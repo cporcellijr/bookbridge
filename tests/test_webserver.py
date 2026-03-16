@@ -7,6 +7,7 @@ import unittest
 import tempfile
 import os
 import json
+import types
 from pathlib import Path
 from unittest.mock import Mock, patch
 import sys
@@ -964,6 +965,53 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertTrue(data['ok'])
         self.assertIn('credentials are valid', data['message'])
         self.assertEqual(mock_get.call_count, 2)
+
+    def test_smart_refresh_can_include_whisper(self):
+        book = types.SimpleNamespace(
+            abs_id='abs-1',
+            status='active',
+            ebook_filename='book.epub',
+            transcript_source='whisper',
+            transcript_file='DB_MANAGED',
+            audio_source='ABS',
+            audio_source_id='abs-1',
+        )
+        self.mock_database_service.get_all_books.return_value = [book]
+        self.mock_database_service.save_book = Mock()
+
+        self.mock_manager._get_non_story_ebook_filename.return_value = 'book.epub'
+        self.mock_manager._get_storyteller_ebook_filename.return_value = None
+        self.mock_manager._get_local_epub.return_value = Path(self.temp_dir) / 'book.epub'
+        self.mock_manager._get_storyteller_manifest_path.return_value = None
+        self.mock_manager._get_audio_source_name.return_value = 'ABS'
+
+        adapter = Mock()
+        adapter.get_audio_files.return_value = [{'stream_url': 'http://audio.example/file.mp3'}]
+        adapter.get_chapters.return_value = []
+        self.mock_manager._get_audio_source_adapter.return_value = adapter
+
+        transcriber = Mock()
+        transcriber.transcribe_from_smil.return_value = None
+        transcriber.process_audio.return_value = [{'start': 0.0, 'end': 1.0, 'text': 'hello'}]
+        self.mock_manager.transcriber = transcriber
+
+        alignment_service = Mock()
+        alignment_service.align_and_store.return_value = True
+        alignment_service.align_storyteller_and_store.return_value = False
+        self.mock_manager.alignment_service = alignment_service
+
+        self.mock_container.mock_ebook_parser.extract_text_and_map.return_value = ('full text', [])
+        self.mock_abs_client.get_item_details.return_value = {'media': {'chapters': []}}
+
+        response = self.client.post('/api/alignment/smart-refresh', json={'include_whisper': True})
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload.get('success'))
+        self.assertTrue(payload.get('include_whisper'))
+        self.assertEqual(payload.get('aligned'), 1)
+        self.assertEqual(payload.get('skipped'), 0)
+        transcriber.process_audio.assert_called_once()
+        alignment_service.align_and_store.assert_called_once()
 
     @patch('src.web_server.requests.post')
     def test_test_connection_storyteller_uses_post_payload_not_saved_env(self, mock_post):

@@ -4696,6 +4696,191 @@ def api_storyteller_backfill():
     return jsonify(summary), status_code
 
 
+def _run_smart_alignment_refresh(include_whisper: bool = False):
+    """
+    Re-run alignment for already matched books.
+    Priority:
+      1) Storyteller manifest alignment when available.
+      2) SMIL extraction + alignment when available from EPUB overlays.
+      3) Optional Whisper re-transcription fallback when include_whisper=True.
+    """
+    started_at = time.time()
+    summary = {
+        "success": True,
+        "scanned": 0,
+        "aligned": 0,
+        "skipped": 0,
+        "skipped_reasons": {},
+        "failed": 0,
+        "duration_seconds": 0.0,
+    }
+
+    def _skip(reason: str, abs_id: str | None = None):
+        summary["skipped"] += 1
+        summary["skipped_reasons"][reason] = int(summary["skipped_reasons"].get(reason, 0)) + 1
+        if abs_id:
+            logger.info("Smart alignment refresh skipped '%s': %s", abs_id, reason)
+
+    if not manager or not database_service:
+        return {"success": False, "error": "Sync manager not initialized", **summary}, 500
+
+    books = database_service.get_all_books() or []
+    candidates = [
+        b for b in books
+        if getattr(b, "status", None) == "active" and getattr(b, "ebook_filename", None)
+    ]
+
+    abs_client = container.abs_client() if container else None
+    ebook_parser = container.ebook_parser() if container else None
+    transcriber = getattr(manager, "transcriber", None)
+    alignment_service = getattr(manager, "alignment_service", None)
+
+    if not alignment_service or not ebook_parser:
+        return {
+            "success": False,
+            "error": "Alignment components unavailable",
+            **summary,
+        }, 500
+
+    for book in candidates:
+        summary["scanned"] += 1
+        abs_id = getattr(book, "abs_id", None)
+        if not abs_id:
+            _skip("missing_abs_id")
+            continue
+
+        try:
+            preferred_ebook = manager._get_non_story_ebook_filename(book) or manager._get_storyteller_ebook_filename(book)
+            if not preferred_ebook:
+                _skip("missing_ebook_filename", abs_id)
+                continue
+
+            epub_path = manager._get_local_epub(preferred_ebook)
+            if not epub_path:
+                _skip("epub_unavailable", abs_id)
+                continue
+
+            book_text, _ = ebook_parser.extract_text_and_map(epub_path)
+            if not book_text:
+                _skip("ebook_text_empty", abs_id)
+                continue
+
+            aligned = False
+
+            storyteller_manifest = manager._get_storyteller_manifest_path(book)
+            if storyteller_manifest:
+                try:
+                    storyteller_transcript = StorytellerTranscript(storyteller_manifest)
+                    aligned = alignment_service.align_storyteller_and_store(abs_id, storyteller_transcript, ebook_text=book_text)
+                    if aligned:
+                        book.transcript_source = "storyteller"
+                except Exception as st_err:
+                    logger.warning(f"Smart refresh storyteller alignment failed for '{abs_id}': {st_err}")
+
+            # If no storyteller map generated, attempt SMIL refresh.
+            if not aligned and transcriber and hasattr(transcriber, "transcribe_from_smil"):
+                chapters = []
+                if abs_client:
+                    item_details = abs_client.get_item_details(abs_id)
+                    chapters = item_details.get("media", {}).get("chapters", []) if item_details else []
+
+                smil_segments = transcriber.transcribe_from_smil(
+                    abs_id,
+                    Path(epub_path),
+                    chapters,
+                    full_book_text=book_text,
+                )
+                if smil_segments:
+                    aligned = alignment_service.align_and_store(abs_id, smil_segments, book_text, chapters)
+                    if aligned:
+                        book.transcript_source = "smil"
+                else:
+                    logger.info("Smart alignment refresh '%s': no acceptable SMIL transcript", abs_id)
+            elif not aligned:
+                logger.info("Smart alignment refresh '%s': transcriber missing SMIL support", abs_id)
+
+            # Optional: Whisper re-transcription for remaining books.
+            if not aligned and include_whisper:
+                try:
+                    audio_adapter = manager._get_audio_source_adapter(book)
+                    audio_source = manager._get_audio_source_name(book)
+                    audio_source_id = getattr(book, "audio_source_id", None) or abs_id
+
+                    if not audio_adapter:
+                        _skip("whisper_no_audio_adapter", abs_id)
+                        continue
+
+                    audio_files = audio_adapter.get_audio_files(audio_source_id, bridge_key=abs_id)
+                    if not audio_files:
+                        _skip("whisper_no_audio_files", abs_id)
+                        continue
+
+                    whisper_segments = transcriber.process_audio(
+                        abs_id,
+                        audio_files,
+                        full_book_text=book_text,
+                        progress_callback=None,
+                    )
+                    if whisper_segments:
+                        chapters = []
+                        if audio_adapter and hasattr(audio_adapter, "get_chapters"):
+                            try:
+                                chapters = audio_adapter.get_chapters(audio_source_id) or []
+                            except Exception:
+                                chapters = []
+                        if not chapters and abs_client and (audio_source or "ABS") == "ABS":
+                            item_details = abs_client.get_item_details(abs_id)
+                            chapters = item_details.get("media", {}).get("chapters", []) if item_details else []
+
+                        aligned = alignment_service.align_and_store(abs_id, whisper_segments, book_text, chapters)
+                        if aligned:
+                            book.transcript_source = "whisper"
+                    else:
+                        _skip("whisper_transcription_empty", abs_id)
+                        continue
+                except Exception as whisper_err:
+                    logger.warning("Smart alignment refresh whisper fallback failed for '%s': %s", abs_id, whisper_err)
+                    _skip("whisper_refresh_failed", abs_id)
+                    continue
+
+            if aligned:
+                summary["aligned"] += 1
+                book.transcript_file = "DB_MANAGED"
+                database_service.save_book(book)
+            else:
+                if include_whisper:
+                    if storyteller_manifest:
+                        _skip("storyteller_smil_whisper_not_alignable", abs_id)
+                    else:
+                        _skip("no_storyteller_manifest_smil_whisper_not_alignable", abs_id)
+                else:
+                    if storyteller_manifest:
+                        _skip("storyteller_or_smil_not_alignable", abs_id)
+                    else:
+                        _skip("no_storyteller_manifest_and_smil_unavailable", abs_id)
+
+        except Exception as e:
+            summary["failed"] += 1
+            logger.warning(f"Smart alignment refresh failed for '{abs_id}': {e}")
+
+    summary["duration_seconds"] = round(time.time() - started_at, 3)
+    logger.info(
+        "Smart alignment refresh summary: "
+        f"scanned={summary['scanned']} aligned={summary['aligned']} "
+        f"skipped={summary['skipped']} failed={summary['failed']} reasons={summary['skipped_reasons']} "
+        f"duration={summary['duration_seconds']}s"
+    )
+    return summary, 200
+
+
+def api_alignment_smart_refresh():
+    payload = request.get_json(silent=True) or {}
+    include_whisper = bool(payload.get("include_whisper", False))
+    summary, status_code = _run_smart_alignment_refresh(include_whisper=include_whisper)
+    summary["include_whisper"] = include_whisper
+    return jsonify(summary), status_code
+
+
 def proxy_cover(abs_id):
     """Proxy cover access to allow loading covers from local network ABS instances."""
     try:
@@ -5106,6 +5291,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/storyteller/search', 'api_storyteller_search', api_storyteller_search, methods=['GET'])
     app.add_url_rule('/api/storyteller/link/<abs_id>', 'api_storyteller_link', api_storyteller_link, methods=['POST'])
     app.add_url_rule('/api/storyteller/backfill', 'api_storyteller_backfill', api_storyteller_backfill, methods=['POST'])
+    app.add_url_rule('/api/alignment/smart-refresh', 'api_alignment_smart_refresh', api_alignment_smart_refresh, methods=['POST'])
 
     # Forge routes
     app.add_url_rule('/api/forge/search_audio', 'forge_search_audio', forge_search_audio, methods=['GET'])
@@ -5220,5 +5406,3 @@ if __name__ == '__main__':
         logger.info(f"🚀 Split-Port Mode Active: Sync-only server on port {sync_port}")
 
     app.run(host='0.0.0.0', port=5757, debug=False)
-
-

@@ -7,6 +7,7 @@ epubcfi
 beautifulsoup4
 rapidfuzz
 fuzzysearch
+error-align
 tqdm
 gTTs
 ffmpeg
@@ -17,4 +18,3 @@ sqlalchemy
 alembic
 python-socketio[client]
 mkdocs-material
-

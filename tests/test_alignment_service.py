@@ -1,6 +1,9 @@
 import pytest
 import json
+import sys
+import types
 from unittest.mock import MagicMock
+from src.services import alignment_service as alignment_service_module
 from src.services.alignment_service import AlignmentService
 from src.utils.polisher import Polisher
 from src.db.models import BookAlignment
@@ -88,3 +91,96 @@ def test_get_time_for_text(service, mock_db):
     # Test Interpolation (50 chars -> 5.0s)
     ts = service.get_time_for_text("test_id", "query", char_offset_hint=50)
     assert ts == 5.0
+
+
+def test_error_align_anchors_outperform_legacy_ngram(service, monkeypatch):
+    # Build long enough corpus for legacy N=12 anchors, but inject transcript errors.
+    book_tokens = [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel",
+        "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa",
+        "quebec", "romeo", "sierra", "tango",
+    ]
+    transcript_tokens = [
+        "alpha", "bravo", "charli", "delta", "echo", "foxtrot", "golf", "EXTRA",
+        "hotel", "india", "juliet", "kilo", "lima", "mike", "november", "oscar",
+        "papa", "quebec", "romeo", "sierr", "tango",
+    ]
+    full_text = " ".join(book_tokens)
+    segments = [{"start": float(i), "end": float(i + 1), "text": w} for i, w in enumerate(transcript_tokens)]
+
+    # Measure legacy path by forcing error-align path to return None.
+    legacy_map = service._generate_alignment_map_error_align
+    monkeypatch.setattr(service, "_generate_alignment_map_error_align", lambda *args, **kwargs: None)
+    legacy_result = service._generate_alignment_map(segments, full_text)
+    legacy_anchor_count = max(0, len(legacy_result) - 2)  # strip forced start/end points
+
+    # Restore method and inject a deterministic fake error_align module.
+    monkeypatch.setattr(service, "_generate_alignment_map_error_align", legacy_map)
+
+    class FakeAlignment:
+        def __init__(self, typ, ref="", hyp=""):
+            self.type = typ
+            self.ref = ref
+            self.hyp = hyp
+
+    fake_mod = types.ModuleType("error_align")
+    fake_mod.error_align = lambda ref, hyp: [
+        FakeAlignment("match", "alpha", "alpha"),
+        FakeAlignment("match", "bravo", "bravo"),
+        FakeAlignment("substitute", "charlie", "charli"),
+        FakeAlignment("match", "delta", "delta"),
+        FakeAlignment("match", "echo", "echo"),
+        FakeAlignment("match", "foxtrot", "foxtrot"),
+        FakeAlignment("match", "golf", "golf"),
+        FakeAlignment("insert", "", "extra"),
+        FakeAlignment("match", "hotel", "hotel"),
+        FakeAlignment("match", "india", "india"),
+        FakeAlignment("match", "juliet", "juliet"),
+        FakeAlignment("match", "kilo", "kilo"),
+        FakeAlignment("match", "lima", "lima"),
+        FakeAlignment("match", "mike", "mike"),
+        FakeAlignment("match", "november", "november"),
+        FakeAlignment("match", "oscar", "oscar"),
+        FakeAlignment("match", "papa", "papa"),
+        FakeAlignment("match", "quebec", "quebec"),
+        FakeAlignment("match", "romeo", "romeo"),
+        FakeAlignment("substitute", "sierra", "sierr"),
+        FakeAlignment("match", "tango", "tango"),
+    ]
+    monkeypatch.setitem(sys.modules, "error_align", fake_mod)
+
+    improved_map = service._generate_alignment_map(segments, full_text)
+    improved_anchor_count = max(0, len(improved_map) - 2)
+
+    assert improved_anchor_count > legacy_anchor_count
+
+
+def test_word_edit_distance_fallback_matches_expected(monkeypatch):
+    # Force fallback DP implementation path (no rapidfuzz).
+    monkeypatch.setattr(alignment_service_module, "Levenshtein", None)
+    assert AlignmentService._word_edit_distance("wizard", "lizard") == 1
+    assert AlignmentService._word_edit_distance("can't", "cant") == 1
+    assert AlignmentService._word_edit_distance("going", "gonna") >= 2
+
+
+def test_error_align_low_density_rejected(service, monkeypatch):
+    # Large token streams but only a handful of matches should fail density gating.
+    book_tokens = [f"token{i}" for i in range(1200)]
+    transcript_tokens = list(book_tokens)
+    full_text = " ".join(book_tokens)
+    segments = [{"start": float(i), "end": float(i + 1), "text": w} for i, w in enumerate(transcript_tokens)]
+
+    class FakeAlignment:
+        def __init__(self, typ):
+            self.type = typ
+
+    sparse = [FakeAlignment("match") for _ in range(6)] + [FakeAlignment("insert") for _ in range(1194)]
+    fake_mod = types.ModuleType("error_align")
+    fake_mod.error_align = lambda ref, hyp: sparse
+    monkeypatch.setitem(sys.modules, "error_align", fake_mod)
+
+    # Directly call new method: low token-anchor ratio should reject.
+    transcript_words = [{"word": w, "ts": float(i), "orig_index": i} for i, w in enumerate(transcript_tokens)]
+    book_words = [{"word": w, "char": i * 7, "orig_index": i} for i, w in enumerate(book_tokens)]
+    result = service._generate_alignment_map_error_align(transcript_words, book_words, segments, full_text)
+    assert result is None

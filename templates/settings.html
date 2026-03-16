@@ -1119,6 +1119,25 @@
                     </div>
 
                     <div class="form-group full-width">
+                        <label>Smart Alignment Refresh</label>
+                        <div class="cleanup-group">
+                            <button type="button" class="btn btn-primary" onclick="smartRefreshAlignments()">
+                                Smart Refresh Alignments
+                            </button>
+                            <p class="help-text flex-1 m-0">
+                                Re-runs alignment for already matched books using existing Storyteller/SMIL transcript sources.
+                                This upgrades existing libraries to newer alignment logic without forcing a full rematch.
+                            </p>
+                        </div>
+                        <div class="mt-8" style="display:flex; align-items:center; gap:8px;">
+                            <input type="checkbox" id="smart_refresh_include_whisper">
+                            <label for="smart_refresh_include_whisper" style="margin:0; font-size:0.9rem; color:rgba(255,255,255,.85); cursor:pointer;">
+                                Include Whisper re-transcription for books without Storyteller/SMIL (slow)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group full-width">
                         <label>Cache Cleanup</label>
                         <div class="cleanup-group">
                             <button type="button" class="btn btn-danger" onclick="cleanInactiveCache()">
@@ -1615,6 +1634,46 @@
             } catch (err) {
                 console.error('Error running storyteller backfill:', err);
                 alert('An error occurred while running storyteller backfill. Check console for details.');
+            }
+        }
+
+        async function smartRefreshAlignments() {
+            const includeWhisper = !!document.getElementById('smart_refresh_include_whisper')?.checked;
+            const warn = includeWhisper
+                ? "Run smart alignment refresh now?\n\nThis will reprocess matched books and INCLUDE Whisper re-transcription when Storyteller/SMIL are unavailable. This can take a long time on large libraries."
+                : "Run smart alignment refresh now?\n\nThis will reprocess currently matched books using Storyteller/SMIL when available. Whisper-only rematch work will be skipped.";
+            if (!confirm(warn)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/alignment/smart-refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ include_whisper: includeWhisper })
+                });
+
+                const data = await response.json();
+                if (!response.ok || data.success === false) {
+                    alert(`Smart refresh failed: ${data.error || 'Unknown error'}`);
+                    return;
+                }
+
+                alert(
+                    `Smart refresh complete.\n` +
+                    `Include Whisper: ${data.include_whisper ? 'Yes' : 'No'}\n` +
+                    `Scanned: ${data.scanned}\n` +
+                    `Aligned: ${data.aligned}\n` +
+                    `Skipped: ${data.skipped}\n` +
+                    `Skip reasons: ${JSON.stringify(data.skipped_reasons || {})}\n` +
+                    `Failed: ${data.failed}\n` +
+                    `Duration: ${data.duration_seconds}s`
+                );
+            } catch (err) {
+                console.error('Error running smart refresh:', err);
+                alert('An error occurred while running smart alignment refresh. Check console for details.');
             }
         }
 

@@ -14,6 +14,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
+try:
+    from rapidfuzz.distance import Levenshtein
+except Exception:
+    Levenshtein = None
+
 from src.db.models import BookAlignment
 from src.utils.polisher import Polisher
 from src.utils.logging_utils import time_execution
@@ -334,6 +339,162 @@ class AlignmentService:
         result_indices.reverse()
         return [anchors[i] for i in result_indices]
 
+    def _generate_alignment_map_error_align(
+        self,
+        transcript_words: List[Dict],
+        book_words: List[Dict],
+        segments: List[Dict],
+        full_text: str,
+    ) -> Optional[List[Dict]]:
+        """
+        Build anchors via error-align word-level mapping.
+
+        Returns a list of monotonic anchors (char/ts with token indices) or None when
+        the dependency is unavailable or the output quality is too low.
+        """
+        try:
+            from error_align import error_align
+        except Exception as import_err:
+            logger.warning("error-align unavailable; using legacy n-gram alignment (%s)", import_err)
+            return None
+
+        ref_words = [w.get("word", "") for w in book_words]
+        hyp_words = [w.get("word", "") for w in transcript_words]
+        if not ref_words or not hyp_words:
+            return None
+
+        try:
+            alignments = error_align(ref=ref_words, hyp=hyp_words)
+        except Exception as align_err:
+            logger.warning("error-align failed; falling back to legacy n-gram alignment (%s)", align_err)
+            return None
+
+        anchors: List[Dict] = []
+        b_idx = 0
+        t_idx = 0
+
+        def _norm_type(entry) -> str:
+            raw = str(getattr(entry, "type", "")).lower()
+            if "." in raw:
+                raw = raw.split(".")[-1]
+            return raw
+
+        def _word_at(obj, key):
+            val = getattr(obj, key, None)
+            if isinstance(val, list) and val:
+                return str(val[0])
+            if val is None:
+                return ""
+            return str(val)
+
+        def _advance(entry_type: str):
+            nonlocal b_idx, t_idx
+            # Conservative one-step advancement by operation type; if error-align returns
+            # richer structures, sequential processing still produces dense anchors.
+            if entry_type in {"match", "equal", "substitute", "replace", "similar"}:
+                b_idx += 1
+                t_idx += 1
+            elif entry_type in {"insert", "insertion"}:
+                t_idx += 1
+            elif entry_type in {"delete", "deletion"}:
+                b_idx += 1
+            else:
+                # Unknown op type; fail-safe forward motion to avoid stalling.
+                b_idx += 1
+                t_idx += 1
+
+        for entry in alignments or []:
+            if b_idx >= len(book_words) or t_idx >= len(transcript_words):
+                break
+
+            op = _norm_type(entry)
+            if op in {"match", "equal"}:
+                anchors.append(
+                    {
+                        "char": book_words[b_idx]["char"],
+                        "ts": transcript_words[t_idx]["ts"],
+                        "t_idx": transcript_words[t_idx]["orig_index"],
+                        "b_idx": book_words[b_idx]["orig_index"],
+                    }
+                )
+            elif op in {"substitute", "replace", "similar"}:
+                ref_word = _word_at(entry, "ref") or book_words[b_idx]["word"]
+                hyp_word = _word_at(entry, "hyp") or transcript_words[t_idx]["word"]
+                # Keep minor substitutions only (apostrophe/plural/one-char drift).
+                if self._word_edit_distance(ref_word, hyp_word) <= 1:
+                    anchors.append(
+                        {
+                            "char": book_words[b_idx]["char"],
+                            "ts": transcript_words[t_idx]["ts"],
+                            "t_idx": transcript_words[t_idx]["orig_index"],
+                            "b_idx": book_words[b_idx]["orig_index"],
+                        }
+                    )
+
+            _advance(op)
+
+        if not anchors:
+            return None
+
+        anchors.sort(key=lambda x: x["char"])
+        valid = self._filter_monotonic_lis(anchors)
+        if not valid:
+            return None
+
+        # Quality gates: avoid accepting tiny/low-coverage maps.
+        # For longer books/transcripts, require a slightly denser anchor set.
+        coverage = 0.0
+        if len(full_text) > 0 and len(valid) > 1:
+            coverage = max(0.0, (valid[-1]["char"] - valid[0]["char"]) / float(len(full_text)))
+        min_anchor_count = max(5, min(20, len(transcript_words) // 300))
+        transcript_anchor_ratio = (len(valid) / float(len(transcript_words))) if transcript_words else 0.0
+        if len(valid) < min_anchor_count or coverage < 0.08 or transcript_anchor_ratio < 0.003:
+            logger.info(
+                "   ⚠️ error-align produced low-confidence anchors (%d anchors, %.1f%% coverage, %.2f%% token anchor ratio; min=%d, substitution_dist<=1)",
+                len(valid),
+                coverage * 100.0,
+                transcript_anchor_ratio * 100.0,
+                min_anchor_count,
+            )
+            return None
+
+        logger.info(
+            "   ✅ error-align anchors: %d candidates -> %d monotonic (%.1f%% coverage, %.2f%% token anchor ratio; substitution_dist<=1)",
+            len(anchors),
+            len(valid),
+            coverage * 100.0,
+            transcript_anchor_ratio * 100.0,
+        )
+        return valid
+
+    @staticmethod
+    def _word_edit_distance(left: str, right: str) -> int:
+        """Tiny fallback for substitution filtering when rapidfuzz isn't installed."""
+        if Levenshtein is not None:
+            return int(Levenshtein.distance(left, right))
+
+        a = left or ""
+        b = right or ""
+        if a == b:
+            return 0
+        # Small dynamic programming fallback; words are short so this is cheap.
+        rows = len(a) + 1
+        cols = len(b) + 1
+        dp = [[0] * cols for _ in range(rows)]
+        for i in range(rows):
+            dp[i][0] = i
+        for j in range(cols):
+            dp[0][j] = j
+        for i in range(1, rows):
+            for j in range(1, cols):
+                cost = 0 if a[i - 1] == b[j - 1] else 1
+                dp[i][j] = min(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + cost,
+                )
+        return dp[-1][-1]
+
     def _generate_alignment_map(self, segments: List[Dict], full_text: str) -> List[Dict]:
         """
         Core Anchored Alignment Algorithm (Two-Pass).
@@ -392,7 +553,15 @@ class AlignmentService:
         if not transcript_words or not book_words:
             return _build_linear_fallback_map("insufficient normalized tokens")
 
-        # --- Helper for N-Gram Logic ---
+        # 3. Prefer error-align when available; fall back to legacy n-gram anchors.
+        valid_anchors = self._generate_alignment_map_error_align(
+            transcript_words=transcript_words,
+            book_words=book_words,
+            segments=segments,
+            full_text=full_text,
+        )
+
+        # --- Helper for Legacy N-Gram Logic ---
         def _find_anchors(t_tokens, b_tokens, n_size):
             # Build N-Grams
             def build_ngrams(items, is_book=False):
@@ -424,43 +593,46 @@ class AlignmentService:
                         })
             return found
 
-        # 3. PASS 1: Global Search (N=12)
-        anchors = _find_anchors(transcript_words, book_words, n_size=12)
-        
-        # Sort by character position
-        anchors.sort(key=lambda x: x['char'])
-        
-        # Filter Monotonic (Global) — Longest Increasing Subsequence
-        valid_anchors = self._filter_monotonic_lis(anchors)
-        logger.info(f"   📊 Monotonic LIS filter: {len(anchors)} candidates -> {len(valid_anchors)} valid")
-        if len(anchors) > len(valid_anchors):
-            logger.info(f"      📊 Dropped {len(anchors) - len(valid_anchors)} non-monotonic anchors")
+        if not valid_anchors:
+            logger.info("   ℹ️ error-align unavailable/insufficient; using legacy n-gram anchors")
 
-        # 4. PASS 2: Backfill Start (N=6) "Work Backwards"
-        # If the first anchor is significantly into the book, try to recover the intro.
-        # Threshold: First anchor is > 1000 chars in AND > 30 seconds in
-        if valid_anchors and valid_anchors[0]['char'] > 1000 and valid_anchors[0]['ts'] > 30.0:
-            first = valid_anchors[0]
-            logger.info(f"   🔄 Late start detected (Char: {first['char']}, TS: {first['ts']:.1f}s) — Attempting backfill")
+            # PASS 1: Global Search (N=12)
+            anchors = _find_anchors(transcript_words, book_words, n_size=12)
 
-            # Slice the data: Everything BEFORE the first anchor
-            # We use the indices we stored during tokenization
-            t_slice = transcript_words[:first['t_idx']]
-            b_slice = book_words[:first['b_idx']]
+            # Sort by character position
+            anchors.sort(key=lambda x: x['char'])
 
-            if t_slice and b_slice:
-                # Run with reduced N-Gram (N=6)
-                # Lower N is risky globally, but safe in this small constrained window
-                early_anchors = _find_anchors(t_slice, b_slice, n_size=6)
-                
-                # Filter Early Anchors (Must be monotonic with themselves)
-                early_anchors.sort(key=lambda x: x['char'])
-                valid_early = self._filter_monotonic_lis(early_anchors)
-                
-                if valid_early:
-                    logger.info(f"   ✅ Backfill success: Recovered {len(valid_early)} early anchors.")
-                    # Prepend to main list
-                    valid_anchors = valid_early + valid_anchors
+            # Filter Monotonic (Global) — Longest Increasing Subsequence
+            valid_anchors = self._filter_monotonic_lis(anchors)
+            logger.info(f"   📊 Monotonic LIS filter: {len(anchors)} candidates -> {len(valid_anchors)} valid")
+            if len(anchors) > len(valid_anchors):
+                logger.info(f"      📊 Dropped {len(anchors) - len(valid_anchors)} non-monotonic anchors")
+
+            # PASS 2: Backfill Start (N=6) "Work Backwards"
+            # If the first anchor is significantly into the book, try to recover the intro.
+            # Threshold: First anchor is > 1000 chars in AND > 30 seconds in
+            if valid_anchors and valid_anchors[0]['char'] > 1000 and valid_anchors[0]['ts'] > 30.0:
+                first = valid_anchors[0]
+                logger.info(f"   🔄 Late start detected (Char: {first['char']}, TS: {first['ts']:.1f}s) — Attempting backfill")
+
+                # Slice the data: Everything BEFORE the first anchor
+                # We use the indices we stored during tokenization
+                t_slice = transcript_words[:first['t_idx']]
+                b_slice = book_words[:first['b_idx']]
+
+                if t_slice and b_slice:
+                    # Run with reduced N-Gram (N=6)
+                    # Lower N is risky globally, but safe in this small constrained window
+                    early_anchors = _find_anchors(t_slice, b_slice, n_size=6)
+
+                    # Filter Early Anchors (Must be monotonic with themselves)
+                    early_anchors.sort(key=lambda x: x['char'])
+                    valid_early = self._filter_monotonic_lis(early_anchors)
+
+                    if valid_early:
+                        logger.info(f"   ✅ Backfill success: Recovered {len(valid_early)} early anchors.")
+                        # Prepend to main list
+                        valid_anchors = valid_early + valid_anchors
 
 
 
