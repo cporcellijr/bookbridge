@@ -131,6 +131,34 @@
                 </div>
                 {% endif %}
 
+                {% if integrations.kavitakosync and (mapping.states.kavitakosync is defined or mapping.kavita_series_id
+                or mapping.kavita_id) %}
+                {% if mapping.kavita_url %}
+                <a href="{{ mapping.kavita_url }}" target="_blank" rel="noopener noreferrer" class="service-item"
+                    title="Open in Kavita" data-service="kavita">
+                    <span class="service-icon-emoji">📚</span>
+                    <span class="service-name">Kavita</span>
+                    {% if mapping.states.kavitakosync is defined %}
+                    <span class="service-value">{{ '%.1f' | format(mapping.states.kavitakosync.percentage|default(0))
+                        }}%</span>
+                    {% else %}
+                    <span class="service-value">0.0%</span>
+                    {% endif %}
+                </a>
+                {% else %}
+                <div class="service-item" title="Kavita" data-service="kavita">
+                    <span class="service-icon-emoji">📚</span>
+                    <span class="service-name">Kavita</span>
+                    {% if mapping.states.kavitakosync is defined %}
+                    <span class="service-value">{{ '%.1f' | format(mapping.states.kavitakosync.percentage|default(0))
+                        }}%</span>
+                    {% else %}
+                    <span class="service-value">0.0%</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% endif %}
+
                 {# [CHANGED] Show Storyteller for active links, legacy fixes, and ebook-only rows (link affordance). #}
                 {% if integrations.storyteller and (mapping.states.storyteller is defined or
                 mapping.storyteller_legacy_link or mapping.storyteller_uuid or mapping.sync_mode == 'ebook_only') %}
@@ -2098,6 +2126,11 @@
                             const kosyncItem = card.querySelector('.service-item[title^="Update KoReader Hash"] .service-value');
                             if (kosyncItem && book.states && book.states.kosync) {
                                 kosyncItem.textContent = `${book.states.kosync.percentage.toFixed(1)}%`;
+                            }
+
+                            const kavitaItem = card.querySelector('.service-item[data-service="kavita"] .service-value');
+                            if (kavitaItem && book.states && book.states.kavitakosync) {
+                                kavitaItem.textContent = `${book.states.kavitakosync.percentage.toFixed(1)}%`;
                             }
 
                             const stItem = card.querySelector('.service-item[title="Storyteller"] .service-value');

@@ -360,6 +360,80 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
 
         print("[OK] API status endpoint test passed with clean DI")
 
+    def test_index_endpoint_includes_kavita_card_mapping(self):
+        """Index should expose Kavita metadata for dashboard service cards."""
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='kavita-book-123',
+            abs_title='Soul Fraud',
+            ebook_filename='kavita_187.epub',
+            ebook_source='Kavita',
+            ebook_source_id='145',
+            kosync_doc_id='kavita-doc-id',
+            status='active',
+            duration=5400
+        )
+
+        mock_states = [
+            State(
+                abs_id='kavita-book-123',
+                client_name='kavitakosync',
+                last_updated=1642292200,
+                percentage=0.31,
+                xpath='/body/DocFragment[9]/body/div/p[3].0'
+            )
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_states_for_book.return_value = mock_states
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_hardcover_details.return_value = None
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+
+        self.mock_kavita_client.is_configured.return_value = True
+        self.mock_kavita_client.base_url = 'https://kavita.example'
+        self.mock_kavita_client.find_book_by_filename.return_value = {
+            'id': '187',
+            'series_id': '145',
+            'series_title': 'Soul Fraud',
+            'title': 'Soul Fraud'
+        }
+
+        clients_dict = {
+            'ABS': Mock(is_configured=Mock(return_value=True)),
+            'KoSync': Mock(is_configured=Mock(return_value=True)),
+            'KavitaKoSync': Mock(is_configured=Mock(return_value=True)),
+        }
+        self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
+
+        import src.web_server
+        original_render = src.web_server.render_template
+        mock_render = Mock(return_value="Mocked HTML Response")
+        src.web_server.render_template = mock_render
+
+        try:
+            response = self.client.get('/')
+
+            self.assertEqual(response.status_code, 200)
+            render_kwargs = mock_render.call_args.kwargs
+            mapping = render_kwargs['mappings'][0]
+
+            self.assertEqual(mapping['kavita_id'], '187')
+            self.assertEqual(mapping['kavita_series_id'], '145')
+            self.assertEqual(mapping['kavita_title'], 'Soul Fraud')
+            self.assertEqual(mapping['kavita_url'], 'https://kavita.example/series/145')
+            self.assertIn('kavitakosync', mapping['states'])
+            self.assertEqual(mapping['states']['kavitakosync']['percentage'], 31.0)
+            self.assertTrue(render_kwargs['integrations'].get('kavitakosync', False))
+            self.mock_kavita_client.find_book_by_filename.assert_called_once_with(
+                'kavita_187.epub',
+                allow_refresh=False,
+            )
+        finally:
+            src.web_server.render_template = original_render
+
     def test_api_status_percentage_scaling(self):
         """Test that API status scales percentages correctly (0.45 -> 45.0)."""
         # Setup mock data

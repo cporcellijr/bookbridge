@@ -7,7 +7,6 @@ from src.api.api_clients import ABSClient
 from src.db.models import Book, State
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 from src.utils.ebook_utils import EbookParser
-from src.utils.ebook_utils import EbookParser
 from src.utils.transcriber import AudioTranscriber
 from pathlib import Path
 
@@ -261,10 +260,8 @@ class ABSSyncClient(SyncClient):
             time_listened = 0
 
         logger.debug(f"   ⏱️ time_listened: {time_listened:.1f}s (prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")
-        try:
+        abs_ok = self.abs_client.update_progress(abs_id, adjusted_ts, time_listened)
+        if abs_ok.get("success"):
             from src.services.write_tracker import record_write
             record_write('ABS', abs_id)
-        except ImportError:
-            pass
-        abs_ok = self.abs_client.update_progress(abs_id, adjusted_ts, time_listened)
         return abs_ok, adjusted_ts

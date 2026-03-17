@@ -1463,6 +1463,15 @@ class BookloreClient:
             return 0.0
 
     @staticmethod
+    def _to_nullable_progress_fraction(raw_pct):
+        if raw_pct in (None, ""):
+            return None
+        try:
+            return float(raw_pct) / 100.0
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _to_optional_int(raw_value):
         if raw_value in (None, ""):
             return None
@@ -1474,23 +1483,19 @@ class BookloreClient:
             except (TypeError, ValueError):
                 return None
 
-    def _get_progress_by_book_id(self, book_id):
-        """
-        Get progress tuple for a specific Booklore book id.
-        Returns: (pct_fraction, cfi) or (None, None) on failure.
-        """
-        response = self._make_request("GET", f"/api/v1/books/{book_id}")
+    def _get_progress_detail_by_book_id(self, book_id):
+        response = self._make_request("GET", f"/api/v1/books/{book_id}", None)
         if not response:
-            return None, None
+            return None
         if response.status_code == 404:
             self._evict_cached_book(book_id=book_id, reason="progress lookup returned 404")
-            return None, None
+            return None
         if response.status_code != 200:
-            return None, None
+            return None
 
         data = self._parse_json_response(response, f"Booklore progress for book {book_id}")
         if not isinstance(data, dict):
-            return None, None
+            return None
         book_type = str(
             data.get('primaryFile', {}).get('bookType')
             or data.get('bookType')
@@ -1498,37 +1503,104 @@ class BookloreClient:
         ).upper()
         if book_type == 'EPUB':
             progress = data.get('epubProgress') or {}
-            raw_pct = progress.get('percentage', 0)
-            parsed_pct = self._to_progress_fraction(raw_pct)
+            raw_pct = progress.get('percentage')
+            parsed_pct = self._to_nullable_progress_fraction(raw_pct)
             logger.debug(
                 f"Booklore verify read: book_id={book_id} type=EPUB "
                 f"raw_pct={raw_pct!r} parsed_pct={parsed_pct if parsed_pct is not None else 'None'} "
                 f"has_cfi={bool(progress.get('cfi'))}"
             )
-            return parsed_pct, progress.get('cfi')
+            return {
+                "book_type": "EPUB",
+                "raw_pct": raw_pct,
+                "pct": parsed_pct,
+                "cfi": progress.get('cfi'),
+                "href": progress.get('href'),
+                "positioned": bool(progress.get('cfi') or progress.get('href')),
+            }
         if book_type == 'PDF':
             progress = data.get('pdfProgress') or {}
             logger.debug(
                 f"Booklore verify read: book_id={book_id} type=PDF "
                 f"raw_pct={progress.get('percentage', 0)!r}"
             )
-            return self._to_progress_fraction(progress.get('percentage', 0)), None
+            return {
+                "book_type": "PDF",
+                "raw_pct": progress.get('percentage'),
+                "pct": self._to_nullable_progress_fraction(progress.get('percentage')),
+                "cfi": None,
+                "href": None,
+                "positioned": self._to_nullable_progress_fraction(progress.get('percentage')) not in (None, 0.0),
+            }
         if book_type == 'CBX':
             progress = data.get('cbxProgress') or {}
             logger.debug(
                 f"Booklore verify read: book_id={book_id} type=CBX "
                 f"raw_pct={progress.get('percentage', 0)!r}"
             )
-            return self._to_progress_fraction(progress.get('percentage', 0)), None
+            return {
+                "book_type": "CBX",
+                "raw_pct": progress.get('percentage'),
+                "pct": self._to_nullable_progress_fraction(progress.get('percentage')),
+                "cfi": None,
+                "href": None,
+                "positioned": self._to_nullable_progress_fraction(progress.get('percentage')) not in (None, 0.0),
+            }
         logger.debug(f"Booklore verify read: book_id={book_id} unknown book_type={book_type!r}")
-        return None, None
+        return None
+
+    def _get_progress_by_book_id(self, book_id):
+        """
+        Get progress tuple for a specific Booklore book id.
+        Returns: (pct_fraction, cfi) or (None, None) on failure.
+        """
+        detail = self._get_progress_detail_by_book_id(book_id)
+        if not detail:
+            return None, None
+        return detail.get("pct"), detail.get("cfi")
+
+    def get_progress_details(self, ebook_filename):
+        book = self.find_book_by_filename(ebook_filename, allow_refresh=False)
+        if not book:
+            book = self.find_book_by_filename(ebook_filename, allow_refresh=True)
+        if not book:
+            return None
+        detail = self._get_progress_detail_by_book_id(book['id'])
+        if detail:
+            detail = dict(detail)
+            detail["book_id"] = book["id"]
+            return detail
+        refreshed = self.find_book_by_filename(ebook_filename, allow_refresh=True)
+        refreshed_id = refreshed.get('id') if refreshed else None
+        if refreshed_id is not None and str(refreshed_id) != str(book.get('id')):
+            detail = self._get_progress_detail_by_book_id(refreshed_id)
+            if detail:
+                detail = dict(detail)
+                detail["book_id"] = refreshed_id
+                return detail
+        return detail
 
     def get_audiobook_info(self, book_id):
         response = self._make_request("GET", f"/api/v1/audiobooks/{book_id}/info")
+        if response and response.status_code == 200:
+            data = self._parse_json_response(response, f"Booklore audiobook info for book {book_id}")
+            return data if isinstance(data, dict) else None
+
+        response = self._make_request("GET", f"/api/v1/books/{book_id}")
         if not response or response.status_code != 200:
             return None
-        data = self._parse_json_response(response, f"Booklore audiobook info for book {book_id}")
-        return data if isinstance(data, dict) else None
+
+        data = self._parse_json_response(response, f"Booklore fallback audiobook info for book {book_id}")
+        if not isinstance(data, dict):
+            return None
+
+        primary_file = data.get("primaryFile") or {}
+        fallback_info = {
+            "bookFileId": primary_file.get("id"),
+            "folderBased": False,
+            "tracks": [],
+        }
+        return fallback_info
 
     def get_audiobook_progress(self, book_id):
         response = self._make_request("GET", f"/api/v1/books/{book_id}")
@@ -1556,10 +1628,10 @@ class BookloreClient:
         }
 
     def get_progress(self, ebook_filename):
-        book = self.find_book_by_filename(ebook_filename)
-        if not book:
+        detail = self.get_progress_details(ebook_filename)
+        if not detail:
             return None, None
-        return self._get_progress_by_book_id(book['id'])
+        return detail.get("pct"), detail.get("cfi")
 
     def get_audiobook_cover_bytes(self, book_id):
         response = self._make_request("GET", f"/api/v1/audiobooks/{book_id}/cover")
@@ -1719,7 +1791,9 @@ class BookloreClient:
         return False
 
     def update_progress(self, ebook_filename, percentage, rich_locator: Optional[LocatorResult] = None):
-        book = self.find_book_by_filename(ebook_filename)
+        book = self.find_book_by_filename(ebook_filename, allow_refresh=False)
+        if not book:
+            book = self.find_book_by_filename(ebook_filename, allow_refresh=True)
         if not book:
             logger.debug(f"Booklore: Book not found: {ebook_filename}")
             return False
@@ -1796,6 +1870,15 @@ class BookloreClient:
                     filename=ebook_filename,
                     reason="progress update returned 404",
                 )
+                refreshed = self.find_book_by_filename(ebook_filename, allow_refresh=True)
+                if refreshed and str(refreshed.get('id')) != str(book_id):
+                    logger.info(
+                        "Booklore: re-resolved '%s' from stale id=%s to id=%s after 404",
+                        safe_filename,
+                        book_id,
+                        refreshed.get('id'),
+                    )
+                    return self.update_progress(ebook_filename, percentage, rich_locator=rich_locator)
                 last_status = 404
                 break
             if not response or response.status_code not in [200, 201, 204]:
@@ -1809,7 +1892,10 @@ class BookloreClient:
 
             # Verify EPUB writes to ensure the server actually persisted the target.
             if book_type == 'EPUB':
-                verified_pct, verified_cfi = self._get_progress_by_book_id(book_id)
+                verified_detail = self._get_progress_detail_by_book_id(book_id)
+                verified_pct = verified_detail.get("pct") if verified_detail else None
+                verified_cfi = verified_detail.get("cfi") if verified_detail else None
+                verified_positioned = bool(verified_detail.get("positioned")) if verified_detail else False
                 if verified_pct is not None:
                     logger.debug(
                         f"Booklore progress verify comparison: file={safe_filename} book_id={book_id} "
@@ -1838,6 +1924,13 @@ class BookloreClient:
                         )
                         last_status = f"verify_mismatch:{verified_pct * 100:.2f}%"
                         continue
+                elif verified_positioned and verified_cfi:
+                    logger.debug(
+                        "Booklore progress verify accepted locator-only readback: file=%s book_id=%s variant=%s",
+                        safe_filename,
+                        book_id,
+                        variant_name,
+                    )
 
             logger.info(f"Booklore: {safe_filename} -> {pct_display:.1f}%")
 

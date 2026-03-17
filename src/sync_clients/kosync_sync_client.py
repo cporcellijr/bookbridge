@@ -231,6 +231,9 @@ class KoSyncSyncClient(SyncClient):
 
         clean_xpath = re.sub(r"/{2,}", "/", clean_xpath).rstrip("/")
 
+        if re.match(r"^/body/DocFragment\[\d+\]\.\d+$", clean_xpath):
+            return clean_xpath
+
         if not re.match(r"^/body/DocFragment\[\d+\](/.+)?$", clean_xpath):
             return None
         if self._FRAGILE_INLINE_SEGMENT_RE.search(clean_xpath):
@@ -244,6 +247,16 @@ class KoSyncSyncClient(SyncClient):
 
         return f"{clean_xpath}/text().0"
 
+    def _get_reset_xpath(self, book: Book | None, pct: Optional[float]) -> Optional[str]:
+        if pct is None or pct > 0 or not book:
+            return None
+
+        if self._is_kavita_kosync():
+            # Kavita accepts a root DocFragment reset locator even when it ignores empty progress strings.
+            return "/body/DocFragment[1].0"
+
+        return None
+
     def _is_kavita_kosync(self) -> bool:
         return (
             self.display_name.lower() == "kavitakosync"
@@ -256,13 +269,21 @@ class KoSyncSyncClient(SyncClient):
         ko_id = book.kosync_doc_id if book else None
         # use perfect_ko_xpath if available
         xpath = locator.perfect_ko_xpath if locator and locator.perfect_ko_xpath else locator.xpath
-        safe_xpath = self._sanitize_kosync_xpath(xpath, pct)
+        safe_xpath = None
 
         epub = (
             (getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None))
             if book
             else None
         )
+        if pct is not None and pct <= 0:
+            safe_xpath = self._get_reset_xpath(book, pct)
+            if safe_xpath:
+                logger.debug(f"Using explicit start-of-book KoSync XPath for '{book.abs_title if book else 'unknown'}'")
+
+        if safe_xpath is None:
+            safe_xpath = self._sanitize_kosync_xpath(xpath, pct)
+
         if safe_xpath is None and epub and pct is not None and pct > 0:
             regenerated_xpath = self.ebook_parser.get_sentence_level_ko_xpath(epub, pct)
             safe_xpath = self._sanitize_kosync_xpath(regenerated_xpath, pct)

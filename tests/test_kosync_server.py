@@ -621,5 +621,29 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(saved_doc.booklore_id, 'bl-1')
 
 
+class TestKosyncDebounceHelpers(unittest.TestCase):
+    def test_default_kosync_put_debounce_is_short(self):
+        from src.api import kosync_server
+
+        with patch.dict(os.environ, {'KOSYNC_PUT_DEBOUNCE_SECONDS': ''}, clear=False):
+            self.assertEqual(kosync_server._get_kosync_debounce_seconds(), 5.0)
+
+    def test_trigger_kosync_sync_prefers_dispatcher_request(self):
+        from src.api import kosync_server
+
+        manager = MagicMock()
+        manager.request_sync = MagicMock()
+
+        with patch.object(kosync_server, '_manager', manager):
+            kosync_server._trigger_kosync_sync('book-1', 'Yellow')
+
+        manager.request_sync.assert_called_once_with(
+            'book-1',
+            trigger_source='kosync',
+            trigger_service='KoSync',
+            reason='put_debounce',
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

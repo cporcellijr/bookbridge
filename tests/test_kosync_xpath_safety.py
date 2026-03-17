@@ -78,8 +78,21 @@ class TestKoSyncXPathSafety(unittest.TestCase):
             "/body/DocFragment[24]/body/p[15]/text().0",
         )
 
-    def test_update_progress_clear_flow_forces_empty_xpath(self):
+    def test_kavita_clear_flow_uses_root_reset_xpath(self):
+        client = KoSyncSyncClient(self.kosync_api, self.ebook_parser, display_name="KavitaKoSync")
         self.kosync_api.update_progress.return_value = True
+        book = SimpleNamespace(kosync_doc_id="doc-3", ebook_filename="book.epub", abs_title="Book")
+        locator = LocatorResult(percentage=0.0, xpath="bad-xpath")
+        request = UpdateProgressRequest(locator_result=locator)
+
+        result = client.update_progress(book, request)
+
+        self.assertTrue(result.success)
+        self.kosync_api.update_progress.assert_called_once_with("doc-3", 0.0, "/body/DocFragment[1].0")
+
+    def test_update_progress_clear_flow_falls_back_to_empty_xpath_when_reset_locator_unavailable(self):
+        self.kosync_api.update_progress.return_value = True
+        self.ebook_parser.get_perfect_ko_xpath.return_value = None
         book = SimpleNamespace(kosync_doc_id="doc-3", ebook_filename="book.epub", abs_title="Book")
         locator = LocatorResult(percentage=0.0, xpath="bad-xpath")
         request = UpdateProgressRequest(locator_result=locator)

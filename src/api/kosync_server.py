@@ -37,6 +37,45 @@ _kosync_debounce_lock = threading.Lock()
 _debounce_thread_started = False
 
 
+def _get_kosync_debounce_seconds() -> float:
+    raw = os.environ.get("KOSYNC_PUT_DEBOUNCE_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            logger.warning("Invalid KOSYNC_PUT_DEBOUNCE_SECONDS=%r, falling back to 5s", raw)
+    return 5.0
+
+
+def _get_kosync_debounce_poll_seconds(debounce_seconds: float) -> float:
+    if debounce_seconds <= 1.0:
+        return 0.25
+    if debounce_seconds <= 3.0:
+        return 0.5
+    return 1.0
+
+
+def _trigger_kosync_sync(abs_id: str, title: str) -> None:
+    if not _manager:
+        return
+
+    logger.info("⚡ KOSync PUT: Triggering sync for '%s' (debounced)", title)
+    if hasattr(_manager, "request_sync"):
+        _manager.request_sync(
+            abs_id,
+            trigger_source="kosync",
+            trigger_service="KoSync",
+            reason="put_debounce",
+        )
+        return
+
+    threading.Thread(
+        target=_manager.sync_cycle,
+        kwargs={"target_abs_id": abs_id},
+        daemon=True,
+    ).start()
+
+
 def init_kosync_server(database_service, container, manager, ebook_dir=None):
     """Initialize KoSync server with required dependencies."""
     global _database_service, _container, _manager, _ebook_dir
@@ -71,10 +110,10 @@ def _record_kosync_event(abs_id: str, title: str) -> None:
 
 
 def _kosync_debounce_loop() -> None:
-    """Check every 10s for books that stopped receiving KoSync PUTs."""
-    debounce_seconds = int(os.environ.get('ABS_SOCKET_DEBOUNCE_SECONDS', '30'))
+    """Check for books that stopped receiving KoSync PUTs."""
     while True:
-        time.sleep(10)
+        debounce_seconds = _get_kosync_debounce_seconds()
+        time.sleep(_get_kosync_debounce_poll_seconds(debounce_seconds))
         now = time.time()
         to_sync = []
 
@@ -85,13 +124,7 @@ def _kosync_debounce_loop() -> None:
                     to_sync.append((abs_id, info['title']))
 
         for abs_id, title in to_sync:
-            if _manager:
-                logger.info(f"⚡ KOSync PUT: Triggering sync for '{title}' (debounced)")
-                threading.Thread(
-                    target=_manager.sync_cycle,
-                    kwargs={'target_abs_id': abs_id},
-                    daemon=True,
-                ).start()
+            _trigger_kosync_sync(abs_id, title)
 
         # Clean up entries older than 5 minutes
         with _kosync_debounce_lock:
@@ -727,9 +760,32 @@ def _respond_from_book_states(doc_id, book):
     """Build a GET response from a book's state data. Returns (response, status_code)."""
     states = _database_service.get_states_for_book(book.abs_id)
 
+    exact_doc = _database_service.get_kosync_document(doc_id)
+    if exact_doc and (
+        exact_doc.progress
+        or (exact_doc.percentage is not None and float(exact_doc.percentage) > 0)
+    ):
+        logger.info(
+            "KOSync: Returning exact document state for %s (%s %.2f%%)",
+            doc_id,
+            book.abs_title,
+            float(exact_doc.percentage or 0) * 100.0,
+        )
+        return jsonify({
+            "device": exact_doc.device or "abs-kosync-bridge",
+            "device_id": exact_doc.device_id or "abs-kosync-bridge",
+            "document": doc_id,
+            "percentage": float(exact_doc.percentage or 0),
+            "progress": exact_doc.progress or "",
+            "timestamp": int(exact_doc.timestamp.timestamp()) if exact_doc.timestamp else 0,
+        }), 200
+
     # Also check sibling kosync_documents for device-specific progress
     sibling_docs = _database_service.get_kosync_documents_for_book(book.abs_id)
-    docs_with_progress = [d for d in sibling_docs if d.percentage and float(d.percentage) > 0]
+    docs_with_progress = [
+        d for d in sibling_docs
+        if d.document_hash != doc_id and d.percentage and float(d.percentage) > 0
+    ]
     if docs_with_progress:
         best_doc = max(docs_with_progress, key=lambda d: float(d.percentage))
         logger.info(f"KOSync: Resolved {doc_id} to '{book.abs_title}' via sibling hash {best_doc.document_hash} ({float(best_doc.percentage):.2%})")

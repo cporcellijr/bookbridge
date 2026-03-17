@@ -180,23 +180,53 @@ class State(Base):
     client_name = Column(String(50), nullable=False)
     last_updated = Column(Float)
     percentage = Column(Float)
+    raw_percentage = Column(Float)
     timestamp = Column(Float)
     xpath = Column(Text)
     cfi = Column(Text)
+    canonical_text_offset = Column(Integer)
+    canonical_audio_ms = Column(Integer)
+    variant_id = Column(String(500))
+    mapping_confidence = Column(Float)
+    locator_version = Column(Integer, default=2, nullable=False)
+    locator_json = Column(Text)
 
     # Relationship
     book = relationship("Book", back_populates="states")
 
     def __init__(self, abs_id: str, client_name: str, last_updated: float = None,
-                 percentage: float = None, timestamp: float = None,
-                 xpath: str = None, cfi: str = None):
+                 percentage: float = None, raw_percentage: float = None,
+                 timestamp: float = None, xpath: str = None,
+                 cfi: str = None, canonical_text_offset: int = None,
+                 canonical_audio_ms: int = None, variant_id: str = None,
+                 mapping_confidence: float = None, locator_version: int = 2,
+                 locator_json: str = None):
         self.abs_id = abs_id
         self.client_name = client_name
         self.last_updated = last_updated
         self.percentage = percentage
+        self.raw_percentage = raw_percentage
         self.timestamp = timestamp
         self.xpath = xpath
         self.cfi = cfi
+        self.canonical_text_offset = canonical_text_offset
+        self.canonical_audio_ms = canonical_audio_ms
+        self.variant_id = variant_id
+        self.mapping_confidence = mapping_confidence
+        self.locator_version = locator_version
+        self.locator_json = locator_json
+
+    @property
+    def locator_data(self) -> dict:
+        import json
+
+        if not self.locator_json:
+            return {}
+        try:
+            data = json.loads(self.locator_json)
+        except (TypeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def __repr__(self):
         return f"<State(abs_id='{self.abs_id}', client='{self.client_name}', pct={self.percentage})>"

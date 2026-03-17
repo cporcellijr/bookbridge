@@ -249,12 +249,34 @@ class DatabaseService:
                 session.query(Job).filter(Job.abs_id == old_abs_id).update({Job.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(KosyncDocument).filter(KosyncDocument.linked_abs_id == old_abs_id).update({KosyncDocument.linked_abs_id: new_abs_id}, synchronize_session=False)
                 
-                # Cleanup non-migratable data (Alignment/Hardcover)
+                # Cleanup non-migratable alignment data, but preserve Hardcover links.
                 from .models import BookAlignment # Import here to avoid circulars if any, though likely safe at top
                 try:
                     session.query(BookAlignment).filter(BookAlignment.abs_id == old_abs_id).delete(synchronize_session=False)
-                    session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == old_abs_id).delete(synchronize_session=False)
-                except Exception: pass
+                except Exception:
+                    pass
+
+                old_hardcover = session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == old_abs_id).first()
+                if old_hardcover:
+                    new_hardcover = session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == new_abs_id).first()
+                    if new_hardcover:
+                        for attr in [
+                            'hardcover_book_id',
+                            'hardcover_slug',
+                            'hardcover_edition_id',
+                            'hardcover_pages',
+                            'hardcover_audio_seconds',
+                            'isbn',
+                            'asin',
+                            'matched_by',
+                        ]:
+                            new_value = getattr(new_hardcover, attr, None)
+                            old_value = getattr(old_hardcover, attr, None)
+                            if new_value in (None, "", 0) and old_value not in (None, ""):
+                                setattr(new_hardcover, attr, old_value)
+                        session.delete(old_hardcover)
+                    else:
+                        old_hardcover.abs_id = new_abs_id
                 
                 logger.info(f"✅ Migrated data from '{old_abs_id}' to '{new_abs_id}'")
             except Exception as e:
@@ -321,7 +343,20 @@ class DatabaseService:
 
             if existing:
                 # Update existing state
-                for attr in ['last_updated', 'percentage', 'timestamp', 'xpath', 'cfi']:
+                for attr in [
+                    'last_updated',
+                    'percentage',
+                    'raw_percentage',
+                    'timestamp',
+                    'xpath',
+                    'cfi',
+                    'canonical_text_offset',
+                    'canonical_audio_ms',
+                    'variant_id',
+                    'mapping_confidence',
+                    'locator_version',
+                    'locator_json',
+                ]:
                     if hasattr(state, attr):
                         setattr(existing, attr, getattr(state, attr))
                 session.flush()

@@ -7,7 +7,7 @@ import time
 import traceback
 from pathlib import Path
 import schedule
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 import re
 
 import json
@@ -21,8 +21,11 @@ from src.utils.logging_utils import sanitize_log_data
 
 # [NEW] Service Imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
+from src.services.canonical_position_service import CanonicalPositionService
 from src.services.library_service import LibraryService
 from src.services.migration_service import MigrationService
+from src.services.sync_dispatcher import SyncDispatcher, SyncRequest
+from src.services.variant_position_mapper import VariantPositionMapper
 
 # Silence noisy third-party loggers
 for noisy in ('urllib3', 'requests', 'schedule', 'chardet', 'multipart', 'faster_whisper'):
@@ -87,12 +90,30 @@ class SyncManager:
 
         self._job_queue = []
         self._job_lock = threading.Lock()
-        self._sync_lock = threading.Lock()
+        self._daemon_cycle_lock = threading.Lock()
+        self._sync_lock = self._daemon_cycle_lock
+        self._library_sync_lock = threading.Lock()
+        self._book_sync_locks_guard = threading.Lock()
+        self._book_sync_locks: dict[str, threading.Lock] = {}
         self._job_thread = None
         self._last_library_sync = 0
         self._suggestion_in_flight: set[str] = set()
         self._suggestion_lock = threading.Lock()
         self._sync_cycle_ebook_cache: dict[str, tuple[str, int]] = {}
+        self._cycle_context = threading.local()
+        self.use_canonical_position = os.getenv("SYNC_USE_CANONICAL_POSITION", "true").lower() != "false"
+        self.block_low_confidence_writes = os.getenv("SYNC_BLOCK_LOW_CONFIDENCE_WRITES", "true").lower() != "false"
+        self.coalesce_book_requests = os.getenv("SYNC_COALESCE_BOOK_REQUESTS", "true").lower() != "false"
+        self._canonical_confidence_threshold = float(os.getenv("SYNC_CANONICAL_CONFIDENCE_THRESHOLD", "0.75"))
+        self._state_fetch_timeout_seconds = float(os.getenv("SYNC_STATE_FETCH_TIMEOUT_SECONDS", "45"))
+        variant_cache_dir = (self.data_dir / "cache" / "variant_maps") if self.data_dir else Path("/data/cache/variant_maps")
+        self.variant_position_mapper = VariantPositionMapper(self.ebook_parser, variant_cache_dir)
+        self.canonical_position_service = CanonicalPositionService(
+            self.ebook_parser,
+            alignment_service=self.alignment_service,
+            variant_position_mapper=self.variant_position_mapper,
+        )
+        self.sync_dispatcher = SyncDispatcher(self._run_dispatched_book_sync)
 
         self._setup_sync_clients(sync_clients)
         self.startup_checks()
@@ -100,20 +121,51 @@ class SyncManager:
 
     def _get_cached_ebook_text(self, ebook_filename: str):
         """Return (full_text, total_len) cached for current sync cycle."""
-        if not hasattr(self, "_sync_cycle_ebook_cache"):
-            self._sync_cycle_ebook_cache = {}
+        cache = self._get_cycle_ebook_cache()
         if not ebook_filename:
             return None, 0
 
-        cached = self._sync_cycle_ebook_cache.get(ebook_filename)
+        cached = cache.get(ebook_filename)
         if cached is not None:
             return cached
 
         book_path = self.ebook_parser.resolve_book_path(ebook_filename)
         full_text, _ = self.ebook_parser.extract_text_and_map(book_path)
         result = (full_text or "", len(full_text or ""))
-        self._sync_cycle_ebook_cache[ebook_filename] = result
+        cache[ebook_filename] = result
         return result
+
+    def _get_cycle_ebook_cache(self) -> dict[str, tuple[str, int]]:
+        if not hasattr(self, "_cycle_context"):
+            self._cycle_context = threading.local()
+
+        cache = getattr(self._cycle_context, "ebook_cache", None)
+        if cache is None:
+            cache = getattr(self, "_sync_cycle_ebook_cache", None)
+            if cache is None:
+                cache = {}
+            self._cycle_context.ebook_cache = cache
+            self._sync_cycle_ebook_cache = cache
+        return cache
+
+    def _clear_cycle_ebook_cache(self) -> None:
+        cache = self._get_cycle_ebook_cache()
+        cache.clear()
+        self._sync_cycle_ebook_cache = cache
+
+    def _get_book_sync_lock(self, abs_id: str | None):
+        if not abs_id:
+            return self._sync_lock
+        if not hasattr(self, "_book_sync_locks_guard"):
+            self._book_sync_locks_guard = threading.Lock()
+        if not hasattr(self, "_book_sync_locks"):
+            self._book_sync_locks = {}
+        with self._book_sync_locks_guard:
+            lock = self._book_sync_locks.get(abs_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._book_sync_locks[abs_id] = lock
+            return lock
 
     def _get_non_story_ebook_filename(self, book: Book | None) -> str | None:
         """Preferred EPUB for KoSync/Booklore/ABS ebook operations."""
@@ -250,23 +302,27 @@ class SyncManager:
 
         if locator.perfect_ko_xpath:
             idx = self.ebook_parser.resolve_xpath_to_index(target_epub, locator.perfect_ko_xpath)
-            if idx is not None:
-                return int(idx), "perfect_ko_xpath"
+            coerced_idx = CanonicalPositionService._coerce_int(idx)
+            if coerced_idx is not None:
+                return coerced_idx, "perfect_ko_xpath"
 
         if locator.xpath:
             idx = self.ebook_parser.resolve_xpath_to_index(target_epub, locator.xpath)
-            if idx is not None:
-                return int(idx), "xpath"
+            coerced_idx = CanonicalPositionService._coerce_int(idx)
+            if coerced_idx is not None:
+                return coerced_idx, "xpath"
 
         if locator.cfi:
             idx = self.ebook_parser.resolve_cfi_to_index(target_epub, locator.cfi)
-            if idx is not None:
-                return int(idx), "cfi"
+            coerced_idx = CanonicalPositionService._coerce_int(idx)
+            if coerced_idx is not None:
+                return coerced_idx, "cfi"
 
         if locator.href:
             idx, reason = self._resolve_href_to_char_offset(target_epub, locator.href, locator.chapter_progress)
-            if idx is not None:
-                return int(idx), reason or "href"
+            coerced_idx = CanonicalPositionService._coerce_int(idx)
+            if coerced_idx is not None:
+                return coerced_idx, reason or "href"
 
         return None, None
 
@@ -554,6 +610,20 @@ class SyncManager:
                 continue
 
             client_state = config[client_name]
+            canonical_audio_ms = client_state.current.get("_canonical_audio_ms")
+            canonical_text_offset = client_state.current.get("_canonical_text_offset")
+            if canonical_audio_ms is not None and canonical_text_offset is not None:
+                normalized_ts = float(canonical_audio_ms) / 1000.0
+                normalized[client_name] = normalized_ts
+                client_state.current["_normalized_ts"] = normalized_ts
+                client_state.current["_normalization_source"] = client_state.current.get(
+                    "_canonical_source",
+                    client_state.current.get("_normalization_source", "canonical"),
+                )
+                client_state.current["_normalization_confidence"] = (
+                    "high" if float(client_state.current.get("_canonical_confidence", 0.0)) >= getattr(self, "_canonical_confidence_threshold", 0.75) else "low"
+                )
+                continue
             client_pct = client_state.current.get('pct', 0)
             client_xpath = client_state.current.get('xpath')
             client_cfi = client_state.current.get('cfi')
@@ -686,6 +756,19 @@ class SyncManager:
             return None
 
         client_state = config[client_name]
+        canonical_audio_ms = client_state.current.get("_canonical_audio_ms")
+        canonical_text_offset = client_state.current.get("_canonical_text_offset")
+        if canonical_audio_ms is not None and canonical_text_offset is not None:
+            normalized_ts = float(canonical_audio_ms) / 1000.0
+            client_state.current["_normalized_ts"] = normalized_ts
+            client_state.current["_normalization_source"] = client_state.current.get(
+                "_canonical_source",
+                client_state.current.get("_normalization_source", "canonical"),
+            )
+            client_state.current["_normalization_confidence"] = (
+                "high" if float(client_state.current.get("_canonical_confidence", 0.0)) >= getattr(self, "_canonical_confidence_threshold", 0.75) else "low"
+            )
+            return normalized_ts
         client_pct = client_state.current.get("pct", 0)
         client_xpath = client_state.current.get("xpath")
         client_cfi = client_state.current.get("cfi")
@@ -802,6 +885,143 @@ class SyncManager:
 
         return None
 
+    @staticmethod
+    def _extract_raw_percentage(state_data: dict | None) -> float | None:
+        if not isinstance(state_data, dict):
+            return None
+
+        for key in ("raw_pct", "_remote_pct"):
+            raw_value = state_data.get(key)
+            if raw_value is None:
+                continue
+            try:
+                return float(raw_value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    @staticmethod
+    def _build_locator_payload(state_data: dict | None) -> str | None:
+        if not isinstance(state_data, dict):
+            return None
+
+        payload = {}
+        fragment = state_data.get("fragment")
+        if fragment is None:
+            fragment = state_data.get("frag")
+
+        field_map = {
+            "href": state_data.get("href"),
+            "fragment": fragment,
+            "fragments": state_data.get("fragments"),
+            "chapter_progress": state_data.get("chapter_progress"),
+            "css_selector": state_data.get("css_selector"),
+            "position": state_data.get("position"),
+            "match_index": state_data.get("match_index"),
+            "perfect_ko_xpath": state_data.get("perfect_ko_xpath"),
+            "normalization_source": state_data.get("_normalization_source"),
+            "normalization_confidence": state_data.get("_normalization_confidence"),
+            "canonical_source": state_data.get("_canonical_source"),
+            "anchor_excerpt": state_data.get("_anchor_excerpt"),
+        }
+
+        for key, value in field_map.items():
+            if value is not None:
+                payload[key] = value
+
+        return json.dumps(payload, sort_keys=True) if payload else None
+
+    def _build_state_model(self, abs_id: str, client_name: str, current_time: float, state_data: dict | None) -> State:
+        state_data = state_data or {}
+        return State(
+            abs_id=abs_id,
+            client_name=client_name.lower(),
+            last_updated=current_time,
+            percentage=state_data.get('pct'),
+            raw_percentage=self._extract_raw_percentage(state_data),
+            timestamp=state_data.get('ts'),
+            xpath=state_data.get('xpath'),
+            cfi=state_data.get('cfi'),
+            canonical_text_offset=state_data.get('_canonical_text_offset'),
+            canonical_audio_ms=state_data.get('_canonical_audio_ms'),
+            variant_id=state_data.get('_variant_id'),
+            mapping_confidence=state_data.get('_canonical_confidence'),
+            locator_version=2,
+            locator_json=self._build_locator_payload(state_data),
+        )
+
+    def _derive_primary_pct_from_offset(self, book: Book, char_offset: int | None) -> float | None:
+        if char_offset is None:
+            return None
+        primary_epub = self._get_non_story_ebook_filename(book) or self._get_storyteller_ebook_filename(book)
+        if not primary_epub:
+            return None
+        try:
+            full_text, total_len = self._get_cached_ebook_text(primary_epub)
+        except Exception:
+            return None
+        if not full_text or total_len <= 0:
+            return None
+        safe_offset = max(0, min(int(char_offset), total_len - 1))
+        return safe_offset / float(total_len)
+
+    def _enrich_service_state_with_canonical(
+        self,
+        book: Book,
+        client_name: str,
+        service_state: ServiceState | None,
+        prev_state: State | None,
+    ) -> ServiceState | None:
+        if (
+            service_state is None
+            or not getattr(self, "use_canonical_position", True)
+            or not hasattr(self, "canonical_position_service")
+        ):
+            return service_state
+
+        current = service_state.current or {}
+        try:
+            canonical = self.canonical_position_service.resolve_state(book, client_name, current)
+            if canonical.canonical_text_offset is not None:
+                current["_canonical_text_offset"] = canonical.canonical_text_offset
+            if canonical.canonical_audio_ms is not None:
+                current["_canonical_audio_ms"] = canonical.canonical_audio_ms
+                current.setdefault("ts", canonical.canonical_audio_ms / 1000.0)
+            if canonical.anchor_excerpt:
+                current["_anchor_excerpt"] = canonical.anchor_excerpt
+            if canonical.variant_id:
+                current["_variant_id"] = canonical.variant_id
+            if canonical.canonical_text_offset is not None or canonical.canonical_audio_ms is not None:
+                current["_canonical_confidence"] = canonical.confidence
+
+            derived_pct = self._derive_primary_pct_from_offset(book, canonical.canonical_text_offset)
+            if derived_pct is not None:
+                current["_locator_pct"] = derived_pct
+                current["_canonical_pct"] = derived_pct
+                raw_pct = current.get("pct")
+                if client_name == "BookLore" and bool(current.get("cfi") or current.get("href")):
+                    try:
+                        if raw_pct is None or float(raw_pct) <= 0.0:
+                            current["pct"] = derived_pct
+                    except (TypeError, ValueError):
+                        current["pct"] = derived_pct
+
+            prev_text = getattr(prev_state, "canonical_text_offset", None) if prev_state else None
+            prev_audio_ms = getattr(prev_state, "canonical_audio_ms", None) if prev_state else None
+            if canonical.canonical_text_offset is not None and prev_text is not None:
+                current["_canonical_delta_text"] = abs(int(canonical.canonical_text_offset) - int(prev_text))
+            if canonical.canonical_audio_ms is not None and prev_audio_ms is not None:
+                current["_canonical_delta_audio_ms"] = abs(int(canonical.canonical_audio_ms) - int(prev_audio_ms))
+        except Exception as exc:
+            logger.debug(
+                "Skipping canonical enrichment for '%s' on '%s': %s",
+                sanitize_log_data(getattr(book, "abs_title", getattr(book, "abs_id", "unknown"))),
+                client_name,
+                exc,
+            )
+
+        return service_state
+
 
     def _fetch_states_parallel(self, book, prev_states_by_client, title_snip, bulk_states_per_client=None, clients_to_use=None):
         """Fetch states from specified clients (or all if not specified) in parallel."""
@@ -825,14 +1045,34 @@ class SyncManager:
                 )
                 futures[future] = client_name
 
-            for future in as_completed(futures, timeout=15):
-                client_name = futures[future]
-                try:
-                    state = future.result()
-                    if state is not None:
-                        config[client_name] = state
-                except Exception as e:
-                    logger.warning(f"⚠️ '{client_name}' state fetch failed: {e}")
+            try:
+                for future in as_completed(futures, timeout=self._state_fetch_timeout_seconds):
+                    client_name = futures[future]
+                    try:
+                        state = future.result()
+                        if state is not None:
+                            prev_state = prev_states_by_client.get(client_name.lower())
+                            state = self._enrich_service_state_with_canonical(book, client_name, state, prev_state)
+                            config[client_name] = state
+                    except Exception as e:
+                        logger.warning(f"⚠️ '{client_name}' state fetch failed: {e}")
+            except FuturesTimeoutError:
+                pending = [futures[future] for future in futures if not future.done()]
+                logger.warning(
+                    f"⚠️ State fetch timeout for '{sanitize_log_data(getattr(book, 'abs_title', getattr(book, 'abs_id', 'unknown')))}' "
+                    f"after {self._state_fetch_timeout_seconds:.1f}s; pending clients={pending}"
+                )
+                for future, client_name in futures.items():
+                    if not future.done() or client_name in config:
+                        continue
+                    try:
+                        state = future.result()
+                        if state is not None:
+                            prev_state = prev_states_by_client.get(client_name.lower())
+                            state = self._enrich_service_state_with_canonical(book, client_name, state, prev_state)
+                            config[client_name] = state
+                    except Exception as e:
+                        logger.warning(f"⚠️ '{client_name}' state fetch failed after timeout: {e}")
 
         return config
 
@@ -1622,6 +1862,14 @@ class SyncManager:
         - API noise on long books (BookLore's 20s rounding errors filtered)
         - Missing real progress on all books (30s+ changes do count)
         """
+        canonical_audio_delta_ms = config[client_name].current.get("_canonical_delta_audio_ms")
+        if canonical_audio_delta_ms is not None and int(canonical_audio_delta_ms) >= 30_000:
+            return True
+
+        canonical_text_delta = config[client_name].current.get("_canonical_delta_text")
+        if canonical_text_delta is not None and int(canonical_text_delta) >= self.delta_chars_thresh:
+            return True
+
         delta_pct = config[client_name].delta
         return self._is_significant_pct_delta(delta_pct, book)
 
@@ -1871,7 +2119,53 @@ class SyncManager:
                 
         return leader, leader_pct
 
-    def sync_cycle(self, target_abs_id=None):
+    def request_sync(
+        self,
+        abs_id: str,
+        *,
+        trigger_source: str = "manual",
+        trigger_service: str | None = None,
+        reason: str | None = None,
+        force_reconcile: bool = False,
+    ) -> None:
+        if not abs_id:
+            return
+
+        if not getattr(self, "coalesce_book_requests", False):
+            self.sync_cycle(target_abs_id=abs_id)
+            return
+
+        self.sync_dispatcher.request_sync(
+            abs_id,
+            trigger_source=trigger_source,
+            trigger_service=trigger_service,
+            reason=reason,
+            force_reconcile=force_reconcile,
+        )
+
+    def _run_dispatched_book_sync(self, request: SyncRequest) -> None:
+        self.sync_cycle(target_abs_id=request.book_id, sync_request=request)
+
+    def _refresh_library_if_due(self) -> None:
+        if not self.library_service:
+            return
+        if time.time() - self._last_library_sync <= 900:
+            return
+        if not self._library_sync_lock.acquire(blocking=False):
+            return
+
+        def _worker():
+            try:
+                self.library_service.sync_library_books()
+                self._last_library_sync = time.time()
+            except Exception as exc:
+                logger.warning(f"⚠️ Background library refresh failed: {exc}")
+            finally:
+                self._library_sync_lock.release()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def sync_cycle(self, target_abs_id=None, sync_request: SyncRequest | None = None):
         """
         Run a sync cycle.
 
@@ -1880,41 +2174,51 @@ class SyncManager:
                            Otherwise, sync all active books using bulk-poll optimization.
         """
         # Prevent race condition: If daemon is running, skip. If Instant Sync, wait.
-        acquired = False
+        if target_abs_id and getattr(self, "coalesce_book_requests", False) and sync_request is None:
+            self.request_sync(target_abs_id, trigger_source="direct", reason="sync_cycle")
+            return
         if target_abs_id:
-             # Instant Sync: Block and wait for lock (up to 10s)
-             acquired = self._sync_lock.acquire(timeout=10)
-             if not acquired:
-                 logger.warning(f"⚠️ Sync lock timeout for '{target_abs_id}' - skipping")
-                 return
+             book_lock = self._get_book_sync_lock(target_abs_id)
+             book_lock.acquire()
         else:
              # Daemon: Non-blocking attempt
-             acquired = self._sync_lock.acquire(blocking=False)
+             daemon_lock = getattr(self, "_daemon_cycle_lock", self._sync_lock)
+             acquired = daemon_lock.acquire(blocking=False)
              if not acquired:
-                 logger.debug("Sync cycle skipped - another cycle is running")
-                 return
+                  logger.debug("Sync cycle skipped - another cycle is running")
+                  return
 
         try:
-            self._sync_cycle_internal(target_abs_id)
+            self._sync_cycle_internal(target_abs_id, sync_request=sync_request)
         except Exception as e:
             logger.error(f"❌ Sync cycle internal error: {e}")
             # Log traceback for robust debugging
             logger.error(traceback.format_exc())
         finally:
-            self._sync_lock.release()
+            if target_abs_id:
+                book_lock.release()
+            else:
+                daemon_lock.release()
 
-    def _sync_cycle_internal(self, target_abs_id=None):
+    def _sync_cycle_internal(self, target_abs_id=None, sync_request: SyncRequest | None = None):
         # Clear caches at start of cycle
-        self._sync_cycle_ebook_cache.clear()
+        self._clear_cycle_ebook_cache()
         storyteller_client = self.sync_clients.get('Storyteller')
         if storyteller_client and hasattr(storyteller_client, 'storyteller_client'):
             if hasattr(storyteller_client.storyteller_client, 'clear_cache'):
                 storyteller_client.storyteller_client.clear_cache()
                 
         # Refresh Library Metadata (Booklore) — throttle to once per 15 minutes
-        if self.library_service and (time.time() - self._last_library_sync > 900):
-            self.library_service.sync_library_books()
-            self._last_library_sync = time.time()
+        if target_abs_id:
+            logger.info(
+                "sync_requested book=%s trigger_source=%s trigger_service=%s reason=%s",
+                target_abs_id,
+                sync_request.trigger_source if sync_request else "direct",
+                sync_request.trigger_service if sync_request and sync_request.trigger_service else "",
+                sync_request.reason if sync_request and sync_request.reason else "",
+            )
+        else:
+            self._refresh_library_if_due()
     
         # Get active books directly from database service
         active_books = []
@@ -1948,6 +2252,15 @@ class SyncManager:
         # Main sync loop - process each active book
         for book in active_books:
             abs_id = book.abs_id
+            book_lock_acquired = False
+            if not target_abs_id:
+                book_lock = self._get_book_sync_lock(abs_id)
+                book_lock_acquired = book_lock.acquire(blocking=False)
+                if not book_lock_acquired:
+                    logger.debug(
+                        f"'{abs_id}' Skipping daemon sync for book because a targeted sync is already running"
+                    )
+                    continue
             logger.info(f"🔄 '{abs_id}' Syncing '{sanitize_log_data(book.abs_title or 'Unknown')}'")
             title_snip = sanitize_log_data(book.abs_title or 'Unknown')
 
@@ -2083,8 +2396,32 @@ class SyncManager:
                     for client_name in config.keys()
                 )
                 if significant_diff and not any_significant_delta and not char_delta_triggered and not new_client_in_config:
-                    logger.debug(f"'{abs_id}' '{title_snip}' Discrepancy exists ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) but no recent client activity detected. Waiting for a new read event to determine true leader")
-                    continue
+                    try:
+                        stale_discrepancy_threshold = int(os.getenv("SYNC_STALE_DISCREPANCY_SECONDS", "900"))
+                    except (TypeError, ValueError):
+                        stale_discrepancy_threshold = 900
+
+                    latest_persisted_activity = max(
+                        (
+                            float(prev_states_by_client[client_name.lower()].last_updated or 0.0)
+                            for client_name in config.keys()
+                            if client_name.lower() in prev_states_by_client
+                        ),
+                        default=0.0,
+                    )
+                    discrepancy_age = (time.time() - latest_persisted_activity) if latest_persisted_activity else None
+
+                    if discrepancy_age is None or discrepancy_age < stale_discrepancy_threshold:
+                        logger.debug(
+                            f"'{abs_id}' '{title_snip}' Discrepancy exists ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) "
+                            "but no recent client activity detected. Waiting for a new read event to determine true leader"
+                        )
+                        continue
+
+                    logger.info(
+                        f"'{abs_id}' '{title_snip}' Forcing stale discrepancy reconciliation after "
+                        f"{discrepancy_age:.0f}s without fresh activity"
+                    )
 
                 if significant_diff:
                     logger.debug(f"'{abs_id}' '{title_snip}' Proceeding due to client discrepancy")
@@ -2150,6 +2487,10 @@ class SyncManager:
                 locator = None
                 locator_source = None
 
+                leader_current = leader_state.current or {}
+                leader_canonical_text_offset = leader_current.get("_canonical_text_offset")
+                leader_anchor_excerpt = leader_current.get("_anchor_excerpt")
+
                 if leader == primary_audio_client:
                     abs_timestamp = leader_state.current.get('ts')
                     locator, txt = self._resolve_alignment_locator_from_abs_timestamp(book, abs_timestamp)
@@ -2165,19 +2506,47 @@ class SyncManager:
                             locator_source = "storyteller_direct"
                             logger.debug(f"'{abs_id}' '{title_snip}' Using storyteller direct timestamp->locator path")
                 else:
-                    normalized_ts = leader_state.current.get("_normalized_ts")
-                    if normalized_ts is not None:
-                        locator, txt = self._resolve_alignment_locator_from_abs_timestamp(book, normalized_ts)
-                        if locator:
-                            locator_source = "alignment_from_normalized_ts"
-                            logger.debug(
-                                f"'{abs_id}' '{title_snip}' Using normalized timestamp->locator path "
-                                f"for leader '{leader}' (ts={float(normalized_ts):.2f}s)"
+                    if leader_canonical_text_offset is not None and epub:
+                        try:
+                            locator = self.ebook_parser.get_locator_from_char_offset(
+                                epub, int(leader_canonical_text_offset)
                             )
+                        except Exception as e:
+                            logger.debug(
+                                f"'{abs_id}' '{title_snip}' Failed to rebuild canonical locator "
+                                f"for leader '{leader}': {e}"
+                            )
+                            locator = None
+                        if locator:
+                            locator = self._validate_and_stabilize_locator(
+                                book,
+                                int(leader_canonical_text_offset),
+                                locator,
+                                ebook_filename=epub,
+                            )
+                            locator_source = "canonical_text_offset"
+                            txt = leader_anchor_excerpt or leader_client.get_text_from_current_state(
+                                book, leader_state
+                            )
+                            logger.debug(
+                                f"'{abs_id}' '{title_snip}' Using canonical text offset->locator path "
+                                f"for leader '{leader}' (offset={int(leader_canonical_text_offset)})"
+                            )
+
+                    if not locator:
+                        normalized_ts = leader_current.get("_normalized_ts")
+                        if normalized_ts is not None:
+                            locator, txt = self._resolve_alignment_locator_from_abs_timestamp(book, normalized_ts)
+                            if locator:
+                                locator_source = "alignment_from_normalized_ts"
+                                logger.debug(
+                                    f"'{abs_id}' '{title_snip}' Using normalized timestamp->locator path "
+                                    f"for leader '{leader}' (ts={float(normalized_ts):.2f}s)"
+                                )
 
                 if not locator:
                     if leader != primary_audio_client:
-                        current = leader_state.current or {}
+                        current = leader_current
                         locator = LocatorResult(
                             percentage=leader_pct,
                             xpath=current.get('xpath'),
@@ -2192,7 +2561,27 @@ class SyncManager:
                         if match_index is not None:
                             locator.match_index = match_index
                         locator_source = f"ebook_leader_passthrough:{source or 'state_fields'}"
-                        txt = None
+                        txt = leader_client.get_text_from_current_state(book, leader_state)
+                        if txt and epub:
+                            enriched_locator = leader_client.get_locator_from_text(txt, epub, leader_pct)
+                            if enriched_locator:
+                                locator = LocatorResult(
+                                    percentage=locator.percentage,
+                                    xpath=locator.xpath or enriched_locator.xpath,
+                                    match_index=locator.match_index if locator.match_index is not None else enriched_locator.match_index,
+                                    cfi=locator.cfi or enriched_locator.cfi,
+                                    href=locator.href or enriched_locator.href,
+                                    fragment=locator.fragment or enriched_locator.fragment,
+                                    perfect_ko_xpath=locator.perfect_ko_xpath or enriched_locator.perfect_ko_xpath,
+                                    css_selector=locator.css_selector or enriched_locator.css_selector,
+                                    chapter_progress=(
+                                        locator.chapter_progress
+                                        if locator.chapter_progress is not None
+                                        else enriched_locator.chapter_progress
+                                    ),
+                                    fragments=locator.fragments or enriched_locator.fragments,
+                                )
+                                locator_source = f"{locator_source}+text_enriched"
                     else:
                         if not epub:
                             logger.warning(
@@ -2230,6 +2619,16 @@ class SyncManager:
                     f"original_epub='{sanitize_log_data(getattr(book, 'original_ebook_filename', None))}'"
                 )
 
+                leader_canonical_text_offset = leader_current.get("_canonical_text_offset")
+                leader_canonical_audio_ms = leader_current.get("_canonical_audio_ms")
+                leader_mapping_confidence_raw = leader_current.get("_canonical_confidence")
+                leader_mapping_confidence = (
+                    None
+                    if leader_mapping_confidence_raw in (None, "")
+                    else float(leader_mapping_confidence_raw)
+                )
+                leader_anchor_excerpt = leader_anchor_excerpt or txt
+
                 # Update all other clients and store results
                 results: dict[str, SyncResult] = {}
                 leader_is_audio = leader == primary_audio_client
@@ -2239,11 +2638,78 @@ class SyncManager:
 
                     try:
                         previous_location = config.get(client_name).previous_pct if config.get(client_name) else None
-                        request = UpdateProgressRequest(locator, txt, previous_location=previous_location)
+                        request = UpdateProgressRequest(
+                            locator,
+                            txt,
+                            previous_location=previous_location,
+                            canonical_text_offset=leader_canonical_text_offset,
+                            canonical_audio_ms=leader_canonical_audio_ms,
+                            anchor_excerpt=leader_anchor_excerpt,
+                            mapping_confidence=leader_mapping_confidence,
+                            variant_id=leader_state.current.get("_variant_id"),
+                        )
 
                         follower_supports = client.get_supported_sync_types()
                         follower_is_audio = client_name == primary_audio_client
                         follower_is_ebook = 'ebook' in follower_supports and not follower_is_audio
+
+                        if (
+                            client_name == "Storyteller"
+                            and request.canonical_text_offset is not None
+                            and self.variant_position_mapper
+                        ):
+                            primary_epub = self._get_non_story_ebook_filename(book)
+                            storyteller_epub = self._get_storyteller_ebook_filename(book)
+                            if primary_epub and storyteller_epub:
+                                mapped = self.variant_position_mapper.map_offset(
+                                    book_id=abs_id,
+                                    source_epub=primary_epub,
+                                    target_epub=storyteller_epub,
+                                    source_offset=request.canonical_text_offset,
+                                    excerpt=request.anchor_excerpt or txt,
+                                )
+                                if mapped and mapped.get("target_offset") is not None:
+                                    mapped_confidence = float(mapped.get("confidence") or 0.0)
+                                    request.mapping_confidence = min(
+                                        float(request.mapping_confidence or 1.0),
+                                        mapped_confidence,
+                                    )
+                                    mapped_locator = self.ebook_parser.get_locator_from_char_offset(
+                                        storyteller_epub,
+                                        int(mapped["target_offset"]),
+                                    )
+                                    if mapped_locator:
+                                        request.locator_result = mapped_locator
+                                        request.variant_id = storyteller_epub
+                                        logger.debug(
+                                            f"'{abs_id}' '{title_snip}' Storyteller variant map resolved: "
+                                            f"source_offset={request.canonical_text_offset} "
+                                            f"target_offset={int(mapped['target_offset'])} "
+                                            f"confidence={mapped_confidence:.2f}"
+                                        )
+                                    else:
+                                        request.mapping_confidence = 0.0
+                                else:
+                                    request.mapping_confidence = 0.0
+
+                        if (
+                            self.block_low_confidence_writes
+                            and request.mapping_confidence is not None
+                            and float(request.mapping_confidence) < getattr(self, "_canonical_confidence_threshold", 0.75)
+                        ):
+                            logger.warning(
+                                f"⚠️ '{abs_id}' '{title_snip}' Blocking '{leader}' -> '{client_name}' "
+                                f"write due to low canonical confidence {float(request.mapping_confidence):.2f}"
+                            )
+                            results[client_name] = SyncResult(
+                                request.previous_location,
+                                False,
+                                {
+                                    "pct": config.get(client_name).current.get("pct") if config.get(client_name) else None,
+                                    "_persist_observed_state": False,
+                                },
+                            )
+                            continue
 
                         if (not leader_is_audio) and follower_is_ebook:
                             logger.debug(
@@ -2251,11 +2717,14 @@ class SyncManager:
                             )
 
                         elif (not leader_is_audio) and follower_is_audio:
-                            char_offset, char_source = self._resolve_locator_char_offset(book, locator, epub)
+                            char_offset = request.canonical_text_offset
+                            char_source = "canonical"
+                            if char_offset is None:
+                                char_offset, char_source = self._resolve_locator_char_offset(book, locator, epub)
                             if char_offset is not None and self.alignment_service:
                                 seek_ts = self.alignment_service.get_time_for_text(
                                     book.abs_id,
-                                    query_text=None,
+                                    query_text=request.anchor_excerpt,
                                     char_offset_hint=char_offset,
                                 )
                                 if seek_ts is not None:
@@ -2287,14 +2756,11 @@ class SyncManager:
                 # Save leader state
                 leader_state_data = leader_state.current
 
-                leader_state_model = State(
-                    abs_id=book.abs_id,
-                    client_name=leader.lower(),
-                    last_updated=current_time,
-                    percentage=leader_state_data.get('pct'),
-                    timestamp=leader_state_data.get('ts'),
-                    xpath=leader_state_data.get('xpath'),
-                    cfi=leader_state_data.get('cfi')
+                leader_state_model = self._build_state_model(
+                    book.abs_id,
+                    leader,
+                    current_time,
+                    leader_state_data,
                 )
                 self.database_service.save_state(leader_state_model)
 
@@ -2302,20 +2768,19 @@ class SyncManager:
                 for client_name, result in results.items():
                     state_data = self._get_persistable_result_state(result)
                     if state_data is not None:
+                        if self.use_canonical_position:
+                            self.canonical_position_service.resolve_state(book, client_name, state_data, observed_at=current_time)
                         if result.success:
                             logger.info(f"'{abs_id}' '{title_snip}' Updated state data for '{client_name}': {state_data}")
                         else:
                             logger.info(
                                 f"'{abs_id}' '{title_snip}' Observed state data for '{client_name}' after failed update: {state_data}"
                             )
-                        client_state_model = State(
-                            abs_id=book.abs_id,
-                            client_name=client_name.lower(),
-                            last_updated=current_time,
-                            percentage=state_data.get('pct'),
-                            timestamp=state_data.get('ts'),
-                            xpath=state_data.get('xpath'),
-                            cfi=state_data.get('cfi')
+                        client_state_model = self._build_state_model(
+                            book.abs_id,
+                            client_name,
+                            current_time,
+                            state_data,
                         )
                         self.database_service.save_state(client_state_model)
 
@@ -2332,6 +2797,10 @@ class SyncManager:
                 logger.error(traceback.format_exc())
                 logger.error(f"❌ Sync error: {e}")
 
+            finally:
+                if book_lock_acquired:
+                    book_lock.release()
+
         logger.debug("End of sync cycle for active books")
 
     def clear_progress(self, abs_id):
@@ -2347,8 +2816,8 @@ class SyncManager:
         try:
             logger.info(f"🧹 Clearing progress for book {sanitize_log_data(abs_id)}...")
 
-            # Acquire lock to prevent race conditions with active sync cycles
-            with self._sync_lock:
+            # Serialize destructive resets only against sync work for this book.
+            with self._get_book_sync_lock(abs_id):
                 # Get the book first
                 book = self.database_service.get_book(abs_id)
                 if not book:

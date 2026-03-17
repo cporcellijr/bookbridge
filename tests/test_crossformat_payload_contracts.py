@@ -52,7 +52,18 @@ def test_booklore_payload_contract_epub_percentage_and_optional_cfi():
     payloads = []
 
     def _fake_make_request(method, endpoint, payload):
-        payloads.append(payload)
+        if method == "POST":
+            payloads.append(payload)
+            return SimpleNamespace(status_code=200)
+        if method == "GET":
+            book_payload = {
+                "bookType": "EPUB",
+                "epubProgress": {
+                    "percentage": 42.0 if len(payloads) == 1 else 36.0,
+                    "cfi": "epubcfi(/6/10!/4:0)" if len(payloads) == 1 else None,
+                },
+            }
+            return SimpleNamespace(status_code=200, json=lambda: book_payload)
         return SimpleNamespace(status_code=200)
 
     client._make_request = MagicMock(side_effect=_fake_make_request)

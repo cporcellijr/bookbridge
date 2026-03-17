@@ -1560,9 +1560,11 @@ def settings():
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
         ]
+        meta_keys = {'__SETTINGS_FORM_FULL'}
 
         # Current settings in DB
         current_settings = database_service.get_all_settings()
+        full_settings_form = request.form.get('__SETTINGS_FORM_FULL') == '1'
         booklore_setting_keys = [
             'BOOKLORE_LIBRARY_ID',
             'BOOKLORE_SERVER',
@@ -1593,9 +1595,16 @@ def settings():
             return clean_value
 
         # 1. Handle Boolean Toggles (Checkbox logic)
-        # Checkboxes are NOT sent if unchecked, so we must check every known bool key
+        # Checkboxes are not sent if unchecked. Only treat missing keys as false when
+        # this is the full settings form; otherwise preserve the existing stored value.
         for key in bool_keys:
-            is_checked = (key in request.form)
+            if key in request.form:
+                is_checked = True
+            elif full_settings_form:
+                is_checked = False
+            else:
+                existing_value = str(current_settings.get(key, '') or '').strip().lower()
+                is_checked = existing_value in {'true', '1', 'yes', 'on'}
             # Save "true" or "false"
             val_str = str(is_checked).lower()
             database_service.set_setting(key, val_str)
@@ -1604,7 +1613,8 @@ def settings():
         # 2. Handle Text Inputs
         # Iterate over form to find other keys
         for key, value in request.form.items():
-            if key in bool_keys: continue
+            if key in bool_keys or key in meta_keys:
+                continue
 
             clean_value = value.strip()
 
@@ -1833,6 +1843,13 @@ def index():
         else:
             integrations[client_name.lower()] = False
 
+    try:
+        kavita_client = container.kavita_client()
+        if not kavita_client or not kavita_client.is_configured():
+            kavita_client = None
+    except Exception:
+        kavita_client = None
+
     # Convert books to mappings format for template compatibility
     mappings = []
     total_duration = 0
@@ -1966,6 +1983,59 @@ def index():
         else:
             mapping['booklore_id'] = None
             mapping['booklore_url'] = None
+
+        kavita_book = None
+        kavita_series_id = None
+        kavita_id = None
+        kavita_title = None
+
+        if kavita_client:
+            kavita_filenames = []
+            if book.ebook_filename:
+                kavita_filenames.append(book.ebook_filename)
+            original_ebook_filename = getattr(book, 'original_ebook_filename', None)
+            if original_ebook_filename and original_ebook_filename not in kavita_filenames:
+                kavita_filenames.append(original_ebook_filename)
+
+            for candidate in kavita_filenames:
+                if not _decode_kavita_filename_id(candidate):
+                    continue
+                try:
+                    kavita_book = kavita_client.find_book_by_filename(candidate, allow_refresh=False)
+                except Exception as e:
+                    logger.debug(
+                        "Kavita metadata lookup failed for '%s': %s",
+                        sanitize_log_data(candidate),
+                        e,
+                    )
+                    kavita_book = None
+                if kavita_book:
+                    break
+
+            source_name = str(getattr(book, 'ebook_source', '') or '').strip().lower()
+            if kavita_book:
+                kavita_id = str(kavita_book.get('id') or '').strip() or None
+                kavita_series_id = str(kavita_book.get('series_id') or '').strip() or None
+                kavita_title = kavita_book.get('series_title') or kavita_book.get('title')
+            elif source_name == 'kavita':
+                normalized_series_id = _normalize_ebook_source_id(
+                    getattr(book, 'ebook_source', None),
+                    getattr(book, 'ebook_source_id', None),
+                    book.ebook_filename,
+                )
+                kavita_series_id = str(normalized_series_id or '').strip() or None
+            elif 'kavitakosync' in state_by_client:
+                kavita_series_id = _resolve_kavita_series_id(book, kavita_client)
+
+        mapping['kavita_id'] = kavita_id
+        mapping['kavita_series_id'] = kavita_series_id
+        mapping['kavita_title'] = kavita_title
+        if kavita_client and kavita_series_id:
+            mapping['kavita_url'] = f"{kavita_client.base_url}/series/{kavita_series_id}"
+        elif kavita_client and kavita_id:
+            mapping['kavita_url'] = f"{kavita_client.base_url}/book/{kavita_id}"
+        else:
+            mapping['kavita_url'] = None
 
         # Hardcover deep link (if linked)
         if mapping.get('hardcover_slug'):

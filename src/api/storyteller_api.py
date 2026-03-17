@@ -149,12 +149,8 @@ class StorytellerAPIClient:
                 return book_info
         return None
 
-    def get_position_details_rich(
-        self, book_uuid: str
-    ) -> Tuple[Optional[float], Optional[int], Optional[str], Optional[str], Optional[float]]:
-        """
-        Returns: (percentage, timestamp, href, fragment_id, chapter_progression)
-        """
+    def get_position_details_payload(self, book_uuid: str) -> Optional[dict]:
+        """Return the richest locator payload Storyteller exposes for a book."""
         response = self._make_request("GET", f"/api/v2/books/{book_uuid}/positions")
         if response and response.status_code == 200:
             data = response.json()
@@ -163,22 +159,50 @@ class StorytellerAPIClient:
 
             pct = float(locations.get('totalProgression', 0))
             ts = int(data.get('timestamp', 0))
-
-            # --- EXTRACT PRECISION DATA ---
-            href = locator.get('href') # e.g. "OEBPS/Text/part0000.html"
-            fragment = None
-            if locations.get('fragments') and len(locations['fragments']) > 0:
-                fragment = locations['fragments'][0] # e.g. "id628-sentence94"
+            fragments = locations.get('fragments') if isinstance(locations.get('fragments'), list) else None
+            fragment = fragments[0] if fragments else None
             chapter_progression = locations.get("progression")
             if chapter_progression is not None:
                 try:
                     chapter_progression = float(chapter_progression)
                 except (TypeError, ValueError):
                     chapter_progression = None
+            position = locations.get("position")
+            try:
+                position = int(position) if position is not None else None
+            except (TypeError, ValueError):
+                position = None
 
-            return pct, ts, href, fragment, chapter_progression
+            return {
+                "pct": pct,
+                "ts": ts,
+                "href": locator.get('href'),
+                "fragment": fragment,
+                "fragments": fragments,
+                "chapter_progress": chapter_progression,
+                "css_selector": locations.get("cssSelector"),
+                "position": position,
+                "cfi": locations.get("cfi"),
+            }
 
-        return None, None, None, None, None
+        return None
+
+    def get_position_details_rich(
+        self, book_uuid: str
+    ) -> Tuple[Optional[float], Optional[int], Optional[str], Optional[str], Optional[float]]:
+        """
+        Returns: (percentage, timestamp, href, fragment_id, chapter_progression)
+        """
+        payload = self.get_position_details_payload(book_uuid)
+        if not payload:
+            return None, None, None, None, None
+        return (
+            payload.get("pct"),
+            payload.get("ts"),
+            payload.get("href"),
+            payload.get("fragment"),
+            payload.get("chapter_progress"),
+        )
 
     def get_position_details(self, book_uuid: str) -> Tuple[Optional[float], Optional[int], Optional[str], Optional[str]]:
         """
@@ -197,10 +221,19 @@ class StorytellerAPIClient:
             uuid = book.get('uuid')
             if not uuid:
                 continue
-            pct, ts, href, frag, chapter_progress = self.get_position_details_rich(uuid)
-            if pct is not None:
+            payload = self.get_position_details_payload(uuid)
+            if payload and payload.get('pct') is not None:
                 positions[title.lower()] = {
-                    'pct': pct, 'ts': ts, 'href': href, 'frag': frag, 'chapter_progress': chapter_progress, 'uuid': uuid
+                    'pct': payload.get('pct'),
+                    'ts': payload.get('ts'),
+                    'href': payload.get('href'),
+                    'frag': payload.get('fragment'),
+                    'fragments': payload.get('fragments'),
+                    'chapter_progress': payload.get('chapter_progress'),
+                    'css_selector': payload.get('css_selector'),
+                    'position': payload.get('position'),
+                    'cfi': payload.get('cfi'),
+                    'uuid': uuid,
                 }
         return positions
 

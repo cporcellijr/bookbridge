@@ -36,6 +36,11 @@ class UpdateProgressRequest:
     previous_location: Optional[float] = None
     # optional direct audio seek target (seconds)
     seek_timestamp: Optional[float] = None
+    canonical_text_offset: Optional[int] = None
+    canonical_audio_ms: Optional[int] = None
+    anchor_excerpt: Optional[str] = None
+    mapping_confidence: Optional[float] = None
+    variant_id: Optional[str] = None
 
 @dataclass
 class SyncResult:

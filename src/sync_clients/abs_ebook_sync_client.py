@@ -14,7 +14,7 @@ class ABSEbookSyncClient(SyncClient):
         super().__init__(ebook_parser)
         self.abs_client = abs_client
         self.ebook_parser = ebook_parser
-        self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_EBOOK_PERCENT", 1))
+        self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_EBOOK_PERCENT", 1)) / 100.0
 
     def is_configured(self) -> bool:
         return os.getenv("SYNC_ABS_EBOOK", "false").lower() == "true"
@@ -81,11 +81,9 @@ class ABSEbookSyncClient(SyncClient):
         target_id = book.abs_ebook_item_id if book.abs_ebook_item_id else book.abs_id
         cfi = locator.cfi
         success = self.abs_client.update_ebook_progress(target_id, pct, cfi)
-        try:
-            from src.services.abs_socket_listener import record_abs_write
-            record_abs_write(book.abs_id)
-        except ImportError:
-            pass
+        if success:
+            from src.services.write_tracker import record_write
+            record_write('ABS_Ebook', book.abs_id)
         updated_state = {
             'pct': pct,
             'cfi': cfi

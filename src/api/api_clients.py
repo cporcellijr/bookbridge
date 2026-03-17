@@ -483,9 +483,6 @@ class ABSClient:
         except Exception as e:
             logger.error(f"❌ Error fetching all ABS progress: {e}")
             return {}
-        except Exception as e:
-            logger.error(f"❌ Error fetching all ABS progress: {e}")
-            return {}
 
     def get_in_progress(self, min_progress=0.01):
         """Fetch in-progress items, optimized to avoid redundant detail fetches if possible."""

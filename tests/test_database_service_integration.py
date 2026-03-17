@@ -852,6 +852,54 @@ class TestLegacyDatabaseMigration(unittest.TestCase):
 
             self.assertTrue(Path(db_path).exists(), "Database file was not created")
 
+    def test_migrate_book_data_preserves_hardcover_details(self):
+        """Merging book ids should carry Hardcover links forward to the new abs_id."""
+        from src.db.database_service import DatabaseService
+        from src.db.models import Book, HardcoverDetails
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'migrate_hardcover.db')
+            db_service = DatabaseService(db_path)
+            try:
+                old_abs_id = 'old-ebook-only'
+                new_abs_id = 'new-audio-book'
+
+                db_service.save_book(Book(
+                    abs_id=old_abs_id,
+                    abs_title='Old Link Source',
+                    ebook_filename='old.epub',
+                    kosync_doc_id='old-doc',
+                    status='active'
+                ))
+                db_service.save_book(Book(
+                    abs_id=new_abs_id,
+                    abs_title='New Link Target',
+                    ebook_filename='new.epub',
+                    kosync_doc_id='new-doc',
+                    status='active'
+                ))
+                db_service.save_hardcover_details(HardcoverDetails(
+                    abs_id=old_abs_id,
+                    hardcover_book_id='hc-123',
+                    hardcover_slug='linked-book',
+                    hardcover_edition_id='ed-456',
+                    hardcover_pages=321,
+                    matched_by='manual'
+                ))
+
+                db_service.migrate_book_data(old_abs_id, new_abs_id)
+
+                self.assertIsNone(db_service.get_hardcover_details(old_abs_id))
+                migrated = db_service.get_hardcover_details(new_abs_id)
+                self.assertIsNotNone(migrated)
+                self.assertEqual(migrated.hardcover_book_id, 'hc-123')
+                self.assertEqual(migrated.hardcover_slug, 'linked-book')
+                self.assertEqual(migrated.hardcover_edition_id, 'ed-456')
+                self.assertEqual(migrated.hardcover_pages, 321)
+                self.assertEqual(migrated.matched_by, 'manual')
+            finally:
+                db_service.db_manager.close()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

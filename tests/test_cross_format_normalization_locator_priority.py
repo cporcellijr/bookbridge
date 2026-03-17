@@ -1,4 +1,5 @@
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -543,7 +544,7 @@ def test_single_delta_low_conf_percent_fallback_still_uses_full_normalization():
     manager._normalize_for_cross_format_comparison.assert_called_once_with(book, config)
 
 
-def test_sync_cycle_lazy_normalizes_ebook_leader_when_needed():
+def test_sync_cycle_ebook_leader_prefers_native_locator_over_normalized_timestamp_roundtrip():
     manager = SyncManager.__new__(SyncManager)
     manager._sync_cycle_ebook_cache = {}
     manager.library_service = None
@@ -553,6 +554,7 @@ def test_sync_cycle_lazy_normalizes_ebook_leader_when_needed():
     manager.cross_format_deadband_seconds = 2.0
     manager.alignment_service = MagicMock()
     manager.database_service = MagicMock()
+    manager.ebook_parser = MagicMock()
 
     class _CycleClient:
         def get_supported_sync_types(self):
@@ -563,6 +565,15 @@ def test_sync_cycle_lazy_normalizes_ebook_leader_when_needed():
 
         def can_be_leader(self):
             return True
+
+        def get_text_from_current_state(self, book, state):
+            return "native-anchor"
+
+        def get_locator_from_text(self, txt, epub_file_name, hint_percentage):
+            return None
+
+        def update_progress(self, book, request):
+            return SyncResult(location=request.locator_result.percentage, success=True, updated_state={})
 
     manager.sync_clients = {"KoSync": _CycleClient()}
 
@@ -577,7 +588,14 @@ def test_sync_cycle_lazy_normalizes_ebook_leader_when_needed():
     manager.database_service.get_states_for_book.return_value = []
 
     config = {
-        "KoSync": _state({"pct": 0.4, "xpath": "/body/DocFragment[1]/body/p[1]/text().0"}),
+        "KoSync": _state(
+            {
+                "pct": 0.4,
+                "xpath": "/body/DocFragment[1]/body/p[1]/text().0",
+                "_canonical_text_offset": 123,
+                "_anchor_excerpt": "native-anchor",
+            }
+        ),
     }
     config["KoSync"].delta = 0.2
     config["KoSync"].threshold = 0.01
@@ -590,11 +608,51 @@ def test_sync_cycle_lazy_normalizes_ebook_leader_when_needed():
     manager._normalize_single_client = MagicMock(
         side_effect=lambda b, cfg, name: cfg[name].current.__setitem__("_normalized_ts", 777.0) or 777.0
     )
+    manager.ebook_parser.get_locator_from_char_offset.return_value = SimpleNamespace(
+        percentage=0.4,
+        xpath="/body/DocFragment[1]/body/p[1]/text().0",
+        perfect_ko_xpath="/body/DocFragment[1]/body/p[1]/text().0",
+        match_index=123,
+        cfi="epubcfi(/6/2!/4/2:0)",
+        href="chapter.xhtml",
+        fragment=None,
+        css_selector=None,
+        chapter_progress=0.1,
+        fragments=None,
+    )
+    manager._validate_and_stabilize_locator = MagicMock(
+        side_effect=lambda book, target_offset, locator, ebook_filename=None: locator
+    )
 
     manager._sync_cycle_internal(target_abs_id="abs-1")
 
     manager._normalize_single_client.assert_called_once_with(book, config, "KoSync")
-    manager._resolve_alignment_locator_from_abs_timestamp.assert_called_once_with(book, 777.0)
+    manager.ebook_parser.get_locator_from_char_offset.assert_called_once_with("book.epub", 123)
+    manager._resolve_alignment_locator_from_abs_timestamp.assert_not_called()
+
+
+def test_target_sync_does_not_wait_for_daemon_cycle_lock():
+    manager = SyncManager.__new__(SyncManager)
+    manager.coalesce_book_requests = False
+    manager._daemon_cycle_lock = threading.Lock()
+    manager._sync_lock = manager._daemon_cycle_lock
+    manager._book_sync_locks_guard = threading.Lock()
+    manager._book_sync_locks = {}
+    manager._cycle_context = threading.local()
+    manager._sync_cycle_ebook_cache = {}
+    manager._sync_cycle_internal = MagicMock()
+
+    manager._daemon_cycle_lock.acquire()
+    try:
+        worker = threading.Thread(target=manager.sync_cycle, kwargs={"target_abs_id": "abs-1"})
+        worker.start()
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+    finally:
+        if manager._daemon_cycle_lock.locked():
+            manager._daemon_cycle_lock.release()
+
+    manager._sync_cycle_internal.assert_called_once_with("abs-1", sync_request=None)
 
 
 def test_get_persistable_result_state_accepts_flagged_observed_failure():
