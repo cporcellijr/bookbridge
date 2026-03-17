@@ -502,18 +502,34 @@ class ForgeService:
             downloaded = 0
 
             for idx, track in enumerate(tracks):
-                download_index = track.get("index") if isinstance(track.get("index"), int) else idx
                 ext = infer_ext(track, info)
                 dest_path = dest_folder / f"track_{idx:03d}.{ext}"
-                logger.info(
-                    f"Booklore audio: downloading stream index {download_index} -> '{dest_path.name}'"
-                )
-                if self.booklore_client.download_audiobook_track(book_id, download_index, dest_path):
-                    downloaded += 1
-                else:
-                    logger.error(
-                        f"Failed to download Booklore track index {download_index} for book '{book_id}'"
+
+                if track_mode == "chapter_markers_single_stream":
+                    # For single M4B files with only chapter markers, the Booklore
+                    # /track/{index}/stream endpoint uses the M4B's container stream
+                    # index, where stream 0 is often the cover art (mjpeg), not the
+                    # audio. Download the whole file instead.
+                    logger.info(
+                        f"Booklore audio (single-file): downloading whole file -> '{dest_path.name}'"
                     )
+                    if self.booklore_client.download_book_to_path(book_id, dest_path):
+                        downloaded += 1
+                    else:
+                        logger.error(
+                            f"Failed to download Booklore whole-file audio for book '{book_id}'"
+                        )
+                else:
+                    download_index = track.get("index") if isinstance(track.get("index"), int) else idx
+                    logger.info(
+                        f"Booklore audio: downloading stream index {download_index} -> '{dest_path.name}'"
+                    )
+                    if self.booklore_client.download_audiobook_track(book_id, download_index, dest_path):
+                        downloaded += 1
+                    else:
+                        logger.error(
+                            f"Failed to download Booklore track index {download_index} for book '{book_id}'"
+                        )
 
             if downloaded == len(tracks):
                 logger.info(f"Booklore audio: downloaded all {downloaded} tracks for book '{book_id}'")

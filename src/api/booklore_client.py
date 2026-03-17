@@ -1555,6 +1555,45 @@ class BookloreClient:
             return None, None
         return response.content, response.headers.get('Content-Type', 'image/jpeg')
 
+    def download_book_to_path(self, book_id, output_path) -> bool:
+        """Stream-download a book file directly to disk (avoids loading large files in memory)."""
+        token = self._get_fresh_token()
+        if not token:
+            return False
+        headers = {"Authorization": f"Bearer {token}"}
+        urls = [
+            f"{self.base_url}/api/v1/books/{book_id}/download",
+            f"{self.base_url}/api/v1/books/{book_id}/file",
+        ]
+        for url in urls:
+            try:
+                with self.session.get(url, headers=headers, stream=True, timeout=120) as response:
+                    if response.status_code == 404:
+                        continue
+                    if response.status_code != 200:
+                        logger.error(
+                            f"❌ Booklore whole-file download failed: book_id={book_id} "
+                            f"status={response.status_code}"
+                        )
+                        return False
+                    output_path = Path(output_path)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "wb") as handle:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if chunk:
+                                handle.write(chunk)
+                    size_kb = output_path.stat().st_size // 1024
+                    logger.info(
+                        f"Booklore whole-file download: book_id={book_id} "
+                        f"-> '{output_path.name}' ({size_kb} KiB)"
+                    )
+                    return True
+            except Exception as e:
+                logger.error(f"❌ Booklore whole-file download error: book_id={book_id} url={url} {e}")
+                return False
+        logger.error(f"❌ Booklore whole-file download: no valid URL found for book_id={book_id}")
+        return False
+
     def download_audiobook_track(self, book_id, track_index, output_path):
         token = self._get_fresh_token()
         if not token:
