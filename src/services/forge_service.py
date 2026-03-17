@@ -525,7 +525,10 @@ class ForgeService:
                     logger.info(
                         f"Booklore audio (single-file): downloading whole file -> '{dest_path.name}'"
                     )
-                    if self.booklore_client.download_book_to_path(book_id, dest_path):
+                    if self.booklore_client.download_book_to_path(
+                        book_id, dest_path,
+                        expected_size=int(info.get("totalSizeBytes") or 0),
+                    ):
                         downloaded += 1
                     else:
                         logger.error(

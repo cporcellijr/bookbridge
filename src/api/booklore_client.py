@@ -1684,25 +1684,33 @@ class BookloreClient:
             return None, None
         return response.content, response.headers.get('Content-Type', 'image/jpeg')
 
-    def download_book_to_path(self, book_id, output_path) -> bool:
-        """Stream-download a book file directly to disk (avoids loading large files in memory)."""
+    def download_book_to_path(self, book_id, output_path, expected_size: int = 0) -> bool:
+        """Stream-download the audiobook file directly to disk.
+
+        Tries audiobook-specific endpoints first (these serve the actual M4B/audio
+        file), NOT /api/v1/books/{id}/download which returns the ebook.
+        """
         token = self._get_fresh_token()
         if not token:
             return False
         headers = {"Authorization": f"Bearer {token}"}
         urls = [
-            f"{self.base_url}/api/v1/books/{book_id}/download",
-            f"{self.base_url}/api/v1/books/{book_id}/file",
+            f"{self.base_url}/api/v1/audiobooks/{book_id}/stream",
+            f"{self.base_url}/api/v1/audiobooks/{book_id}/download",
+            f"{self.base_url}/api/v1/audiobooks/{book_id}/file",
         ]
         for url in urls:
             try:
-                with self.session.get(url, headers=headers, stream=True, timeout=120) as response:
+                with self.session.get(url, headers=headers, stream=True, timeout=300) as response:
                     if response.status_code == 404:
+                        logger.debug(
+                            f"Booklore audiobook download: 404 on {url}, trying next"
+                        )
                         continue
                     if response.status_code != 200:
                         logger.error(
-                            f"❌ Booklore whole-file download failed: book_id={book_id} "
-                            f"status={response.status_code}"
+                            f"❌ Booklore audiobook download failed: book_id={book_id} "
+                            f"url={url} status={response.status_code}"
                         )
                         return False
                     output_path = Path(output_path)
@@ -1711,16 +1719,23 @@ class BookloreClient:
                         for chunk in response.iter_content(chunk_size=65536):
                             if chunk:
                                 handle.write(chunk)
-                    size_kb = output_path.stat().st_size // 1024
+                    actual_size = output_path.stat().st_size
+                    size_display = f"{actual_size // (1024 * 1024)} MiB" if actual_size > 1024 * 1024 else f"{actual_size // 1024} KiB"
                     logger.info(
-                        f"Booklore whole-file download: book_id={book_id} "
-                        f"-> '{output_path.name}' ({size_kb} KiB)"
+                        f"Booklore audiobook download: book_id={book_id} "
+                        f"-> '{output_path.name}' ({size_display}) via {url.split('/')[-1]}"
                     )
+                    if expected_size and actual_size < expected_size * 0.5:
+                        logger.warning(
+                            f"Booklore audiobook download size mismatch: "
+                            f"expected ~{expected_size // (1024 * 1024)} MiB, "
+                            f"got {size_display} — file may be incomplete"
+                        )
                     return True
             except Exception as e:
-                logger.error(f"❌ Booklore whole-file download error: book_id={book_id} url={url} {e}")
+                logger.error(f"❌ Booklore audiobook download error: book_id={book_id} url={url} {e}")
                 return False
-        logger.error(f"❌ Booklore whole-file download: no valid URL found for book_id={book_id}")
+        logger.error(f"❌ Booklore audiobook download: all endpoints returned 404 for book_id={book_id}")
         return False
 
     def download_audiobook_track(self, book_id, track_index, output_path):
