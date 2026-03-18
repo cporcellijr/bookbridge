@@ -40,6 +40,7 @@ This branch integrates Storyteller's new `stalign` CLI tool as the transcription
 
 ## 4. CHANGE LOG (Newest Top)
 
+- **[2026-03-18 08:41]**: Antigravity - Investigated Grimmory API compatibility. Confirmed `abs-kosync-bridge` endpoints are fully compatible. Found `BookLoreSync-plugin` uses deprecated endpoints (`/by-hash`, `/batch`), but decided to hold off on workarounds until Grimmory's official release.
 - **[2026-03-17 17:33]**: Fixed Booklore forge audio 55KB bug. `_copy_booklore_audio_files` for single M4B files (chapter_markers_single_stream mode) was calling `download_audiobook_track(book_id, 0)` which served M4B container stream 0 (cover art/mjpeg, 54KiB) instead of the audio stream. Fixed by routing to new `download_book_to_path` streaming method on `booklore_client` (/books/{id}/download endpoint). Multi-track audiobooks unchanged. 20 tests pass.
 - **[2026-03-06]**: Merged dev branch into feature/stalin. 281 tests pass, 4 skipped.
 
@@ -52,3 +53,14 @@ This branch integrates Storyteller's new `stalign` CLI tool as the transcription
 3. **WINDOWS COMMAND CHAINING:** The AI is strictly running on Windows PowerShell and MUST use `;` to chain commands instead of `&&`.
 4. **PYTHON SCRIPTING:** The AI MUST NOT run multi-line Python scripts using `python -c` in PowerShell as it will hang the process indefinitely. Instead, the AI MUST use `write_to_file` to save a local `.py` script and then execute it via `python script.py`.
 5. **TEST EXECUTION:** Always execute pytest through the module flag as `python -m pytest` instead of calling `pytest` directly to ensure the environment `sys.path` is correct.
+
+## 6. EXTERNAL INTEGRATION REFERENCES
+
+- **Repositories:**
+  - `https://github.com/WorldTeacher/BookLoreSync-plugin`
+  - `https://github.com/grimmory-tools/grimmory`
+  - `https://gitlab.com/storyteller-platform/storyteller`
+  - `https://github.com/crocodilestick/Calibre-Web-Automated`
+  - `https://github.com/calibrain/shelfmark`
+  - `https://github.com/advplyr/audiobookshelf`
+  - `https://github.com/Kareadita/Kavita`

@@ -52,7 +52,7 @@ class ABSSyncClient(SyncClient):
             abs_ts = response.get('currentTime') if response is not None else None
 
         if abs_ts is None:
-            logger.info("🔍 ABS timestamp is None, probably not started the book yet")
+            logger.debug(f"ABS timestamp is None for '{getattr(book, 'abs_title', getattr(book, 'abs_id', 'unknown'))}' - probably not started")
             abs_ts = 0.0
 
         # Convert timestamp to percentage

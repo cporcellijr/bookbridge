@@ -38,7 +38,7 @@ class ABSEbookSyncClient(SyncClient):
         abs_pct, abs_cfi = response.get('ebookProgress'), response.get('ebookLocation') if response is not None else None
 
         if abs_pct is None:
-            logger.warning("⚠️ ABS ebook percentage is None - returning None for service state")
+            logger.debug(f"ABS ebook percentage is None for '{getattr(book, 'abs_title', getattr(book, 'abs_id', 'unknown'))}' - returning None for service state")
             return None
 
         # Get previous ABS ebook state

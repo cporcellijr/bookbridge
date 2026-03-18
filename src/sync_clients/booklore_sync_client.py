@@ -83,7 +83,7 @@ class BookloreSyncClient(SyncClient):
                 logger.debug("BookLore locator-derived pct failed for '%s': %s", epub, exc)
 
         if bl_pct is None and not positioned:
-            logger.warning("BookLore percentage is None and locator missing - returning None for service state")
+            logger.debug(f"BookLore percentage is None for '{getattr(book, 'abs_title', getattr(book, 'abs_id', 'unknown'))}' - returning None for service state")
             return None
 
         prev_booklore_pct = prev_state.percentage if prev_state else 0

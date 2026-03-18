@@ -1026,7 +1026,9 @@ class EbookParser:
                 except Exception: pass
 
             if not elements:
-                logger.warning(f"⚠️ Could not resolve XPath in {filename}: {clean_xpath}")
+                # XPath misses are often expected during fallback resolution, especially for
+                # books that have not started or when the source locator is already degraded.
+                logger.debug(f"Could not resolve XPath in {filename}: {clean_xpath}")
                 return None
 
             target_node = elements[0]
@@ -1178,7 +1180,9 @@ class EbookParser:
                     pass
 
             if not elements:
-                logger.warning(f"Could not resolve XPath in {filename}: {clean_xpath}")
+                # XPath misses are often expected during fallback resolution, especially for
+                # books that have not started or when the source locator is already degraded.
+                logger.debug(f"Could not resolve XPath in {filename}: {clean_xpath}")
                 return None
 
             target_node = elements[0]

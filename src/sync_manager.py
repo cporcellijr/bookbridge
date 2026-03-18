@@ -2304,6 +2304,17 @@ class SyncManager:
                 if not config:
                     continue  # No valid states to process
 
+                # Unified "Not Started" check
+                current_max_pct = max([cfg.current.get('pct') or 0.0 for cfg in config.values()] + [0.0])
+                previous_max_pct = max([cfg.previous_pct or 0.0 for cfg in config.values()] + [0.0])
+
+                if current_max_pct == 0.0 and previous_max_pct == 0.0:
+                    if target_abs_id:
+                        logger.info(f"🔍 Book '{title_snip}' hasn't started yet.")
+                    else:
+                        logger.debug(f"Book '{title_snip}' hasn't started yet.")
+                    continue
+
                 # Check for ABS offline condition (only for audiobook mode)
                 # Check for ABS offline condition (only for audiobook mode)
                 if not (hasattr(book, 'sync_mode') and book.sync_mode == 'ebook_only'):
