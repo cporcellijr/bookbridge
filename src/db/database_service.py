@@ -211,6 +211,9 @@ class DatabaseService:
 
     def save_book(self, book: Book) -> Book:
         """Save or update a book model."""
+        if getattr(book, 'ebook_source', None) == 'Stump' and getattr(book, 'ebook_source_id', None):
+            if not getattr(book, 'stump_media_id', None):
+                book.stump_media_id = book.ebook_source_id
         with self.get_session() as session:
             existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
 
@@ -221,7 +224,8 @@ class DatabaseService:
                            'audio_provider_file_id', 'ebook_filename', 'ebook_source',
                            'ebook_source_id', 'original_ebook_filename', 'kosync_doc_id',
                            'transcript_file', 'status', 'duration', 'sync_mode',
-                           'transcript_source', 'storyteller_uuid', 'abs_ebook_item_id']:
+                           'transcript_source', 'storyteller_uuid', 'abs_ebook_item_id',
+                           'stump_media_id']:
                     if hasattr(book, attr):
                         setattr(existing, attr, getattr(book, attr))
                 session.flush()

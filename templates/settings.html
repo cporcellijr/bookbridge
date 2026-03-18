@@ -801,6 +801,40 @@
                 </div>
             </div>
 
+            <!-- Stump (Optional) -->
+            <div class="settings-section">
+                {% set stump_configured = get_val('STUMP_SERVER') != '' %}
+                {% set stump_enabled = get_bool('STUMP_ENABLED') %}
+                <div class="section-header">
+                    <h3>Stump</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('stump', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_stump" name="STUMP_ENABLED"
+                                onchange="toggleSection('stump_body', this.checked)"
+                                {% if stump_enabled %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="stump_body" class="section-body {% if not stump_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <label>Server URL</label>
+                        <input type="text" name="STUMP_SERVER" value="{{ get_val('STUMP_SERVER') }}"
+                            placeholder="http://stump:10801">
+                    </div>
+                    <div class="form-group full-width">
+                        <label>API Key</label>
+                        <input type="password" name="STUMP_API_KEY" value="{{ get_val('STUMP_API_KEY') }}"
+                            placeholder="stump_xxxx...">
+                        <div class="help-text">
+                            Generate an API key in Stump under User Settings → API Keys. Requires the <code>access_api_keys</code> permission.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Hardcover.app (Optional) -->
             <div class="settings-section">
                 {% set hardcover_configured = get_val('HARDCOVER_TOKEN') != '' %}
@@ -1331,6 +1365,7 @@
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD'],
             kavita: ['KAVITA_ENABLED', 'KAVITA_SERVER', 'KAVITA_API_KEY', 'KAVITA_OPDS_URL'],
+            stump: ['STUMP_ENABLED', 'STUMP_SERVER', 'STUMP_API_KEY'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
         };

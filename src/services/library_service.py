@@ -24,12 +24,14 @@ class LibraryService:
         abs_client: ABSClient,
         epub_cache_dir: str,
         kavita_client=None,
+        stump_client=None,
     ):
         self.database_service = database_service
         self.booklore = booklore_client
         self.cwa_client = cwa_client
         self.abs_client = abs_client
         self.kavita_client = kavita_client
+        self.stump_client = stump_client
         self.epub_cache_dir = epub_cache_dir
         
         if not os.path.exists(self.epub_cache_dir):

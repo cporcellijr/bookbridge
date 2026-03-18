@@ -735,9 +735,16 @@ def _compute_storyteller_trilink_kosync_id(original_ebook_filename, storyteller_
 
 
 def _is_storyteller_artifact_filename(filename):
+    """Check if filename is a virtual/artifact filename (not a real file on disk).
+
+    Covers storyteller_, kavita_, and stump_ virtual filenames generated
+    during matching when the ebook source is a remote service.
+    """
     if not isinstance(filename, str):
         return False
-    return bool(filename and re.match(r"^storyteller_[0-9a-fA-F-]+\.epub$", filename))
+    return bool(filename and re.match(
+        r"^(storyteller|kavita|stump)_[0-9a-fA-F-]+\.epub$", filename
+    ))
 
 
 def _download_storyteller_artifact(storyteller_uuid, abs_title=None):
@@ -917,6 +924,8 @@ def _upsert_storyteller_mapping(
     if selected_ebook_source is not None:
         target_book.ebook_source = selected_ebook_source
         target_book.ebook_source_id = normalized_ebook_source_id
+        if selected_ebook_source == "Stump" and normalized_ebook_source_id:
+            target_book.stump_media_id = normalized_ebook_source_id
     target_book.kosync_doc_id = kosync_doc_id
     target_book.status = "pending"
 
@@ -1196,6 +1205,40 @@ def get_searchable_ebooks(search_term):
         except Exception as e:
             logger.warning(f"⚠️ Kavita search failed: {e}")
 
+    # 4.5 Stump
+    if search_term:
+        try:
+            try:
+                stump_client = container.stump_client()
+            except Exception:
+                stump_client = None
+            if stump_client and stump_client.is_configured():
+                stump_results = stump_client.search_media(search_term)
+                if stump_results:
+                    for sr in stump_results:
+                        stump_id = str(sr.get('id') or '').strip()
+                        if not stump_id:
+                            continue
+                        ext = str(sr.get('extension') or 'epub').strip().lstrip('.')
+                        if ext.lower() != 'epub':
+                            continue
+                        stump_name = sr.get('name') or ''
+                        real_filename = f"{stump_name}.{ext}" if stump_name else f"stump_{stump_id}.epub"
+                        if real_filename.lower() not in found_filenames:
+                            meta = sr.get('metadata') or {}
+                            title = stump_name or meta.get('title')
+                            results.append(EbookResult(
+                                name=real_filename,
+                                title=title,
+                                source='Stump',
+                                source_id=stump_id,
+                            ))
+                            found_filenames.add(real_filename.lower())
+                            if title:
+                                found_stems.add(str(title).lower().strip())
+        except Exception as e:
+            logger.warning(f"⚠️ Stump search failed: {e}")
+
     # 5. Search filesystem (Local) - LOW PRIORITY
     if EBOOK_DIR.exists():
         try:
@@ -1458,6 +1501,8 @@ def _create_or_update_booklore_audio_mapping(
         )
         or target_book.ebook_source_id
     )
+    if ebook_source == "Stump" and target_book.ebook_source_id:
+        target_book.stump_media_id = target_book.ebook_source_id
     target_book.kosync_doc_id = kosync_doc_id
     target_book.status = "pending"
     target_book.sync_mode = "audiobook"
@@ -1552,6 +1597,7 @@ def settings():
             'STORYTELLER_ENABLED',
             'BOOKLORE_ENABLED',
             'KAVITA_ENABLED',
+            'STUMP_ENABLED',
             'CWA_ENABLED',
             'HARDCOVER_ENABLED',
             'TELEGRAM_ENABLED',
@@ -1578,7 +1624,7 @@ def settings():
         url_keys = [
             'SHELFMARK_URL', 'ABS_SERVER', 'BOOKLORE_SERVER',
             'STORYTELLER_API_URL', 'CWA_SERVER', 'KOSYNC_SERVER',
-            'KAVITA_SERVER', 'KAVITA_OPDS_URL'
+            'KAVITA_SERVER', 'KAVITA_OPDS_URL', 'STUMP_SERVER'
         ]
 
         def _normalized_form_value(key):
@@ -2273,6 +2319,38 @@ def forge_search_text():
                         })
     except Exception as e:
         logger.warning(f"⚠️ Forge: Kavita search failed: {e}")
+
+    # 4.5 Stump
+    try:
+        try:
+            stump_client = container.stump_client()
+        except Exception:
+            stump_client = None
+        if stump_client and stump_client.is_configured():
+            stump_results = stump_client.search_media(query)
+            if stump_results:
+                for sr in stump_results:
+                    stump_id = str(sr.get('id') or '').strip()
+                    if not stump_id:
+                        continue
+                    ext = str(sr.get('extension') or 'epub').strip().lstrip('.')
+                    if ext.lower() != 'epub':
+                        continue
+                    key = f"stump_{stump_id}"
+                    if key not in found_ids:
+                        found_ids.add(key)
+                        stump_name = sr.get('name') or ''
+                        meta = sr.get('metadata') or {}
+                        results.append({
+                            "id": key,
+                            "title": stump_name or meta.get('title', 'Unknown'),
+                            "author": meta.get('author', ''),
+                            "source": "Stump",
+                            "stump_id": stump_id,
+                            "ext": ext,
+                        })
+    except Exception as e:
+        logger.warning(f"⚠️ Forge: Stump search failed: {e}")
 
     # 5. Local files from BOOKS_DIR
     try:
@@ -4937,6 +5015,11 @@ def test_connection(service: str):
             _coerce_test_str(data.get('KAVITA_API_KEY')),
             _coerce_test_str(data.get('KAVITA_OPDS_URL')),
         ),
+        'stump': lambda data: _test_stump(
+            _coerce_test_bool(data.get('STUMP_ENABLED')),
+            _normalize_test_url(data.get('STUMP_SERVER')),
+            _coerce_test_str(data.get('STUMP_API_KEY')),
+        ),
         'hardcover': lambda data: _test_hardcover(
             _coerce_test_bool(data.get('HARDCOVER_ENABLED')),
             _coerce_test_str(data.get('HARDCOVER_TOKEN')),
@@ -5064,6 +5147,28 @@ def _test_kavita(enabled: bool, url: str, api_key: str, opds_url: str) -> dict:
         if "<feed" not in body:
             return {"ok": False, "message": "Connected but response was not a valid OPDS feed"}
         return {"ok": True, "message": "Connected to Kavita OPDS feed"}
+    if r.status_code in (401, 403):
+        return {"ok": False, "message": "Invalid API key"}
+    return {"ok": False, "message": f"Server returned {r.status_code}"}
+
+
+def _test_stump(enabled: bool, url: str, api_key: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "Stump is disabled"}
+    if not url or not api_key:
+        return {"ok": False, "message": "Missing server URL or API key"}
+    try:
+        r = requests.get(
+            f"{url}/api/v1/libraries",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        return {"ok": False, "message": str(exc)}
+    if r.status_code == 200:
+        data = r.json()
+        count = len(data) if isinstance(data, list) else len(data.get("data", []))
+        return {"ok": True, "message": f"Connected ({count} libraries found)"}
     if r.status_code in (401, 403):
         return {"ok": False, "message": "Invalid API key"}
     return {"ok": False, "message": f"Server returned {r.status_code}"}
