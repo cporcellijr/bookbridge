@@ -8,7 +8,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, unquote, urljoin
 
 import requests
 
@@ -730,12 +730,20 @@ class KavitaClient:
             if not entry_series_id:
                 continue
 
+            # Extract real filename from the last segment of the download URL
+            real_filename = ""
+            if href:
+                last_segment = unquote(href.rsplit("/", 1)[-1]) if "/" in href else ""
+                if last_segment and "." in last_segment:
+                    real_filename = last_segment
+
             item = {
                 "id": str(kid),
                 "title": title or fallback_series_title or str(kid),
                 "author": self._read_author(entry) or fallback_author or "",
                 "download_url": href,
                 "ext": ext,
+                "filename": real_filename,
                 "source": "Kavita",
                 "series_id": str(entry_series_id),
                 "series_title": fallback_series_title or "",

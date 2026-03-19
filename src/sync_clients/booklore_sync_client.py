@@ -31,6 +31,9 @@ class BookloreSyncClient(SyncClient):
         return getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
 
     def supports_book(self, book: Book) -> bool:
+        if not self.booklore_client.is_configured():
+            return False
+
         epub = self._resolve_epub_filename(book)
         if not epub:
             return False

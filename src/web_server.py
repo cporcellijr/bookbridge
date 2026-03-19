@@ -715,7 +715,7 @@ def _compute_storyteller_trilink_kosync_id(original_ebook_filename, storyteller_
     if original_ebook_filename:
         logger.info(f"⚡ {log_prefix}: Computing hash from original EPUB '{original_ebook_filename}'")
         if container.booklore_client().is_configured():
-            bl_book = container.booklore_client().find_book_by_filename(original_ebook_filename)
+            bl_book = container.booklore_client().find_book_by_filename(original_ebook_filename, allow_refresh=False)
             if bl_book:
                 booklore_id = bl_book.get('id')
 
@@ -735,9 +735,12 @@ def _compute_storyteller_trilink_kosync_id(original_ebook_filename, storyteller_
 
 
 def _is_storyteller_artifact_filename(filename):
+    """Check if filename is a virtual/artifact filename (not a real file on disk)."""
     if not isinstance(filename, str):
         return False
-    return bool(filename and re.match(r"^storyteller_[0-9a-fA-F-]+\.epub$", filename))
+    return bool(filename and re.match(
+        r"^(storyteller|kavita)_[0-9a-fA-F-]+\.epub$", filename
+    ))
 
 
 def _download_storyteller_artifact(storyteller_uuid, abs_title=None):
@@ -821,6 +824,17 @@ def _upsert_storyteller_mapping(
             return None, "Book not found", 404
 
     original_ebook_filename = selected_ebook_filename
+    # For Kavita sources, resolve the real filename from cache instead of using the virtual kavita_{id}.epub
+    if selected_ebook_source == "Kavita" and _decode_kavita_filename_id(original_ebook_filename):
+        try:
+            kavita_client = container.kavita_client()
+            if kavita_client:
+                kavita_book = kavita_client.find_book_by_filename(original_ebook_filename, allow_refresh=False)
+                real_name = (kavita_book or {}).get("filename", "")
+                if real_name:
+                    original_ebook_filename = real_name
+        except Exception:
+            pass
     if not original_ebook_filename and target_book and target_book.original_ebook_filename:
         original_ebook_filename = target_book.original_ebook_filename
     if (
@@ -860,7 +874,7 @@ def _upsert_storyteller_mapping(
     else:
         booklore_id = None
         if container.booklore_client().is_configured():
-            bl_book = container.booklore_client().find_book_by_filename(resolved_ebook_filename)
+            bl_book = container.booklore_client().find_book_by_filename(resolved_ebook_filename, allow_refresh=False)
             if bl_book:
                 booklore_id = bl_book.get("id")
         kosync_doc_id = get_kosync_id_for_ebook(resolved_ebook_filename, booklore_id)
@@ -1416,7 +1430,7 @@ def _create_or_update_booklore_audio_mapping(
     if ebook_source == "BookLore":
         booklore_ebook_id = ebook_source_id
     elif container.booklore_client().is_configured():
-        bl_book = container.booklore_client().find_book_by_filename(original_ebook_filename or resolved_ebook_filename)
+        bl_book = container.booklore_client().find_book_by_filename(original_ebook_filename or resolved_ebook_filename, allow_refresh=False)
         if bl_book:
             booklore_ebook_id = bl_book.get("id")
 
@@ -2551,7 +2565,7 @@ def match():
         else:
             # Fallback to Standard Logic
             if container.booklore_client().is_configured():
-                book = container.booklore_client().find_book_by_filename(ebook_filename)
+                book = container.booklore_client().find_book_by_filename(ebook_filename, allow_refresh=False)
                 if book:
                     booklore_id = book.get('id')
 
@@ -3126,7 +3140,7 @@ def batch_match():
                 else:
                     # Standard path: Get booklore_id if available for API-based hash computation
                     if container.booklore_client().is_configured():
-                        book = container.booklore_client().find_book_by_filename(ebook_filename)
+                        book = container.booklore_client().find_book_by_filename(ebook_filename, allow_refresh=False)
                         if book:
                             booklore_id = book.get('id')
 
@@ -3735,7 +3749,7 @@ def suggestions_page():
                         continue
                 else:
                     if container.booklore_client().is_configured():
-                        book = container.booklore_client().find_book_by_filename(ebook_filename)
+                        book = container.booklore_client().find_book_by_filename(ebook_filename, allow_refresh=False)
                         if book:
                             booklore_id = book.get('id')
 
@@ -4198,7 +4212,7 @@ def update_hash(abs_id):
         
         booklore_id = None
         if container.booklore_client().is_configured():
-            bl_book = container.booklore_client().find_book_by_filename(target_filename)
+            bl_book = container.booklore_client().find_book_by_filename(target_filename, allow_refresh=False)
             if bl_book:
                 booklore_id = bl_book.get('id')
 

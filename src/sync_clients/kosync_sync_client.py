@@ -60,6 +60,8 @@ class KoSyncSyncClient(SyncClient):
         source_name = self._book_source_name(book)
 
         if self.allowed_ebook_source:
+            if not self.kosync_client.is_configured():
+                return False
             return source_name == self.allowed_ebook_source
 
         if self.blocked_ebook_source and source_name == self.blocked_ebook_source:

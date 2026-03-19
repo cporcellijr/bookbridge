@@ -27,6 +27,8 @@ class BookLoreAudioSyncClient(SyncClient):
         return {"audiobook"}
 
     def supports_book(self, book: Book) -> bool:
+        if not self.booklore_client.is_configured():
+            return False
         return getattr(book, "audio_source", None) == "BookLore"
 
     def _resolve_booklore_book_id(self, book: Book) -> Optional[str]:
