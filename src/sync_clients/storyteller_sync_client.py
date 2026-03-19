@@ -198,9 +198,9 @@ class StorytellerSyncClient(SyncClient):
 
         if not locator.href:
             # Fallback: if we still don't have href, try to resolve from percentage
-            fallback_href = self._resolve_href_from_percentage(epub, pct)
+            fallback_href, fallback_ch_progress = self._resolve_href_from_percentage(epub, pct)
             if fallback_href:
-                # Merge: keep the percentage but add the href
+                # Merge: keep the percentage but add the href and chapter_progress
                 locator = LocatorResult(
                     percentage=pct,
                     href=fallback_href,
@@ -210,7 +210,7 @@ class StorytellerSyncClient(SyncClient):
                     cfi=locator.cfi,
                     fragment=locator.fragment,
                     perfect_ko_xpath=locator.perfect_ko_xpath,
-                    chapter_progress=locator.chapter_progress,
+                    chapter_progress=locator.chapter_progress if locator.chapter_progress is not None else fallback_ch_progress,
                     fragments=locator.fragments,
                 )
                 logger.debug(f"Resolved Storyteller href from percentage: {locator.href}")
@@ -248,17 +248,19 @@ class StorytellerSyncClient(SyncClient):
             updated_state['match_index'] = locator.match_index
         return SyncResult(pct, success, updated_state)
 
-    def _resolve_href_from_percentage(self, epub: str, pct: float) -> Optional[str]:
-        """Find which spine item href contains the given percentage."""
+    def _resolve_href_from_percentage(self, epub: str, pct: float) -> tuple:
+        """Find which spine item href contains the given percentage, plus chapter progress."""
         try:
             book_path = self.ebook_parser.resolve_book_path(epub)
             full_text, spine_map = self.ebook_parser.extract_text_and_map(book_path)
             if not full_text or not spine_map:
-                return None
+                return None, None
             target_index = int(len(full_text) * pct)
             for item in spine_map:
                 if item["start"] <= target_index < item["end"]:
-                    return item["href"]
+                    span = item["end"] - item["start"]
+                    ch_progress = (target_index - item["start"]) / span if span > 0 else 0.0
+                    return item["href"], ch_progress
         except Exception:
             pass
-        return None
+        return None, None

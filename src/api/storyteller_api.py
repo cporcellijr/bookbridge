@@ -6,6 +6,7 @@ import logging
 import requests
 from typing import Optional, Dict, Tuple
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from src.utils.logging_utils import sanitize_log_data
 from src.sync_clients.sync_client_interface import LocatorResult
@@ -254,9 +255,10 @@ class StorytellerAPIClient:
         }
 
         if rich_locator:
-            # 1. Href
+            # 1. Href — URL-encode to match Storyteller's positions.json format.
+            # Normalize first (unquote) to avoid double-encoding if already encoded.
             if rich_locator.href:
-                payload['locator']['href'] = rich_locator.href
+                payload['locator']['href'] = quote(unquote(rich_locator.href), safe=",")
 
             # 2. CSS Selector
             if rich_locator.css_selector:
@@ -278,10 +280,13 @@ class StorytellerAPIClient:
                  # For now, let's leave it out if None to avoid sending null.
                  pass
 
-            # 5. Position (Global Integer)
-            if rich_locator.match_index is not None:
-                payload['locator']['locations']['position'] = rich_locator.match_index
-                
+            # 5. Position — intentionally omitted.
+            # match_index is a character offset in extracted text, but Storyteller's
+            # "position" is a Readium page index (small integer into positions.json).
+            # Sending the wrong value blocks href+progression resolution and causes
+            # the reader to fall back to page 1. Let Storyteller resolve from
+            # href + progression instead.
+
             # 6. CFI
             if rich_locator.cfi:
                 payload['locator']['locations']['cfi'] = rich_locator.cfi
@@ -303,8 +308,8 @@ class StorytellerAPIClient:
                 logger.info(f"✅ Storyteller API: {book_uuid[:8]}... -> {percentage:.1%} (TS: {new_ts})")
                 return True
             elif response.status_code == 409:
-                logger.warning(f"⚠️ Storyteller rejected update for '{book_uuid[:8]}...': Timestamp older than server state (Ignored)")
-                return True # Treat as 'handled' to prevent retry loops
+                logger.warning(f"⚠️ Storyteller rejected update for '{book_uuid[:8]}...': Timestamp older than server state")
+                return False
             else:
                 logger.warning(f"⚠️ Storyteller API error: {response.status_code} - {response.text[:100]}")
         
