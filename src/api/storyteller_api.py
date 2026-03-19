@@ -6,7 +6,7 @@ import logging
 import requests
 from typing import Optional, Dict, Tuple
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from src.utils.logging_utils import sanitize_log_data
 from src.sync_clients.sync_client_interface import LocatorResult
@@ -174,10 +174,14 @@ class StorytellerAPIClient:
             except (TypeError, ValueError):
                 position = None
 
+            href = locator.get('href')
+            if isinstance(href, str):
+                href = unquote(href)
+
             return {
                 "pct": pct,
                 "ts": ts,
-                "href": locator.get('href'),
+                "href": href,
                 "fragment": fragment,
                 "fragments": fragments,
                 "chapter_progress": chapter_progression,
@@ -238,8 +242,78 @@ class StorytellerAPIClient:
                 }
         return positions
 
+    def get_readium_positions(self, book_uuid: str) -> list:
+        """Return Readium positions array for a book, or [] on failure."""
+        response = self._make_request("GET", f"/api/v2/books/{book_uuid}/read/~readium/positions.json")
+        if not response or response.status_code != 200:
+            return []
+        try:
+            data = response.json()
+        except Exception:
+            return []
+
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            positions = data.get("positions")
+            if isinstance(positions, list):
+                return positions
+        return []
+
+    def resolve_exact_position(self, book_uuid: str, href: str, chapter_progress: float) -> Optional[int]:
+        """
+        Resolve the nearest Readium position index for a locator href + progression.
+        Returns locations.position, or None when unresolved.
+        """
+        try:
+            target_progress = float(chapter_progress)
+        except (TypeError, ValueError):
+            return None
+
+        target_href = unquote(href)
+        matches = []
+        for entry in self.get_readium_positions(book_uuid):
+            if not isinstance(entry, dict):
+                continue
+
+            entry_href = entry.get("href")
+            if not isinstance(entry_href, str):
+                continue
+            if unquote(entry_href) != target_href:
+                continue
+
+            locations = entry.get("locations")
+            if not isinstance(locations, dict):
+                continue
+
+            progression = locations.get("progression")
+            position = locations.get("position")
+            try:
+                progression = float(progression)
+                position = int(position)
+            except (TypeError, ValueError):
+                continue
+
+            matches.append((abs(progression - target_progress), position))
+
+        if not matches:
+            return None
+
+        matches.sort(key=lambda item: (item[0], item[1]))
+        return matches[0][1]
+
     def update_position(self, book_uuid: str, percentage: float, rich_locator: LocatorResult = None) -> bool:
         new_ts = int(time.time() * 1000)
+        exact_position = None
+        if rich_locator and rich_locator.href and rich_locator.chapter_progress is not None:
+            try:
+                exact_position = self.resolve_exact_position(
+                    book_uuid,
+                    rich_locator.href,
+                    rich_locator.chapter_progress,
+                )
+            except Exception:
+                exact_position = None
         
         # Base Payload with UUID (critical)
         payload = {
@@ -255,10 +329,9 @@ class StorytellerAPIClient:
         }
 
         if rich_locator:
-            # 1. Href — URL-encode to match Storyteller's positions.json format.
-            # Normalize first (unquote) to avoid double-encoding if already encoded.
+            # 1. Href - keep it unquoted for Storyteller's guided navigation matching.
             if rich_locator.href:
-                payload['locator']['href'] = quote(unquote(rich_locator.href), safe=",")
+                payload['locator']['href'] = unquote(rich_locator.href)
 
             # 2. CSS Selector
             if rich_locator.css_selector:
@@ -273,19 +346,9 @@ class StorytellerAPIClient:
             # 4. Chapter Progress (Critical for Storyteller)
             if rich_locator.chapter_progress is not None:
                 payload['locator']['locations']['progression'] = rich_locator.chapter_progress
-            else:
-                 # Fallback: if we don't have chapter progress, maybe default to 0 or omit?
-                 # Storyteller logs show it as distinct. 
-                 # If we omit, it might calculate it? 
-                 # For now, let's leave it out if None to avoid sending null.
-                 pass
-
-            # 5. Position — intentionally omitted.
-            # match_index is a character offset in extracted text, but Storyteller's
-            # "position" is a Readium page index (small integer into positions.json).
-            # Sending the wrong value blocks href+progression resolution and causes
-            # the reader to fall back to page 1. Let Storyteller resolve from
-            # href + progression instead.
+            # 5. Exact Readium Position
+            if exact_position is not None:
+                payload['locator']['locations']['position'] = exact_position
 
             # 6. CFI
             if rich_locator.cfi:

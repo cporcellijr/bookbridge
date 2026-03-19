@@ -402,6 +402,39 @@ class EbookParser:
             element_path = "4/2/1"
         return f"epubcfi(/6/{spine_step}!/{element_path}:0)"
 
+    def _generate_readium_fragment(self, html_content, local_target_index):
+        """
+        Resolve the nearest DOM id for a text offset.
+
+        Storyteller readaloud EPUBs use sentence-level ids as SMIL anchors. Returning
+        that id lets Readium resume audio from the same sentence instead of only the
+        surrounding chapter/progression.
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        current_char_count = 0
+        target_tag = None
+
+        elements = soup.find_all(string=True)
+        for string in elements:
+            text_len = len(string.strip())
+            if text_len == 0:
+                continue
+            if current_char_count + text_len >= local_target_index:
+                target_tag = string.parent
+                break
+            current_char_count += text_len
+            if current_char_count < local_target_index:
+                current_char_count += 1
+
+        current = target_tag
+        while current and isinstance(current, Tag):
+            fragment_id = current.get("id")
+            if isinstance(fragment_id, str) and fragment_id.strip():
+                return fragment_id.strip()
+            current = current.parent
+
+        return None
+
     def _generate_xpath_bs4(self, html_content, local_target_index):
         """
         Original BS4 XPath generator (kept for fuzzy matching references).
@@ -554,6 +587,7 @@ class EbookParser:
                         chapter_progress = 0.0
                         if spine_item_len > 0:
                             chapter_progress = local_index / spine_item_len
+                        fragment = self._generate_readium_fragment(item['content'], local_index)
 
                         perfect_ko = self.get_perfect_ko_xpath(filename, match_index)
 
@@ -564,9 +598,10 @@ class EbookParser:
                             match_index=match_index,
                             cfi=cfi,
                             href=item['href'],
-                            fragment=None,
+                            fragment=fragment,
                             css_selector=css_selector,
-                            chapter_progress=chapter_progress
+                            chapter_progress=chapter_progress,
+                            fragments=[fragment] if fragment else None,
                         )
 
             return None
@@ -601,6 +636,7 @@ class EbookParser:
             cfi = self._generate_cfi(target_item['spine_index'] - 1, target_item['content'], local_index)
             spine_item_len = max(1, target_item['end'] - target_item['start'])
             chapter_progress = local_index / spine_item_len
+            fragment = self._generate_readium_fragment(target_item['content'], local_index)
 
             return LocatorResult(
                 percentage=percentage,
@@ -609,9 +645,10 @@ class EbookParser:
                 match_index=target_index,
                 cfi=cfi,
                 href=target_item.get('href'),
-                fragment=None,
+                fragment=fragment,
                 css_selector=None,
                 chapter_progress=chapter_progress,
+                fragments=[fragment] if fragment else None,
             )
         except Exception as e:
             logger.error(f"âŒ Error resolving locator from char offset in '{filename}': {e}")
