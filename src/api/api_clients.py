@@ -678,12 +678,15 @@ class KoSyncClient:
             return False
         return bool(self.base_url and self.user)
 
+    def _is_local_server(self):
+        return '127.0.0.1' in self.base_url or 'localhost' in self.base_url
+
     def check_connection(self):
         if not self.is_configured():
             logger.warning("⚠️ KoSync not configured (skipping)")
             return False
             
-        is_local = '127.0.0.1' in self.base_url or 'localhost' in self.base_url
+        is_local = self._is_local_server()
         url = f"{self.base_url}/healthcheck"
         headers = kosync_auth_headers(self.user, self.auth_token)
         try:
@@ -747,8 +750,8 @@ class KoSyncClient:
         }
         url = f"{self.base_url}/syncs/progress"
 
-        # Use XPath if provided, otherwise format percentage
-        progress_val = xpath if xpath else ""
+        # Match KOReader's payload shape for external KoSync servers.
+        progress_val = str(xpath) if xpath else ""
 
         payload = {
             "document": doc_id,
@@ -756,12 +759,13 @@ class KoSyncClient:
             "progress": progress_val,
             "device": "abs-sync-bot",
             "device_id": "abs-sync-bot",
-            "timestamp": int(time.time()),
-            "force": True  # [NEW] Force update to override server-side "furthest wins" logic
         }
+        if self._is_local_server():
+            payload["timestamp"] = int(time.time())
+            payload["force"] = True
         try:
             r = self.session.put(url, headers=headers, json=payload, timeout=10)
-            if r.status_code in (200, 201, 204):
+            if r.status_code in (200, 202, 201, 204):
                 logger.debug(f"   📡 KoSync Updated: {percentage:.1%} with progress '{progress_val}' for doc {doc_id}")
                 return True
             else:

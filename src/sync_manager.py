@@ -88,6 +88,8 @@ class SyncManager:
         self._job_queue = []
         self._job_lock = threading.Lock()
         self._sync_lock = threading.Lock()
+        self._pending_sync_lock = threading.Lock()
+        self._pending_sync_books: set[str] = set()
         self._job_thread = None
         self._last_library_sync = 0
         self._suggestion_in_flight: set[str] = set()
@@ -109,7 +111,9 @@ class SyncManager:
         if cached is not None:
             return cached
 
-        book_path = self.ebook_parser.resolve_book_path(ebook_filename)
+        book_path = self._get_local_epub(ebook_filename)
+        if not book_path:
+            raise FileNotFoundError(f"Could not locate or download: {ebook_filename}")
         full_text, _ = self.ebook_parser.extract_text_and_map(book_path)
         result = (full_text or "", len(full_text or ""))
         self._sync_cycle_ebook_cache[ebook_filename] = result
@@ -121,6 +125,10 @@ class SyncManager:
             return None
         original = getattr(book, "original_ebook_filename", None)
         current = getattr(book, "ebook_filename", None)
+        if original and self._get_local_epub(original):
+            return original
+        if current and current != original and self._get_local_epub(current):
+            return current
         return original or current
 
     def _get_storyteller_ebook_filename(self, book: Book | None) -> str | None:
@@ -143,6 +151,16 @@ class SyncManager:
                 pass
 
         return current
+
+    def _iter_update_targets(self, active_clients: dict, leader_name: str | None):
+        """Yield non-leader clients with KoSync updated last."""
+        ordered = [
+            (client_name, client)
+            for client_name, client in active_clients.items()
+            if client_name != leader_name
+        ]
+        ordered.sort(key=lambda item: item[0] == "KoSync")
+        return ordered
 
     def _get_epub_for_client(self, book: Book | None, client_name: str | None) -> str | None:
         if client_name == "Storyteller":
@@ -383,16 +401,13 @@ class SyncManager:
             
             for book in candidates:
                 # Check if alignment actually exists (job finished but status update failed)
-                has_alignment = False
-                if self.alignment_service:
-                    has_alignment = bool(self.alignment_service._get_alignment(book.abs_id))
+                original_status = book.status
+                has_alignment = self._promote_alignment_backed_book(book)
                 
                 if has_alignment:
                     # Only log if we are CHANGING status (active is goal)
-                    if book.status != 'active':
-                        logger.info(f"✅ Found orphan alignment for '{book.status}' book: {sanitize_log_data(book.abs_title)} — Marking ACTIVE")
-                        book.status = 'active'
-                        self.database_service.save_book(book)
+                    if original_status != 'active':
+                        logger.info(f"✅ Found orphan alignment for '{original_status}' book: {sanitize_log_data(book.abs_title)} — Marking ACTIVE")
                 elif book.status == 'processing':
                      # Only mark processing checks as failed (failed are already failed)
                     logger.info(f"⚡ Recovering interrupted job: {sanitize_log_data(book.abs_title)}")
@@ -692,6 +707,60 @@ class SyncManager:
             if candidate and candidate.exists():
                 return candidate
         return None
+
+    def _promote_alignment_backed_book(self, book: Book | None) -> bool:
+        """Repair books whose alignment is stored but whose metadata never finalized."""
+        if not book or not self.alignment_service:
+            return False
+
+        alignment = self.alignment_service._get_alignment(book.abs_id)
+        if not alignment:
+            return False
+
+        changed = False
+        if getattr(book, "transcript_file", None) != "DB_MANAGED":
+            book.transcript_file = "DB_MANAGED"
+            changed = True
+        if getattr(book, "status", None) != "active":
+            book.status = "active"
+            changed = True
+
+        if changed:
+            self.database_service.save_book(book)
+
+        latest_job = self.database_service.get_latest_job(book.abs_id)
+        if latest_job and (
+            (latest_job.progress or 0.0) < 1.0
+            or latest_job.retry_count
+            or latest_job.last_error
+        ):
+            self.database_service.update_latest_job(
+                book.abs_id,
+                progress=1.0,
+                retry_count=0,
+                last_error=None,
+            )
+
+        return True
+
+    def _queue_pending_sync(self, abs_id: str | None) -> None:
+        if not abs_id:
+            return
+        with self._pending_sync_lock:
+            self._pending_sync_books.add(abs_id)
+
+    def _dispatch_pending_syncs(self) -> None:
+        with self._pending_sync_lock:
+            pending = sorted(self._pending_sync_books)
+            self._pending_sync_books.clear()
+
+        for abs_id in pending:
+            logger.info(f"⚡ Replaying queued instant sync for '{abs_id}'")
+            threading.Thread(
+                target=self.sync_cycle,
+                kwargs={'target_abs_id': abs_id},
+                daemon=True,
+            ).start()
 
     def _resolve_storyteller_locator_from_abs_timestamp(self, book: Book, abs_timestamp: float):
         """
@@ -1619,7 +1688,8 @@ class SyncManager:
              # Instant Sync: Block and wait for lock (up to 10s)
              acquired = self._sync_lock.acquire(timeout=10)
              if not acquired:
-                 logger.warning(f"⚠️ Sync lock timeout for '{target_abs_id}' - skipping")
+                 self._queue_pending_sync(target_abs_id)
+                 logger.warning(f"⚠️ Sync lock timeout for '{target_abs_id}' - queued follow-up sync")
                  return
         else:
              # Daemon: Non-blocking attempt
@@ -1636,6 +1706,7 @@ class SyncManager:
             logger.error(traceback.format_exc())
         finally:
             self._sync_lock.release()
+            self._dispatch_pending_syncs()
 
     def _sync_cycle_internal(self, target_abs_id=None):
         # Clear caches at start of cycle
@@ -1689,17 +1760,10 @@ class SyncManager:
                 # -----------------------------------------------------------------
                 # MIGRATION UPGRADE
                 # -----------------------------------------------------------------
-                if self.alignment_service:
-                    alignment = self.alignment_service._get_alignment(abs_id)
-                    if alignment:
-                        # [MIGRATION UPGRADE] If the book has a map but still points to a legacy file, upgrade it
-                        if (
-                            getattr(book, 'transcript_file', None) != 'DB_MANAGED'
-                            and getattr(book, 'transcript_source', None) != 'storyteller'
-                        ):
-                            logger.info(f"   🔄 Upgrading '{title_snip}' to DB_MANAGED unified architecture")
-                            book.transcript_file = 'DB_MANAGED'
-                            self.database_service.save_book(book)
+                had_db_managed_alignment = getattr(book, 'transcript_file', None) == 'DB_MANAGED'
+                if self._promote_alignment_backed_book(book):
+                    if not had_db_managed_alignment and getattr(book, 'transcript_file', None) == 'DB_MANAGED':
+                        logger.info(f"   🔄 Upgrading '{title_snip}' to DB_MANAGED unified architecture")
 
                 # Get previous state for this book from database
                 previous_states = self.database_service.get_states_for_book(abs_id)
@@ -1915,6 +1979,11 @@ class SyncManager:
                             f"⚠️ '{abs_id}' '{title_snip}' Missing locator target EPUB; cannot derive cross-client locator"
                         )
                         continue
+                    if not self._get_local_epub(epub):
+                        logger.warning(
+                            f"⚠️ '{abs_id}' '{title_snip}' Could not locate or download locator target EPUB '{sanitize_log_data(epub)}'"
+                        )
+                        continue
                     txt = leader_client.get_text_from_current_state(book, leader_state)
                     if not txt:
                         logger.warning(f"⚠️ '{abs_id}' '{title_snip}' Could not get text from leader '{leader}'")
@@ -1948,10 +2017,7 @@ class SyncManager:
 
                 # Update all other clients and store results
                 results: dict[str, SyncResult] = {}
-                for client_name, client in active_clients.items():
-                    if client_name == leader:
-                        continue
-
+                for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
                         request = UpdateProgressRequest(locator, txt, previous_location=config.get(client_name).previous_pct if config.get(client_name) else None)
                         result = client.update_progress(book, request)

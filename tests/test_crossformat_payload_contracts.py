@@ -31,7 +31,7 @@ def test_kosync_payload_contract_keys_and_degraded_progress_only():
             assert client.update_progress("doc-1", 0.42, "/body/DocFragment[1]/body/p[1]/text().0")
             assert client.update_progress("doc-1", 0.42, None)
 
-        expected_keys = {"document", "percentage", "progress", "device", "device_id", "timestamp", "force"}
+        expected_keys = {"document", "percentage", "progress", "device", "device_id"}
         assert set(payloads[0].keys()) == expected_keys
         assert set(payloads[1].keys()) == expected_keys
 
@@ -40,6 +40,30 @@ def test_kosync_payload_contract_keys_and_degraded_progress_only():
         p0_no_progress = {k: v for k, v in payloads[0].items() if k != "progress"}
         p1_no_progress = {k: v for k, v in payloads[1].items() if k != "progress"}
         assert p0_no_progress == p1_no_progress
+
+
+def test_kosync_payload_contract_keeps_internal_force_fields_for_local_server():
+    with patch.dict(
+        os.environ,
+        {"KOSYNC_SERVER": "http://127.0.0.1:5758", "KOSYNC_USER": "user", "KOSYNC_KEY": "secret"},
+        clear=False,
+    ):
+        client = KoSyncClient()
+        payloads = []
+
+        def _fake_put(url, headers=None, json=None, timeout=None):
+            payloads.append(dict(json))
+            return SimpleNamespace(status_code=202, text="accepted")
+
+        client.session.put = MagicMock(side_effect=_fake_put)
+
+        with patch("src.api.api_clients.time.time", return_value=1700000000):
+            assert client.update_progress("doc-1", 0.42, "/body/DocFragment[1]/body/p[1]/text().0")
+
+        expected_keys = {"document", "percentage", "progress", "device", "device_id", "timestamp", "force"}
+        assert set(payloads[0].keys()) == expected_keys
+        assert payloads[0]["timestamp"] == 1700000000
+        assert payloads[0]["force"] is True
 
 
 def test_booklore_payload_contract_epub_percentage_and_optional_cfi():
