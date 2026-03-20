@@ -74,6 +74,40 @@ def test_get_cached_ebook_text_uses_local_epub_hydration(tmp_path):
     manager.ebook_parser.extract_text_and_map.assert_called_once_with(hydrated_path)
 
 
+def test_get_local_epub_resolves_once_per_cycle(tmp_path):
+    manager = _build_manager(tmp_path)
+    resolved_path = tmp_path / "books" / "cached.epub"
+    manager._resolve_local_epub_uncached = MagicMock(return_value=resolved_path)
+
+    first = manager._get_local_epub("cached.epub")
+    second = manager._get_local_epub("cached.epub")
+
+    assert first == resolved_path
+    assert second == resolved_path
+    manager._resolve_local_epub_uncached.assert_called_once_with("cached.epub")
+
+
+def test_get_storyteller_ebook_filename_uses_local_epub_cache(tmp_path):
+    manager = _build_manager(tmp_path)
+    resolved_path = tmp_path / "epub_cache" / "storyteller_uuid.epub"
+    manager._resolve_local_epub_uncached = MagicMock(return_value=resolved_path)
+
+    book = Book(
+        abs_id="book-3",
+        abs_title="Story Book",
+        storyteller_uuid="uuid-123",
+        ebook_filename=None,
+        status="active",
+    )
+
+    first = manager._get_storyteller_ebook_filename(book)
+    second = manager._get_storyteller_ebook_filename(book)
+
+    assert first == "storyteller_uuid-123.epub"
+    assert second == "storyteller_uuid-123.epub"
+    manager._resolve_local_epub_uncached.assert_called_once_with("storyteller_uuid-123.epub")
+
+
 def test_iter_update_targets_keeps_kosync_last(tmp_path):
     manager = _build_manager(tmp_path)
     active_clients = {
@@ -166,3 +200,13 @@ def test_sync_cycle_dispatches_pending_after_release(tmp_path):
     manager._sync_cycle_internal.assert_called_once_with("book-1")
     assert manager._sync_lock.release_count == 1
     manager._dispatch_pending_syncs.assert_called_once_with()
+
+
+def test_sync_cycle_internal_clears_local_epub_cache(tmp_path):
+    manager = _build_manager(tmp_path)
+    manager._sync_cycle_local_epub_cache["stale.epub"] = tmp_path / "old.epub"
+    manager.database_service.get_books_by_status.return_value = []
+
+    manager._sync_cycle_internal()
+
+    assert manager._sync_cycle_local_epub_cache == {}

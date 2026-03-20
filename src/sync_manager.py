@@ -95,6 +95,7 @@ class SyncManager:
         self._suggestion_in_flight: set[str] = set()
         self._suggestion_lock = threading.Lock()
         self._sync_cycle_ebook_cache: dict[str, tuple[str, int]] = {}
+        self._sync_cycle_local_epub_cache: dict[str, Path | None] = {}
 
         self._setup_sync_clients(sync_clients)
         self.startup_checks()
@@ -143,12 +144,8 @@ class SyncManager:
         storyteller_uuid = getattr(book, "storyteller_uuid", None)
         if storyteller_uuid:
             candidate = f"storyteller_{storyteller_uuid}.epub"
-            try:
-                candidate_path = self.ebook_parser.resolve_book_path(candidate)
-                if candidate_path and Path(candidate_path).exists():
-                    return candidate
-            except Exception:
-                pass
+            if self._get_local_epub(candidate):
+                return candidate
 
         return current
 
@@ -653,7 +650,7 @@ class SyncManager:
 
 
 
-    def _get_local_epub(self, ebook_filename):
+    def _resolve_local_epub_uncached(self, ebook_filename):
         """
         Get local path to EPUB file, downloading from Booklore if necessary.
         """
@@ -693,6 +690,19 @@ class SyncManager:
                 logger.error(f"❌ EPUB not found on filesystem and Booklore not configured")
 
         return None
+
+    def _get_local_epub(self, ebook_filename):
+        """Resolve an EPUB path once per sync cycle."""
+        if not ebook_filename:
+            return None
+        if not hasattr(self, "_sync_cycle_local_epub_cache"):
+            self._sync_cycle_local_epub_cache = {}
+        if ebook_filename in self._sync_cycle_local_epub_cache:
+            return self._sync_cycle_local_epub_cache[ebook_filename]
+
+        resolved = self._resolve_local_epub_uncached(ebook_filename)
+        self._sync_cycle_local_epub_cache[ebook_filename] = resolved
+        return resolved
 
     def _get_storyteller_manifest_path(self, book: Book) -> Path | None:
         if not book:
@@ -1711,6 +1721,7 @@ class SyncManager:
     def _sync_cycle_internal(self, target_abs_id=None):
         # Clear caches at start of cycle
         self._sync_cycle_ebook_cache.clear()
+        self._sync_cycle_local_epub_cache.clear()
         storyteller_client = self.sync_clients.get('Storyteller')
         if storyteller_client and hasattr(storyteller_client, 'storyteller_client'):
             if hasattr(storyteller_client.storyteller_client, 'clear_cache'):
