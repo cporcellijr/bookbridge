@@ -468,6 +468,11 @@
             color: #ce93d8;
         }
 
+        .source-badge.transcript {
+            background: rgba(167, 139, 250, 0.2);
+            color: #a78bfa;
+        }
+
         /* Ebook Select (kept for fallback but hidden when cards shown) */
         select.ebook-select {
             width: 100%;
@@ -850,6 +855,9 @@
                             </div>
                             {% if st.authors %}
                             <div class="resource-subtitle">{{ st.authors|join(', ') }}</div>
+                            {% endif %}
+                            {% if st.has_transcript %}
+                            <span class="source-badge transcript">Transcript</span>
                             {% endif %}
                         </div>
                         {% endfor %}

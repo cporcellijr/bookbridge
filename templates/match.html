@@ -606,6 +606,11 @@
             color: #ce93d8;
         }
 
+        .source-badge.transcript {
+            background: rgba(167, 139, 250, 0.2);
+            color: #a78bfa;
+        }
+
         .modal-overlay {
             position: fixed;
             inset: 0;
@@ -864,6 +869,9 @@
                                 </div>
                                 {% if st.authors %}
                                 <div class="resource-subtitle">{{ st.authors|join(', ') }}</div>
+                                {% endif %}
+                                {% if st.has_transcript %}
+                                <span class="source-badge transcript">Transcript</span>
                                 {% endif %}
                             </label>
                             {% endfor %}

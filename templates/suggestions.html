@@ -65,6 +65,7 @@
         .source-badge.cwa { background: rgba(255,152,0,0.2); color: #ffb74d; }
         .source-badge.localfile { background: rgba(156,39,176,0.2); color: #ce93d8; }
         .source-badge.unknown { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
+        .source-badge.transcript { background: rgba(167,139,250,0.2); color: #a78bfa; }
         .score { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
         .card-actions { margin-top: 8px; width: 100%; display: flex; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
         .card-actions .btn { opacity: 1; border-width: 1px; font-weight: 700; }
@@ -537,7 +538,8 @@
                         } else if (typeof item?.authors === 'string') {
                             authors = item.authors;
                         }
-                        parsed.push({ uuid, title, subtitle, authors });
+                        const has_transcript = !!item?.has_transcript;
+                        parsed.push({ uuid, title, subtitle, authors, has_transcript });
                     });
 
                     parsed.forEach((st) => {
@@ -564,6 +566,13 @@
                             subtitle.className = 'resource-subtitle';
                             subtitle.textContent = st.authors;
                             card.appendChild(subtitle);
+                        }
+
+                        if (st.has_transcript) {
+                            const badge = document.createElement('span');
+                            badge.className = 'source-badge transcript';
+                            badge.textContent = 'Transcript';
+                            card.appendChild(badge);
                         }
 
                         grid.appendChild(card);

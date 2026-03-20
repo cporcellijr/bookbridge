@@ -485,6 +485,14 @@ class StorytellerAPIClient:
                 return True
 
         return False
+    def _has_transcript_on_disk(self, title: str) -> bool:
+        """Check if a Storyteller book has transcription files in the assets directory."""
+        assets_dir_raw = os.environ.get("STORYTELLER_ASSETS_DIR", "").strip()
+        if not assets_dir_raw:
+            return False
+        transcriptions_dir = Path(assets_dir_raw) / "assets" / title / "transcriptions"
+        return transcriptions_dir.is_dir() and any(transcriptions_dir.glob("*.json"))
+
     def search_books(self, query: str) -> list:
         """Search for books in Storyteller."""
         response = self._make_request("GET", "/api/v2/books", None)
@@ -516,7 +524,8 @@ class StorytellerAPIClient:
                         'uuid': book.get('uuid') or book.get('id'),
                         'title': title,
                         'authors': [a.get('name') for a in book.get('authors', [])],
-                        'cover_url': f"/api/v2/books/{book.get('uuid') or book.get('id')}/cover"
+                        'cover_url': f"/api/v2/books/{book.get('uuid') or book.get('id')}/cover",
+                        'has_transcript': self._has_transcript_on_disk(title),
                     })
             return results
         return []
