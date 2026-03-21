@@ -542,7 +542,11 @@ def _storyteller_filename_for_abs_chapter(chapter_index: int, prefix: str = "000
     return f"{prefix}-{chapter_index + 1:05d}.json"
 
 
-def _resolve_storyteller_title_dir(assets_root: Path, abs_title: str) -> Optional[Path]:
+def _resolve_storyteller_title_dir(
+    assets_root: Path,
+    abs_title: str,
+    storyteller_title: str = None,
+) -> Optional[Path]:
     """
     Resolve the Storyteller title directory using exact match first,
     then normalized exact match (must be unique).
@@ -550,6 +554,21 @@ def _resolve_storyteller_title_dir(assets_root: Path, abs_title: str) -> Optiona
     assets_dir = assets_root / "assets"
     if not assets_dir.exists() or not assets_dir.is_dir():
         return None
+
+    if storyteller_title:
+        exact_storyteller_dir = assets_dir / storyteller_title
+        if exact_storyteller_dir.exists() and exact_storyteller_dir.is_dir():
+            return exact_storyteller_dir
+
+        storyteller_key = _normalize_title_key(storyteller_title)
+        if storyteller_key:
+            storyteller_candidates = [
+                child
+                for child in assets_dir.iterdir()
+                if child.is_dir() and _normalize_title_key(child.name) == storyteller_key
+            ]
+            if len(storyteller_candidates) == 1:
+                return storyteller_candidates[0]
 
     exact_dir = assets_dir / abs_title
     if exact_dir.exists() and exact_dir.is_dir():
@@ -757,7 +776,12 @@ def _read_storyteller_chapter_metrics(chapter_file_path: Path) -> tuple[int, int
     return text_len, text_len_utf16, local_duration
 
 
-def ingest_storyteller_transcripts(abs_id: str, abs_title: str, chapters: list) -> Optional[str]:
+def ingest_storyteller_transcripts(
+    abs_id: str,
+    abs_title: str,
+    chapters: list,
+    storyteller_title: str = None,
+) -> Optional[str]:
     """
     Copy Storyteller chapter JSON files into bridge-managed data storage and write a manifest.
     Returns manifest path on success.
@@ -769,7 +793,11 @@ def ingest_storyteller_transcripts(abs_id: str, abs_title: str, chapters: list) 
     chapter_list = chapters if isinstance(chapters, list) else []
 
     assets_root = Path(assets_dir_raw)
-    title_dir = _resolve_storyteller_title_dir(assets_root, abs_title or "")
+    title_dir = _resolve_storyteller_title_dir(
+        assets_root,
+        abs_title or "",
+        storyteller_title=storyteller_title,
+    )
     if not title_dir:
         logger.info(f"Storyteller transcripts not found for '{abs_id}' (title='{_sanitize_log_data(abs_title)}')")
         return None

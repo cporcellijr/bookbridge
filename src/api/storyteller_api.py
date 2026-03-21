@@ -150,6 +150,32 @@ class StorytellerAPIClient:
                 return book_info
         return None
 
+    def _find_book_by_uuid(self, book_uuid: str) -> Optional[Dict]:
+        """Find a Storyteller book entry by UUID."""
+        if not book_uuid:
+            return None
+
+        response = self._make_request("GET", "/api/v2/books")
+        if not response or response.status_code != 200:
+            return None
+
+        for book in response.json():
+            candidate_uuid = book.get("uuid") or book.get("id")
+            if candidate_uuid == book_uuid:
+                return book
+
+        return None
+
+    def get_book_title_by_uuid(self, book_uuid: str) -> Optional[str]:
+        """Get Storyteller's internal title for a book by UUID."""
+        if not book_uuid:
+            return None
+
+        book = self._find_book_by_uuid(book_uuid)
+        if not book:
+            return None
+        return book.get("title")
+
     def get_position_details_payload(self, book_uuid: str) -> Optional[dict]:
         response = self._make_request("GET", f"/api/v2/books/{book_uuid}/positions")
         if response and response.status_code == 200:
@@ -485,13 +511,28 @@ class StorytellerAPIClient:
                 return True
 
         return False
-    def _has_transcript_on_disk(self, title: str) -> bool:
+    def _has_transcript_on_disk(self, title: str, storyteller_uuid: str = None) -> bool:
         """Check if a Storyteller book has transcription files in the assets directory."""
         assets_dir_raw = os.environ.get("STORYTELLER_ASSETS_DIR", "").strip()
         if not assets_dir_raw:
             return False
-        transcriptions_dir = Path(assets_dir_raw) / "assets" / title / "transcriptions"
-        return transcriptions_dir.is_dir() and any(transcriptions_dir.glob("*.json"))
+
+        lookup_title = title
+        if storyteller_uuid:
+            storyteller_title = self.get_book_title_by_uuid(storyteller_uuid)
+            if storyteller_title:
+                lookup_title = storyteller_title
+
+        transcriptions_dir = Path(assets_dir_raw) / "assets" / lookup_title / "transcriptions"
+        if transcriptions_dir.is_dir() and any(transcriptions_dir.glob("*.json")):
+            return True
+
+        if lookup_title != title:
+            fallback_dir = Path(assets_dir_raw) / "assets" / title / "transcriptions"
+            if fallback_dir.is_dir() and any(fallback_dir.glob("*.json")):
+                return True
+
+        return False
 
     def search_books(self, query: str) -> list:
         """Search for books in Storyteller."""
@@ -520,12 +561,13 @@ class StorytellerAPIClient:
                     matched = overlap >= min(len(query_set), len(searchable_tokens)) * 0.5
 
                 if matched:
+                    book_uuid = book.get('uuid') or book.get('id')
                     results.append({
-                        'uuid': book.get('uuid') or book.get('id'),
+                        'uuid': book_uuid,
                         'title': title,
                         'authors': [a.get('name') for a in book.get('authors', [])],
-                        'cover_url': f"/api/v2/books/{book.get('uuid') or book.get('id')}/cover",
-                        'has_transcript': self._has_transcript_on_disk(title),
+                        'cover_url': f"/api/v2/books/{book_uuid}/cover",
+                        'has_transcript': self._has_transcript_on_disk(title, book_uuid),
                     })
             return results
         return []

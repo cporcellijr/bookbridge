@@ -1300,7 +1300,24 @@ class SyncManager:
                 storyteller_manifest = self._get_storyteller_manifest_path(book)
                 if not storyteller_manifest:
                     try:
-                        ingested_manifest = ingest_storyteller_transcripts(abs_id, abs_title, chapters)
+                        storyteller_title = None
+                        if getattr(book, "storyteller_uuid", None):
+                            try:
+                                storyteller_title = self.storyteller_client.get_book_title_by_uuid(book.storyteller_uuid)
+                            except Exception as storyteller_title_err:
+                                logger.debug(
+                                    "Unable to resolve Storyteller title for '%s' (%s): %s",
+                                    abs_id,
+                                    book.storyteller_uuid,
+                                    storyteller_title_err,
+                                )
+
+                        ingested_manifest = ingest_storyteller_transcripts(
+                            abs_id,
+                            abs_title,
+                            chapters,
+                            storyteller_title=storyteller_title,
+                        )
                         if ingested_manifest:
                             storyteller_manifest = self._get_storyteller_manifest_path(book) or Path(ingested_manifest)
                     except Exception as storyteller_ingest_err:
