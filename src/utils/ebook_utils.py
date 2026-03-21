@@ -747,7 +747,13 @@ class EbookParser:
             pct = float(percentage if percentage is not None else 0.0)
             pct = max(0.0, min(1.0, pct))
             position = int((len(full_text) - 1) * pct) if len(full_text) > 1 else 0
-            return self.get_perfect_ko_xpath(filename, position)
+            xpath = self.get_perfect_ko_xpath(filename, position)
+
+            # Truncate character offsets to node start for sentence-level syncing.
+            if xpath:
+                xpath = re.sub(r'(text\(\)(?:\[\d+\])?)\.\d+$', r'\1.0', xpath)
+
+            return xpath
         except Exception as e:
             logger.error(f"Error generating sentence-level KOReader XPath: {e}")
             return None

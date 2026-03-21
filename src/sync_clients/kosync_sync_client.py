@@ -106,28 +106,26 @@ class KoSyncSyncClient(SyncClient):
 
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
         pct = request.locator_result.percentage
-        locator = request.locator_result
         ko_id = book.kosync_doc_id if book else None
-        # use perfect_ko_xpath if available
-        xpath = locator.perfect_ko_xpath if locator and locator.perfect_ko_xpath else locator.xpath
-        safe_xpath = self._sanitize_kosync_xpath(xpath, pct)
 
         epub = (
             (getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None))
             if book
             else None
         )
-        if safe_xpath is None and epub and pct is not None and pct > 0:
-            regenerated_xpath = self.ebook_parser.get_sentence_level_ko_xpath(epub, pct)
-            safe_xpath = self._sanitize_kosync_xpath(regenerated_xpath, pct)
-            if safe_xpath:
-                logger.info(f"Recovered malformed KoSync XPath using sentence-level fallback for '{book.abs_title}'")
+        # Always use sentence-level XPaths for KOSync.
+        # Character-level offsets don't survive cross-engine rendering differences
+        # between our parser and KOReader's CREngine.
+        safe_xpath = None
+        if epub and pct is not None and pct > 0:
+            sentence_xpath = self.ebook_parser.get_sentence_level_ko_xpath(epub, pct)
+            safe_xpath = self._sanitize_kosync_xpath(sentence_xpath, pct)
 
         if safe_xpath is None and pct is not None and pct <= 0:
             safe_xpath = ""
 
         if safe_xpath is None and pct is not None and pct > 0:
-            logger.warning(f"Skipping KoSync update due to malformed XPath for '{book.abs_title if book else 'unknown'}'")
+            logger.warning(f"Skipping KoSync update due to unresolvable XPath for '{book.abs_title if book else 'unknown'}'")
             return SyncResult(
                 location=pct,
                 success=False,
@@ -140,4 +138,3 @@ class KoSyncSyncClient(SyncClient):
             'xpath': safe_xpath
         }
         return SyncResult(pct, success, updated_state)
-
