@@ -333,7 +333,7 @@ class BookloreClient:
         # Strategy 2: Fallback - Scan a few books to find unique libraries
         try:
             logger.info("Booklore: Scanning books to discover libraries...")
-            response = self._make_request("GET", "/api/v1/books?page=0&size=50")
+            response = self._make_request("GET", "/api/v1/books")
             if response and response.status_code == 200:
                 data = self._parse_json_response(response, "Booklore library discovery scan")
                 if isinstance(data, list):
@@ -501,7 +501,8 @@ class BookloreClient:
     def _build_books_endpoint(self, page, batch_size, use_server_side_filter):
         if use_server_side_filter and self.target_library_id:
             return f"/api/v1/libraries/{self.target_library_id}/book"
-        return f"/api/v1/books?page={page}&size={batch_size}"
+        # Grimmory /api/v1/books returns all books as a flat list (no pagination).
+        return "/api/v1/books"
 
     def _filter_books_by_library(self, books):
         if not self.target_library_id:
@@ -794,6 +795,11 @@ class BookloreClient:
                     break
 
                 if raw_batch_size != batch_size:
+                    break
+
+                # Grimmory /api/v1/books returns a flat list; always stop after
+                # first fetch for non-library-scoped scans.
+                if not use_server_side_filter:
                     break
 
                 page += 1
@@ -1429,12 +1435,6 @@ class BookloreClient:
 
         try:
             response = self.session.get(url, headers=headers, timeout=60)
-            
-            # Fallback for newer Booklore versions or different configurations
-            if response.status_code == 404:
-                file_url = f"{self.base_url}/api/v1/books/{book_id}/file"
-                logger.debug(f"404 on /download, trying fallback: {file_url}")
-                response = self.session.get(file_url, headers=headers, timeout=60)
 
             if response.status_code != 200:
                 if response.status_code == 404:
@@ -1565,16 +1565,13 @@ class BookloreClient:
     def download_book_to_path(self, book_id, output_path, expected_size: int = 0) -> bool:
         """Stream-download the audiobook file directly to disk.
 
-        Tries audiobook-specific endpoints first (these serve the actual M4B/audio
-        file), NOT /api/v1/books/{id}/download which returns the ebook.
+        Uses Grimmory's audiobook stream endpoint for full-file delivery.
         """
         token = self._get_fresh_token()
         if not token:
             return False
         headers = {"Authorization": f"Bearer {token}"}
         urls = [
-            f"{self.base_url}/api/v1/audiobooks/{book_id}/download",
-            f"{self.base_url}/api/v1/audiobooks/{book_id}/file",
             f"{self.base_url}/api/v1/audiobooks/{book_id}/stream",
         ]
         for url in urls:
@@ -1630,7 +1627,7 @@ class BookloreClient:
             except Exception as e:
                 logger.error(f"❌ Booklore audiobook download error: book_id={book_id} url={url} {e}")
                 return False
-        logger.error(f"❌ Booklore audiobook download: all endpoints returned 404 for book_id={book_id}")
+        logger.error(f"❌ Booklore audiobook download: stream endpoint unavailable for book_id={book_id}")
         return False
 
     def download_audiobook_track(self, book_id, track_index, output_path):
@@ -1785,6 +1782,12 @@ class BookloreClient:
         return False
 
     def update_progress(self, ebook_filename, percentage, rich_locator: Optional[LocatorResult] = None):
+        # TODO: Grimmory deprecated epubProgress/pdfProgress/cbxProgress/audiobookProgress
+        # in ReadProgressRequest. Migrate to:
+        #   fileProgress = { bookFileId: primaryFile.id, positionData: cfi,
+        #                    positionHref: href, progressPercent: pct*100 }
+        # _process_book_detail() already caches primaryFile, so book['primaryFile']['id']
+        # is available. Switch when Grimmory removes the deprecated fields.
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             logger.debug(f"Booklore: Book not found: {ebook_filename}")
