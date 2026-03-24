@@ -14,7 +14,7 @@ import sys
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.utils.kosync_headers import hash_kosync_key
+from src.utils.kosync_headers import KOSYNC_ACCEPT, hash_kosync_key
 
 
 def _http_response(status_code, payload=None, text=""):
@@ -851,12 +851,15 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     def test_test_connection_kosync_fails_when_auth_fails(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
             if url == 'http://typed-kosync/healthcheck':
-                self.assertIsNone(headers)
+                self.assertEqual(headers['x-auth-user'], 'reader')
+                self.assertEqual(headers['x-auth-key'], hash_kosync_key('wrong-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 self.assertEqual(timeout, 5)
                 return _http_response(200)
             if url == 'http://typed-kosync/users/auth':
                 self.assertEqual(headers['x-auth-user'], 'reader')
                 self.assertEqual(headers['x-auth-key'], hash_kosync_key('wrong-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 self.assertEqual(timeout, 5)
                 return _http_response(401)
             raise AssertionError(f'Unexpected URL {url}')
@@ -883,10 +886,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     def test_test_connection_kosync_succeeds_after_healthcheck_and_auth(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
             if url == 'http://typed-kosync/healthcheck':
+                self.assertEqual(headers['x-auth-user'], 'reader')
+                self.assertEqual(headers['x-auth-key'], hash_kosync_key('good-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 return _http_response(200)
             if url == 'http://typed-kosync/users/auth':
                 self.assertEqual(headers['x-auth-user'], 'reader')
                 self.assertEqual(headers['x-auth-key'], hash_kosync_key('good-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 return _http_response(200)
             raise AssertionError(f'Unexpected URL {url}')
 
@@ -907,6 +914,73 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertTrue(data['ok'])
         self.assertIn('credentials are valid', data['message'])
         self.assertEqual(mock_get.call_count, 2)
+
+    @patch('src.web_server.requests.get')
+    def test_test_connection_kosync_auth_success_overrides_healthcheck_403(self, mock_get):
+        def fake_get(url, headers=None, timeout=None):
+            self.assertEqual(headers['x-auth-user'], 'reader')
+            self.assertEqual(headers['x-auth-key'], hash_kosync_key('good-pass'))
+            self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
+            if url == 'http://typed-kosync/healthcheck':
+                return _http_response(403)
+            if url == 'http://typed-kosync/users/auth':
+                return _http_response(200)
+            raise AssertionError(f'Unexpected URL {url}')
+
+        mock_get.side_effect = fake_get
+
+        response = self.client.post(
+            '/api/test-connection/kosync',
+            json={
+                'KOSYNC_ENABLED': True,
+                'KOSYNC_SERVER': 'typed-kosync',
+                'KOSYNC_USER': 'reader',
+                'KOSYNC_KEY': 'good-pass',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('healthcheck returned 403', data['message'])
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch('src.web_server.requests.post')
+    def test_test_connection_hardcover_accepts_list_shaped_me_payload(self, mock_post):
+        mock_post.return_value = _http_response(
+            200,
+            payload={'data': {'me': [{'id': 1, 'username': 'reader'}]}},
+        )
+
+        response = self.client.post(
+            '/api/test-connection/hardcover',
+            json={
+                'HARDCOVER_ENABLED': True,
+                'HARDCOVER_TOKEN': 'good-token',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn("Connected as 'reader'", data['message'])
+
+    @patch('src.web_server.requests.post')
+    def test_test_connection_hardcover_invalid_token(self, mock_post):
+        mock_post.return_value = _http_response(403)
+
+        response = self.client.post(
+            '/api/test-connection/hardcover',
+            json={
+                'HARDCOVER_ENABLED': True,
+                'HARDCOVER_TOKEN': 'bad-token',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertFalse(data['ok'])
+        self.assertEqual(data['message'], 'Invalid API token')
 
     @patch('src.web_server.requests.post')
     def test_test_connection_storyteller_uses_post_payload_not_saved_env(self, mock_post):

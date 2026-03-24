@@ -30,7 +30,7 @@ from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult
 from src.utils.storyteller_transcript import StorytellerTranscript
-from src.utils.kosync_headers import hash_kosync_key
+from src.utils.kosync_headers import hash_kosync_key, kosync_auth_headers
 
 def _reconfigure_logging():
     """Force update of root logger level based on env var."""
@@ -1315,6 +1315,7 @@ def settings():
             'KOSYNC_ENABLED',
             'STORYTELLER_ENABLED',
             'BOOKLORE_ENABLED',
+            'GRIMMORY_READING_SESSIONS',
             'CWA_ENABLED',
             'HARDCOVER_ENABLED',
             'TELEGRAM_ENABLED',
@@ -4671,21 +4672,57 @@ def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
     if not user or not key:
         return {"ok": False, "message": "Missing username or password"}
 
-    healthcheck = requests.get(_build_test_url(url, "healthcheck"), timeout=5)
-    if healthcheck.status_code != 200:
-        return {"ok": False, "message": f"Healthcheck returned {healthcheck.status_code}"}
-
-    headers = {
-        "x-auth-user": user,
-        "x-auth-key": hash_kosync_key(key),
-    }
+    headers = kosync_auth_headers(user, hash_kosync_key(key))
+    healthcheck_status = None
+    healthcheck_error = None
+    try:
+        healthcheck = requests.get(
+            _build_test_url(url, "healthcheck"),
+            headers=headers,
+            timeout=5,
+        )
+        healthcheck_status = healthcheck.status_code
+    except Exception as e:
+        healthcheck_error = str(e)
     auth = requests.get(_build_test_url(url, "users/auth"), headers=headers, timeout=5)
     if auth.status_code == 200:
+        if healthcheck_status not in (None, 200):
+            return {
+                "ok": True,
+                "message": (
+                    "Server is reachable and credentials are valid "
+                    f"(healthcheck returned {healthcheck_status})"
+                ),
+            }
+        if healthcheck_error:
+            return {
+                "ok": True,
+                "message": (
+                    "Server is reachable and credentials are valid "
+                    f"(healthcheck error: {healthcheck_error})"
+                ),
+            }
         return {"ok": True, "message": "Server is reachable and credentials are valid"}
     if auth.status_code in (401, 403):
         return {"ok": False, "message": f"Authentication failed ({auth.status_code}) — check username or password"}
     if auth.status_code == 500:
         return {"ok": False, "message": "Remote KOSync server is not configured"}
+    if healthcheck_status is not None:
+        return {
+            "ok": False,
+            "message": (
+                f"Auth check returned {auth.status_code}; "
+                f"healthcheck returned {healthcheck_status}"
+            ),
+        }
+    if healthcheck_error:
+        return {
+            "ok": False,
+            "message": (
+                f"Auth check returned {auth.status_code}; "
+                f"healthcheck error: {healthcheck_error}"
+            ),
+        }
     return {"ok": False, "message": f"Auth check returned {auth.status_code}"}
 
 
@@ -4753,8 +4790,13 @@ def _test_hardcover(enabled: bool, token: str) -> dict:
     )
     if r.status_code == 200:
         data = r.json()
-        if data.get('data', {}).get('me'):
-            username = data['data']['me'].get('username', 'unknown')
+        me = data.get('data', {}).get('me')
+        if isinstance(me, list):
+            me = me[0] if me and isinstance(me[0], dict) else None
+        elif not isinstance(me, dict):
+            me = None
+        if me:
+            username = me.get('username', 'unknown')
             return {"ok": True, "message": f"Connected as '{username}'"}
         errors = data.get('errors', [])
         if errors:

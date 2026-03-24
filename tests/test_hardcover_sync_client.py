@@ -12,6 +12,7 @@ from unittest.mock import Mock
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.api.hardcover_client import HardcoverRateLimitError
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
 from src.sync_clients.sync_client_interface import UpdateProgressRequest, LocatorResult
 from src.db.models import Book, HardcoverDetails
@@ -309,6 +310,30 @@ class TestHardcoverSyncClient(unittest.TestCase):
 
         # Verify it returns failure on API error
         self.assertFalse(result.success)
+
+    def test_rate_limited_automatch_skips_without_false_no_match_log(self):
+        self.mock_abs_client.get_item_details.return_value = {
+            'media': {
+                'metadata': {
+                    'title': 'Rate Limited Book',
+                    'authorName': 'Test Author',
+                    'isbn': '9781234567890'
+                }
+            }
+        }
+        self.mock_hardcover_client.search_by_isbn.side_effect = HardcoverRateLimitError("throttled")
+
+        update_request = UpdateProgressRequest(
+            locator_result=LocatorResult(percentage=0.5)
+        )
+
+        with self.assertLogs('src.sync_clients.hardcover_sync_client', level='WARNING') as logs:
+            result = self.hardcover_sync_client.update_progress(self.test_book, update_request)
+
+        self.assertFalse(result.success)
+        self.assertIsNone(self.database_service.get_hardcover_details('test-hardcover-book'))
+        self.assertFalse(any('No match found' in entry for entry in logs.output))
+        self.assertTrue(any('Rate limited while matching' in entry for entry in logs.output))
 
     def test_get_text_from_current_state_returns_none(self):
         """Test that get_text_from_current_state always returns None since Hardcover doesn't provide text."""

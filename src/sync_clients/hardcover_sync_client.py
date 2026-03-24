@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-from src.api.hardcover_client import HardcoverClient
+from src.api.hardcover_client import HardcoverClient, HardcoverRateLimitError
 from src.db.models import Book, State, HardcoverDetails
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 from src.utils.ebook_utils import EbookParser
@@ -100,7 +100,14 @@ class HardcoverSyncClient(SyncClient):
 
         for search_func, strategy_name, condition in search_strategies:
             if not match and condition:
-                valid_match, rejected_match = self._try_match_with_strategy(search_func, strategy_name, book.abs_title)
+                try:
+                    valid_match, rejected_match = self._try_match_with_strategy(search_func, strategy_name, book.abs_title)
+                except HardcoverRateLimitError:
+                    logger.warning(
+                        "⚠️ Hardcover: Rate limited while matching '%s'; skipping automatch for now",
+                        sanitize_log_data(meta.get('title')),
+                    )
+                    return
                 if valid_match:
                     match = valid_match
                     matched_by = strategy_name
@@ -114,7 +121,14 @@ class HardcoverSyncClient(SyncClient):
         if not match and first_rejected:
             book_id = first_rejected.get('book_id')
             if book_id:
-                edition = self.hardcover_client.get_default_edition(book_id)
+                try:
+                    edition = self.hardcover_client.get_default_edition(book_id)
+                except HardcoverRateLimitError:
+                    logger.warning(
+                        "⚠️ Hardcover: Rate limited while resolving editions for '%s'; skipping automatch for now",
+                        sanitize_log_data(meta.get('title')),
+                    )
+                    return
                 if edition and edition.get('audio_seconds') and edition['audio_seconds'] > 0:
                     match = first_rejected
                     matched_by = first_rejected_by

@@ -991,6 +991,87 @@ def test_add_to_shelf_404_evicts_stale_hydrated_entry(booklore_client):
     booklore_client.db.delete_booklore_book.assert_called_once_with("gone.epub")
 
 
+def test_add_to_shelf_creates_missing_shelf_with_201_dict_payload(booklore_client):
+    booklore_client.find_book_by_filename = MagicMock(return_value={"id": "created"})
+
+    shelves_response = MagicMock()
+    shelves_response.status_code = 200
+    shelves_response.json.return_value = []
+    create_response = MagicMock()
+    create_response.status_code = 201
+    create_response.json.return_value = {"id": "shelf-2", "name": "Kobo"}
+    assign_response = MagicMock()
+    assign_response.status_code = 204
+    booklore_client._make_request = MagicMock(side_effect=[shelves_response, create_response, assign_response])
+
+    ok = booklore_client.add_to_shelf("created.epub", shelf_name="Kobo")
+
+    assert ok is True
+    assert booklore_client._make_request.call_args_list[1][0][1] == "/api/v1/shelves"
+    assert booklore_client._make_request.call_args_list[2][0][1] == "/api/v1/books/shelves"
+
+
+def test_add_to_shelf_accepts_200_create_response(booklore_client):
+    booklore_client.find_book_by_filename = MagicMock(return_value={"id": "compat"})
+
+    shelves_response = MagicMock()
+    shelves_response.status_code = 200
+    shelves_response.json.return_value = []
+    create_response = MagicMock()
+    create_response.status_code = 200
+    create_response.json.return_value = {"id": "shelf-3", "name": "Kobo"}
+    assign_response = MagicMock()
+    assign_response.status_code = 200
+    booklore_client._make_request = MagicMock(side_effect=[shelves_response, create_response, assign_response])
+
+    ok = booklore_client.add_to_shelf("compat.epub", shelf_name="Kobo")
+
+    assert ok is True
+
+
+def test_add_to_shelf_refetches_when_create_response_has_no_id(booklore_client):
+    booklore_client.find_book_by_filename = MagicMock(return_value={"id": "refetch"})
+
+    first_shelves_response = MagicMock()
+    first_shelves_response.status_code = 200
+    first_shelves_response.json.return_value = []
+    create_response = MagicMock()
+    create_response.status_code = 201
+    create_response.json.return_value = {"name": "Kobo"}
+    second_shelves_response = MagicMock()
+    second_shelves_response.status_code = 200
+    second_shelves_response.json.return_value = [{"id": "shelf-4", "name": "Kobo"}]
+    assign_response = MagicMock()
+    assign_response.status_code = 201
+    booklore_client._make_request = MagicMock(
+        side_effect=[first_shelves_response, create_response, second_shelves_response, assign_response]
+    )
+
+    ok = booklore_client.add_to_shelf("refetch.epub", shelf_name="Kobo")
+
+    assert ok is True
+    assert booklore_client._make_request.call_args_list[2][0][1] == "/api/v1/shelves"
+
+
+def test_add_to_shelf_logs_create_failure_details(booklore_client, caplog):
+    booklore_client.find_book_by_filename = MagicMock(return_value={"id": "fail"})
+
+    shelves_response = MagicMock()
+    shelves_response.status_code = 200
+    shelves_response.json.return_value = []
+    create_response = MagicMock()
+    create_response.status_code = 500
+    create_response.text = "server exploded"
+    booklore_client._make_request = MagicMock(side_effect=[shelves_response, create_response])
+
+    with caplog.at_level("ERROR"):
+        ok = booklore_client.add_to_shelf("fail.epub", shelf_name="Kobo")
+
+    assert ok is False
+    assert "status=500" in caplog.text
+    assert "server exploded" in caplog.text
+
+
 def test_refresh_book_cache_uses_server_side_library_filter_when_supported(mock_db):
     with patch.dict(os.environ, {
         "BOOKLORE_SERVER": "http://mock-booklore",

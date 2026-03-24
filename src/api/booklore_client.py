@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 import logging
 import threading
@@ -83,7 +83,7 @@ class BookloreClient:
             try:
                 # Check if DB is empty to avoid overwriting newer SQL data
                 if self.db and not self.db.get_all_booklore_books():
-                    logger.info("📦 Grimmory: Migrating legacy JSON cache to SQLite...")
+                    logger.info("ðŸ“¦ Grimmory: Migrating legacy JSON cache to SQLite...")
                     with open(self.legacy_cache_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         books = data.get('books', {})
@@ -103,18 +103,18 @@ class BookloreClient:
                                 self.db.save_booklore_book(b_model)
                                 count += 1
                             except Exception as e:
-                                logger.warning(f"⚠️ Failed to migrate book {filename}: {e}")
+                                logger.warning(f"âš ï¸ Failed to migrate book {filename}: {e}")
                         
-                        logger.info(f"✅ Grimmory: Migrated {count} books to database.")
+                        logger.info(f"âœ… Grimmory: Migrated {count} books to database.")
                         
                     # Rename legacy file to .bak after successful migration
                     try:
                         self.legacy_cache_file.rename(self.legacy_cache_file.with_suffix('.json.bak'))
-                        logger.info("📦 Grimmory: Legacy cache file renamed to .bak")
+                        logger.info("ðŸ“¦ Grimmory: Legacy cache file renamed to .bak")
                     except Exception as e:
-                        logger.warning(f"⚠️ Could not rename legacy cache file: {e}")
+                        logger.warning(f"âš ï¸ Could not rename legacy cache file: {e}")
             except Exception as e:
-                logger.error(f"❌ Grimmory migration failed: {e}")
+                logger.error(f"âŒ Grimmory migration failed: {e}")
 
         # 2. Load from DB into memory
         if self.db:
@@ -144,9 +144,9 @@ class BookloreClient:
                         
                 # Set to 0 to force a refresh/validation against API on next access
                 self._cache_timestamp = 0
-                logger.info(f"📚 Grimmory: Loaded {len(self._book_cache)} books from database")
+                logger.info(f"ðŸ“š Grimmory: Loaded {len(self._book_cache)} books from database")
             except Exception as e:
-                logger.error(f"❌ Failed to load Grimmory cache from DB: {e}")
+                logger.error(f"âŒ Failed to load Grimmory cache from DB: {e}")
                 with self._cache_lock:
                     self._book_cache = {}
                     self._book_id_cache = {}
@@ -215,12 +215,12 @@ class BookloreClient:
                         continue
 
                     logger.error(
-                        f"❌ Grimmory login failed: {response.status_code} - "
+                        f"âŒ Grimmory login failed: {response.status_code} - "
                         f"{self._response_text_preview(response, limit=300)}"
                     )
                     return None
             except Exception as e:
-                logger.error(f"❌ Grimmory login error: {e}")
+                logger.error(f"âŒ Grimmory login error: {e}")
         return None
 
     def _make_request(self, method, endpoint, json_data=None):
@@ -248,7 +248,7 @@ class BookloreClient:
                     response = self.session.post(url, headers=headers, json=json_data, timeout=10)
             return response
         except Exception as e:
-            logger.error(f"❌ Grimmory API request failed: {e}")
+            logger.error(f"âŒ Grimmory API request failed: {e}")
             return None
 
     @staticmethod
@@ -269,7 +269,7 @@ class BookloreClient:
             return response.json()
         except Exception as e:
             logger.error(
-                f"âŒ Grimmory: Failed to parse JSON from {context} "
+                f"Ã¢ÂÅ’ Grimmory: Failed to parse JSON from {context} "
                 f"(status={getattr(response, 'status_code', 'unknown')}, "
                 f"body={self._response_text_preview(response)!r}): {e}"
             )
@@ -285,7 +285,7 @@ class BookloreClient:
     def check_connection(self):
         # Ensure Grimmory is configured first
         if not all([self.base_url, self.username, self.password]):
-            logger.warning("⚠️ Grimmory not configured (skipping)")
+            logger.warning("âš ï¸ Grimmory not configured (skipping)")
             return False
 
         token = self._get_fresh_token()
@@ -298,7 +298,7 @@ class BookloreClient:
                 first_run = False
 
             if first_run:
-                logger.info(f"✅ Connected to Grimmory at {self.base_url}")
+                logger.info(f"âœ… Connected to Grimmory at {self.base_url}")
                 try:
                     open(first_run_marker, 'w').close()
                 except Exception:
@@ -306,7 +306,7 @@ class BookloreClient:
             return True
 
         # If we were configured but couldn't get a token, warn
-        logger.error("❌ Grimmory connection failed: could not obtain auth token")
+        logger.error("âŒ Grimmory connection failed: could not obtain auth token")
         return False
 
     def get_libraries(self):
@@ -357,7 +357,7 @@ class BookloreClient:
                         }
                 return list(unique_libs.values())
         except Exception as e:
-            logger.error(f"❌ Grimmory: Failed to discover libraries via book scan: {e}")
+            logger.error(f"âŒ Grimmory: Failed to discover libraries via book scan: {e}")
             
         return []
 
@@ -487,14 +487,14 @@ class BookloreClient:
                 try:
                     self.db.delete_booklore_book(cached_filename)
                 except Exception as e:
-                    logger.error(f"❌ Failed to evict stale Grimmory book {cached_filename}: {e}")
+                    logger.error(f"âŒ Failed to evict stale Grimmory book {cached_filename}: {e}")
 
         removed_any = bool(removed_filenames or removed_ids)
         if removed_any:
             self._cache_timestamp = 0
             reason_msg = f" ({reason})" if reason else ""
             logger.info(
-                f"📚 Grimmory: Evicted stale cached book"
+                f"ðŸ“š Grimmory: Evicted stale cached book"
                 f"{reason_msg}: ids={sorted(removed_ids) or ['?']} files={sorted(removed_filenames) or ['?']}"
             )
         return removed_any
@@ -713,10 +713,10 @@ class BookloreClient:
                 try:
                     self.db.delete_booklore_book(filename)
                 except Exception as e:
-                    logger.error(f"âŒ Failed to prune stale book {filename}: {e}")
+                    logger.error(f"Ã¢ÂÅ’ Failed to prune stale book {filename}: {e}")
 
         if stale_entries:
-            logger.info(f"📚 Grimmory: Pruned {len(stale_entries)} books no longer in library")
+            logger.info(f"ðŸ“š Grimmory: Pruned {len(stale_entries)} books no longer in library")
 
     def _refresh_book_cache(self, refresh_stale_details=True):
         """
@@ -738,16 +738,16 @@ class BookloreClient:
             use_server_side_filter = bool(self.target_library_id and self._server_side_filter_supported is not False)
             should_probe_server_side_filter = bool(self.target_library_id and self._server_side_filter_supported is None)
 
-            logger.info("📚 Grimmory: Starting full library scan...")
+            logger.info("ðŸ“š Grimmory: Starting full library scan...")
 
             while True:
                 endpoint = self._build_books_endpoint(page, batch_size, use_server_side_filter)
                 response = self._make_request("GET", endpoint)
 
                 if not response or response.status_code != 200:
-                    logger.error(f"❌ Grimmory: Failed to fetch page {page}")
+                    logger.error(f"âŒ Grimmory: Failed to fetch page {page}")
                     self._last_refresh_failed = True
-                    return False
+                
 
                 data = self._parse_json_response(response, f"Grimmory books page {page}")
                 if data is None:
@@ -815,7 +815,7 @@ class BookloreClient:
                 self._last_refresh_failed = False
                 return True
 
-            logger.info(f"📚 Grimmory: Scan complete. Found {len(all_books_list)} total books.")
+            logger.info(f"ðŸ“š Grimmory: Scan complete. Found {len(all_books_list)} total books.")
 
             # Legacy stale pruning path left disabled; _book_id_cache pruning now runs above.
             if False and self.db and all_books_list:
@@ -869,10 +869,10 @@ class BookloreClient:
                         try:
                             self.db.delete_booklore_book(fname)
                         except Exception as e:
-                            logger.error(f"❌ Failed to prune stale book {fname}: {e}")
+                            logger.error(f"âŒ Failed to prune stale book {fname}: {e}")
 
                 if stale_count > 0:
-                    logger.info(f"🧹 Grimmory: Pruned {stale_count} stale books from database.")
+                    logger.info(f"ðŸ§¹ Grimmory: Pruned {stale_count} stale books from database.")
 
             id_snapshot = self._snapshot_book_id_items()
             existing_id_strings = {str(bid) for bid, _ in id_snapshot}
@@ -895,7 +895,7 @@ class BookloreClient:
                         self._upsert_lightweight_entry(book)
 
                     logger.warning(
-                        f"📚 Grimmory: {len(new_book_ids)} new books detected. "
+                        f"ðŸ“š Grimmory: {len(new_book_ids)} new books detected. "
                         f"Skipping bulk detail fetch (limit: {BULK_DETAIL_FETCH_LIMIT}). "
                         f"Book details will be fetched on demand. "
                         f"Consider setting BOOKLORE_LIBRARY_ID to reduce scan scope."
@@ -1055,11 +1055,11 @@ class BookloreClient:
                 try:
                     self.db.delete_booklore_book(stale_filename)
                 except Exception as e:
-                    logger.error(f"❌ Failed to remove stale Grimmory alias '{stale_filename}': {e}")
+                    logger.error(f"âŒ Failed to remove stale Grimmory alias '{stale_filename}': {e}")
 
         if stale_filenames:
             logger.info(
-                "📚 Grimmory: Removed stale filename aliases for book %s: %s",
+                "ðŸ“š Grimmory: Removed stale filename aliases for book %s: %s",
                 detail.get('id'),
                 stale_filenames,
             )
@@ -1078,7 +1078,7 @@ class BookloreClient:
                 )
                 self.db.save_booklore_book(b_model)
             except Exception as e:
-                logger.error(f"❌ Failed to persist book {filename} to DB: {e}")
+                logger.error(f"âŒ Failed to persist book {filename} to DB: {e}")
 
         return None
 
@@ -1297,7 +1297,7 @@ class BookloreClient:
         """Clear all Grimmory cache state (memory + DB) and run a full refresh."""
         acquired = self._refresh_lock.acquire(timeout=30)
         if not acquired:
-            logger.warning("⚠️ Grimmory: Cache refresh already in progress, cannot clear cache right now")
+            logger.warning("âš ï¸ Grimmory: Cache refresh already in progress, cannot clear cache right now")
             return False
 
         try:
@@ -1312,12 +1312,12 @@ class BookloreClient:
 
             if self.db:
                 if not self.db.clear_all_booklore_books():
-                    logger.error("❌ Grimmory: Failed to clear DB cache table")
+                    logger.error("âŒ Grimmory: Failed to clear DB cache table")
                     return False
 
-            logger.info("📚 Grimmory: Cache cleared (memory + DB), starting full refresh...")
+            logger.info("ðŸ“š Grimmory: Cache cleared (memory + DB), starting full refresh...")
         except Exception as e:
-            logger.error(f"❌ Grimmory: Failed to clear cache before refresh: {e}")
+            logger.error(f"âŒ Grimmory: Failed to clear cache before refresh: {e}")
             return False
         finally:
             self._refresh_lock.release()
@@ -1477,12 +1477,12 @@ class BookloreClient:
             if response.status_code != 200:
                 if response.status_code == 404:
                     self._evict_cached_book(book_id=book_id, reason="download returned 404")
-                logger.error(f"❌ Failed to download book: {response.status_code}")
+                logger.error(f"âŒ Failed to download book: {response.status_code}")
                 return None
 
             return response.content
         except Exception as e:
-            logger.error(f"❌ Download error: {e}")
+            logger.error(f"âŒ Download error: {e}")
             return None
 
     @staticmethod
@@ -1622,7 +1622,7 @@ class BookloreClient:
                         continue
                     if response.status_code != 200:
                         logger.error(
-                            f"❌ Grimmory audiobook download failed: book_id={book_id} "
+                            f"âŒ Grimmory audiobook download failed: book_id={book_id} "
                             f"url={url} status={response.status_code}"
                         )
                         return False
@@ -1659,13 +1659,13 @@ class BookloreClient:
                         logger.warning(
                             f"Grimmory audiobook download size mismatch: "
                             f"expected ~{expected_size // (1024 * 1024)} MiB, "
-                            f"got {size_display} — file may be incomplete"
+                            f"got {size_display} â€” file may be incomplete"
                         )
                     return True
             except Exception as e:
-                logger.error(f"❌ Grimmory audiobook download error: book_id={book_id} url={url} {e}")
+                logger.error(f"âŒ Grimmory audiobook download error: book_id={book_id} url={url} {e}")
                 return False
-        logger.error(f"❌ Grimmory audiobook download: stream endpoint unavailable for book_id={book_id}")
+        logger.error(f"âŒ Grimmory audiobook download: stream endpoint unavailable for book_id={book_id}")
         return False
 
     def download_audiobook_track(self, book_id, track_index, output_path):
@@ -1678,7 +1678,7 @@ class BookloreClient:
             with self.session.get(url, headers=headers, stream=True, timeout=120) as response:
                 if response.status_code != 200:
                     logger.error(
-                        f"❌ Grimmory audiobook track download failed: book_id={book_id} "
+                        f"âŒ Grimmory audiobook track download failed: book_id={book_id} "
                         f"track_index={track_index} status={response.status_code}"
                     )
                     return False
@@ -1690,7 +1690,7 @@ class BookloreClient:
                             handle.write(chunk)
                 return True
         except Exception as e:
-            logger.error(f"❌ Grimmory audiobook track download error: {e}")
+            logger.error(f"âŒ Grimmory audiobook track download error: {e}")
             return False
 
     def update_audiobook_progress(
@@ -1816,7 +1816,7 @@ class BookloreClient:
                     cached['audiobookProgress'] = dict(progress_payload)
             return True
 
-        logger.error(f"❌ Grimmory audiobook update failed: {last_status}")
+        logger.error(f"âŒ Grimmory audiobook update failed: {last_status}")
         return False
 
     def update_progress(self, ebook_filename, percentage, rich_locator: Optional[LocatorResult] = None):
@@ -2118,6 +2118,57 @@ class BookloreClient:
             logger.debug("Grimmory: Reading session error for book %s: %s", book_id, e)
             return False
 
+    def _normalize_shelves_payload(self, payload):
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, dict):
+            return [payload]
+        return []
+
+    def _find_shelf_in_payload(self, payload, shelf_name):
+        shelves = self._normalize_shelves_payload(payload)
+        return next((s for s in shelves if s.get("name") == shelf_name), None)
+
+    def _get_shelf_id(self, shelf_name):
+        shelves_response = self._make_request("GET", "/api/v1/shelves")
+        if not shelves_response or shelves_response.status_code != 200:
+            logger.error("❌ Failed to get Grimmory shelves")
+            return None
+
+        shelves = self._parse_json_response(shelves_response, "Grimmory shelves list")
+        target_shelf = self._find_shelf_in_payload(shelves, shelf_name)
+        if not target_shelf:
+            return None
+        return target_shelf.get("id")
+
+    def _get_or_create_shelf_id(self, shelf_name):
+        shelf_id = self._get_shelf_id(shelf_name)
+        if shelf_id:
+            return shelf_id
+
+        create_response = self._make_request("POST", "/api/v1/shelves", {
+            "name": shelf_name,
+            "icon": "📚",
+            "iconType": "PRIME_NG"
+        })
+        if not create_response or create_response.status_code not in (200, 201):
+            logger.error(
+                "❌ Failed to create Grimmory shelf '%s' (status=%s, body=%s)",
+                shelf_name,
+                create_response.status_code if create_response else "No response",
+                self._response_text_preview(create_response, limit=300) if create_response else "<unavailable>",
+            )
+            return None
+
+        created_payload = self._parse_json_response(
+            create_response,
+            f"Grimmory create shelf {shelf_name}",
+        )
+        target_shelf = self._find_shelf_in_payload(created_payload, shelf_name)
+        if target_shelf and target_shelf.get("id"):
+            return target_shelf.get("id")
+
+        return self._get_shelf_id(shelf_name)
     def add_to_shelf(self, ebook_filename, shelf_name=None):
         """Add a book to a shelf, creating the shelf if it doesn't exist."""
         if not shelf_name:
@@ -2130,33 +2181,9 @@ class BookloreClient:
                 logger.warning(f"⚠️ Grimmory: Book not found for shelf assignment: {sanitize_log_data(ebook_filename)}")
                 return False
 
-            # Get or create shelf
-            shelves_response = self._make_request("GET", "/api/v1/shelves")
-            if not shelves_response or shelves_response.status_code != 200:
-                logger.error("❌ Failed to get Grimmory shelves")
-                return False
-
-            shelves = self._parse_json_response(shelves_response, "Grimmory shelves list")
-            if not isinstance(shelves, list):
-                return False
-            target_shelf = next((s for s in shelves if isinstance(s, dict) and s.get('name') == shelf_name), None)
-
-            if not target_shelf:
-                # Create shelf
-                create_response = self._make_request("POST", "/api/v1/shelves", {
-                    "name": shelf_name,
-                    "icon": "📚",
-                    "iconType": "PRIME_NG"
-                })
-                if not create_response or create_response.status_code != 201:
-                    logger.error(f"❌ Failed to create Grimmory shelf: {shelf_name}")
-                    return False
-                target_shelf = self._parse_json_response(create_response, f"Grimmory create shelf {shelf_name}")
-                if not isinstance(target_shelf, dict):
-                    return False
-            shelf_id = target_shelf.get('id') if isinstance(target_shelf, dict) else None
+            shelf_id = self._get_or_create_shelf_id(shelf_name)
             if not shelf_id:
-                logger.error(f"âŒ Failed to resolve Grimmory shelf id for '{shelf_name}'")
+                logger.error(f"❌ Failed to resolve Grimmory shelf id for '{shelf_name}'")
                 return False
 
             # Assign book to shelf
@@ -2192,13 +2219,13 @@ class BookloreClient:
             # Find the book
             book = self.find_book_by_filename(ebook_filename)
             if not book:
-                logger.warning(f"⚠️ Grimmory: Book not found for shelf removal: {sanitize_log_data(ebook_filename)}")
+                logger.warning(f"âš ï¸ Grimmory: Book not found for shelf removal: {sanitize_log_data(ebook_filename)}")
                 return False
 
             # Get shelf
             shelves_response = self._make_request("GET", "/api/v1/shelves")
             if not shelves_response or shelves_response.status_code != 200:
-                logger.error("❌ Failed to get Grimmory shelves")
+                logger.error("âŒ Failed to get Grimmory shelves")
                 return False
 
             shelves = self._parse_json_response(shelves_response, "Grimmory shelves list")
@@ -2207,11 +2234,11 @@ class BookloreClient:
             target_shelf = next((s for s in shelves if isinstance(s, dict) and s.get('name') == shelf_name), None)
 
             if not target_shelf:
-                logger.warning(f"⚠️ Shelf '{shelf_name}' not found")
+                logger.warning(f"âš ï¸ Shelf '{shelf_name}' not found")
                 return False
             shelf_id = target_shelf.get('id') if isinstance(target_shelf, dict) else None
             if not shelf_id:
-                logger.error(f"âŒ Failed to resolve Grimmory shelf id for '{shelf_name}'")
+                logger.error(f"Ã¢ÂÅ’ Failed to resolve Grimmory shelf id for '{shelf_name}'")
                 return False
 
             # Remove from shelf
@@ -2222,7 +2249,7 @@ class BookloreClient:
             })
 
             if assign_response and assign_response.status_code in [200, 201, 204]:
-                logger.info(f"🗑️ Removed '{sanitize_log_data(ebook_filename)}' from Grimmory Shelf: {shelf_name}")
+                logger.info(f"ðŸ—‘ï¸ Removed '{sanitize_log_data(ebook_filename)}' from Grimmory Shelf: {shelf_name}")
                 return True
             else:
                 if assign_response and assign_response.status_code == 404:
@@ -2231,9 +2258,11 @@ class BookloreClient:
                         filename=ebook_filename,
                         reason="shelf removal returned 404",
                     )
-                logger.error(f"❌ Failed to remove book from shelf. Status: {assign_response.status_code if assign_response else 'No response'}")
+                logger.error(f"âŒ Failed to remove book from shelf. Status: {assign_response.status_code if assign_response else 'No response'}")
                 return False
 
         except Exception as e:
-            logger.error(f"❌ Error removing book from Grimmory shelf: {e}")
+            logger.error(f"âŒ Error removing book from Grimmory shelf: {e}")
             return False
+
+

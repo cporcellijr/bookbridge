@@ -1,4 +1,4 @@
-# [START FILE: abs-kosync-enhanced/hardcover_client.py]
+﻿# [START FILE: abs-kosync-enhanced/hardcover_client.py]
 """
 Hardcover.app GraphQL API Client
 
@@ -13,13 +13,20 @@ Key features:
 """
 
 import os
-import requests
 import logging
+import time
 from typing import Optional, Dict
 from datetime import date
+
+import requests
+
 from src.utils.string_utils import calculate_similarity, clean_book_title
 
 logger = logging.getLogger(__name__)
+
+
+class HardcoverRateLimitError(Exception):
+    """Raised when Hardcover throttles a read query after bounded retries."""
 
 
 class HardcoverClient:
@@ -43,6 +50,34 @@ class HardcoverClient:
             "User-Agent": "ABS-KoSync-Enhanced/5.9",
         }
 
+    @staticmethod
+    def _extract_me_payload(data) -> Optional[dict]:
+        me = (data or {}).get("me")
+        if isinstance(me, list):
+            me = me[0] if me and isinstance(me[0], dict) else None
+        elif not isinstance(me, dict):
+            me = None
+        return me
+
+    @staticmethod
+    def _is_read_only_graphql(query: str) -> bool:
+        normalized = (query or "").strip()
+        if not normalized:
+            return False
+        return not normalized.lower().startswith("mutation")
+
+    @staticmethod
+    def _get_retry_delay(response, attempt: int) -> float:
+        retry_after = response.headers.get("Retry-After") if response is not None else None
+        if retry_after:
+            try:
+                delay = float(retry_after)
+                if delay > 0:
+                    return delay
+            except (TypeError, ValueError):
+                pass
+        return float(2 ** (attempt - 1))
+
     def is_configured(self):
         enabled_val = os.environ.get("HARDCOVER_ENABLED", "").lower()
         if enabled_val == "false":
@@ -65,22 +100,45 @@ class HardcoverClient:
         if not self.token:
             return None
 
-        try:
-            r = requests.post(
-                self.api_url,
-                json={"query": query, "variables": variables or {}},
-                headers=self.headers,
-                timeout=10,
-            )
+        is_read_only = self._is_read_only_graphql(query)
+        max_attempts = 3 if is_read_only else 1
 
-            if r.status_code == 200:
-                data = r.json()
-                if data.get("data"):
-                    return data["data"]
-                elif data.get("errors"):
-                    logger.error(f"❌ GraphQL errors: {data['errors']}")
-            else:
-                logger.error(f"❌ HTTP {r.status_code}: {r.text}")
+        try:
+            for attempt in range(1, max_attempts + 1):
+                response = requests.post(
+                    self.api_url,
+                    json={"query": query, "variables": variables or {}},
+                    headers=self.headers,
+                    timeout=10,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("data"):
+                        return data["data"]
+                    if data.get("errors"):
+                        logger.error(f"❌ GraphQL errors: {data['errors']}")
+                    return None
+
+                if response.status_code == 429 and is_read_only:
+                    if attempt < max_attempts:
+                        delay = self._get_retry_delay(response, attempt)
+                        logger.warning(
+                            "⚠️ Hardcover rate limited read query. Retrying in %.1fs (attempt %d/%d).",
+                            delay,
+                            attempt,
+                            max_attempts,
+                        )
+                        time.sleep(delay)
+                        continue
+                    raise HardcoverRateLimitError(
+                        f"Hardcover read query throttled after {max_attempts} attempts"
+                    )
+
+                logger.error(f"❌ HTTP {response.status_code}: {response.text}")
+                return None
+        except HardcoverRateLimitError:
+            raise
         except Exception as e:
             logger.error(f"❌ Hardcover query failed: {e}")
 
@@ -91,8 +149,9 @@ class HardcoverClient:
             return self.user_id
 
         result = self.query("{ me { id } }")
-        if result and result.get("me"):
-            self.user_id = result["me"][0]["id"]
+        me = self._extract_me_payload(result)
+        if me:
+            self.user_id = me.get("id")
         return self.user_id
 
     def get_user_book(self, book_id):
@@ -125,7 +184,7 @@ class HardcoverClient:
                     return books[0]
 
         except Exception as e:
-            logger.error(f"❌ Error fetching user book: {e}")
+            logger.error(f"âŒ Error fetching user book: {e}")
 
         return None
 
@@ -460,7 +519,7 @@ class HardcoverClient:
                 else:
                     return None
             except Exception as e:
-                logger.error(f"❌ resolve_book_from_input error (id): {e}")
+                logger.error(f"âŒ resolve_book_from_input error (id): {e}")
                 return None
         else:
             # Treat as slug
@@ -573,7 +632,7 @@ class HardcoverClient:
         if result and result.get("insert_user_book"):
             error = result["insert_user_book"].get("error")
             if error:
-                logger.error(f"❌ Hardcover update_status error: {error}")
+                logger.error(f"âŒ Hardcover update_status error: {error}")
             return result["insert_user_book"].get("user_book")
         return None
 
@@ -629,12 +688,12 @@ class HardcoverClient:
             if not started_at_val and should_start:
                 started_at_val = today
                 logger.info(
-                    f"🔄 Hardcover: Setting started_at to '{today}' (Progress: {current_percentage:.1%})"
+                    f"ðŸ”„ Hardcover: Setting started_at to '{today}' (Progress: {current_percentage:.1%})"
                 )
 
             if is_finished and not finished_at_val:
                 finished_at_val = today
-                logger.info(f"🔄 Hardcover: Setting finished_at to '{today}'")
+                logger.info(f"ðŸ”„ Hardcover: Setting finished_at to '{today}'")
 
             # Use progress_seconds for audiobooks, progress_pages for page-based editions
             if audio_seconds and audio_seconds > 0:
@@ -754,3 +813,4 @@ class HardcoverClient:
 
 
 # [END FILE]
+
