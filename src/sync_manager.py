@@ -2112,12 +2112,22 @@ class SyncManager:
 
                 logger.info(f"💾 '{abs_id}' '{title_snip}' States saved to database")
 
+                # ── Local Reading Session Recording (always fires) ──
+                if leader_pct != leader_state.previous_pct:
+                    try:
+                        self._record_local_reading_session(
+                            book, leader, leader_state, prev_states_by_client, current_time
+                        )
+                    except Exception:
+                        pass  # Non-blocking
+
                 # ── Grimmory Reading Session Recording ──
                 if (
                     os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
                     and self.booklore_client
                     and self.booklore_client.is_configured()
                     and leader_pct != leader_state.previous_pct
+                    and leader.lower() != 'kosync'  # Plugin handles KOSync→Grimmory
                 ):
                     try:
                         self._record_grimmory_reading_session(
@@ -2139,6 +2149,97 @@ class SyncManager:
 
         logger.debug("End of sync cycle for active books")
 
+    def _compute_session_duration(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        prev_states_by_client: dict,
+        current_time: float,
+    ) -> int | None:
+        """Compute an accurate session duration in seconds. Returns None if indeterminate."""
+        leader_pct = leader_state.current.get('pct', 0)
+        prev_pct = leader_state.previous_pct or 0.0
+        prev_state = prev_states_by_client.get(leader.lower())
+
+        primary_audio_client = self._get_primary_audio_client_name(book)
+        is_audio_leader = (leader == primary_audio_client)
+
+        # Audio Tier: ABS/audio playback timestamp delta
+        if is_audio_leader:
+            current_ts = leader_state.current.get('ts')
+            previous_ts = prev_state.timestamp if prev_state else None
+            if current_ts is not None and previous_ts is not None and current_ts > previous_ts:
+                delta = int(current_ts - previous_ts)
+                if 0 < delta <= 14400:
+                    return delta
+
+        # Progress-delta heuristic (universal fallback)
+        progress_delta = abs(leader_pct - prev_pct)
+        if progress_delta > 0:
+            total_time = getattr(book, 'duration', None) or getattr(book, 'audio_duration', None) or 36000
+            estimated = int(progress_delta * total_time)
+            return max(60, min(estimated, 3600))  # clamp [1min, 1hr]
+
+        return None
+
+    def _record_local_reading_session(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        prev_states_by_client: dict,
+        current_time: float,
+    ) -> None:
+        """Record a local reading session for dashboard stats. Always fires on progress change."""
+        try:
+            # Plugin handles all KOSync ebook sessions directly
+            if leader.lower() == 'kosync':
+                return
+
+            leader_pct = leader_state.current.get('pct', 0)
+            prev_pct = leader_state.previous_pct or 0.0
+
+            prev_state = prev_states_by_client.get(leader.lower())
+            start_time = (
+                prev_state.last_updated
+                if prev_state and prev_state.last_updated
+                else current_time - 60
+            )
+
+            primary_audio_client = self._get_primary_audio_client_name(book)
+            is_audio_leader = (leader == primary_audio_client)
+
+            if is_audio_leader:
+                session_type = "AUDIOBOOK"
+            else:
+                ebook_filename = getattr(book, 'ebook_filename', '') or ''
+                if ebook_filename.lower().endswith('.epub'):
+                    session_type = "EPUB"
+                elif ebook_filename.lower().endswith('.pdf'):
+                    session_type = "PDF"
+                else:
+                    session_type = "EBOOK"
+
+            duration_seconds = self._compute_session_duration(
+                book, leader, leader_state, prev_states_by_client, current_time
+            )
+            if duration_seconds is None or duration_seconds <= 0:
+                return
+
+            self.database_service.record_reading_session(
+                abs_id=book.abs_id,
+                session_type=session_type,
+                start_time=start_time,
+                end_time=current_time,
+                duration_seconds=duration_seconds,
+                start_progress=prev_pct,
+                end_progress=leader_pct,
+                leader_client=leader,
+            )
+        except Exception:
+            pass  # Never block sync
+
     def _record_grimmory_reading_session(
         self,
         book,
@@ -2151,13 +2252,14 @@ class SyncManager:
         leader_pct = leader_state.current.get('pct', 0)
         prev_pct = leader_state.previous_pct or 0.0
 
-        # Determine session start time from the leader's previous state timestamp
-        prev_state = prev_states_by_client.get(leader.lower())
-        start_time = (
-            prev_state.last_updated
-            if prev_state and prev_state.last_updated
-            else current_time - 60
+        # Compute accurate duration, then backdate start_time so Grimmory's
+        # internal (end_time - start_time) math produces the correct value.
+        duration_seconds = self._compute_session_duration(
+            book, leader, leader_state, prev_states_by_client, current_time
         )
+        if duration_seconds is None or duration_seconds <= 0:
+            duration_seconds = 60  # Conservative 1-minute fallback for Grimmory
+        start_time = current_time - duration_seconds
 
         primary_audio_client = self._get_primary_audio_client_name(book)
         is_audio_leader = (leader == primary_audio_client)

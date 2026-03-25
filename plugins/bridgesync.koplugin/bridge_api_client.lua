@@ -1,5 +1,6 @@
 local socket = require("socket")
 local http = require("socket.http")
+local ltn12 = require("ltn12")
 local json = require("json")
 local logger = require("logger")
 local socketutil = require("socketutil")
@@ -179,6 +180,78 @@ function APIClient:downloadBook(download_path, save_path)
     end
 
     return false, "Download failed"
+end
+
+function APIClient:_requestJSON(method, path, json_body, timeout_opts)
+    if self.server_url == "" then
+        return false, nil, "Server URL not configured"
+    end
+
+    local url = self.server_url .. path
+    self:_log("info", method, url)
+    local opts = timeout_opts or {}
+    local block_timeout = opts.block_timeout or self.timeout
+    local total_timeout = opts.total_timeout or 60
+    local attempts = opts.attempts or 1
+
+    for attempt = 1, attempts do
+        socketutil:set_timeout(block_timeout, total_timeout)
+
+        local response_body = {}
+        local headers = self:_build_headers({
+            ["content-type"] = "application/json",
+            ["content-length"] = tostring(#json_body),
+        })
+        local request = {
+            url = url,
+            method = method,
+            headers = headers,
+            source = ltn12.source.string(json_body),
+            sink = socketutil.table_sink(response_body),
+        }
+        local code, response_headers, status = socket.skip(1, http.request(request))
+        socketutil:reset_timeout()
+
+        if code == socketutil.TIMEOUT_CODE or
+           code == socketutil.SSL_HANDSHAKE_CODE or
+           code == socketutil.SINK_TIMEOUT_CODE
+        then
+            self:_log("warn", "Request interrupted:", tostring(code))
+            if attempt < attempts then
+                self:_log("info", "Retrying request", tostring(attempt + 1), "of", tostring(attempts))
+                socket.sleep(attempt)
+            else
+                return false, nil, tostring(code)
+            end
+        else
+            if response_headers == nil then
+                self:_log("warn", "No HTTP headers:", tostring(status or code or "Connection failed"))
+                return false, nil, tostring(status or code or "Connection failed")
+            end
+            if type(code) ~= "number" then
+                self:_log("warn", "Non-numeric response code:", tostring(code))
+                return false, nil, tostring(code)
+            end
+
+            local body = table.concat(response_body)
+            if code >= 200 and code < 300 then
+                return true, code, body, response_headers, status
+            end
+            self:_log("warn", "HTTP failure:", tostring(code), tostring(body or status or ""))
+            return false, code, body or status or ("HTTP " .. tostring(code)), response_headers, status
+        end
+    end
+
+    return false, nil, "Request failed"
+end
+
+function APIClient:uploadSessions(sessions)
+    local body = json.encode(sessions)
+    return self:_requestJSON("POST", "/koreader/device-sync/sessions", body, {
+        block_timeout = 20,
+        total_timeout = 60,
+        attempts = 2,
+    })
 end
 
 return APIClient

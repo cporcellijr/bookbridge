@@ -25,10 +25,16 @@
     {% endif %}
     {% set max_diff = (progress_values|max|default(0) - progress_values|min|default(0)) if progress_values|length > 1
     else 0 %}
+    {% set full_display_title = mapping.display_title %}
+    {% if mapping.display_subtitle %}
+    {% set full_display_title = mapping.display_title ~ ': ' ~ mapping.display_subtitle %}
+    {% endif %}
 
     <div class="book-card {% if max_diff > 5 %}out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}"
-        data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ mapping.abs_title }}"
-        data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}">
+        data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ full_display_title }}"
+        data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
+        data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
+        {% if mapping.display_filename %}title="{{ mapping.display_filename }}"{% endif %}>
 
         {# Cover image section - prioritize ebook cover, fallback to ABS cover #}
         <div class="book-cover-section">
@@ -49,7 +55,8 @@
         <div class="book-info">
             <div class="book-header">
                 <div class="book-title">
-                    {{ mapping.abs_title }}{% if mapping.abs_subtitle %}: {{ mapping.abs_subtitle }}{% endif %}
+                    <span class="book-title-main">{{ mapping.display_title }}</span>{% if mapping.display_subtitle %}<span
+                        class="book-title-subtitle">: {{ mapping.display_subtitle }}</span>{% endif %}
                 </div>
                 <div class="status-badge status-{{ mapping.status }}">
                     {% if mapping.status == 'processing' and mapping.job_progress is defined %}
@@ -60,7 +67,9 @@
                 </div>
             </div>
 
-            <div class="book-author">{{ mapping.abs_author or mapping.ebook_filename }}</div>
+            {% if mapping.display_author %}
+            <div class="book-author">{{ mapping.display_author }}</div>
+            {% endif %}
             {% if mapping.audio_source %}
             <div class="mapping-meta">
                 <span class="mapping-badge">{{ 'Grimmory' if mapping.audio_source == 'BookLore' else mapping.audio_source }} Audio</span>
@@ -80,6 +89,26 @@
 
             {% if max_diff > 5 %}
             <div class="sync-warning">Out of sync by {{ '%.1f' | format(max_diff) }}%</div>
+            {% endif %}
+
+            {% if mapping.reading_stats is defined and mapping.reading_stats %}
+            <div class="reading-stats">
+                {% if mapping.reading_stats.listen_seconds > 0 %}
+                <span class="rs-item"><span class="rs-icon">🎧</span> <span class="rs-val">{{ mapping.reading_stats.listen_seconds | format_duration }}</span></span>
+                <span class="rs-sep">·</span>
+                {% endif %}
+                {% if mapping.reading_stats.read_seconds > 0 %}
+                <span class="rs-item"><span class="rs-icon">📖</span> <span class="rs-val">{{ mapping.reading_stats.read_seconds | format_duration }}</span></span>
+                <span class="rs-sep">·</span>
+                {% endif %}
+                <span class="rs-item"><span class="rs-val">{{ mapping.reading_stats.session_count }}</span> sessions</span>
+                <span class="rs-sep">·</span>
+                <span class="rs-item">avg <span class="rs-val">{{ mapping.reading_stats.avg_session_seconds | format_duration }}</span></span>
+                {% if mapping.reading_stats.last_session_time %}
+                <span class="rs-sep">·</span>
+                <span class="rs-item"><span class="rs-val">{{ mapping.reading_stats.last_session_time | format_time_ago }}</span> ago</span>
+                {% endif %}
+            </div>
             {% endif %}
 
             {% if mapping.status == 'active' %}
@@ -557,11 +586,25 @@
         }
 
         .book-title {
+            flex: 1;
+            min-width: 0;
             font-size: 14px;
             font-weight: 700;
             color: #ffffff;
             line-height: 1.3;
             word-break: break-word;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            overflow: hidden;
+        }
+
+        .book-title-main {
+            color: #ffffff;
+        }
+
+        .book-title-subtitle {
+            color: rgba(255, 255, 255, 0.78);
         }
 
         .book-author {
@@ -610,7 +653,7 @@
             font-weight: 700;
             text-transform: uppercase;
             white-space: nowrap;
-            flex-shrink: 0;
+            flex: 0 0 auto;
         }
 
         .status-active {
@@ -699,6 +742,29 @@
             border-radius: 4px;
             margin-bottom: 8px;
         }
+
+        /* Reading Stats */
+        .reading-stats {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 5px 8px;
+            margin-bottom: 8px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.04);
+            border-radius: 6px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.45);
+            flex-wrap: wrap;
+        }
+        .reading-stats .rs-item {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .reading-stats .rs-icon { font-size: 11px; line-height: 1; }
+        .reading-stats .rs-val { color: rgba(255,255,255,0.7); font-weight: 600; }
+        .reading-stats .rs-sep { color: rgba(255,255,255,0.12); user-select: none; }
 
         /* Service Progress Grid */
         .service-progress {
@@ -1853,10 +1919,9 @@
                     // Default to 'audiobook' if not specified
                     const syncMode = card.dataset.syncMode || 'audiobook';
 
-                    const titleEl = card.querySelector('.book-title');
-                    const authorEl = card.querySelector('.book-author');
-                    const title = titleEl ? titleEl.textContent.toLowerCase() : '';
-                    const author = authorEl ? authorEl.textContent.toLowerCase() : '';
+                    const title = (card.dataset.title || '').toLowerCase();
+                    const author = (card.dataset.author || '').toLowerCase();
+                    const filename = (card.dataset.filename || '').toLowerCase();
 
                     let isVisible = true;
                     if (filterValue === 'audiobook' && syncMode !== 'audiobook') {
@@ -1866,7 +1931,7 @@
                     }
 
                     if (isVisible && searchString) {
-                        if (!title.includes(searchString) && !author.includes(searchString)) {
+                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {
                             isVisible = false;
                         }
                     }

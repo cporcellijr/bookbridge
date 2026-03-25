@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 from contextlib import contextmanager
-from .models import DatabaseManager, Book, State, Job, HardcoverDetails, Setting, KosyncDocument, PendingSuggestion, BookloreBook, Base
+from .models import DatabaseManager, Book, State, Job, HardcoverDetails, Setting, KosyncDocument, PendingSuggestion, BookloreBook, ReadingSession, Base
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -803,6 +803,100 @@ class DatabaseService:
             logger.error(f"❌ Failed to delete Grimmory book '{filename}': {e}")
             return False
 
+
+    # Reading session operations
+    def record_reading_session(self, abs_id: str, session_type: str, start_time: float,
+                               end_time: float, duration_seconds: int,
+                               start_progress: float = None, end_progress: float = None,
+                               leader_client: str = None) -> None:
+        """Record a local reading session for dashboard stats.
+
+        Callers must pre-compute duration_seconds (exact telemetry or heuristic).
+        This method only persists and applies a safety cap.
+        """
+        try:
+            if duration_seconds <= 0:
+                return
+            # Safety cap at 4 hours
+            duration_seconds = min(duration_seconds, 14400)
+
+            session = ReadingSession(
+                abs_id=abs_id,
+                session_type=session_type,
+                start_time=start_time,
+                end_time=end_time,
+                duration_seconds=duration_seconds,
+                start_progress=start_progress,
+                end_progress=end_progress,
+                leader_client=leader_client,
+            )
+            with self.get_session() as db_session:
+                db_session.add(session)
+        except Exception as e:
+            logger.debug(f"Failed to record reading session for '{abs_id}': {e}")
+
+    def get_reading_stats(self, abs_id: str) -> Optional[dict]:
+        """Get aggregated reading stats for one book."""
+        from sqlalchemy import func, case
+
+        with self.get_session() as session:
+            row = session.query(
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('listen_seconds'),
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type != 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('read_seconds'),
+                func.count(ReadingSession.id).label('session_count'),
+                func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
+                func.max(ReadingSession.end_time).label('last_session_time'),
+            ).filter(ReadingSession.abs_id == abs_id).first()
+
+            if not row or row.session_count == 0:
+                return None
+
+            return {
+                'listen_seconds': int(row.listen_seconds),
+                'read_seconds': int(row.read_seconds),
+                'session_count': int(row.session_count),
+                'avg_session_seconds': int(row.total_duration) // int(row.session_count),
+                'last_session_time': row.last_session_time,
+            }
+
+    def get_all_reading_stats(self) -> dict:
+        """Bulk fetch reading stats for all books. Returns dict[abs_id, stats_dict]."""
+        from sqlalchemy import func, case
+
+        with self.get_session() as session:
+            rows = session.query(
+                ReadingSession.abs_id,
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('listen_seconds'),
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type != 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('read_seconds'),
+                func.count(ReadingSession.id).label('session_count'),
+                func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
+                func.max(ReadingSession.end_time).label('last_session_time'),
+            ).group_by(ReadingSession.abs_id).all()
+
+            result = {}
+            for row in rows:
+                if row.session_count == 0:
+                    continue
+                result[row.abs_id] = {
+                    'listen_seconds': int(row.listen_seconds),
+                    'read_seconds': int(row.read_seconds),
+                    'session_count': int(row.session_count),
+                    'avg_session_seconds': int(row.total_duration) // int(row.session_count),
+                    'last_session_time': row.last_session_time,
+                }
+            return result
 
     def clear_all_booklore_books(self) -> bool:
         """Delete all cached Grimmory books."""
