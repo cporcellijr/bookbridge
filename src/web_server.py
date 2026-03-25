@@ -1479,13 +1479,85 @@ def _get_cached_ebook_display_metadata(book):
         cached = database_service.get_booklore_book(filename)
         if not cached:
             continue
-        raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") else {}
-        title = (raw.get("title") or getattr(cached, "title", "") or "").strip()
-        subtitle = (raw.get("subtitle") or "").strip()
-        author = _coerce_author_display(raw.get("authors")) or (getattr(cached, "authors", "") or "").strip()
+        raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") and isinstance(cached.raw_metadata_dict, dict) else {}
+        title = _normalize_dashboard_display_value(raw.get("title") or getattr(cached, "title", ""))
+        subtitle = _normalize_dashboard_display_value(raw.get("subtitle"))
+        author = _coerce_author_display(raw.get("authors")) or _normalize_dashboard_display_value(getattr(cached, "authors", ""))
         if title or subtitle or author:
             return {"title": title, "subtitle": subtitle, "author": author}
     return {}
+
+
+def _get_dashboard_display_filename(book):
+    for filename in (
+        getattr(book, "original_ebook_filename", None),
+        getattr(book, "ebook_filename", None),
+    ):
+        value = (filename or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _normalize_dashboard_display_value(value):
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def _parse_dashboard_filename_fallback(filename):
+    display_filename = (filename or "").strip()
+    stem = Path(display_filename).stem.strip() if display_filename else ""
+    if not stem:
+        return {
+            "display_title": "",
+            "display_subtitle": "",
+            "display_author": "",
+            "display_filename": display_filename,
+        }
+
+    if " - " in stem:
+        title_part, author_part = stem.rsplit(" - ", 1)
+        title_part = title_part.strip()
+        author_part = re.sub(r"\s*\(\d{4}\)\s*$", "", author_part).strip()
+        if title_part and author_part:
+            return {
+                "display_title": title_part,
+                "display_subtitle": "",
+                "display_author": author_part,
+                "display_filename": display_filename,
+            }
+
+    return {
+        "display_title": stem,
+        "display_subtitle": "",
+        "display_author": "",
+        "display_filename": display_filename,
+    }
+
+
+def _looks_like_dashboard_filename_title(title):
+    normalized_title = _normalize_dashboard_display_value(title)
+    if not normalized_title:
+        return False
+    parsed = _parse_dashboard_filename_fallback(normalized_title)
+    return bool(parsed.get("display_author"))
+
+
+def _should_override_dashboard_base_title(book, base_title, display_filename):
+    normalized_title = _normalize_dashboard_display_value(base_title)
+    if getattr(book, "sync_mode", "audiobook") == "ebook_only":
+        return True
+    if not normalized_title:
+        return True
+    if normalized_title.lower().startswith("storyteller_"):
+        return True
+
+    filename_stem = Path(display_filename).stem if display_filename else ""
+    if filename_stem and normalized_title.casefold() == _normalize_dashboard_display_value(filename_stem).casefold():
+        return True
+
+    return _looks_like_dashboard_filename_title(normalized_title)
 
 
 def _get_storyteller_display_metadata(storyteller_uuid):
@@ -1507,31 +1579,51 @@ def _get_storyteller_display_metadata(storyteller_uuid):
 
 
 def _resolve_dashboard_display_metadata(book, base_title, base_subtitle, base_author):
-    title = (base_title or "").strip()
-    subtitle = (base_subtitle or "").strip()
-    author = (base_author or "").strip()
-    sync_mode = getattr(book, "sync_mode", "audiobook")
-    is_storyteller_placeholder = title.lower().startswith("storyteller_")
+    title = _normalize_dashboard_display_value(base_title)
+    subtitle = _normalize_dashboard_display_value(base_subtitle)
+    author = _normalize_dashboard_display_value(base_author)
+    display_filename = _get_dashboard_display_filename(book)
+    should_override_base_title = _should_override_dashboard_base_title(book, title, display_filename)
+    original_title = title
 
     cached_meta = _get_cached_ebook_display_metadata(book)
     if cached_meta:
-        if (sync_mode == "ebook_only" or is_storyteller_placeholder or not title) and cached_meta.get("title"):
-            title = cached_meta["title"]
-        if not subtitle and cached_meta.get("subtitle"):
-            subtitle = cached_meta["subtitle"]
-        if not author and cached_meta.get("author"):
-            author = cached_meta["author"]
+        cached_title = _normalize_dashboard_display_value(cached_meta.get("title"))
+        cached_subtitle = _normalize_dashboard_display_value(cached_meta.get("subtitle"))
+        cached_author = _normalize_dashboard_display_value(cached_meta.get("author"))
+        if should_override_base_title and title == original_title and cached_title:
+            title = cached_title
+        if not subtitle and cached_subtitle:
+            subtitle = cached_subtitle
+        if not author and cached_author:
+            author = cached_author
 
     storyteller_meta = _get_storyteller_display_metadata(getattr(book, "storyteller_uuid", None))
     if storyteller_meta:
-        if (sync_mode == "ebook_only" or is_storyteller_placeholder or not title) and storyteller_meta.get("title"):
-            title = storyteller_meta["title"]
-        if not subtitle and storyteller_meta.get("subtitle"):
-            subtitle = storyteller_meta["subtitle"]
-        if not author and storyteller_meta.get("author"):
-            author = storyteller_meta["author"]
+        storyteller_title = _normalize_dashboard_display_value(storyteller_meta.get("title"))
+        storyteller_subtitle = _normalize_dashboard_display_value(storyteller_meta.get("subtitle"))
+        storyteller_author = _normalize_dashboard_display_value(storyteller_meta.get("author"))
+        if should_override_base_title and title == original_title and storyteller_title:
+            title = storyteller_title
+        if not subtitle and storyteller_subtitle:
+            subtitle = storyteller_subtitle
+        if not author and storyteller_author:
+            author = storyteller_author
 
-    return title or (base_title or "").strip(), subtitle, author
+    filename_fallback = _parse_dashboard_filename_fallback(display_filename)
+    if should_override_base_title and not title:
+        title = filename_fallback["display_title"]
+    if should_override_base_title and title == original_title and filename_fallback["display_author"]:
+        title = filename_fallback["display_title"]
+    if not author and filename_fallback["display_author"]:
+        author = filename_fallback["display_author"]
+
+    return {
+        "display_title": title or filename_fallback["display_title"] or _normalize_dashboard_display_value(base_title),
+        "display_subtitle": subtitle,
+        "display_author": author,
+        "display_filename": display_filename,
+    }
 
 
 def _storyteller_transcript_source(storyteller_uuid, storyteller_manifest):
@@ -1647,12 +1739,15 @@ def index():
         _abs_meta = abs_metadata_by_id.get(book.abs_id, {})
         abs_subtitle = _abs_meta.get('subtitle', '')
         abs_author = _abs_meta.get('author', '')
-        display_title, abs_subtitle, abs_author = _resolve_dashboard_display_metadata(
+        display_meta = _resolve_dashboard_display_metadata(
             book,
             book.abs_title,
             abs_subtitle,
             abs_author,
         )
+        display_title = display_meta['display_title']
+        abs_subtitle = display_meta['display_subtitle']
+        abs_author = display_meta['display_author']
 
         # Create mapping dict for template compatibility
         mapping = {
@@ -1660,6 +1755,10 @@ def index():
             'abs_title': display_title,
             'abs_subtitle': abs_subtitle,
             'abs_author': abs_author,
+            'display_title': display_title,
+            'display_subtitle': abs_subtitle,
+            'display_author': abs_author,
+            'display_filename': display_meta['display_filename'],
             'audio_source': getattr(book, 'audio_source', None) or ('ABS' if getattr(book, 'sync_mode', 'audiobook') != 'ebook_only' else None),
             'audio_source_id': getattr(book, 'audio_source_id', None) or book.abs_id,
             'audio_title': getattr(book, 'audio_title', None) or display_title,
