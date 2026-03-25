@@ -1,4 +1,5 @@
 import unittest
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch, ANY
 import json
 import os
@@ -465,6 +466,7 @@ class TestForgeService(unittest.TestCase):
         audio_source: str = None,
         audio_source_id: str = None,
         staged_audio: bool = True,
+        patch_ingest: bool = True,
     ):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -506,8 +508,15 @@ class TestForgeService(unittest.TestCase):
             self.mock_storyteller.upload_audio_file.return_value = True
             self.mock_storyteller.trigger_processing.return_value = True
             self.mock_storyteller.get_book_details.return_value = {
+                "title": title,
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
                 "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
+                "readaloud": {
+                    "status": "ALIGNED",
+                    "currentStage": "SYNC_CHAPTERS",
+                    "stageProgress": 1,
+                },
+                "alignedAt": "2026-03-25T17:28:56.000Z",
             }
             self.mock_storyteller.add_to_collection_by_uuid.return_value = True
             self.mock_storyteller.add_to_collection.return_value = True
@@ -524,20 +533,31 @@ class TestForgeService(unittest.TestCase):
             self.mock_db.get_book.return_value = db_book
             self.mock_db.save_book.return_value = db_book
 
-            with patch.dict(
-                os.environ,
-                {
-                    "ABS_COLLECTION_NAME": "Synced with KOReader",
-                    "BOOKLORE_SHELF_NAME": "Kobo",
-                },
-                clear=False,
-            ), patch("src.services.forge_service.time.sleep", return_value=None), patch(
-                "src.services.forge_service.ingest_storyteller_transcripts",
-                return_value=ingest_manifest,
-            ), patch(
-                "src.services.forge_service.probe_storyteller_transcripts",
-                return_value={"ready": True, "reason": "assets_not_configured"},
-            ):
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch.dict(
+                        os.environ,
+                        {
+                            "ABS_COLLECTION_NAME": "Synced with KOReader",
+                            "BOOKLORE_SHELF_NAME": "Kobo",
+                        },
+                        clear=False,
+                    )
+                )
+                stack.enter_context(patch("src.services.forge_service.time.sleep", return_value=None))
+                if patch_ingest:
+                    stack.enter_context(
+                        patch(
+                            "src.services.forge_service.ingest_storyteller_transcripts",
+                            return_value=ingest_manifest,
+                        )
+                    )
+                stack.enter_context(
+                    patch(
+                        "src.services.forge_service.probe_storyteller_transcripts",
+                        return_value={"ready": True, "reason": "assets_not_configured"},
+                    )
+                )
                 self.service._auto_forge_background_task(
                     abs_id="abs-1",
                     text_item=text_item,
@@ -585,15 +605,18 @@ class TestForgeService(unittest.TestCase):
         """Storyteller transcript alignment should run first; SMIL is fallback only."""
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = self._write_storyteller_manifest(Path(tmp))
-            self._run_auto_forge_pipeline(
-                text_item={"source": "Local File"},
-                ingest_manifest=manifest_path,
-                storyteller_alignment_ok=True,
-            )
+            with patch("src.services.forge_service.ingest_storyteller_transcripts", return_value=manifest_path) as mock_ingest:
+                self._run_auto_forge_pipeline(
+                    text_item={"source": "Local File"},
+                    ingest_manifest=manifest_path,
+                    storyteller_alignment_ok=True,
+                    patch_ingest=False,
+                )
 
         self.mock_alignment.align_storyteller_and_store.assert_called_once()
         self.mock_transcriber.transcribe_from_smil.assert_not_called()
         self.mock_alignment.align_and_store.assert_not_called()
+        self.assertEqual(mock_ingest.call_args.kwargs["storyteller_title"], "Auto Book")
 
     def test_auto_forge_falls_back_to_whisper_when_smil_rejected(self):
         """Auto-forge should run Whisper fallback if SMIL returns no transcript."""
@@ -663,7 +686,6 @@ class TestForgeService(unittest.TestCase):
             st_client.get_book_details.return_value = {
                 "readaloud": {"filepath": "/storyteller/output/readaloud.epub"}
             }
-            st_client.download_book.return_value = False
 
             with patch(
                 "src.services.forge_service.probe_storyteller_transcripts",
@@ -679,8 +701,10 @@ class TestForgeService(unittest.TestCase):
                     poll_count=1,
                 )
 
-            self.assertTrue(result["api_ready_seen"])
             self.assertIsNone(result["completion_method"])
+            self.assertIsNone(result["readaloud_status"])
+            self.assertFalse(result["terminal_error"])
+            st_client.download_book.assert_not_called()
 
     def test_poll_auto_forge_completion_does_not_trigger_before_processing_ready(self):
         """Auto-forge should delay /process until Storyteller exposes linked ebook and audiobook."""
@@ -693,7 +717,6 @@ class TestForgeService(unittest.TestCase):
             st_client.get_book_details.return_value = {
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0}
             }
-            st_client.download_book.return_value = False
 
             with patch(
                 "src.services.forge_service.probe_storyteller_transcripts",
@@ -724,7 +747,6 @@ class TestForgeService(unittest.TestCase):
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
                 "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
             }
-            st_client.download_book.return_value = False
 
             with patch(
                 "src.services.forge_service.probe_storyteller_transcripts",
@@ -743,7 +765,47 @@ class TestForgeService(unittest.TestCase):
             st_client.trigger_processing.assert_called_once_with("uuid-1")
             self.assertTrue(result["processing_triggered"])
 
-    def test_poll_auto_forge_completion_api_probe_requires_transcripts_when_assets_configured(self):
+    def test_poll_auto_forge_completion_marks_complete_when_aligned_even_if_transcripts_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            epub_cache = tmp_path / "epub_cache"
+            epub_cache.mkdir(parents=True, exist_ok=True)
+
+            st_client = MagicMock()
+            st_client.get_book_details.return_value = {
+                "title": "Auto Book",
+                "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
+                "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
+                "readaloud": {
+                    "filepath": "/storyteller/library/Auto Book/Auto Book (readaloud).epub",
+                    "status": "ALIGNED",
+                    "currentStage": "SYNC_CHAPTERS",
+                    "stageProgress": 1,
+                },
+                "alignedAt": "2026-03-25T17:28:56.000Z",
+            }
+
+            with patch(
+                "src.services.forge_service.probe_storyteller_transcripts",
+                return_value={"ready": False, "reason": "chapter_set_incomplete"},
+            ):
+                result = self.service._poll_auto_forge_completion(
+                    st_client=st_client,
+                    book_uuid="uuid-1",
+                    title="Auto Book",
+                    chapters=[],
+                    epub_cache=epub_cache,
+                    processing_triggered=True,
+                    poll_count=4,
+                )
+
+            self.assertEqual(result["completion_method"], "storyteller_aligned")
+            self.assertEqual(result["readaloud_status"], "ALIGNED")
+            self.assertEqual(result["aligned_at"], "2026-03-25T17:28:56.000Z")
+            self.assertFalse(result["terminal_error"])
+            st_client.download_book.assert_not_called()
+
+    def test_poll_auto_forge_completion_requires_aligned_at(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             epub_cache = tmp_path / "epub_cache"
@@ -753,16 +815,49 @@ class TestForgeService(unittest.TestCase):
             st_client.get_book_details.return_value = {
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
                 "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
-                "readaloud": {"filepath": "/storyteller/library/Auto Book/Auto Book (readaloud).epub"},
+                "readaloud": {
+                    "status": "ALIGNED",
+                    "currentStage": "SYNC_CHAPTERS",
+                    "stageProgress": 1,
+                },
             }
 
-            def _probe_download(_uuid, output_path, polling=False):
-                if polling:
-                    Path(output_path).write_bytes(b"artifact")
-                    return True
-                return False
+            with patch(
+                "src.services.forge_service.probe_storyteller_transcripts",
+                return_value={"ready": True, "reason": "validated"},
+            ):
+                result = self.service._poll_auto_forge_completion(
+                    st_client=st_client,
+                    book_uuid="uuid-1",
+                    title="Auto Book",
+                    chapters=[],
+                    epub_cache=epub_cache,
+                    processing_triggered=True,
+                    poll_count=4,
+                )
 
-            st_client.download_book.side_effect = _probe_download
+            self.assertIsNone(result["completion_method"])
+            self.assertEqual(result["readaloud_status"], "ALIGNED")
+            self.assertIsNone(result["aligned_at"])
+            self.assertFalse(result["terminal_error"])
+            st_client.download_book.assert_not_called()
+
+    def test_poll_auto_forge_completion_error_returns_terminal_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            epub_cache = tmp_path / "epub_cache"
+            epub_cache.mkdir(parents=True, exist_ok=True)
+
+            st_client = MagicMock()
+            st_client.get_book_details.return_value = {
+                "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
+                "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
+                "readaloud": {
+                    "status": "ERROR",
+                    "currentStage": "SYNC_CHAPTERS",
+                    "stageProgress": 1.25,
+                },
+            }
 
             with patch(
                 "src.services.forge_service.probe_storyteller_transcripts",
@@ -779,9 +874,12 @@ class TestForgeService(unittest.TestCase):
                 )
 
             self.assertIsNone(result["completion_method"])
-            self.assertIsNotNone(result["probe_download_path"])
+            self.assertEqual(result["readaloud_status"], "ERROR")
+            self.assertTrue(result["terminal_error"])
+            self.assertEqual(result["terminal_error_reason"], "readaloud_error")
+            st_client.download_book.assert_not_called()
 
-    def test_poll_auto_forge_completion_api_probe_marks_complete_when_transcripts_ready(self):
+    def test_poll_auto_forge_completion_non_aligned_status_does_not_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             epub_cache = tmp_path / "epub_cache"
@@ -791,19 +889,17 @@ class TestForgeService(unittest.TestCase):
             st_client.get_book_details.return_value = {
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
                 "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
+                "readaloud": {
+                    "status": "PROCESSING",
+                    "currentStage": "SYNC_CHAPTERS",
+                    "stageProgress": 0.87,
+                },
+                "alignedAt": "2026-03-25T17:28:56.000Z",
             }
-
-            def _probe_download(_uuid, output_path, polling=False):
-                if polling:
-                    Path(output_path).write_bytes(b"artifact")
-                    return True
-                return False
-
-            st_client.download_book.side_effect = _probe_download
 
             with patch(
                 "src.services.forge_service.probe_storyteller_transcripts",
-                return_value={"ready": True, "reason": "validated"},
+                return_value={"ready": False, "reason": "chapter_set_incomplete"},
             ):
                 result = self.service._poll_auto_forge_completion(
                     st_client=st_client,
@@ -815,44 +911,10 @@ class TestForgeService(unittest.TestCase):
                     poll_count=4,
                 )
 
-            self.assertEqual(result["completion_method"], "api_download")
-            self.assertTrue(result["probe_download_path"].exists())
-
-    def test_poll_auto_forge_completion_assets_unconfigured_allows_api_probe_completion(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            epub_cache = tmp_path / "epub_cache"
-            epub_cache.mkdir(parents=True, exist_ok=True)
-
-            st_client = MagicMock()
-            st_client.get_book_details.return_value = {
-                "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
-                "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
-            }
-
-            def _probe_download(_uuid, output_path, polling=False):
-                if polling:
-                    Path(output_path).write_bytes(b"artifact")
-                    return True
-                return False
-
-            st_client.download_book.side_effect = _probe_download
-
-            with patch(
-                "src.services.forge_service.probe_storyteller_transcripts",
-                return_value={"ready": True, "reason": "assets_not_configured"},
-            ):
-                result = self.service._poll_auto_forge_completion(
-                    st_client=st_client,
-                    book_uuid="uuid-1",
-                    title="Auto Book",
-                    chapters=[],
-                    epub_cache=epub_cache,
-                    processing_triggered=True,
-                    poll_count=4,
-                )
-
-            self.assertEqual(result["completion_method"], "api_download")
+            self.assertIsNone(result["completion_method"])
+            self.assertEqual(result["readaloud_status"], "PROCESSING")
+            self.assertFalse(result["terminal_error"])
+            st_client.download_book.assert_not_called()
 
     def test_auto_forge_waits_for_storyteller_processing_readiness_before_trigger(self):
         """Auto-forge should poll readiness instead of triggering immediately on UUID discovery."""
@@ -862,8 +924,15 @@ class TestForgeService(unittest.TestCase):
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0}
             },
             {
+                "title": "Auto Book",
                 "ebook": {"filepath": "/storyteller/library/Auto Book/Auto Book.epub", "missing": 0},
                 "audiobook": {"filepath": "/storyteller/library/Auto Book", "missing": 0},
+                "readaloud": {
+                    "status": "ALIGNED",
+                    "currentStage": "SYNC_CHAPTERS",
+                    "stageProgress": 1,
+                },
+                "alignedAt": "2026-03-25T17:28:56.000Z",
             },
         ]
 
@@ -902,9 +971,12 @@ class TestForgeService(unittest.TestCase):
             return_value={
                 "processing_triggered": True,
                 "completion_method": None,
-                "probe_download_path": None,
-                "api_ready_seen": False,
                 "transcript_probe": {"ready": False, "reason": "chapter_set_incomplete"},
+                "readaloud_status": "PROCESSING",
+                "aligned_at": None,
+                "terminal_error": False,
+                "terminal_error_reason": None,
+                "storyteller_title": "Auto Book",
             },
         ), patch.dict(
             os.environ,
@@ -921,6 +993,30 @@ class TestForgeService(unittest.TestCase):
             )
 
         self.assertEqual(db_book.status, "forging")
+
+    def test_auto_forge_fails_fast_when_storyteller_reports_error(self):
+        with patch.object(
+            self.service,
+            "_poll_auto_forge_completion",
+            return_value={
+                "processing_triggered": True,
+                "completion_method": None,
+                "transcript_probe": {"ready": False, "reason": "chapter_set_incomplete"},
+                "readaloud_status": "ERROR",
+                "aligned_at": None,
+                "terminal_error": True,
+                "terminal_error_reason": "readaloud_error",
+                "storyteller_title": "Auto Book",
+            },
+        ):
+            db_book = self._run_auto_forge_pipeline(
+                text_item={"source": "Local File"},
+                ingest_manifest=None,
+                storyteller_alignment_ok=False,
+            )
+
+        self.assertEqual(db_book.status, "error")
+        self.mock_storyteller.download_book.assert_not_called()
 
     def test_auto_forge_whisper_fallback_prefers_staged_audio(self):
         self._run_auto_forge_pipeline(
