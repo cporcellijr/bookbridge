@@ -113,6 +113,21 @@ class ABSClient:
             logger.error(f"ABS: Exception fetching audiobooks: {e}")
             return []
 
+    def get_libraries(self):
+        if not self.is_configured():
+            return []
+        self._update_session_headers()
+        lib_url = f"{self.base_url}/api/libraries"
+        try:
+            r = self.session.get(lib_url, timeout=self.timeout)
+            if r.status_code != 200:
+                logger.warning(f"ABS: Failed to fetch libraries (status {r.status_code})")
+                return []
+            return r.json().get('libraries', []) or []
+        except Exception as e:
+            logger.error(f"ABS: Exception fetching libraries: {e}")
+            return []
+
     @staticmethod
     def _item_has_audio(item: dict) -> bool:
         media = (item or {}).get('media', {}) or {}

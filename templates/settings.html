@@ -235,6 +235,15 @@
             width: 100%;
         }
 
+        .form-group select {
+            color-scheme: dark;
+        }
+
+        .form-group select option {
+            background: #121212;
+            color: #ffffff;
+        }
+
         .form-group input:focus,
         .form-group select:focus {
             outline: none;
@@ -527,7 +536,17 @@
                     <!-- Wrapper for Library ID -->
                     <div id="abs_library_id_group" class="form-group">
                         <label>Library ID</label>
-                        <input type="text" name="ABS_LIBRARY_ID" value="{{ get_val('ABS_LIBRARY_ID') }}">
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" name="ABS_LIBRARY_ID" value="{{ get_val('ABS_LIBRARY_ID') }}"
+                                placeholder="e.g. lib_123" style="flex: 1;">
+                            <button class="btn" type="button" onclick="checkAbsLibs()">🔍 Find IDs</button>
+                        </div>
+                        <select id="abs_library_picker" style="display:none; margin-top:10px;"
+                            onchange="applyLibraryPickerSelection('ABS_LIBRARY_ID', 'abs_library_picker')">
+                            <option value="">Select a library ID...</option>
+                        </select>
+                        <div id="abs_library_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
+                        <div class="help-text">Use when restricting ABS search to a specific library.</div>
                     </div>
 
                     <div class="form-group">
@@ -708,6 +727,11 @@
                                 placeholder="e.g. 1" style="flex: 1;">
                             <button class="btn" type="button" onclick="checkBookloreLibs()">🔍 Find IDs</button>
                         </div>
+                        <select id="booklore_library_picker" style="display:none; margin-top:10px;"
+                            onchange="applyLibraryPickerSelection('BOOKLORE_LIBRARY_ID', 'booklore_library_picker')">
+                            <option value="">Select a library ID...</option>
+                        </select>
+                        <div id="booklore_library_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
                         <div class="help-text">Restricts sync to a specific library (e.g., 1). Leave empty to sync all.
                         </div>
                     </div>
@@ -1265,6 +1289,128 @@
                     btn.innerHTML = originalText;
                     btn.disabled = false;
                 });
+        }
+
+        function checkAbsLibs() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⌛ Scanning...';
+            btn.disabled = true;
+
+            fetch('/api/abs/libraries')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    if (data.length === 0) {
+                        alert('No libraries found. Check connection and library access.');
+                        return;
+                    }
+
+                    let msg = "Found ABS Libraries:\n\n";
+                    data.forEach(lib => {
+                        msg += `ID: ${lib.id}\nName: ${lib.name}\n`;
+                        if (lib.mediaType) {
+                            msg += `Type: ${lib.mediaType}\n`;
+                        }
+                        msg += '------------------\n';
+                    });
+                    alert(msg);
+                })
+                .catch(err => alert('Failed to fetch ABS libraries: ' + err))
+                .finally(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                });
+        }
+
+        function applyLibraryPickerSelection(inputName, selectId) {
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            if (!input || !select) return;
+            input.value = select.value || '';
+        }
+
+        function populateLibraryPicker({ endpoint, button, inputName, selectId, statusId, emptyMessage, labelBuilder }) {
+            const originalText = button.innerHTML;
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            const status = document.getElementById(statusId);
+
+            button.innerHTML = 'âŒ› Scanning...';
+            button.disabled = true;
+
+            fetch(endpoint)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    if (!Array.isArray(data) || data.length === 0) {
+                        if (select) {
+                            select.style.display = 'none';
+                            select.innerHTML = '<option value="">Select a library ID...</option>';
+                        }
+                        if (status) {
+                            status.style.display = 'block';
+                            status.textContent = emptyMessage;
+                        }
+                        return;
+                    }
+
+                    const currentValue = input ? input.value.trim() : '';
+                    select.innerHTML = '<option value="">Select a library ID...</option>';
+
+                    data.forEach(lib => {
+                        const option = document.createElement('option');
+                        option.value = lib.id || '';
+                        option.textContent = labelBuilder(lib);
+                        if (currentValue && currentValue === option.value) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+
+                    select.style.display = 'block';
+                    if (status) {
+                        status.style.display = 'block';
+                        status.textContent = 'Select a library to fill the ID field.';
+                    }
+                })
+                .catch(err => {
+                    alert('Failed to fetch libraries: ' + err);
+                })
+                .finally(() => {
+                    button.innerHTML = originalText;
+                    button.disabled = false;
+                });
+        }
+
+        function checkBookloreLibs() {
+            populateLibraryPicker({
+                endpoint: '/api/booklore/libraries',
+                button: event.target,
+                inputName: 'BOOKLORE_LIBRARY_ID',
+                selectId: 'booklore_library_picker',
+                statusId: 'booklore_library_picker_status',
+                emptyMessage: 'No libraries found. Check connection or try syncing first.',
+                labelBuilder: (lib) => `${lib.name} (${lib.id})`,
+            });
+        }
+
+        function checkAbsLibs() {
+            populateLibraryPicker({
+                endpoint: '/api/abs/libraries',
+                button: event.target,
+                inputName: 'ABS_LIBRARY_ID',
+                selectId: 'abs_library_picker',
+                statusId: 'abs_library_picker_status',
+                emptyMessage: 'No libraries found. Check connection and library access.',
+                labelBuilder: (lib) => lib.mediaType ? `${lib.name} (${lib.id}) - ${lib.mediaType}` : `${lib.name} (${lib.id})`,
+            });
         }
 
         const TEST_CONNECTION_FIELDS = {

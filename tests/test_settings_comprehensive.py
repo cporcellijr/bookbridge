@@ -153,6 +153,22 @@ class TestSettingsComprehensive(unittest.TestCase):
         self.assertIn('<option value="tiny"></option>', html)
         self.assertIn('<option value="large-v3"></option>', html)
 
+    def test_settings_get_renders_selectable_library_pickers(self):
+        html = self._render_settings_template_source()
+
+        self.assertIn('name="ABS_LIBRARY_ID"', html)
+        self.assertIn('onclick="checkAbsLibs()"', html)
+        self.assertIn("fetch('/api/abs/libraries')", html)
+        self.assertIn('id="abs_library_picker"', html)
+        self.assertIn("applyLibraryPickerSelection('ABS_LIBRARY_ID', 'abs_library_picker')", html)
+        self.assertIn('Use when restricting ABS search to a specific library.', html)
+        self.assertIn('name="BOOKLORE_LIBRARY_ID"', html)
+        self.assertIn('onclick="checkBookloreLibs()"', html)
+        self.assertIn("fetch('/api/booklore/libraries')", html)
+        self.assertIn('id="booklore_library_picker"', html)
+        self.assertIn("applyLibraryPickerSelection('BOOKLORE_LIBRARY_ID', 'booklore_library_picker')", html)
+        self.assertIn('Select a library to fill the ID field.', html)
+
     @patch('src.web_server.restart_server')
     def test_custom_whisper_model_is_saved_without_being_forced_to_builtin(self, mock_restart):
         response = self.client.post('/settings', data={

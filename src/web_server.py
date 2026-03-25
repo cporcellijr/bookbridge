@@ -4655,6 +4655,15 @@ def get_booklore_libraries():
     return jsonify(libraries)
 
 
+def get_abs_libraries():
+    """Return available Audiobookshelf libraries."""
+    if not container.abs_client().is_configured():
+        return jsonify({"error": "Audiobookshelf not configured"}), 400
+
+    libraries = container.abs_client().get_libraries()
+    return jsonify(libraries)
+
+
 def proxy_booklore_audiobook_cover(book_id):
     """Stream a Grimmory audiobook cover through the backend."""
     client = container.booklore_client()
@@ -5042,6 +5051,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
+    app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
 

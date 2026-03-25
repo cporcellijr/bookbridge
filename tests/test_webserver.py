@@ -1009,6 +1009,29 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
         mock_start_restart_async.assert_called_once()
 
+    def test_get_abs_libraries_returns_available_libraries(self):
+        self.mock_abs_client.is_configured.return_value = True
+        self.mock_abs_client.get_libraries.return_value = [
+            {'id': 'lib-audio', 'name': 'Audiobooks', 'mediaType': 'book'},
+            {'id': 'lib-podcasts', 'name': 'Podcasts', 'mediaType': 'podcast'},
+        ]
+
+        response = self.client.get('/api/abs/libraries')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [
+            {'id': 'lib-audio', 'name': 'Audiobooks', 'mediaType': 'book'},
+            {'id': 'lib-podcasts', 'name': 'Podcasts', 'mediaType': 'podcast'},
+        ])
+
+    def test_get_abs_libraries_requires_configured_abs(self):
+        self.mock_abs_client.is_configured.return_value = False
+
+        response = self.client.get('/api/abs/libraries')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {'error': 'Audiobookshelf not configured'})
+
     @patch('src.web_server.requests.get')
     def test_test_connection_abs_uses_post_payload_not_saved_env(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
