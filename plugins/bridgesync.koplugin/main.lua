@@ -14,6 +14,13 @@ local FFIUtil = require("ffi/util")
 local buffer = require("string.buffer")
 local socket = require("socket")
 local APIClient = require("bridge_api_client")
+local DirChooser
+do
+    local ok, mod = pcall(require, "ui/widget/dirchooser")
+    if ok then
+        DirChooser = mod
+    end
+end
 
 local function _(text)
     return text
@@ -37,6 +44,25 @@ function BridgeSync:init()
     self.auto_sync_on_resume = self.settings:readSetting("auto_sync_on_resume") or false
     self.auto_sync_on_network = self.settings:readSetting("auto_sync_on_network") or false
     self.delete_removed_books = self.settings:readSetting("delete_removed_books") or false
+    self.manual_only = self.settings:readSetting("manual_only") or false
+    local do_not_sync_while_book_open = self.settings:readSetting("do_not_sync_while_book_open")
+    if do_not_sync_while_book_open == nil then
+        self.do_not_sync_while_book_open = true
+    else
+        self.do_not_sync_while_book_open = do_not_sync_while_book_open
+    end
+    self.wake_sync_delay_seconds = tonumber(self.settings:readSetting("wake_sync_delay_seconds")) or 30
+
+    -- Reading session tracking
+    local session_tracking = self.settings:readSetting("session_tracking_enabled")
+    if session_tracking == nil then
+        self.session_tracking_enabled = true
+    else
+        self.session_tracking_enabled = session_tracking
+    end
+    self.min_session_duration = tonumber(self.settings:readSetting("min_session_duration")) or 30
+    self.current_session = nil
+    self.pending_sessions = self.state:readSetting("pending_sessions") or {}
 
     self.sync_in_progress = false
     self.last_auto_sync_time = 0
@@ -94,6 +120,11 @@ function BridgeSync:_saveSettings()
     self.settings:saveSetting("auto_sync_on_resume", self.auto_sync_on_resume)
     self.settings:saveSetting("auto_sync_on_network", self.auto_sync_on_network)
     self.settings:saveSetting("delete_removed_books", self.delete_removed_books)
+    self.settings:saveSetting("manual_only", self.manual_only)
+    self.settings:saveSetting("do_not_sync_while_book_open", self.do_not_sync_while_book_open)
+    self.settings:saveSetting("wake_sync_delay_seconds", self.wake_sync_delay_seconds)
+    self.settings:saveSetting("session_tracking_enabled", self.session_tracking_enabled)
+    self.settings:saveSetting("min_session_duration", self.min_session_duration)
     self.settings:flush()
     self.api:init(self.server_url, self.username, self.key, function(level, message)
         self:_appendLog(level, message)
@@ -138,6 +169,75 @@ function BridgeSync:_showMessage(text, timeout)
         text = text,
         timeout = timeout or 3,
     })
+end
+
+function BridgeSync:_normalizePath(path)
+    local normalized = tostring(path or ""):gsub("\\", "/"):gsub("/+$", "")
+    if normalized == "" then
+        return ""
+    end
+    return normalized
+end
+
+function BridgeSync:_shouldAvoidAutoSyncWhileReading()
+    if not self.do_not_sync_while_book_open then
+        return false
+    end
+    return self:_currentDocumentPath() ~= nil
+end
+
+function BridgeSync:_currentFileManagerPath()
+    local FileManager = require("apps/filemanager/filemanager")
+    local instance = FileManager and FileManager.instance or nil
+    if not instance or not instance.file_chooser then
+        return nil
+    end
+
+    local current_path = instance.file_chooser.path
+    if type(current_path) ~= "string" or current_path == "" then
+        return nil
+    end
+    return self:_normalizePath(current_path)
+end
+
+function BridgeSync:_showManagedFolderChooser()
+    local start_path = self.download_dir
+    if lfs.attributes(start_path, "mode") ~= "directory" then
+        start_path = self:_detectDefaultDownloadDir()
+    end
+
+    if DirChooser then
+        local chooser
+        chooser = DirChooser:new{
+            path = start_path,
+            title = _("Managed Folder"),
+            onConfirm = function(path)
+                local selected = self:_normalizePath(path)
+                if selected == "" then
+                    return
+                end
+                self.download_dir = selected
+                self:_saveSettings()
+                self:_showMessage(T(_("Managed Folder set to %1"), self.download_dir), 3)
+            end,
+        }
+        UIManager:show(chooser)
+        return
+    end
+
+    self:_promptForSetting(
+        _("Managed Folder"),
+        self.download_dir,
+        _("Enter managed folder path"),
+        function(value)
+            local selected = self:_normalizePath(value)
+            if selected == "" then
+                return
+            end
+            self.download_dir = selected
+            self:_saveSettings()
+        end
+    )
 end
 
 function BridgeSync:_runInSubprocess(task)
@@ -288,6 +388,11 @@ function BridgeSync:_scheduleSync(delay_seconds, silent)
         if not self.is_enabled or not NetworkMgr:isConnected() then
             return
         end
+        if self:_shouldAvoidAutoSyncWhileReading() then
+            self.needs_wake_sync = true
+            self:logInfo("Deferring auto-sync while a document is open")
+            return
+        end
         self.needs_wake_sync = false
         self.last_auto_sync_time = os.time()
         Trapper:wrap(function()
@@ -300,13 +405,27 @@ function BridgeSync:onResume()
     if not self.is_enabled then
         return false
     end
+
+    -- Restart session tracking if a book is open
+    if self.session_tracking_enabled and self.ui and self.ui.document then
+        self:startSession()
+    end
+
+    -- Upload any queued sessions
+    if #self.pending_sessions > 0 and NetworkMgr:isConnected() then
+        self:_uploadSessions()
+    end
+
+    if self.manual_only then
+        return false
+    end
     if not self.auto_sync_on_resume or self:_isCooldownActive() then
         return false
     end
 
     self.needs_wake_sync = true
     if NetworkMgr:isConnected() then
-        self:_scheduleSync(15, true)
+        self:_scheduleSync(self.wake_sync_delay_seconds, true)
     end
     return false
 end
@@ -315,14 +434,25 @@ function BridgeSync:onNetworkConnected()
     if not self.is_enabled then
         return false
     end
+    if self.manual_only then
+        return false
+    end
 
     if self.needs_wake_sync and not self:_isCooldownActive() then
         self.needs_wake_sync = false
-        self:_scheduleSync(15, true)
+        if self:_shouldAvoidAutoSyncWhileReading() then
+            self.needs_wake_sync = true
+            return false
+        end
+        self:_scheduleSync(self.wake_sync_delay_seconds, true)
         return false
     end
 
     if self.auto_sync_on_network and not self:_isCooldownActive() then
+        if self:_shouldAvoidAutoSyncWhileReading() then
+            self.needs_wake_sync = true
+            return false
+        end
         self:_scheduleSync(10, true)
     end
     return false
@@ -461,12 +591,28 @@ function BridgeSync:_runSync()
         error("Failed to create managed folder")
     end
 
+    local local_revision = tostring(self.state:readSetting("revision") or "")
     local ok, manifest_or_error = self.api:getManifest()
     if not ok then
         error(manifest_or_error or "Failed to fetch manifest")
     end
 
     local manifest = manifest_or_error
+    local remote_revision = tostring(manifest.revision or "")
+    if remote_revision ~= "" and local_revision ~= "" and remote_revision == local_revision then
+        self:logInfo("Manifest revision unchanged, skipping file checks")
+        return {
+            downloaded = 0,
+            skipped = 0,
+            renamed = 0,
+            deleted = 0,
+            deferred = 0,
+            errors = 0,
+            revision = remote_revision,
+            unchanged = true,
+        }
+    end
+
     local remote_books = manifest.books or {}
     local remote_by_abs = {}
     local items = self:_loadStateItems()
@@ -477,6 +623,12 @@ function BridgeSync:_runSync()
         remote_by_abs[book.abs_id] = true
         local target_path = self.download_dir .. "/" .. book.filename
         local entry = items[book.abs_id]
+        local previous_entry = entry and {
+            local_path = entry.local_path,
+            filename = entry.filename,
+            content_hash = entry.content_hash,
+            pending_delete = entry.pending_delete,
+        } or nil
         local reused_path = nil
 
         if entry and entry.local_path and self:_fileExists(entry.local_path) and entry.content_hash == book.content_hash then
@@ -541,6 +693,13 @@ function BridgeSync:_runSync()
                         self:_safeRemove(temp_path)
                     else
                         downloaded = downloaded + 1
+                        if previous_entry
+                            and previous_entry.local_path == target_path
+                            and previous_entry.content_hash
+                            and previous_entry.content_hash ~= book.content_hash
+                        then
+                            self:_removeTree(target_path .. ".sdr")
+                        end
                         items[book.abs_id] = {
                             local_path = target_path,
                             filename = book.filename,
@@ -580,7 +739,8 @@ function BridgeSync:_runSync()
         deleted = deleted,
         deferred = deferred,
         errors = errors,
-        revision = manifest.revision or "",
+        revision = remote_revision,
+        unchanged = false,
     }
 end
 
@@ -652,22 +812,32 @@ function BridgeSync:syncFromBridge(silent)
         return false
     end
 
-    local message = T(
-        _("Bridge Sync complete.\nDownloaded: %1\nSkipped: %2\nRenamed: %3\nDeleted: %4\nDeferred: %5\nErrors: %6"),
-        result.downloaded,
-        result.skipped,
-        result.renamed,
-        result.deleted,
-        result.deferred,
-        result.errors
-    )
+    local message
+    if result.unchanged then
+        message = _("Bridge Sync complete. No changes found.")
+    else
+        message = T(
+            _("Bridge Sync complete.\nDownloaded: %1\nSkipped: %2\nRenamed: %3\nDeleted: %4\nDeferred: %5\nErrors: %6"),
+            result.downloaded,
+            result.skipped,
+            result.renamed,
+            result.deleted,
+            result.deferred,
+            result.errors
+        )
+    end
     self:logInfo(message)
     if not silent then
         self:_showMessage(message, 5)
     end
 
     local FileManager = require("apps/filemanager/filemanager")
-    if FileManager.instance then
+    local current_filemanager_path = self:_currentFileManagerPath()
+    if not silent
+        and FileManager.instance
+        and current_filemanager_path ~= nil
+        and current_filemanager_path == self:_normalizePath(self.download_dir)
+    then
         FileManager.instance:reinit(self.download_dir)
     end
 
@@ -713,6 +883,186 @@ function BridgeSync:testConnection()
     end
 end
 
+-- ── Reading Session Tracking ──
+
+function BridgeSync:_getCurrentProgress()
+    if not self.ui or not self.ui.document then
+        return 0, "0"
+    end
+
+    local progress = 0
+    local location = "0"
+
+    if self.ui.document.info and self.ui.document.info.has_pages then
+        local current_page = nil
+        if self.view and self.view.state and self.view.state.page then
+            current_page = self.view.state.page
+        elseif self.ui.paging then
+            current_page = self.ui.paging:getCurrentPage()
+        end
+        local total_pages = self.ui.document:getPageCount()
+        if current_page and total_pages and total_pages > 0 then
+            progress = (current_page / total_pages) * 100
+            location = tostring(current_page)
+        end
+    elseif self.ui.rolling then
+        local cur_page = self.ui.document:getCurrentPage()
+        local total_pages = self.ui.document:getPageCount()
+        if cur_page and total_pages and total_pages > 0 then
+            progress = (cur_page / total_pages) * 100
+            location = tostring(cur_page)
+        end
+    end
+
+    return progress, location
+end
+
+function BridgeSync:_getBookType(file_path)
+    if not file_path then
+        return "EPUB"
+    end
+    local ext = file_path:match("^.+%.(.+)$")
+    if ext then
+        ext = ext:upper()
+        if ext == "PDF" then
+            return "PDF"
+        elseif ext == "CBZ" or ext == "CBR" then
+            return "CBX"
+        end
+    end
+    return "EPUB"
+end
+
+function BridgeSync:_resolveAbsId(file_path)
+    local items = self:_loadStateItems()
+    for abs_id, entry in pairs(items) do
+        if entry.local_path and entry.local_path == file_path then
+            return abs_id
+        end
+    end
+    return nil
+end
+
+function BridgeSync:startSession()
+    if not self.is_enabled or not self.session_tracking_enabled then
+        return
+    end
+    if not self.ui or not self.ui.document then
+        return
+    end
+
+    local file_path = self.ui.document.file
+    if not file_path then
+        return
+    end
+    file_path = tostring(file_path)
+
+    local abs_id = self:_resolveAbsId(file_path)
+    local doc_hash = nil
+    if not abs_id then
+        doc_hash = self:_calculateBookHash(file_path)
+    end
+    local start_progress, start_page = self:_getCurrentProgress()
+
+    self.current_session = {
+        file_path = file_path,
+        abs_id = abs_id,
+        document_hash = doc_hash,
+        start_time = os.time(),
+        start_progress = start_progress,
+        start_page = start_page,
+        book_type = self:_getBookType(file_path),
+    }
+
+    self:logInfo("Session started for", file_path, "abs_id:", abs_id or "nil", "hash:", doc_hash or "n/a", "at", start_progress, "%")
+end
+
+function BridgeSync:endSession(options)
+    options = options or {}
+    local force_queue = options.force_queue or false
+
+    if not self.current_session then
+        return
+    end
+
+    local end_time = os.time()
+    local end_progress, end_page = self:_getCurrentProgress()
+    local duration_seconds = end_time - self.current_session.start_time
+
+    local start_loc = tonumber(self.current_session.start_page) or 0
+    local end_loc = tonumber(end_page) or 0
+    local pages_read = math.abs(end_loc - start_loc)
+
+    if duration_seconds < self.min_session_duration then
+        self:logInfo("Session too short:", duration_seconds, "s <", self.min_session_duration, "s")
+        self.current_session = nil
+        return
+    end
+
+    if pages_read <= 0 then
+        self:logInfo("No page progress, skipping session")
+        self.current_session = nil
+        return
+    end
+
+    local session = {
+        abs_id = self.current_session.abs_id,
+        document_hash = self.current_session.document_hash,
+        session_type = self.current_session.book_type,
+        start_time = self.current_session.start_time,
+        end_time = end_time,
+        duration_seconds = duration_seconds,
+        start_progress = self.current_session.start_progress,
+        end_progress = end_progress,
+    }
+
+    table.insert(self.pending_sessions, session)
+    self.state:saveSetting("pending_sessions", self.pending_sessions)
+    self.state:flush()
+
+    self:logInfo("Session ended:", duration_seconds, "s,", pages_read, "pages,",
+        self.current_session.start_progress, "% ->", end_progress, "%")
+
+    self.current_session = nil
+
+    if not force_queue and NetworkMgr:isConnected() then
+        self:_uploadSessions()
+    end
+end
+
+function BridgeSync:_uploadSessions()
+    if #self.pending_sessions == 0 then
+        return
+    end
+
+    self:logInfo("Uploading", #self.pending_sessions, "pending sessions")
+
+    local ok, code, body = self.api:uploadSessions(self.pending_sessions)
+    if ok then
+        self:logInfo("Sessions uploaded successfully")
+        self.pending_sessions = {}
+        self.state:saveSetting("pending_sessions", self.pending_sessions)
+        self.state:flush()
+    else
+        self:logWarn("Session upload failed:", code or "", body or "", "- will retry later")
+    end
+end
+
+function BridgeSync:onReaderReady()
+    self:startSession()
+    return false
+end
+
+function BridgeSync:onCloseDocument()
+    self:endSession({ force_queue = false })
+    return false
+end
+
+function BridgeSync:onSuspend()
+    self:endSession({ silent = true, force_queue = true })
+    return false
+end
+
 function BridgeSync:addToMainMenu(menu_items)
     menu_items.bridge_sync = {
         text = _("Bridge Sync"),
@@ -741,6 +1091,16 @@ function BridgeSync:addToMainMenu(menu_items)
                 end,
             },
             {
+                text = _("Manual Only"),
+                checked_func = function()
+                    return self.manual_only
+                end,
+                callback = function()
+                    self.manual_only = not self.manual_only
+                    self:_saveSettings()
+                end,
+            },
+            {
                 text = _("Auto-Sync on Wake"),
                 checked_func = function()
                     return self.auto_sync_on_resume
@@ -761,6 +1121,16 @@ function BridgeSync:addToMainMenu(menu_items)
                 end,
             },
             {
+                text = _("Do Not Sync While Reading"),
+                checked_func = function()
+                    return self.do_not_sync_while_book_open
+                end,
+                callback = function()
+                    self.do_not_sync_while_book_open = not self.do_not_sync_while_book_open
+                    self:_saveSettings()
+                end,
+            },
+            {
                 text = _("Delete Removed Books"),
                 checked_func = function()
                     return self.delete_removed_books
@@ -768,6 +1138,32 @@ function BridgeSync:addToMainMenu(menu_items)
                 callback = function()
                     self.delete_removed_books = not self.delete_removed_books
                     self:_saveSettings()
+                end,
+            },
+            {
+                text = _("Track Reading Sessions"),
+                checked_func = function()
+                    return self.session_tracking_enabled
+                end,
+                callback = function()
+                    self.session_tracking_enabled = not self.session_tracking_enabled
+                    self:_saveSettings()
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("Pending Sessions: %1"), #self.pending_sessions)
+                end,
+                enabled_func = function()
+                    return #self.pending_sessions > 0
+                end,
+                callback = function()
+                    if #self.pending_sessions > 0 and NetworkMgr:isConnected() then
+                        self:_uploadSessions()
+                        self:_showMessage(T(_("Uploaded %1 session(s)"), #self.pending_sessions), 2)
+                    elseif #self.pending_sessions > 0 then
+                        self:_showMessage(_("No network connection"), 2)
+                    end
                 end,
             },
             {
@@ -819,18 +1215,31 @@ function BridgeSync:addToMainMenu(menu_items)
             },
             {
                 text_func = function()
-                    return T(_("Managed Folder: %1"), self.download_dir)
+                    return T(_("Wake Sync Delay: %1s"), self.wake_sync_delay_seconds)
                 end,
                 callback = function()
                     self:_promptForSetting(
-                        _("Managed Folder"),
-                        self.download_dir,
-                        _("Enter managed folder path"),
+                        _("Wake Sync Delay"),
+                        tostring(self.wake_sync_delay_seconds),
+                        _("Enter delay in seconds"),
                         function(value)
-                            self.download_dir = value
-                            self:_saveSettings()
+                            local delay = tonumber(value)
+                            if delay and delay >= 5 then
+                                self.wake_sync_delay_seconds = math.floor(delay)
+                                self:_saveSettings()
+                            else
+                                self:_showMessage(_("Wake Sync Delay must be at least 5 seconds"), 3)
+                            end
                         end
                     )
+                end,
+            },
+            {
+                text_func = function()
+                    return T(_("Managed Folder: %1"), self.download_dir)
+                end,
+                callback = function()
+                    self:_showManagedFolderChooser()
                 end,
             },
             {

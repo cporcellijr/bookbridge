@@ -36,7 +36,6 @@ _kosync_debounce: dict = {}  # {abs_id: {'last_event': float, 'title': str, 'syn
 _kosync_debounce_lock = threading.Lock()
 _debounce_thread_started = False
 
-
 def init_kosync_server(database_service, container, manager, ebook_dir=None):
     """Initialize KoSync server with required dependencies."""
     global _database_service, _container, _manager, _ebook_dir
@@ -538,6 +537,95 @@ def koreader_device_sync_download(abs_id):
     response.set_etag(content_hash)
     response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
+
+
+@kosync_sync_bp.route('/device-sync/sessions', methods=['POST'])
+@kosync_sync_bp.route('/koreader/device-sync/sessions', methods=['POST'])
+@kosync_auth_required
+def kosync_upload_sessions():
+    """Receive reading sessions from BridgeSync plugin and persist locally + forward to Grimmory."""
+    data = request.json
+    if not data or not isinstance(data, list):
+        return jsonify({"error": "Expected JSON array"}), 400
+
+    accepted = 0
+    rejected = 0
+
+    for session in data:
+        abs_id = session.get('abs_id')
+        book = None
+
+        if abs_id and _database_service:
+            book = _database_service.get_book(abs_id)
+
+        # Fallback: resolve via KOSync document hash
+        if not book and _database_service:
+            doc_hash = session.get('document_hash')
+            if doc_hash:
+                book = _database_service.get_book_by_kosync_id(doc_hash)
+                if book:
+                    abs_id = book.abs_id
+
+        if not book:
+            logger.warning(f"Session upload: book not found for abs_id='{abs_id}' hash='{session.get('document_hash')}'")
+            rejected += 1
+            continue
+
+        session_type = session.get('session_type', 'EBOOK')
+        start_time = session.get('start_time', 0)
+        end_time = session.get('end_time', 0)
+        duration_seconds = session.get('duration_seconds', 0)
+        start_progress = session.get('start_progress')
+        end_progress = session.get('end_progress')
+
+        # Plugin sends progress as 0-100, DB stores as 0-1
+        if start_progress is not None:
+            start_progress = float(start_progress) / 100.0
+        if end_progress is not None:
+            end_progress = float(end_progress) / 100.0
+
+        try:
+            _database_service.record_reading_session(
+                abs_id=abs_id,
+                session_type=session_type,
+                start_time=float(start_time),
+                end_time=float(end_time),
+                duration_seconds=int(duration_seconds),
+                start_progress=start_progress,
+                end_progress=end_progress,
+                leader_client="BridgeSync_Plugin",
+            )
+            accepted += 1
+        except Exception as e:
+            logger.warning(f"Session upload: failed to record session for '{abs_id}': {e}")
+            rejected += 1
+            continue
+
+        # Forward to Grimmory if configured
+        if (
+            os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
+            and _manager
+            and hasattr(_manager, 'booklore_client')
+            and _manager.booklore_client
+            and _manager.booklore_client.is_configured()
+        ):
+            try:
+                grimmory_id = _manager._resolve_grimmory_ebook_id(book)
+                if grimmory_id:
+                    _manager.booklore_client.create_reading_session(
+                        book_id=int(grimmory_id),
+                        start_time=float(start_time),
+                        end_time=float(end_time),
+                        start_progress=start_progress,
+                        end_progress=end_progress,
+                        book_type=session_type,
+                    )
+                    logger.debug(f"Forwarded session to Grimmory for '{book.abs_title}' (id={grimmory_id})")
+            except Exception as e:
+                logger.warning(f"Session upload: Grimmory forwarding failed for '{abs_id}': {e}")
+
+    logger.info(f"Session upload: accepted={accepted}, rejected={rejected}")
+    return jsonify({"accepted": accepted, "rejected": rejected}), 200
 
 
 # ---------------- Helper Functions ----------------

@@ -1618,6 +1618,9 @@ def index():
     all_hardcover = database_service.get_all_hardcover_details()
     hardcover_by_book = {h.abs_id: h for h in all_hardcover}
 
+    # Fetch reading stats in bulk (one query for all books)
+    all_reading_stats = database_service.get_all_reading_stats()
+
     integrations = {}
 
     # Dynamically check all configured sync clients
@@ -1800,6 +1803,11 @@ def index():
         if duration > 0:
             total_duration += duration
             total_listened += (progress_pct / 100.0) * duration
+
+        # Reading session stats
+        reading_stats = all_reading_stats.get(book.abs_id)
+        if reading_stats:
+            mapping['reading_stats'] = reading_stats
 
         mappings.append(mapping)
 
@@ -4871,6 +4879,32 @@ def create_app(test_container=None):
     # Register context processors, jinja globals, etc.
     app.context_processor(inject_global_vars)
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
+
+    def format_duration(seconds: int) -> str:
+        """Convert seconds to human-readable duration."""
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s"
+        if seconds < 3600:
+            return f"{seconds // 60}m"
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        return f"{h}h {m}m" if m else f"{h}h"
+
+    def format_time_ago(unix_timestamp: float) -> str:
+        """Convert a unix timestamp to relative time from now."""
+        import time as _time
+        diff = _time.time() - unix_timestamp
+        if diff < 60:
+            return f"{int(diff)}s"
+        if diff < 3600:
+            return f"{int(diff // 60)}m"
+        if diff < 86400:
+            return f"{int(diff // 3600)}h"
+        return f"{int(diff // 86400)}d"
+
+    app.jinja_env.filters['format_duration'] = format_duration
+    app.jinja_env.filters['format_time_ago'] = format_time_ago
 
     def _legacy_book_linker_redirect(dummy=None):
         return redirect(url_for('forge'), code=301)

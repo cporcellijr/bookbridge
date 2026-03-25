@@ -313,6 +313,38 @@ class BookAlignment(Base):
         self.alignment_map_json = alignment_map_json
 
 
+class ReadingSession(Base):
+    """
+    Local reading session tracking for dashboard stats.
+    Recorded on every sync cycle where a leader is elected and progress changes.
+    """
+    __tablename__ = 'reading_sessions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
+    session_type = Column(String(20), nullable=False)   # 'AUDIOBOOK', 'EPUB', 'PDF', 'EBOOK'
+    start_time = Column(Float, nullable=False)           # Unix timestamp
+    end_time = Column(Float, nullable=False)             # Unix timestamp
+    duration_seconds = Column(Integer, nullable=False)   # Capped/estimated
+    start_progress = Column(Float, nullable=True)        # 0-1 fraction
+    end_progress = Column(Float, nullable=True)          # 0-1 fraction
+    leader_client = Column(String(50), nullable=True)    # e.g. 'ABS', 'BookLoreAudio', 'KoSync', 'BookLore'
+
+    book = relationship("Book", backref="reading_sessions")
+
+    def __init__(self, abs_id: str, session_type: str, start_time: float, end_time: float,
+                 duration_seconds: int, start_progress: float = None, end_progress: float = None,
+                 leader_client: str = None):
+        self.abs_id = abs_id
+        self.session_type = session_type
+        self.start_time = start_time
+        self.end_time = end_time
+        self.duration_seconds = duration_seconds
+        self.start_progress = start_progress
+        self.end_progress = end_progress
+        self.leader_client = leader_client
+
+
 class BookloreBook(Base):
     """
     Model for caching Grimmory search results, replacing local JSON cache.
