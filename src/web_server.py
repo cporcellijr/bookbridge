@@ -4678,7 +4678,7 @@ def get_booklore_shelves():
             result.append({
                 "id": s.get("name"),  # Use original name as ID
                 "name": name,
-                "count": s.get("booksCount", 0)
+                "count": s.get("bookCount", 0)
             })
             
         # Sort alphabetically by the original name

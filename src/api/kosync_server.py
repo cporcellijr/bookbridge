@@ -806,6 +806,11 @@ def koreader_device_sync_manifest():
             if bl.is_configured():
                 excluded_raw = os.environ.get("DEVICE_SYNC_EXCLUDED_SHELVES", "")
                 excludes = [s.strip() for s in excluded_raw.split(",") if s.strip()]
+                # Auto-exclude the Grimmory sync shelf (e.g. "Kobo") — every
+                # matched book is on it, so it would be a redundant collection.
+                sync_shelf = os.environ.get("BOOKLORE_SHELF_NAME", "").strip()
+                if sync_shelf and sync_shelf not in excludes:
+                    excludes.append(sync_shelf)
                 shelf_mapping = bl.get_book_shelf_mapping(mode=collections_mode, excludes=excludes)
         except Exception as e:
             logger.warning("Device-sync manifest: shelf mapping failed: %s", e)

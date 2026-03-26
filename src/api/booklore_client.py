@@ -55,6 +55,12 @@ class BookloreClient:
         self._cache_lock = threading.RLock()
         self._epub_cfi_write_disabled_for_books = set()
 
+        # Shelf mapping cache to avoid N+1 API calls on rapid successive syncs
+        self._shelf_mapping_cache: Optional[dict[str, list[str]]] = None
+        self._shelf_mapping_cache_time: float = 0
+        self._shelf_mapping_cache_key: Optional[tuple] = None
+        self._shelf_mapping_cache_ttl: int = 300  # 5 minutes
+
         self._token = None
         self._token_timestamp = 0
         self._token_max_age = 300
@@ -2128,37 +2134,160 @@ class BookloreClient:
         return self._normalize_shelves_payload(shelves)
 
     def get_all_magic_shelves(self) -> list[dict]:
-        """Fetch all magic shelves from Grimmory."""
-        response = self._make_request("GET", "/api/v1/magic-shelves")
+        """Fetch all magic shelves from Grimmory.
+
+        Magic shelves live at ``/api/magic-shelves`` (no ``v1`` prefix).
+        Each shelf carries a ``filterJson`` blob that must be evaluated
+        client-side against the full book list.
+        """
+        response = self._make_request("GET", "/api/magic-shelves")
         if not response or response.status_code != 200:
-            # Fallback for differing API versions
-            response = self._make_request("GET", "/api/v1/magic-shelf")
-            
-        if not response or response.status_code != 200:
-            logger.debug("Grimmory: Failed to fetch magic shelves list")
+            logger.debug("Grimmory: Failed to fetch magic shelves list (status=%s)",
+                         getattr(response, "status_code", None))
             return []
-            
+
         shelves = self._parse_json_response(response, "Grimmory magic shelves list")
-        
-        # Ensure they are marked as magic just in case the API payload omits the boolean true
+        logger.debug("Grimmory: Magic shelves raw payload type=%s", type(shelves).__name__)
+
         normalized = self._normalize_shelves_payload(shelves)
         for s in normalized:
             s["magicShelf"] = True
-            
+
+        logger.debug("Grimmory: Fetched %d magic shelf(ves)", len(normalized))
         return normalized
 
-    def get_magic_shelf_books(self, shelf_id: int) -> list[dict]:
-        """Fetch books belonging to a magic shelf."""
-        response = self._make_request("GET", f"/api/v1/magic-shelf/{shelf_id}/books")
+    # -- Magic shelf filter evaluation ------------------------------------
+
+    # Virtual field names used in Grimmory's filterJson that don't match
+    # the API book object keys directly.
+    _FILTER_FIELD_MAP: dict[str, str] = {
+        "library": "libraryId",
+    }
+
+    def _fetch_all_books_for_filter(self) -> list[dict]:
+        """Fetch the full book list with metadata intact for filter evaluation."""
+        response = self._make_request("GET", "/api/v1/books")
         if not response or response.status_code != 200:
-            logger.debug("Grimmory: Failed to fetch magic shelf %s books", shelf_id)
+            logger.warning("Grimmory: Failed to fetch books for magic shelf evaluation")
             return []
-        data = self._parse_json_response(response, f"Grimmory magic shelf {shelf_id} books")
+        data = self._parse_json_response(response, "Grimmory all books for filter")
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
             return data.get("content", data.get("books", []))
         return []
+
+    @staticmethod
+    def _resolve_filter_field(book: dict, field: str):
+        """Resolve a filterJson field name to its value on a book dict.
+
+        Checks virtual mappings first, then top-level keys, then metadata.
+        """
+        mapped = BookloreClient._FILTER_FIELD_MAP.get(field, field)
+        if mapped in book:
+            return book[mapped]
+        metadata = book.get("metadata") or {}
+        if mapped in metadata:
+            return metadata[mapped]
+        return None
+
+    @staticmethod
+    def _evaluate_rule(book: dict, rule: dict) -> bool:
+        """Evaluate a single filter rule against a book."""
+        field = rule.get("field", "")
+        operator = rule.get("operator", "")
+        expected = rule.get("value")
+
+        actual = BookloreClient._resolve_filter_field(book, field)
+
+        if operator == "is_empty":
+            return actual is None or actual == "" or actual == []
+        if operator == "is_not_empty":
+            return actual is not None and actual != "" and actual != []
+
+        # For comparison operators, normalize strings to lowercase
+        if isinstance(actual, str) and isinstance(expected, str):
+            actual = actual.lower()
+            expected = expected.lower()
+
+        if operator == "equals":
+            return actual == expected
+        if operator == "not_equals":
+            return actual != expected
+        if operator == "contains":
+            if isinstance(actual, str):
+                return str(expected).lower() in actual.lower() if expected else False
+            if isinstance(actual, list):
+                return expected in actual
+            return False
+        if operator == "not_contains":
+            if isinstance(actual, str):
+                return str(expected).lower() not in actual.lower() if expected else True
+            if isinstance(actual, list):
+                return expected not in actual
+            return True
+        if operator == "starts_with":
+            return isinstance(actual, str) and actual.startswith(str(expected).lower())
+        if operator == "ends_with":
+            return isinstance(actual, str) and actual.endswith(str(expected).lower())
+
+        # Numeric comparisons
+        try:
+            num_actual = float(actual) if actual is not None else None
+            num_expected = float(expected) if expected is not None else None
+            if num_actual is not None and num_expected is not None:
+                if operator == "gt":
+                    return num_actual > num_expected
+                if operator == "gte":
+                    return num_actual >= num_expected
+                if operator == "lt":
+                    return num_actual < num_expected
+                if operator == "lte":
+                    return num_actual <= num_expected
+        except (TypeError, ValueError):
+            pass
+
+        logger.debug("Grimmory: Unknown filter operator '%s' for field '%s'", operator, field)
+        return False
+
+    @staticmethod
+    def _evaluate_filter_group(book: dict, group: dict) -> bool:
+        """Evaluate a filter group (with join logic) against a book."""
+        join = group.get("join", "and")
+        rules = group.get("rules", [])
+
+        results = []
+        for rule in rules:
+            if rule.get("type") == "group":
+                results.append(BookloreClient._evaluate_filter_group(book, rule))
+            else:
+                results.append(BookloreClient._evaluate_rule(book, rule))
+
+        if join == "or":
+            return any(results)
+        return all(results)
+
+    def _evaluate_magic_shelf(self, shelf: dict, all_books: list[dict]) -> list[dict]:
+        """Evaluate a magic shelf's filterJson against all books.
+
+        Returns the list of books that match the filter rules.
+        """
+        filter_raw = shelf.get("filterJson")
+        if not filter_raw:
+            logger.debug("Grimmory: Magic shelf '%s' has no filterJson", shelf.get("name"))
+            return []
+
+        try:
+            filter_tree = json.loads(filter_raw) if isinstance(filter_raw, str) else filter_raw
+        except (json.JSONDecodeError, TypeError) as exc:
+            logger.warning("Grimmory: Failed to parse filterJson for magic shelf '%s': %s",
+                           shelf.get("name"), exc)
+            return []
+
+        matching = [book for book in all_books if self._evaluate_filter_group(book, filter_tree)]
+        logger.debug("Grimmory: Magic shelf '%s' matched %d/%d book(s)",
+                     shelf.get("name"), len(matching), len(all_books))
+        return matching
 
     def get_book_shelf_mapping(
         self,
@@ -2166,6 +2295,10 @@ class BookloreClient:
         excludes: Optional[list[str]] = None,
     ) -> dict[str, list[str]]:
         """Build a mapping of Grimmory book ID → list of shelf names.
+
+        Results are cached for ``_shelf_mapping_cache_ttl`` seconds so that
+        rapid successive manifest requests (e.g. multiple devices waking)
+        don't each trigger N+1 API calls to Grimmory.
 
         Args:
             mode: "all" (regular + magic), "magic" (magic only), "shelf" (regular only).
@@ -2175,6 +2308,18 @@ class BookloreClient:
             dict mapping str(book_id) to a list of shelf name strings.
         """
         excludes = set(excludes or [])
+        cache_key = (mode, tuple(sorted(excludes)))
+
+        # Return cached result if still valid for the same parameters
+        now = time.time()
+        if (
+            self._shelf_mapping_cache is not None
+            and self._shelf_mapping_cache_key == cache_key
+            and (now - self._shelf_mapping_cache_time) < self._shelf_mapping_cache_ttl
+        ):
+            logger.debug("Grimmory: Returning cached shelf mapping (age=%.0fs)", now - self._shelf_mapping_cache_time)
+            return self._shelf_mapping_cache
+
         mapping: dict[str, list[str]] = {}
 
         regular_shelves = []
@@ -2186,7 +2331,7 @@ class BookloreClient:
             if shelf_name in excludes:
                 continue
             regular_shelves.append(shelf)
-            
+
         # Process magic shelves
         for shelf in self.get_all_magic_shelves():
             shelf_name = shelf.get("name", "")
@@ -2194,20 +2339,20 @@ class BookloreClient:
                 continue
             magic_shelves.append(shelf)
 
-        # Regular shelves: check book detail for shelf membership
+        # Regular shelves: fetch book membership per shelf
         if mode in ("all", "shelf"):
             for shelf in regular_shelves:
                 shelf_id = shelf.get("id")
                 shelf_name = shelf.get("name", "")
                 if not shelf_id or not shelf_name:
                     continue
-                # Query books on this shelf
                 response = self._make_request("GET", f"/api/v1/shelves/{shelf_id}/books")
                 if not response or response.status_code != 200:
                     logger.debug("Grimmory: Could not fetch books for shelf '%s' (id=%s)", shelf_name, shelf_id)
                     continue
                 data = self._parse_json_response(response, f"Grimmory shelf {shelf_name} books")
                 books = data if isinstance(data, list) else data.get("content", data.get("books", [])) if isinstance(data, dict) else []
+                logger.debug("Grimmory: Shelf '%s' contains %d book(s)", shelf_name, len(books))
                 for book in books:
                     if not isinstance(book, dict):
                         continue
@@ -2217,14 +2362,15 @@ class BookloreClient:
                         if shelf_name not in mapping[book_id]:
                             mapping[book_id].append(shelf_name)
 
-        # Magic shelves
-        if mode in ("all", "magic"):
+        # Magic shelves: evaluate filterJson client-side against all books
+        if mode in ("all", "magic") and magic_shelves:
+            all_books = self._fetch_all_books_for_filter()
+            logger.debug("Grimmory: Fetched %d book(s) for magic shelf evaluation", len(all_books))
             for shelf in magic_shelves:
-                shelf_id = shelf.get("id")
                 shelf_name = shelf.get("name", "")
-                if not shelf_id or not shelf_name:
+                if not shelf_name:
                     continue
-                books = self.get_magic_shelf_books(shelf_id)
+                books = self._evaluate_magic_shelf(shelf, all_books)
                 for book in books:
                     if not isinstance(book, dict):
                         continue
@@ -2241,6 +2387,12 @@ class BookloreClient:
             mode,
             list(excludes) if excludes else "none",
         )
+
+        # Cache the result
+        self._shelf_mapping_cache = mapping
+        self._shelf_mapping_cache_time = now
+        self._shelf_mapping_cache_key = cache_key
+
         return mapping
 
     def _normalize_shelves_payload(self, payload):
