@@ -94,6 +94,7 @@ class Book(Base):
     jobs = relationship("Job", back_populates="book", cascade="all, delete-orphan")
     hardcover_details = relationship("HardcoverDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
+    reading_sessions = relationship("ReadingSession", back_populates="book", cascade="all, delete-orphan")
 
     def __init__(self, abs_id: str, abs_title: str = None, ebook_filename: str = None,
                  audio_source: str = None, audio_source_id: str = None,
@@ -330,7 +331,7 @@ class ReadingSession(Base):
     end_progress = Column(Float, nullable=True)          # 0-1 fraction
     leader_client = Column(String(50), nullable=True)    # e.g. 'ABS', 'BookLoreAudio', 'KoSync', 'BookLore'
 
-    book = relationship("Book", backref="reading_sessions")
+    book = relationship("Book", back_populates="reading_sessions")
 
     def __init__(self, abs_id: str, session_type: str, start_time: float, end_time: float,
                  duration_seconds: int, start_progress: float = None, end_progress: float = None,

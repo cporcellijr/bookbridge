@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class KOReaderDeviceSyncService:
     """Build and resolve the optional KOReader managed-folder sync manifest."""
 
+    _UNSORTED_SHELF_NAME = "Unsorted"
+
     _ABS_FILENAME_RE = re.compile(r"^(?P<item_id>.+?)_(?:abs|abs_search|direct)\.[^.]+$", re.IGNORECASE)
     _CWA_FILENAME_RE = re.compile(r"^cwa_(?P<cwa_id>[^.]+)\.[^.]+$", re.IGNORECASE)
     _KAVITA_FILENAME_RE = re.compile(r"^kavita_(?P<kavita_id>[^.]+)\.[^.]+$", re.IGNORECASE)
@@ -89,6 +91,8 @@ class KOReaderDeviceSyncService:
                     source_id = getattr(book, "ebook_source_id", None)
                     if source_id and str(source_id) in shelf_mapping:
                         item["shelves"] = shelf_mapping[str(source_id)]
+                    else:
+                        item["shelves"] = [self._UNSORTED_SHELF_NAME]
 
         return {
             "generated_at": int(time.time()),

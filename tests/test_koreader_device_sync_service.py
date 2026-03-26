@@ -154,7 +154,7 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         item = manifest["books"][0]
         self.assertNotIn("shelves", item)
 
-    def test_manifest_no_shelves_for_unmatched_book(self):
+    def test_manifest_uses_unsorted_shelf_for_unmatched_book(self):
         self.db.save_book(
             Book(
                 abs_id="abs-1",
@@ -171,5 +171,21 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         manifest = self.service.build_manifest(shelf_mapping=shelf_mapping)
         self.assertEqual(len(manifest["books"]), 1)
         item = manifest["books"][0]
-        self.assertNotIn("shelves", item)
+        self.assertEqual(item["shelves"], ["Unsorted"])
+
+    def test_manifest_uses_unsorted_shelf_when_source_id_missing(self):
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="No Source Book",
+                original_ebook_filename="no-source.epub",
+                kosync_doc_id="hash-1",
+                status="active",
+            )
+        )
+
+        manifest = self.service.build_manifest(shelf_mapping={"42": ["Fantasy"]})
+        self.assertEqual(len(manifest["books"]), 1)
+        item = manifest["books"][0]
+        self.assertEqual(item["shelves"], ["Unsorted"])
 
