@@ -753,7 +753,7 @@
                             <option value="magic" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'magic' %}selected{% endif %}>Magic Shelves Only</option>
                             <option value="shelf" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'shelf' %}selected{% endif %}>Regular Shelves Only</option>
                         </select>
-                        <div class="help-text">Automatically creates KOReader collections based on Grimmory shelf membership (requires KOReader BridgeSync).</div>
+                        <div class="help-text">Automatically creates KOReader collections based on Grimmory shelf membership (<b>Note:</b> This feature only works with <code>bridgesync.koplugin</code> active on your KOReader device).</div>
                     </div>
                     <div class="form-group full-width">
                         <label>Excluded Shelves</label>

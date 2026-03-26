@@ -4656,17 +4656,35 @@ def get_booklore_libraries():
 
 
 def get_booklore_shelves():
-    """Return available Grimmory shelves."""
+    """Return available Grimmory shelves (regular and magic)."""
     if not container.booklore_client().is_configured():
         return jsonify({"error": "Grimmory not configured"}), 400
 
     try:
         shelves = container.booklore_client().get_all_shelves()
-        return jsonify([{
-            "id": s.get("id"),
-            "name": s.get("name", "Unknown"),
-            "count": s.get("booksCount", 0)
-        } for s in shelves])
+        magic_shelves = container.booklore_client().get_all_magic_shelves()
+        
+        all_shelves = shelves + magic_shelves
+        result = []
+        
+        for s in all_shelves:
+            is_magic = s.get("magicShelf") or s.get("magic") or s.get("isMagic", False)
+            name = s.get("name", "Unknown")
+            
+            # Add emoji prefix for UI distinction
+            if is_magic and not name.startswith("🪄"):
+                name = f"🪄 {name}"
+                
+            result.append({
+                "id": s.get("name"),  # Use original name as ID
+                "name": name,
+                "count": s.get("booksCount", 0)
+            })
+            
+        # Sort alphabetically by the original name
+        result.sort(key=lambda x: x["id"].lower() if x["id"] else "")
+        return jsonify(result)
+        
     except Exception as e:
         logger.error(f"Error fetching Grimmory shelves: {e}")
         return jsonify({"error": str(e)}), 500

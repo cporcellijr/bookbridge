@@ -2127,6 +2127,26 @@ class BookloreClient:
         shelves = self._parse_json_response(response, "Grimmory shelves list")
         return self._normalize_shelves_payload(shelves)
 
+    def get_all_magic_shelves(self) -> list[dict]:
+        """Fetch all magic shelves from Grimmory."""
+        response = self._make_request("GET", "/api/v1/magic-shelves")
+        if not response or response.status_code != 200:
+            # Fallback for differing API versions
+            response = self._make_request("GET", "/api/v1/magic-shelf")
+            
+        if not response or response.status_code != 200:
+            logger.debug("Grimmory: Failed to fetch magic shelves list")
+            return []
+            
+        shelves = self._parse_json_response(response, "Grimmory magic shelves list")
+        
+        # Ensure they are marked as magic just in case the API payload omits the boolean true
+        normalized = self._normalize_shelves_payload(shelves)
+        for s in normalized:
+            s["magicShelf"] = True
+            
+        return normalized
+
     def get_magic_shelf_books(self, shelf_id: int) -> list[dict]:
         """Fetch books belonging to a magic shelf."""
         response = self._make_request("GET", f"/api/v1/magic-shelf/{shelf_id}/books")
