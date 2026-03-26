@@ -1638,6 +1638,16 @@ class TestMagicShelfFilterEvaluator:
         rule = {"field": "language", "operator": "not_equals", "value": "en"}
         assert BookloreClient._evaluate_rule(book, rule) is False
 
+    def test_equals_matches_list_membership_case_insensitive(self):
+        book = self._make_book(1, categories=["Science Fiction", "Horror"])
+        rule = {"field": "categories", "operator": "equals", "value": "science fiction"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_not_equals_rejects_present_list_member(self):
+        book = self._make_book(1, categories=["Science Fiction", "Horror"])
+        rule = {"field": "categories", "operator": "not_equals", "value": "Horror"}
+        assert BookloreClient._evaluate_rule(book, rule) is False
+
     def test_is_empty_none(self):
         book = self._make_book(1, hc_review_count=None)
         rule = {"field": "hardcoverReviewCount", "operator": "is_empty"}
@@ -1769,3 +1779,34 @@ class TestMagicShelfFilterEvaluator:
 
         # Book 100 should NOT be in Non-English (language=en)
         assert "Non-English" not in mapping["100"]
+
+    def test_evaluate_magic_shelf_category_equals_rules_match_multitag_books(self, booklore_client):
+        magic_shelves_resp = MockResponse([
+            {
+                "id": 4,
+                "name": "SciFi Horror",
+                "filterJson": json.dumps({
+                    "type": "group",
+                    "join": "and",
+                    "rules": [
+                        {"field": "categories", "operator": "equals", "value": "Science Fiction"},
+                        {"field": "categories", "operator": "equals", "value": "Horror"},
+                    ],
+                }),
+            },
+        ])
+        all_books_resp = MockResponse([
+            {"id": 100, "libraryId": 10, "metadata": {"title": "Ghost Ship", "categories": ["Science Fiction", "Horror"]}},
+            {"id": 200, "libraryId": 10, "metadata": {"title": "Space Opera", "categories": ["Science Fiction"]}},
+            {"id": 300, "libraryId": 10, "metadata": {"title": "Haunted House", "categories": ["Horror"]}},
+        ])
+
+        with patch.object(booklore_client, "_make_request") as mock_req:
+            mock_req.side_effect = [
+                MockResponse([]),      # GET /api/v1/shelves
+                magic_shelves_resp,    # GET /api/magic-shelves
+                all_books_resp,        # GET /api/v1/books (for filter eval)
+            ]
+            mapping = booklore_client.get_book_shelf_mapping(mode="magic", excludes=[])
+
+        assert mapping == {"100": ["SciFi Horror"]}

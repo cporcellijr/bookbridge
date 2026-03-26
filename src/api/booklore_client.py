@@ -2162,6 +2162,7 @@ class BookloreClient:
     # the API book object keys directly.
     _FILTER_FIELD_MAP: dict[str, str] = {
         "library": "libraryId",
+        "fileType": "bookType",
     }
 
     def _fetch_all_books_for_filter(self) -> list[dict]:
@@ -2189,7 +2190,37 @@ class BookloreClient:
         metadata = book.get("metadata") or {}
         if mapped in metadata:
             return metadata[mapped]
+        if mapped == "bookType":
+            primary_file = book.get("primaryFile") or {}
+            if isinstance(primary_file, dict) and primary_file.get("bookType") is not None:
+                return primary_file.get("bookType")
         return None
+
+    @staticmethod
+    def _normalize_filter_sequence(value) -> list:
+        """Normalize filter values so array comparisons work across strings and objects."""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+
+        normalized = []
+        for item in value:
+            if isinstance(item, dict):
+                for key in ("name", "label", "value", "id"):
+                    candidate = item.get(key)
+                    if candidate not in (None, ""):
+                        normalized.append(candidate)
+                        break
+            elif item not in (None, ""):
+                normalized.append(item)
+        return normalized
+
+    @staticmethod
+    def _normalize_filter_comparable(value):
+        if isinstance(value, str):
+            return value.strip().lower()
+        return str(value).strip().lower()
 
     @staticmethod
     def _evaluate_rule(book: dict, rule: dict) -> bool:
@@ -2197,8 +2228,17 @@ class BookloreClient:
         field = rule.get("field", "")
         operator = rule.get("operator", "")
         expected = rule.get("value")
+        operator = {
+            "does_not_contain": "not_contains",
+            "greater_than": "gt",
+            "greater_than_equal_to": "gte",
+            "less_than": "lt",
+            "less_than_equal_to": "lte",
+        }.get(operator, operator)
 
         actual = BookloreClient._resolve_filter_field(book, field)
+        logger.debug("Grimmory: filter rule field=%s op=%s expected=%r actual=%r",
+                     field, operator, expected, actual)
 
         if operator == "is_empty":
             return actual is None or actual == "" or actual == []
@@ -2211,25 +2251,75 @@ class BookloreClient:
             expected = expected.lower()
 
         if operator == "equals":
+            if isinstance(actual, list):
+                actual_values = BookloreClient._normalize_filter_sequence(actual)
+                expected_values = BookloreClient._normalize_filter_sequence(expected)
+                actual_normalized = {
+                    BookloreClient._normalize_filter_comparable(item) for item in actual_values
+                }
+                return any(
+                    BookloreClient._normalize_filter_comparable(item) in actual_normalized
+                    for item in expected_values
+                )
             return actual == expected
         if operator == "not_equals":
+            if isinstance(actual, list):
+                actual_values = BookloreClient._normalize_filter_sequence(actual)
+                expected_values = BookloreClient._normalize_filter_sequence(expected)
+                actual_normalized = {
+                    BookloreClient._normalize_filter_comparable(item) for item in actual_values
+                }
+                return all(
+                    BookloreClient._normalize_filter_comparable(item) not in actual_normalized
+                    for item in expected_values
+                )
             return actual != expected
         if operator == "contains":
             if isinstance(actual, str):
                 return str(expected).lower() in actual.lower() if expected else False
             if isinstance(actual, list):
-                return expected in actual
+                actual_values = BookloreClient._normalize_filter_sequence(actual)
+                expected_values = BookloreClient._normalize_filter_sequence(expected)
+                actual_normalized = {
+                    BookloreClient._normalize_filter_comparable(item) for item in actual_values
+                }
+                return any(
+                    BookloreClient._normalize_filter_comparable(item) in actual_normalized
+                    for item in expected_values
+                )
             return False
         if operator == "not_contains":
             if isinstance(actual, str):
                 return str(expected).lower() not in actual.lower() if expected else True
             if isinstance(actual, list):
-                return expected not in actual
+                actual_values = BookloreClient._normalize_filter_sequence(actual)
+                expected_values = BookloreClient._normalize_filter_sequence(expected)
+                actual_normalized = {
+                    BookloreClient._normalize_filter_comparable(item) for item in actual_values
+                }
+                return all(
+                    BookloreClient._normalize_filter_comparable(item) not in actual_normalized
+                    for item in expected_values
+                )
             return True
         if operator == "starts_with":
             return isinstance(actual, str) and actual.startswith(str(expected).lower())
         if operator == "ends_with":
             return isinstance(actual, str) and actual.endswith(str(expected).lower())
+        if operator in {"includes_any", "includes_all", "excludes_all"}:
+            actual_values = BookloreClient._normalize_filter_sequence(actual)
+            expected_values = BookloreClient._normalize_filter_sequence(expected)
+            actual_normalized = {
+                BookloreClient._normalize_filter_comparable(item) for item in actual_values
+            }
+            expected_normalized = {
+                BookloreClient._normalize_filter_comparable(item) for item in expected_values
+            }
+            if operator == "includes_any":
+                return any(item in actual_normalized for item in expected_normalized)
+            if operator == "includes_all":
+                return all(item in actual_normalized for item in expected_normalized)
+            return all(item not in actual_normalized for item in expected_normalized)
 
         # Numeric comparisons
         try:
@@ -2284,6 +2374,7 @@ class BookloreClient:
                            shelf.get("name"), exc)
             return []
 
+        logger.debug("Grimmory: Magic shelf '%s' filterJson: %s", shelf.get("name"), filter_tree)
         matching = [book for book in all_books if self._evaluate_filter_group(book, filter_tree)]
         logger.debug("Grimmory: Magic shelf '%s' matched %d/%d book(s)",
                      shelf.get("name"), len(matching), len(all_books))
