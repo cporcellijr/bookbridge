@@ -2177,19 +2177,22 @@ class BookloreClient:
         excludes = set(excludes or [])
         mapping: dict[str, list[str]] = {}
 
-        all_shelves = self.get_all_shelves()
         regular_shelves = []
         magic_shelves = []
 
-        for shelf in all_shelves:
+        # Process regular shelves
+        for shelf in self.get_all_shelves():
             shelf_name = shelf.get("name", "")
             if shelf_name in excludes:
                 continue
-            is_magic = shelf.get("magicShelf") or shelf.get("magic") or shelf.get("isMagic", False)
-            if is_magic:
-                magic_shelves.append(shelf)
-            else:
-                regular_shelves.append(shelf)
+            regular_shelves.append(shelf)
+            
+        # Process magic shelves
+        for shelf in self.get_all_magic_shelves():
+            shelf_name = shelf.get("name", "")
+            if shelf_name in excludes:
+                continue
+            magic_shelves.append(shelf)
 
         # Regular shelves: check book detail for shelf membership
         if mode in ("all", "shelf"):
