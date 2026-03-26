@@ -4655,6 +4655,23 @@ def get_booklore_libraries():
     return jsonify(libraries)
 
 
+def get_booklore_shelves():
+    """Return available Grimmory shelves."""
+    if not container.booklore_client().is_configured():
+        return jsonify({"error": "Grimmory not configured"}), 400
+
+    try:
+        shelves = container.booklore_client().get_all_shelves()
+        return jsonify([{
+            "id": s.get("id"),
+            "name": s.get("name", "Unknown"),
+            "count": s.get("booksCount", 0)
+        } for s in shelves])
+    except Exception as e:
+        logger.error(f"Error fetching Grimmory shelves: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def get_abs_libraries():
     """Return available Audiobookshelf libraries."""
     if not container.abs_client().is_configured():
@@ -5051,6 +5068,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
+    app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
     app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
