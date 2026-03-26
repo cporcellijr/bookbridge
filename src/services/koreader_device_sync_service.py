@@ -40,7 +40,7 @@ class KOReaderDeviceSyncService:
         self.kavita_client = kavita_client
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir is not None else Path("/data/epub_cache")
 
-    def build_manifest(self) -> dict:
+    def build_manifest(self, shelf_mapping: dict[str, list[str]] | None = None) -> dict:
         books = sorted(
             self.database_service.get_books_by_status("active"),
             key=lambda book: (str(getattr(book, "abs_title", "") or "").lower(), str(book.abs_id)),
@@ -81,6 +81,14 @@ class KOReaderDeviceSyncService:
                 suffix = Path(preferred_name).suffix
                 preferred_name = f"{stem}__{item['abs_id'][:8]}{suffix}"
             item["filename"] = preferred_name
+
+        if shelf_mapping:
+            for item in items:
+                book = self.database_service.get_book(item["abs_id"])
+                if book:
+                    source_id = getattr(book, "ebook_source_id", None)
+                    if source_id and str(source_id) in shelf_mapping:
+                        item["shelves"] = shelf_mapping[str(source_id)]
 
         return {
             "generated_at": int(time.time()),

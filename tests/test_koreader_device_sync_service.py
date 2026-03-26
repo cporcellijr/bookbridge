@@ -118,3 +118,58 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertEqual(resolved["filename"], "Dragon's Justice.epub")
         self.assertEqual(resolved["content_hash"], "hash-1")
         self.assertEqual(resolved["mime_type"], "application/epub+zip")
+
+    def test_manifest_includes_shelves_from_mapping(self):
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Horror Book",
+                original_ebook_filename="horror.epub",
+                kosync_doc_id="hash-1",
+                ebook_source="booklore",
+                ebook_source_id="42",
+                status="active",
+            )
+        )
+
+        shelf_mapping = {"42": ["Sci-fi Horror", "Dark Fiction"]}
+        manifest = self.service.build_manifest(shelf_mapping=shelf_mapping)
+        self.assertEqual(len(manifest["books"]), 1)
+        item = manifest["books"][0]
+        self.assertEqual(item["shelves"], ["Sci-fi Horror", "Dark Fiction"])
+
+    def test_manifest_no_shelves_when_disabled(self):
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Plain Book",
+                original_ebook_filename="plain.epub",
+                kosync_doc_id="hash-1",
+                status="active",
+            )
+        )
+
+        manifest = self.service.build_manifest()
+        self.assertEqual(len(manifest["books"]), 1)
+        item = manifest["books"][0]
+        self.assertNotIn("shelves", item)
+
+    def test_manifest_no_shelves_for_unmatched_book(self):
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Unshelved Book",
+                original_ebook_filename="unshelved.epub",
+                kosync_doc_id="hash-1",
+                ebook_source="booklore",
+                ebook_source_id="99",
+                status="active",
+            )
+        )
+
+        shelf_mapping = {"42": ["Fantasy"]}
+        manifest = self.service.build_manifest(shelf_mapping=shelf_mapping)
+        self.assertEqual(len(manifest["books"]), 1)
+        item = manifest["books"][0]
+        self.assertNotIn("shelves", item)
+

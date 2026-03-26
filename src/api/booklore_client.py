@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import logging
 import threading
@@ -2117,6 +2117,108 @@ class BookloreClient:
         except Exception as e:
             logger.debug("Grimmory: Reading session error for book %s: %s", book_id, e)
             return False
+
+    def get_all_shelves(self) -> list[dict]:
+        """Fetch all regular shelves from Grimmory."""
+        response = self._make_request("GET", "/api/v1/shelves")
+        if not response or response.status_code != 200:
+            logger.debug("Grimmory: Failed to fetch shelves list")
+            return []
+        shelves = self._parse_json_response(response, "Grimmory shelves list")
+        return self._normalize_shelves_payload(shelves)
+
+    def get_magic_shelf_books(self, shelf_id: int) -> list[dict]:
+        """Fetch books belonging to a magic shelf."""
+        response = self._make_request("GET", f"/api/v1/magic-shelf/{shelf_id}/books")
+        if not response or response.status_code != 200:
+            logger.debug("Grimmory: Failed to fetch magic shelf %s books", shelf_id)
+            return []
+        data = self._parse_json_response(response, f"Grimmory magic shelf {shelf_id} books")
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return data.get("content", data.get("books", []))
+        return []
+
+    def get_book_shelf_mapping(
+        self,
+        mode: str = "all",
+        excludes: Optional[list[str]] = None,
+    ) -> dict[str, list[str]]:
+        """Build a mapping of Grimmory book ID → list of shelf names.
+
+        Args:
+            mode: "all" (regular + magic), "magic" (magic only), "shelf" (regular only).
+            excludes: Shelf names to skip.
+
+        Returns:
+            dict mapping str(book_id) to a list of shelf name strings.
+        """
+        excludes = set(excludes or [])
+        mapping: dict[str, list[str]] = {}
+
+        all_shelves = self.get_all_shelves()
+        regular_shelves = []
+        magic_shelves = []
+
+        for shelf in all_shelves:
+            shelf_name = shelf.get("name", "")
+            if shelf_name in excludes:
+                continue
+            is_magic = shelf.get("magicShelf") or shelf.get("magic") or shelf.get("isMagic", False)
+            if is_magic:
+                magic_shelves.append(shelf)
+            else:
+                regular_shelves.append(shelf)
+
+        # Regular shelves: check book detail for shelf membership
+        if mode in ("all", "shelf"):
+            for shelf in regular_shelves:
+                shelf_id = shelf.get("id")
+                shelf_name = shelf.get("name", "")
+                if not shelf_id or not shelf_name:
+                    continue
+                # Query books on this shelf
+                response = self._make_request("GET", f"/api/v1/shelves/{shelf_id}/books")
+                if not response or response.status_code != 200:
+                    logger.debug("Grimmory: Could not fetch books for shelf '%s' (id=%s)", shelf_name, shelf_id)
+                    continue
+                data = self._parse_json_response(response, f"Grimmory shelf {shelf_name} books")
+                books = data if isinstance(data, list) else data.get("content", data.get("books", [])) if isinstance(data, dict) else []
+                for book in books:
+                    if not isinstance(book, dict):
+                        continue
+                    book_id = str(book.get("id", ""))
+                    if book_id:
+                        mapping.setdefault(book_id, [])
+                        if shelf_name not in mapping[book_id]:
+                            mapping[book_id].append(shelf_name)
+
+        # Magic shelves
+        if mode in ("all", "magic"):
+            for shelf in magic_shelves:
+                shelf_id = shelf.get("id")
+                shelf_name = shelf.get("name", "")
+                if not shelf_id or not shelf_name:
+                    continue
+                books = self.get_magic_shelf_books(shelf_id)
+                for book in books:
+                    if not isinstance(book, dict):
+                        continue
+                    book_id = str(book.get("id", ""))
+                    if book_id:
+                        mapping.setdefault(book_id, [])
+                        if shelf_name not in mapping[book_id]:
+                            mapping[book_id].append(shelf_name)
+
+        logger.info(
+            "Grimmory: Built shelf mapping — %d books across %d shelves (mode=%s, excluded=%s)",
+            len(mapping),
+            len(regular_shelves) + len(magic_shelves),
+            mode,
+            list(excludes) if excludes else "none",
+        )
+        return mapping
 
     def _normalize_shelves_payload(self, payload):
         if isinstance(payload, list):
