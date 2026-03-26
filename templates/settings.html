@@ -647,26 +647,6 @@
                             get_bool('KOSYNC_USE_PERCENTAGE_FROM_SERVER') %}checked{% endif %}>
                         <label for="kosync_pct">Use Percentage from Server (Ignore Text Matching)</label>
                     </div>
-
-                    <!-- Separator -->
-                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
-                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Device Sync Collections</h4>
-
-                    <div class="form-group full-width">
-                        <label>Collection Syncing (Grimmory Shelves to KOReader)</label>
-                        <select name="DEVICE_SYNC_COLLECTIONS">
-                            <option value="off" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'off' %}selected{% endif %}>Off / Disabled</option>
-                            <option value="all" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'all' %}selected{% endif %}>All Shelves</option>
-                            <option value="magic" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'magic' %}selected{% endif %}>Magic Shelves Only</option>
-                            <option value="shelf" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'shelf' %}selected{% endif %}>Regular Shelves Only</option>
-                        </select>
-                        <div class="help-text">Automatically creates KOReader collections based on Grimmory shelf membership (requires Grimmory).</div>
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Excluded Shelves</label>
-                        <input type="text" name="DEVICE_SYNC_EXCLUDED_SHELVES" value="{{ get_val('DEVICE_SYNC_EXCLUDED_SHELVES') }}" placeholder="e.g. Read, Archive, DNF">
-                        <div class="help-text">Comma-separated list of Grimmory shelf names to skip when creating KOReader collections.</div>
-                    </div>
                 </div>
             </div>
 
@@ -759,6 +739,26 @@
                         <input type="checkbox" id="grimmory_sessions" name="GRIMMORY_READING_SESSIONS"
                             {% if get_bool('GRIMMORY_READING_SESSIONS') %}checked{% endif %}>
                         <label for="grimmory_sessions">Record Reading Sessions</label>
+                    </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Device Sync Collections</h4>
+
+                    <div class="form-group full-width">
+                        <label>Collection Syncing (Grimmory Shelves to KOReader)</label>
+                        <select name="DEVICE_SYNC_COLLECTIONS">
+                            <option value="off" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'off' %}selected{% endif %}>Off / Disabled</option>
+                            <option value="all" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'all' %}selected{% endif %}>All Shelves</option>
+                            <option value="magic" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'magic' %}selected{% endif %}>Magic Shelves Only</option>
+                            <option value="shelf" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'shelf' %}selected{% endif %}>Regular Shelves Only</option>
+                        </select>
+                        <div class="help-text">Automatically creates KOReader collections based on Grimmory shelf membership (requires KOReader BridgeSync).</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Excluded Shelves</label>
+                        <input type="text" name="DEVICE_SYNC_EXCLUDED_SHELVES" value="{{ get_val('DEVICE_SYNC_EXCLUDED_SHELVES') }}" placeholder="e.g. Read, Archive, DNF">
+                        <div class="help-text">Comma-separated list of Grimmory shelf names to skip when creating KOReader collections.</div>
                     </div>
                 </div>
             </div>
