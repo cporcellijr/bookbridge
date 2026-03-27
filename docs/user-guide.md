@@ -17,6 +17,8 @@ It shows:
 
 If a book is significantly out of sync, the card is highlighted so you can spot it quickly.
 
+When you start actions like **Create Mapping**, **Forge & Match**, **Add to Queue**, or **Process All**, the page now shows a working message right away so you know the action started.
+
 ---
 
 ## Sync Modes
@@ -71,6 +73,8 @@ The **Settings** page is where you connect your services and adjust how the brid
 
 - Each service section has a **Test** button so you can check a service before saving.
 - Audiobookshelf and Grimmory library ID fields include **Find IDs** helpers so you can pick from a dropdown instead of pasting blindly.
+- If you want an ebook-only or maintenance-focused setup, you can intentionally turn off Audiobookshelf by entering `disabled` in the ABS URL or token field.
+- If you use the built-in KOSync bridge, you can test the KOSync settings you have typed in before saving them.
 - **Save Settings** applies your changes and restarts the app.
 - When the restart finishes, you are sent back to the dashboard.
 
@@ -213,6 +217,22 @@ You can now use **Grimmory audiobooks** in:
 If **Record Reading Sessions** is enabled in Settings, Grimmory also receives session updates as you make progress.
 
 If Grimmory imports change and results look stale, open **Settings** and run **Refresh Grimmory Cache**.
+
+---
+
+## Bridge Sync Plugin Collections
+
+This section only applies if you install the optional **Bridge Sync** KOReader plugin.
+
+If you use that plugin, the bridge can turn Grimmory shelves into KOReader collections for the books it sends to your device.
+
+- **Collection Syncing** lets you choose whether Bridge Sync should use all shelves, only regular shelves, or only magic shelves.
+- **Excluded Shelves** lets you skip shelf names you do not want turned into KOReader collections.
+- **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
+
+In simple terms, a **magic shelf** is a shelf in Grimmory that fills itself based on rules instead of you adding books one by one.
+
+If you do not use the Bridge Sync plugin, you can ignore these settings.
 
 ---
 

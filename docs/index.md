@@ -43,12 +43,14 @@
 
 ### Management Web UI
 
-- **Dashboard** for live sync status, direct service links, and source badges.
+- **Dashboard** for live sync status, reading session details, direct service links, and source badges.
 - **Add Book** for ABS, Grimmory, Storyteller, or ebook-only matching flows.
 - **Batch Match** for queue-based review and bulk linking.
 - **Library Suggestions** for background scanning, review, and queue building.
 - **Forge** for Storyteller read-along preparation.
 - **Dynamic Settings** with live connection tests and automatic restart after saving.
+- **Flexible setup** including an intentional Audiobookshelf-off mode for ebook-only or maintenance-focused use.
+- **Optional Bridge Sync plugin support** for turning Grimmory shelves into KOReader collections.
 
 ### Automation and Reliability
 

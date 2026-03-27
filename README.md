@@ -24,10 +24,13 @@
 
 - **Five-Way Sync**: Syncs Audiobookshelf, KOReader, Storyteller, Grimmory, and Hardcover.
 - **Flexible Match Flows**: Link ABS or Grimmory audiobooks, or create ebook-only links when you only want text sync.
+- **Flexible Setup**: You can intentionally turn Audiobookshelf off for ebook-only or maintenance-focused setups.
+- **Dashboard Session Details**: See recent reading or listening session summaries right on the dashboard cards.
 - **Smart Alignment Sources**: Uses Storyteller forced-alignment transcripts when available, then SMIL, then Whisper fallback.
 - **Web UI**: Full management dashboard for tracking syncs and matching books.
 - **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk.
 - **Guided Settings Workflow**: Check your service settings from the UI and save everything in one place.
+- **Optional Bridge Sync Plugin Collections**: If you install the Bridge Sync KOReader plugin, Grimmory shelves can be used to shape KOReader collections.
 - **Split-Port Security**: Expose only the sync API to the internet while keeping the dashboard on your LAN.
 - **Self-Hosted**: Runs entirely in Docker on your own server.
 
@@ -60,6 +63,8 @@ services:
 Forge now uploads directly to Storyteller over the API, so a Storyteller library mount is no longer required for normal Forge ingestion.
 
 If you want KOReader to download and manage bridge-provided books for you, an optional **Bridge Sync** KOReader plugin is available from the project's GitHub Releases page.
+
+If you use that plugin, Grimmory shelf settings in the bridge can also shape the KOReader collections it creates.
 
 For full installation instructions, checking logs, and advanced configuration, please visit the **[Documentation Site](https://cporcellijr.github.io/abs-kosync-bridge/)**.
 

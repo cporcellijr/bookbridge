@@ -11,7 +11,7 @@ Get your library syncing in about 10 minutes.
 Before you begin, you should have:
 
 - Docker and Docker Compose
-- A working Audiobookshelf server
+- A working Audiobookshelf server if you want audiobook matching or ABS sync
 - An ebook folder on the Docker host
 - Optional: KOSync, Grimmory, Storyteller, or Hardcover if you want those integrations
 
@@ -124,7 +124,8 @@ docker compose logs -f
    - Hardcover
 4. Use the **Test** button on any service section if you want to check a service before saving.
 5. If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller`.
-6. Click **Save Settings** and wait for the app to come back.
+6. If you are setting up an ebook-only or maintenance-focused install, you can enter `disabled` in the ABS URL or token field instead of connecting Audiobookshelf.
+7. Click **Save Settings** and wait for the app to come back.
 
 ---
 
@@ -155,5 +156,7 @@ That is enough to get syncing started. The normal background cycle runs every 5 
 ## Optional: KOReader Plugin
 
 If you want KOReader to download and manage bridge-provided books for you, you can also install the optional **Bridge Sync** KOReader plugin from the project's GitHub Releases page.
+
+If you install it, you can later use the Grimmory settings to turn selected Grimmory shelves into KOReader collections for synced books.
 
 This is optional. The bridge works without it.

@@ -10,10 +10,8 @@ Get your library syncing in about 10 minutes.
 
 You will want:
 
-- Your Audiobookshelf URL
-- Your Audiobookshelf API token
-- Your ABS library ID
 - Your ebook folder path on the Docker host
+- Your Audiobookshelf URL, API token, and library ID if you want ABS sync or audiobook matching
 
 Optional for later:
 
@@ -111,6 +109,8 @@ Then add any optional services you want:
 
 Use the **Test** button on any service section if you want to check a service before saving.
 
+If you are setting up an ebook-only or maintenance-focused install, you can enter `disabled` in the ABS URL or token field instead of connecting Audiobookshelf.
+
 If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller` and not `/storyteller/assets`.
 
 Save settings and wait a moment for the app to come back.
@@ -184,4 +184,5 @@ Once the basics work, try:
 - **Suggestions** for bulk review and queueing
 - **Forge** for Storyteller processing
 - **Storyteller Backfill** in Settings
+- **Bridge Sync plugin + Grimmory shelf settings** if you want plugin-managed KOReader collections
 - **Split-port mode** if you want to expose only the sync endpoint
