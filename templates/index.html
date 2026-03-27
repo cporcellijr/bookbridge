@@ -22,10 +22,12 @@
         <div class="book-cover-section">
             {% if mapping.kosync_doc_id %}
             <img src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="Cover" class="book-cover"
+                loading="lazy" decoding="async"
                 onerror="{% if mapping.cover_url %}this.onerror=null; this.src='{{ mapping.cover_url }}';{% else %}this.style.display='none'; this.nextElementSibling.classList.remove('hidden');{% endif %}">
             <div class="book-cover-placeholder hidden">📖</div>
             {% elif mapping.cover_url %}
             <img src="{{ mapping.cover_url }}" alt="Cover" class="book-cover"
+                loading="lazy" decoding="async"
                 onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
             <div class="book-cover-placeholder hidden">📖</div>
             {% else %}
