@@ -1235,6 +1235,39 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('healthcheck returned 403', data['message'])
         self.assertEqual(mock_get.call_count, 2)
 
+    @patch('src.web_server.requests.get')
+    def test_test_connection_builtin_kosync_accepts_typed_unsaved_credentials(self, mock_get):
+        def fake_get(url, headers=None, timeout=None):
+            self.assertEqual(url, 'http://127.0.0.1:5757/healthcheck')
+            self.assertEqual(headers['x-auth-user'], 'typed-reader')
+            self.assertEqual(headers['x-auth-key'], hash_kosync_key('typed-pass'))
+            self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
+            self.assertEqual(timeout, 5)
+            return _http_response(200)
+
+        mock_get.side_effect = fake_get
+
+        with patch.dict(os.environ, {
+            'KOSYNC_PORT': '5757',
+            'KOSYNC_USER': 'saved-reader',
+            'KOSYNC_KEY': 'saved-pass',
+        }, clear=False):
+            response = self.client.post(
+                '/api/test-connection/kosync',
+                json={
+                    'KOSYNC_ENABLED': True,
+                    'KOSYNC_SERVER': '127.0.0.1:5757',
+                    'KOSYNC_USER': 'typed-reader',
+                    'KOSYNC_KEY': 'typed-pass',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('will take effect after you save settings', data['message'])
+        mock_get.assert_called_once()
+
     @patch('src.web_server.requests.post')
     def test_test_connection_hardcover_accepts_list_shaped_me_payload(self, mock_post):
         mock_post.return_value = _http_response(

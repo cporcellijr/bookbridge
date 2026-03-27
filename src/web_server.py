@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 import schedule
@@ -4838,6 +4838,34 @@ def _build_test_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _is_builtin_kosync_test_url(url: str) -> bool:
+    if not url:
+        return False
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    host = (parsed.hostname or "").strip().lower()
+    if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+        return False
+
+    valid_ports = {5757}
+    configured_port = (os.environ.get("KOSYNC_PORT") or "").strip()
+    if configured_port:
+        try:
+            valid_ports.add(int(configured_port))
+        except ValueError:
+            logger.warning(f"Invalid KOSYNC_PORT '{configured_port}' while testing KOSync settings")
+
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+
+    return port in valid_ports
+
+
 def test_connection(service: str):
     """Test connectivity with diagnostic error messages."""
     payload = request.get_json(silent=True) or {}
@@ -4920,6 +4948,29 @@ def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
         healthcheck_status = healthcheck.status_code
     except Exception as e:
         healthcheck_error = str(e)
+
+    if _is_builtin_kosync_test_url(url):
+        if healthcheck_status == 200:
+            return {
+                "ok": True,
+                "message": (
+                    "Built-in KOSync bridge is reachable. "
+                    "Typed credentials look ready and will take effect after you save settings."
+                ),
+            }
+        if healthcheck_status is not None:
+            return {
+                "ok": False,
+                "message": f"Built-in KOSync bridge healthcheck returned {healthcheck_status}",
+            }
+        return {
+            "ok": False,
+            "message": (
+                "Built-in KOSync bridge is not reachable"
+                + (f": {healthcheck_error}" if healthcheck_error else "")
+            ),
+        }
+
     auth = requests.get(_build_test_url(url, "users/auth"), headers=headers, timeout=5)
     if auth.status_code == 200:
         if healthcheck_status not in (None, 200):
