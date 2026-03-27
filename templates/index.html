@@ -6,31 +6,13 @@
 
     {# Macro for rendering a book card - used by both currently-reading and all-books grids #}
     {% macro render_book_card(mapping, integrations) %}
-    {# Calculate sync discrepancy for highlighting #}
-    {% set progress_values = [] %}
-    {% if mapping.states.abs is defined and mapping.states.abs.percentage %}
-    {% set _ = progress_values.append(mapping.states.abs.percentage) %}
-    {% endif %}
-    {% if mapping.states.storyteller is defined and mapping.states.storyteller.percentage %}
-    {% set _ = progress_values.append(mapping.states.storyteller.percentage) %}
-    {% endif %}
-    {% if mapping.states.booklore is defined and mapping.states.booklore.percentage %}
-    {% set _ = progress_values.append(mapping.states.booklore.percentage) %}
-    {% endif %}
-    {% if mapping.states.bookloreaudio is defined and mapping.states.bookloreaudio.percentage %}
-    {% set _ = progress_values.append(mapping.states.bookloreaudio.percentage) %}
-    {% endif %}
-    {% if mapping.states.kosync is defined and mapping.states.kosync.percentage %}
-    {% set _ = progress_values.append(mapping.states.kosync.percentage) %}
-    {% endif %}
-    {% set max_diff = (progress_values|max|default(0) - progress_values|min|default(0)) if progress_values|length > 1
-    else 0 %}
+    {% set sync_warning_pct = mapping.sync_warning_pct|default(0) %}
     {% set full_display_title = mapping.display_title %}
     {% if mapping.display_subtitle %}
     {% set full_display_title = mapping.display_title ~ ': ' ~ mapping.display_subtitle %}
     {% endif %}
 
-    <div class="book-card {% if max_diff > 5 %}out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}"
+    <div class="book-card {% if mapping.is_out_of_sync %}out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}"
         data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ full_display_title }}"
         data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
         data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
@@ -87,8 +69,8 @@
                 <span class="progress-percent">{{ '%.1f' | format(mapping.unified_progress) }}%</span>
             </div>
 
-            {% if max_diff > 5 %}
-            <div class="sync-warning">Out of sync by {{ '%.1f' | format(max_diff) }}%</div>
+            {% if mapping.is_out_of_sync %}
+            <div class="sync-warning">Out of sync by {{ '%.1f' | format(sync_warning_pct) }}%</div>
             {% endif %}
 
             {% if mapping.reading_stats is defined and mapping.reading_stats %}
@@ -104,10 +86,6 @@
                 <span class="rs-item"><span class="rs-val">{{ mapping.reading_stats.session_count }}</span> sessions</span>
                 <span class="rs-sep">·</span>
                 <span class="rs-item">avg <span class="rs-val">{{ mapping.reading_stats.avg_session_seconds | format_duration }}</span></span>
-                {% if mapping.reading_stats.last_session_time %}
-                <span class="rs-sep">·</span>
-                <span class="rs-item"><span class="rs-val">{{ mapping.reading_stats.last_session_time | format_time_ago }}</span> ago</span>
-                {% endif %}
             </div>
             {% endif %}
 

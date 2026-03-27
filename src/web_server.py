@@ -1630,6 +1630,53 @@ def _storyteller_transcript_source(storyteller_uuid, storyteller_manifest):
     return "storyteller" if storyteller_uuid or storyteller_manifest else None
 
 
+def _get_dashboard_sync_warning_clients(mapping, integrations):
+    client_names = []
+
+    if integrations.get('abs') and mapping.get('sync_mode') != 'ebook_only':
+        client_names.append('abs')
+
+    if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
+        client_names.append('bookloreaudio')
+
+    if integrations.get('kosync'):
+        client_names.append('kosync')
+
+    if integrations.get('storyteller') and (
+        mapping.get('storyteller_uuid')
+        or mapping.get('storyteller_legacy_link')
+        or 'storyteller' in mapping.get('states', {})
+    ):
+        client_names.append('storyteller')
+
+    if integrations.get('booklore') and (
+        mapping.get('booklore_id')
+        or 'booklore' in mapping.get('states', {})
+    ):
+        client_names.append('booklore')
+
+    return client_names
+
+
+def _compute_dashboard_sync_warning_pct(mapping, integrations):
+    progress_values = []
+    states = mapping.get('states', {})
+
+    for client_name in _get_dashboard_sync_warning_clients(mapping, integrations):
+        state = states.get(client_name)
+        if not state:
+            continue
+        percentage = state.get('percentage')
+        if percentage is None or percentage <= 0:
+            continue
+        progress_values.append(float(percentage))
+
+    if len(progress_values) < 2:
+        return 0.0
+
+    return round(max(progress_values) - min(progress_values), 1)
+
+
 def audiobook_matches_search(ab, search_term):
     """Check if audiobook matches search term (searches title AND author)."""
     import re
@@ -1871,6 +1918,9 @@ def index():
             mapping['hardcover_url'] = f"https://hardcover.app/books/{mapping['hardcover_book_id']}"
         else:
             mapping['hardcover_url'] = None
+
+        mapping['sync_warning_pct'] = _compute_dashboard_sync_warning_pct(mapping, integrations)
+        mapping['is_out_of_sync'] = mapping['sync_warning_pct'] > 5.0
 
         # Set unified progress to the maximum progress across all clients
         mapping['unified_progress'] = min(max_progress, 100.0)
@@ -4655,6 +4705,41 @@ def get_booklore_libraries():
     return jsonify(libraries)
 
 
+def get_booklore_shelves():
+    """Return available Grimmory shelves (regular and magic)."""
+    if not container.booklore_client().is_configured():
+        return jsonify({"error": "Grimmory not configured"}), 400
+
+    try:
+        shelves = container.booklore_client().get_all_shelves()
+        magic_shelves = container.booklore_client().get_all_magic_shelves()
+        
+        all_shelves = shelves + magic_shelves
+        result = []
+        
+        for s in all_shelves:
+            is_magic = s.get("magicShelf") or s.get("magic") or s.get("isMagic", False)
+            name = s.get("name", "Unknown")
+            
+            # Add emoji prefix for UI distinction
+            if is_magic and not name.startswith("🪄"):
+                name = f"🪄 {name}"
+                
+            result.append({
+                "id": s.get("name"),  # Use original name as ID
+                "name": name,
+                "count": s.get("bookCount", 0)
+            })
+            
+        # Sort alphabetically by the original name
+        result.sort(key=lambda x: x["id"].lower() if x["id"] else "")
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error fetching Grimmory shelves: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def get_abs_libraries():
     """Return available Audiobookshelf libraries."""
     if not container.abs_client().is_configured():
@@ -5051,6 +5136,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
+    app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
     app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])

@@ -160,11 +160,20 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         os.environ["STORYTELLER_ASSETS_DIR"] = str(assets_root)
         self.addCleanup(lambda: os.environ.pop("STORYTELLER_ASSETS_DIR", None))
 
-    def _set_dashboard_integrations(self, storyteller=False):
+    def _set_dashboard_integrations(
+        self,
+        storyteller=False,
+        booklore=False,
+        bookloreaudio=False,
+        hardcover=False,
+    ):
         clients_dict = {
             'ABS': Mock(is_configured=Mock(return_value=True)),
             'KoSync': Mock(is_configured=Mock(return_value=True)),
-            'Storyteller': Mock(is_configured=Mock(return_value=storyteller))
+            'Storyteller': Mock(is_configured=Mock(return_value=storyteller)),
+            'BookLore': Mock(is_configured=Mock(return_value=booklore)),
+            'BookLoreAudio': Mock(is_configured=Mock(return_value=bookloreaudio)),
+            'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
         }
         self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
 
@@ -876,6 +885,42 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['display_subtitle'], 'ABS Subtitle')
         self.assertEqual(mapping['display_author'], 'ABS Author')
         self.assertEqual(mapping['display_filename'], 'Audio Title - Wrong Author.epub')
+
+    def test_index_endpoint_sync_warning_ignores_disabled_storyteller_state(self):
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='sync-warning-1',
+            abs_title='Trad Wife',
+            ebook_filename='storyteller_uuid-book.epub',
+            storyteller_uuid='uuid-story-1',
+            sync_mode='audiobook',
+            status='active',
+            duration=40269
+        )
+        mock_states = [
+            State(abs_id='sync-warning-1', client_name='abs', percentage=0.8618398680719048, timestamp=34706, last_updated=1642291400),
+            State(abs_id='sync-warning-1', client_name='kosync', percentage=0.814176695624452, xpath='/body/DocFragment[37]/body/section/p[62]/text().0', last_updated=1642291400),
+            State(abs_id='sync-warning-1', client_name='booklore', percentage=0.814176695624452, cfi='epubcfi(/6/74!/4/2/130/2:0)', last_updated=1642291400),
+            State(abs_id='sync-warning-1', client_name='storyteller', percentage=0.322427671953455, cfi='epubcfi(/6/34!/4/2/174/2:0)', last_updated=1642240000),
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_booklore_client.is_configured.return_value = True
+        self.mock_booklore_client.find_book_by_filename.return_value = {'id': 10440}
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
+
+        mapping = self._capture_index_mapping()
+        self.assertIn('storyteller', mapping['states'])
+        self.assertEqual(mapping['sync_warning_pct'], 4.8)
+        self.assertFalse(mapping['is_out_of_sync'])
+
+        html = self._render_index_template_source()
+        self.assertNotIn('Out of sync by 54.0%', html)
+        self.assertNotIn('class="book-card out-of-sync"', html)
 
     def test_index_template_keeps_filename_searchable_but_not_as_author(self):
         from src.db.models import Book, BookloreBook
