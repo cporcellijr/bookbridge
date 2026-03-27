@@ -134,6 +134,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_reading_stats.return_value = {}
         self.mock_database_service.get_booklore_book.return_value = None
+        self.mock_database_service.get_all_booklore_books.return_value = []
         self.mock_abs_client.get_all_audiobooks.return_value = []
         self.mock_abs_client.get_all_progress_raw.return_value = {}
         self.mock_booklore_client.is_configured.return_value = False
@@ -206,6 +207,9 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         finally:
             src.web_server.render_template = original_render
 
+    def _read_template_source(self, template_name: str) -> str:
+        return (Path(__file__).parent.parent / 'templates' / template_name).read_text(encoding='utf-8')
+
     def test_dependency_injection_works(self):
         """Verify that dependency injection is working properly."""
         from src.web_server import manager, database_service, container
@@ -264,7 +268,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         ]
 
         self.mock_database_service.get_all_books.return_value = [test_book]
-        self.mock_database_service.get_states_for_book.return_value = mock_states
         self.mock_database_service.get_all_states.return_value = mock_states
         self.mock_database_service.get_hardcover_details.return_value = None
         self.mock_database_service.get_all_hardcover_details.return_value = []
@@ -299,6 +302,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             self.mock_database_service.get_all_books.assert_called_once()
             self.mock_database_service.get_all_states.assert_called_once()
             self.mock_database_service.get_all_hardcover_details.assert_called_once()
+            self.mock_database_service.get_all_booklore_books.assert_called_once()
+            self.mock_abs_client.get_all_audiobooks.assert_not_called()
+            self.mock_abs_client.get_all_progress_raw.assert_not_called()
+            self.mock_storyteller_client.get_book_details.assert_not_called()
+            self.mock_booklore_client.find_book_by_filename.assert_not_called()
 
             # Verify render_template was called with correct arguments
             mock_render.assert_called_once()
@@ -391,7 +399,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         )
 
         self.mock_database_service.get_all_books.return_value = [test_book]
-        self.mock_database_service.get_states_for_book.return_value = []
+        self.mock_database_service.get_all_states.return_value = []
 
         # Make HTTP request
         response = self.client.get('/api/status')
@@ -404,10 +412,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('mappings', data)
         self.assertEqual(len(data['mappings']), 1)
         self.assertEqual(data['mappings'][0]['abs_id'], 'api-test-book-123')
+        self.assertEqual(data['mappings'][0]['unified_progress'], 0)
+        self.assertEqual(data['mappings'][0]['last_sync'], 'Never')
         
         # Verify percentage scaling (should be 0 because states mock returned empty list)
         # But let's verify structure
         self.assertIn('states', data['mappings'][0])
+        self.mock_database_service.get_all_states.assert_called_once()
+        self.mock_database_service.get_states_for_book.assert_not_called()
 
         print("[OK] API status endpoint test passed with clean DI")
 
@@ -440,7 +452,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         ]
 
         self.mock_database_service.get_all_books.return_value = [test_book]
-        self.mock_database_service.get_states_for_book.return_value = mock_states
         self.mock_database_service.get_all_states.return_value = mock_states
 
         # Make HTTP request
@@ -457,6 +468,9 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         # Check legacy flat fields
         self.assertEqual(mapping['kosync_pct'], 45.5)
         self.assertEqual(mapping['storyteller_pct'], 10.0)
+        self.assertEqual(mapping['unified_progress'], 45.5)
+        self.assertIn('last_sync', mapping)
+        self.mock_database_service.get_states_for_book.assert_not_called()
 
         print("[OK] API status percentage scaling test passed")
 
@@ -715,7 +729,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.side_effect = lambda filename: cached_book if filename == 'book-file.epub' else None
+        self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
 
         self._set_dashboard_integrations(storyteller=False)
@@ -729,13 +743,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['display_author'], 'Displayed Author')
         self.assertEqual(mapping['display_filename'], 'book-file.epub')
 
-    def test_index_endpoint_storyteller_uses_storyteller_metadata_for_display(self):
+    def test_index_endpoint_storyteller_uses_cached_audio_title_for_display(self):
         from src.db.models import Book
 
         test_book = Book(
             abs_id='ebook-storyteller-1',
             abs_title='storyteller_uuid-book',
             ebook_filename='storyteller_uuid-book.epub',
+            audio_title='Storyteller Title',
             storyteller_uuid='uuid-story-1',
             sync_mode='ebook_only',
             status='active'
@@ -745,25 +760,20 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.return_value = None
         self.mock_booklore_client.is_configured.return_value = False
         self.mock_storyteller_client.is_configured.return_value = True
-        self.mock_storyteller_client.get_book_details.return_value = {
-            'title': 'Storyteller Title',
-            'subtitle': 'Storyteller Subtitle',
-            'authors': [{'name': 'Storyteller Author'}]
-        }
 
         self._set_dashboard_integrations(storyteller=True)
 
         mapping = self._capture_index_mapping()
         self.assertEqual(mapping['abs_title'], 'Storyteller Title')
-        self.assertEqual(mapping['abs_subtitle'], 'Storyteller Subtitle')
-        self.assertEqual(mapping['abs_author'], 'Storyteller Author')
+        self.assertEqual(mapping['abs_subtitle'], '')
+        self.assertEqual(mapping['abs_author'], '')
         self.assertEqual(mapping['display_title'], 'Storyteller Title')
-        self.assertEqual(mapping['display_subtitle'], 'Storyteller Subtitle')
-        self.assertEqual(mapping['display_author'], 'Storyteller Author')
+        self.assertEqual(mapping['display_subtitle'], '')
+        self.assertEqual(mapping['display_author'], '')
         self.assertEqual(mapping['display_filename'], 'storyteller_uuid-book.epub')
+        self.mock_storyteller_client.get_book_details.assert_not_called()
 
     def test_index_endpoint_parses_filename_fallback_with_year(self):
         from src.db.models import Book
@@ -780,7 +790,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.return_value = None
         self.mock_booklore_client.is_configured.return_value = False
         self._set_dashboard_integrations(storyteller=False)
 
@@ -805,7 +814,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.return_value = None
         self.mock_booklore_client.is_configured.return_value = False
         self._set_dashboard_integrations(storyteller=False)
 
@@ -830,7 +838,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.return_value = None
         self.mock_booklore_client.is_configured.return_value = False
         self._set_dashboard_integrations(storyteller=False)
 
@@ -865,25 +872,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.side_effect = lambda filename: cached_book if filename == 'Audio Title - Wrong Author.epub' else None
+        self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
-        self.mock_abs_client.get_all_audiobooks.return_value = [
-            {
-                'id': 'audio-backed-1',
-                'media': {
-                    'metadata': {
-                        'subtitle': 'ABS Subtitle',
-                        'authorName': 'ABS Author'
-                    }
-                }
-            }
-        ]
         self._set_dashboard_integrations(storyteller=False)
 
         mapping = self._capture_index_mapping()
         self.assertEqual(mapping['display_title'], 'ABS Clean Title')
-        self.assertEqual(mapping['display_subtitle'], 'ABS Subtitle')
-        self.assertEqual(mapping['display_author'], 'ABS Author')
+        self.assertEqual(mapping['display_subtitle'], 'Cached Ebook Subtitle')
+        self.assertEqual(mapping['display_author'], 'Cached Ebook Author')
         self.assertEqual(mapping['display_filename'], 'Audio Title - Wrong Author.epub')
 
     def test_index_endpoint_sync_warning_ignores_disabled_storyteller_state(self):
@@ -910,13 +906,17 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_booklore_client.is_configured.return_value = True
-        self.mock_booklore_client.find_book_by_filename.return_value = {'id': 10440}
+        from src.db.models import BookloreBook
+        self.mock_database_service.get_all_booklore_books.return_value = [
+            BookloreBook(filename='storyteller_uuid-book.epub', raw_metadata=json.dumps({'id': 10440}))
+        ]
         self._set_dashboard_integrations(storyteller=False, booklore=True)
 
         mapping = self._capture_index_mapping()
         self.assertIn('storyteller', mapping['states'])
         self.assertEqual(mapping['sync_warning_pct'], 4.8)
         self.assertFalse(mapping['is_out_of_sync'])
+        self.mock_booklore_client.find_book_by_filename.assert_not_called()
 
         html = self._render_index_template_source()
         self.assertNotIn('Out of sync by 54.0%', html)
@@ -947,7 +947,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.side_effect = lambda filename: cached_book if filename == 'book-file.epub' else None
+        self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
         self._set_dashboard_integrations(storyteller=False)
 
@@ -958,6 +958,44 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('Displayed Subtitle', html)
         self.assertIn('<div class="book-author">Displayed Author</div>', html)
         self.assertNotIn('<div class="book-author">book-file.epub</div>', html)
+        self.assertIn('loading="lazy"', html)
+        self.assertIn('decoding="async"', html)
+
+    def test_match_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('match.html')
+
+        self.assertIn('id="submitFeedback"', html)
+        self.assertIn('data-working-label="Creating mapping..."', html)
+        self.assertIn('data-modal-label="Opening forge options..."', html)
+        self.assertIn('previewMatchSubmit(', html)
+        self.assertIn('mappingForm.requestSubmit(forgeBtn);', html)
+
+    def test_batch_match_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('batch_match.html')
+
+        self.assertIn('id="selectionFeedback"', html)
+        self.assertIn('id="queueFeedback"', html)
+        self.assertIn('data-working-label="Adding to queue..."', html)
+        self.assertIn('data-working-label="Processing queue..."', html)
+        self.assertIn('data-working-label="Forging + matching..."', html)
+        self.assertIn('startBatchSubmitState(submitter)', html)
+
+    def test_suggestions_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('suggestions.html')
+
+        self.assertIn('id="selectionFeedback"', html)
+        self.assertIn('id="queueFeedback"', html)
+        self.assertIn("addToQueueBtn.dataset.primaryAction = 'selection-actions';", html)
+        self.assertIn("processQueueBtn.dataset.primaryAction = 'queue-actions';", html)
+        self.assertIn('startSuggestionSubmitState(submitter)', html)
+
+    def test_forge_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('forge.html')
+
+        self.assertIn('previewForgeState(', html)
+        self.assertIn('Opening forge options...', html)
+        self.assertIn('forgeRequestInFlight = true;', html)
+        self.assertIn("btn.textContent = 'Forging edition...';", html)
 
     def test_clear_progress_endpoint_clean_di(self):
         """Test clear progress endpoint with clean dependency injection."""
@@ -1196,6 +1234,39 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertTrue(data['ok'])
         self.assertIn('healthcheck returned 403', data['message'])
         self.assertEqual(mock_get.call_count, 2)
+
+    @patch('src.web_server.requests.get')
+    def test_test_connection_builtin_kosync_accepts_typed_unsaved_credentials(self, mock_get):
+        def fake_get(url, headers=None, timeout=None):
+            self.assertEqual(url, 'http://127.0.0.1:5757/healthcheck')
+            self.assertEqual(headers['x-auth-user'], 'typed-reader')
+            self.assertEqual(headers['x-auth-key'], hash_kosync_key('typed-pass'))
+            self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
+            self.assertEqual(timeout, 5)
+            return _http_response(200)
+
+        mock_get.side_effect = fake_get
+
+        with patch.dict(os.environ, {
+            'KOSYNC_PORT': '5757',
+            'KOSYNC_USER': 'saved-reader',
+            'KOSYNC_KEY': 'saved-pass',
+        }, clear=False):
+            response = self.client.post(
+                '/api/test-connection/kosync',
+                json={
+                    'KOSYNC_ENABLED': True,
+                    'KOSYNC_SERVER': '127.0.0.1:5757',
+                    'KOSYNC_USER': 'typed-reader',
+                    'KOSYNC_KEY': 'typed-pass',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('will take effect after you save settings', data['message'])
+        mock_get.assert_called_once()
 
     @patch('src.web_server.requests.post')
     def test_test_connection_hardcover_accepts_list_shaped_me_payload(self, mock_post):

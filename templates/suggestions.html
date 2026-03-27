@@ -120,6 +120,11 @@
         .queue-actions { margin-top: 6px; display: grid; gap: 10px; }
         .w-100 { width: 100%; }
         .inline-form { display: inline-flex; }
+        .submit-feedback { display: none; align-items: center; gap: 10px; margin-top: 12px; color: rgba(255,255,255,0.72); font-size: 13px; }
+        .submit-feedback.show { display: inline-flex; }
+        .submit-feedback.block.show { display: flex; }
+        .submit-feedback-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #9fb2ff; border-radius: 50%; animation: submit-spin .8s linear infinite; flex-shrink: 0; }
+        @keyframes submit-spin { to { transform: rotate(360deg); } }
         @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .queue-panel { position: static; max-height: none; } .suggestions-list { max-height: 440px; } .selection-grid-scroll { max-height: none; overflow: visible; padding-right: 0; } }
         @media (max-width: 920px) {
             .top-nav { padding: 14px; flex-direction: column; align-items: flex-start; }
@@ -312,6 +317,7 @@
                             <p id="ebookGridEmpty" class="ebook-grid-empty hidden">No ebook matches available for this suggestion. Storyteller-only queue is allowed.</p>
                             <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>➕ Add to Queue</button>
                         </form>
+                        <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
                     </div>
                 </div>
 
@@ -340,6 +346,7 @@
                             <input type="hidden" name="action" value="process_queue">
                             <button type="submit" class="btn btn-success w-100">✅ Process All ({{ queue|length }})</button>
                         </form>
+                        <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
                         <form method="POST" action="/suggestions">
                             <input type="hidden" name="action" value="clear_queue">
                             <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Clear entire queue?')">🗑️ Clear Queue</button>
@@ -364,6 +371,55 @@
         let fakeScanTimer = null;
         let displayedScanProgress = 0;
         let reportedScanProgress = 0;
+        let suggestionSubmitInFlight = false;
+
+        function showSuggestionSubmitFeedback(targetId, message) {
+            const feedback = document.getElementById(targetId);
+            if (!feedback) return;
+
+            if (!message) {
+                feedback.classList.remove('show');
+                feedback.innerHTML = '';
+                return;
+            }
+
+            feedback.classList.add('show');
+            feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+        }
+
+        function setSuggestionButtonHtml(button, html) {
+            button.innerHTML = html;
+        }
+
+        function getSuggestionPrimarySubmitter(form) {
+            return form.querySelector('[data-primary-action]:not([disabled])');
+        }
+
+        function startSuggestionSubmitState(submitter) {
+            if (!submitter || suggestionSubmitInFlight) {
+                return false;
+            }
+
+            suggestionSubmitInFlight = true;
+            const groupName = submitter.dataset.primaryAction || '';
+            if (groupName) {
+                document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
+                    if (!button.dataset.originalHtml) {
+                        button.dataset.originalHtml = button.innerHTML;
+                    }
+                    button.disabled = true;
+                });
+            } else {
+                submitter.disabled = true;
+            }
+
+            setSuggestionButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
+            showSuggestionSubmitFeedback(
+                submitter.dataset.feedbackTarget || '',
+                submitter.dataset.workingMessage || 'Working...'
+            );
+            return true;
+        }
 
         function setScanProgress(percent, label) {
             const clamped = Math.max(0, Math.min(100, Math.round(percent)));
@@ -792,6 +848,50 @@
 
         document.getElementById('scanForm').addEventListener('submit', handleScanSubmit);
         document.getElementById('scanFullForm').addEventListener('submit', handleScanSubmit);
+
+        const addToQueueBtn = document.getElementById('addToQueueBtn');
+        if (addToQueueBtn) {
+            addToQueueBtn.dataset.primaryAction = 'selection-actions';
+            addToQueueBtn.dataset.workingLabel = 'Adding to queue...';
+            addToQueueBtn.dataset.workingMessage = 'Adding this suggestion to the batch queue...';
+            addToQueueBtn.dataset.feedbackTarget = 'selectionFeedback';
+        }
+
+        const processQueueAction = document.querySelector('form[action="/suggestions"] input[name="action"][value="process_queue"]');
+        const processQueueBtn = processQueueAction && processQueueAction.form
+            ? processQueueAction.form.querySelector('button[type="submit"]')
+            : null;
+        if (processQueueBtn) {
+            processQueueBtn.dataset.primaryAction = 'queue-actions';
+            processQueueBtn.dataset.workingLabel = 'Processing queue...';
+            processQueueBtn.dataset.workingMessage = 'Processing queued suggestion matches and returning to the dashboard...';
+            processQueueBtn.dataset.feedbackTarget = 'queueFeedback';
+        }
+
+        document.querySelectorAll('form[action="/suggestions"]').forEach((form) => {
+            if (form.id === 'scanForm' || form.id === 'scanFullForm') {
+                return;
+            }
+            if (form.querySelector('input[name="action"][value="clear_queue"]')) {
+                return;
+            }
+            if (form.querySelector('input[name="action"][value="remove_from_queue"]')) {
+                return;
+            }
+            if (form.querySelector('input[name="action"][value="reject_suggestion"]')) {
+                return;
+            }
+
+            form.addEventListener('submit', (event) => {
+                const submitter = event.submitter || document.activeElement || getSuggestionPrimarySubmitter(form);
+                if (!submitter || !submitter.dataset.primaryAction) {
+                    return;
+                }
+                if (!startSuggestionSubmitState(submitter)) {
+                    event.preventDefault();
+                }
+            });
+        });
 
         const sortModeSelect = document.getElementById('sortMode');
         if (sortModeSelect) {

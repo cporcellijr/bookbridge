@@ -428,6 +428,36 @@
             margin: 40px 0 20px 0;
         }
 
+        .submit-feedback {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 14px;
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 14px;
+        }
+
+        .submit-feedback.show {
+            display: flex;
+        }
+
+        .submit-feedback-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-top-color: #93a5f6;
+            border-radius: 50%;
+            animation: submit-spin 0.8s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes submit-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
         /* Empty State */
         .empty-state {
             text-align: center;
@@ -930,14 +960,23 @@
 
             <!-- Submit Button -->
             <div class="submit-container">
-                <button type="submit" class="btn btn-success" id="submitBtn" disabled>
+                <button type="submit" class="btn btn-success" id="submitBtn" disabled
+                    data-primary-action="match-actions"
+                    data-working-label="Creating mapping..."
+                    data-working-message="Creating mapping and returning to the dashboard...">
                     ✅ Create Mapping
                 </button>
                 <button type="submit" name="action" value="forge_match" class="btn btn-primary" id="forgeBtn"
                     style="margin-left: 10px; background: linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%); border: none;"
+                    data-primary-action="match-actions"
+                    data-modal-label="Opening forge options..."
+                    data-modal-message="Choose how to stage the forge files to continue."
+                    data-working-label="Forging + matching..."
+                    data-working-message="Forging the Storyteller edition and saving the mapping..."
                     disabled>
                     🔨 Forge & Match
                 </button>
+                <div id="submitFeedback" class="submit-feedback" aria-live="polite"></div>
                 <div id="validationMsg" style="margin-top: 10px; color: #ff6b6b; display: none;">
                     Please select a Text Source (Storyteller or Ebook)
                 </div>
@@ -968,6 +1007,69 @@
     <script>
         let pendingForgeStageSelection = null;
         let allowForgeSubmit = false;
+        let matchSubmitInFlight = false;
+
+        function getMatchActionButtons() {
+            return Array.from(document.querySelectorAll('[data-primary-action="match-actions"]'));
+        }
+
+        function setMatchButtonHtml(button, html) {
+            button.innerHTML = html;
+        }
+
+        function showMatchSubmitFeedback(message) {
+            const feedback = document.getElementById('submitFeedback');
+            if (!feedback) return;
+
+            if (!message) {
+                feedback.classList.remove('show');
+                feedback.innerHTML = '';
+                return;
+            }
+
+            feedback.classList.add('show');
+            feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+        }
+
+        function previewMatchSubmit(button, label, message) {
+            if (!button) return;
+            if (!button.dataset.originalHtml) {
+                button.dataset.originalHtml = button.innerHTML;
+            }
+            setMatchButtonHtml(button, label);
+            showMatchSubmitFeedback(message);
+        }
+
+        function restoreMatchPreviewState() {
+            if (matchSubmitInFlight) {
+                return;
+            }
+
+            getMatchActionButtons().forEach((button) => {
+                if (button.dataset.originalHtml) {
+                    setMatchButtonHtml(button, button.dataset.originalHtml);
+                }
+            });
+            showMatchSubmitFeedback('');
+            validateForm();
+        }
+
+        function startMatchSubmitState(submitter) {
+            if (!submitter || matchSubmitInFlight) {
+                return;
+            }
+
+            matchSubmitInFlight = true;
+            getMatchActionButtons().forEach((button) => {
+                if (!button.dataset.originalHtml) {
+                    button.dataset.originalHtml = button.innerHTML;
+                }
+                button.disabled = true;
+                button.style.opacity = "0.5";
+            });
+            setMatchButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
+            showMatchSubmitFeedback(submitter.dataset.workingMessage || 'Working...');
+        }
 
         function openForgeStageModal(onSelect) {
             pendingForgeStageSelection = onSelect;
@@ -978,6 +1080,7 @@
         function closeForgeStageModal() {
             pendingForgeStageSelection = null;
             document.getElementById('forgeStageModal').classList.remove('open');
+            restoreMatchPreviewState();
         }
 
         function chooseForgeStageMode(mode) {
@@ -1030,6 +1133,10 @@
         }
 
         function validateForm() {
+            if (matchSubmitInFlight) {
+                return;
+            }
+
             const ab = document.querySelector('input[name="audiobook_id"]:checked');
             const st = document.querySelector('input[name="storyteller_uuid"]:checked');
             const eb = document.querySelector('input[name="ebook_filename"]:checked');
@@ -1089,11 +1196,24 @@
             });
 
             mappingForm.addEventListener('submit', (event) => {
-                if (event.submitter !== forgeBtn || allowForgeSubmit || forgeBtn.disabled) {
+                const submitter = event.submitter || document.activeElement || document.querySelector('#mappingForm [type="submit"]:not([disabled])');
+
+                if (matchSubmitInFlight) {
+                    event.preventDefault();
+                    return;
+                }
+
+                if (submitter !== forgeBtn || allowForgeSubmit || forgeBtn.disabled) {
+                    startMatchSubmitState(submitter);
                     return;
                 }
 
                 event.preventDefault();
+                previewMatchSubmit(
+                    forgeBtn,
+                    forgeBtn.dataset.modalLabel || 'Opening forge options...',
+                    forgeBtn.dataset.modalMessage || 'Choose how to stage the forge files to continue.'
+                );
                 openForgeStageModal((mode) => {
                     document.getElementById('input_forge_stage_mode').value = mode;
                     allowForgeSubmit = true;
