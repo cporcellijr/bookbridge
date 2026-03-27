@@ -1630,6 +1630,53 @@ def _storyteller_transcript_source(storyteller_uuid, storyteller_manifest):
     return "storyteller" if storyteller_uuid or storyteller_manifest else None
 
 
+def _get_dashboard_sync_warning_clients(mapping, integrations):
+    client_names = []
+
+    if integrations.get('abs') and mapping.get('sync_mode') != 'ebook_only':
+        client_names.append('abs')
+
+    if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
+        client_names.append('bookloreaudio')
+
+    if integrations.get('kosync'):
+        client_names.append('kosync')
+
+    if integrations.get('storyteller') and (
+        mapping.get('storyteller_uuid')
+        or mapping.get('storyteller_legacy_link')
+        or 'storyteller' in mapping.get('states', {})
+    ):
+        client_names.append('storyteller')
+
+    if integrations.get('booklore') and (
+        mapping.get('booklore_id')
+        or 'booklore' in mapping.get('states', {})
+    ):
+        client_names.append('booklore')
+
+    return client_names
+
+
+def _compute_dashboard_sync_warning_pct(mapping, integrations):
+    progress_values = []
+    states = mapping.get('states', {})
+
+    for client_name in _get_dashboard_sync_warning_clients(mapping, integrations):
+        state = states.get(client_name)
+        if not state:
+            continue
+        percentage = state.get('percentage')
+        if percentage is None or percentage <= 0:
+            continue
+        progress_values.append(float(percentage))
+
+    if len(progress_values) < 2:
+        return 0.0
+
+    return round(max(progress_values) - min(progress_values), 1)
+
+
 def audiobook_matches_search(ab, search_term):
     """Check if audiobook matches search term (searches title AND author)."""
     import re
@@ -1871,6 +1918,9 @@ def index():
             mapping['hardcover_url'] = f"https://hardcover.app/books/{mapping['hardcover_book_id']}"
         else:
             mapping['hardcover_url'] = None
+
+        mapping['sync_warning_pct'] = _compute_dashboard_sync_warning_pct(mapping, integrations)
+        mapping['is_out_of_sync'] = mapping['sync_warning_pct'] > 5.0
 
         # Set unified progress to the maximum progress across all clients
         mapping['unified_progress'] = min(max_progress, 100.0)
