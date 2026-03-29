@@ -2237,8 +2237,6 @@ class BookloreClient:
         }.get(operator, operator)
 
         actual = BookloreClient._resolve_filter_field(book, field)
-        logger.debug("Grimmory: filter rule field=%s op=%s expected=%r actual=%r",
-                     field, operator, expected, actual)
 
         if operator == "is_empty":
             return actual is None or actual == "" or actual == []
@@ -2384,6 +2382,7 @@ class BookloreClient:
         self,
         mode: str = "all",
         excludes: Optional[list[str]] = None,
+        target_book_ids: Optional[list[str]] = None,
     ) -> dict[str, list[str]]:
         """Build a mapping of Grimmory book ID → list of shelf names.
 
@@ -2394,12 +2393,14 @@ class BookloreClient:
         Args:
             mode: "all" (regular + magic), "magic" (magic only), "shelf" (regular only).
             excludes: Shelf names to skip.
+            target_book_ids: Optional Grimmory book IDs to limit evaluation to.
 
         Returns:
             dict mapping str(book_id) to a list of shelf name strings.
         """
         excludes = set(excludes or [])
-        cache_key = (mode, tuple(sorted(excludes)))
+        target_ids = {str(book_id) for book_id in (target_book_ids or []) if str(book_id)}
+        cache_key = (mode, tuple(sorted(excludes)), tuple(sorted(target_ids)))
 
         # Return cached result if still valid for the same parameters
         now = time.time()
@@ -2448,6 +2449,8 @@ class BookloreClient:
                     if not isinstance(book, dict):
                         continue
                     book_id = str(book.get("id", ""))
+                    if target_ids and book_id not in target_ids:
+                        continue
                     if book_id:
                         mapping.setdefault(book_id, [])
                         if shelf_name not in mapping[book_id]:
@@ -2456,6 +2459,11 @@ class BookloreClient:
         # Magic shelves: evaluate filterJson client-side against all books
         if mode in ("all", "magic") and magic_shelves:
             all_books = self._fetch_all_books_for_filter()
+            if target_ids:
+                all_books = [
+                    book for book in all_books
+                    if isinstance(book, dict) and str(book.get("id", "")) in target_ids
+                ]
             logger.debug("Grimmory: Fetched %d book(s) for magic shelf evaluation", len(all_books))
             for shelf in magic_shelves:
                 shelf_name = shelf.get("name", "")

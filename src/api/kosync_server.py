@@ -811,7 +811,16 @@ def koreader_device_sync_manifest():
                 sync_shelf = os.environ.get("BOOKLORE_SHELF_NAME", "").strip()
                 if sync_shelf and sync_shelf not in excludes:
                     excludes.append(sync_shelf)
-                shelf_mapping = bl.get_book_shelf_mapping(mode=collections_mode, excludes=excludes)
+                target_book_ids = []
+                for book in service.database_service.get_books_by_status("active"):
+                    source_id = getattr(book, "ebook_source_id", None)
+                    if source_id:
+                        target_book_ids.append(str(source_id))
+                shelf_mapping = bl.get_book_shelf_mapping(
+                    mode=collections_mode,
+                    excludes=excludes,
+                    target_book_ids=target_book_ids,
+                )
         except Exception as e:
             logger.warning("Device-sync manifest: shelf mapping failed: %s", e)
 
@@ -1194,8 +1203,8 @@ def _respond_from_book_states(doc_id, book):
         if poison_pill is not None:
             return poison_pill
         return jsonify({
-            "device": best_doc.device or "abs-kosync-bridge",
-            "device_id": best_doc.device_id or "abs-kosync-bridge",
+            "device": "abs-kosync-bridge",
+            "device_id": "abs-kosync-bridge",
             "document": doc_id,
             "percentage": float(best_doc.percentage),
             "progress": best_doc.progress or "",

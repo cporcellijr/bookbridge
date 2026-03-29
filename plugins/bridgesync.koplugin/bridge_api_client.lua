@@ -130,8 +130,8 @@ end
 
 function APIClient:getManifest()
     local ok, code, body = self:_request("GET", "/koreader/device-sync/manifest", nil, nil, {
-        block_timeout = 20,
-        total_timeout = 60,
+        block_timeout = 45,
+        total_timeout = 120,
         attempts = 3,
     })
     if not ok then
