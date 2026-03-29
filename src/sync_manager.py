@@ -96,6 +96,10 @@ class SyncManager:
         self._suggestion_lock = threading.Lock()
         self._sync_cycle_ebook_cache: dict[str, tuple[str, int]] = {}
         self._sync_cycle_local_epub_cache: dict[str, Path | None] = {}
+        # Grimmory session coalescing buffer
+        # Key: abs_id, Value: dict with session accumulation data
+        # No lock needed — only accessed inside _sync_cycle_internal under self._sync_lock
+        self._grimmory_open_sessions: dict[str, dict] = {}
 
         self._setup_sync_clients(sync_clients)
         self.startup_checks()
@@ -1770,7 +1774,10 @@ class SyncManager:
         if self.library_service and (time.time() - self._last_library_sync > 900):
             self.library_service.sync_library_books()
             self._last_library_sync = time.time()
-    
+
+        # Finalize any stale Grimmory sessions from previous cycles
+        self._flush_stale_grimmory_sessions()
+
         # Get active books directly from database service
         active_books = []
         if target_abs_id:
@@ -2130,7 +2137,7 @@ class SyncManager:
                     and leader.lower() != 'kosync'  # Plugin handles KOSync→Grimmory
                 ):
                     try:
-                        self._record_grimmory_reading_session(
+                        self._buffer_grimmory_session(
                             book, leader, leader_state, prev_states_by_client, current_time
                         )
                     except Exception:
@@ -2240,7 +2247,7 @@ class SyncManager:
         except Exception:
             pass  # Never block sync
 
-    def _record_grimmory_reading_session(
+    def _buffer_grimmory_session(
         self,
         book,
         leader: str,
@@ -2248,69 +2255,125 @@ class SyncManager:
         prev_states_by_client: dict,
         current_time: float,
     ) -> None:
-        """Record a reading session to Grimmory when progress changes on a tracked book."""
+        """Buffer a Grimmory reading session update; coalesces across sync cycles."""
+        abs_id = book.abs_id
         leader_pct = leader_state.current.get('pct', 0)
         prev_pct = leader_state.previous_pct or 0.0
-
-        # Compute accurate duration, then backdate start_time so Grimmory's
-        # internal (end_time - start_time) math produces the correct value.
-        duration_seconds = self._compute_session_duration(
-            book, leader, leader_state, prev_states_by_client, current_time
-        )
-        if duration_seconds is None or duration_seconds <= 0:
-            duration_seconds = 60  # Conservative 1-minute fallback for Grimmory
-        start_time = current_time - duration_seconds
 
         primary_audio_client = self._get_primary_audio_client_name(book)
         is_audio_leader = (leader == primary_audio_client)
 
-        if is_audio_leader:
-            # Path 1: Audio Session (Strict Isolation - No Ebook Double Dip)
-            audio_grimmory_id = None
-            if getattr(book, 'audio_source', None) == "BookLore":
-                audio_grimmory_id = getattr(book, 'audio_provider_book_id', None) or getattr(book, 'audio_source_id', None)
+        # Skip if Grimmory is the native source — it tracks its own sessions internally
+        if is_audio_leader and getattr(book, 'audio_source', None) == "BookLore":
+            return
+        if not is_audio_leader and getattr(book, 'ebook_source', None) == "BookLore":
+            return
 
-            # If using ABS audio, fallback to logging the audiobook session against the linked Grimmory ebook ID
-            grimmory_id = audio_grimmory_id
+        # Resolve Grimmory book ID
+        if is_audio_leader:
+            grimmory_id = None
+            if getattr(book, 'audio_source', None) == "BookLore":
+                grimmory_id = getattr(book, 'audio_provider_book_id', None) or getattr(book, 'audio_source_id', None)
             if not grimmory_id:
                 grimmory_id = self._resolve_grimmory_ebook_id(book)
-
-            if grimmory_id:
-                try:
-                    self.booklore_client.create_reading_session(
-                        book_id=int(grimmory_id),
-                        start_time=start_time,
-                        end_time=current_time,
-                        start_progress=prev_pct,
-                        end_progress=leader_pct,
-                        book_type="AUDIOBOOK",
-                    )
-                except (TypeError, ValueError):
-                    pass
+            book_type = "AUDIOBOOK"
+            cfi = None
         else:
-            # Path 2: Ebook Session (Strict Isolation - Only if reading)
-            ebook_grimmory_id = self._resolve_grimmory_ebook_id(book)
-            if ebook_grimmory_id:
+            grimmory_id = self._resolve_grimmory_ebook_id(book)
+            ebook_filename = getattr(book, 'ebook_filename', '') or ''
+            if ebook_filename.lower().endswith('.epub'):
+                book_type = "EPUB"
+            elif ebook_filename.lower().endswith('.pdf'):
+                book_type = "PDF"
+            else:
                 book_type = None
-                ebook_filename = getattr(book, 'ebook_filename', '') or ''
-                if ebook_filename.lower().endswith('.epub'):
-                    book_type = "EPUB"
-                elif ebook_filename.lower().endswith('.pdf'):
-                    book_type = "PDF"
+            cfi = leader_state.current.get('cfi')
 
-                cfi = leader_state.current.get('cfi')
-                try:
-                    self.booklore_client.create_reading_session(
-                        book_id=int(ebook_grimmory_id),
-                        start_time=start_time,
-                        end_time=current_time,
-                        start_progress=prev_pct,
-                        end_progress=leader_pct,
-                        book_type=book_type,
-                        end_location=cfi,
-                    )
-                except (TypeError, ValueError):
-                    pass
+        if not grimmory_id:
+            return
+
+        # Backdate start_time based on computed duration for the first cycle of a session
+        duration_seconds = self._compute_session_duration(
+            book, leader, leader_state, prev_states_by_client, current_time
+        )
+        if duration_seconds is None or duration_seconds <= 0:
+            duration_seconds = 60
+        start_time = current_time - duration_seconds
+
+        existing = self._grimmory_open_sessions.get(abs_id)
+        if existing is None:
+            self._grimmory_open_sessions[abs_id] = {
+                "abs_id": abs_id,
+                "grimmory_id": int(grimmory_id),
+                "book_type": book_type,
+                "start_time": start_time,
+                "last_time": current_time,
+                "start_progress": prev_pct,
+                "last_progress": leader_pct,
+                "end_location": cfi,
+            }
+        elif existing["book_type"] == book_type:
+            existing["last_time"] = current_time
+            existing["last_progress"] = leader_pct
+            if cfi is not None:
+                existing["end_location"] = cfi
+        else:
+            # Book type changed (e.g. switched from listening to reading) — finalize old, open new
+            self._grimmory_open_sessions.pop(abs_id)
+            self._finalize_grimmory_session(existing)
+            self._grimmory_open_sessions[abs_id] = {
+                "abs_id": abs_id,
+                "grimmory_id": int(grimmory_id),
+                "book_type": book_type,
+                "start_time": start_time,
+                "last_time": current_time,
+                "start_progress": prev_pct,
+                "last_progress": leader_pct,
+                "end_location": cfi,
+            }
+
+    def _finalize_grimmory_session(self, session_data: dict) -> None:
+        """POST a coalesced session to Grimmory."""
+        duration_seconds = int(session_data["last_time"] - session_data["start_time"])
+        if duration_seconds <= 0:
+            return
+        try:
+            self.booklore_client.create_reading_session(
+                book_id=session_data["grimmory_id"],
+                start_time=session_data["start_time"],
+                end_time=session_data["last_time"],
+                start_progress=session_data["start_progress"],
+                end_progress=session_data["last_progress"],
+                book_type=session_data["book_type"],
+                end_location=session_data.get("end_location"),
+            )
+            logger.debug(
+                "Grimmory: Finalized coalesced session for book %s (%s, %.1f%% -> %.1f%%, %ds)",
+                session_data["grimmory_id"],
+                session_data["book_type"] or "unknown",
+                session_data["start_progress"] * 100,
+                session_data["last_progress"] * 100,
+                duration_seconds,
+            )
+        except Exception as e:
+            logger.warning(
+                "Grimmory: Failed to finalize coalesced session for book %s: %s",
+                session_data["grimmory_id"], e,
+            )
+
+    def _flush_stale_grimmory_sessions(self) -> None:
+        """Finalize any Grimmory sessions that have gone stale (no progress for 2 sync periods)."""
+        if not self._grimmory_open_sessions:
+            return
+        gap_seconds = int(os.getenv("SYNC_PERIOD_MINS", 5)) * 60 * 2
+        now = time.time()
+        stale_keys = [
+            abs_id for abs_id, session in self._grimmory_open_sessions.items()
+            if (now - session["last_time"]) > gap_seconds
+        ]
+        for abs_id in stale_keys:
+            session = self._grimmory_open_sessions.pop(abs_id)
+            self._finalize_grimmory_session(session)
 
     def _resolve_grimmory_ebook_id(self, book):
         """Resolve the Grimmory book ID for a book's ebook. Returns int or None."""
