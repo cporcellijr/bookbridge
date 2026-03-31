@@ -1527,6 +1527,45 @@ class SyncManager:
                 
         return False
 
+    def _should_skip_deadband_rollback(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        client_name: str,
+        client_state,
+        abs_id: str,
+        title_snip: str,
+    ) -> bool:
+        """Avoid pushing a slightly older audio leader onto richer ebook locators."""
+        primary_audio_client = self._get_primary_audio_client_name(book)
+        if leader != primary_audio_client or client_name == primary_audio_client:
+            return False
+
+        client_source = client_state.current.get("_normalization_source")
+        if client_source not in {"xpath", "cfi", "href_frag", "href_progression"}:
+            return False
+
+        leader_ts = leader_state.current.get("ts")
+        client_ts = client_state.current.get("_normalized_ts")
+        if leader_ts is None or client_ts is None:
+            return False
+
+        try:
+            ts_delta = float(client_ts) - float(leader_ts)
+        except (TypeError, ValueError):
+            return False
+
+        if 0 < ts_delta <= self.cross_format_deadband_seconds:
+            logger.info(
+                f"🔒 '{abs_id}' '{title_snip}' Skipping rollback to '{client_name}' "
+                f"(leader={leader} ts={float(leader_ts):.1f}s, client_ts={float(client_ts):.1f}s, "
+                f"delta={ts_delta:.2f}s, source={client_source})"
+            )
+            return True
+
+        return False
+
     def _determine_leader(self, config, book, abs_id, title_snip):
         """
         Determines which client should be the leader based on:
@@ -2069,7 +2108,17 @@ class SyncManager:
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
-                        request = UpdateProgressRequest(locator, txt, previous_location=config.get(client_name).previous_pct if config.get(client_name) else None)
+                        client_state = config.get(client_name)
+                        if client_state and self._should_skip_deadband_rollback(
+                            book, leader, leader_state, client_name, client_state, abs_id, title_snip
+                        ):
+                            continue
+
+                        request = UpdateProgressRequest(
+                            locator,
+                            txt,
+                            previous_location=client_state.previous_pct if client_state else None,
+                        )
                         result = client.update_progress(book, request)
                         results[client_name] = result
                     except Exception as e:

@@ -32,6 +32,7 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 - Fixed Storyteller direct-upload and post-import issues, including `Upload-Metadata` formatting, import readiness timing, duplicate Forge triggers, and several incorrect locator/progress writes.
 - Fixed Grimmory progress writes, single-file audiobook Forge downloads, cache hydration edge cases, and truncated downloads that could break matching or syncing.
 - Fixed suggestions and sync edge cases around finished books, instant-sync replays, sentence-level KOReader locators, and cross-format rollback handling.
+- Fixed deadband rollback behavior so tiny audiobook-vs-ebook gaps still avoid leader flapping without pushing older ABS progress back onto newer high-confidence ebook locators.
 - Fixed Grimmory session reporting so reading and listening sessions are recorded more reliably.
 - Fixed dashboard sync warnings so old inactive states do not create misleading out-of-sync messages.
 - Fixed the built-in KOSync Test button so it no longer requires saving first.

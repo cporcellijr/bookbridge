@@ -30,6 +30,7 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 - Fixed Grimmory session writes so reading and listening sessions stay in the format Grimmory expects.
 - Fixed Storyteller direct-upload metadata formatting so Forge no longer fails with `400 Invalid upload-metadata` on Storyteller `web-v2.9.3`.
 - Fixed Storyteller direct-upload metadata and readiness issues that could break Forge imports.
+- Fixed deadband rollback behavior so tiny audiobook-vs-ebook gaps still avoid leader flapping without pushing older ABS progress back onto newer high-confidence ebook locators.
 - Fixed Grimmory progress, cache, and download edge cases that could break matching or syncing.
 - Fixed several sync stability issues around finished-book suggestions, KOReader locators, and replayed instant-sync events.
 - Fixed Grimmory session reporting so reading and listening sessions are recorded more reliably.
