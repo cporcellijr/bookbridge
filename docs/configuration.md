@@ -41,6 +41,7 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 Audiobookshelf notes:
 
 - Use **Find IDs** next to **Library ID** in Settings to load your available ABS libraries and fill the field from a dropdown.
+- If you want to run without Audiobookshelf for a while, enter `disabled` in the ABS URL or token field to intentionally turn ABS off.
 
 #### KOSync / KOReader
 
@@ -55,6 +56,10 @@ Use this when you want KOReader devices to sync directly with the bridge.
 | Hash Method | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Split-Port Listener | `KOSYNC_PORT` | empty | Optional dedicated KOSync port for internet-safe exposure. |
+
+KOSync notes:
+
+- If you use the built-in KOSync bridge, the **Test** button checks the values currently typed into the form before you save them.
 
 #### Storyteller
 
@@ -93,6 +98,8 @@ Grimmory now supports both ebook sync and Grimmory audiobook-backed mappings.
 | Shelf Name | `BOOKLORE_SHELF_NAME` | `Kobo` | Shelf used for matched ebooks. |
 | Library ID | `BOOKLORE_LIBRARY_ID` | empty | Optional library restriction. |
 | Record Reading Sessions | `GRIMMORY_READING_SESSIONS` | `true` | Sends reading or listening session updates back to Grimmory. |
+| Collection Syncing | `DEVICE_SYNC_COLLECTIONS` | `off` | Optional Bridge Sync plugin feature for turning Grimmory shelves into KOReader collections. |
+| Excluded Shelves | `DEVICE_SYNC_EXCLUDED_SHELVES` | empty | Optional Bridge Sync plugin setting for shelves that should be skipped. |
 | Poll Mode | `BOOKLORE_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Grimmory separately. |
 | Poll Interval | `BOOKLORE_POLL_SECONDS` | `300` | Used when Poll Mode is `custom`. |
 
@@ -103,6 +110,11 @@ Grimmory notes:
 - When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
 - **Settings -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
 - Use **Find IDs** next to **Library ID** in Settings to load your available Grimmory libraries and fill the field from a dropdown.
+- The **Device Sync Collections** settings only matter if you use the optional **Bridge Sync** KOReader plugin.
+- **Collection Syncing** controls whether Bridge Sync should turn Grimmory shelves into KOReader collections.
+- **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
+- **Excluded Shelves** lets you list shelf names you do not want turned into KOReader collections.
+- **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
 
 Advanced Grimmory cache tuning:
 
@@ -191,7 +203,7 @@ Transcription notes:
 | Fuzzy Match Threshold | `FUZZY_MATCH_THRESHOLD` | `80` | Matching threshold used by several book and text lookups. |
 | Job Max Retries | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs. |
 | Job Retry Delay (Minutes) | `JOB_RETRY_DELAY_MINS` | `15` | Delay before retrying failed jobs. |
-| Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips. |
+| Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips while avoiding backward writes to newer high-confidence ebook locators. |
 | Cross-Format Roundtrip Tolerance | `CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS` | `2` | Locator roundtrip tolerance used when stabilizing cross-format locators. |
 
 ### Advanced Toggles

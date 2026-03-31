@@ -690,6 +690,7 @@ function BridgeSync:_runSync()
                     local_path = target_path,
                     filename = book.filename,
                     content_hash = book.content_hash,
+                    shelves = book.shelves,
                 }
                 hash_index[book.content_hash] = target_path
             end
@@ -727,6 +728,7 @@ function BridgeSync:_runSync()
                             local_path = target_path,
                             filename = book.filename,
                             content_hash = book.content_hash,
+                            shelves = book.shelves,
                         }
                         hash_index[book.content_hash] = target_path
                     end
@@ -754,6 +756,7 @@ function BridgeSync:_runSync()
         end
     end
 
+    self:_updateCollections(items)
     self:_saveState(items, manifest.revision or "")
     return {
         downloaded = downloaded,
@@ -765,6 +768,50 @@ function BridgeSync:_runSync()
         revision = remote_revision,
         unchanged = false,
     }
+end
+
+function BridgeSync:_updateCollections(items)
+    local collection_path = DataStorage:getSettingsDir() .. "/collection.lua"
+    local ok_open, collections = pcall(LuaSettings.open, LuaSettings, collection_path)
+    if not ok_open or not collections then
+        self:logWarn("Could not open collection.lua for writing")
+        return
+    end
+
+    local prev_managed = self.settings:readSetting("managed_collections") or {}
+    for _, name in ipairs(prev_managed) do
+        collections:delSetting(name)
+    end
+
+    local shelf_books = {}
+    for _, entry in pairs(items) do
+        if entry.shelves and type(entry.shelves) == "table" and entry.local_path and self:_fileExists(entry.local_path) then
+            for _, shelf_name in ipairs(entry.shelves) do
+                if not shelf_books[shelf_name] then
+                    shelf_books[shelf_name] = {}
+                end
+                table.insert(shelf_books[shelf_name], entry.local_path)
+            end
+        end
+    end
+
+    local new_managed = {}
+    for shelf_name, files in pairs(shelf_books) do
+        local data = { settings = { order = 1 } }
+        for i, file_path in ipairs(files) do
+            table.insert(data, { file = file_path, order = i })
+        end
+        collections:saveSetting(shelf_name, data)
+        table.insert(new_managed, shelf_name)
+    end
+
+    collections:flush()
+    self.settings:saveSetting("managed_collections", new_managed)
+    self.settings:flush()
+
+    if #new_managed > 0 then
+        self:logInfo("Updated", #new_managed, "KOReader collection(s) from shelf data")
+    end
 end
 
 function BridgeSync:syncFromBridge(silent)

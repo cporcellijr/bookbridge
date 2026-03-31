@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 import schedule
@@ -1466,7 +1466,21 @@ def _coerce_author_display(value):
     return ""
 
 
-def _get_cached_ebook_display_metadata(book):
+def _dashboard_filename_key(filename):
+    value = (filename or "").strip()
+    return value.casefold() if value else ""
+
+
+def _index_cached_booklore_books(all_booklore_books):
+    indexed = {}
+    for cached in all_booklore_books or []:
+        key = _dashboard_filename_key(getattr(cached, "filename", None))
+        if key and key not in indexed:
+            indexed[key] = cached
+    return indexed
+
+
+def _get_cached_booklore_book(book, cached_booklore_by_filename=None):
     candidates = []
     for filename in (
         getattr(book, "original_ebook_filename", None),
@@ -1476,16 +1490,38 @@ def _get_cached_ebook_display_metadata(book):
             candidates.append(filename)
 
     for filename in candidates:
-        cached = database_service.get_booklore_book(filename)
-        if not cached:
-            continue
-        raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") and isinstance(cached.raw_metadata_dict, dict) else {}
-        title = _normalize_dashboard_display_value(raw.get("title") or getattr(cached, "title", ""))
-        subtitle = _normalize_dashboard_display_value(raw.get("subtitle"))
-        author = _coerce_author_display(raw.get("authors")) or _normalize_dashboard_display_value(getattr(cached, "authors", ""))
-        if title or subtitle or author:
-            return {"title": title, "subtitle": subtitle, "author": author}
+        if cached_booklore_by_filename is not None:
+            cached = cached_booklore_by_filename.get(_dashboard_filename_key(filename))
+        else:
+            cached = database_service.get_booklore_book(filename)
+        if cached:
+            return cached
+    return None
+
+
+def _get_cached_ebook_display_metadata(book, cached_booklore_by_filename=None):
+    cached = _get_cached_booklore_book(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    if not cached:
+        return {}
+    raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") and isinstance(cached.raw_metadata_dict, dict) else {}
+    title = _normalize_dashboard_display_value(raw.get("title") or getattr(cached, "title", ""))
+    subtitle = _normalize_dashboard_display_value(raw.get("subtitle"))
+    author = _coerce_author_display(raw.get("authors")) or _normalize_dashboard_display_value(getattr(cached, "authors", ""))
+    if title or subtitle or author:
+        return {"title": title, "subtitle": subtitle, "author": author}
     return {}
+
+
+def _get_cached_booklore_id(book, cached_booklore_by_filename=None):
+    cached = _get_cached_booklore_book(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    if not cached:
+        return None
+    raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") and isinstance(cached.raw_metadata_dict, dict) else {}
+    for key in ("id", "bookId"):
+        value = raw.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
 
 
 def _get_dashboard_display_filename(book):
@@ -1578,7 +1614,28 @@ def _get_storyteller_display_metadata(storyteller_uuid):
         return {}
 
 
-def _resolve_dashboard_display_metadata(book, base_title, base_subtitle, base_author):
+def _get_cached_storyteller_display_metadata(book):
+    raw_title = _normalize_dashboard_display_value(getattr(book, "audio_title", None))
+    if not raw_title:
+        return {}
+    display_filename = _get_dashboard_display_filename(book)
+    if not _should_override_dashboard_base_title(book, raw_title, display_filename):
+        return {}
+    return {
+        "title": raw_title,
+        "subtitle": "",
+        "author": "",
+    }
+
+
+def _resolve_dashboard_display_metadata(
+    book,
+    base_title,
+    base_subtitle,
+    base_author,
+    cached_booklore_by_filename=None,
+    storyteller_meta=None,
+):
     title = _normalize_dashboard_display_value(base_title)
     subtitle = _normalize_dashboard_display_value(base_subtitle)
     author = _normalize_dashboard_display_value(base_author)
@@ -1586,7 +1643,7 @@ def _resolve_dashboard_display_metadata(book, base_title, base_subtitle, base_au
     should_override_base_title = _should_override_dashboard_base_title(book, title, display_filename)
     original_title = title
 
-    cached_meta = _get_cached_ebook_display_metadata(book)
+    cached_meta = _get_cached_ebook_display_metadata(book, cached_booklore_by_filename=cached_booklore_by_filename)
     if cached_meta:
         cached_title = _normalize_dashboard_display_value(cached_meta.get("title"))
         cached_subtitle = _normalize_dashboard_display_value(cached_meta.get("subtitle"))
@@ -1598,7 +1655,7 @@ def _resolve_dashboard_display_metadata(book, base_title, base_subtitle, base_au
         if not author and cached_author:
             author = cached_author
 
-    storyteller_meta = _get_storyteller_display_metadata(getattr(book, "storyteller_uuid", None))
+    storyteller_meta = storyteller_meta or {}
     if storyteller_meta:
         storyteller_title = _normalize_dashboard_display_value(storyteller_meta.get("title"))
         storyteller_subtitle = _normalize_dashboard_display_value(storyteller_meta.get("subtitle"))
@@ -1630,6 +1687,282 @@ def _storyteller_transcript_source(storyteller_uuid, storyteller_manifest):
     return "storyteller" if storyteller_uuid or storyteller_manifest else None
 
 
+def _get_dashboard_sync_warning_clients(mapping, integrations):
+    client_names = []
+
+    if integrations.get('abs') and mapping.get('sync_mode') != 'ebook_only':
+        client_names.append('abs')
+
+    if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
+        client_names.append('bookloreaudio')
+
+    if integrations.get('kosync'):
+        client_names.append('kosync')
+
+    if integrations.get('storyteller') and (
+        mapping.get('storyteller_uuid')
+        or mapping.get('storyteller_legacy_link')
+        or 'storyteller' in mapping.get('states', {})
+    ):
+        client_names.append('storyteller')
+
+    if integrations.get('booklore') and (
+        mapping.get('booklore_id')
+        or 'booklore' in mapping.get('states', {})
+    ):
+        client_names.append('booklore')
+
+    return client_names
+
+
+def _compute_dashboard_sync_warning_pct(mapping, integrations):
+    progress_values = []
+    states = mapping.get('states', {})
+
+    for client_name in _get_dashboard_sync_warning_clients(mapping, integrations):
+        state = states.get(client_name)
+        if not state:
+            continue
+        percentage = state.get('percentage')
+        if percentage is None or percentage <= 0:
+            continue
+        progress_values.append(float(percentage))
+
+    if len(progress_values) < 2:
+        return 0.0
+
+    return round(max(progress_values) - min(progress_values), 1)
+
+
+def _format_dashboard_last_sync(latest_update_time):
+    if latest_update_time <= 0:
+        return "Never"
+    diff = time.time() - latest_update_time
+    if diff < 60:
+        return f"{int(diff)}s ago"
+    if diff < 3600:
+        return f"{int(diff // 60)}m ago"
+    return f"{int(diff // 3600)}h ago"
+
+
+def _build_dashboard_integrations():
+    integrations = {}
+    sync_clients = container.sync_clients()
+    client_items = sync_clients.items() if hasattr(sync_clients, "items") else sync_clients
+    try:
+        iterator = list(client_items)
+    except TypeError:
+        return integrations
+    for client_name, client in iterator:
+        integrations[client_name.lower()] = bool(client.is_configured())
+    return integrations
+
+
+def _group_dashboard_states_by_book(all_states):
+    states_by_book = {}
+    for state in all_states or []:
+        states_by_book.setdefault(state.abs_id, []).append(state)
+    return states_by_book
+
+
+def _build_dashboard_mapping(
+    book,
+    states_by_book,
+    integrations,
+    hardcover_by_book,
+    reading_stats_by_book,
+    cached_booklore_by_filename,
+):
+    states = states_by_book.get(book.abs_id, [])
+    state_by_client = {state.client_name: state for state in states}
+
+    display_meta = _resolve_dashboard_display_metadata(
+        book,
+        getattr(book, "audio_title", None) or book.abs_title,
+        "",
+        "",
+        cached_booklore_by_filename=cached_booklore_by_filename,
+        storyteller_meta=_get_cached_storyteller_display_metadata(book),
+    )
+    display_title = display_meta["display_title"]
+    display_subtitle = display_meta["display_subtitle"]
+    display_author = display_meta["display_author"]
+
+    mapping = {
+        "abs_id": book.abs_id,
+        "abs_title": display_title,
+        "abs_subtitle": display_subtitle,
+        "abs_author": display_author,
+        "display_title": display_title,
+        "display_subtitle": display_subtitle,
+        "display_author": display_author,
+        "display_filename": display_meta["display_filename"],
+        "audio_source": getattr(book, "audio_source", None) or ("ABS" if getattr(book, "sync_mode", "audiobook") != "ebook_only" else None),
+        "audio_source_id": getattr(book, "audio_source_id", None) or book.abs_id,
+        "audio_title": getattr(book, "audio_title", None) or display_title,
+        "audio_duration": getattr(book, "audio_duration", None) or book.duration or 0,
+        "audio_cover_url": getattr(book, "audio_cover_url", None),
+        "ebook_filename": book.ebook_filename,
+        "kosync_doc_id": book.kosync_doc_id,
+        "transcript_file": book.transcript_file,
+        "status": book.status,
+        "sync_mode": getattr(book, "sync_mode", "audiobook"),
+        "unified_progress": 0,
+        "duration": book.duration or 0,
+        "storyteller_uuid": book.storyteller_uuid,
+        "states": {},
+    }
+
+    if book.status == "processing":
+        job = database_service.get_latest_job(book.abs_id)
+        mapping["job_progress"] = round((job.progress or 0.0) * 100, 1) if job else 0.0
+
+    latest_update_time = 0
+    max_progress = 0
+    for client_name, state in state_by_client.items():
+        if state.last_updated and state.last_updated > latest_update_time:
+            latest_update_time = state.last_updated
+
+        pct_val = round(state.percentage * 100, 1) if state.percentage is not None else 0
+        mapping["states"][client_name] = {
+            "timestamp": state.timestamp or 0,
+            "percentage": pct_val,
+            "last_updated": state.last_updated,
+            "xpath": getattr(state, "xpath", None),
+        }
+        if getattr(state, "cfi", None) is not None:
+            mapping["states"][client_name]["cfi"] = getattr(state, "cfi", None)
+
+        if state.percentage is not None:
+            max_progress = max(max_progress, pct_val)
+
+        if client_name == "kosync":
+            mapping["kosync_pct"] = pct_val
+            mapping["kosync_xpath"] = getattr(state, "xpath", None)
+        elif client_name == "abs":
+            mapping["abs_pct"] = pct_val
+            mapping["abs_ts"] = state.timestamp
+        elif client_name == "storyteller":
+            mapping["storyteller_pct"] = pct_val
+            mapping["storyteller_xpath"] = getattr(state, "xpath", None)
+        elif client_name == "booklore":
+            mapping["booklore_pct"] = pct_val
+            mapping["booklore_xpath"] = getattr(state, "xpath", None)
+
+    hardcover_details = hardcover_by_book.get(book.abs_id)
+    if hardcover_details:
+        mapping.update({
+            "hardcover_book_id": hardcover_details.hardcover_book_id,
+            "hardcover_slug": hardcover_details.hardcover_slug,
+            "hardcover_edition_id": hardcover_details.hardcover_edition_id,
+            "hardcover_pages": hardcover_details.hardcover_pages,
+            "isbn": hardcover_details.isbn,
+            "asin": hardcover_details.asin,
+            "matched_by": hardcover_details.matched_by,
+            "hardcover_linked": True,
+            "hardcover_title": book.abs_title,
+        })
+    else:
+        mapping.update({
+            "hardcover_book_id": None,
+            "hardcover_slug": None,
+            "hardcover_edition_id": None,
+            "hardcover_pages": None,
+            "isbn": None,
+            "asin": None,
+            "matched_by": None,
+            "hardcover_linked": False,
+            "hardcover_title": None,
+        })
+
+    mapping["storyteller_legacy_link"] = "storyteller" in state_by_client and not book.storyteller_uuid
+
+    if mapping.get("sync_mode") == "ebook_only":
+        mapping["abs_url"] = None
+        mapping["audio_url"] = None
+    elif mapping["audio_source"] == "BookLore":
+        mapping["abs_url"] = None
+        mapping["audio_url"] = f"{manager.booklore_client.base_url}/book/{mapping['audio_source_id']}?tab=view"
+    else:
+        mapping["abs_url"] = f"{manager.abs_client.base_url}/item/{book.abs_id}"
+        mapping["audio_url"] = mapping["abs_url"]
+
+    mapping["booklore_id"] = _get_cached_booklore_id(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    if manager.booklore_client.is_configured() and mapping["booklore_id"]:
+        mapping["booklore_url"] = f"{manager.booklore_client.base_url}/book/{mapping['booklore_id']}?tab=view"
+    else:
+        mapping["booklore_url"] = None
+
+    if mapping.get("hardcover_slug"):
+        mapping["hardcover_url"] = f"https://hardcover.app/books/{mapping['hardcover_slug']}"
+    elif mapping.get("hardcover_book_id"):
+        mapping["hardcover_url"] = f"https://hardcover.app/books/{mapping['hardcover_book_id']}"
+    else:
+        mapping["hardcover_url"] = None
+
+    mapping["sync_warning_pct"] = _compute_dashboard_sync_warning_pct(mapping, integrations)
+    mapping["is_out_of_sync"] = mapping["sync_warning_pct"] > 5.0
+    mapping["unified_progress"] = min(max_progress, 100.0)
+    mapping["last_sync"] = _format_dashboard_last_sync(latest_update_time)
+
+    if mapping.get("audio_cover_url"):
+        mapping["cover_url"] = mapping["audio_cover_url"]
+    elif mapping.get("audio_source") == "BookLore" and mapping.get("audio_source_id"):
+        mapping["cover_url"] = f"/api/booklore/audiobook-cover/{mapping['audio_source_id']}"
+    elif book.abs_id and mapping.get("audio_source") != "BookLore":
+        mapping["cover_url"] = f"{manager.abs_client.base_url}/api/items/{book.abs_id}/cover?token={manager.abs_client.token}"
+
+    reading_stats = reading_stats_by_book.get(book.abs_id)
+    if reading_stats:
+        mapping["reading_stats"] = reading_stats
+
+    return mapping
+
+
+def _build_dashboard_mappings(
+    books,
+    all_states,
+    integrations,
+    all_hardcover=None,
+    reading_stats_by_book=None,
+    cached_booklore_by_filename=None,
+):
+    hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
+    states_by_book = _group_dashboard_states_by_book(all_states)
+    reading_stats_by_book = reading_stats_by_book or {}
+    cached_booklore_by_filename = cached_booklore_by_filename or {}
+
+    mappings = []
+    total_duration = 0
+    total_listened = 0
+
+    for book in books:
+        mapping = _build_dashboard_mapping(
+            book,
+            states_by_book,
+            integrations,
+            hardcover_by_book,
+            reading_stats_by_book,
+            cached_booklore_by_filename,
+        )
+        mappings.append(mapping)
+
+        duration = mapping.get("duration", 0)
+        progress_pct = mapping.get("unified_progress", 0)
+        if duration > 0:
+            total_duration += duration
+            total_listened += (progress_pct / 100.0) * duration
+
+    if total_duration > 0:
+        overall_progress = round((total_listened / total_duration) * 100, 1)
+    elif mappings:
+        overall_progress = round(sum(m["unified_progress"] for m in mappings) / len(mappings), 1)
+    else:
+        overall_progress = 0
+
+    return mappings, overall_progress
+
+
 def audiobook_matches_search(ab, search_term):
     """Check if audiobook matches search term (searches title AND author)."""
     import re
@@ -1658,266 +1991,22 @@ def audiobook_matches_search(ab, search_term):
 # ---------------- ROUTES ----------------
 def index():
     """Dashboard - loads books and progress from database service"""
-
-    # Load books from database service
     books = database_service.get_all_books()
-
-    # Fetch ABS metadata once for the whole dashboard (single API call, not per-book)
-    abs_metadata_by_id = {}
-    try:
-        all_abs_books = container.abs_client().get_all_audiobooks()
-        for ab in all_abs_books:
-            ab_id = ab.get('id')
-            if ab_id:
-                metadata = ab.get('media', {}).get('metadata', {})
-                abs_metadata_by_id[ab_id] = {
-                    'subtitle': metadata.get('subtitle') or '',
-                    'author': metadata.get('authorName') or '',
-                }
-    except Exception as e:
-        logger.warning(f"Could not fetch ABS metadata for dashboard enrichment: {e}")
-
-    # Fetch all states at once to avoid N+1 queries with NullPool
     all_states = database_service.get_all_states()
-    states_by_book = {}
-    for state in all_states:
-        if state.abs_id not in states_by_book:
-            states_by_book[state.abs_id] = []
-        states_by_book[state.abs_id].append(state)
-
-    # Fetch pending suggestions
-    suggestions_raw = database_service.get_all_pending_suggestions()
-
-    # Filter suggestions: Hide those with 0 matches or >70% progress (finished books)
-    suggestions = []
-    abs_client = container.abs_client()
-    abs_progress_map = abs_client.get_all_progress_raw() if abs_client and abs_client.is_configured() else {}
-
-    for s in suggestions_raw:
-        if len(s.matches) == 0:
-            continue
-        # Hide suggestions for books that are now mostly finished
-        progress_entry = abs_progress_map.get(s.source_id)
-        if progress_entry:
-            duration = progress_entry.get('duration', 0)
-            if duration > 0 and progress_entry.get('currentTime', 0) / duration > 0.70:
-                continue
-            if progress_entry.get('isFinished'):
-                continue
-        suggestions.append(s)
-
-    # [OPTIMIZATION] Fetch all hardcover details at once
     all_hardcover = database_service.get_all_hardcover_details()
-    hardcover_by_book = {h.abs_id: h for h in all_hardcover}
-
-    # Fetch reading stats in bulk (one query for all books)
     all_reading_stats = database_service.get_all_reading_stats()
+    cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
+    integrations = _build_dashboard_integrations()
+    mappings, overall_progress = _build_dashboard_mappings(
+        books,
+        all_states,
+        integrations,
+        all_hardcover=all_hardcover,
+        reading_stats_by_book=all_reading_stats,
+        cached_booklore_by_filename=cached_booklore_by_filename,
+    )
 
-    integrations = {}
-
-    # Dynamically check all configured sync clients
-    sync_clients = container.sync_clients()
-    for client_name, client in sync_clients.items():
-        if client.is_configured():
-            integrations[client_name.lower()] = True
-        else:
-            integrations[client_name.lower()] = False
-
-    # Convert books to mappings format for template compatibility
-    mappings = []
-    total_duration = 0
-    total_listened = 0
-
-    for book in books:
-        # Get states for this book from pre-fetched dict
-        states = states_by_book.get(book.abs_id, [])
-
-        # Convert states to a dict by client name for easy access
-        state_by_client = {state.client_name: state for state in states}
-
-        # Pull enriched ABS metadata from the pre-fetched lookup (no additional API calls)
-        _abs_meta = abs_metadata_by_id.get(book.abs_id, {})
-        abs_subtitle = _abs_meta.get('subtitle', '')
-        abs_author = _abs_meta.get('author', '')
-        display_meta = _resolve_dashboard_display_metadata(
-            book,
-            book.abs_title,
-            abs_subtitle,
-            abs_author,
-        )
-        display_title = display_meta['display_title']
-        abs_subtitle = display_meta['display_subtitle']
-        abs_author = display_meta['display_author']
-
-        # Create mapping dict for template compatibility
-        mapping = {
-            'abs_id': book.abs_id,
-            'abs_title': display_title,
-            'abs_subtitle': abs_subtitle,
-            'abs_author': abs_author,
-            'display_title': display_title,
-            'display_subtitle': abs_subtitle,
-            'display_author': abs_author,
-            'display_filename': display_meta['display_filename'],
-            'audio_source': getattr(book, 'audio_source', None) or ('ABS' if getattr(book, 'sync_mode', 'audiobook') != 'ebook_only' else None),
-            'audio_source_id': getattr(book, 'audio_source_id', None) or book.abs_id,
-            'audio_title': getattr(book, 'audio_title', None) or display_title,
-            'audio_duration': getattr(book, 'audio_duration', None) or book.duration or 0,
-            'audio_cover_url': getattr(book, 'audio_cover_url', None),
-            'ebook_filename': book.ebook_filename,
-            'kosync_doc_id': book.kosync_doc_id,
-            'transcript_file': book.transcript_file,
-            'status': book.status,
-            'sync_mode': getattr(book, 'sync_mode', 'audiobook'),
-            'unified_progress': 0,
-            'duration': book.duration or 0,
-            'storyteller_uuid': book.storyteller_uuid,
-            'states': {}
-        }
-
-        if book.status == 'processing':
-            job = database_service.get_latest_job(book.abs_id)
-            if job:
-                mapping['job_progress'] = round((job.progress or 0.0) * 100, 1)
-            else:
-                mapping['job_progress'] = 0.0
-
-        # Populate progress from states
-        latest_update_time = 0
-        max_progress = 0
-
-        # Process each client state and store both timestamp and percentage
-        for client_name, state in state_by_client.items():
-            if state.last_updated and state.last_updated > latest_update_time:
-                latest_update_time = state.last_updated
-
-            # Store both timestamp and percentage for each client
-            mapping['states'][client_name] = {
-                'timestamp': state.timestamp or 0,
-                'percentage': round(state.percentage * 100, 1) if state.percentage else 0,
-                'last_updated': state.last_updated
-            }
-
-            # Calculate max progress for unified_progress (using percentage)
-            if state.percentage:
-                progress_pct = round(state.percentage * 100, 1)
-                max_progress = max(max_progress, progress_pct)
-
-        # Add hardcover mapping details
-        hardcover_details = hardcover_by_book.get(book.abs_id)
-        if hardcover_details:
-            mapping.update({
-                'hardcover_book_id': hardcover_details.hardcover_book_id,
-                'hardcover_slug': hardcover_details.hardcover_slug,
-                'hardcover_edition_id': hardcover_details.hardcover_edition_id,
-                'hardcover_pages': hardcover_details.hardcover_pages,
-                'isbn': hardcover_details.isbn,
-                'asin': hardcover_details.asin,
-                'matched_by': hardcover_details.matched_by,
-                'hardcover_linked': True,
-                'hardcover_title': book.abs_title  # Use ABS title as fallback for Hardcover title
-            })
-        else:
-            mapping.update({
-                'hardcover_book_id': None,
-                'hardcover_slug': None,
-                'hardcover_edition_id': None,
-                'hardcover_pages': None,
-                'isbn': None,
-                'asin': None,
-                'matched_by': None,
-                'hardcover_linked': False,
-                'hardcover_title': None
-            })
-            
-        # [NEW] Check for legacy Storyteller link
-        # Book has 'storyteller' state but no 'storyteller_uuid'
-        has_storyteller_state = 'storyteller' in state_by_client
-        is_legacy_link = has_storyteller_state and not book.storyteller_uuid
-        mapping['storyteller_legacy_link'] = is_legacy_link
-
-        # Platform deep links for dashboard
-        if mapping.get('sync_mode') == 'ebook_only':
-            mapping['abs_url'] = None
-            mapping['audio_url'] = None
-        else:
-            if mapping['audio_source'] == 'BookLore':
-                mapping['abs_url'] = None
-                mapping['audio_url'] = f"{manager.booklore_client.base_url}/book/{mapping['audio_source_id']}?tab=view"
-            else:
-                mapping['abs_url'] = f"{manager.abs_client.base_url}/item/{book.abs_id}"
-                mapping['audio_url'] = mapping['abs_url']
-
-        # Grimmory deep link (if configured and book found)
-        if manager.booklore_client.is_configured():
-            bl_book = manager.booklore_client.find_book_by_filename(book.ebook_filename, allow_refresh=False)
-            # [FIX] Fallback to original filename if storyteller artifact doesn't match
-            if not bl_book and book.original_ebook_filename:
-                bl_book = manager.booklore_client.find_book_by_filename(book.original_ebook_filename, allow_refresh=False)
-        else:
-            bl_book = None
-
-        if bl_book:
-            mapping['booklore_id'] = bl_book.get('id')
-            mapping['booklore_url'] = f"{manager.booklore_client.base_url}/book/{bl_book.get('id')}?tab=view"
-        else:
-            mapping['booklore_id'] = None
-            mapping['booklore_url'] = None
-
-        # Hardcover deep link (if linked)
-        if mapping.get('hardcover_slug'):
-            mapping['hardcover_url'] = f"https://hardcover.app/books/{mapping['hardcover_slug']}"
-        elif mapping.get('hardcover_book_id'):
-            mapping['hardcover_url'] = f"https://hardcover.app/books/{mapping['hardcover_book_id']}"
-        else:
-            mapping['hardcover_url'] = None
-
-        # Set unified progress to the maximum progress across all clients
-        mapping['unified_progress'] = min(max_progress, 100.0)
-
-        # Calculate last sync time
-        if latest_update_time > 0:
-            diff = time.time() - latest_update_time
-            if diff < 60:
-                mapping['last_sync'] = f"{int(diff)}s ago"
-            elif diff < 3600:
-                mapping['last_sync'] = f"{int(diff // 60)}m ago"
-            else:
-                mapping['last_sync'] = f"{int(diff // 3600)}h ago"
-        else:
-            mapping['last_sync'] = "Never"
-
-        # Set cover URL
-        if mapping.get('audio_cover_url'):
-            mapping['cover_url'] = mapping['audio_cover_url']
-        elif mapping.get('audio_source') == 'BookLore' and mapping.get('audio_source_id'):
-            mapping['cover_url'] = f"/api/booklore/audiobook-cover/{mapping['audio_source_id']}"
-        elif book.abs_id and mapping.get('audio_source') != 'BookLore':
-            mapping['cover_url'] = f"{manager.abs_client.base_url}/api/items/{book.abs_id}/cover?token={manager.abs_client.token}"
-
-        # Add to totals for overall progress calculation
-        duration = mapping.get('duration', 0)
-        progress_pct = mapping.get('unified_progress', 0)
-
-        if duration > 0:
-            total_duration += duration
-            total_listened += (progress_pct / 100.0) * duration
-
-        # Reading session stats
-        reading_stats = all_reading_stats.get(book.abs_id)
-        if reading_stats:
-            mapping['reading_stats'] = reading_stats
-
-        mappings.append(mapping)
-
-    # Calculate overall progress based on total duration and listening time
-    if total_duration > 0:
-        overall_progress = round((total_listened / total_duration) * 100, 1)
-    elif mappings:
-        # Fallback: average progress if no duration data available
-        overall_progress = round(sum(m['unified_progress'] for m in mappings) / len(mappings), 1)
-    else:
-        overall_progress = 0
+    suggestions = [s for s in database_service.get_all_pending_suggestions() if len(s.matches) > 0]
 
     latest_version, update_available = get_update_status()
 
@@ -4203,54 +4292,19 @@ def api_storyteller_link(abs_id):
 def api_status():
     """Return status of all books from database service"""
     books = database_service.get_all_books()
-
-    # Convert books to mappings format for API compatibility
-    mappings = []
-    for book in books:
-        # Get states for this book
-        states = database_service.get_states_for_book(book.abs_id)
-        state_by_client = {state.client_name: state for state in states}
-
-        mapping = {
-            'abs_id': book.abs_id,
-            'abs_title': book.abs_title,
-            'ebook_filename': book.ebook_filename,
-            'kosync_doc_id': book.kosync_doc_id,
-            'transcript_file': book.transcript_file,
-            'status': book.status,
-            'sync_mode': getattr(book, 'sync_mode', 'audiobook'), # Default to audiobook for existing
-            'duration': book.duration,
-            'storyteller_uuid': book.storyteller_uuid,
-            'states': {}
-        }
-
-        # Add progress information from states
-        for client_name, state in state_by_client.items():
-            # Store in unified states object
-            pct_val = round(state.percentage * 100, 1) if state.percentage is not None else 0
-
-            mapping['states'][client_name] = {
-                'timestamp': state.timestamp or 0,
-                'percentage': pct_val,
-                'xpath': getattr(state, 'xpath', None),
-                'last_updated': state.last_updated
-            }
-
-            # Maintain backward compatibility with old field names
-            if client_name == 'kosync':
-                mapping['kosync_pct'] = pct_val
-                mapping['kosync_xpath'] = getattr(state, 'xpath', None)
-            elif client_name == 'abs':
-                mapping['abs_pct'] = pct_val
-                mapping['abs_ts'] = state.timestamp
-            elif client_name == 'storyteller':
-                mapping['storyteller_pct'] = pct_val
-                mapping['storyteller_xpath'] = getattr(state, 'xpath', None)
-            elif client_name == 'booklore':
-                mapping['booklore_pct'] = pct_val
-                mapping['booklore_xpath'] = getattr(state, 'xpath', None)
-
-        mappings.append(mapping)
+    all_states = database_service.get_all_states()
+    all_hardcover = database_service.get_all_hardcover_details()
+    all_reading_stats = database_service.get_all_reading_stats()
+    cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
+    integrations = _build_dashboard_integrations()
+    mappings, _ = _build_dashboard_mappings(
+        books,
+        all_states,
+        integrations,
+        all_hardcover=all_hardcover,
+        reading_stats_by_book=all_reading_stats,
+        cached_booklore_by_filename=cached_booklore_by_filename,
+    )
 
     return jsonify({"mappings": mappings})
 
@@ -4655,6 +4709,41 @@ def get_booklore_libraries():
     return jsonify(libraries)
 
 
+def get_booklore_shelves():
+    """Return available Grimmory shelves (regular and magic)."""
+    if not container.booklore_client().is_configured():
+        return jsonify({"error": "Grimmory not configured"}), 400
+
+    try:
+        shelves = container.booklore_client().get_all_shelves()
+        magic_shelves = container.booklore_client().get_all_magic_shelves()
+        
+        all_shelves = shelves + magic_shelves
+        result = []
+        
+        for s in all_shelves:
+            is_magic = s.get("magicShelf") or s.get("magic") or s.get("isMagic", False)
+            name = s.get("name", "Unknown")
+            
+            # Add emoji prefix for UI distinction
+            if is_magic and not name.startswith("🪄"):
+                name = f"🪄 {name}"
+                
+            result.append({
+                "id": s.get("name"),  # Use original name as ID
+                "name": name,
+                "count": s.get("bookCount", 0)
+            })
+            
+        # Sort alphabetically by the original name
+        result.sort(key=lambda x: x["id"].lower() if x["id"] else "")
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error fetching Grimmory shelves: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 def get_abs_libraries():
     """Return available Audiobookshelf libraries."""
     if not container.abs_client().is_configured():
@@ -4749,6 +4838,34 @@ def _build_test_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def _is_builtin_kosync_test_url(url: str) -> bool:
+    if not url:
+        return False
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    host = (parsed.hostname or "").strip().lower()
+    if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+        return False
+
+    valid_ports = {5757}
+    configured_port = (os.environ.get("KOSYNC_PORT") or "").strip()
+    if configured_port:
+        try:
+            valid_ports.add(int(configured_port))
+        except ValueError:
+            logger.warning(f"Invalid KOSYNC_PORT '{configured_port}' while testing KOSync settings")
+
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+
+    return port in valid_ports
+
+
 def test_connection(service: str):
     """Test connectivity with diagnostic error messages."""
     payload = request.get_json(silent=True) or {}
@@ -4831,6 +4948,29 @@ def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
         healthcheck_status = healthcheck.status_code
     except Exception as e:
         healthcheck_error = str(e)
+
+    if _is_builtin_kosync_test_url(url):
+        if healthcheck_status == 200:
+            return {
+                "ok": True,
+                "message": (
+                    "Built-in KOSync bridge is reachable. "
+                    "Typed credentials look ready and will take effect after you save settings."
+                ),
+            }
+        if healthcheck_status is not None:
+            return {
+                "ok": False,
+                "message": f"Built-in KOSync bridge healthcheck returned {healthcheck_status}",
+            }
+        return {
+            "ok": False,
+            "message": (
+                "Built-in KOSync bridge is not reachable"
+                + (f": {healthcheck_error}" if healthcheck_error else "")
+            ),
+        }
+
     auth = requests.get(_build_test_url(url, "users/auth"), headers=headers, timeout=5)
     if auth.status_code == 200:
         if healthcheck_status not in (None, 200):
@@ -5051,6 +5191,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
+    app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
     app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])

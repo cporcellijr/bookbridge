@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class KOReaderDeviceSyncService:
     """Build and resolve the optional KOReader managed-folder sync manifest."""
 
+    _UNSORTED_SHELF_NAME = "Unsorted"
+
     _ABS_FILENAME_RE = re.compile(r"^(?P<item_id>.+?)_(?:abs|abs_search|direct)\.[^.]+$", re.IGNORECASE)
     _CWA_FILENAME_RE = re.compile(r"^cwa_(?P<cwa_id>[^.]+)\.[^.]+$", re.IGNORECASE)
     _KAVITA_FILENAME_RE = re.compile(r"^kavita_(?P<kavita_id>[^.]+)\.[^.]+$", re.IGNORECASE)
@@ -40,7 +42,7 @@ class KOReaderDeviceSyncService:
         self.kavita_client = kavita_client
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir is not None else Path("/data/epub_cache")
 
-    def build_manifest(self) -> dict:
+    def build_manifest(self, shelf_mapping: dict[str, list[str]] | None = None) -> dict:
         books = sorted(
             self.database_service.get_books_by_status("active"),
             key=lambda book: (str(getattr(book, "abs_title", "") or "").lower(), str(book.abs_id)),
@@ -69,7 +71,7 @@ class KOReaderDeviceSyncService:
                 "title": str(getattr(book, "abs_title", "") or ""),
                 "content_hash": str(content_hash),
                 "download_path": f"/koreader/device-sync/books/{quote(str(book.abs_id), safe='')}/download",
-                "size": self._try_get_size(source_filename),
+                "size": None,
                 "_preferred_filename": preferred_name,
             })
 
@@ -81,6 +83,16 @@ class KOReaderDeviceSyncService:
                 suffix = Path(preferred_name).suffix
                 preferred_name = f"{stem}__{item['abs_id'][:8]}{suffix}"
             item["filename"] = preferred_name
+
+        if shelf_mapping:
+            for item in items:
+                book = self.database_service.get_book(item["abs_id"])
+                if book:
+                    source_id = getattr(book, "ebook_source_id", None)
+                    if source_id and str(source_id) in shelf_mapping:
+                        item["shelves"] = shelf_mapping[str(source_id)]
+                    else:
+                        item["shelves"] = [self._UNSORTED_SHELF_NAME]
 
         return {
             "generated_at": int(time.time()),

@@ -10,8 +10,9 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 - Added an optional **Bridge Sync** KOReader plugin for pulling bridge-managed books into a device folder.
 - Added **Find IDs** helpers for Audiobookshelf and Grimmory library ID settings, with dropdown pickers after lookup.
-- Dashboard cards now show recent session stats when that data exists.
 - Added an intentional **ABS disabled** mode for ebook-only or maintenance-focused deployments.
+- Added Grimmory shelf and magic shelf support for **Bridge Sync** plugin collection syncing.
+- Added a Grimmory shelf picker in Settings to make Bridge Sync collection setup easier.
 
 ### Changed
 
@@ -20,14 +21,21 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 - Added documentation for `STORYTELLER_UPLOAD_CHUNK_SIZE` so direct-upload chunk size can be tuned when needed.
 - Grimmory compatibility and session handling were expanded so newer Grimmory installs behave more reliably as both ebook and audiobook sources.
 - Settings now test the values currently in the form and show a restart page after saving.
+- Dashboard cards now show reading session details.
+- Match, Batch Match, Suggestions, and Forge now show clearer working feedback when you start an action.
+- Built-in KOSync testing in Settings now works with the values currently in the form.
 
 ### Fixed
 
 - Fixed Grimmory session writes so reading and listening sessions stay in the format Grimmory expects.
 - Fixed Storyteller direct-upload metadata formatting so Forge no longer fails with `400 Invalid upload-metadata` on Storyteller `web-v2.9.3`.
 - Fixed Storyteller direct-upload metadata and readiness issues that could break Forge imports.
+- Fixed deadband rollback behavior so tiny audiobook-vs-ebook gaps still avoid leader flapping without pushing older ABS progress back onto newer high-confidence ebook locators.
 - Fixed Grimmory progress, cache, and download edge cases that could break matching or syncing.
 - Fixed several sync stability issues around finished-book suggestions, KOReader locators, and replayed instant-sync events.
+- Fixed Grimmory session reporting so reading and listening sessions are recorded more reliably.
+- Fixed dashboard sync warnings so old inactive states do not create misleading out-of-sync messages.
+- Fixed the built-in KOSync Test button so it no longer requires saving first.
 
 ---
 

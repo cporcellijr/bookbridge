@@ -1544,3 +1544,269 @@ class TestCreateReadingSession:
         payload = call_kwargs.kwargs.get('json') or call_kwargs[1].get('json')
         assert payload["startLocation"] == "/6/4[chap01]!/4/2/1:0"
         assert payload["endLocation"] == "/6/4[chap01]!/4/2/3:50"
+
+
+class TestShelfMappingCache:
+    """Tests for the shelf mapping TTL cache in get_book_shelf_mapping."""
+
+    def test_cache_returns_cached_result_within_ttl(self, booklore_client):
+        """Second call within TTL should return cached data without re-calling API."""
+        shelves_resp = MockResponse([{"id": 1, "name": "Fantasy"}])
+        books_resp = MockResponse([{"id": 10, "title": "Book A"}])
+        magic_empty = MockResponse([])
+
+        with patch.object(booklore_client, "_make_request") as mock_req:
+            mock_req.side_effect = [shelves_resp, magic_empty, books_resp]
+            result1 = booklore_client.get_book_shelf_mapping(mode="shelf", excludes=[])
+            assert "10" in result1
+            call_count_after_first = mock_req.call_count
+
+            result2 = booklore_client.get_book_shelf_mapping(mode="shelf", excludes=[])
+            assert result2 == result1
+            assert mock_req.call_count == call_count_after_first
+
+    def test_cache_invalidated_after_ttl(self, booklore_client):
+        """After TTL expires, a fresh fetch should happen."""
+        shelves_resp = MockResponse([{"id": 1, "name": "Fantasy"}])
+        books_resp = MockResponse([{"id": 10, "title": "Book A"}])
+        magic_empty = MockResponse([])
+
+        with patch.object(booklore_client, "_make_request") as mock_req:
+            mock_req.side_effect = [
+                shelves_resp, magic_empty, books_resp,  # first call
+                shelves_resp, magic_empty, books_resp,  # second call after expiry
+            ]
+            booklore_client.get_book_shelf_mapping(mode="shelf", excludes=[])
+            call_count_after_first = mock_req.call_count
+
+            # Expire the cache
+            booklore_client._shelf_mapping_cache_time = 0
+
+            booklore_client.get_book_shelf_mapping(mode="shelf", excludes=[])
+            assert mock_req.call_count > call_count_after_first
+
+    def test_cache_invalidated_on_different_params(self, booklore_client):
+        """Different mode/excludes should bypass cache."""
+        shelves_resp = MockResponse([{"id": 1, "name": "Fantasy"}])
+        magic_resp = MockResponse([{"id": 2, "name": "Smart Shelf", "filterJson": "{}"}])
+        books_resp = MockResponse([{"id": 10, "title": "Book A"}])
+        all_books_resp = MockResponse([])  # empty books list for filter eval
+
+        with patch.object(booklore_client, "_make_request") as mock_req:
+            mock_req.side_effect = [
+                shelves_resp, magic_resp, books_resp, all_books_resp,  # mode=all
+                shelves_resp, magic_resp, books_resp,  # mode=shelf (different params)
+            ]
+            booklore_client.get_book_shelf_mapping(mode="all", excludes=[])
+            call_count_after_first = mock_req.call_count
+
+            booklore_client.get_book_shelf_mapping(mode="shelf", excludes=[])
+            assert mock_req.call_count > call_count_after_first
+
+
+class TestMagicShelfFilterEvaluator:
+    """Tests for the client-side magic shelf filterJson evaluator."""
+
+    def _make_book(self, book_id, language="en", library_id=10, hc_review_count=None,
+                   read_status="UNREAD", categories=None, title="Test Book"):
+        return {
+            "id": book_id,
+            "libraryId": library_id,
+            "libraryName": "Ebooks",
+            "readStatus": read_status,
+            "metadata": {
+                "title": title,
+                "language": language,
+                "hardcoverReviewCount": hc_review_count,
+                "categories": categories or [],
+                "authors": ["Author"],
+            },
+        }
+
+    def test_equals_case_insensitive(self):
+        book = self._make_book(1, language="En")
+        rule = {"field": "language", "operator": "equals", "value": "en"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_not_equals(self):
+        book = self._make_book(1, language="fr")
+        rule = {"field": "language", "operator": "not_equals", "value": "en"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_not_equals_same_value(self):
+        book = self._make_book(1, language="en")
+        rule = {"field": "language", "operator": "not_equals", "value": "en"}
+        assert BookloreClient._evaluate_rule(book, rule) is False
+
+    def test_equals_matches_list_membership_case_insensitive(self):
+        book = self._make_book(1, categories=["Science Fiction", "Horror"])
+        rule = {"field": "categories", "operator": "equals", "value": "science fiction"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_not_equals_rejects_present_list_member(self):
+        book = self._make_book(1, categories=["Science Fiction", "Horror"])
+        rule = {"field": "categories", "operator": "not_equals", "value": "Horror"}
+        assert BookloreClient._evaluate_rule(book, rule) is False
+
+    def test_is_empty_none(self):
+        book = self._make_book(1, hc_review_count=None)
+        rule = {"field": "hardcoverReviewCount", "operator": "is_empty"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_is_empty_with_value(self):
+        book = self._make_book(1, hc_review_count=5)
+        rule = {"field": "hardcoverReviewCount", "operator": "is_empty"}
+        assert BookloreClient._evaluate_rule(book, rule) is False
+
+    def test_is_not_empty(self):
+        book = self._make_book(1, hc_review_count=5)
+        rule = {"field": "hardcoverReviewCount", "operator": "is_not_empty"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_library_field_maps_to_library_id(self):
+        book = self._make_book(1, library_id=10)
+        rule = {"field": "library", "operator": "equals", "value": 10}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_library_field_no_match(self):
+        book = self._make_book(1, library_id=12)
+        rule = {"field": "library", "operator": "equals", "value": 10}
+        assert BookloreClient._evaluate_rule(book, rule) is False
+
+    def test_metadata_field_resolution(self):
+        book = self._make_book(1, language="fr")
+        value = BookloreClient._resolve_filter_field(book, "language")
+        assert value == "fr"
+
+    def test_top_level_field_resolution(self):
+        book = self._make_book(1)
+        book["readStatus"] = "READ"
+        value = BookloreClient._resolve_filter_field(book, "readStatus")
+        assert value == "READ"
+
+    def test_and_group_all_match(self):
+        book = self._make_book(1, hc_review_count=None, library_id=10)
+        group = {
+            "type": "group",
+            "join": "and",
+            "rules": [
+                {"field": "hardcoverReviewCount", "operator": "is_empty"},
+                {"field": "library", "operator": "equals", "value": 10},
+            ],
+        }
+        assert BookloreClient._evaluate_filter_group(book, group) is True
+
+    def test_and_group_partial_match(self):
+        book = self._make_book(1, hc_review_count=5, library_id=10)
+        group = {
+            "type": "group",
+            "join": "and",
+            "rules": [
+                {"field": "hardcoverReviewCount", "operator": "is_empty"},
+                {"field": "library", "operator": "equals", "value": 10},
+            ],
+        }
+        assert BookloreClient._evaluate_filter_group(book, group) is False
+
+    def test_or_group(self):
+        book = self._make_book(1, hc_review_count=5, library_id=10)
+        group = {
+            "type": "group",
+            "join": "or",
+            "rules": [
+                {"field": "hardcoverReviewCount", "operator": "is_empty"},
+                {"field": "library", "operator": "equals", "value": 10},
+            ],
+        }
+        assert BookloreClient._evaluate_filter_group(book, group) is True
+
+    def test_contains_string(self):
+        book = self._make_book(1, title="The Dark Tower")
+        rule = {"field": "title", "operator": "contains", "value": "dark"}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_gt_numeric(self):
+        book = self._make_book(1, hc_review_count=10)
+        rule = {"field": "hardcoverReviewCount", "operator": "gt", "value": 5}
+        assert BookloreClient._evaluate_rule(book, rule) is True
+
+    def test_unknown_operator_returns_false(self):
+        book = self._make_book(1)
+        rule = {"field": "language", "operator": "banana", "value": "en"}
+        assert BookloreClient._evaluate_rule(book, rule) is False
+
+    def test_evaluate_magic_shelf_end_to_end(self, booklore_client):
+        """Full integration: magic shelf filterJson → matching books in mapping."""
+        regular_shelves_resp = MockResponse([{"id": 1, "name": "Kobo"}])
+        magic_shelves_resp = MockResponse([
+            {
+                "id": 3,
+                "name": "Non-English",
+                "filterJson": json.dumps({
+                    "type": "group",
+                    "join": "and",
+                    "rules": [{"field": "language", "operator": "not_equals", "value": "en"}],
+                }),
+            },
+        ])
+        kobo_books_resp = MockResponse([{"id": 100, "title": "Book A"}])
+        all_books_resp = MockResponse([
+            {"id": 100, "libraryId": 10, "metadata": {"language": "en", "title": "English Book"}},
+            {"id": 200, "libraryId": 10, "metadata": {"language": "fr", "title": "French Book"}},
+            {"id": 300, "libraryId": 10, "metadata": {"language": "de", "title": "German Book"}},
+        ])
+
+        booklore_client._shelf_mapping_cache = None
+
+        with patch.object(booklore_client, "_make_request") as mock_req:
+            mock_req.side_effect = [
+                regular_shelves_resp,   # GET /api/v1/shelves
+                magic_shelves_resp,     # GET /api/magic-shelves
+                kobo_books_resp,        # GET /api/v1/shelves/1/books
+                all_books_resp,         # GET /api/v1/books (for filter eval)
+            ]
+            mapping = booklore_client.get_book_shelf_mapping(mode="all", excludes=[])
+
+        # Book 100 is on Kobo shelf (regular)
+        assert "100" in mapping
+        assert "Kobo" in mapping["100"]
+
+        # Books 200, 300 match the Non-English magic shelf
+        assert "200" in mapping
+        assert "Non-English" in mapping["200"]
+        assert "300" in mapping
+        assert "Non-English" in mapping["300"]
+
+        # Book 100 should NOT be in Non-English (language=en)
+        assert "Non-English" not in mapping["100"]
+
+    def test_evaluate_magic_shelf_category_equals_rules_match_multitag_books(self, booklore_client):
+        magic_shelves_resp = MockResponse([
+            {
+                "id": 4,
+                "name": "SciFi Horror",
+                "filterJson": json.dumps({
+                    "type": "group",
+                    "join": "and",
+                    "rules": [
+                        {"field": "categories", "operator": "equals", "value": "Science Fiction"},
+                        {"field": "categories", "operator": "equals", "value": "Horror"},
+                    ],
+                }),
+            },
+        ])
+        all_books_resp = MockResponse([
+            {"id": 100, "libraryId": 10, "metadata": {"title": "Ghost Ship", "categories": ["Science Fiction", "Horror"]}},
+            {"id": 200, "libraryId": 10, "metadata": {"title": "Space Opera", "categories": ["Science Fiction"]}},
+            {"id": 300, "libraryId": 10, "metadata": {"title": "Haunted House", "categories": ["Horror"]}},
+        ])
+
+        with patch.object(booklore_client, "_make_request") as mock_req:
+            mock_req.side_effect = [
+                MockResponse([]),      # GET /api/v1/shelves
+                magic_shelves_resp,    # GET /api/magic-shelves
+                all_books_resp,        # GET /api/v1/books (for filter eval)
+            ]
+            mapping = booklore_client.get_book_shelf_mapping(mode="magic", excludes=[])
+
+        assert mapping == {"100": ["SciFi Horror"]}

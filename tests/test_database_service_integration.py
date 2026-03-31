@@ -33,7 +33,7 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
 
         # Import here to avoid circular imports
         from src.db.database_service import DatabaseService, DatabaseMigrator
-        from src.db.models import Book, State, Job, HardcoverDetails
+        from src.db.models import Book, State, Job, HardcoverDetails, ReadingSession
 
         self.DatabaseService = DatabaseService
         self.DatabaseMigrator = DatabaseMigrator
@@ -41,6 +41,7 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.State = State
         self.Job = Job
         self.HardcoverDetails = HardcoverDetails
+        self.ReadingSession = ReadingSession
 
         # Create database service
         self.db_service = DatabaseService(self.test_db_path)
@@ -174,6 +175,47 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         # Verify job is gone (cascade delete)
         deleted_job = self.db_service.get_latest_job(test_abs_id)
         self.assertIsNone(deleted_job)
+
+    def test_delete_book_cascades_reading_sessions(self):
+        """Deleting a book should also delete reading_sessions rows."""
+        test_abs_id = 'test-book-delete-reading-sessions'
+
+        book = self.Book(
+            abs_id=test_abs_id,
+            abs_title='Delete Reading Sessions',
+            ebook_filename='test-delete-reading-sessions.epub',
+            kosync_doc_id='test-delete-reading-sessions-doc',
+            status='active',
+            duration=3600.0
+        )
+        self.db_service.save_book(book)
+
+        self.db_service.record_reading_session(
+            abs_id=test_abs_id,
+            session_type='EPUB',
+            start_time=1000.0,
+            end_time=1100.0,
+            duration_seconds=100,
+            start_progress=0.1,
+            end_progress=0.2,
+            leader_client='KoSync',
+        )
+
+        with self.db_service.get_session() as session:
+            self.assertEqual(
+                session.query(self.ReadingSession).filter(self.ReadingSession.abs_id == test_abs_id).count(),
+                1,
+            )
+
+        success = self.db_service.delete_book(test_abs_id)
+        self.assertTrue(success)
+        self.assertIsNone(self.db_service.get_book(test_abs_id))
+
+        with self.db_service.get_session() as session:
+            self.assertEqual(
+                session.query(self.ReadingSession).filter(self.ReadingSession.abs_id == test_abs_id).count(),
+                0,
+            )
 
     def test_create_states(self):
         """Test creating state records for multiple clients."""

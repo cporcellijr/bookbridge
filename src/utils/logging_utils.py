@@ -10,6 +10,59 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+_MOJIBAKE_MARKERS = (
+    "\u00f0\u0178",  # Common emoji mojibake prefix, e.g. ðŸ
+    "\u00e2",        # Common punctuation/symbol mojibake prefix, e.g. âš, âœ, â
+    "\u00c3",        # Common accented-text mojibake prefix, e.g. Ã
+    "\u00ef\u00b8",  # Variation selector mojibake, e.g. ï¸
+)
+
+
+def repair_mojibake(text):
+    """Repair UTF-8 text that was accidentally decoded as a single-byte encoding."""
+    if not isinstance(text, str) or not any(marker in text for marker in _MOJIBAKE_MARKERS):
+        return text
+
+    repaired = text
+    for _ in range(3):
+        if not any(marker in repaired for marker in _MOJIBAKE_MARKERS):
+            break
+
+        raw_bytes = bytearray()
+        for char in repaired:
+            codepoint = ord(char)
+            if codepoint <= 0xFF:
+                raw_bytes.append(codepoint)
+                continue
+
+            try:
+                raw_bytes.extend(char.encode("cp1252"))
+            except UnicodeError:
+                raw_bytes = None
+                break
+
+        if raw_bytes is None:
+            break
+
+        try:
+            candidate = bytes(raw_bytes).decode("utf-8")
+        except UnicodeError:
+            break
+
+        if not candidate or candidate == repaired:
+            break
+        repaired = candidate
+
+    return repaired
+
+
+class MojibakeSafeFormatter(logging.Formatter):
+    """Formatter that normalizes mojibake before logs are emitted."""
+
+    def format(self, record):
+        return repair_mojibake(super().format(record))
+
+
 class MemoryLogHandler(logging.Handler):
     """Log handler that keeps logs in memory for real-time streaming."""
 
@@ -23,7 +76,7 @@ class MemoryLogHandler(logging.Handler):
             log_entry = {
                 'timestamp': datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S'),
                 'level': record.levelname,
-                'message': record.getMessage(),
+                'message': repair_mojibake(record.getMessage()),
                 'module': record.name
             }
             self.logs.append(log_entry)
@@ -52,7 +105,7 @@ def setup_file_logging():
 
     file_handler = RotatingFileHandler(str(LOG_PATH), maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file_handler.setLevel(log_level)
-    file_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s - %(name)s: %(message)s'))
+    file_handler.setFormatter(MojibakeSafeFormatter('[%(asctime)s] %(levelname)s - %(name)s: %(message)s'))
 
     # Attach to the root logger so all module loggers go to the same file
     root_logger = logging.getLogger()
@@ -67,7 +120,7 @@ def setup_console_logging():
     # Use LOG_LEVEL env variable or fallback to INFO
     log_level = getattr(logging, os.environ.get('LOG_LEVEL', 'INFO').upper(), logging.INFO)
     console_handler.setLevel(log_level)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    console_handler.setFormatter(MojibakeSafeFormatter('%(asctime)s - %(levelname)s - %(message)s'))
 
     # Add to root logger
     root_logger = logging.getLogger()
@@ -142,7 +195,7 @@ def setup_telegram_logging():
 
     logger.info("Setting up telegram logger")
     handler = TelegramHandler(bot_token, chat_id, min_level=log_level)
-    handler.setFormatter(logging.Formatter(
+    handler.setFormatter(MojibakeSafeFormatter(
         '<b>[%(asctime)s]</b> <code>%(levelname)s</code> - <b>%(name)s</b>: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'))
     root_logger = logging.getLogger()

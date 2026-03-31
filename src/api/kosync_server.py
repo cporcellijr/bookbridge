@@ -797,7 +797,34 @@ def koreader_device_sync_manifest():
     service = _get_koreader_device_sync_service()
     if not service:
         return jsonify({"error": "Device sync service unavailable"}), 503
-    return jsonify(service.build_manifest()), 200
+
+    shelf_mapping = None
+    collections_mode = os.environ.get("DEVICE_SYNC_COLLECTIONS", "off").lower()
+    if collections_mode != "off":
+        try:
+            bl = _container.booklore_client()
+            if bl.is_configured():
+                excluded_raw = os.environ.get("DEVICE_SYNC_EXCLUDED_SHELVES", "")
+                excludes = [s.strip() for s in excluded_raw.split(",") if s.strip()]
+                # Auto-exclude the Grimmory sync shelf (e.g. "Kobo") — every
+                # matched book is on it, so it would be a redundant collection.
+                sync_shelf = os.environ.get("BOOKLORE_SHELF_NAME", "").strip()
+                if sync_shelf and sync_shelf not in excludes:
+                    excludes.append(sync_shelf)
+                target_book_ids = []
+                for book in service.database_service.get_books_by_status("active"):
+                    source_id = getattr(book, "ebook_source_id", None)
+                    if source_id:
+                        target_book_ids.append(str(source_id))
+                shelf_mapping = bl.get_book_shelf_mapping(
+                    mode=collections_mode,
+                    excludes=excludes,
+                    target_book_ids=target_book_ids,
+                )
+        except Exception as e:
+            logger.warning("Device-sync manifest: shelf mapping failed: %s", e)
+
+    return jsonify(service.build_manifest(shelf_mapping=shelf_mapping)), 200
 
 
 @kosync_sync_bp.route('/device-sync/books/<path:abs_id>/download', methods=['GET'])
@@ -1176,8 +1203,8 @@ def _respond_from_book_states(doc_id, book):
         if poison_pill is not None:
             return poison_pill
         return jsonify({
-            "device": best_doc.device or "abs-kosync-bridge",
-            "device_id": best_doc.device_id or "abs-kosync-bridge",
+            "device": "abs-kosync-bridge",
+            "device_id": "abs-kosync-bridge",
             "document": doc_id,
             "percentage": float(best_doc.percentage),
             "progress": best_doc.progress or "",

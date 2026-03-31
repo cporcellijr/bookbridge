@@ -740,6 +740,34 @@
                             {% if get_bool('GRIMMORY_READING_SESSIONS') %}checked{% endif %}>
                         <label for="grimmory_sessions">Record Reading Sessions</label>
                     </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Device Sync Collections</h4>
+
+                    <div class="form-group full-width">
+                        <label>Collection Syncing (Grimmory Shelves to KOReader)</label>
+                        <select name="DEVICE_SYNC_COLLECTIONS">
+                            <option value="off" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'off' %}selected{% endif %}>Off / Disabled</option>
+                            <option value="all" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'all' %}selected{% endif %}>All Shelves</option>
+                            <option value="magic" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'magic' %}selected{% endif %}>Magic Shelves Only</option>
+                            <option value="shelf" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'shelf' %}selected{% endif %}>Regular Shelves Only</option>
+                        </select>
+                        <div class="help-text">Automatically creates KOReader collections based on Grimmory shelf membership (<b>Note:</b> This feature only works with <code>bridgesync.koplugin</code> active on your KOReader device).</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Excluded Shelves</label>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" name="DEVICE_SYNC_EXCLUDED_SHELVES" value="{{ get_val('DEVICE_SYNC_EXCLUDED_SHELVES') }}" placeholder="e.g. Read, Archive, DNF" style="flex: 1;">
+                            <button class="btn" type="button" onclick="checkBookloreShelves()">🔍 Find Shelves</button>
+                        </div>
+                        <select id="booklore_shelf_picker" style="display:none; margin-top:10px;"
+                            onchange="applyShelfPickerSelection('DEVICE_SYNC_EXCLUDED_SHELVES', 'booklore_shelf_picker')">
+                            <option value="">Select a shelf to add...</option>
+                        </select>
+                        <div id="booklore_shelf_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
+                        <div class="help-text">Comma-separated list of Grimmory shelf names to skip when creating KOReader collections.</div>
+                    </div>
                 </div>
             </div>
 
@@ -1398,6 +1426,33 @@
                 statusId: 'booklore_library_picker_status',
                 emptyMessage: 'No libraries found. Check connection or try syncing first.',
                 labelBuilder: (lib) => `${lib.name} (${lib.id})`,
+            });
+        }
+
+        function applyShelfPickerSelection(inputName, selectId) {
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            if (!input || !select || !select.value) return;
+            
+            let currentStr = input.value || '';
+            let current = currentStr.split(',').map(s => s.trim()).filter(Boolean);
+            if (!current.includes(select.value)) {
+                current.push(select.value);
+                input.value = current.join(', ');
+                if (typeof markDirty === 'function') markDirty();
+            }
+            select.value = ""; // Reset select
+        }
+
+        function checkBookloreShelves() {
+            populateLibraryPicker({
+                endpoint: '/api/booklore/shelves',
+                button: event.target,
+                inputName: 'DEVICE_SYNC_EXCLUDED_SHELVES', // Just used for reading current value optionally
+                selectId: 'booklore_shelf_picker',
+                statusId: 'booklore_shelf_picker_status',
+                emptyMessage: 'No shelves found. Check connection or try syncing first.',
+                labelBuilder: (shelf) => `${shelf.name} (${shelf.count} books)`,
             });
         }
 

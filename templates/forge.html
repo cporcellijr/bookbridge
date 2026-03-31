@@ -734,6 +734,33 @@
         let selectedAudio = null;
         let selectedText = null;
         let pendingForgeStageSelection = null;
+        let forgeRequestInFlight = false;
+
+        function previewForgeState(buttonLabel, message) {
+            const btn = document.getElementById('forgeBtn');
+            const status = document.getElementById('forgeStatus');
+
+            if (!btn.dataset.originalLabel) {
+                btn.dataset.originalLabel = btn.textContent.trim();
+            }
+
+            btn.textContent = buttonLabel;
+            status.className = 'forge-status working';
+            status.innerHTML = `<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0"></div>${message}`;
+        }
+
+        function restoreForgePreviewState() {
+            if (forgeRequestInFlight) {
+                return;
+            }
+
+            const btn = document.getElementById('forgeBtn');
+            const status = document.getElementById('forgeStatus');
+            btn.textContent = btn.dataset.originalLabel || 'Forge Edition';
+            status.className = 'forge-status';
+            status.innerHTML = '';
+            updateForgeBtn();
+        }
 
         function openForgeStageModal(onSelect) {
             pendingForgeStageSelection = onSelect;
@@ -743,6 +770,7 @@
         function closeForgeStageModal() {
             pendingForgeStageSelection = null;
             document.getElementById('forgeStageModal').classList.remove('open');
+            restoreForgePreviewState();
         }
 
         function chooseForgeStageMode(mode) {
@@ -906,11 +934,16 @@
 
         function updateForgeBtn() {
             const btn = document.getElementById('forgeBtn');
-            btn.disabled = !(selectedAudio && selectedText);
+            btn.disabled = forgeRequestInFlight || !(selectedAudio && selectedText);
         }
 
         function forgeBook() {
-            if (!selectedAudio || !selectedText) return;
+            if (!selectedAudio || !selectedText || forgeRequestInFlight) return;
+
+            previewForgeState(
+                'Opening forge options...',
+                'Choose how to stage the forge files to continue.'
+            );
 
             openForgeStageModal((mode) => {
                 startForgeRequest(mode);
@@ -921,10 +954,14 @@
             const btn = document.getElementById('forgeBtn');
             const status = document.getElementById('forgeStatus');
 
+            forgeRequestInFlight = true;
             btn.disabled = true;
+            btn.textContent = 'Forging edition...';
             btn.textContent = '⏳ Forging...';
             status.className = 'forge-status working';
             status.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0"></div> Copying files and starting Storyteller processing...';
+            status.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0"></div> Forging the Storyteller edition and returning to the dashboard...';
+            btn.textContent = 'Forging edition...';
 
             fetch('/api/forge/process', {
                 method: 'POST',
@@ -943,17 +980,25 @@
                         // Redirect to dashboard to show status banner
                         window.location.href = '/';
                     } else {
+                        forgeRequestInFlight = false;
                         status.className = 'forge-status error';
                         status.textContent = `❌ ${data.error || 'Forge failed'}`;
                         btn.textContent = '⚡ Forge Edition';
                         btn.disabled = false;
+                        status.textContent = data.error || 'Forge failed';
+                        btn.textContent = btn.dataset.originalLabel || 'Forge Edition';
+                        updateForgeBtn();
                     }
                 })
                 .catch(err => {
+                    forgeRequestInFlight = false;
                     status.className = 'forge-status error';
                     status.textContent = `❌ Network error: ${err.message}`;
                     btn.textContent = '⚡ Forge Edition';
                     btn.disabled = false;
+                    status.textContent = `Network error: ${err.message}`;
+                    btn.textContent = btn.dataset.originalLabel || 'Forge Edition';
+                    updateForgeBtn();
                 });
         }
 

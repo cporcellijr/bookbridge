@@ -10,8 +10,9 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 
 - Added an optional **Bridge Sync** KOReader plugin for pulling bridge-managed books onto a device-managed folder.
 - Added **Find IDs** helpers for Audiobookshelf and Grimmory library ID fields in Settings, including quick pick dropdowns.
-- Dashboard cards now show recent session stats when session tracking data is available.
 - Added an **Audiobookshelf disabled mode** by treating `disabled` as an intentional off switch for ABS URL or token settings.
+- Added Grimmory shelf and magic shelf support for **Bridge Sync** plugin collection syncing.
+- Added a Grimmory shelf picker in Settings to make Bridge Sync collection setup easier.
 
 ### Changed
 
@@ -20,6 +21,9 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 - Storyteller direct-upload settings now expose `STORYTELLER_UPLOAD_CHUNK_SIZE` for tuning TUS PATCH chunk size when needed.
 - Grimmory compatibility was broadened across search, cache refresh, downloads, and progress/session handling so newer Grimmory installs work more reliably as both ebook and audiobook sources.
 - Settings now test the values currently typed into the form, and saving settings shows a restart-wait page until the application is healthy again.
+- Dashboard cards now show reading session details.
+- Match, Batch Match, Suggestions, and Forge now show clearer working feedback when you start an action.
+- Built-in KOSync testing in Settings now works with the values currently in the form.
 
 ### Fixed
 
@@ -28,6 +32,10 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 - Fixed Storyteller direct-upload and post-import issues, including `Upload-Metadata` formatting, import readiness timing, duplicate Forge triggers, and several incorrect locator/progress writes.
 - Fixed Grimmory progress writes, single-file audiobook Forge downloads, cache hydration edge cases, and truncated downloads that could break matching or syncing.
 - Fixed suggestions and sync edge cases around finished books, instant-sync replays, sentence-level KOReader locators, and cross-format rollback handling.
+- Fixed deadband rollback behavior so tiny audiobook-vs-ebook gaps still avoid leader flapping without pushing older ABS progress back onto newer high-confidence ebook locators.
+- Fixed Grimmory session reporting so reading and listening sessions are recorded more reliably.
+- Fixed dashboard sync warnings so old inactive states do not create misleading out-of-sync messages.
+- Fixed the built-in KOSync Test button so it no longer requires saving first.
 
 ---
 
