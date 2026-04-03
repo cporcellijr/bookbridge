@@ -189,7 +189,7 @@ class KOReaderDeviceSyncService:
 
         stored_hash = self._select_content_hash(book)
         if stored_hash and stored_hash != content_hash:
-            logger.info(
+            logger.debug(
                 "KOReader device-sync serving resolved hash for '%s' instead of stored kosync_doc_id",
                 sanitize_log_data(getattr(book, "abs_title", None) or source_filename),
             )

@@ -961,6 +961,103 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('loading="lazy"', html)
         self.assertIn('decoding="async"', html)
 
+    def test_index_template_renders_three_progress_sections_and_not_started_toggle(self):
+        from src.db.models import Book, State
+
+        in_progress_book = Book(
+            abs_id='in-progress-1',
+            abs_title='In Progress Book',
+            ebook_filename='in-progress.epub',
+            status='active',
+            duration=3600
+        )
+        not_started_book = Book(
+            abs_id='not-started-1',
+            abs_title='Not Started Book',
+            ebook_filename='not-started.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+        finished_book = Book(
+            abs_id='finished-1',
+            abs_title='Finished Book',
+            ebook_filename='finished.epub',
+            status='active',
+            duration=3600
+        )
+
+        self.mock_database_service.get_all_books.return_value = [
+            in_progress_book,
+            not_started_book,
+            finished_book,
+        ]
+        self.mock_database_service.get_all_states.return_value = [
+            State(abs_id='in-progress-1', client_name='kosync', percentage=0.45, last_updated=1000),
+            State(abs_id='finished-1', client_name='abs', percentage=1.0, timestamp=3600, last_updated=2000),
+        ]
+        self._set_dashboard_integrations(storyteller=False)
+
+        html = self._render_index_template_source()
+
+        self.assertIn('In Progress', html)
+        self.assertIn('Not Started', html)
+        self.assertIn('Finished', html)
+        self.assertNotIn('Currently Reading', html)
+        self.assertNotIn('<h2>All Books</h2>', html)
+        self.assertLess(html.index('In Progress'), html.index('Not Started'))
+        self.assertLess(html.index('Not Started'), html.index('Finished'))
+
+        self.assertIn('id="in-progress-section"', html)
+        self.assertIn('id="not-started-section"', html)
+        self.assertIn('id="finished-section"', html)
+        self.assertIn('id="not-started-header"', html)
+        self.assertIn('id="not-started-grid"', html)
+        self.assertIn('id="not-started-chevron"', html)
+        self.assertIn("localStorage.setItem('not_started_expanded', isShowing);", html)
+        self.assertIn("const shouldExpand = localStorage.getItem('not_started_expanded') === 'true';", html)
+        self.assertIn("window.toggleNotStarted = function ()", html)
+
+        in_progress_chunk = html.split('id="in-progress-section"', 1)[1].split('id="not-started-section"', 1)[0]
+        not_started_chunk = html.split('id="not-started-section"', 1)[1].split('id="finished-section"', 1)[0]
+        finished_chunk = html.split('id="finished-section"', 1)[1]
+
+        self.assertIn('data-abs-id="in-progress-1"', in_progress_chunk)
+        self.assertNotIn('data-abs-id="not-started-1"', in_progress_chunk)
+        self.assertNotIn('data-abs-id="finished-1"', in_progress_chunk)
+
+        self.assertIn('data-abs-id="not-started-1"', not_started_chunk)
+        self.assertIn('data-filename="not-started.epub"', not_started_chunk)
+        self.assertNotIn('data-abs-id="in-progress-1"', not_started_chunk)
+        self.assertNotIn('data-abs-id="finished-1"', not_started_chunk)
+
+        self.assertIn('data-abs-id="finished-1"', finished_chunk)
+        self.assertNotIn('data-abs-id="in-progress-1"', finished_chunk)
+        self.assertNotIn('data-abs-id="not-started-1"', finished_chunk)
+
+    def test_index_template_hides_empty_progress_sections(self):
+        from src.db.models import Book
+
+        not_started_book = Book(
+            abs_id='only-not-started-1',
+            abs_title='Only Not Started',
+            ebook_filename='only-not-started.epub',
+            status='active'
+        )
+
+        self.mock_database_service.get_all_books.return_value = [not_started_book]
+        self._set_dashboard_integrations(storyteller=False)
+
+        html = self._render_index_template_source()
+
+        self.assertNotIn('id="in-progress-section"', html)
+        self.assertIn('id="not-started-section"', html)
+        self.assertNotIn('id="finished-section"', html)
+        self.assertNotIn('<h2>In Progress</h2>', html)
+        self.assertIn('<h2>Not Started</h2>', html)
+        self.assertNotIn('<h2>Finished</h2>', html)
+        self.assertIn('class="book-grid collapsible-book-grid" id="not-started-grid"', html)
+        self.assertNotIn('No books syncing yet', html)
+
     def test_match_template_has_submit_feedback_hooks(self):
         html = self._read_template_source('match.html')
 

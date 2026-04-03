@@ -378,6 +378,36 @@
             color: #ffffff;
         }
 
+        .dashboard-section + .dashboard-section .section-header {
+            margin-top: 80px;
+        }
+
+        .collapsible-section-header {
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .section-chevron {
+            font-size: 24px;
+            color: #667eea;
+            transition: color 0.2s ease;
+        }
+
+        .collapsible-section-header:hover .section-chevron,
+        .collapsible-section-header.active .section-chevron {
+            color: #ffffff;
+        }
+
+        .book-grid.collapsible-book-grid {
+            display: none;
+        }
+
+        .book-grid.collapsible-book-grid.show {
+            display: grid;
+            animation: slide-down 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
         .section-link {
             color: #667eea;
             font-size: 16px;
@@ -943,6 +973,10 @@
                 flex-direction: column;
                 align-items: stretch;
                 gap: 12px;
+            }
+
+            .dashboard-section + .dashboard-section .section-header {
+                margin-top: 40px;
             }
 
             .mt-80 {
@@ -1828,6 +1862,16 @@
         {% endif %}
         {% endwith %}
         {% if mappings %}
+        {% set section_flags = namespace(has_in_progress=false, has_not_started=false, has_finished=false) %}
+        {% for mapping in mappings %}
+        {% if mapping.unified_progress > 0 and mapping.unified_progress < 100 %}
+        {% set section_flags.has_in_progress = true %}
+        {% elif mapping.unified_progress == 0 %}
+        {% set section_flags.has_not_started = true %}
+        {% elif mapping.unified_progress >= 100 %}
+        {% set section_flags.has_finished = true %}
+        {% endif %}
+        {% endfor %}
         <div class="controls-bar">
             <div class="control-group">
                 <input type="text" id="dashboard-search" placeholder="Search books...">
@@ -1852,27 +1896,57 @@
             </div>
         </div>
 
-        <div class="section-header">
-            <h2>Currently Reading</h2>
+        {% if section_flags.has_in_progress %}
+        <div class="dashboard-section" id="in-progress-section">
+            <div class="section-header">
+                <h2>In Progress</h2>
+            </div>
+
+            <div class="book-grid" id="in-progress-grid">
+                {% for mapping in mappings %}
+                {% if mapping.unified_progress > 0 and mapping.unified_progress < 100 %}
+                {{ render_book_card(mapping, integrations) }}
+                {% endif %}
+                {% endfor %}
+            </div>
         </div>
+        {% endif %}
 
-        <div class="book-grid" id="currently-reading-grid">
-            {% for mapping in mappings %}
-            {% if mapping.unified_progress > 0 and mapping.unified_progress < 100 %} {{ render_book_card(mapping,
-                integrations) }} {% endif %} {% endfor %} </div>
+        {% if section_flags.has_not_started %}
+        <div class="dashboard-section" id="not-started-section">
+            <div class="section-header collapsible-section-header" id="not-started-header" role="button" tabindex="0"
+                aria-controls="not-started-grid" aria-expanded="false">
+                <h2>Not Started</h2>
+                <span class="section-chevron" id="not-started-chevron" aria-hidden="true">▶</span>
+            </div>
 
-                <div class="section-header mt-80">
-                    <h2>All Books</h2>
-                </div>
+            <div class="book-grid collapsible-book-grid" id="not-started-grid">
+                {% for mapping in mappings %}
+                {% if mapping.unified_progress == 0 %}
+                {{ render_book_card(mapping, integrations) }}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
-                <div class="book-grid" id="all-books-grid">
-                    {% for mapping in mappings %}
-                    {{ render_book_card(mapping, integrations) }}
-                    {% endfor %}
-                </div>
+        {% if section_flags.has_finished %}
+        <div class="dashboard-section" id="finished-section">
+            <div class="section-header">
+                <h2>Finished</h2>
+            </div>
 
+            <div class="book-grid" id="finished-grid">
+                {% for mapping in mappings %}
+                {% if mapping.unified_progress >= 100 %}
+                {{ render_book_card(mapping, integrations) }}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
-                {% else %}
+        {% else %}
                 <div class="empty-state">
                     <div class="empty-state-icon">📚</div>
                     <h2>No books syncing yet</h2>
@@ -1883,12 +1957,54 @@
         </div>
 
         <script>
-            const currentlyReadingGrid = document.getElementById('currently-reading-grid');
-            const allBooksGrid = document.getElementById('all-books-grid');
+            const dashboardSections = Array.from(document.querySelectorAll('.dashboard-section'));
+            const dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));
             const sortSelect = document.getElementById('sort-select');
             const filterSelect = document.getElementById('filter-select');
             const directionBtn = document.getElementById('sort-direction');
             const dashboardSearch = document.getElementById('dashboard-search');
+            const notStartedSection = document.getElementById('not-started-section');
+            const notStartedHeader = document.getElementById('not-started-header');
+            const notStartedGrid = document.getElementById('not-started-grid');
+            const notStartedChevron = document.getElementById('not-started-chevron');
+
+            function updateNotStartedChevron(isExpanded) {
+                if (notStartedChevron) {
+                    notStartedChevron.textContent = isExpanded ? '▼' : '▶';
+                }
+                if (notStartedHeader) {
+                    notStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+                }
+            }
+
+            function updateDashboardSectionVisibility() {
+                dashboardSections.forEach(section => {
+                    const grid = section.querySelector('.book-grid');
+                    if (!grid) return;
+
+                    const visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');
+                    if (visibleCards.length > 0) {
+                        section.classList.remove('hidden');
+                    } else {
+                        section.classList.add('hidden');
+                    }
+                });
+            }
+
+            window.toggleNotStarted = function () {
+                if (!notStartedGrid || !notStartedSection || !notStartedHeader) return;
+
+                const isShowing = notStartedGrid.classList.toggle('show');
+                notStartedSection.classList.toggle('active');
+                notStartedHeader.classList.toggle('active');
+                updateNotStartedChevron(isShowing);
+
+                try {
+                    localStorage.setItem('not_started_expanded', isShowing);
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
+            };
 
             function filterBooks() {
                 const filterValue = filterSelect.value;
@@ -1924,6 +2040,8 @@
                         card.style.display = 'none'; // Force hide
                     }
                 });
+
+                updateDashboardSectionVisibility();
 
                 // Persist choice
                 localStorage.setItem('abs_kosync_filter', filterValue);
@@ -1971,7 +2089,7 @@
             const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';
             const savedSortState = localStorage.getItem('abs_kosync_sort_state');
 
-            if (savedSort) {
+            if (savedSort && sortSelect) {
                 sortSelect.value = savedSort;
             }
 
@@ -2031,6 +2149,10 @@
                 sortedCards.forEach(card => grid.appendChild(card));
             }
 
+            function sortBooks(sortBy, direction) {
+                dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));
+            }
+
             function applySorting(sortBy) {
                 let direction;
 
@@ -2051,8 +2173,7 @@
                 updateSortIndicator(direction);
 
                 // Sort Grids
-                sortCards(currentlyReadingGrid, sortBy, direction);
-                sortCards(allBooksGrid, sortBy, direction);
+                sortBooks(sortBy, direction);
 
                 // Save preferences
                 localStorage.setItem('abs_kosync_sort', sortBy);
@@ -2082,10 +2203,37 @@
                 });
             }
 
+            document.addEventListener('DOMContentLoaded', () => {
+                if (notStartedHeader) {
+                    notStartedHeader.addEventListener('click', window.toggleNotStarted);
+                    notStartedHeader.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            window.toggleNotStarted();
+                        }
+                    });
+                }
+
+                try {
+                    const shouldExpand = localStorage.getItem('not_started_expanded') === 'true';
+                    if (shouldExpand && notStartedGrid && notStartedSection && notStartedHeader) {
+                        notStartedGrid.classList.add('show');
+                        notStartedSection.classList.add('active');
+                        notStartedHeader.classList.add('active');
+                        updateNotStartedChevron(true);
+                    } else {
+                        updateNotStartedChevron(false);
+                    }
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                    updateNotStartedChevron(false);
+                }
+            });
+
             // --- Initialization ---
 
             // Apply initial sort on load (if content exists)
-            if (currentlyReadingGrid || allBooksGrid) {
+            if (dashboardGrids.length > 0) {
                 applySorting(savedSort);
             }
 

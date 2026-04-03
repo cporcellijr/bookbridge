@@ -188,6 +188,14 @@ def _get_kosync_session_type(book) -> str:
 
 
 def _persist_grouped_kosync_session(session_data: dict) -> None:
+    if not _supports_estimated_kosync_sessions(session_data["device"], session_data["device_id"]):
+        logger.debug(
+            "KOSync estimated session skipped for '%s' (device '%s' classified as plugin/ignored)",
+            session_data["title"],
+            session_data["device"] or "unknown",
+        )
+        return
+
     duration_seconds = int(session_data["last_time"] - session_data["start_time"])
     if duration_seconds < _KOSYNC_SESSION_MIN_SECONDS or duration_seconds > _KOSYNC_SESSION_MAX_SECONDS:
         return
@@ -240,7 +248,13 @@ def _discard_open_kosync_session(document_hash: str | None, device: str | None, 
         return False
     session_key = _get_kosync_session_key(document_hash, device, device_id)
     with _kosync_open_sessions_lock:
-        return _kosync_open_sessions.pop(session_key, None) is not None
+        removed = _kosync_open_sessions.pop(session_key, None) is not None
+    logger.debug(
+        "_discard_open_kosync_session: key='%s' found=%s",
+        session_key,
+        removed,
+    )
+    return removed
 
 
 def _flush_stale_kosync_sessions(now_ts: float | None = None) -> None:
