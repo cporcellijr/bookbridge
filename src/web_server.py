@@ -11,9 +11,11 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 import requests
 import schedule
@@ -58,6 +60,9 @@ SUGGESTIONS_STATE_LOCK = threading.Lock()
 SUGGESTIONS_STATE_TTL_SECONDS = 86400
 SUGGESTIONS_CACHE_FILE_NAME = "suggestions_scan_cache.json"
 SUGGESTIONS_CACHE_LOCK = threading.Lock()
+STATS_CACHE = {}
+STATS_CACHE_LOCK = threading.Lock()
+STATS_CACHE_TTL_SECONDS = 60
 RESTARTING_PAGE_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -4289,6 +4294,430 @@ def api_storyteller_link(abs_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _get_stats_timezone():
+    tz_name = os.environ.get("TZ", "America/New_York") or "America/New_York"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        logger.warning("Invalid TZ '%s' for stats, falling back to America/New_York", tz_name)
+        return ZoneInfo("America/New_York")
+
+
+def _build_stats_cache_key():
+    return f"stats::{os.environ.get('TZ', 'America/New_York')}"
+
+
+def _read_cached_stats():
+    cache_key = _build_stats_cache_key()
+    with STATS_CACHE_LOCK:
+        entry = STATS_CACHE.get(cache_key)
+        if not entry:
+            return None
+        if (time.time() - entry["created_at"]) > STATS_CACHE_TTL_SECONDS:
+            STATS_CACHE.pop(cache_key, None)
+            return None
+        return entry["payload"]
+
+
+def _write_cached_stats(payload):
+    cache_key = _build_stats_cache_key()
+    with STATS_CACHE_LOCK:
+        STATS_CACHE[cache_key] = {
+            "created_at": time.time(),
+            "payload": payload,
+        }
+
+
+def _date_series(start_date, end_date):
+    values = []
+    cursor = start_date
+    while cursor <= end_date:
+        values.append(cursor)
+        cursor += timedelta(days=1)
+    return values
+
+
+def _activity_dates_from_daily(daily):
+    dates = set()
+    for row in daily or []:
+        try:
+            if int(row.get("seconds") or 0) > 0:
+                dates.add(datetime.fromisoformat(row["date"]).date())
+        except Exception:
+            continue
+    return dates
+
+
+def _calculate_current_streak_from_dates(activity_dates, reference_date):
+    streak = 0
+    cursor = reference_date
+    while cursor in activity_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def _normalize_abs_author(metadata):
+    authors = (metadata or {}).get("authors") or []
+    names = [author.get("name") for author in authors if isinstance(author, dict) and author.get("name")]
+    return ", ".join(names)
+
+
+def _recent_daily_from_mapping(days_map, tz, days=7):
+    end_date = datetime.now(tz).date()
+    start_date = end_date - timedelta(days=max(days - 1, 0))
+    days_map = days_map if isinstance(days_map, dict) else {}
+    buckets = {
+        str(key): int(round(float(value or 0)))
+        for key, value in days_map.items()
+    }
+    return [
+        {
+            "date": day.isoformat(),
+            "seconds": buckets.get(day.isoformat(), 0),
+        }
+        for day in _date_series(start_date, end_date)
+    ]
+
+
+def _heatmap_from_mapping(days_map, year):
+    days_map = days_map if isinstance(days_map, dict) else {}
+    heatmap = []
+    for key, value in days_map.items():
+        if str(key).startswith(f"{year}-"):
+            heatmap.append({
+                "date": str(key),
+                "seconds": int(round(float(value or 0))),
+            })
+    heatmap.sort(key=lambda row: row["date"])
+    return heatmap
+
+
+def _summarize_activity(daily, total_seconds, total_days, reference_date):
+    daily = daily or []
+    week_total = sum(int(row.get("seconds") or 0) for row in daily)
+    best_day = max(daily, key=lambda row: int(row.get("seconds") or 0), default=None)
+    activity_dates = _activity_dates_from_daily(daily)
+    return {
+        "totalSeconds": int(total_seconds or 0),
+        "totalDays": int(total_days or 0),
+        "weekTotalSeconds": week_total,
+        "dailyAverageSeconds": int(week_total / max(len(daily), 1)),
+        "bestDay": best_day,
+        "currentStreakDays": _calculate_current_streak_from_dates(activity_dates, reference_date),
+    }
+
+
+def _normalize_listening_session(session_data):
+    metadata = session_data.get("mediaMetadata") or {}
+    started_at = int((session_data.get("startedAt") or 0) / 1000)
+    ended_at = int((session_data.get("updatedAt") or 0) / 1000) or started_at
+    return {
+        "id": session_data.get("id"),
+        "activityType": "listening",
+        "absId": session_data.get("libraryItemId"),
+        "title": session_data.get("displayTitle") or metadata.get("title") or "Unknown title",
+        "subtitle": metadata.get("subtitle"),
+        "author": session_data.get("displayAuthor") or _normalize_abs_author(metadata),
+        "durationSeconds": int(round(float(session_data.get("timeListening") or 0))),
+        "startedAt": started_at,
+        "endedAt": ended_at,
+        "coverPath": session_data.get("coverPath"),
+    }
+
+
+def _build_listening_stats_payload(tz):
+    try:
+        abs_client = container.abs_client()
+    except Exception:
+        return None
+
+    raw_stats = abs_client.get_listening_stats()
+    if not raw_stats:
+        return None
+
+    all_days = raw_stats.get("days") or {}
+    daily = _recent_daily_from_mapping(all_days, tz, days=7)
+    heatmap = _heatmap_from_mapping(all_days, datetime.now(tz).year)
+    all_activity_dates = _activity_dates_from_daily([
+        {"date": key, "seconds": value}
+        for key, value in all_days.items()
+    ])
+
+    recent_sessions = raw_stats.get("recentSessions")
+    if not isinstance(recent_sessions, list) or not recent_sessions:
+        recent_sessions = abs_client.get_listening_sessions(limit=10)
+    normalized_sessions = [
+        _normalize_listening_session(session_data)
+        for session_data in (recent_sessions or [])[:10]
+        if isinstance(session_data, dict)
+    ]
+
+    summary = _summarize_activity(
+        daily=daily,
+        total_seconds=int(round(float(raw_stats.get("totalTime") or 0))),
+        total_days=len(all_activity_dates),
+        reference_date=datetime.now(tz).date(),
+    )
+    summary["itemsFinished"] = len(raw_stats.get("items") or {})
+    summary["daysListened"] = len(all_activity_dates)
+
+    return {
+        "available": True,
+        "stats": summary,
+        "daily": daily,
+        "heatmap": heatmap,
+        "recentSessions": normalized_sessions,
+        "activityDates": [day.isoformat() for day in sorted(all_activity_dates)],
+        "trackedBookIds": sorted({
+            session.get("absId") for session in normalized_sessions if session.get("absId")
+        }),
+    }
+
+
+def _build_reading_stats_payload(tz):
+    tz_name = getattr(tz, "key", str(tz))
+    summary = database_service.get_koreader_dashboard_summary(tz_name)
+    daily = database_service.get_koreader_daily_totals(7, tz_name)
+    heatmap = database_service.get_koreader_heatmap(datetime.now(tz).year, tz_name)
+    recent_sessions = database_service.get_koreader_recent_sessions(10, tz_name)
+    activity_dates = database_service.get_koreader_activity_dates(tz_name)
+
+    if not summary and not any(int(row.get("seconds") or 0) > 0 for row in daily):
+        return {
+            "available": False,
+            "stats": None,
+            "daily": daily,
+            "heatmap": heatmap,
+            "recentSessions": [],
+            "activityDates": [],
+            "trackedBookIds": [],
+        }
+
+    stats = summary or {}
+    stats.setdefault("booksTracked", 0)
+    stats.setdefault("daysRead", len(activity_dates))
+    stats.setdefault("totalSeconds", 0)
+    stats.setdefault("pagesRead", 0)
+    stats.setdefault("weekTotalSeconds", sum(int(row.get("seconds") or 0) for row in daily))
+    stats.setdefault("dailyAverageSeconds", int(stats["weekTotalSeconds"] / max(len(daily), 1)))
+    stats.setdefault("bestDay", max(daily, key=lambda row: int(row.get("seconds") or 0), default=None))
+    stats.setdefault("currentStreakDays", _calculate_current_streak_from_dates(
+        {datetime.fromisoformat(day).date() for day in activity_dates},
+        datetime.now(tz).date(),
+    ))
+    stats.setdefault("trackedBookIds", [])
+
+    return {
+        "available": True,
+        "stats": stats,
+        "daily": daily,
+        "heatmap": heatmap,
+        "recentSessions": recent_sessions,
+        "activityDates": activity_dates,
+        "trackedBookIds": stats.get("trackedBookIds") or [],
+    }
+
+
+def _merge_daily_activity(listening_daily, reading_daily, tz):
+    end_date = datetime.now(tz).date()
+    start_date = end_date - timedelta(days=6)
+    listening_map = {row["date"]: int(row.get("seconds") or 0) for row in listening_daily or []}
+    reading_map = {row["date"]: int(row.get("seconds") or 0) for row in reading_daily or []}
+
+    merged = []
+    for day in _date_series(start_date, end_date):
+        key = day.isoformat()
+        listening_seconds = listening_map.get(key, 0)
+        reading_seconds = reading_map.get(key, 0)
+        merged.append({
+            "date": key,
+            "seconds": listening_seconds + reading_seconds,
+            "listeningSeconds": listening_seconds,
+            "readingSeconds": reading_seconds,
+        })
+    return merged
+
+
+def _merge_heatmap_activity(listening_heatmap, reading_heatmap):
+    merged = defaultdict(lambda: {"seconds": 0, "listeningSeconds": 0, "readingSeconds": 0})
+    for row in listening_heatmap or []:
+        key = row["date"]
+        value = int(row.get("seconds") or 0)
+        merged[key]["seconds"] += value
+        merged[key]["listeningSeconds"] += value
+    for row in reading_heatmap or []:
+        key = row["date"]
+        value = int(row.get("seconds") or 0)
+        merged[key]["seconds"] += value
+        merged[key]["readingSeconds"] += value
+    return [
+        {"date": key, **values}
+        for key, values in sorted(merged.items())
+    ]
+
+
+def _merge_recent_sessions(listening_sessions, reading_sessions, limit=10):
+    merged = list(listening_sessions or []) + list(reading_sessions or [])
+    merged.sort(key=lambda row: int(row.get("endedAt") or 0), reverse=True)
+    return merged[: max(int(limit or 10), 1)]
+
+
+def _build_combined_stats_payload(listening, reading, tz):
+    listening_daily = (listening or {}).get("daily") or []
+    reading_daily = (reading or {}).get("daily") or []
+    combined_daily = _merge_daily_activity(listening_daily, reading_daily, tz)
+    combined_heatmap = _merge_heatmap_activity(
+        (listening or {}).get("heatmap"),
+        (reading or {}).get("heatmap"),
+    )
+    combined_sessions = _merge_recent_sessions(
+        (listening or {}).get("recentSessions"),
+        (reading or {}).get("recentSessions"),
+        limit=10,
+    )
+
+    listening_dates = {
+        datetime.fromisoformat(day).date()
+        for day in ((listening or {}).get("activityDates") or [])
+    }
+    reading_dates = {
+        datetime.fromisoformat(day).date()
+        for day in ((reading or {}).get("activityDates") or [])
+    }
+    all_activity_dates = listening_dates | reading_dates
+
+    combined_stats = {
+        "activeDays": len(all_activity_dates),
+        "totalSeconds": int(((listening or {}).get("stats") or {}).get("totalSeconds") or 0)
+        + int(((reading or {}).get("stats") or {}).get("totalSeconds") or 0),
+        "booksWithActivity": len(
+            set((listening or {}).get("trackedBookIds") or [])
+            | set((reading or {}).get("trackedBookIds") or [])
+        ),
+        "weekTotalSeconds": sum(int(row.get("seconds") or 0) for row in combined_daily),
+        "dailyAverageSeconds": int(
+            sum(int(row.get("seconds") or 0) for row in combined_daily) / max(len(combined_daily), 1)
+        ),
+        "bestDay": max(combined_daily, key=lambda row: int(row.get("seconds") or 0), default=None),
+        "currentStreakDays": _calculate_current_streak_from_dates(all_activity_dates, datetime.now(tz).date()),
+    }
+
+    return {
+        "available": bool((listening and listening.get("available")) or (reading and reading.get("available"))),
+        "stats": combined_stats if combined_stats["totalSeconds"] or combined_stats["activeDays"] else None,
+        "daily": combined_daily,
+        "heatmap": combined_heatmap,
+        "recentSessions": combined_sessions,
+    }
+
+
+def stats_view():
+    return render_template('stats.html')
+
+
+def api_stats():
+    cached = _read_cached_stats()
+    if cached is not None:
+        return jsonify(cached)
+
+    tz = _get_stats_timezone()
+    listening = None
+    reading = None
+
+    try:
+        listening = _build_listening_stats_payload(tz)
+    except Exception as e:
+        logger.warning("Stats API: listening stats build failed: %s", e)
+        listening = None
+
+    try:
+        reading = _build_reading_stats_payload(tz)
+    except Exception as e:
+        logger.warning("Stats API: reading stats build failed: %s", e)
+        reading = {
+            "available": False,
+            "stats": None,
+            "daily": [],
+            "heatmap": [],
+            "recentSessions": [],
+            "activityDates": [],
+            "trackedBookIds": [],
+        }
+
+    combined = _build_combined_stats_payload(
+        listening or {"available": False, "stats": None, "daily": [], "heatmap": [], "recentSessions": []},
+        reading,
+        tz,
+    )
+
+    response = {
+        "listening": listening,
+        "reading": {
+            "available": reading.get("available"),
+            "stats": reading.get("stats"),
+            "daily": reading.get("daily"),
+            "heatmap": reading.get("heatmap"),
+            "recentSessions": reading.get("recentSessions"),
+        } if reading else {
+            "available": False,
+            "stats": None,
+            "daily": [],
+            "heatmap": [],
+            "recentSessions": [],
+        },
+        "combined": combined,
+    }
+    _write_cached_stats(response)
+    return jsonify(response)
+
+
+def api_stats_reading_day():
+    date_str = str(request.args.get("date") or "").strip()
+    if not date_str:
+        return jsonify({"error": "Missing date"}), 400
+
+    try:
+        target_date = datetime.fromisoformat(date_str).date()
+    except ValueError:
+        return jsonify({"error": "Invalid date format"}), 400
+
+    try:
+        tz = _get_stats_timezone()
+        payload = database_service.get_koreader_books_for_date(
+            target_date.isoformat(),
+            getattr(tz, "key", str(tz)),
+        )
+    except Exception as e:
+        logger.warning("Stats API: reading day drilldown failed for %s: %s", date_str, e)
+        return jsonify({"error": "Failed to load reading day details"}), 500
+
+    return jsonify(payload)
+
+
+def api_stats_reading_calendar():
+    month_str = str(request.args.get("month") or "").strip()
+    if not month_str:
+        return jsonify({"error": "Missing month"}), 400
+
+    try:
+        datetime.fromisoformat(f"{month_str}-01")
+    except ValueError:
+        return jsonify({"error": "Invalid month format"}), 400
+
+    try:
+        tz = _get_stats_timezone()
+        payload = database_service.get_koreader_calendar_month(
+            month_str,
+            getattr(tz, "key", str(tz)),
+        )
+    except Exception as e:
+        logger.warning("Stats API: reading calendar failed for %s: %s", month_str, e)
+        return jsonify({"error": "Failed to load reading calendar"}), 500
+
+    return jsonify(payload)
+
+
 def api_status():
     """Return status of all books from database service"""
     books = database_service.get_all_books()
@@ -5175,6 +5604,10 @@ def create_app(test_container=None):
     app.add_url_rule('/api/health', 'api_health', api_health)
     app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
     app.add_url_rule('/api/status', 'api_status', api_status)
+    app.add_url_rule('/stats', 'stats_view', stats_view)
+    app.add_url_rule('/api/stats', 'api_stats', api_stats)
+    app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
+    app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
     app.add_url_rule('/logs', 'logs_view', logs_view)
     app.add_url_rule('/api/logs', 'api_logs', api_logs)
     app.add_url_rule('/api/logs/live', 'api_logs_live', api_logs_live)

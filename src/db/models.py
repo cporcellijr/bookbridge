@@ -346,6 +346,88 @@ class ReadingSession(Base):
         self.leader_client = leader_client
 
 
+class KOReaderBookStat(Base):
+    """
+    Raw KOReader book metadata uploaded from statistics.sqlite.
+    Stored per book per device and resolved to bridge books at query time.
+    """
+    __tablename__ = 'koreader_book_stats'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    md5 = Column(String(32), nullable=False, index=True)
+    device = Column(String(128), nullable=True)
+    device_id = Column(String(128), nullable=True)
+    device_key = Column(String(128), nullable=False, index=True)
+    ko_book_id = Column(Integer, nullable=True)
+    title = Column(String(500), nullable=True)
+    authors = Column(String(500), nullable=True)
+    pages = Column(Integer, nullable=True)
+    total_read_pages = Column(Integer, nullable=True)
+    total_read_time = Column(Integer, nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    def __init__(
+        self,
+        md5: str,
+        device_key: str,
+        device: str = None,
+        device_id: str = None,
+        ko_book_id: int = None,
+        title: str = None,
+        authors: str = None,
+        pages: int = None,
+        total_read_pages: int = None,
+        total_read_time: int = None,
+    ):
+        self.md5 = md5
+        self.device = device
+        self.device_id = device_id
+        self.device_key = device_key
+        self.ko_book_id = ko_book_id
+        self.title = title
+        self.authors = authors
+        self.pages = pages
+        self.total_read_pages = total_read_pages
+        self.total_read_time = total_read_time
+        self.last_updated = datetime.utcnow()
+
+
+class KOReaderPageStat(Base):
+    """
+    Raw KOReader per-page timing events uploaded from statistics.sqlite.
+    """
+    __tablename__ = 'koreader_page_stats'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    md5 = Column(String(32), nullable=False, index=True)
+    device = Column(String(128), nullable=True)
+    device_id = Column(String(128), nullable=True)
+    device_key = Column(String(128), nullable=False, index=True)
+    page = Column(Integer, nullable=False)
+    start_time = Column(Float, nullable=False, index=True)
+    duration = Column(Float, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+    def __init__(
+        self,
+        md5: str,
+        device_key: str,
+        page: int,
+        start_time: float,
+        duration: float,
+        device: str = None,
+        device_id: str = None,
+    ):
+        self.md5 = md5
+        self.device = device
+        self.device_id = device_id
+        self.device_key = device_key
+        self.page = page
+        self.start_time = start_time
+        self.duration = duration
+        self.uploaded_at = datetime.utcnow()
+
+
 class BookloreBook(Base):
     """
     Model for caching Grimmory search results, replacing local JSON cache.

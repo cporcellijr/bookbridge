@@ -13,7 +13,15 @@ local md5 = require("ffi/sha2").md5
 local FFIUtil = require("ffi/util")
 local buffer = require("string.buffer")
 local socket = require("socket")
+local json = require("json")
 local APIClient = require("bridge_api_client")
+local SQ3
+do
+    local ok, mod = pcall(require, "lua-ljsqlite3/init")
+    if ok then
+        SQ3 = mod
+    end
+end
 local PathChooser
 do
     local ok, mod = pcall(require, "ui/widget/pathchooser")
@@ -1222,6 +1230,318 @@ function BridgeSync:_uploadSessions()
     end
 end
 
+function BridgeSync:_findStatisticsDbPath()
+    local settings_dir = DataStorage:getSettingsDir()
+    local candidates = {
+        settings_dir .. "/statistics.sqlite",
+        settings_dir .. "/statistics.sqlite3",
+    }
+    for _, path in ipairs(candidates) do
+        if self:_fileExists(path) then
+            return path
+        end
+    end
+    return nil
+end
+
+function BridgeSync:_flushStatisticsDatabase()
+    local ok_reader, ReaderUI = pcall(require, "apps/reader/readerui")
+    if not ok_reader or not ReaderUI or not ReaderUI.instance then
+        return
+    end
+
+    local ui = ReaderUI.instance
+    if ui and ui.statistics and ui.statistics.is_doc then
+        local ok_flush, err = pcall(function()
+            ui.statistics:insertDB()
+        end)
+        if ok_flush then
+            self:logInfo("Flushed KOReader statistics DB before sync")
+        else
+            self:logWarn("Failed to flush KOReader statistics DB:", tostring(err or "unknown error"))
+        end
+    end
+end
+
+function BridgeSync:_currentDeviceIdentity()
+    local device = "KOReader"
+    local device_id = ""
+
+    local ok_device, Device = pcall(require, "device")
+    if ok_device and Device then
+        device = tostring(Device.friendly_name or Device.model or device)
+    end
+
+    if G_reader_settings and G_reader_settings.readSetting then
+        device_id = tostring(G_reader_settings:readSetting("device_id") or "")
+    end
+
+    return device, device_id
+end
+
+function BridgeSync:_collectStatisticsPayload()
+    if not SQ3 then
+        return nil, _("SQLite support is unavailable in this KOReader build")
+    end
+
+    self:_flushStatisticsDatabase()
+
+    local db_path = self:_findStatisticsDbPath()
+    if not db_path then
+        return nil, _("statistics.sqlite was not found in the KOReader settings folder")
+    end
+
+    local device, device_id = self:_currentDeviceIdentity()
+    local device_key = device_id ~= "" and device_id or device
+    local last_uploaded_device_key = tostring(self.state:readSetting("stats_last_uploaded_device_key") or "")
+    local last_uploaded_start_time = tonumber(self.state:readSetting("stats_last_uploaded_start_time")) or 0
+    if last_uploaded_device_key ~= "" and last_uploaded_device_key ~= device_key then
+        last_uploaded_start_time = 0
+    end
+    local replay_from = math.max(0, math.floor(last_uploaded_start_time - 300))
+
+    local conn = SQ3.open(db_path)
+    if not conn then
+        return nil, _("Failed to open KOReader statistics database")
+    end
+
+    local ok_payload, payload_or_err = pcall(function()
+        local book_result, book_rows = conn:exec("SELECT * FROM book")
+        local books_by_id = {}
+        for i = 1, book_rows do
+            local ko_book_id = tonumber(book_result[1][i])
+            local book_md5 = tostring(book_result[10][i] or "")
+            if ko_book_id and book_md5 ~= "" then
+                books_by_id[ko_book_id] = {
+                    ko_book_id = ko_book_id,
+                    md5 = book_md5,
+                    title = tostring(book_result[2][i] or ""),
+                    authors = tostring(book_result[3][i] or ""),
+                    pages = tonumber(book_result[7][i]) or 0,
+                    total_read_time = tonumber(book_result[11][i]) or 0,
+                    total_read_pages = tonumber(book_result[12][i]) or 0,
+                }
+            end
+        end
+
+        local query = string.format(
+            "SELECT * FROM page_stat_data WHERE start_time >= %d ORDER BY start_time ASC",
+            replay_from
+        )
+        local page_result, page_rows = conn:exec(query)
+        local page_stats = {}
+        local included_md5 = {}
+        local max_start_time = last_uploaded_start_time
+
+        for i = 1, page_rows do
+            local ko_book_id = tonumber(page_result[1][i])
+            local book = books_by_id[ko_book_id]
+            if book and book.md5 ~= "" then
+                local page = tonumber(page_result[2][i]) or 0
+                local start_time = tonumber(page_result[3][i]) or 0
+                local duration = tonumber(page_result[4][i]) or 0
+
+                table.insert(page_stats, {
+                    md5 = book.md5,
+                    page = page,
+                    start_time = start_time,
+                    duration = duration,
+                })
+                included_md5[book.md5] = true
+                if start_time > max_start_time then
+                    max_start_time = start_time
+                end
+            end
+        end
+
+        local books = {}
+        for _, book in pairs(books_by_id) do
+            if included_md5[book.md5] then
+                table.insert(books, {
+                    md5 = book.md5,
+                    ko_book_id = book.ko_book_id,
+                    title = book.title,
+                    authors = book.authors,
+                    pages = book.pages,
+                    total_read_time = book.total_read_time,
+                    total_read_pages = book.total_read_pages,
+                })
+            end
+        end
+        table.sort(books, function(a, b)
+            return tostring(a.title or "") < tostring(b.title or "")
+        end)
+
+        return {
+            device = device,
+            device_id = device_id,
+            device_key = device_key,
+            replay_from = replay_from,
+            watermark = max_start_time,
+            books = books,
+            page_stats = page_stats,
+        }
+    end)
+
+    pcall(function()
+        conn:close()
+    end)
+
+    if not ok_payload then
+        return nil, tostring(payload_or_err or "Failed to read KOReader statistics database")
+    end
+
+    return payload_or_err, nil
+end
+
+function BridgeSync:_runStatisticsSync()
+    local payload, payload_err = self:_collectStatisticsPayload()
+    if not payload then
+        error(payload_err or "Failed to build statistics payload")
+    end
+
+    if #payload.page_stats == 0 then
+        return {
+            skipped = true,
+            device_key = payload.device_key,
+            watermark = payload.watermark,
+            accepted_books = 0,
+            accepted_page_stats = 0,
+            duplicate_page_stats = 0,
+        }
+    end
+
+    self:logInfo(
+        "Uploading",
+        #payload.page_stats,
+        "reading stat rows and",
+        #payload.books,
+        "book metadata rows"
+    )
+
+    local ok, code, body = self.api:uploadStatistics({
+        device = payload.device,
+        device_id = payload.device_id,
+        books = payload.books,
+        page_stats = payload.page_stats,
+    })
+    if not ok then
+        error(body or ("HTTP " .. tostring(code or "unknown")))
+    end
+
+    local parsed = {}
+    if body and body ~= "" then
+        local ok_json, decoded = pcall(json.decode, body)
+        if ok_json and type(decoded) == "table" then
+            parsed = decoded
+        end
+    end
+
+    return {
+        skipped = false,
+        device_key = payload.device_key,
+        watermark = payload.watermark,
+        accepted_books = tonumber(parsed.accepted_books) or #payload.books,
+        accepted_page_stats = tonumber(parsed.accepted_page_stats) or #payload.page_stats,
+        duplicate_page_stats = tonumber(parsed.duplicate_page_stats) or 0,
+    }
+end
+
+function BridgeSync:syncReadingStats(silent)
+    if silent == nil then
+        silent = false
+    end
+
+    if self.sync_in_progress then
+        if not silent then
+            self:_showMessage(_("Bridge Sync is already running"), 2)
+        end
+        return false
+    end
+
+    if not self.server_url or self.server_url == "" or
+       not self.username or self.username == "" or
+       not self.key or self.key == "" then
+        if not silent then
+            self:_showMessage(_("Bridge Sync is not configured"), 3)
+        end
+        return false
+    end
+
+    local network_ok, network_err = self:_preflightNetwork()
+    if not network_ok then
+        self:logWarn(network_err)
+        if not silent then
+            self:_showMessage(network_err, 4)
+        end
+        return false
+    end
+
+    self.sync_in_progress = true
+    local info_msg = nil
+    if not silent then
+        info_msg = InfoMessage:new{
+            text = _("Syncing reading stats..."),
+            timeout = 0,
+        }
+        UIManager:show(info_msg)
+        UIManager:forceRePaint()
+    end
+
+    local subprocess_ok, success, result = self:_runInSubprocess(function()
+        return pcall(function()
+            return self:_runStatisticsSync()
+        end)
+    end)
+
+    if info_msg then
+        UIManager:close(info_msg)
+    end
+    self.sync_in_progress = false
+
+    if not subprocess_ok then
+        self:logErr("Reading stats sync subprocess failed", success or "")
+        if not silent then
+            self:_showMessage(T(_("Reading stats sync failed: %1"), tostring(success or "Subprocess failed")), 5)
+        end
+        return false
+    end
+
+    if not success then
+        self:logErr(result or "Unknown reading stats sync error")
+        if not silent then
+            self:_showMessage(T(_("Reading stats sync failed: %1"), tostring(result or "Unknown error")), 5)
+        end
+        return false
+    end
+
+    if result.device_key and result.device_key ~= "" then
+        self.state:saveSetting("stats_last_uploaded_device_key", result.device_key)
+    end
+    if result.watermark and tonumber(result.watermark) then
+        self.state:saveSetting("stats_last_uploaded_start_time", tonumber(result.watermark))
+    end
+    self.state:flush()
+
+    local message
+    if result.skipped then
+        message = _("Reading stats are already up to date.")
+    else
+        message = T(
+            _("Reading stats synced.\nAccepted rows: %1\nDuplicates: %2\nBooks: %3"),
+            result.accepted_page_stats or 0,
+            result.duplicate_page_stats or 0,
+            result.accepted_books or 0
+        )
+    end
+
+    self:logInfo(message)
+    if not silent then
+        self:_showMessage(message, 5)
+    end
+    return true
+end
+
 function BridgeSync:onReaderReady()
     self:startSession()
     return false
@@ -1263,6 +1583,14 @@ function BridgeSync:addToMainMenu(menu_items)
                 callback = function()
                     Trapper:wrap(function()
                         self:syncFromBridge(false)
+                    end)
+                end,
+            },
+            {
+                text = _("Sync Reading Stats"),
+                callback = function()
+                    Trapper:wrap(function()
+                        self:syncReadingStats(false)
                     end)
                 end,
             },

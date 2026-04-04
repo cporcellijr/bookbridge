@@ -368,6 +368,51 @@ class ABSClient:
             pass
         return None
 
+    def get_listening_stats(self):
+        """Fetch aggregated listening stats for the current ABS user."""
+        if not self.is_configured():
+            return None
+
+        self._update_session_headers()
+        url = f"{self.base_url}/api/me/listening-stats"
+        try:
+            r = self.session.get(url, timeout=self.timeout)
+            if r.status_code == 200:
+                return r.json()
+            logger.warning(
+                "ABS: Failed to fetch listening stats (%s) - %s",
+                r.status_code,
+                sanitize_log_data(r.text),
+            )
+        except Exception as e:
+            logger.error(f"ABS: Error fetching listening stats: {e}")
+        return None
+
+    def get_listening_sessions(self, limit=10):
+        """Fetch recent listening sessions for the current ABS user."""
+        if not self.is_configured():
+            return []
+
+        self._update_session_headers()
+        url = f"{self.base_url}/api/me/listening-sessions"
+        try:
+            r = self.session.get(
+                url,
+                params={"itemsPerPage": int(limit or 10)},
+                timeout=self.timeout,
+            )
+            if r.status_code == 200:
+                data = r.json() or {}
+                return data.get("sessions", []) or []
+            logger.warning(
+                "ABS: Failed to fetch listening sessions (%s) - %s",
+                r.status_code,
+                sanitize_log_data(r.text),
+            )
+        except Exception as e:
+            logger.error(f"ABS: Error fetching listening sessions: {e}")
+        return []
+
     def get_progress(self, item_id):
         if not self.is_configured(): return None
         self._update_session_headers()

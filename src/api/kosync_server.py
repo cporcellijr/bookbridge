@@ -892,6 +892,51 @@ def koreader_device_sync_download(abs_id):
     return response
 
 
+@kosync_sync_bp.route('/device-sync/statistics', methods=['POST'])
+@kosync_sync_bp.route('/koreader/device-sync/statistics', methods=['POST'])
+@kosync_auth_required
+def koreader_upload_statistics():
+    """Receive incremental KOReader reading statistics uploads."""
+    data = request.json
+    if not data or not isinstance(data, dict):
+        return jsonify({"error": "Expected JSON object"}), 400
+
+    books = data.get("books")
+    page_stats = data.get("page_stats")
+    if not isinstance(books, list) or not isinstance(page_stats, list):
+        return jsonify({"error": "Expected 'books' and 'page_stats' arrays"}), 400
+
+    device = str(data.get("device") or "").strip()
+    device_id = str(data.get("device_id") or "").strip()
+    device_key = (device_id or device).strip()
+    if not device_key:
+        return jsonify({"error": "Missing device identity"}), 400
+
+    if not _database_service:
+        return jsonify({"error": "Database service unavailable"}), 503
+
+    try:
+        accepted_books = _database_service.upsert_koreader_book_stats(
+            device=device,
+            device_id=device_id,
+            books=books,
+        )
+        page_insert_result = _database_service.bulk_insert_koreader_page_stats(
+            device=device,
+            device_id=device_id,
+            page_stats=page_stats,
+        )
+    except Exception as e:
+        logger.error("KOReader statistics upload failed for device '%s': %s", device_key, e)
+        return jsonify({"error": "Failed to persist statistics upload"}), 500
+
+    return jsonify({
+        "accepted_books": int(accepted_books or 0),
+        "accepted_page_stats": int(page_insert_result.get("accepted") or 0),
+        "duplicate_page_stats": int(page_insert_result.get("duplicates") or 0),
+    }), 200
+
+
 @kosync_sync_bp.route('/device-sync/sessions', methods=['POST'])
 @kosync_sync_bp.route('/koreader/device-sync/sessions', methods=['POST'])
 @kosync_auth_required

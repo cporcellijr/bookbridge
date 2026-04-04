@@ -254,4 +254,13 @@ function APIClient:uploadSessions(sessions)
     })
 end
 
+function APIClient:uploadStatistics(payload)
+    local body = json.encode(payload)
+    return self:_requestJSON("POST", "/koreader/device-sync/statistics", body, {
+        block_timeout = 30,
+        total_timeout = 90,
+        attempts = 2,
+    })
+end
+
 return APIClient
