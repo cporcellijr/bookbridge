@@ -6,19 +6,19 @@
 
 - Make sure your `/books` volume is mounted correctly in `docker-compose.yml`.
 - Check file permissions for the user running the container.
-- If the missing books should come from Booklore, run **Settings -> Refresh Booklore Cache**.
+- If the missing books should come from Grimmory, run **Settings -> Refresh Grimmory Cache**.
 
 ### Suggestions look stale or new imports are missing
 
 - A normal **Scan Library** run reuses cached results on purpose.
 - Use **Full Refresh** after large imports, removals, or metadata cleanup.
-- If Booklore titles are missing from Suggestions, refresh the Booklore cache first.
+- If Grimmory titles are missing from Suggestions, refresh the Grimmory cache first.
 
-### Booklore audiobook links are not syncing
+### Grimmory audiobook links are not syncing
 
-- Confirm **Booklore** is enabled and the audiobook still exists in the selected Booklore library.
-- Run **Refresh Booklore Cache** after moving, rescanning, or replacing Booklore items.
-- If the old Booklore item was deleted and recreated with a new ID, rematch that book.
+- Confirm **Grimmory** is enabled and the audiobook still exists in the selected Grimmory library.
+- Run **Refresh Grimmory Cache** after moving, rescanning, or replacing Grimmory items.
+- If the old Grimmory item was deleted and recreated with a new ID, rematch that book.
 
 ### Storyteller transcripts are not found
 
@@ -63,7 +63,7 @@ Useful places to look:
 
 - Match and Suggestions actions
 - Storyteller transcript ingest
-- Booklore cache refreshes
+- Grimmory cache refreshes
 - Background job failures
 
 ---

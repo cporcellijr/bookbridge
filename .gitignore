@@ -32,6 +32,10 @@ Thumbs.db
 *.log
 cwa_debug.log
 
+# Local artifacts
+.tmp/
+dist/
+
 # Local System Rules
 .cursorrules
 BRANCH_STATUS.md

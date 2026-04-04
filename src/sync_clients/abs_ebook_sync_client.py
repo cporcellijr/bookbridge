@@ -17,7 +17,7 @@ class ABSEbookSyncClient(SyncClient):
         self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_EBOOK_PERCENT", 1)) / 100.0
 
     def is_configured(self) -> bool:
-        return os.getenv("SYNC_ABS_EBOOK", "false").lower() == "true"
+        return os.getenv("SYNC_ABS_EBOOK", "false").lower() == "true" and self.abs_client.is_configured()
 
     def check_connection(self):
         return self.abs_client.check_connection()

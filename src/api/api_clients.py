@@ -9,6 +9,12 @@ from src.utils.logging_utils import sanitize_log_data
 
 logger = logging.getLogger(__name__)
 
+ABS_DISABLED_SENTINEL = "disabled"
+
+
+def is_abs_disabled_value(value) -> bool:
+    return str(value or "").strip().lower() == ABS_DISABLED_SENTINEL
+
 class ABSClient:
     def __init__(self):
         # Configuration is now dynamic via properties (no caching)
@@ -18,7 +24,11 @@ class ABSClient:
     @property
     def base_url(self):
         """Dynamic base_url from environment (no caching)."""
-        url = os.environ.get("ABS_SERVER", "").rstrip('/')
+        raw_url = os.environ.get("ABS_SERVER", "")
+        if is_abs_disabled_value(raw_url):
+            return ""
+
+        url = str(raw_url).strip().rstrip('/')
         # Validate URL scheme to help catch configuration errors
         if url and not url.startswith(('http://', 'https://')):
             logger.warning(f"⚠️ ABS_SERVER missing http:// or https:// scheme: {url}")
@@ -27,7 +37,10 @@ class ABSClient:
     @property
     def token(self):
         """Dynamic token from environment (no caching)."""
-        return os.environ.get("ABS_KEY")
+        raw_token = os.environ.get("ABS_KEY", "")
+        if is_abs_disabled_value(raw_token):
+            return ""
+        return str(raw_token).strip()
 
     @property
     def headers(self):
@@ -40,11 +53,16 @@ class ABSClient:
 
     def is_configured(self):
         """Check if ABS is configured with URL and token."""
+        if is_abs_disabled_value(os.environ.get("ABS_SERVER")) or is_abs_disabled_value(os.environ.get("ABS_KEY")):
+            return False
         return bool(self.base_url and self.token)
 
     def check_connection(self):
         # Verify configuration first
         if not self.is_configured():
+            if is_abs_disabled_value(os.environ.get("ABS_SERVER")) or is_abs_disabled_value(os.environ.get("ABS_KEY")):
+                logger.info("Audiobookshelf intentionally disabled")
+                return False
             logger.warning("⚠️ Audiobookshelf not configured (skipping)")
             return False
 
@@ -93,6 +111,21 @@ class ABSClient:
             return all_audiobooks
         except Exception as e:
             logger.error(f"ABS: Exception fetching audiobooks: {e}")
+            return []
+
+    def get_libraries(self):
+        if not self.is_configured():
+            return []
+        self._update_session_headers()
+        lib_url = f"{self.base_url}/api/libraries"
+        try:
+            r = self.session.get(lib_url, timeout=self.timeout)
+            if r.status_code != 200:
+                logger.warning(f"ABS: Failed to fetch libraries (status {r.status_code})")
+                return []
+            return r.json().get('libraries', []) or []
+        except Exception as e:
+            logger.error(f"ABS: Exception fetching libraries: {e}")
             return []
 
     @staticmethod
@@ -334,6 +367,51 @@ class ABSClient:
         except Exception:
             pass
         return None
+
+    def get_listening_stats(self):
+        """Fetch aggregated listening stats for the current ABS user."""
+        if not self.is_configured():
+            return None
+
+        self._update_session_headers()
+        url = f"{self.base_url}/api/me/listening-stats"
+        try:
+            r = self.session.get(url, timeout=self.timeout)
+            if r.status_code == 200:
+                return r.json()
+            logger.warning(
+                "ABS: Failed to fetch listening stats (%s) - %s",
+                r.status_code,
+                sanitize_log_data(r.text),
+            )
+        except Exception as e:
+            logger.error(f"ABS: Error fetching listening stats: {e}")
+        return None
+
+    def get_listening_sessions(self, limit=10):
+        """Fetch recent listening sessions for the current ABS user."""
+        if not self.is_configured():
+            return []
+
+        self._update_session_headers()
+        url = f"{self.base_url}/api/me/listening-sessions"
+        try:
+            r = self.session.get(
+                url,
+                params={"itemsPerPage": int(limit or 10)},
+                timeout=self.timeout,
+            )
+            if r.status_code == 200:
+                data = r.json() or {}
+                return data.get("sessions", []) or []
+            logger.warning(
+                "ABS: Failed to fetch listening sessions (%s) - %s",
+                r.status_code,
+                sanitize_log_data(r.text),
+            )
+        except Exception as e:
+            logger.error(f"ABS: Error fetching listening sessions: {e}")
+        return []
 
     def get_progress(self, item_id):
         if not self.is_configured(): return None

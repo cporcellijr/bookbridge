@@ -50,8 +50,12 @@ class TestBookLoreLeadsSync(BaseSyncCycleTestCase):
         }
 
     def get_expected_leader(self):
-        """Return expected leader service name."""
+        """Return expected leader service name (client key)."""
         return "BookLore"
+
+    def get_expected_leader_display(self):
+        """Return display label used in status logs."""
+        return "Grimmory"
 
     def get_expected_final_percentage(self):
         """Return expected final percentage."""

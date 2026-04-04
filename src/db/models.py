@@ -94,6 +94,7 @@ class Book(Base):
     jobs = relationship("Job", back_populates="book", cascade="all, delete-orphan")
     hardcover_details = relationship("HardcoverDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
+    reading_sessions = relationship("ReadingSession", back_populates="book", cascade="all, delete-orphan")
 
     def __init__(self, abs_id: str, abs_title: str = None, ebook_filename: str = None,
                  audio_source: str = None, audio_source_id: str = None,
@@ -313,9 +314,123 @@ class BookAlignment(Base):
         self.alignment_map_json = alignment_map_json
 
 
+class ReadingSession(Base):
+    """
+    Local reading session tracking for dashboard stats.
+    Recorded on every sync cycle where a leader is elected and progress changes.
+    """
+    __tablename__ = 'reading_sessions'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
+    session_type = Column(String(20), nullable=False)   # 'AUDIOBOOK', 'EPUB', 'PDF', 'EBOOK'
+    start_time = Column(Float, nullable=False)           # Unix timestamp
+    end_time = Column(Float, nullable=False)             # Unix timestamp
+    duration_seconds = Column(Integer, nullable=False)   # Capped/estimated
+    start_progress = Column(Float, nullable=True)        # 0-1 fraction
+    end_progress = Column(Float, nullable=True)          # 0-1 fraction
+    leader_client = Column(String(50), nullable=True)    # e.g. 'ABS', 'BookLoreAudio', 'KoSync', 'BookLore'
+
+    book = relationship("Book", back_populates="reading_sessions")
+
+    def __init__(self, abs_id: str, session_type: str, start_time: float, end_time: float,
+                 duration_seconds: int, start_progress: float = None, end_progress: float = None,
+                 leader_client: str = None):
+        self.abs_id = abs_id
+        self.session_type = session_type
+        self.start_time = start_time
+        self.end_time = end_time
+        self.duration_seconds = duration_seconds
+        self.start_progress = start_progress
+        self.end_progress = end_progress
+        self.leader_client = leader_client
+
+
+class KOReaderBookStat(Base):
+    """
+    Raw KOReader book metadata uploaded from statistics.sqlite.
+    Stored per book per device and resolved to bridge books at query time.
+    """
+    __tablename__ = 'koreader_book_stats'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    md5 = Column(String(32), nullable=False, index=True)
+    device = Column(String(128), nullable=True)
+    device_id = Column(String(128), nullable=True)
+    device_key = Column(String(128), nullable=False, index=True)
+    ko_book_id = Column(Integer, nullable=True)
+    title = Column(String(500), nullable=True)
+    authors = Column(String(500), nullable=True)
+    pages = Column(Integer, nullable=True)
+    total_read_pages = Column(Integer, nullable=True)
+    total_read_time = Column(Integer, nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    def __init__(
+        self,
+        md5: str,
+        device_key: str,
+        device: str = None,
+        device_id: str = None,
+        ko_book_id: int = None,
+        title: str = None,
+        authors: str = None,
+        pages: int = None,
+        total_read_pages: int = None,
+        total_read_time: int = None,
+    ):
+        self.md5 = md5
+        self.device = device
+        self.device_id = device_id
+        self.device_key = device_key
+        self.ko_book_id = ko_book_id
+        self.title = title
+        self.authors = authors
+        self.pages = pages
+        self.total_read_pages = total_read_pages
+        self.total_read_time = total_read_time
+        self.last_updated = datetime.utcnow()
+
+
+class KOReaderPageStat(Base):
+    """
+    Raw KOReader per-page timing events uploaded from statistics.sqlite.
+    """
+    __tablename__ = 'koreader_page_stats'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    md5 = Column(String(32), nullable=False, index=True)
+    device = Column(String(128), nullable=True)
+    device_id = Column(String(128), nullable=True)
+    device_key = Column(String(128), nullable=False, index=True)
+    page = Column(Integer, nullable=False)
+    start_time = Column(Float, nullable=False, index=True)
+    duration = Column(Float, nullable=False)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+    def __init__(
+        self,
+        md5: str,
+        device_key: str,
+        page: int,
+        start_time: float,
+        duration: float,
+        device: str = None,
+        device_id: str = None,
+    ):
+        self.md5 = md5
+        self.device = device
+        self.device_id = device_id
+        self.device_key = device_key
+        self.page = page
+        self.start_time = start_time
+        self.duration = duration
+        self.uploaded_at = datetime.utcnow()
+
+
 class BookloreBook(Base):
     """
-    Model for caching Booklore search results, replacing local JSON cache.
+    Model for caching Grimmory search results, replacing local JSON cache.
     """
     __tablename__ = 'booklore_books'
 

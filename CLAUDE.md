@@ -50,7 +50,7 @@ There is no configured linter or formatter beyond PEP 8 — the project does not
 - **Audiobookshelf (ABS)** — audiobook server (source of truth for audio timestamps)
 - **KOReader / KoSync** — e-reader device progress (by percentage)
 - **Storyteller** — audiobook companion app (by ebook EPUB position)
-- **Booklore** — ebook library/shelf manager (by percentage)
+- **Grimmory** — ebook library/shelf manager (by percentage)
 - **Hardcover** — book tracking service (write-only metadata)
 
 ### Sync Tiers
@@ -105,7 +105,7 @@ The settings UI at `/settings` reads from `os.environ` via `get_val()`/`get_bool
 
 `src/services/write_tracker.py` tracks recent writes per `(client_name, abs_id)`. After pushing progress to a client, call `record_write(client_name, abs_id)`. Before reacting to a progress change from that client, call `is_own_write(client_name, abs_id)` to suppress feedback loops.
 
-Client name keys: `'ABS'`, `'Storyteller'`, `'BookLore'`, `'KoSync'`.
+Client name keys: `'ABS'`, `'Storyteller'`, `'BookLore'` (internal key, displayed as Grimmory), `'KoSync'`.
 
 `abs_socket_listener.py` exposes backward-compat wrappers `record_abs_write(abs_id)` / `is_own_write(abs_id)` that delegate to the shared tracker.
 
@@ -121,7 +121,7 @@ SQLAlchemy ORM. Key models in `src/db/models.py`:
 | `KosyncDocument` | KOReader document hash ↔ ABS book link |
 | `Job` | Transcription/alignment job tracking |
 | `PendingSuggestion` | Auto-discovered book match candidates |
-| `BookloreBook` | Cached Booklore book metadata |
+| `BookloreBook` | Cached Grimmory book metadata |
 
 `DatabaseService` (`src/db/database_service.py`) is the only access layer — use it, never query the ORM directly from services.
 

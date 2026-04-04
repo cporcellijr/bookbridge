@@ -38,10 +38,10 @@ services:
 
       # Integrations
       # - KOSYNC_SERVER=https://koreader.example.com
-      # - BOOKLORE_SERVER=http://booklore.example.com
+      # - BOOKLORE_SERVER=http://grimmory.example.com
       # - STORYTELLER_API_URL=http://storyteller.example.com
       # - STORYTELLER_ASSETS_DIR=/storyteller
-      # Configure ABS, KOSync, Booklore, Storyteller, and other services in the Web UI.
+      # Configure ABS, KOSync, Grimmory, Storyteller, and other services in the Web UI.
 
       # CWA (Calibre-Web Automated) - For syncing ebooks without local files
       # - CWA_ENABLED=true
@@ -52,11 +52,12 @@ services:
     volumes:
       # === REQUIRED ===
       - ./data:/data                    # App data (database, cache)
-      - /path/to/ebooks:/books          # Your EPUB library (Required unless using CWA/Booklore exclusively)
+      - /path/to/ebooks:/books          # Your EPUB library (Required unless using CWA/Grimmory exclusively)
 
       # === OPTIONAL: Forge (Storyteller) ===
-      # - /path/to/storyteller/library:/storyteller_library
-      # - /path/to/storyteller/assets:/storyteller/assets
+      # Forge uploads directly over the Storyteller API.
+      # - /path/to/storyteller/library:/storyteller_library # Optional: local fallback/download access
+      # - /path/to/storyteller/assets:/storyteller/assets   # Optional: transcript ingest
 
     networks:
       - your-network

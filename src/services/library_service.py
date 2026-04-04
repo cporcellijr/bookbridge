@@ -1,7 +1,7 @@
 """
 Library Service.
 Handles high-level book management, bridging the gap between
-AudioBookShelf (ABS), Booklore (Metadata), and our local database.
+AudioBookShelf (ABS), Grimmory (Metadata), and our local database.
 """
 
 import logging
@@ -41,7 +41,7 @@ class LibraryService:
         Attempt to acquire an ebook for the given audiobook item.
         Priority Chain:
         1. ABS Direct Match (Audiobook item has ebook file)
-        2. Booklore (Curated DB Match)
+        2. Grimmory (Curated DB Match)
         3. CWA (Automated Library Search via OPDS)
         4. ABS Search (Search other libraries for title)
         5. Filesystem (Fallback - handled by caller)
@@ -84,7 +84,7 @@ class LibraryService:
                      logger.info(f"   ⬇️ Downloaded direct match to {output_path}")
                      return output_path
 
-        # 2. Booklore (Curated)
+        # 2. Grimmory (Curated)
         # Placeholder for curated DB lookup. 
         # Future: Check self.db.find_booklore_match(title, author)
         
@@ -135,7 +135,7 @@ class LibraryService:
 
     def sync_library_books(self):
         """
-        Main Routine: Synchronize our local library DB with external metadata sources (Booklore).
+        Main Routine: Synchronize our local library DB with external metadata sources (Grimmory).
         
         The new BookloreClient handles its own file-based caching internally.
         This method now simply triggers a cache refresh by calling get_all_books().
@@ -143,12 +143,12 @@ class LibraryService:
         books = self.get_syncable_books()
         logger.info(f"📚 LibraryService: Syncing metadata for {len(books)} books...")
         
-        # Check if Booklore is configured
+        # Check if Grimmory is configured
         if not self.booklore or not self.booklore.is_configured():
-            logger.info("   Booklore not configured, skipping library sync.")
+            logger.info("   Grimmory not configured, skipping library sync.")
             return
             
-        logger.info("✅ Booklore integration enabled - ebooks sourced from API")
+        logger.info("✅ Grimmory integration enabled - ebooks sourced from API")
         
         # Trigger cache refresh by calling get_all_books()
         # This will refresh the internal JSON-based cache if stale and PRUNE ghosts
@@ -159,7 +159,7 @@ class LibraryService:
             # and could mask pruning operations.
             
             all_books = self.booklore.get_all_books()
-            logger.info(f"   📚 Booklore cache is active with {len(all_books)} books.")
+            logger.info(f"   📚 Grimmory cache is active with {len(all_books)} books.")
             
             # FUTURE: If we want to ensure DB sync for fields that changed without ID change,
             # we could do it here, but efficiently. For now, trust the client's cache logic.

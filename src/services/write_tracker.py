@@ -5,7 +5,7 @@ Call record_write(client_name, abs_id) after BookBridge successfully pushes
 progress to any client. Call is_own_write(client_name, abs_id) before acting
 on a progress change from that client to suppress round-trip echoes.
 
-Supported client_name values: 'ABS', 'Storyteller', 'BookLore', 'KoSync'
+Supported client_name values: 'ABS', 'Storyteller', 'Grimmory', 'KoSync'
 """
 
 import threading

@@ -235,6 +235,15 @@
             width: 100%;
         }
 
+        .form-group select {
+            color-scheme: dark;
+        }
+
+        .form-group select option {
+            background: #121212;
+            color: #ffffff;
+        }
+
         .form-group input:focus,
         .form-group select:focus {
             outline: none;
@@ -502,7 +511,7 @@
 
             <div class="settings-section section-highlight">
                 <div class="section-header">
-                    <h3 class="text-primary">Audiobookshelf (Required)</h3>
+                    <h3 class="text-primary">Audiobookshelf</h3>
                     <button class="btn btn-sm" type="button" onclick="testConnection('abs', this)">🔗 Test</button>
                 </div>
                 <div class="section-body">
@@ -515,17 +524,29 @@
 
                     <div class="form-group full-width">
                         <label>Server URL</label>
-                        <input type="text" name="ABS_SERVER" value="{{ get_val('ABS_SERVER') }}" required>
+                        <input type="text" name="ABS_SERVER" value="{{ get_val('ABS_SERVER') }}">
+                        <div class="help-text">Enter <code>disabled</code> to skip Audiobookshelf</div>
                     </div>
                     <div class="form-group full-width">
                         <label>API Token</label>
-                        <input type="password" name="ABS_KEY" value="{{ get_val('ABS_KEY') }}" required>
+                        <input type="password" name="ABS_KEY" value="{{ get_val('ABS_KEY') }}">
+                        <div class="help-text">Enter <code>disabled</code> to skip Audiobookshelf</div>
                     </div>
 
                     <!-- Wrapper for Library ID -->
                     <div id="abs_library_id_group" class="form-group">
                         <label>Library ID</label>
-                        <input type="text" name="ABS_LIBRARY_ID" value="{{ get_val('ABS_LIBRARY_ID') }}" required>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" name="ABS_LIBRARY_ID" value="{{ get_val('ABS_LIBRARY_ID') }}"
+                                placeholder="e.g. lib_123" style="flex: 1;">
+                            <button class="btn" type="button" onclick="checkAbsLibs()">🔍 Find IDs</button>
+                        </div>
+                        <select id="abs_library_picker" style="display:none; margin-top:10px;"
+                            onchange="applyLibraryPickerSelection('ABS_LIBRARY_ID', 'abs_library_picker')">
+                            <option value="">Select a library ID...</option>
+                        </select>
+                        <div id="abs_library_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
+                        <div class="help-text">Use when restricting ABS search to a specific library.</div>
                     </div>
 
                     <div class="form-group">
@@ -664,13 +685,13 @@
                 </div>
             </div>
 
-            <!-- Booklore (Optional) -->
+            <!-- Grimmory (Optional) -->
             <div class="settings-section">
                 {% set booklore_configured = get_val('BOOKLORE_SERVER') != '' %}
                 {% set booklore_enabled = get_bool('BOOKLORE_ENABLED') or (booklore_configured and
                 get_val('BOOKLORE_ENABLED') == '') %}
                 <div class="section-header">
-                    <h3>Booklore</h3>
+                    <h3>Grimmory</h3>
                     <button class="btn btn-sm" type="button" onclick="testConnection('booklore', this)">🔗 Test</button>
                     <div class="toggle-switch-wrapper">
                         <span class="toggle-label">Enable</span>
@@ -700,14 +721,52 @@
                         <input type="text" name="BOOKLORE_SHELF_NAME" value="{{ get_val('BOOKLORE_SHELF_NAME') }}">
                     </div>
                     <div class="form-group full-width">
-                        <label>Booklore Library ID (Optional)</label>
+                        <label>Grimmory Library ID (Optional)</label>
                         <div style="display: flex; gap: 10px;">
                             <input type="text" name="BOOKLORE_LIBRARY_ID" value="{{ get_val('BOOKLORE_LIBRARY_ID') }}"
                                 placeholder="e.g. 1" style="flex: 1;">
                             <button class="btn" type="button" onclick="checkBookloreLibs()">🔍 Find IDs</button>
                         </div>
+                        <select id="booklore_library_picker" style="display:none; margin-top:10px;"
+                            onchange="applyLibraryPickerSelection('BOOKLORE_LIBRARY_ID', 'booklore_library_picker')">
+                            <option value="">Select a library ID...</option>
+                        </select>
+                        <div id="booklore_library_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
                         <div class="help-text">Restricts sync to a specific library (e.g., 1). Leave empty to sync all.
                         </div>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="grimmory_sessions" name="GRIMMORY_READING_SESSIONS"
+                            {% if get_bool('GRIMMORY_READING_SESSIONS') %}checked{% endif %}>
+                        <label for="grimmory_sessions">Record Reading Sessions</label>
+                    </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Device Sync Collections</h4>
+
+                    <div class="form-group full-width">
+                        <label>Collection Syncing (Grimmory Shelves to KOReader)</label>
+                        <select name="DEVICE_SYNC_COLLECTIONS">
+                            <option value="off" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'off' %}selected{% endif %}>Off / Disabled</option>
+                            <option value="all" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'all' %}selected{% endif %}>All Shelves</option>
+                            <option value="magic" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'magic' %}selected{% endif %}>Magic Shelves Only</option>
+                            <option value="shelf" {% if get_val('DEVICE_SYNC_COLLECTIONS') == 'shelf' %}selected{% endif %}>Regular Shelves Only</option>
+                        </select>
+                        <div class="help-text">Automatically creates KOReader collections based on Grimmory shelf membership (<b>Note:</b> This feature only works with <code>bridgesync.koplugin</code> active on your KOReader device).</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Excluded Shelves</label>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" name="DEVICE_SYNC_EXCLUDED_SHELVES" value="{{ get_val('DEVICE_SYNC_EXCLUDED_SHELVES') }}" placeholder="e.g. Read, Archive, DNF" style="flex: 1;">
+                            <button class="btn" type="button" onclick="checkBookloreShelves()">🔍 Find Shelves</button>
+                        </div>
+                        <select id="booklore_shelf_picker" style="display:none; margin-top:10px;"
+                            onchange="applyShelfPickerSelection('DEVICE_SYNC_EXCLUDED_SHELVES', 'booklore_shelf_picker')">
+                            <option value="">Select a shelf to add...</option>
+                        </select>
+                        <div id="booklore_shelf_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
+                        <div class="help-text">Comma-separated list of Grimmory shelf names to skip when creating KOReader collections.</div>
                     </div>
                 </div>
             </div>
@@ -951,7 +1010,7 @@
 
                         {% if get_bool('BOOKLORE_ENABLED') %}
                         <div class="form-group" style="align-items: center;">
-                            <label>Booklore Poll Mode</label>
+                            <label>Grimmory Poll Mode</label>
                             <select name="BOOKLORE_POLL_MODE" id="booklore_poll_mode"
                                     onchange="togglePollSeconds('booklore_poll_seconds_row', this.value)">
                                 <option value="global" {% if get_val('BOOKLORE_POLL_MODE', 'global') == 'global' %}selected{% endif %}>Global</option>
@@ -960,10 +1019,10 @@
                         </div>
                         <div class="form-group" id="booklore_poll_seconds_row"
                              {% if get_val('BOOKLORE_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Booklore Poll Interval (seconds)</label>
+                            <label>Grimmory Poll Interval (seconds)</label>
                             <input type="number" name="BOOKLORE_POLL_SECONDS" min="10"
                                    value="{{ get_val('BOOKLORE_POLL_SECONDS', '300') }}">
-                            <div class="help-text">Recommended: 300s for Booklore.</div>
+                            <div class="help-text">Recommended: 300s for Grimmory.</div>
                         </div>
                         {% endif %}
 
@@ -1080,13 +1139,13 @@
                     </div>
 
                     <div class="form-group full-width">
-                        <label>Booklore Cache</label>
+                        <label>Grimmory Cache</label>
                         <div class="cleanup-group">
                             <button type="button" id="booklore_refresh_btn" class="btn btn-primary" onclick="refreshBookloreCache(this)">
-                                Refresh Booklore Cache
+                                Refresh Grimmory Cache
                             </button>
                             <p class="help-text flex-1 m-0">
-                                Rebuilds Booklore cache immediately, including stale metadata refresh.
+                                Rebuilds Grimmory cache immediately, including stale metadata refresh.
                                 <span id="booklore_refresh_status"></span>
                             </p>
                         </div>
@@ -1172,14 +1231,16 @@
                     <div id="group_whisper_model" class="dynamic-group full-width" style="display:contents;">
                         <div class="form-group">
                             <label>Whisper Model</label>
-                            <select name="WHISPER_MODEL">
+                            <input type="text" name="WHISPER_MODEL" list="whisper-model-suggestions"
+                                value="{{ get_val('WHISPER_MODEL') }}" placeholder="tiny" autocomplete="off">
+                            <datalist id="whisper-model-suggestions">
                                 {% for model in ['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'] %}
-                                <option value="{{ model }}" {% if get_val('WHISPER_MODEL')==model %}selected{% endif %}>
-                                    {{ model }}</option>
+                                <option value="{{ model }}"></option>
                                 {% endfor %}
-                            </select>
-                            <div class="help-text">Model size for Local Whisper and Whisper.cpp Server. Larger =
-                                better accuracy but slower.
+                            </datalist>
+                            <div class="help-text">Model name for Local Whisper and Whisper.cpp Server. Pick a common
+                                model from the suggestions or enter a custom whisper.cpp model name. Larger = better
+                                accuracy but slower.
                             </div>
                         </div>
                     </div>
@@ -1256,6 +1317,155 @@
                     btn.innerHTML = originalText;
                     btn.disabled = false;
                 });
+        }
+
+        function checkAbsLibs() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⌛ Scanning...';
+            btn.disabled = true;
+
+            fetch('/api/abs/libraries')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    if (data.length === 0) {
+                        alert('No libraries found. Check connection and library access.');
+                        return;
+                    }
+
+                    let msg = "Found ABS Libraries:\n\n";
+                    data.forEach(lib => {
+                        msg += `ID: ${lib.id}\nName: ${lib.name}\n`;
+                        if (lib.mediaType) {
+                            msg += `Type: ${lib.mediaType}\n`;
+                        }
+                        msg += '------------------\n';
+                    });
+                    alert(msg);
+                })
+                .catch(err => alert('Failed to fetch ABS libraries: ' + err))
+                .finally(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                });
+        }
+
+        function applyLibraryPickerSelection(inputName, selectId) {
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            if (!input || !select) return;
+            input.value = select.value || '';
+        }
+
+        function populateLibraryPicker({ endpoint, button, inputName, selectId, statusId, emptyMessage, labelBuilder }) {
+            const originalText = button.innerHTML;
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            const status = document.getElementById(statusId);
+
+            button.innerHTML = 'âŒ› Scanning...';
+            button.disabled = true;
+
+            fetch(endpoint)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert('Error: ' + data.error);
+                        return;
+                    }
+                    if (!Array.isArray(data) || data.length === 0) {
+                        if (select) {
+                            select.style.display = 'none';
+                            select.innerHTML = '<option value="">Select a library ID...</option>';
+                        }
+                        if (status) {
+                            status.style.display = 'block';
+                            status.textContent = emptyMessage;
+                        }
+                        return;
+                    }
+
+                    const currentValue = input ? input.value.trim() : '';
+                    select.innerHTML = '<option value="">Select a library ID...</option>';
+
+                    data.forEach(lib => {
+                        const option = document.createElement('option');
+                        option.value = lib.id || '';
+                        option.textContent = labelBuilder(lib);
+                        if (currentValue && currentValue === option.value) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+
+                    select.style.display = 'block';
+                    if (status) {
+                        status.style.display = 'block';
+                        status.textContent = 'Select a library to fill the ID field.';
+                    }
+                })
+                .catch(err => {
+                    alert('Failed to fetch libraries: ' + err);
+                })
+                .finally(() => {
+                    button.innerHTML = originalText;
+                    button.disabled = false;
+                });
+        }
+
+        function checkBookloreLibs() {
+            populateLibraryPicker({
+                endpoint: '/api/booklore/libraries',
+                button: event.target,
+                inputName: 'BOOKLORE_LIBRARY_ID',
+                selectId: 'booklore_library_picker',
+                statusId: 'booklore_library_picker_status',
+                emptyMessage: 'No libraries found. Check connection or try syncing first.',
+                labelBuilder: (lib) => `${lib.name} (${lib.id})`,
+            });
+        }
+
+        function applyShelfPickerSelection(inputName, selectId) {
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            if (!input || !select || !select.value) return;
+            
+            let currentStr = input.value || '';
+            let current = currentStr.split(',').map(s => s.trim()).filter(Boolean);
+            if (!current.includes(select.value)) {
+                current.push(select.value);
+                input.value = current.join(', ');
+                if (typeof markDirty === 'function') markDirty();
+            }
+            select.value = ""; // Reset select
+        }
+
+        function checkBookloreShelves() {
+            populateLibraryPicker({
+                endpoint: '/api/booklore/shelves',
+                button: event.target,
+                inputName: 'DEVICE_SYNC_EXCLUDED_SHELVES', // Just used for reading current value optionally
+                selectId: 'booklore_shelf_picker',
+                statusId: 'booklore_shelf_picker_status',
+                emptyMessage: 'No shelves found. Check connection or try syncing first.',
+                labelBuilder: (shelf) => `${shelf.name} (${shelf.count} books)`,
+            });
+        }
+
+        function checkAbsLibs() {
+            populateLibraryPicker({
+                endpoint: '/api/abs/libraries',
+                button: event.target,
+                inputName: 'ABS_LIBRARY_ID',
+                selectId: 'abs_library_picker',
+                statusId: 'abs_library_picker_status',
+                emptyMessage: 'No libraries found. Check connection and library access.',
+                labelBuilder: (lib) => lib.mediaType ? `${lib.name} (${lib.id}) - ${lib.mediaType}` : `${lib.name} (${lib.id})`,
+            });
         }
 
         const TEST_CONNECTION_FIELDS = {
@@ -1463,7 +1673,7 @@
                     statusEl.style.color = '#81c784';
                 }
             } catch (err) {
-                console.error('Error refreshing Booklore cache:', err);
+                console.error('Error refreshing Grimmory cache:', err);
                 if (statusEl) {
                     statusEl.textContent = ` Refresh failed: ${err}`;
                     statusEl.style.color = '#e57373';
@@ -1541,9 +1751,17 @@
         function initDynamicForms() {
             // 1. ABS Library ID Toggle
             const absCheckbox = document.getElementById('abs_only_lib');
+            const absServerInput = document.querySelector('input[name="ABS_SERVER"]');
+            const absKeyInput = document.querySelector('input[name="ABS_KEY"]');
             if (absCheckbox) {
                 absCheckbox.addEventListener('change', toggleAbsLibraryId);
                 toggleAbsLibraryId(); // Initial state
+            }
+            if (absServerInput) {
+                absServerInput.addEventListener('input', toggleAbsLibraryId);
+            }
+            if (absKeyInput) {
+                absKeyInput.addEventListener('input', toggleAbsLibraryId);
             }
 
             // 2. Transcription Provider Toggle
@@ -1568,9 +1786,14 @@
             const checkbox = document.getElementById('abs_only_lib');
             const group = document.getElementById('abs_library_id_group');
             const input = document.querySelector('input[name="ABS_LIBRARY_ID"]');
+            const absServer = document.querySelector('input[name="ABS_SERVER"]');
+            const absKey = document.querySelector('input[name="ABS_KEY"]');
+            const absDisabled = [absServer, absKey].some((field) =>
+                field && (field.value || '').trim().toLowerCase() === 'disabled'
+            );
 
             if (checkbox && group && input) {
-                if (checkbox.checked) {
+                if (checkbox.checked && !absDisabled) {
                     group.classList.remove('hidden');
                     input.setAttribute('required', 'required');
                 } else {

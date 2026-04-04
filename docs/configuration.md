@@ -6,7 +6,7 @@
 
 ## Web UI Settings
 
-The **Settings** page is the easiest way to manage the bridge. Saving settings restarts the app automatically and sends you back to the dashboard when it is ready.
+The **Settings** page is the easiest way to manage the bridge. Each service section includes a **Test** button so you can check a service before saving. Saving settings restarts the app automatically and brings you back to the dashboard when it is ready.
 
 ### Split-Port Security (Optional)
 
@@ -27,7 +27,7 @@ ports:
 
 #### Audiobookshelf
 
-Audiobookshelf remains the default audiobook source when a mapping is not explicitly using Booklore audio.
+Audiobookshelf remains the default audiobook source when a mapping is not explicitly using Grimmory audio.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -37,6 +37,11 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Collection used for matched audiobooks. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
+
+Audiobookshelf notes:
+
+- Use **Find IDs** next to **Library ID** in Settings to load your available ABS libraries and fill the field from a dropdown.
+- If you want to run without Audiobookshelf for a while, enter `disabled` in the ABS URL or token field to intentionally turn ABS off.
 
 #### KOSync / KOReader
 
@@ -52,6 +57,10 @@ Use this when you want KOReader devices to sync directly with the bridge.
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Split-Port Listener | `KOSYNC_PORT` | empty | Optional dedicated KOSync port for internet-safe exposure. |
 
+KOSync notes:
+
+- If you use the built-in KOSync bridge, the **Test** button checks the values currently typed into the form before you save them.
+
 #### Storyteller
 
 The bridge talks to Storyteller through the REST API only.
@@ -63,39 +72,51 @@ The bridge talks to Storyteller through the REST API only.
 | Username | `STORYTELLER_USER` | empty | Storyteller username. |
 | Password | `STORYTELLER_PASSWORD` | empty | Storyteller password. |
 | Collection Name | `STORYTELLER_COLLECTION_NAME` | `Synced with KOReader` | Collection used when linked books are added to Storyteller. |
-| Library Path | `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Where Forge writes Storyteller-ready books. |
+| Library Path | `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Optional local Storyteller library path used for fallback/download helpers. Forge uploads go through the API. |
 | Assets Path | `STORYTELLER_ASSETS_DIR` | empty | Root path that contains `/assets/{title}/transcriptions`. |
+| Upload Chunk Size | `STORYTELLER_UPLOAD_CHUNK_SIZE` | `5242880` | TUS PATCH chunk size in bytes for direct Storyteller uploads. |
 | Poll Mode | `STORYTELLER_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Storyteller separately. |
 | Poll Interval | `STORYTELLER_POLL_SECONDS` | `45` | Used when Poll Mode is `custom`. |
 
 Storyteller notes:
 
+- Forge imports use the Storyteller REST/TUS API directly. A Storyteller library mount is optional unless you want local fallback access to generated artifacts.
 - If you mount `/path/to/storyteller/assets:/storyteller/assets`, set **Storyteller Assets Path** to `/storyteller`.
 - Storyteller timing data stays the preferred alignment source whenever valid transcript assets are available.
 - **Settings -> Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
 
-#### Booklore
+#### Grimmory
 
-Booklore now supports both ebook sync and Booklore audiobook-backed mappings.
+Grimmory now supports both ebook sync and Grimmory audiobook-backed mappings.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
-| Enable | `BOOKLORE_ENABLED` | `false` | Turns on Booklore support. |
-| Server URL | `BOOKLORE_SERVER` | empty | Booklore base URL. |
-| Username | `BOOKLORE_USER` | empty | Booklore username. |
-| Password | `BOOKLORE_PASSWORD` | empty | Booklore password. |
+| Enable | `BOOKLORE_ENABLED` | `false` | Turns on Grimmory support. |
+| Server URL | `BOOKLORE_SERVER` | empty | Grimmory base URL. |
+| Username | `BOOKLORE_USER` | empty | Grimmory username. |
+| Password | `BOOKLORE_PASSWORD` | empty | Grimmory password. |
 | Shelf Name | `BOOKLORE_SHELF_NAME` | `Kobo` | Shelf used for matched ebooks. |
 | Library ID | `BOOKLORE_LIBRARY_ID` | empty | Optional library restriction. |
-| Poll Mode | `BOOKLORE_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Booklore separately. |
+| Record Reading Sessions | `GRIMMORY_READING_SESSIONS` | `true` | Sends reading or listening session updates back to Grimmory. |
+| Collection Syncing | `DEVICE_SYNC_COLLECTIONS` | `off` | Optional Bridge Sync plugin feature for turning Grimmory shelves into KOReader collections. |
+| Excluded Shelves | `DEVICE_SYNC_EXCLUDED_SHELVES` | empty | Optional Bridge Sync plugin setting for shelves that should be skipped. |
+| Poll Mode | `BOOKLORE_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Grimmory separately. |
 | Poll Interval | `BOOKLORE_POLL_SECONDS` | `300` | Used when Poll Mode is `custom`. |
 
-Booklore notes:
+Grimmory notes:
 
-- Match, Batch Match, Suggestions, and Forge can now use **Booklore audiobooks** as the audio source.
-- The dashboard shows **BL Audio** progress when a mapping is driven by Booklore audio.
-- **Settings -> Refresh Booklore Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
+- Match, Batch Match, Suggestions, and Forge can now use **Grimmory audiobooks** as the audio source.
+- The dashboard shows **BL Audio** progress when a mapping is driven by Grimmory audio.
+- When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
+- **Settings -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
+- Use **Find IDs** next to **Library ID** in Settings to load your available Grimmory libraries and fill the field from a dropdown.
+- The **Device Sync Collections** settings only matter if you use the optional **Bridge Sync** KOReader plugin.
+- **Collection Syncing** controls whether Bridge Sync should turn Grimmory shelves into KOReader collections.
+- **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
+- **Excluded Shelves** lets you list shelf names you do not want turned into KOReader collections.
+- **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
 
-Advanced Booklore cache tuning:
+Advanced Grimmory cache tuning:
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -148,7 +169,7 @@ Suggestions notes:
 
 - A normal scan reuses cached results so repeat scans are faster.
 - **Full Refresh** rescans the whole unmatched library from scratch.
-- Suggestions can queue ABS-backed links, Booklore-audio links, ebook-only links, and Storyteller-only links.
+- Suggestions can queue ABS-backed links, Grimmory-audio links, ebook-only links, and Storyteller-only links.
 
 ### Transcription Settings
 
@@ -158,13 +179,17 @@ Suggestions notes:
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Provider | `TRANSCRIPTION_PROVIDER` | `local` | `local`, `deepgram`, or `whispercpp`. |
-| Whisper Model | `WHISPER_MODEL` | `tiny` | Local Whisper model size. |
+| Whisper Model | `WHISPER_MODEL` | `tiny` | Local Whisper model size or a custom Whisper.cpp model name. |
 | Whisper Device | `WHISPER_DEVICE` | `auto` | `auto`, `cpu`, or `cuda`. |
 | Whisper Compute Type | `WHISPER_COMPUTE_TYPE` | `auto` | Precision mode for local Whisper. |
 | Whisper.cpp URL | `WHISPER_CPP_URL` | empty | URL to your Whisper.cpp HTTP endpoint. |
 | Deepgram API Key | `DEEPGRAM_API_KEY` | empty | Deepgram API key. |
 | Deepgram Model | `DEEPGRAM_MODEL` | `nova-2` | Deepgram model tier. |
 | SMIL Validation Threshold | `SMIL_VALIDATION_THRESHOLD` | `60` | Minimum token match percentage for accepting SMIL timing data. |
+
+Transcription notes:
+
+- The **Whisper Model** field in Settings is a text box with common suggestions. You can use a normal preset like `tiny` or enter a custom model name directly.
 
 ### Sync Tuning
 
@@ -178,7 +203,7 @@ Suggestions notes:
 | Fuzzy Match Threshold | `FUZZY_MATCH_THRESHOLD` | `80` | Matching threshold used by several book and text lookups. |
 | Job Max Retries | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs. |
 | Job Retry Delay (Minutes) | `JOB_RETRY_DELAY_MINS` | `15` | Delay before retrying failed jobs. |
-| Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips. |
+| Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips while avoiding backward writes to newer high-confidence ebook locators. |
 | Cross-Format Roundtrip Tolerance | `CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS` | `2` | Locator roundtrip tolerance used when stabilizing cross-format locators. |
 
 ### Advanced Toggles
@@ -201,9 +226,9 @@ Suggestions notes:
 | Data Directory | `DATA_DIR` | `/data` | Database, cache, and working state. |
 | Books Directory | `BOOKS_DIR` | `/books` | Local ebook library path inside the container. |
 | Audiobooks Directory | `AUDIOBOOKS_DIR` | `/audiobooks` | Optional local audiobook path. |
-| Storyteller Library Directory | `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Forge destination path. |
+| Storyteller Library Directory | `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Optional local Storyteller library path for fallback/download helpers. |
 | Storyteller Assets Directory | `STORYTELLER_ASSETS_DIR` | empty | Optional transcript asset root. |
-| Forge Processing Directory | `PROCESSING_DIR` | `/tmp` | Temporary staging area before Forge moves files into Storyteller. |
+| Storyteller Upload Chunk Size | `STORYTELLER_UPLOAD_CHUNK_SIZE` | `5242880` | TUS upload chunk size in bytes for direct Storyteller uploads. |
 | Ebook Cache Size | `EBOOK_CACHE_SIZE` | `3` | Parsed-ebook cache size. |
 
 ---

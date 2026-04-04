@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.sync_clients.booklore_sync_client import BookloreSyncClient
-from src.sync_clients.sync_client_interface import ServiceState
+from src.sync_clients.sync_client_interface import LocatorResult, ServiceState, SyncResult
 from src.sync_manager import SyncManager
 from src.utils.ebook_utils import EbookParser
 
@@ -31,11 +31,42 @@ class _StubClient:
     def can_be_leader(self):
         return True
 
+    def is_configured(self):
+        return True
+
+    def check_connection(self):
+        return True
+
+    def fetch_bulk_state(self):
+        return None
+
+    def supports_book(self, book):
+        return True
+
+
+class _SyncLoopClient(_StubClient):
+    def __init__(self, supported_types=None, update_result=None):
+        self._supported_types = supported_types or {'audiobook', 'ebook'}
+        self.update_progress = MagicMock(
+            return_value=update_result or SyncResult(0.0, True, {"pct": 0.0})
+        )
+
+    def get_supported_sync_types(self):
+        return self._supported_types
+
 
 def _manager_with_mocks():
     manager = SyncManager.__new__(SyncManager)
     manager.ebook_parser = MagicMock()
     manager.alignment_service = MagicMock()
+    manager.booklore_client = MagicMock()
+    manager.booklore_client.find_book_by_filename.return_value = None
+    manager.books_dir = None
+    manager.epub_cache_dir = Path("/tmp/epub_cache")
+    manager._sync_cycle_local_epub_cache = {}
+    manager._sync_cycle_ebook_cache = {}
+    # Make _get_local_epub return a dummy path so normalization can proceed
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
     manager.sync_clients = {
         "ABS": _StubClient(),
         "KoSync": _StubClient(),
@@ -514,9 +545,144 @@ def test_deadband_allows_switch_when_delta_exceeds_threshold():
     assert leader_pct == config["KoSync"].current["pct"]
 
 
+def test_deadband_rollback_guard_skips_high_conf_locator_client():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    book = SimpleNamespace(duration=32385, transcript_file="DB_MANAGED")
+    leader_state = _state({"pct": 0.713911, "ts": 23051.6})
+    client_state = _state(
+        {
+            "pct": 0.7118,
+            "_normalized_ts": 23052.9,
+            "_normalization_source": "xpath",
+        }
+    )
+
+    should_skip = manager._should_skip_deadband_rollback(
+        book,
+        "ABS",
+        leader_state,
+        "KoSync",
+        client_state,
+        "abs-1",
+        "book",
+    )
+
+    assert should_skip is True
+
+
+def test_deadband_rollback_guard_allows_percent_fallback_rewrite():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    book = SimpleNamespace(duration=32385, transcript_file="DB_MANAGED")
+    leader_state = _state({"pct": 0.713911, "ts": 23051.6})
+    client_state = _state(
+        {
+            "pct": 0.7118,
+            "_normalized_ts": 23052.9,
+            "_normalization_source": "percent_fallback",
+        }
+    )
+
+    should_skip = manager._should_skip_deadband_rollback(
+        book,
+        "ABS",
+        leader_state,
+        "KoSync",
+        client_state,
+        "abs-1",
+        "book",
+    )
+
+    assert should_skip is False
+
+
+def test_sync_cycle_skips_deadband_rollback_to_high_conf_kosync():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+    manager.sync_delta_between_clients = 0.005
+    manager.delta_chars_thresh = 2000
+    manager._sync_cycle_ebook_cache = {}
+    manager._sync_cycle_local_epub_cache = {}
+    manager._last_library_sync = 0
+    manager.library_service = None
+    manager.booklore_client = None
+    manager.alignment_service = None
+    manager.ebook_parser = MagicMock()
+    manager.ebook_parser.extract_text_and_map.return_value = ("a" * 1000, [])
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
+    manager._promote_alignment_backed_book = MagicMock(return_value=False)
+    manager._record_local_reading_session = MagicMock()
+    manager._record_grimmory_reading_session = MagicMock()
+
+    abs_client = _SyncLoopClient(supported_types={"audiobook"})
+    kosync_client = _SyncLoopClient()
+    manager.sync_clients = {"ABS": abs_client, "KoSync": kosync_client}
+
+    book = SimpleNamespace(
+        abs_id="abs-1",
+        abs_title="Rollback Guard",
+        status="active",
+        duration=32385,
+        transcript_file="DB_MANAGED",
+        ebook_filename="book.epub",
+    )
+    manager.database_service = MagicMock()
+    manager.database_service.get_book.return_value = book
+    manager.database_service.get_states_for_book.return_value = [
+        SimpleNamespace(client_name="abs", last_updated=1000, timestamp=23000.0, percentage=0.70),
+        SimpleNamespace(client_name="kosync", last_updated=1001, timestamp=None, percentage=0.7184),
+    ]
+    manager.database_service.save_state = MagicMock()
+
+    config = {
+        "ABS": _state({"pct": 0.713911, "ts": 23051.6}),
+        "KoSync": _state(
+            {
+                "pct": 0.7118,
+                "xpath": "/body/DocFragment[1]/body/p[153]/text().0",
+                "_normalized_ts": 23052.9,
+                "_normalization_source": "xpath",
+            }
+        ),
+    }
+    config["ABS"].previous_pct = 0.70
+    config["ABS"].delta = 51.6
+    config["ABS"].threshold = 60.0
+    config["ABS"].value_seconds_formatter = lambda v: f"{v:.2f}s"
+    config["KoSync"].previous_pct = 0.7184
+    config["KoSync"].delta = 0.0066
+    config["KoSync"].threshold = 0.005
+
+    manager._fetch_states_parallel = MagicMock(return_value=config)
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 23051.6, "KoSync": 23052.9}
+    )
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(
+            LocatorResult(
+                percentage=0.713911,
+                xpath="/body/DocFragment[1]/body/p[153]/text().0",
+                cfi="epubcfi(/6/4!/4/2:0)",
+                match_index=713,
+            ),
+            "anchor text",
+        )
+    )
+
+    manager._sync_cycle_internal(target_abs_id="abs-1")
+
+    kosync_client.update_progress.assert_not_called()
+    manager.database_service.save_state.assert_called_once()
+
+
 def test_alignment_locator_roundtrip_regenerates_cfi_when_unstable():
     manager = SyncManager.__new__(SyncManager)
     manager.ebook_parser = MagicMock()
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
+    manager._sync_cycle_local_epub_cache = {}
     manager.ebook_parser.locator_roundtrip_tolerance = 2
     manager.ebook_parser.resolve_xpath_to_index.return_value = 250
     manager.ebook_parser.get_sentence_level_ko_xpath.return_value = "/body/DocFragment[1]/body/p[1]/text().0"
@@ -549,6 +715,8 @@ def test_alignment_locator_roundtrip_regenerates_cfi_when_unstable():
 def test_roundtrip_prefers_sentence_xpath_before_percent_only():
     manager = SyncManager.__new__(SyncManager)
     manager.ebook_parser = MagicMock()
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
+    manager._sync_cycle_local_epub_cache = {}
     manager.ebook_parser.locator_roundtrip_tolerance = 2
     manager.ebook_parser.resolve_xpath_to_index.side_effect = [130, 101]
     manager.ebook_parser.get_sentence_level_ko_xpath.return_value = "/body/DocFragment[1]/body/p[10]/text().0"
@@ -578,6 +746,8 @@ def test_roundtrip_prefers_sentence_xpath_before_percent_only():
 def test_repeated_time_to_locator_roundtrip_stays_within_tolerance():
     manager = SyncManager.__new__(SyncManager)
     manager.ebook_parser = MagicMock()
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
+    manager._sync_cycle_local_epub_cache = {}
     manager.ebook_parser.locator_roundtrip_tolerance = 2
     manager.ebook_parser.resolve_xpath_to_index.return_value = 101
     manager.ebook_parser.resolve_cfi_to_index.return_value = 99

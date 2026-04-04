@@ -22,7 +22,7 @@ if os.path.exists(TEST_DIR):
     shutil.rmtree(TEST_DIR)
 os.makedirs(TEST_DIR, exist_ok=True)
 
-from src.db.models import KosyncDocument, Book, State
+from src.db.models import KosyncDocument, Book, ReadingSession, Setting, State
 # Initialize DB service with test path
 from src.db.database_service import DatabaseService
 
@@ -172,8 +172,18 @@ class TestKosyncEndpoints(unittest.TestCase):
         }
         # Clear specific tables
         from src import web_server
+        from src.api import kosync_server
         with web_server.database_service.get_session() as session:
+             session.query(ReadingSession).delete()
              session.query(KosyncDocument).delete()
+             session.query(Setting).delete()
+             session.query(State).delete()
+             session.query(Book).delete()
+        kosync_server._kosync_device_session_registry = None
+        with kosync_server._kosync_open_sessions_lock:
+            kosync_server._kosync_open_sessions.clear()
+        with kosync_server._kosync_debounce_lock:
+            kosync_server._kosync_debounce.clear()
 
     def test_put_progress_creates_document(self):
         """Test that PUT creates a new document."""
@@ -669,6 +679,445 @@ class TestKosyncEndpoints(unittest.TestCase):
         saved_doc = db.save_kosync_document.call_args[0][0]
         self.assertEqual(saved_doc.filename, 'target-book.epub')
         self.assertEqual(saved_doc.booklore_id, 'bl-1')
+
+    def test_plugin_session_upload_auto_classifies_device_and_replaces_estimated_overlap(self):
+        from src import web_server
+        from src.api import kosync_server
+
+        doc_hash = 'u' * 32
+        device = 'Kobo_monza'
+        device_id = 'KOBO123'
+        start_time = 1_742_900_000.0
+        end_time = start_time + 120.0
+
+        book = Book(
+            abs_id='plugin-book',
+            abs_title='Plugin Classification',
+            ebook_filename='plugin.epub',
+            kosync_doc_id=doc_hash,
+            status='active',
+            sync_mode='ebook_only',
+        )
+        web_server.database_service.save_book(book)
+        web_server.database_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=doc_hash,
+                progress='/body/chapter[1]',
+                percentage=0.20,
+                device=device,
+                device_id=device_id,
+                timestamp=datetime.utcnow(),
+                linked_abs_id=book.abs_id,
+            )
+        )
+        web_server.database_service.record_reading_session(
+            abs_id=book.abs_id,
+            session_type='EPUB',
+            start_time=start_time,
+            end_time=end_time,
+            duration_seconds=int(end_time - start_time),
+            start_progress=0.10,
+            end_progress=0.20,
+            leader_client=f'KoSync:{device}',
+        )
+
+        with patch.object(kosync_server, '_manager', None):
+            kosync_server._update_grouped_kosync_session(book, doc_hash, device, device_id, 0.10, start_time)
+            kosync_server._update_grouped_kosync_session(book, doc_hash, device, device_id, 0.20, end_time)
+
+            response = self.client.post(
+                '/koreader/device-sync/sessions',
+                headers=self.auth_headers,
+                json=[{
+                    'document_hash': doc_hash,
+                    'session_type': 'EPUB',
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'duration_seconds': int(end_time - start_time),
+                    'start_progress': 10,
+                    'end_progress': 20,
+                }],
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {'accepted': 1, 'rejected': 0})
+
+        registry = web_server.database_service.get_json_setting('KOSYNC_DEVICE_SESSION_REGISTRY', default={})
+        self.assertEqual(registry[device_id]['mode'], 'plugin')
+        self.assertEqual(registry[device_id]['source'], 'plugin_session_auto')
+        self.assertEqual(registry[device_id]['last_document_hash'], doc_hash)
+
+        with web_server.database_service.get_session() as session:
+            rows = session.query(ReadingSession).filter(ReadingSession.abs_id == book.abs_id).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].leader_client, 'BridgeSync_Plugin')
+
+        with kosync_server._kosync_open_sessions_lock:
+            self.assertFalse(kosync_server._kosync_open_sessions)
+
+    def test_internal_kosync_put_does_not_overwrite_plugin_device_classification_source(self):
+        from src import web_server
+        from src.api import kosync_server
+
+        doc_hash = 'x' * 32
+        external_device = 'Kobo_monza'
+        external_device_id = 'KOBO999'
+        start_time = 1_742_901_000.0
+        end_time = start_time + 180.0
+
+        book = Book(
+            abs_id='plugin-device-preserve',
+            abs_title='Plugin Device Preserve',
+            ebook_filename='preserve.epub',
+            kosync_doc_id=doc_hash,
+            status='active',
+            sync_mode='ebook_only',
+        )
+        web_server.database_service.save_book(book)
+        web_server.database_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=doc_hash,
+                progress='/body/chapter[1]',
+                percentage=0.40,
+                device=external_device,
+                device_id=external_device_id,
+                timestamp=datetime.utcnow(),
+                linked_abs_id=book.abs_id,
+            )
+        )
+
+        with patch.object(kosync_server, '_manager', None):
+            internal_put = self.client.put(
+                '/syncs/progress',
+                headers=self.auth_headers,
+                json={
+                    'document': doc_hash,
+                    'progress': '/body/chapter[2]',
+                    'percentage': 0.45,
+                    'device': 'abs-sync-bot',
+                    'device_id': 'abs-sync-bot',
+                },
+            )
+            self.assertEqual(internal_put.status_code, 200)
+
+            updated_doc = web_server.database_service.get_kosync_document(doc_hash)
+            self.assertEqual(updated_doc.device, external_device)
+            self.assertEqual(updated_doc.device_id, external_device_id)
+
+            response = self.client.post(
+                '/koreader/device-sync/sessions',
+                headers=self.auth_headers,
+                json=[{
+                    'document_hash': doc_hash,
+                    'session_type': 'EPUB',
+                    'start_time': start_time,
+                    'end_time': end_time,
+                    'duration_seconds': int(end_time - start_time),
+                    'start_progress': 40,
+                    'end_progress': 45,
+                }],
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {'accepted': 1, 'rejected': 0})
+
+        registry = web_server.database_service.get_json_setting('KOSYNC_DEVICE_SESSION_REGISTRY', default={})
+        self.assertEqual(registry[external_device_id]['mode'], 'plugin')
+        self.assertNotIn('abs-sync-bot', registry)
+
+    def test_plugin_classified_device_puts_do_not_create_estimated_sessions(self):
+        from src import web_server
+        from src.api import kosync_server
+
+        doc_hash = 'v' * 32
+        device = 'Kobo_monza'
+        device_id = 'KOBO456'
+        web_server.database_service.set_json_setting(
+            'KOSYNC_DEVICE_SESSION_REGISTRY',
+            {
+                device_id: {
+                    'mode': 'plugin',
+                    'device': device,
+                    'device_id': device_id,
+                    'source': 'plugin_session_auto',
+                    'first_seen': '2026-03-25T12:00:00Z',
+                    'last_seen': '2026-03-25T12:00:00Z',
+                    'last_document_hash': doc_hash,
+                }
+            },
+        )
+        kosync_server._kosync_device_session_registry = None
+
+        book = Book(
+            abs_id='plugin-put-book',
+            abs_title='Plugin Device PUTs',
+            ebook_filename='plugin-put.epub',
+            kosync_doc_id=doc_hash,
+            status='active',
+            sync_mode='ebook_only',
+        )
+        web_server.database_service.save_book(book)
+        web_server.database_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=doc_hash,
+                progress='/body/chapter[1]',
+                percentage=0.15,
+                device=device,
+                device_id=device_id,
+                timestamp=datetime.utcnow(),
+                linked_abs_id=book.abs_id,
+            )
+        )
+
+        with patch.object(kosync_server, '_manager', None):
+            first = self.client.put(
+                '/syncs/progress',
+                headers=self.auth_headers,
+                json={
+                    'document': doc_hash,
+                    'progress': '/body/chapter[2]',
+                    'percentage': 0.20,
+                    'device': device,
+                    'device_id': device_id,
+                },
+            )
+            second = self.client.put(
+                '/syncs/progress',
+                headers=self.auth_headers,
+                json={
+                    'document': doc_hash,
+                    'progress': '/body/chapter[3]',
+                    'percentage': 0.25,
+                    'device': device,
+                    'device_id': device_id,
+                },
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+
+        with web_server.database_service.get_session() as session:
+            self.assertEqual(session.query(ReadingSession).count(), 0)
+        with kosync_server._kosync_open_sessions_lock:
+            self.assertFalse(kosync_server._kosync_open_sessions)
+
+    def test_internal_abs_sync_bot_puts_do_not_create_estimated_sessions(self):
+        from src import web_server
+        from src.api import kosync_server
+
+        doc_hash = 'w' * 32
+        book = Book(
+            abs_id='internal-put-book',
+            abs_title='Internal PUTs',
+            ebook_filename='internal.epub',
+            kosync_doc_id=doc_hash,
+            status='active',
+            sync_mode='ebook_only',
+        )
+        web_server.database_service.save_book(book)
+        web_server.database_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=doc_hash,
+                progress='/body/chapter[1]',
+                percentage=0.20,
+                device='abs-sync-bot',
+                device_id='BOT1',
+                timestamp=datetime.utcnow(),
+                linked_abs_id=book.abs_id,
+            )
+        )
+
+        with patch.object(kosync_server, '_manager', None):
+            first = self.client.put(
+                '/syncs/progress',
+                headers=self.auth_headers,
+                json={
+                    'document': doc_hash,
+                    'progress': '/body/chapter[2]',
+                    'percentage': 0.30,
+                    'device': 'abs-sync-bot',
+                    'device_id': 'BOT1',
+                },
+            )
+            second = self.client.put(
+                '/syncs/progress',
+                headers=self.auth_headers,
+                json={
+                    'document': doc_hash,
+                    'progress': '/body/chapter[3]',
+                    'percentage': 0.35,
+                    'device': 'abs-sync-bot',
+                    'device_id': 'BOT1',
+                },
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+
+        with web_server.database_service.get_session() as session:
+            self.assertEqual(session.query(ReadingSession).count(), 0)
+        with kosync_server._kosync_open_sessions_lock:
+            self.assertFalse(kosync_server._kosync_open_sessions)
+
+
+class TestKosyncEstimatedSessions(unittest.TestCase):
+    def setUp(self):
+        import src.api.kosync_server as ks
+
+        self.ks = ks
+        self.original_grimmory_sessions = os.environ.get('GRIMMORY_READING_SESSIONS')
+        os.environ['GRIMMORY_READING_SESSIONS'] = 'true'
+        self.ks._debounce_thread_started = True
+        self.ks._kosync_device_session_registry = None
+        with self.ks._kosync_open_sessions_lock:
+            self.ks._kosync_open_sessions.clear()
+        with self.ks._kosync_debounce_lock:
+            self.ks._kosync_debounce.clear()
+
+    def tearDown(self):
+        if self.original_grimmory_sessions is None:
+            os.environ.pop('GRIMMORY_READING_SESSIONS', None)
+        else:
+            os.environ['GRIMMORY_READING_SESSIONS'] = self.original_grimmory_sessions
+
+        self.ks._kosync_device_session_registry = None
+        with self.ks._kosync_open_sessions_lock:
+            self.ks._kosync_open_sessions.clear()
+        with self.ks._kosync_debounce_lock:
+            self.ks._kosync_debounce.clear()
+
+    def test_readest_puts_are_grouped_into_one_session(self):
+        db = MagicMock()
+        manager = MagicMock()
+        manager.booklore_client = MagicMock()
+        manager.booklore_client.is_configured.return_value = True
+        manager._resolve_grimmory_ebook_id.return_value = "11520"
+
+        book = Book(abs_id='book-1', abs_title='Grouped Session', ebook_filename='grouped.epub', status='active')
+        db.get_book.return_value = book
+
+        start = 1000.0
+        with patch.object(self.ks, '_database_service', db), patch.object(self.ks, '_manager', manager):
+            self.ks._update_grouped_kosync_session(book, 'r' * 32, 'Readest iOS', 'RID1', 0.10, start)
+            self.ks._update_grouped_kosync_session(book, 'r' * 32, 'Readest iOS', 'RID1', 0.13, start + 70)
+            self.ks._update_grouped_kosync_session(book, 'r' * 32, 'Readest iOS', 'RID1', 0.17, start + 180)
+
+            db.record_reading_session.assert_not_called()
+
+            self.ks._flush_stale_kosync_sessions(start + 520)
+
+        db.record_reading_session.assert_called_once()
+        kwargs = db.record_reading_session.call_args.kwargs
+        self.assertEqual(kwargs['abs_id'], 'book-1')
+        self.assertEqual(kwargs['session_type'], 'EPUB')
+        self.assertEqual(kwargs['duration_seconds'], 180)
+        self.assertAlmostEqual(kwargs['start_progress'], 0.10)
+        self.assertAlmostEqual(kwargs['end_progress'], 0.17)
+        self.assertEqual(kwargs['leader_client'], 'KoSync:Readest iOS')
+        manager.booklore_client.create_reading_session.assert_called_once()
+
+    def test_gap_over_five_minutes_splits_estimated_sessions(self):
+        db = MagicMock()
+        manager = MagicMock()
+        manager.booklore_client = MagicMock()
+        manager.booklore_client.is_configured.return_value = False
+
+        book = Book(abs_id='book-2', abs_title='Split Session', ebook_filename='split.epub', status='active')
+        start = 2000.0
+
+        with patch.object(self.ks, '_database_service', db), patch.object(self.ks, '_manager', manager):
+            self.ks._update_grouped_kosync_session(book, 's' * 32, 'Readest iOS', 'RID2', 0.20, start)
+            self.ks._update_grouped_kosync_session(book, 's' * 32, 'Readest iOS', 'RID2', 0.24, start + 90)
+            self.ks._update_grouped_kosync_session(book, 's' * 32, 'Readest iOS', 'RID2', 0.30, start + 430)
+            self.ks._update_grouped_kosync_session(book, 's' * 32, 'Readest iOS', 'RID2', 0.34, start + 520)
+            self.ks._flush_stale_kosync_sessions(start + 900)
+
+        self.assertEqual(db.record_reading_session.call_count, 2)
+        first = db.record_reading_session.call_args_list[0].kwargs
+        second = db.record_reading_session.call_args_list[1].kwargs
+        self.assertEqual(first['duration_seconds'], 90)
+        self.assertAlmostEqual(first['start_progress'], 0.20)
+        self.assertAlmostEqual(first['end_progress'], 0.24)
+        self.assertEqual(second['duration_seconds'], 90)
+        self.assertAlmostEqual(second['start_progress'], 0.30)
+        self.assertAlmostEqual(second['end_progress'], 0.34)
+
+    def test_no_forward_progress_does_not_extend_grouped_session(self):
+        db = MagicMock()
+        manager = MagicMock()
+        manager.booklore_client = MagicMock()
+        manager.booklore_client.is_configured.return_value = False
+
+        book = Book(abs_id='book-3', abs_title='No Forward Progress', ebook_filename='reader.epub', status='active')
+        start = 3000.0
+
+        with patch.object(self.ks, '_database_service', db), patch.object(self.ks, '_manager', manager):
+            self.ks._update_grouped_kosync_session(book, 'k' * 32, 'GenericReader', 'K1', 0.40, start)
+            self.ks._update_grouped_kosync_session(book, 'k' * 32, 'GenericReader', 'K1', 0.45, start + 120)
+            self.ks._update_grouped_kosync_session(book, 'k' * 32, 'GenericReader', 'K1', 0.45, start + 240)
+            self.ks._flush_stale_kosync_sessions(start + 700)
+
+        db.record_reading_session.assert_called_once()
+        kwargs = db.record_reading_session.call_args.kwargs
+        self.assertEqual(kwargs['duration_seconds'], 120)
+        self.assertAlmostEqual(kwargs['start_progress'], 0.40)
+        self.assertAlmostEqual(kwargs['end_progress'], 0.45)
+
+    def test_plugin_classified_device_skips_estimated_session_grouping(self):
+        db = MagicMock()
+        manager = MagicMock()
+        manager.booklore_client = MagicMock()
+        manager.booklore_client.is_configured.return_value = True
+
+        book = Book(abs_id='book-4', abs_title='Plugin Device', ebook_filename='plugin.epub', status='active')
+        start = 4000.0
+
+        with patch.object(self.ks, '_database_service', db), patch.object(self.ks, '_manager', manager):
+            self.ks._upsert_kosync_device_session_entry(
+                device='Kobo_monza',
+                device_id='RID3',
+                mode='plugin',
+                source='plugin_session_auto',
+                last_document_hash='p' * 32,
+                seen_time=datetime.utcnow(),
+            )
+            self.ks._update_grouped_kosync_session(book, 'p' * 32, 'Kobo_monza', 'RID3', 0.30, start)
+            self.ks._update_grouped_kosync_session(book, 'p' * 32, 'Kobo_monza', 'RID3', 0.36, start + 120)
+            self.ks._flush_stale_kosync_sessions(start + 700)
+
+        db.record_reading_session.assert_not_called()
+        manager.booklore_client.create_reading_session.assert_not_called()
+
+    def test_readest_heartbeat_pattern_finalizes_from_last_forward_progress(self):
+        db = MagicMock()
+        manager = MagicMock()
+        manager.booklore_client = MagicMock()
+        manager.booklore_client.is_configured.return_value = False
+
+        book = Book(abs_id='book-5', abs_title='Readest Heartbeat', ebook_filename='heartbeat.epub', status='active')
+        start = 5000.0
+
+        with patch.object(self.ks, '_database_service', db), patch.object(self.ks, '_manager', manager):
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4904, start)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4907, start + 19)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4907, start + 36)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4907, start + 44)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4907, start + 52)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4907, start + 57)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4930, start + 68)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4930, start + 83)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4907, start + 106)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4930, start + 115)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4930, start + 136)
+            self.ks._update_grouped_kosync_session(book, 'h' * 32, 'Readest (iOS)', 'RID5', 0.4930, start + 155)
+            self.ks._flush_stale_kosync_sessions(start + 500)
+
+        db.record_reading_session.assert_called_once()
+        kwargs = db.record_reading_session.call_args.kwargs
+        self.assertEqual(kwargs['leader_client'], 'KoSync:Readest (iOS)')
+        self.assertEqual(kwargs['duration_seconds'], 68)
+        self.assertAlmostEqual(kwargs['start_progress'], 0.4904)
+        self.assertAlmostEqual(kwargs['end_progress'], 0.4930)
 
 
 if __name__ == '__main__':

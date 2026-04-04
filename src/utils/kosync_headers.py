@@ -19,7 +19,7 @@ def kosync_auth_headers(user: str, hashed_key: str) -> dict:
     """Build the standard header dict expected by KoSync-compatible servers.
 
     Includes auth credentials and the KOReader accept type on every
-    request — some servers (e.g. Booklore) require all three headers
+    request — some servers (e.g. Grimmory) require all three headers
     even on unauthenticated endpoints like /healthcheck.
     """
     return {

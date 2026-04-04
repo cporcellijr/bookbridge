@@ -32,7 +32,7 @@ class MigrationService:
            Option A: Load the transcript into a temporary structure? No, we want unified structure.
         Migrate all legacy JSON data to database:
         1. Transcripts/Alignments
-        2. Booklore Cache
+        2. Grimmory Cache
         3. Clean up obsolete files
         """
         self._migrate_alignments()
@@ -97,7 +97,7 @@ class MigrationService:
         if existing_count > 0:
             return
 
-        logger.info("📦 Migrating Booklore cache to database...")
+        logger.info("📦 Migrating Grimmory cache to database...")
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -120,7 +120,7 @@ class MigrationService:
                     logger.warning(f"⚠️ Failed to migrate book '{filename}': {e}")
             
             if count > 0:
-                logger.info(f"✅ Migrated {count} Booklore books to database")
+                logger.info(f"✅ Migrated {count} Grimmory books to database")
                 # Rename to .bak to prevent re-reading and confusion
                 try:
                     cache_file.rename(cache_file.with_suffix('.json.bak'))
@@ -129,7 +129,7 @@ class MigrationService:
                     logger.warning(f"⚠️ Failed to rename legacy cache file: {e}")
 
         except Exception as e:
-            logger.error(f"❌ Booklore migration failed: {e}")
+            logger.error(f"❌ Grimmory migration failed: {e}")
 
     def _cleanup_legacy_files(self):
         """Identify and optionally rename/delete obsolete JSON files."""

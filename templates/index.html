@@ -6,38 +6,28 @@
 
     {# Macro for rendering a book card - used by both currently-reading and all-books grids #}
     {% macro render_book_card(mapping, integrations) %}
-    {# Calculate sync discrepancy for highlighting #}
-    {% set progress_values = [] %}
-    {% if mapping.states.abs is defined and mapping.states.abs.percentage %}
-    {% set _ = progress_values.append(mapping.states.abs.percentage) %}
+    {% set sync_warning_pct = mapping.sync_warning_pct|default(0) %}
+    {% set full_display_title = mapping.display_title %}
+    {% if mapping.display_subtitle %}
+    {% set full_display_title = mapping.display_title ~ ': ' ~ mapping.display_subtitle %}
     {% endif %}
-    {% if mapping.states.storyteller is defined and mapping.states.storyteller.percentage %}
-    {% set _ = progress_values.append(mapping.states.storyteller.percentage) %}
-    {% endif %}
-    {% if mapping.states.booklore is defined and mapping.states.booklore.percentage %}
-    {% set _ = progress_values.append(mapping.states.booklore.percentage) %}
-    {% endif %}
-    {% if mapping.states.bookloreaudio is defined and mapping.states.bookloreaudio.percentage %}
-    {% set _ = progress_values.append(mapping.states.bookloreaudio.percentage) %}
-    {% endif %}
-    {% if mapping.states.kosync is defined and mapping.states.kosync.percentage %}
-    {% set _ = progress_values.append(mapping.states.kosync.percentage) %}
-    {% endif %}
-    {% set max_diff = (progress_values|max|default(0) - progress_values|min|default(0)) if progress_values|length > 1
-    else 0 %}
 
-    <div class="book-card {% if max_diff > 5 %}out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}"
-        data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ mapping.abs_title }}"
-        data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}">
+    <div class="book-card {% if mapping.is_out_of_sync %}out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}"
+        data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ full_display_title }}"
+        data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
+        data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
+        {% if mapping.display_filename %}title="{{ mapping.display_filename }}"{% endif %}>
 
         {# Cover image section - prioritize ebook cover, fallback to ABS cover #}
         <div class="book-cover-section">
             {% if mapping.kosync_doc_id %}
             <img src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="Cover" class="book-cover"
+                loading="lazy" decoding="async"
                 onerror="{% if mapping.cover_url %}this.onerror=null; this.src='{{ mapping.cover_url }}';{% else %}this.style.display='none'; this.nextElementSibling.classList.remove('hidden');{% endif %}">
             <div class="book-cover-placeholder hidden">📖</div>
             {% elif mapping.cover_url %}
             <img src="{{ mapping.cover_url }}" alt="Cover" class="book-cover"
+                loading="lazy" decoding="async"
                 onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
             <div class="book-cover-placeholder hidden">📖</div>
             {% else %}
@@ -49,7 +39,8 @@
         <div class="book-info">
             <div class="book-header">
                 <div class="book-title">
-                    {{ mapping.abs_title }}{% if mapping.abs_subtitle %}: {{ mapping.abs_subtitle }}{% endif %}
+                    <span class="book-title-main">{{ mapping.display_title }}</span>{% if mapping.display_subtitle %}<span
+                        class="book-title-subtitle">: {{ mapping.display_subtitle }}</span>{% endif %}
                 </div>
                 <div class="status-badge status-{{ mapping.status }}">
                     {% if mapping.status == 'processing' and mapping.job_progress is defined %}
@@ -60,10 +51,12 @@
                 </div>
             </div>
 
-            <div class="book-author">{{ mapping.abs_author or mapping.ebook_filename }}</div>
+            {% if mapping.display_author %}
+            <div class="book-author">{{ mapping.display_author }}</div>
+            {% endif %}
             {% if mapping.audio_source %}
             <div class="mapping-meta">
-                <span class="mapping-badge">{{ mapping.audio_source }} Audio</span>
+                <span class="mapping-badge">{{ 'Grimmory' if mapping.audio_source == 'BookLore' else mapping.audio_source }} Audio</span>
                 {% if mapping.audio_url %}
                 <a href="{{ mapping.audio_url }}" target="_blank" rel="noopener noreferrer" class="mapping-link">Open Audio</a>
                 {% endif %}
@@ -78,8 +71,24 @@
                 <span class="progress-percent">{{ '%.1f' | format(mapping.unified_progress) }}%</span>
             </div>
 
-            {% if max_diff > 5 %}
-            <div class="sync-warning">Out of sync by {{ '%.1f' | format(max_diff) }}%</div>
+            {% if mapping.is_out_of_sync %}
+            <div class="sync-warning">Out of sync by {{ '%.1f' | format(sync_warning_pct) }}%</div>
+            {% endif %}
+
+            {% if mapping.reading_stats is defined and mapping.reading_stats %}
+            <div class="reading-stats">
+                {% if mapping.reading_stats.listen_seconds > 0 %}
+                <span class="rs-item"><span class="rs-icon">🎧</span> <span class="rs-val">{{ mapping.reading_stats.listen_seconds | format_duration }}</span></span>
+                <span class="rs-sep">·</span>
+                {% endif %}
+                {% if mapping.reading_stats.read_seconds > 0 %}
+                <span class="rs-item"><span class="rs-icon">📖</span> <span class="rs-val">{{ mapping.reading_stats.read_seconds | format_duration }}</span></span>
+                <span class="rs-sep">·</span>
+                {% endif %}
+                <span class="rs-item"><span class="rs-val">{{ mapping.reading_stats.session_count }}</span> sessions</span>
+                <span class="rs-sep">·</span>
+                <span class="rs-item">avg <span class="rs-val">{{ mapping.reading_stats.avg_session_seconds | format_duration }}</span></span>
+            </div>
             {% endif %}
 
             {% if mapping.status == 'active' %}
@@ -88,9 +97,9 @@
             <div class="service-progress">
                 {% if integrations.bookloreaudio and mapping.audio_source == 'BookLore' and mapping.audio_url %}
                 <a href="{{ mapping.audio_url }}" target="_blank" rel="noopener noreferrer" class="service-item"
-                    title="Open BookLore audiobook">
-                    <img src="/static/booklore.png" alt="BLA" class="service-icon">
-                    <span class="service-name">BL Audio</span>
+                    title="Open Grimmory audiobook">
+                    <img src="/static/grimmory.webp" alt="GRA" class="service-icon">
+                    <span class="service-name">GR Audio</span>
                     {% if mapping.states.bookloreaudio is defined %}
                     <span class="service-value">{{ '%.1f' | format(mapping.states.bookloreaudio.percentage|default(0)) }}%</span>
                     {% else %}
@@ -158,12 +167,12 @@
                 </div>
                 {% endif %}
 
-                {# [CHANGED] Show Booklore if state exists OR if it was successfully linked/resolved #}
+                {# [CHANGED] Show Grimmory if state exists OR if it was successfully linked/resolved #}
                 {% if integrations.booklore and (mapping.states.booklore is defined or mapping.booklore_id) %}
                 <a href="{{ mapping.booklore_url|default('#') }}" target="_blank" rel="noopener noreferrer"
-                    class="service-item" title="Open in Booklore">
-                    <img src="/static/booklore.png" alt="BL" class="service-icon">
-                    <span class="service-name">Booklore</span>
+                    class="service-item" title="Open in Grimmory">
+                    <img src="/static/grimmory.webp" alt="BL" class="service-icon">
+                    <span class="service-name">Grimmory</span>
                     <span class="service-value">
                         {% if mapping.states.booklore is defined %}
                         {{ '%.1f' | format(mapping.states.booklore.percentage) }}%
@@ -369,6 +378,36 @@
             color: #ffffff;
         }
 
+        .dashboard-section + .dashboard-section .section-header {
+            margin-top: 80px;
+        }
+
+        .collapsible-section-header {
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        .section-chevron {
+            font-size: 24px;
+            color: #667eea;
+            transition: color 0.2s ease;
+        }
+
+        .collapsible-section-header:hover .section-chevron,
+        .collapsible-section-header.active .section-chevron {
+            color: #ffffff;
+        }
+
+        .book-grid.collapsible-book-grid {
+            display: none;
+        }
+
+        .book-grid.collapsible-book-grid.show {
+            display: grid;
+            animation: slide-down 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
         .section-link {
             color: #667eea;
             font-size: 16px;
@@ -557,11 +596,25 @@
         }
 
         .book-title {
+            flex: 1;
+            min-width: 0;
             font-size: 14px;
             font-weight: 700;
             color: #ffffff;
             line-height: 1.3;
             word-break: break-word;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+            overflow: hidden;
+        }
+
+        .book-title-main {
+            color: #ffffff;
+        }
+
+        .book-title-subtitle {
+            color: rgba(255, 255, 255, 0.78);
         }
 
         .book-author {
@@ -610,7 +663,7 @@
             font-weight: 700;
             text-transform: uppercase;
             white-space: nowrap;
-            flex-shrink: 0;
+            flex: 0 0 auto;
         }
 
         .status-active {
@@ -699,6 +752,29 @@
             border-radius: 4px;
             margin-bottom: 8px;
         }
+
+        /* Reading Stats */
+        .reading-stats {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 5px 8px;
+            margin-bottom: 8px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.04);
+            border-radius: 6px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.45);
+            flex-wrap: wrap;
+        }
+        .reading-stats .rs-item {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .reading-stats .rs-icon { font-size: 11px; line-height: 1; }
+        .reading-stats .rs-val { color: rgba(255,255,255,0.7); font-weight: 600; }
+        .reading-stats .rs-sep { color: rgba(255,255,255,0.12); user-select: none; }
 
         /* Service Progress Grid */
         .service-progress {
@@ -897,6 +973,10 @@
                 flex-direction: column;
                 align-items: stretch;
                 gap: 12px;
+            }
+
+            .dashboard-section + .dashboard-section .section-header {
+                margin-top: 40px;
             }
 
             .mt-80 {
@@ -1579,6 +1659,7 @@
             <a href="https://cporcellijr.github.io/abs-kosync-bridge/" class="btn" target="_blank"
                 rel="noopener noreferrer">📚 Docs</a>
             <a href="/settings" class="btn">⚙️ Settings</a>
+            <a href="/stats" class="btn">📊 Stats</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/forge" class="btn">⚡ Forge</a>
 
@@ -1782,6 +1863,16 @@
         {% endif %}
         {% endwith %}
         {% if mappings %}
+        {% set section_flags = namespace(has_in_progress=false, has_not_started=false, has_finished=false) %}
+        {% for mapping in mappings %}
+        {% if mapping.unified_progress > 0 and mapping.unified_progress < 100 %}
+        {% set section_flags.has_in_progress = true %}
+        {% elif mapping.unified_progress == 0 %}
+        {% set section_flags.has_not_started = true %}
+        {% elif mapping.unified_progress >= 100 %}
+        {% set section_flags.has_finished = true %}
+        {% endif %}
+        {% endfor %}
         <div class="controls-bar">
             <div class="control-group">
                 <input type="text" id="dashboard-search" placeholder="Search books...">
@@ -1806,27 +1897,57 @@
             </div>
         </div>
 
-        <div class="section-header">
-            <h2>Currently Reading</h2>
+        {% if section_flags.has_in_progress %}
+        <div class="dashboard-section" id="in-progress-section">
+            <div class="section-header">
+                <h2>In Progress</h2>
+            </div>
+
+            <div class="book-grid" id="in-progress-grid">
+                {% for mapping in mappings %}
+                {% if mapping.unified_progress > 0 and mapping.unified_progress < 100 %}
+                {{ render_book_card(mapping, integrations) }}
+                {% endif %}
+                {% endfor %}
+            </div>
         </div>
+        {% endif %}
 
-        <div class="book-grid" id="currently-reading-grid">
-            {% for mapping in mappings %}
-            {% if mapping.unified_progress > 0 and mapping.unified_progress < 100 %} {{ render_book_card(mapping,
-                integrations) }} {% endif %} {% endfor %} </div>
+        {% if section_flags.has_not_started %}
+        <div class="dashboard-section" id="not-started-section">
+            <div class="section-header collapsible-section-header" id="not-started-header" role="button" tabindex="0"
+                aria-controls="not-started-grid" aria-expanded="false">
+                <h2>Not Started</h2>
+                <span class="section-chevron" id="not-started-chevron" aria-hidden="true">▶</span>
+            </div>
 
-                <div class="section-header mt-80">
-                    <h2>All Books</h2>
-                </div>
+            <div class="book-grid collapsible-book-grid" id="not-started-grid">
+                {% for mapping in mappings %}
+                {% if mapping.unified_progress == 0 %}
+                {{ render_book_card(mapping, integrations) }}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
-                <div class="book-grid" id="all-books-grid">
-                    {% for mapping in mappings %}
-                    {{ render_book_card(mapping, integrations) }}
-                    {% endfor %}
-                </div>
+        {% if section_flags.has_finished %}
+        <div class="dashboard-section" id="finished-section">
+            <div class="section-header">
+                <h2>Finished</h2>
+            </div>
 
+            <div class="book-grid" id="finished-grid">
+                {% for mapping in mappings %}
+                {% if mapping.unified_progress >= 100 %}
+                {{ render_book_card(mapping, integrations) }}
+                {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
-                {% else %}
+        {% else %}
                 <div class="empty-state">
                     <div class="empty-state-icon">📚</div>
                     <h2>No books syncing yet</h2>
@@ -1837,12 +1958,54 @@
         </div>
 
         <script>
-            const currentlyReadingGrid = document.getElementById('currently-reading-grid');
-            const allBooksGrid = document.getElementById('all-books-grid');
+            const dashboardSections = Array.from(document.querySelectorAll('.dashboard-section'));
+            const dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));
             const sortSelect = document.getElementById('sort-select');
             const filterSelect = document.getElementById('filter-select');
             const directionBtn = document.getElementById('sort-direction');
             const dashboardSearch = document.getElementById('dashboard-search');
+            const notStartedSection = document.getElementById('not-started-section');
+            const notStartedHeader = document.getElementById('not-started-header');
+            const notStartedGrid = document.getElementById('not-started-grid');
+            const notStartedChevron = document.getElementById('not-started-chevron');
+
+            function updateNotStartedChevron(isExpanded) {
+                if (notStartedChevron) {
+                    notStartedChevron.textContent = isExpanded ? '▼' : '▶';
+                }
+                if (notStartedHeader) {
+                    notStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+                }
+            }
+
+            function updateDashboardSectionVisibility() {
+                dashboardSections.forEach(section => {
+                    const grid = section.querySelector('.book-grid');
+                    if (!grid) return;
+
+                    const visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');
+                    if (visibleCards.length > 0) {
+                        section.classList.remove('hidden');
+                    } else {
+                        section.classList.add('hidden');
+                    }
+                });
+            }
+
+            window.toggleNotStarted = function () {
+                if (!notStartedGrid || !notStartedSection || !notStartedHeader) return;
+
+                const isShowing = notStartedGrid.classList.toggle('show');
+                notStartedSection.classList.toggle('active');
+                notStartedHeader.classList.toggle('active');
+                updateNotStartedChevron(isShowing);
+
+                try {
+                    localStorage.setItem('not_started_expanded', isShowing);
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
+            };
 
             function filterBooks() {
                 const filterValue = filterSelect.value;
@@ -1853,10 +2016,9 @@
                     // Default to 'audiobook' if not specified
                     const syncMode = card.dataset.syncMode || 'audiobook';
 
-                    const titleEl = card.querySelector('.book-title');
-                    const authorEl = card.querySelector('.book-author');
-                    const title = titleEl ? titleEl.textContent.toLowerCase() : '';
-                    const author = authorEl ? authorEl.textContent.toLowerCase() : '';
+                    const title = (card.dataset.title || '').toLowerCase();
+                    const author = (card.dataset.author || '').toLowerCase();
+                    const filename = (card.dataset.filename || '').toLowerCase();
 
                     let isVisible = true;
                     if (filterValue === 'audiobook' && syncMode !== 'audiobook') {
@@ -1866,7 +2028,7 @@
                     }
 
                     if (isVisible && searchString) {
-                        if (!title.includes(searchString) && !author.includes(searchString)) {
+                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {
                             isVisible = false;
                         }
                     }
@@ -1879,6 +2041,8 @@
                         card.style.display = 'none'; // Force hide
                     }
                 });
+
+                updateDashboardSectionVisibility();
 
                 // Persist choice
                 localStorage.setItem('abs_kosync_filter', filterValue);
@@ -1926,7 +2090,7 @@
             const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';
             const savedSortState = localStorage.getItem('abs_kosync_sort_state');
 
-            if (savedSort) {
+            if (savedSort && sortSelect) {
                 sortSelect.value = savedSort;
             }
 
@@ -1986,6 +2150,10 @@
                 sortedCards.forEach(card => grid.appendChild(card));
             }
 
+            function sortBooks(sortBy, direction) {
+                dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));
+            }
+
             function applySorting(sortBy) {
                 let direction;
 
@@ -2006,8 +2174,7 @@
                 updateSortIndicator(direction);
 
                 // Sort Grids
-                sortCards(currentlyReadingGrid, sortBy, direction);
-                sortCards(allBooksGrid, sortBy, direction);
+                sortBooks(sortBy, direction);
 
                 // Save preferences
                 localStorage.setItem('abs_kosync_sort', sortBy);
@@ -2037,10 +2204,37 @@
                 });
             }
 
+            document.addEventListener('DOMContentLoaded', () => {
+                if (notStartedHeader) {
+                    notStartedHeader.addEventListener('click', window.toggleNotStarted);
+                    notStartedHeader.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            window.toggleNotStarted();
+                        }
+                    });
+                }
+
+                try {
+                    const shouldExpand = localStorage.getItem('not_started_expanded') === 'true';
+                    if (shouldExpand && notStartedGrid && notStartedSection && notStartedHeader) {
+                        notStartedGrid.classList.add('show');
+                        notStartedSection.classList.add('active');
+                        notStartedHeader.classList.add('active');
+                        updateNotStartedChevron(true);
+                    } else {
+                        updateNotStartedChevron(false);
+                    }
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                    updateNotStartedChevron(false);
+                }
+            });
+
             // --- Initialization ---
 
             // Apply initial sort on load (if content exists)
-            if (currentlyReadingGrid || allBooksGrid) {
+            if (dashboardGrids.length > 0) {
                 applySorting(savedSort);
             }
 

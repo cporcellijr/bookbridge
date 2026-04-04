@@ -182,7 +182,10 @@ def test_storyteller_branch_retries_ingest_before_fallback(tmp_path):
     with patch("src.sync_manager.ingest_storyteller_transcripts", side_effect=_ingest_side_effect) as mock_ingest:
         manager._run_background_job(book)
 
-    mock_ingest.assert_called_once_with(abs_id, "Storyteller Retry", [{"start": 0.0, "end": 12.0}])
+    mock_ingest.assert_called_once()
+    call_args = mock_ingest.call_args
+    assert call_args.args == (abs_id, "Storyteller Retry", [{"start": 0.0, "end": 12.0}])
+    assert "storyteller_title" in call_args.kwargs
     alignment_service.align_storyteller_and_store.assert_called_once()
     transcriber.transcribe_from_smil.assert_not_called()
     transcriber.process_audio.assert_not_called()

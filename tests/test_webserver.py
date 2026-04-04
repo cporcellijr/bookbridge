@@ -14,7 +14,7 @@ import sys
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.utils.kosync_headers import hash_kosync_key
+from src.utils.kosync_headers import KOSYNC_ACCEPT, hash_kosync_key
 
 
 def _http_response(status_code, payload=None, text=""):
@@ -128,6 +128,18 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_storyteller_client = self.mock_container.mock_storyteller_client
         self.mock_database_service = self.mock_container.mock_database_service
 
+        self.mock_database_service.get_all_books.return_value = []
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_reading_stats.return_value = {}
+        self.mock_database_service.get_booklore_book.return_value = None
+        self.mock_database_service.get_all_booklore_books.return_value = []
+        self.mock_abs_client.get_all_audiobooks.return_value = []
+        self.mock_abs_client.get_all_progress_raw.return_value = {}
+        self.mock_booklore_client.is_configured.return_value = False
+        self.mock_storyteller_client.is_configured.return_value = False
+
     def tearDown(self):
         """Clean up after test."""
         # Restore original function
@@ -148,6 +160,55 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             (transcriptions_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
         os.environ["STORYTELLER_ASSETS_DIR"] = str(assets_root)
         self.addCleanup(lambda: os.environ.pop("STORYTELLER_ASSETS_DIR", None))
+
+    def _set_dashboard_integrations(
+        self,
+        storyteller=False,
+        booklore=False,
+        bookloreaudio=False,
+        hardcover=False,
+    ):
+        clients_dict = {
+            'ABS': Mock(is_configured=Mock(return_value=True)),
+            'KoSync': Mock(is_configured=Mock(return_value=True)),
+            'Storyteller': Mock(is_configured=Mock(return_value=storyteller)),
+            'BookLore': Mock(is_configured=Mock(return_value=booklore)),
+            'BookLoreAudio': Mock(is_configured=Mock(return_value=bookloreaudio)),
+            'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
+        }
+        self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
+
+    def _capture_index_mapping(self):
+        import src.web_server
+        original_render = src.web_server.render_template
+        mock_render = Mock(return_value="Mocked HTML Response")
+        src.web_server.render_template = mock_render
+
+        try:
+            response = self.client.get('/')
+            self.assertEqual(response.status_code, 200)
+            return mock_render.call_args.kwargs['mappings'][0]
+        finally:
+            src.web_server.render_template = original_render
+
+    def _render_index_template_source(self):
+        import src.web_server
+        template_source = (Path(__file__).parent.parent / 'templates' / 'index.html').read_text(encoding='utf-8')
+        original_render = src.web_server.render_template
+
+        def render_from_source(_template_name, **context):
+            return src.web_server.render_template_string(template_source, **context)
+
+        src.web_server.render_template = render_from_source
+        try:
+            response = self.client.get('/')
+            self.assertEqual(response.status_code, 200)
+            return response.get_data(as_text=True)
+        finally:
+            src.web_server.render_template = original_render
+
+    def _read_template_source(self, template_name: str) -> str:
+        return (Path(__file__).parent.parent / 'templates' / template_name).read_text(encoding='utf-8')
 
     def test_dependency_injection_works(self):
         """Verify that dependency injection is working properly."""
@@ -207,7 +268,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         ]
 
         self.mock_database_service.get_all_books.return_value = [test_book]
-        self.mock_database_service.get_states_for_book.return_value = mock_states
         self.mock_database_service.get_all_states.return_value = mock_states
         self.mock_database_service.get_hardcover_details.return_value = None
         self.mock_database_service.get_all_hardcover_details.return_value = []
@@ -242,6 +302,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             self.mock_database_service.get_all_books.assert_called_once()
             self.mock_database_service.get_all_states.assert_called_once()
             self.mock_database_service.get_all_hardcover_details.assert_called_once()
+            self.mock_database_service.get_all_booklore_books.assert_called_once()
+            self.mock_abs_client.get_all_audiobooks.assert_not_called()
+            self.mock_abs_client.get_all_progress_raw.assert_not_called()
+            self.mock_storyteller_client.get_book_details.assert_not_called()
+            self.mock_booklore_client.find_book_by_filename.assert_not_called()
 
             # Verify render_template was called with correct arguments
             mock_render.assert_called_once()
@@ -334,7 +399,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         )
 
         self.mock_database_service.get_all_books.return_value = [test_book]
-        self.mock_database_service.get_states_for_book.return_value = []
+        self.mock_database_service.get_all_states.return_value = []
 
         # Make HTTP request
         response = self.client.get('/api/status')
@@ -347,10 +412,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('mappings', data)
         self.assertEqual(len(data['mappings']), 1)
         self.assertEqual(data['mappings'][0]['abs_id'], 'api-test-book-123')
+        self.assertEqual(data['mappings'][0]['unified_progress'], 0)
+        self.assertEqual(data['mappings'][0]['last_sync'], 'Never')
         
         # Verify percentage scaling (should be 0 because states mock returned empty list)
         # But let's verify structure
         self.assertIn('states', data['mappings'][0])
+        self.mock_database_service.get_all_states.assert_called_once()
+        self.mock_database_service.get_states_for_book.assert_not_called()
 
         print("[OK] API status endpoint test passed with clean DI")
 
@@ -383,7 +452,6 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         ]
 
         self.mock_database_service.get_all_books.return_value = [test_book]
-        self.mock_database_service.get_states_for_book.return_value = mock_states
         self.mock_database_service.get_all_states.return_value = mock_states
 
         # Make HTTP request
@@ -400,6 +468,9 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         # Check legacy flat fields
         self.assertEqual(mapping['kosync_pct'], 45.5)
         self.assertEqual(mapping['storyteller_pct'], 10.0)
+        self.assertEqual(mapping['unified_progress'], 45.5)
+        self.assertIn('last_sync', mapping)
+        self.mock_database_service.get_states_for_book.assert_not_called()
 
         print("[OK] API status percentage scaling test passed")
 
@@ -658,38 +729,28 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.side_effect = lambda filename: cached_book if filename == 'book-file.epub' else None
+        self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
         self.mock_booklore_client.is_configured.return_value = False
 
-        clients_dict = {
-            'ABS': Mock(is_configured=Mock(return_value=True)),
-            'KoSync': Mock(is_configured=Mock(return_value=True)),
-            'Storyteller': Mock(is_configured=Mock(return_value=False))
-        }
-        self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
+        self._set_dashboard_integrations(storyteller=False)
 
-        import src.web_server
-        original_render = src.web_server.render_template
-        mock_render = Mock(return_value="Mocked HTML Response")
-        src.web_server.render_template = mock_render
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['abs_title'], 'Displayed Title')
+        self.assertEqual(mapping['abs_subtitle'], 'Displayed Subtitle')
+        self.assertEqual(mapping['abs_author'], 'Displayed Author')
+        self.assertEqual(mapping['display_title'], 'Displayed Title')
+        self.assertEqual(mapping['display_subtitle'], 'Displayed Subtitle')
+        self.assertEqual(mapping['display_author'], 'Displayed Author')
+        self.assertEqual(mapping['display_filename'], 'book-file.epub')
 
-        try:
-            response = self.client.get('/')
-            self.assertEqual(response.status_code, 200)
-            mapping = mock_render.call_args.kwargs['mappings'][0]
-            self.assertEqual(mapping['abs_title'], 'Displayed Title')
-            self.assertEqual(mapping['abs_subtitle'], 'Displayed Subtitle')
-            self.assertEqual(mapping['abs_author'], 'Displayed Author')
-        finally:
-            src.web_server.render_template = original_render
-
-    def test_index_endpoint_storyteller_uses_storyteller_metadata_for_display(self):
+    def test_index_endpoint_storyteller_uses_cached_audio_title_for_display(self):
         from src.db.models import Book
 
         test_book = Book(
             abs_id='ebook-storyteller-1',
             abs_title='storyteller_uuid-book',
             ebook_filename='storyteller_uuid-book.epub',
+            audio_title='Storyteller Title',
             storyteller_uuid='uuid-story-1',
             sync_mode='ebook_only',
             status='active'
@@ -699,36 +760,339 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
-        self.mock_database_service.get_booklore_book.return_value = None
         self.mock_booklore_client.is_configured.return_value = False
         self.mock_storyteller_client.is_configured.return_value = True
-        self.mock_storyteller_client.get_book_details.return_value = {
-            'title': 'Storyteller Title',
-            'subtitle': 'Storyteller Subtitle',
-            'authors': [{'name': 'Storyteller Author'}]
-        }
 
-        clients_dict = {
-            'ABS': Mock(is_configured=Mock(return_value=True)),
-            'KoSync': Mock(is_configured=Mock(return_value=True)),
-            'Storyteller': Mock(is_configured=Mock(return_value=True))
-        }
-        self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
+        self._set_dashboard_integrations(storyteller=True)
 
-        import src.web_server
-        original_render = src.web_server.render_template
-        mock_render = Mock(return_value="Mocked HTML Response")
-        src.web_server.render_template = mock_render
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['abs_title'], 'Storyteller Title')
+        self.assertEqual(mapping['abs_subtitle'], '')
+        self.assertEqual(mapping['abs_author'], '')
+        self.assertEqual(mapping['display_title'], 'Storyteller Title')
+        self.assertEqual(mapping['display_subtitle'], '')
+        self.assertEqual(mapping['display_author'], '')
+        self.assertEqual(mapping['display_filename'], 'storyteller_uuid-book.epub')
+        self.mock_storyteller_client.get_book_details.assert_not_called()
 
-        try:
-            response = self.client.get('/')
-            self.assertEqual(response.status_code, 200)
-            mapping = mock_render.call_args.kwargs['mappings'][0]
-            self.assertEqual(mapping['abs_title'], 'Storyteller Title')
-            self.assertEqual(mapping['abs_subtitle'], 'Storyteller Subtitle')
-            self.assertEqual(mapping['abs_author'], 'Storyteller Author')
-        finally:
-            src.web_server.render_template = original_render
+    def test_index_endpoint_parses_filename_fallback_with_year(self):
+        from src.db.models import Book
+
+        test_book = Book(
+            abs_id='ebook-filename-year-1',
+            abs_title='Hearts Strange and Dreadful - Tim McGregor (2021)',
+            ebook_filename='Hearts Strange and Dreadful - Tim McGregor (2021).epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storyteller=False)
+
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['display_title'], 'Hearts Strange and Dreadful')
+        self.assertEqual(mapping['display_subtitle'], '')
+        self.assertEqual(mapping['display_author'], 'Tim McGregor')
+        self.assertEqual(mapping['display_filename'], 'Hearts Strange and Dreadful - Tim McGregor (2021).epub')
+
+    def test_index_endpoint_parses_filename_fallback_without_year(self):
+        from src.db.models import Book
+
+        test_book = Book(
+            abs_id='ebook-filename-plain-1',
+            abs_title='Delta-V - Daniel Suarez',
+            ebook_filename='Delta-V - Daniel Suarez.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storyteller=False)
+
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['display_title'], 'Delta-V')
+        self.assertEqual(mapping['display_subtitle'], '')
+        self.assertEqual(mapping['display_author'], 'Daniel Suarez')
+        self.assertEqual(mapping['display_filename'], 'Delta-V - Daniel Suarez.epub')
+
+    def test_index_endpoint_uses_plain_stem_when_filename_has_no_author_pattern(self):
+        from src.db.models import Book
+
+        test_book = Book(
+            abs_id='ebook-plain-stem-1',
+            abs_title='plain-stem-book',
+            ebook_filename='plain-stem-book.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storyteller=False)
+
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['display_title'], 'plain-stem-book')
+        self.assertEqual(mapping['display_subtitle'], '')
+        self.assertEqual(mapping['display_author'], '')
+        self.assertEqual(mapping['display_filename'], 'plain-stem-book.epub')
+
+    def test_index_endpoint_keeps_trustworthy_audiobook_metadata(self):
+        from src.db.models import Book, BookloreBook
+
+        test_book = Book(
+            abs_id='audio-backed-1',
+            abs_title='ABS Clean Title',
+            ebook_filename='Audio Title - Wrong Author.epub',
+            sync_mode='audiobook',
+            status='active'
+        )
+        cached_book = BookloreBook(
+            filename='Audio Title - Wrong Author.epub',
+            title='Cached Ebook Title',
+            authors='Cached Ebook Author',
+            raw_metadata=json.dumps({
+                'title': 'Cached Ebook Title',
+                'subtitle': 'Cached Ebook Subtitle',
+                'authors': 'Cached Ebook Author'
+            })
+        )
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storyteller=False)
+
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['display_title'], 'ABS Clean Title')
+        self.assertEqual(mapping['display_subtitle'], 'Cached Ebook Subtitle')
+        self.assertEqual(mapping['display_author'], 'Cached Ebook Author')
+        self.assertEqual(mapping['display_filename'], 'Audio Title - Wrong Author.epub')
+
+    def test_index_endpoint_sync_warning_ignores_disabled_storyteller_state(self):
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='sync-warning-1',
+            abs_title='Trad Wife',
+            ebook_filename='storyteller_uuid-book.epub',
+            storyteller_uuid='uuid-story-1',
+            sync_mode='audiobook',
+            status='active',
+            duration=40269
+        )
+        mock_states = [
+            State(abs_id='sync-warning-1', client_name='abs', percentage=0.8618398680719048, timestamp=34706, last_updated=1642291400),
+            State(abs_id='sync-warning-1', client_name='kosync', percentage=0.814176695624452, xpath='/body/DocFragment[37]/body/section/p[62]/text().0', last_updated=1642291400),
+            State(abs_id='sync-warning-1', client_name='booklore', percentage=0.814176695624452, cfi='epubcfi(/6/74!/4/2/130/2:0)', last_updated=1642291400),
+            State(abs_id='sync-warning-1', client_name='storyteller', percentage=0.322427671953455, cfi='epubcfi(/6/34!/4/2/174/2:0)', last_updated=1642240000),
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_booklore_client.is_configured.return_value = True
+        from src.db.models import BookloreBook
+        self.mock_database_service.get_all_booklore_books.return_value = [
+            BookloreBook(filename='storyteller_uuid-book.epub', raw_metadata=json.dumps({'id': 10440}))
+        ]
+        self._set_dashboard_integrations(storyteller=False, booklore=True)
+
+        mapping = self._capture_index_mapping()
+        self.assertIn('storyteller', mapping['states'])
+        self.assertEqual(mapping['sync_warning_pct'], 4.8)
+        self.assertFalse(mapping['is_out_of_sync'])
+        self.mock_booklore_client.find_book_by_filename.assert_not_called()
+
+        html = self._render_index_template_source()
+        self.assertNotIn('Out of sync by 54.0%', html)
+        self.assertNotIn('class="book-card out-of-sync"', html)
+
+    def test_index_template_keeps_filename_searchable_but_not_as_author(self):
+        from src.db.models import Book, BookloreBook
+
+        test_book = Book(
+            abs_id='ebook-template-1',
+            abs_title='book-file',
+            ebook_filename='book-file.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+        cached_book = BookloreBook(
+            filename='book-file.epub',
+            title='Displayed Title',
+            authors='Displayed Author',
+            raw_metadata=json.dumps({
+                'title': 'Displayed Title',
+                'subtitle': 'Displayed Subtitle',
+                'authors': 'Displayed Author'
+            })
+        )
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [cached_book]
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storyteller=False)
+
+        html = self._render_index_template_source()
+        self.assertIn('data-filename="book-file.epub"', html)
+        self.assertIn('data-author="Displayed Author"', html)
+        self.assertIn('Displayed Title', html)
+        self.assertIn('Displayed Subtitle', html)
+        self.assertIn('<div class="book-author">Displayed Author</div>', html)
+        self.assertNotIn('<div class="book-author">book-file.epub</div>', html)
+        self.assertIn('loading="lazy"', html)
+        self.assertIn('decoding="async"', html)
+
+    def test_index_template_renders_three_progress_sections_and_not_started_toggle(self):
+        from src.db.models import Book, State
+
+        in_progress_book = Book(
+            abs_id='in-progress-1',
+            abs_title='In Progress Book',
+            ebook_filename='in-progress.epub',
+            status='active',
+            duration=3600
+        )
+        not_started_book = Book(
+            abs_id='not-started-1',
+            abs_title='Not Started Book',
+            ebook_filename='not-started.epub',
+            sync_mode='ebook_only',
+            status='active'
+        )
+        finished_book = Book(
+            abs_id='finished-1',
+            abs_title='Finished Book',
+            ebook_filename='finished.epub',
+            status='active',
+            duration=3600
+        )
+
+        self.mock_database_service.get_all_books.return_value = [
+            in_progress_book,
+            not_started_book,
+            finished_book,
+        ]
+        self.mock_database_service.get_all_states.return_value = [
+            State(abs_id='in-progress-1', client_name='kosync', percentage=0.45, last_updated=1000),
+            State(abs_id='finished-1', client_name='abs', percentage=1.0, timestamp=3600, last_updated=2000),
+        ]
+        self._set_dashboard_integrations(storyteller=False)
+
+        html = self._render_index_template_source()
+
+        self.assertIn('In Progress', html)
+        self.assertIn('Not Started', html)
+        self.assertIn('Finished', html)
+        self.assertNotIn('Currently Reading', html)
+        self.assertNotIn('<h2>All Books</h2>', html)
+        self.assertLess(html.index('In Progress'), html.index('Not Started'))
+        self.assertLess(html.index('Not Started'), html.index('Finished'))
+
+        self.assertIn('id="in-progress-section"', html)
+        self.assertIn('id="not-started-section"', html)
+        self.assertIn('id="finished-section"', html)
+        self.assertIn('id="not-started-header"', html)
+        self.assertIn('id="not-started-grid"', html)
+        self.assertIn('id="not-started-chevron"', html)
+        self.assertIn("localStorage.setItem('not_started_expanded', isShowing);", html)
+        self.assertIn("const shouldExpand = localStorage.getItem('not_started_expanded') === 'true';", html)
+        self.assertIn("window.toggleNotStarted = function ()", html)
+
+        in_progress_chunk = html.split('id="in-progress-section"', 1)[1].split('id="not-started-section"', 1)[0]
+        not_started_chunk = html.split('id="not-started-section"', 1)[1].split('id="finished-section"', 1)[0]
+        finished_chunk = html.split('id="finished-section"', 1)[1]
+
+        self.assertIn('data-abs-id="in-progress-1"', in_progress_chunk)
+        self.assertNotIn('data-abs-id="not-started-1"', in_progress_chunk)
+        self.assertNotIn('data-abs-id="finished-1"', in_progress_chunk)
+
+        self.assertIn('data-abs-id="not-started-1"', not_started_chunk)
+        self.assertIn('data-filename="not-started.epub"', not_started_chunk)
+        self.assertNotIn('data-abs-id="in-progress-1"', not_started_chunk)
+        self.assertNotIn('data-abs-id="finished-1"', not_started_chunk)
+
+        self.assertIn('data-abs-id="finished-1"', finished_chunk)
+        self.assertNotIn('data-abs-id="in-progress-1"', finished_chunk)
+        self.assertNotIn('data-abs-id="not-started-1"', finished_chunk)
+
+    def test_index_template_hides_empty_progress_sections(self):
+        from src.db.models import Book
+
+        not_started_book = Book(
+            abs_id='only-not-started-1',
+            abs_title='Only Not Started',
+            ebook_filename='only-not-started.epub',
+            status='active'
+        )
+
+        self.mock_database_service.get_all_books.return_value = [not_started_book]
+        self._set_dashboard_integrations(storyteller=False)
+
+        html = self._render_index_template_source()
+
+        self.assertNotIn('id="in-progress-section"', html)
+        self.assertIn('id="not-started-section"', html)
+        self.assertNotIn('id="finished-section"', html)
+        self.assertNotIn('<h2>In Progress</h2>', html)
+        self.assertIn('<h2>Not Started</h2>', html)
+        self.assertNotIn('<h2>Finished</h2>', html)
+        self.assertIn('class="book-grid collapsible-book-grid" id="not-started-grid"', html)
+        self.assertNotIn('No books syncing yet', html)
+
+    def test_match_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('match.html')
+
+        self.assertIn('id="submitFeedback"', html)
+        self.assertIn('data-working-label="Creating mapping..."', html)
+        self.assertIn('data-modal-label="Opening forge options..."', html)
+        self.assertIn('previewMatchSubmit(', html)
+        self.assertIn('mappingForm.requestSubmit(forgeBtn);', html)
+
+    def test_batch_match_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('batch_match.html')
+
+        self.assertIn('id="selectionFeedback"', html)
+        self.assertIn('id="queueFeedback"', html)
+        self.assertIn('data-working-label="Adding to queue..."', html)
+        self.assertIn('data-working-label="Processing queue..."', html)
+        self.assertIn('data-working-label="Forging + matching..."', html)
+        self.assertIn('startBatchSubmitState(submitter)', html)
+
+    def test_suggestions_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('suggestions.html')
+
+        self.assertIn('id="selectionFeedback"', html)
+        self.assertIn('id="queueFeedback"', html)
+        self.assertIn("addToQueueBtn.dataset.primaryAction = 'selection-actions';", html)
+        self.assertIn("processQueueBtn.dataset.primaryAction = 'queue-actions';", html)
+        self.assertIn('startSuggestionSubmitState(submitter)', html)
+
+    def test_forge_template_has_submit_feedback_hooks(self):
+        html = self._read_template_source('forge.html')
+
+        self.assertIn('previewForgeState(', html)
+        self.assertIn('Opening forge options...', html)
+        self.assertIn('forgeRequestInFlight = true;', html)
+        self.assertIn("btn.textContent = 'Forging edition...';", html)
 
     def test_clear_progress_endpoint_clean_di(self):
         """Test clear progress endpoint with clean dependency injection."""
@@ -825,6 +1189,29 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
         mock_start_restart_async.assert_called_once()
 
+    def test_get_abs_libraries_returns_available_libraries(self):
+        self.mock_abs_client.is_configured.return_value = True
+        self.mock_abs_client.get_libraries.return_value = [
+            {'id': 'lib-audio', 'name': 'Audiobooks', 'mediaType': 'book'},
+            {'id': 'lib-podcasts', 'name': 'Podcasts', 'mediaType': 'podcast'},
+        ]
+
+        response = self.client.get('/api/abs/libraries')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), [
+            {'id': 'lib-audio', 'name': 'Audiobooks', 'mediaType': 'book'},
+            {'id': 'lib-podcasts', 'name': 'Podcasts', 'mediaType': 'podcast'},
+        ])
+
+    def test_get_abs_libraries_requires_configured_abs(self):
+        self.mock_abs_client.is_configured.return_value = False
+
+        response = self.client.get('/api/abs/libraries')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {'error': 'Audiobookshelf not configured'})
+
     @patch('src.web_server.requests.get')
     def test_test_connection_abs_uses_post_payload_not_saved_env(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
@@ -851,12 +1238,15 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     def test_test_connection_kosync_fails_when_auth_fails(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
             if url == 'http://typed-kosync/healthcheck':
-                self.assertIsNone(headers)
+                self.assertEqual(headers['x-auth-user'], 'reader')
+                self.assertEqual(headers['x-auth-key'], hash_kosync_key('wrong-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 self.assertEqual(timeout, 5)
                 return _http_response(200)
             if url == 'http://typed-kosync/users/auth':
                 self.assertEqual(headers['x-auth-user'], 'reader')
                 self.assertEqual(headers['x-auth-key'], hash_kosync_key('wrong-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 self.assertEqual(timeout, 5)
                 return _http_response(401)
             raise AssertionError(f'Unexpected URL {url}')
@@ -883,10 +1273,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     def test_test_connection_kosync_succeeds_after_healthcheck_and_auth(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
             if url == 'http://typed-kosync/healthcheck':
+                self.assertEqual(headers['x-auth-user'], 'reader')
+                self.assertEqual(headers['x-auth-key'], hash_kosync_key('good-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 return _http_response(200)
             if url == 'http://typed-kosync/users/auth':
                 self.assertEqual(headers['x-auth-user'], 'reader')
                 self.assertEqual(headers['x-auth-key'], hash_kosync_key('good-pass'))
+                self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
                 return _http_response(200)
             raise AssertionError(f'Unexpected URL {url}')
 
@@ -907,6 +1301,106 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertTrue(data['ok'])
         self.assertIn('credentials are valid', data['message'])
         self.assertEqual(mock_get.call_count, 2)
+
+    @patch('src.web_server.requests.get')
+    def test_test_connection_kosync_auth_success_overrides_healthcheck_403(self, mock_get):
+        def fake_get(url, headers=None, timeout=None):
+            self.assertEqual(headers['x-auth-user'], 'reader')
+            self.assertEqual(headers['x-auth-key'], hash_kosync_key('good-pass'))
+            self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
+            if url == 'http://typed-kosync/healthcheck':
+                return _http_response(403)
+            if url == 'http://typed-kosync/users/auth':
+                return _http_response(200)
+            raise AssertionError(f'Unexpected URL {url}')
+
+        mock_get.side_effect = fake_get
+
+        response = self.client.post(
+            '/api/test-connection/kosync',
+            json={
+                'KOSYNC_ENABLED': True,
+                'KOSYNC_SERVER': 'typed-kosync',
+                'KOSYNC_USER': 'reader',
+                'KOSYNC_KEY': 'good-pass',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('healthcheck returned 403', data['message'])
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch('src.web_server.requests.get')
+    def test_test_connection_builtin_kosync_accepts_typed_unsaved_credentials(self, mock_get):
+        def fake_get(url, headers=None, timeout=None):
+            self.assertEqual(url, 'http://127.0.0.1:5757/healthcheck')
+            self.assertEqual(headers['x-auth-user'], 'typed-reader')
+            self.assertEqual(headers['x-auth-key'], hash_kosync_key('typed-pass'))
+            self.assertEqual(headers['accept'], KOSYNC_ACCEPT)
+            self.assertEqual(timeout, 5)
+            return _http_response(200)
+
+        mock_get.side_effect = fake_get
+
+        with patch.dict(os.environ, {
+            'KOSYNC_PORT': '5757',
+            'KOSYNC_USER': 'saved-reader',
+            'KOSYNC_KEY': 'saved-pass',
+        }, clear=False):
+            response = self.client.post(
+                '/api/test-connection/kosync',
+                json={
+                    'KOSYNC_ENABLED': True,
+                    'KOSYNC_SERVER': '127.0.0.1:5757',
+                    'KOSYNC_USER': 'typed-reader',
+                    'KOSYNC_KEY': 'typed-pass',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('will take effect after you save settings', data['message'])
+        mock_get.assert_called_once()
+
+    @patch('src.web_server.requests.post')
+    def test_test_connection_hardcover_accepts_list_shaped_me_payload(self, mock_post):
+        mock_post.return_value = _http_response(
+            200,
+            payload={'data': {'me': [{'id': 1, 'username': 'reader'}]}},
+        )
+
+        response = self.client.post(
+            '/api/test-connection/hardcover',
+            json={
+                'HARDCOVER_ENABLED': True,
+                'HARDCOVER_TOKEN': 'good-token',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn("Connected as 'reader'", data['message'])
+
+    @patch('src.web_server.requests.post')
+    def test_test_connection_hardcover_invalid_token(self, mock_post):
+        mock_post.return_value = _http_response(403)
+
+        response = self.client.post(
+            '/api/test-connection/hardcover',
+            json={
+                'HARDCOVER_ENABLED': True,
+                'HARDCOVER_TOKEN': 'bad-token',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertFalse(data['ok'])
+        self.assertEqual(data['message'], 'Invalid API token')
 
     @patch('src.web_server.requests.post')
     def test_test_connection_storyteller_uses_post_payload_not_saved_env(self, mock_post):

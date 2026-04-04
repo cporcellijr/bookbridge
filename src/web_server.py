@@ -11,18 +11,21 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 import requests
 import schedule
 from dependency_injector import providers
-from flask import Flask, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory
+from flask import Flask, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response
 
 from src.utils.config_loader import ConfigLoader
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
+from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.version import APP_VERSION, get_update_status
@@ -30,7 +33,7 @@ from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult
 from src.utils.storyteller_transcript import StorytellerTranscript
-from src.utils.kosync_headers import hash_kosync_key
+from src.utils.kosync_headers import hash_kosync_key, kosync_auth_headers
 
 def _reconfigure_logging():
     """Force update of root logger level based on env var."""
@@ -57,6 +60,9 @@ SUGGESTIONS_STATE_LOCK = threading.Lock()
 SUGGESTIONS_STATE_TTL_SECONDS = 86400
 SUGGESTIONS_CACHE_FILE_NAME = "suggestions_scan_cache.json"
 SUGGESTIONS_CACHE_LOCK = threading.Lock()
+STATS_CACHE = {}
+STATS_CACHE_LOCK = threading.Lock()
+STATS_CACHE_TTL_SECONDS = 60
 RESTARTING_PAGE_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -326,7 +332,7 @@ ABS_LIBRARY_ID = os.environ.get("ABS_LIBRARY_ID")
 # ABS Collection name for auto-adding matched books
 ABS_COLLECTION_NAME = os.environ.get("ABS_COLLECTION_NAME", "Synced with KOReader")
 
-# Booklore shelf name for auto-adding matched books
+# Grimmory shelf name for auto-adding matched books
 BOOKLORE_SHELF_NAME = os.environ.get("BOOKLORE_SHELF_NAME", "Kobo")
 
 
@@ -359,6 +365,24 @@ def get_audiobooks_conditionally():
     else:
         # Fetch all audiobooks from all libraries
         return container.abs_client().get_all_audiobooks()
+
+
+def _normalize_abs_form_value(key: str, raw_value) -> str:
+    clean_value = str(raw_value or "").strip()
+    if not clean_value:
+        return ""
+    if key in {"ABS_SERVER", "ABS_KEY"} and is_abs_disabled_value(clean_value):
+        return ABS_DISABLED_SENTINEL
+    if key == "ABS_SERVER" and not clean_value.lower().startswith(("http://", "https://")):
+        return f"http://{clean_value}"
+    return clean_value
+
+
+def _display_abs_server() -> str:
+    abs_server = os.environ.get("ABS_SERVER", "")
+    if is_abs_disabled_value(abs_server):
+        return ""
+    return abs_server
 
 # ---------------- CONTEXT PROCESSORS ----------------
 def inject_global_vars():
@@ -407,7 +431,7 @@ def inject_global_vars():
 
     return dict(
         shelfmark_url=os.environ.get("SHELFMARK_URL", ""),
-        abs_server=os.environ.get("ABS_SERVER", ""),
+        abs_server=_display_abs_server(),
         booklore_server=os.environ.get("BOOKLORE_SERVER", ""),
         get_val=get_val,
         get_bool=get_bool
@@ -465,20 +489,20 @@ def find_ebook_file(filename):
 
 def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=None):
     """Get KOSync document ID for an ebook.
-    Tries Booklore API first (if configured and booklore_id provided),
+    Tries Grimmory API first (if configured and booklore_id provided),
     falls back to filesystem if needed.
     """
-    # Try Booklore API first
+    # Try Grimmory API first
     if booklore_id and container.booklore_client().is_configured():
         try:
             content = container.booklore_client().download_book(booklore_id)
             if content:
                 kosync_id = container.ebook_parser().get_kosync_id_from_bytes(ebook_filename, content)
                 if kosync_id:
-                    logger.debug(f"🔍 Computed KOSync ID from Booklore download: '{kosync_id}'")
+                    logger.debug(f"🔍 Computed KOSync ID from Grimmory download: '{kosync_id}'")
                     return kosync_id
         except Exception as e:
-            logger.warning(f"⚠️ Failed to get KOSync ID from Booklore, falling back to filesystem: {e}")
+            logger.warning(f"⚠️ Failed to get KOSync ID from Grimmory, falling back to filesystem: {e}")
 
     # Fall back to filesystem
     ebook_path = find_ebook_file(ebook_filename)
@@ -579,12 +603,12 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
     if not container.booklore_client().is_configured() and not EBOOK_DIR.exists():
         logger.warning(
             f"⚠️ Cannot compute KOSync ID for '{ebook_filename}': "
-            "Neither Booklore integration nor /books volume is configured. "
-            "Enable Booklore (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
+            "Neither Grimmory integration nor /books volume is configured. "
+            "Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
             "or mount the ebooks directory to /books"
         )
     elif not booklore_id and not ebook_path:
-        logger.warning(f"⚠️ Cannot compute KOSync ID for '{ebook_filename}': File not found in Booklore, filesystem, or remote sources")
+        logger.warning(f"⚠️ Cannot compute KOSync ID for '{ebook_filename}': File not found in Grimmory, filesystem, or remote sources")
 
     return None
 
@@ -846,7 +870,7 @@ def _upsert_storyteller_mapping(
         try:
             container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
         except Exception as bl_err:
-            logger.warning(f"Failed to add Booklore shelf entry for '{shelf_filename}': {bl_err}")
+            logger.warning(f"Failed to add Grimmory shelf entry for '{shelf_filename}': {bl_err}")
 
     if getattr(saved_book, "sync_mode", "audiobook") == "ebook_only":
         logger.info("Skipping ABS collection side effects for ebook-only mapping '%s'", saved_book.abs_id)
@@ -859,7 +883,7 @@ def _upsert_storyteller_mapping(
 
 
 class EbookResult:
-    """Wrapper to provide consistent interface for ebooks from Booklore, CWA, ABS, or filesystem."""
+    """Wrapper to provide consistent interface for ebooks from Grimmory, CWA, ABS, or filesystem."""
 
     def __init__(self, name, title=None, subtitle=None, authors=None, booklore_id=None, path=None, source=None, source_id=None):
         self.name = name
@@ -960,14 +984,14 @@ def get_suggestion_audiobooks():
 
 
 def get_searchable_ebooks(search_term):
-    """Get ebooks from Booklore API, filesystem, ABS, and CWA.
+    """Get ebooks from Grimmory API, filesystem, ABS, and CWA.
     Returns list of EbookResult objects for consistent interface."""
 
     results = []
     found_filenames = set()
     found_stems = set()  # To dedupe by title stem
 
-    # 1. Booklore
+    # 1. Grimmory
     if container.booklore_client().is_configured():
         try:
             if search_term:
@@ -988,10 +1012,10 @@ def get_searchable_ebooks(search_term):
                             subtitle=b.get('subtitle'),
                             authors=b.get('authors'),
                             booklore_id=b.get('id'),
-                            source='Booklore'
+                            source='Grimmory'
                         ))
         except Exception as e:
-            logger.warning(f"⚠️ Booklore search failed: {e}")
+            logger.warning(f"⚠️ Grimmory search failed: {e}")
 
     # 2. ABS ebook libraries
     if search_term:
@@ -1066,8 +1090,8 @@ def get_searchable_ebooks(search_term):
     # Check if we have no sources at all
     if not results and not EBOOK_DIR.exists() and not container.booklore_client().is_configured():
         logger.warning(
-            "⚠️ No ebooks available: Neither Booklore integration nor /books volume is configured. "
-            "Enable Booklore (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
+            "⚠️ No ebooks available: Neither Grimmory integration nor /books volume is configured. "
+            "Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
             "or mount the ebooks directory to /books"
         )
 
@@ -1096,6 +1120,7 @@ def _normalize_text_source_type(raw_source):
         return ""
     source_map = {
         "booklore": "Booklore",
+        "grimmory": "Booklore",
         "abs": "ABS",
         "cwa": "CWA",
         "local file": "Local File",
@@ -1185,7 +1210,7 @@ def _create_or_update_booklore_audio_mapping(
         kosync_doc_id = _compute_storyteller_trilink_kosync_id(
             original_ebook_filename,
             resolved_ebook_filename,
-            "BookLore audiobook match",
+            "Grimmory audiobook match",
         )
     else:
         kosync_doc_id = get_kosync_id_for_ebook(resolved_ebook_filename, booklore_ebook_id)
@@ -1249,7 +1274,7 @@ def _create_or_update_booklore_audio_mapping(
         try:
             container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
         except Exception as bl_err:
-            logger.warning(f"Failed to add Booklore shelf entry for '{shelf_filename}': {bl_err}")
+            logger.warning(f"Failed to add Grimmory shelf entry for '{shelf_filename}': {bl_err}")
 
     database_service.dismiss_suggestion(saved_book.abs_id)
     if isinstance(saved_book.kosync_doc_id, str) and saved_book.kosync_doc_id.strip():
@@ -1314,6 +1339,7 @@ def settings():
             'KOSYNC_ENABLED',
             'STORYTELLER_ENABLED',
             'BOOKLORE_ENABLED',
+            'GRIMMORY_READING_SESSIONS',
             'CWA_ENABLED',
             'HARDCOVER_ENABLED',
             'TELEGRAM_ENABLED',
@@ -1321,6 +1347,7 @@ def settings():
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
+            'SHELFMARK_ENABLED',
         ]
 
         # Current settings in DB
@@ -1346,8 +1373,8 @@ def settings():
             else:
                 raw_value = current_settings.get(key, '')
 
-            clean_value = (raw_value or '').strip()
-            if key in url_keys and clean_value:
+            clean_value = _normalize_abs_form_value(key, raw_value)
+            if key in url_keys and clean_value and key != "ABS_SERVER":
                 lower_val = clean_value.lower()
                 if not (lower_val.startswith("http://") or lower_val.startswith("https://")):
                     clean_value = f"http://{clean_value}"
@@ -1367,10 +1394,10 @@ def settings():
         for key, value in request.form.items():
             if key in bool_keys: continue
 
-            clean_value = value.strip()
+            clean_value = _normalize_abs_form_value(key, value)
 
             # Sanitize URLs
-            if key in url_keys and clean_value:
+            if key in url_keys and clean_value and key != "ABS_SERVER":
                 lower_val = clean_value.lower()
                 if not (lower_val.startswith("http://") or lower_val.startswith("https://")):
                     clean_value = f"http://{clean_value}"
@@ -1387,7 +1414,7 @@ def settings():
             for key in booklore_setting_keys
         }
         if any(old_booklore_settings[key] != new_booklore_settings[key] for key in booklore_setting_keys):
-            logger.info("Booklore settings changed; clearing Booklore cache before restart")
+            logger.info("Grimmory settings changed; clearing Grimmory cache before restart")
             database_service.clear_all_booklore_books()
             client = container.booklore_client()
             with client._cache_lock:
@@ -1412,9 +1439,11 @@ def settings():
     message = session.pop('message', None)
     is_error = session.pop('is_error', False)
 
-    return render_template('settings.html',
+    response = make_response(render_template('settings.html',
                          message=message,
-                         is_error=is_error)
+                         is_error=is_error))
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 def get_abs_author(ab):
 
@@ -1442,7 +1471,21 @@ def _coerce_author_display(value):
     return ""
 
 
-def _get_cached_ebook_display_metadata(book):
+def _dashboard_filename_key(filename):
+    value = (filename or "").strip()
+    return value.casefold() if value else ""
+
+
+def _index_cached_booklore_books(all_booklore_books):
+    indexed = {}
+    for cached in all_booklore_books or []:
+        key = _dashboard_filename_key(getattr(cached, "filename", None))
+        if key and key not in indexed:
+            indexed[key] = cached
+    return indexed
+
+
+def _get_cached_booklore_book(book, cached_booklore_by_filename=None):
     candidates = []
     for filename in (
         getattr(book, "original_ebook_filename", None),
@@ -1452,16 +1495,110 @@ def _get_cached_ebook_display_metadata(book):
             candidates.append(filename)
 
     for filename in candidates:
-        cached = database_service.get_booklore_book(filename)
-        if not cached:
-            continue
-        raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") else {}
-        title = (raw.get("title") or getattr(cached, "title", "") or "").strip()
-        subtitle = (raw.get("subtitle") or "").strip()
-        author = _coerce_author_display(raw.get("authors")) or (getattr(cached, "authors", "") or "").strip()
-        if title or subtitle or author:
-            return {"title": title, "subtitle": subtitle, "author": author}
+        if cached_booklore_by_filename is not None:
+            cached = cached_booklore_by_filename.get(_dashboard_filename_key(filename))
+        else:
+            cached = database_service.get_booklore_book(filename)
+        if cached:
+            return cached
+    return None
+
+
+def _get_cached_ebook_display_metadata(book, cached_booklore_by_filename=None):
+    cached = _get_cached_booklore_book(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    if not cached:
+        return {}
+    raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") and isinstance(cached.raw_metadata_dict, dict) else {}
+    title = _normalize_dashboard_display_value(raw.get("title") or getattr(cached, "title", ""))
+    subtitle = _normalize_dashboard_display_value(raw.get("subtitle"))
+    author = _coerce_author_display(raw.get("authors")) or _normalize_dashboard_display_value(getattr(cached, "authors", ""))
+    if title or subtitle or author:
+        return {"title": title, "subtitle": subtitle, "author": author}
     return {}
+
+
+def _get_cached_booklore_id(book, cached_booklore_by_filename=None):
+    cached = _get_cached_booklore_book(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    if not cached:
+        return None
+    raw = cached.raw_metadata_dict if hasattr(cached, "raw_metadata_dict") and isinstance(cached.raw_metadata_dict, dict) else {}
+    for key in ("id", "bookId"):
+        value = raw.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _get_dashboard_display_filename(book):
+    for filename in (
+        getattr(book, "original_ebook_filename", None),
+        getattr(book, "ebook_filename", None),
+    ):
+        value = (filename or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _normalize_dashboard_display_value(value):
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def _parse_dashboard_filename_fallback(filename):
+    display_filename = (filename or "").strip()
+    stem = Path(display_filename).stem.strip() if display_filename else ""
+    if not stem:
+        return {
+            "display_title": "",
+            "display_subtitle": "",
+            "display_author": "",
+            "display_filename": display_filename,
+        }
+
+    if " - " in stem:
+        title_part, author_part = stem.rsplit(" - ", 1)
+        title_part = title_part.strip()
+        author_part = re.sub(r"\s*\(\d{4}\)\s*$", "", author_part).strip()
+        if title_part and author_part:
+            return {
+                "display_title": title_part,
+                "display_subtitle": "",
+                "display_author": author_part,
+                "display_filename": display_filename,
+            }
+
+    return {
+        "display_title": stem,
+        "display_subtitle": "",
+        "display_author": "",
+        "display_filename": display_filename,
+    }
+
+
+def _looks_like_dashboard_filename_title(title):
+    normalized_title = _normalize_dashboard_display_value(title)
+    if not normalized_title:
+        return False
+    parsed = _parse_dashboard_filename_fallback(normalized_title)
+    return bool(parsed.get("display_author"))
+
+
+def _should_override_dashboard_base_title(book, base_title, display_filename):
+    normalized_title = _normalize_dashboard_display_value(base_title)
+    if getattr(book, "sync_mode", "audiobook") == "ebook_only":
+        return True
+    if not normalized_title:
+        return True
+    if normalized_title.lower().startswith("storyteller_"):
+        return True
+
+    filename_stem = Path(display_filename).stem if display_filename else ""
+    if filename_stem and normalized_title.casefold() == _normalize_dashboard_display_value(filename_stem).casefold():
+        return True
+
+    return _looks_like_dashboard_filename_title(normalized_title)
 
 
 def _get_storyteller_display_metadata(storyteller_uuid):
@@ -1482,36 +1619,353 @@ def _get_storyteller_display_metadata(storyteller_uuid):
         return {}
 
 
-def _resolve_dashboard_display_metadata(book, base_title, base_subtitle, base_author):
-    title = (base_title or "").strip()
-    subtitle = (base_subtitle or "").strip()
-    author = (base_author or "").strip()
-    sync_mode = getattr(book, "sync_mode", "audiobook")
-    is_storyteller_placeholder = title.lower().startswith("storyteller_")
+def _get_cached_storyteller_display_metadata(book):
+    raw_title = _normalize_dashboard_display_value(getattr(book, "audio_title", None))
+    if not raw_title:
+        return {}
+    display_filename = _get_dashboard_display_filename(book)
+    if not _should_override_dashboard_base_title(book, raw_title, display_filename):
+        return {}
+    return {
+        "title": raw_title,
+        "subtitle": "",
+        "author": "",
+    }
 
-    cached_meta = _get_cached_ebook_display_metadata(book)
+
+def _resolve_dashboard_display_metadata(
+    book,
+    base_title,
+    base_subtitle,
+    base_author,
+    cached_booklore_by_filename=None,
+    storyteller_meta=None,
+):
+    title = _normalize_dashboard_display_value(base_title)
+    subtitle = _normalize_dashboard_display_value(base_subtitle)
+    author = _normalize_dashboard_display_value(base_author)
+    display_filename = _get_dashboard_display_filename(book)
+    should_override_base_title = _should_override_dashboard_base_title(book, title, display_filename)
+    original_title = title
+
+    cached_meta = _get_cached_ebook_display_metadata(book, cached_booklore_by_filename=cached_booklore_by_filename)
     if cached_meta:
-        if (sync_mode == "ebook_only" or is_storyteller_placeholder or not title) and cached_meta.get("title"):
-            title = cached_meta["title"]
-        if not subtitle and cached_meta.get("subtitle"):
-            subtitle = cached_meta["subtitle"]
-        if not author and cached_meta.get("author"):
-            author = cached_meta["author"]
+        cached_title = _normalize_dashboard_display_value(cached_meta.get("title"))
+        cached_subtitle = _normalize_dashboard_display_value(cached_meta.get("subtitle"))
+        cached_author = _normalize_dashboard_display_value(cached_meta.get("author"))
+        if should_override_base_title and title == original_title and cached_title:
+            title = cached_title
+        if not subtitle and cached_subtitle:
+            subtitle = cached_subtitle
+        if not author and cached_author:
+            author = cached_author
 
-    storyteller_meta = _get_storyteller_display_metadata(getattr(book, "storyteller_uuid", None))
+    storyteller_meta = storyteller_meta or {}
     if storyteller_meta:
-        if (sync_mode == "ebook_only" or is_storyteller_placeholder or not title) and storyteller_meta.get("title"):
-            title = storyteller_meta["title"]
-        if not subtitle and storyteller_meta.get("subtitle"):
-            subtitle = storyteller_meta["subtitle"]
-        if not author and storyteller_meta.get("author"):
-            author = storyteller_meta["author"]
+        storyteller_title = _normalize_dashboard_display_value(storyteller_meta.get("title"))
+        storyteller_subtitle = _normalize_dashboard_display_value(storyteller_meta.get("subtitle"))
+        storyteller_author = _normalize_dashboard_display_value(storyteller_meta.get("author"))
+        if should_override_base_title and title == original_title and storyteller_title:
+            title = storyteller_title
+        if not subtitle and storyteller_subtitle:
+            subtitle = storyteller_subtitle
+        if not author and storyteller_author:
+            author = storyteller_author
 
-    return title or (base_title or "").strip(), subtitle, author
+    filename_fallback = _parse_dashboard_filename_fallback(display_filename)
+    if should_override_base_title and not title:
+        title = filename_fallback["display_title"]
+    if should_override_base_title and title == original_title and filename_fallback["display_author"]:
+        title = filename_fallback["display_title"]
+    if not author and filename_fallback["display_author"]:
+        author = filename_fallback["display_author"]
+
+    return {
+        "display_title": title or filename_fallback["display_title"] or _normalize_dashboard_display_value(base_title),
+        "display_subtitle": subtitle,
+        "display_author": author,
+        "display_filename": display_filename,
+    }
 
 
 def _storyteller_transcript_source(storyteller_uuid, storyteller_manifest):
     return "storyteller" if storyteller_uuid or storyteller_manifest else None
+
+
+def _get_dashboard_sync_warning_clients(mapping, integrations):
+    client_names = []
+
+    if integrations.get('abs') and mapping.get('sync_mode') != 'ebook_only':
+        client_names.append('abs')
+
+    if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
+        client_names.append('bookloreaudio')
+
+    if integrations.get('kosync'):
+        client_names.append('kosync')
+
+    if integrations.get('storyteller') and (
+        mapping.get('storyteller_uuid')
+        or mapping.get('storyteller_legacy_link')
+        or 'storyteller' in mapping.get('states', {})
+    ):
+        client_names.append('storyteller')
+
+    if integrations.get('booklore') and (
+        mapping.get('booklore_id')
+        or 'booklore' in mapping.get('states', {})
+    ):
+        client_names.append('booklore')
+
+    return client_names
+
+
+def _compute_dashboard_sync_warning_pct(mapping, integrations):
+    progress_values = []
+    states = mapping.get('states', {})
+
+    for client_name in _get_dashboard_sync_warning_clients(mapping, integrations):
+        state = states.get(client_name)
+        if not state:
+            continue
+        percentage = state.get('percentage')
+        if percentage is None or percentage <= 0:
+            continue
+        progress_values.append(float(percentage))
+
+    if len(progress_values) < 2:
+        return 0.0
+
+    return round(max(progress_values) - min(progress_values), 1)
+
+
+def _format_dashboard_last_sync(latest_update_time):
+    if latest_update_time <= 0:
+        return "Never"
+    diff = time.time() - latest_update_time
+    if diff < 60:
+        return f"{int(diff)}s ago"
+    if diff < 3600:
+        return f"{int(diff // 60)}m ago"
+    return f"{int(diff // 3600)}h ago"
+
+
+def _build_dashboard_integrations():
+    integrations = {}
+    sync_clients = container.sync_clients()
+    client_items = sync_clients.items() if hasattr(sync_clients, "items") else sync_clients
+    try:
+        iterator = list(client_items)
+    except TypeError:
+        return integrations
+    for client_name, client in iterator:
+        integrations[client_name.lower()] = bool(client.is_configured())
+    return integrations
+
+
+def _group_dashboard_states_by_book(all_states):
+    states_by_book = {}
+    for state in all_states or []:
+        states_by_book.setdefault(state.abs_id, []).append(state)
+    return states_by_book
+
+
+def _build_dashboard_mapping(
+    book,
+    states_by_book,
+    integrations,
+    hardcover_by_book,
+    reading_stats_by_book,
+    cached_booklore_by_filename,
+):
+    states = states_by_book.get(book.abs_id, [])
+    state_by_client = {state.client_name: state for state in states}
+
+    display_meta = _resolve_dashboard_display_metadata(
+        book,
+        getattr(book, "audio_title", None) or book.abs_title,
+        "",
+        "",
+        cached_booklore_by_filename=cached_booklore_by_filename,
+        storyteller_meta=_get_cached_storyteller_display_metadata(book),
+    )
+    display_title = display_meta["display_title"]
+    display_subtitle = display_meta["display_subtitle"]
+    display_author = display_meta["display_author"]
+
+    mapping = {
+        "abs_id": book.abs_id,
+        "abs_title": display_title,
+        "abs_subtitle": display_subtitle,
+        "abs_author": display_author,
+        "display_title": display_title,
+        "display_subtitle": display_subtitle,
+        "display_author": display_author,
+        "display_filename": display_meta["display_filename"],
+        "audio_source": getattr(book, "audio_source", None) or ("ABS" if getattr(book, "sync_mode", "audiobook") != "ebook_only" else None),
+        "audio_source_id": getattr(book, "audio_source_id", None) or book.abs_id,
+        "audio_title": getattr(book, "audio_title", None) or display_title,
+        "audio_duration": getattr(book, "audio_duration", None) or book.duration or 0,
+        "audio_cover_url": getattr(book, "audio_cover_url", None),
+        "ebook_filename": book.ebook_filename,
+        "kosync_doc_id": book.kosync_doc_id,
+        "transcript_file": book.transcript_file,
+        "status": book.status,
+        "sync_mode": getattr(book, "sync_mode", "audiobook"),
+        "unified_progress": 0,
+        "duration": book.duration or 0,
+        "storyteller_uuid": book.storyteller_uuid,
+        "states": {},
+    }
+
+    if book.status == "processing":
+        job = database_service.get_latest_job(book.abs_id)
+        mapping["job_progress"] = round((job.progress or 0.0) * 100, 1) if job else 0.0
+
+    latest_update_time = 0
+    max_progress = 0
+    for client_name, state in state_by_client.items():
+        if state.last_updated and state.last_updated > latest_update_time:
+            latest_update_time = state.last_updated
+
+        pct_val = round(state.percentage * 100, 1) if state.percentage is not None else 0
+        mapping["states"][client_name] = {
+            "timestamp": state.timestamp or 0,
+            "percentage": pct_val,
+            "last_updated": state.last_updated,
+            "xpath": getattr(state, "xpath", None),
+        }
+        if getattr(state, "cfi", None) is not None:
+            mapping["states"][client_name]["cfi"] = getattr(state, "cfi", None)
+
+        if state.percentage is not None:
+            max_progress = max(max_progress, pct_val)
+
+        if client_name == "kosync":
+            mapping["kosync_pct"] = pct_val
+            mapping["kosync_xpath"] = getattr(state, "xpath", None)
+        elif client_name == "abs":
+            mapping["abs_pct"] = pct_val
+            mapping["abs_ts"] = state.timestamp
+        elif client_name == "storyteller":
+            mapping["storyteller_pct"] = pct_val
+            mapping["storyteller_xpath"] = getattr(state, "xpath", None)
+        elif client_name == "booklore":
+            mapping["booklore_pct"] = pct_val
+            mapping["booklore_xpath"] = getattr(state, "xpath", None)
+
+    hardcover_details = hardcover_by_book.get(book.abs_id)
+    if hardcover_details:
+        mapping.update({
+            "hardcover_book_id": hardcover_details.hardcover_book_id,
+            "hardcover_slug": hardcover_details.hardcover_slug,
+            "hardcover_edition_id": hardcover_details.hardcover_edition_id,
+            "hardcover_pages": hardcover_details.hardcover_pages,
+            "isbn": hardcover_details.isbn,
+            "asin": hardcover_details.asin,
+            "matched_by": hardcover_details.matched_by,
+            "hardcover_linked": True,
+            "hardcover_title": book.abs_title,
+        })
+    else:
+        mapping.update({
+            "hardcover_book_id": None,
+            "hardcover_slug": None,
+            "hardcover_edition_id": None,
+            "hardcover_pages": None,
+            "isbn": None,
+            "asin": None,
+            "matched_by": None,
+            "hardcover_linked": False,
+            "hardcover_title": None,
+        })
+
+    mapping["storyteller_legacy_link"] = "storyteller" in state_by_client and not book.storyteller_uuid
+
+    if mapping.get("sync_mode") == "ebook_only":
+        mapping["abs_url"] = None
+        mapping["audio_url"] = None
+    elif mapping["audio_source"] == "BookLore":
+        mapping["abs_url"] = None
+        mapping["audio_url"] = f"{manager.booklore_client.base_url}/book/{mapping['audio_source_id']}?tab=view"
+    else:
+        mapping["abs_url"] = f"{manager.abs_client.base_url}/item/{book.abs_id}"
+        mapping["audio_url"] = mapping["abs_url"]
+
+    mapping["booklore_id"] = _get_cached_booklore_id(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    if manager.booklore_client.is_configured() and mapping["booklore_id"]:
+        mapping["booklore_url"] = f"{manager.booklore_client.base_url}/book/{mapping['booklore_id']}?tab=view"
+    else:
+        mapping["booklore_url"] = None
+
+    if mapping.get("hardcover_slug"):
+        mapping["hardcover_url"] = f"https://hardcover.app/books/{mapping['hardcover_slug']}"
+    elif mapping.get("hardcover_book_id"):
+        mapping["hardcover_url"] = f"https://hardcover.app/books/{mapping['hardcover_book_id']}"
+    else:
+        mapping["hardcover_url"] = None
+
+    mapping["sync_warning_pct"] = _compute_dashboard_sync_warning_pct(mapping, integrations)
+    mapping["is_out_of_sync"] = mapping["sync_warning_pct"] > 5.0
+    mapping["unified_progress"] = min(max_progress, 100.0)
+    mapping["last_sync"] = _format_dashboard_last_sync(latest_update_time)
+
+    if mapping.get("audio_cover_url"):
+        mapping["cover_url"] = mapping["audio_cover_url"]
+    elif mapping.get("audio_source") == "BookLore" and mapping.get("audio_source_id"):
+        mapping["cover_url"] = f"/api/booklore/audiobook-cover/{mapping['audio_source_id']}"
+    elif book.abs_id and mapping.get("audio_source") != "BookLore":
+        mapping["cover_url"] = f"{manager.abs_client.base_url}/api/items/{book.abs_id}/cover?token={manager.abs_client.token}"
+
+    reading_stats = reading_stats_by_book.get(book.abs_id)
+    if reading_stats:
+        mapping["reading_stats"] = reading_stats
+
+    return mapping
+
+
+def _build_dashboard_mappings(
+    books,
+    all_states,
+    integrations,
+    all_hardcover=None,
+    reading_stats_by_book=None,
+    cached_booklore_by_filename=None,
+):
+    hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
+    states_by_book = _group_dashboard_states_by_book(all_states)
+    reading_stats_by_book = reading_stats_by_book or {}
+    cached_booklore_by_filename = cached_booklore_by_filename or {}
+
+    mappings = []
+    total_duration = 0
+    total_listened = 0
+
+    for book in books:
+        mapping = _build_dashboard_mapping(
+            book,
+            states_by_book,
+            integrations,
+            hardcover_by_book,
+            reading_stats_by_book,
+            cached_booklore_by_filename,
+        )
+        mappings.append(mapping)
+
+        duration = mapping.get("duration", 0)
+        progress_pct = mapping.get("unified_progress", 0)
+        if duration > 0:
+            total_duration += duration
+            total_listened += (progress_pct / 100.0) * duration
+
+    if total_duration > 0:
+        overall_progress = round((total_listened / total_duration) * 100, 1)
+    elif mappings:
+        overall_progress = round(sum(m["unified_progress"] for m in mappings) / len(mappings), 1)
+    else:
+        overall_progress = 0
+
+    return mappings, overall_progress
 
 
 def audiobook_matches_search(ab, search_term):
@@ -1542,241 +1996,22 @@ def audiobook_matches_search(ab, search_term):
 # ---------------- ROUTES ----------------
 def index():
     """Dashboard - loads books and progress from database service"""
-
-    # Load books from database service
     books = database_service.get_all_books()
-
-    # Fetch ABS metadata once for the whole dashboard (single API call, not per-book)
-    abs_metadata_by_id = {}
-    try:
-        all_abs_books = container.abs_client().get_all_audiobooks()
-        for ab in all_abs_books:
-            ab_id = ab.get('id')
-            if ab_id:
-                metadata = ab.get('media', {}).get('metadata', {})
-                abs_metadata_by_id[ab_id] = {
-                    'subtitle': metadata.get('subtitle') or '',
-                    'author': metadata.get('authorName') or '',
-                }
-    except Exception as e:
-        logger.warning(f"Could not fetch ABS metadata for dashboard enrichment: {e}")
-
-    # Fetch all states at once to avoid N+1 queries with NullPool
     all_states = database_service.get_all_states()
-    states_by_book = {}
-    for state in all_states:
-        if state.abs_id not in states_by_book:
-            states_by_book[state.abs_id] = []
-        states_by_book[state.abs_id].append(state)
-
-    # Fetch pending suggestions
-    suggestions_raw = database_service.get_all_pending_suggestions()
-
-    # Filter suggestions: Hide those with 0 matches
-    suggestions = []
-
-    for s in suggestions_raw:
-        if len(s.matches) == 0:
-            continue
-        suggestions.append(s)
-
-    # [OPTIMIZATION] Fetch all hardcover details at once
     all_hardcover = database_service.get_all_hardcover_details()
-    hardcover_by_book = {h.abs_id: h for h in all_hardcover}
+    all_reading_stats = database_service.get_all_reading_stats()
+    cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
+    integrations = _build_dashboard_integrations()
+    mappings, overall_progress = _build_dashboard_mappings(
+        books,
+        all_states,
+        integrations,
+        all_hardcover=all_hardcover,
+        reading_stats_by_book=all_reading_stats,
+        cached_booklore_by_filename=cached_booklore_by_filename,
+    )
 
-    integrations = {}
-
-    # Dynamically check all configured sync clients
-    sync_clients = container.sync_clients()
-    for client_name, client in sync_clients.items():
-        if client.is_configured():
-            integrations[client_name.lower()] = True
-        else:
-            integrations[client_name.lower()] = False
-
-    # Convert books to mappings format for template compatibility
-    mappings = []
-    total_duration = 0
-    total_listened = 0
-
-    for book in books:
-        # Get states for this book from pre-fetched dict
-        states = states_by_book.get(book.abs_id, [])
-
-        # Convert states to a dict by client name for easy access
-        state_by_client = {state.client_name: state for state in states}
-
-        # Pull enriched ABS metadata from the pre-fetched lookup (no additional API calls)
-        _abs_meta = abs_metadata_by_id.get(book.abs_id, {})
-        abs_subtitle = _abs_meta.get('subtitle', '')
-        abs_author = _abs_meta.get('author', '')
-        display_title, abs_subtitle, abs_author = _resolve_dashboard_display_metadata(
-            book,
-            book.abs_title,
-            abs_subtitle,
-            abs_author,
-        )
-
-        # Create mapping dict for template compatibility
-        mapping = {
-            'abs_id': book.abs_id,
-            'abs_title': display_title,
-            'abs_subtitle': abs_subtitle,
-            'abs_author': abs_author,
-            'audio_source': getattr(book, 'audio_source', None) or ('ABS' if getattr(book, 'sync_mode', 'audiobook') != 'ebook_only' else None),
-            'audio_source_id': getattr(book, 'audio_source_id', None) or book.abs_id,
-            'audio_title': getattr(book, 'audio_title', None) or display_title,
-            'audio_duration': getattr(book, 'audio_duration', None) or book.duration or 0,
-            'audio_cover_url': getattr(book, 'audio_cover_url', None),
-            'ebook_filename': book.ebook_filename,
-            'kosync_doc_id': book.kosync_doc_id,
-            'transcript_file': book.transcript_file,
-            'status': book.status,
-            'sync_mode': getattr(book, 'sync_mode', 'audiobook'),
-            'unified_progress': 0,
-            'duration': book.duration or 0,
-            'storyteller_uuid': book.storyteller_uuid,
-            'states': {}
-        }
-
-        if book.status == 'processing':
-            job = database_service.get_latest_job(book.abs_id)
-            if job:
-                mapping['job_progress'] = round((job.progress or 0.0) * 100, 1)
-            else:
-                mapping['job_progress'] = 0.0
-
-        # Populate progress from states
-        latest_update_time = 0
-        max_progress = 0
-
-        # Process each client state and store both timestamp and percentage
-        for client_name, state in state_by_client.items():
-            if state.last_updated and state.last_updated > latest_update_time:
-                latest_update_time = state.last_updated
-
-            # Store both timestamp and percentage for each client
-            mapping['states'][client_name] = {
-                'timestamp': state.timestamp or 0,
-                'percentage': round(state.percentage * 100, 1) if state.percentage else 0,
-                'last_updated': state.last_updated
-            }
-
-            # Calculate max progress for unified_progress (using percentage)
-            if state.percentage:
-                progress_pct = round(state.percentage * 100, 1)
-                max_progress = max(max_progress, progress_pct)
-
-        # Add hardcover mapping details
-        hardcover_details = hardcover_by_book.get(book.abs_id)
-        if hardcover_details:
-            mapping.update({
-                'hardcover_book_id': hardcover_details.hardcover_book_id,
-                'hardcover_slug': hardcover_details.hardcover_slug,
-                'hardcover_edition_id': hardcover_details.hardcover_edition_id,
-                'hardcover_pages': hardcover_details.hardcover_pages,
-                'isbn': hardcover_details.isbn,
-                'asin': hardcover_details.asin,
-                'matched_by': hardcover_details.matched_by,
-                'hardcover_linked': True,
-                'hardcover_title': book.abs_title  # Use ABS title as fallback for Hardcover title
-            })
-        else:
-            mapping.update({
-                'hardcover_book_id': None,
-                'hardcover_slug': None,
-                'hardcover_edition_id': None,
-                'hardcover_pages': None,
-                'isbn': None,
-                'asin': None,
-                'matched_by': None,
-                'hardcover_linked': False,
-                'hardcover_title': None
-            })
-            
-        # [NEW] Check for legacy Storyteller link
-        # Book has 'storyteller' state but no 'storyteller_uuid'
-        has_storyteller_state = 'storyteller' in state_by_client
-        is_legacy_link = has_storyteller_state and not book.storyteller_uuid
-        mapping['storyteller_legacy_link'] = is_legacy_link
-
-        # Platform deep links for dashboard
-        if mapping.get('sync_mode') == 'ebook_only':
-            mapping['abs_url'] = None
-            mapping['audio_url'] = None
-        else:
-            if mapping['audio_source'] == 'BookLore':
-                mapping['abs_url'] = None
-                mapping['audio_url'] = f"{manager.booklore_client.base_url}/book/{mapping['audio_source_id']}?tab=view"
-            else:
-                mapping['abs_url'] = f"{manager.abs_client.base_url}/item/{book.abs_id}"
-                mapping['audio_url'] = mapping['abs_url']
-
-        # Booklore deep link (if configured and book found)
-        if manager.booklore_client.is_configured():
-            bl_book = manager.booklore_client.find_book_by_filename(book.ebook_filename, allow_refresh=False)
-            # [FIX] Fallback to original filename if storyteller artifact doesn't match
-            if not bl_book and book.original_ebook_filename:
-                bl_book = manager.booklore_client.find_book_by_filename(book.original_ebook_filename, allow_refresh=False)
-        else:
-            bl_book = None
-
-        if bl_book:
-            mapping['booklore_id'] = bl_book.get('id')
-            mapping['booklore_url'] = f"{manager.booklore_client.base_url}/book/{bl_book.get('id')}?tab=view"
-        else:
-            mapping['booklore_id'] = None
-            mapping['booklore_url'] = None
-
-        # Hardcover deep link (if linked)
-        if mapping.get('hardcover_slug'):
-            mapping['hardcover_url'] = f"https://hardcover.app/books/{mapping['hardcover_slug']}"
-        elif mapping.get('hardcover_book_id'):
-            mapping['hardcover_url'] = f"https://hardcover.app/books/{mapping['hardcover_book_id']}"
-        else:
-            mapping['hardcover_url'] = None
-
-        # Set unified progress to the maximum progress across all clients
-        mapping['unified_progress'] = min(max_progress, 100.0)
-
-        # Calculate last sync time
-        if latest_update_time > 0:
-            diff = time.time() - latest_update_time
-            if diff < 60:
-                mapping['last_sync'] = f"{int(diff)}s ago"
-            elif diff < 3600:
-                mapping['last_sync'] = f"{int(diff // 60)}m ago"
-            else:
-                mapping['last_sync'] = f"{int(diff // 3600)}h ago"
-        else:
-            mapping['last_sync'] = "Never"
-
-        # Set cover URL
-        if mapping.get('audio_cover_url'):
-            mapping['cover_url'] = mapping['audio_cover_url']
-        elif mapping.get('audio_source') == 'BookLore' and mapping.get('audio_source_id'):
-            mapping['cover_url'] = f"/api/booklore/audiobook-cover/{mapping['audio_source_id']}"
-        elif book.abs_id and mapping.get('audio_source') != 'BookLore':
-            mapping['cover_url'] = f"{manager.abs_client.base_url}/api/items/{book.abs_id}/cover?token={manager.abs_client.token}"
-
-        # Add to totals for overall progress calculation
-        duration = mapping.get('duration', 0)
-        progress_pct = mapping.get('unified_progress', 0)
-
-        if duration > 0:
-            total_duration += duration
-            total_listened += (progress_pct / 100.0) * duration
-
-        mappings.append(mapping)
-
-    # Calculate overall progress based on total duration and listening time
-    if total_duration > 0:
-        overall_progress = round((total_listened / total_duration) * 100, 1)
-    elif mappings:
-        # Fallback: average progress if no duration data available
-        overall_progress = round(sum(m['unified_progress'] for m in mappings) / len(mappings), 1)
-    else:
-        overall_progress = 0
+    suggestions = [s for s in database_service.get_all_pending_suggestions() if len(s.matches) > 0]
 
     latest_version, update_available = get_update_status()
 
@@ -1811,7 +2046,7 @@ def forge():
 
 
 def forge_search_audio():
-    """API: Search ABS and BookLore audiobooks for Forge (returns JSON)."""
+    """API: Search ABS and Grimmory audiobooks for Forge (returns JSON)."""
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify([])
@@ -1849,14 +2084,14 @@ def forge_search_audio():
                         "id": bridge_key,
                         "audio_source": "BookLore",
                         "audio_source_id": book_id,
-                        "title": book.get("title") or book.get("fileName") or f"BookLore {book_id}",
+                        "title": book.get("title") or book.get("fileName") or f"Grimmory {book_id}",
                         "author": _coerce_author_display(book.get("authors")),
                         "file_size_mb": round(total_size_bytes / (1024 * 1024), 2) if total_size_bytes else 0,
                         "num_files": num_files,
                         "cover_url": f"/api/booklore/audiobook-cover/{book_id}",
                     })
             except Exception as e:
-                logger.warning(f"⚠️ Forge audio BookLore search failed: {e}")
+                logger.warning(f"⚠️ Forge audio Grimmory search failed: {e}")
 
         all_audiobooks = get_audiobooks_conditionally()
 
@@ -1903,7 +2138,7 @@ def forge_search_audio():
 
 
 def forge_search_text():
-    """API: Unified text source search for Forge - ABS ebooks, Booklore, CWA, local files."""
+    """API: Unified text source search for Forge - ABS ebooks, Grimmory, CWA, local files."""
     query = request.args.get('q', '').strip()
     if not query:
         return jsonify([])
@@ -1912,7 +2147,7 @@ def forge_search_text():
     found_ids = set()  # Dedupe
     query_lower = query.lower()
 
-    # 1. Booklore
+    # 1. Grimmory
     if container.booklore_client().is_configured():
         try:
             books = container.booklore_client().search_books(query)
@@ -1927,12 +2162,12 @@ def forge_search_text():
                                 "id": key,
                                 "title": b.get('title', fname),
                                 "author": b.get('authors', ''),
-                                "source": "Booklore",
+                                "source": "Grimmory",
                                 "filename": fname,
                                 "booklore_id": b.get('id'),
                             })
         except Exception as e:
-            logger.warning(f"⚠️ Forge: Booklore search failed: {e}")
+            logger.warning(f"⚠️ Forge: Grimmory search failed: {e}")
 
     # 2. ABS Ebooks
     try:
@@ -2043,7 +2278,7 @@ def forge_process():
                     metadata.get("title")
                     or book_detail.get("title")
                     or book_detail.get("fileName")
-                    or f"BookLore {audio_source_id}"
+                    or f"Grimmory {audio_source_id}"
                 )
                 author = (
                     _coerce_author_display(book_detail.get("authors"))
@@ -2115,7 +2350,7 @@ def match():
         selected_ab = next((ab for ab in audiobooks if ab['id'] == abs_id), None) if abs_id else None
 
         if request.form.get('action') == 'forge_match' and audio_source not in ('ABS', 'BookLore'):
-            return "Forge match requires an ABS or BookLore audiobook", 400
+            return "Forge match requires an ABS or Grimmory audiobook", 400
 
         if request.form.get('action') == 'forge_match' and audio_source == 'ABS' and not selected_ab:
             return "Audiobook not found", 404
@@ -2164,7 +2399,7 @@ def match():
             logger.info("Match: ebook-only mapping ready for '%s'", sanitize_log_data(saved_book.abs_id))
             return redirect(url_for('index'))
 
-        # [NEW ACTION] Forge & Match (supports both ABS and BookLore audiobooks)
+        # [NEW ACTION] Forge & Match (supports both ABS and Grimmory audiobooks)
         if request.form.get('action') == 'forge_match':
             original_filename = request.form.get('ebook_filename')
             if not original_filename:
@@ -2284,11 +2519,11 @@ def match():
                 if book:
                     booklore_id = book.get('id')
 
-            # Compute KOSync ID (Booklore API first, filesystem fallback)
+            # Compute KOSync ID (Grimmory API first, filesystem fallback)
             kosync_doc_id = get_kosync_id_for_ebook(ebook_filename, booklore_id)
-            
+
         if not kosync_doc_id:
-            logger.warning(f"⚠️ Cannot compute KOSync ID for '{sanitize_log_data(ebook_filename)}': File not found in Booklore or filesystem")
+            logger.warning(f"⚠️ Cannot compute KOSync ID for '{sanitize_log_data(ebook_filename)}': File not found in Grimmory or filesystem")
             return "Could not compute KOSync ID for ebook", 404
 
         # Hash Preservation: If the book already has a kosync_doc_id set,
@@ -2467,7 +2702,7 @@ def batch_match():
                     'bridge_key': _build_bridge_key('BookLore', audio_source_id),
                     'audio_source': 'BookLore',
                     'audio_source_id': audio_source_id,
-                    'audio_title': audio_title or f"BookLore {audio_source_id}",
+                    'audio_title': audio_title or f"Grimmory {audio_source_id}",
                     'audio_duration': audio_duration,
                     'audio_cover_url': audio_cover_url,
                     'audio_provider_book_id': audio_provider_book_id,
@@ -2524,7 +2759,7 @@ def batch_match():
                         )
                         if err_msg:
                             logger.warning(
-                                "Batch Forge skipped BookLore audiobook '%s': %s",
+                                "Batch Forge skipped Grimmory audiobook '%s': %s",
                                 sanitize_log_data(item.get('audio_title') or item.get('audio_source_id')),
                                 err_msg,
                             )
@@ -2692,7 +2927,7 @@ def batch_match():
                     forge_id = _build_bridge_key('BookLore', audio_source_id)
                     if not forge_id:
                         logger.warning(
-                            "Batch Forge skipped '%s': missing BookLore source id",
+                            "Batch Forge skipped '%s': missing Grimmory source id",
                             sanitize_log_data(item.get('audio_title') or item.get('abs_title') or item.get('abs_id')),
                         )
                         continue
@@ -2794,7 +3029,7 @@ def batch_match():
                     )
                     if err_msg:
                         logger.warning(
-                            "⚠️ Batch Match skipped BookLore audiobook '%s': %s",
+                            "⚠️ Batch Match skipped Grimmory audiobook '%s': %s",
                             sanitize_log_data(item.get('audio_title') or item.get('audio_source_id')),
                             err_msg,
                         )
@@ -2840,7 +3075,7 @@ def batch_match():
                         if book:
                             booklore_id = book.get('id')
 
-                    # Compute KOSync ID (Booklore API first, filesystem fallback)
+                    # Compute KOSync ID (Grimmory API first, filesystem fallback)
                     kosync_doc_id = get_kosync_id_for_ebook(ebook_filename, booklore_id)
 
                 if not kosync_doc_id:
@@ -3342,7 +3577,7 @@ def suggestions_page():
                     'bridge_key': bridge_key or _build_bridge_key('BookLore', audio_source_id),
                     'audio_source': 'BookLore',
                     'audio_source_id': audio_source_id,
-                    'audio_title': audio_title or f"BookLore {audio_source_id}",
+                    'audio_title': audio_title or f"Grimmory {audio_source_id}",
                     'audio_duration': audio_duration,
                     'audio_cover_url': audio_cover_url,
                     'audio_provider_book_id': audio_provider_book_id,
@@ -3398,7 +3633,7 @@ def suggestions_page():
                     )
                     if err_msg:
                         logger.warning(
-                            "Suggestions skipped BookLore audiobook '%s': %s",
+                            "Suggestions skipped Grimmory audiobook '%s': %s",
                             sanitize_log_data(item.get('audio_title') or item.get('audio_source_id')),
                             err_msg,
                         )
@@ -3808,7 +4043,7 @@ def cleanup_mapping_resources(book):
             shelf_filename = book.original_ebook_filename or book.ebook_filename
             container.booklore_client().remove_from_shelf(shelf_filename, shelf_name)
         except Exception as e:
-            logger.warning(f"⚠️ Failed to remove from Booklore shelf: {e}")
+            logger.warning(f"⚠️ Failed to remove from Grimmory shelf: {e}")
 
 
 def delete_mapping(abs_id):
@@ -4059,57 +4294,446 @@ def api_storyteller_link(abs_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _get_stats_timezone():
+    tz_name = os.environ.get("TZ", "America/New_York") or "America/New_York"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        logger.warning("Invalid TZ '%s' for stats, falling back to America/New_York", tz_name)
+        return ZoneInfo("America/New_York")
+
+
+def _build_stats_cache_key():
+    return f"stats::{os.environ.get('TZ', 'America/New_York')}"
+
+
+def _read_cached_stats():
+    cache_key = _build_stats_cache_key()
+    with STATS_CACHE_LOCK:
+        entry = STATS_CACHE.get(cache_key)
+        if not entry:
+            return None
+        if (time.time() - entry["created_at"]) > STATS_CACHE_TTL_SECONDS:
+            STATS_CACHE.pop(cache_key, None)
+            return None
+        return entry["payload"]
+
+
+def _write_cached_stats(payload):
+    cache_key = _build_stats_cache_key()
+    with STATS_CACHE_LOCK:
+        STATS_CACHE[cache_key] = {
+            "created_at": time.time(),
+            "payload": payload,
+        }
+
+
+def _date_series(start_date, end_date):
+    values = []
+    cursor = start_date
+    while cursor <= end_date:
+        values.append(cursor)
+        cursor += timedelta(days=1)
+    return values
+
+
+def _activity_dates_from_daily(daily):
+    dates = set()
+    for row in daily or []:
+        try:
+            if int(row.get("seconds") or 0) > 0:
+                dates.add(datetime.fromisoformat(row["date"]).date())
+        except Exception:
+            continue
+    return dates
+
+
+def _calculate_current_streak_from_dates(activity_dates, reference_date):
+    streak = 0
+    cursor = reference_date
+    while cursor in activity_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def _normalize_abs_author(metadata):
+    authors = (metadata or {}).get("authors") or []
+    names = [author.get("name") for author in authors if isinstance(author, dict) and author.get("name")]
+    return ", ".join(names)
+
+
+def _recent_daily_from_mapping(days_map, tz, days=7):
+    end_date = datetime.now(tz).date()
+    start_date = end_date - timedelta(days=max(days - 1, 0))
+    days_map = days_map if isinstance(days_map, dict) else {}
+    buckets = {
+        str(key): int(round(float(value or 0)))
+        for key, value in days_map.items()
+    }
+    return [
+        {
+            "date": day.isoformat(),
+            "seconds": buckets.get(day.isoformat(), 0),
+        }
+        for day in _date_series(start_date, end_date)
+    ]
+
+
+def _heatmap_from_mapping(days_map, year):
+    days_map = days_map if isinstance(days_map, dict) else {}
+    heatmap = []
+    for key, value in days_map.items():
+        if str(key).startswith(f"{year}-"):
+            heatmap.append({
+                "date": str(key),
+                "seconds": int(round(float(value or 0))),
+            })
+    heatmap.sort(key=lambda row: row["date"])
+    return heatmap
+
+
+def _summarize_activity(daily, total_seconds, total_days, reference_date):
+    daily = daily or []
+    week_total = sum(int(row.get("seconds") or 0) for row in daily)
+    best_day = max(daily, key=lambda row: int(row.get("seconds") or 0), default=None)
+    activity_dates = _activity_dates_from_daily(daily)
+    return {
+        "totalSeconds": int(total_seconds or 0),
+        "totalDays": int(total_days or 0),
+        "weekTotalSeconds": week_total,
+        "dailyAverageSeconds": int(week_total / max(len(daily), 1)),
+        "bestDay": best_day,
+        "currentStreakDays": _calculate_current_streak_from_dates(activity_dates, reference_date),
+    }
+
+
+def _normalize_listening_session(session_data):
+    metadata = session_data.get("mediaMetadata") or {}
+    started_at = int((session_data.get("startedAt") or 0) / 1000)
+    ended_at = int((session_data.get("updatedAt") or 0) / 1000) or started_at
+    return {
+        "id": session_data.get("id"),
+        "activityType": "listening",
+        "absId": session_data.get("libraryItemId"),
+        "title": session_data.get("displayTitle") or metadata.get("title") or "Unknown title",
+        "subtitle": metadata.get("subtitle"),
+        "author": session_data.get("displayAuthor") or _normalize_abs_author(metadata),
+        "durationSeconds": int(round(float(session_data.get("timeListening") or 0))),
+        "startedAt": started_at,
+        "endedAt": ended_at,
+        "coverPath": session_data.get("coverPath"),
+    }
+
+
+def _build_listening_stats_payload(tz):
+    try:
+        abs_client = container.abs_client()
+    except Exception:
+        return None
+
+    raw_stats = abs_client.get_listening_stats()
+    if not raw_stats:
+        return None
+
+    all_days = raw_stats.get("days") or {}
+    daily = _recent_daily_from_mapping(all_days, tz, days=7)
+    heatmap = _heatmap_from_mapping(all_days, datetime.now(tz).year)
+    all_activity_dates = _activity_dates_from_daily([
+        {"date": key, "seconds": value}
+        for key, value in all_days.items()
+    ])
+
+    recent_sessions = raw_stats.get("recentSessions")
+    if not isinstance(recent_sessions, list) or not recent_sessions:
+        recent_sessions = abs_client.get_listening_sessions(limit=10)
+    normalized_sessions = [
+        _normalize_listening_session(session_data)
+        for session_data in (recent_sessions or [])[:10]
+        if isinstance(session_data, dict)
+    ]
+
+    summary = _summarize_activity(
+        daily=daily,
+        total_seconds=int(round(float(raw_stats.get("totalTime") or 0))),
+        total_days=len(all_activity_dates),
+        reference_date=datetime.now(tz).date(),
+    )
+    summary["itemsFinished"] = len(raw_stats.get("items") or {})
+    summary["daysListened"] = len(all_activity_dates)
+
+    return {
+        "available": True,
+        "stats": summary,
+        "daily": daily,
+        "heatmap": heatmap,
+        "recentSessions": normalized_sessions,
+        "activityDates": [day.isoformat() for day in sorted(all_activity_dates)],
+        "trackedBookIds": sorted({
+            session.get("absId") for session in normalized_sessions if session.get("absId")
+        }),
+    }
+
+
+def _build_reading_stats_payload(tz):
+    tz_name = getattr(tz, "key", str(tz))
+    summary = database_service.get_koreader_dashboard_summary(tz_name)
+    daily = database_service.get_koreader_daily_totals(7, tz_name)
+    heatmap = database_service.get_koreader_heatmap(datetime.now(tz).year, tz_name)
+    recent_sessions = database_service.get_koreader_recent_sessions(10, tz_name)
+    activity_dates = database_service.get_koreader_activity_dates(tz_name)
+
+    if not summary and not any(int(row.get("seconds") or 0) > 0 for row in daily):
+        return {
+            "available": False,
+            "stats": None,
+            "daily": daily,
+            "heatmap": heatmap,
+            "recentSessions": [],
+            "activityDates": [],
+            "trackedBookIds": [],
+        }
+
+    stats = summary or {}
+    stats.setdefault("booksTracked", 0)
+    stats.setdefault("daysRead", len(activity_dates))
+    stats.setdefault("totalSeconds", 0)
+    stats.setdefault("pagesRead", 0)
+    stats.setdefault("weekTotalSeconds", sum(int(row.get("seconds") or 0) for row in daily))
+    stats.setdefault("dailyAverageSeconds", int(stats["weekTotalSeconds"] / max(len(daily), 1)))
+    stats.setdefault("bestDay", max(daily, key=lambda row: int(row.get("seconds") or 0), default=None))
+    stats.setdefault("currentStreakDays", _calculate_current_streak_from_dates(
+        {datetime.fromisoformat(day).date() for day in activity_dates},
+        datetime.now(tz).date(),
+    ))
+    stats.setdefault("trackedBookIds", [])
+
+    return {
+        "available": True,
+        "stats": stats,
+        "daily": daily,
+        "heatmap": heatmap,
+        "recentSessions": recent_sessions,
+        "activityDates": activity_dates,
+        "trackedBookIds": stats.get("trackedBookIds") or [],
+    }
+
+
+def _merge_daily_activity(listening_daily, reading_daily, tz):
+    end_date = datetime.now(tz).date()
+    start_date = end_date - timedelta(days=6)
+    listening_map = {row["date"]: int(row.get("seconds") or 0) for row in listening_daily or []}
+    reading_map = {row["date"]: int(row.get("seconds") or 0) for row in reading_daily or []}
+
+    merged = []
+    for day in _date_series(start_date, end_date):
+        key = day.isoformat()
+        listening_seconds = listening_map.get(key, 0)
+        reading_seconds = reading_map.get(key, 0)
+        merged.append({
+            "date": key,
+            "seconds": listening_seconds + reading_seconds,
+            "listeningSeconds": listening_seconds,
+            "readingSeconds": reading_seconds,
+        })
+    return merged
+
+
+def _merge_heatmap_activity(listening_heatmap, reading_heatmap):
+    merged = defaultdict(lambda: {"seconds": 0, "listeningSeconds": 0, "readingSeconds": 0})
+    for row in listening_heatmap or []:
+        key = row["date"]
+        value = int(row.get("seconds") or 0)
+        merged[key]["seconds"] += value
+        merged[key]["listeningSeconds"] += value
+    for row in reading_heatmap or []:
+        key = row["date"]
+        value = int(row.get("seconds") or 0)
+        merged[key]["seconds"] += value
+        merged[key]["readingSeconds"] += value
+    return [
+        {"date": key, **values}
+        for key, values in sorted(merged.items())
+    ]
+
+
+def _merge_recent_sessions(listening_sessions, reading_sessions, limit=10):
+    merged = list(listening_sessions or []) + list(reading_sessions or [])
+    merged.sort(key=lambda row: int(row.get("endedAt") or 0), reverse=True)
+    return merged[: max(int(limit or 10), 1)]
+
+
+def _build_combined_stats_payload(listening, reading, tz):
+    listening_daily = (listening or {}).get("daily") or []
+    reading_daily = (reading or {}).get("daily") or []
+    combined_daily = _merge_daily_activity(listening_daily, reading_daily, tz)
+    combined_heatmap = _merge_heatmap_activity(
+        (listening or {}).get("heatmap"),
+        (reading or {}).get("heatmap"),
+    )
+    combined_sessions = _merge_recent_sessions(
+        (listening or {}).get("recentSessions"),
+        (reading or {}).get("recentSessions"),
+        limit=10,
+    )
+
+    listening_dates = {
+        datetime.fromisoformat(day).date()
+        for day in ((listening or {}).get("activityDates") or [])
+    }
+    reading_dates = {
+        datetime.fromisoformat(day).date()
+        for day in ((reading or {}).get("activityDates") or [])
+    }
+    all_activity_dates = listening_dates | reading_dates
+
+    combined_stats = {
+        "activeDays": len(all_activity_dates),
+        "totalSeconds": int(((listening or {}).get("stats") or {}).get("totalSeconds") or 0)
+        + int(((reading or {}).get("stats") or {}).get("totalSeconds") or 0),
+        "booksWithActivity": len(
+            set((listening or {}).get("trackedBookIds") or [])
+            | set((reading or {}).get("trackedBookIds") or [])
+        ),
+        "weekTotalSeconds": sum(int(row.get("seconds") or 0) for row in combined_daily),
+        "dailyAverageSeconds": int(
+            sum(int(row.get("seconds") or 0) for row in combined_daily) / max(len(combined_daily), 1)
+        ),
+        "bestDay": max(combined_daily, key=lambda row: int(row.get("seconds") or 0), default=None),
+        "currentStreakDays": _calculate_current_streak_from_dates(all_activity_dates, datetime.now(tz).date()),
+    }
+
+    return {
+        "available": bool((listening and listening.get("available")) or (reading and reading.get("available"))),
+        "stats": combined_stats if combined_stats["totalSeconds"] or combined_stats["activeDays"] else None,
+        "daily": combined_daily,
+        "heatmap": combined_heatmap,
+        "recentSessions": combined_sessions,
+    }
+
+
+def stats_view():
+    return render_template('stats.html')
+
+
+def api_stats():
+    cached = _read_cached_stats()
+    if cached is not None:
+        return jsonify(cached)
+
+    tz = _get_stats_timezone()
+    listening = None
+    reading = None
+
+    try:
+        listening = _build_listening_stats_payload(tz)
+    except Exception as e:
+        logger.warning("Stats API: listening stats build failed: %s", e)
+        listening = None
+
+    try:
+        reading = _build_reading_stats_payload(tz)
+    except Exception as e:
+        logger.warning("Stats API: reading stats build failed: %s", e)
+        reading = {
+            "available": False,
+            "stats": None,
+            "daily": [],
+            "heatmap": [],
+            "recentSessions": [],
+            "activityDates": [],
+            "trackedBookIds": [],
+        }
+
+    combined = _build_combined_stats_payload(
+        listening or {"available": False, "stats": None, "daily": [], "heatmap": [], "recentSessions": []},
+        reading,
+        tz,
+    )
+
+    response = {
+        "listening": listening,
+        "reading": {
+            "available": reading.get("available"),
+            "stats": reading.get("stats"),
+            "daily": reading.get("daily"),
+            "heatmap": reading.get("heatmap"),
+            "recentSessions": reading.get("recentSessions"),
+        } if reading else {
+            "available": False,
+            "stats": None,
+            "daily": [],
+            "heatmap": [],
+            "recentSessions": [],
+        },
+        "combined": combined,
+    }
+    _write_cached_stats(response)
+    return jsonify(response)
+
+
+def api_stats_reading_day():
+    date_str = str(request.args.get("date") or "").strip()
+    if not date_str:
+        return jsonify({"error": "Missing date"}), 400
+
+    try:
+        target_date = datetime.fromisoformat(date_str).date()
+    except ValueError:
+        return jsonify({"error": "Invalid date format"}), 400
+
+    try:
+        tz = _get_stats_timezone()
+        payload = database_service.get_koreader_books_for_date(
+            target_date.isoformat(),
+            getattr(tz, "key", str(tz)),
+        )
+    except Exception as e:
+        logger.warning("Stats API: reading day drilldown failed for %s: %s", date_str, e)
+        return jsonify({"error": "Failed to load reading day details"}), 500
+
+    return jsonify(payload)
+
+
+def api_stats_reading_calendar():
+    month_str = str(request.args.get("month") or "").strip()
+    if not month_str:
+        return jsonify({"error": "Missing month"}), 400
+
+    try:
+        datetime.fromisoformat(f"{month_str}-01")
+    except ValueError:
+        return jsonify({"error": "Invalid month format"}), 400
+
+    try:
+        tz = _get_stats_timezone()
+        payload = database_service.get_koreader_calendar_month(
+            month_str,
+            getattr(tz, "key", str(tz)),
+        )
+    except Exception as e:
+        logger.warning("Stats API: reading calendar failed for %s: %s", month_str, e)
+        return jsonify({"error": "Failed to load reading calendar"}), 500
+
+    return jsonify(payload)
+
+
 def api_status():
     """Return status of all books from database service"""
     books = database_service.get_all_books()
-
-    # Convert books to mappings format for API compatibility
-    mappings = []
-    for book in books:
-        # Get states for this book
-        states = database_service.get_states_for_book(book.abs_id)
-        state_by_client = {state.client_name: state for state in states}
-
-        mapping = {
-            'abs_id': book.abs_id,
-            'abs_title': book.abs_title,
-            'ebook_filename': book.ebook_filename,
-            'kosync_doc_id': book.kosync_doc_id,
-            'transcript_file': book.transcript_file,
-            'status': book.status,
-            'sync_mode': getattr(book, 'sync_mode', 'audiobook'), # Default to audiobook for existing
-            'duration': book.duration,
-            'storyteller_uuid': book.storyteller_uuid,
-            'states': {}
-        }
-
-        # Add progress information from states
-        for client_name, state in state_by_client.items():
-            # Store in unified states object
-            pct_val = round(state.percentage * 100, 1) if state.percentage is not None else 0
-
-            mapping['states'][client_name] = {
-                'timestamp': state.timestamp or 0,
-                'percentage': pct_val,
-                'xpath': getattr(state, 'xpath', None),
-                'last_updated': state.last_updated
-            }
-
-            # Maintain backward compatibility with old field names
-            if client_name == 'kosync':
-                mapping['kosync_pct'] = pct_val
-                mapping['kosync_xpath'] = getattr(state, 'xpath', None)
-            elif client_name == 'abs':
-                mapping['abs_pct'] = pct_val
-                mapping['abs_ts'] = state.timestamp
-            elif client_name == 'storyteller':
-                mapping['storyteller_pct'] = pct_val
-                mapping['storyteller_xpath'] = getattr(state, 'xpath', None)
-            elif client_name == 'booklore':
-                mapping['booklore_pct'] = pct_val
-                mapping['booklore_xpath'] = getattr(state, 'xpath', None)
-
-        mappings.append(mapping)
+    all_states = database_service.get_all_states()
+    all_hardcover = database_service.get_all_hardcover_details()
+    all_reading_stats = database_service.get_all_reading_stats()
+    cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
+    integrations = _build_dashboard_integrations()
+    mappings, _ = _build_dashboard_mappings(
+        books,
+        all_states,
+        integrations,
+        all_hardcover=all_hardcover,
+        reading_stats_by_book=all_reading_stats,
+        cached_booklore_by_filename=cached_booklore_by_filename,
+    )
 
     return jsonify({"mappings": mappings})
 
@@ -4506,19 +5130,63 @@ def proxy_cover(abs_id):
 logger = logging.getLogger(__name__)
 
 def get_booklore_libraries():
-    """Return available Booklore libraries."""
+    """Return available Grimmory libraries."""
     if not container.booklore_client().is_configured():
-        return jsonify({"error": "Booklore not configured"}), 400
+        return jsonify({"error": "Grimmory not configured"}), 400
 
     libraries = container.booklore_client().get_libraries()
     return jsonify(libraries)
 
 
+def get_booklore_shelves():
+    """Return available Grimmory shelves (regular and magic)."""
+    if not container.booklore_client().is_configured():
+        return jsonify({"error": "Grimmory not configured"}), 400
+
+    try:
+        shelves = container.booklore_client().get_all_shelves()
+        magic_shelves = container.booklore_client().get_all_magic_shelves()
+        
+        all_shelves = shelves + magic_shelves
+        result = []
+        
+        for s in all_shelves:
+            is_magic = s.get("magicShelf") or s.get("magic") or s.get("isMagic", False)
+            name = s.get("name", "Unknown")
+            
+            # Add emoji prefix for UI distinction
+            if is_magic and not name.startswith("🪄"):
+                name = f"🪄 {name}"
+                
+            result.append({
+                "id": s.get("name"),  # Use original name as ID
+                "name": name,
+                "count": s.get("bookCount", 0)
+            })
+            
+        # Sort alphabetically by the original name
+        result.sort(key=lambda x: x["id"].lower() if x["id"] else "")
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error fetching Grimmory shelves: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def get_abs_libraries():
+    """Return available Audiobookshelf libraries."""
+    if not container.abs_client().is_configured():
+        return jsonify({"error": "Audiobookshelf not configured"}), 400
+
+    libraries = container.abs_client().get_libraries()
+    return jsonify(libraries)
+
+
 def proxy_booklore_audiobook_cover(book_id):
-    """Stream a BookLore audiobook cover through the backend."""
+    """Stream a Grimmory audiobook cover through the backend."""
     client = container.booklore_client()
     if not client.is_configured():
-        return "Booklore not configured", 400
+        return "Grimmory not configured", 400
 
     try:
         content, content_type = client.get_audiobook_cover_bytes(book_id)
@@ -4528,26 +5196,26 @@ def proxy_booklore_audiobook_cover(book_id):
 
         return Response(content, content_type=content_type or "image/jpeg")
     except Exception as e:
-        logger.error(f"❌ Error proxying BookLore audiobook cover for '{book_id}': {e}")
+        logger.error(f"❌ Error proxying Grimmory audiobook cover for '{book_id}': {e}")
         return "Error loading cover", 500
 
 
 def api_booklore_refresh():
-    """Clear Booklore cache and trigger a full refresh."""
+    """Clear Grimmory cache and trigger a full refresh."""
     client = container.booklore_client()
     if not client.is_configured():
-        return jsonify({"success": False, "error": "Booklore not configured"}), 400
+        return jsonify({"success": False, "error": "Grimmory not configured"}), 400
 
     try:
         refreshed = client.clear_and_refresh()
     except Exception as e:
-        logger.error(f"❌ Booklore cache refresh failed: {e}")
+        logger.error(f"❌ Grimmory cache refresh failed: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
     if not refreshed:
-        return jsonify({"success": False, "error": "Booklore refresh failed"}), 500
+        return jsonify({"success": False, "error": "Grimmory refresh failed"}), 500
 
-    return jsonify({"success": True, "message": "Booklore cache refreshed successfully"})
+    return jsonify({"success": True, "message": "Grimmory cache refreshed successfully"})
 
 
 def _test_conn_error(e: Exception) -> str:
@@ -4588,8 +5256,43 @@ def _normalize_test_url(value: str) -> str:
     return url
 
 
+def _normalize_abs_test_url(value: str) -> str:
+    url = _coerce_test_str(value)
+    if is_abs_disabled_value(url):
+        return ABS_DISABLED_SENTINEL
+    return _normalize_test_url(url)
+
+
 def _build_test_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _is_builtin_kosync_test_url(url: str) -> bool:
+    if not url:
+        return False
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    host = (parsed.hostname or "").strip().lower()
+    if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+        return False
+
+    valid_ports = {5757}
+    configured_port = (os.environ.get("KOSYNC_PORT") or "").strip()
+    if configured_port:
+        try:
+            valid_ports.add(int(configured_port))
+        except ValueError:
+            logger.warning(f"Invalid KOSYNC_PORT '{configured_port}' while testing KOSync settings")
+
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+
+    return port in valid_ports
 
 
 def test_connection(service: str):
@@ -4597,7 +5300,7 @@ def test_connection(service: str):
     payload = request.get_json(silent=True) or {}
     testers = {
         'abs': lambda data: _test_abs(
-            _normalize_test_url(data.get('ABS_SERVER')),
+            _normalize_abs_test_url(data.get('ABS_SERVER')),
             _coerce_test_str(data.get('ABS_KEY')),
         ),
         'kosync': lambda data: _test_kosync(
@@ -4643,6 +5346,8 @@ def test_connection(service: str):
 
 
 def _test_abs(url: str, token: str) -> dict:
+    if is_abs_disabled_value(url) or is_abs_disabled_value(token):
+        return {"ok": False, "message": "Audiobookshelf is intentionally disabled"}
     if not url or not token:
         return {"ok": False, "message": "Missing server URL or API token"}
     r = requests.get(f"{url}/api/me", headers={"Authorization": f"Bearer {token}"}, timeout=10)
@@ -4660,21 +5365,80 @@ def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
     if not user or not key:
         return {"ok": False, "message": "Missing username or password"}
 
-    healthcheck = requests.get(_build_test_url(url, "healthcheck"), timeout=5)
-    if healthcheck.status_code != 200:
-        return {"ok": False, "message": f"Healthcheck returned {healthcheck.status_code}"}
+    headers = kosync_auth_headers(user, hash_kosync_key(key))
+    healthcheck_status = None
+    healthcheck_error = None
+    try:
+        healthcheck = requests.get(
+            _build_test_url(url, "healthcheck"),
+            headers=headers,
+            timeout=5,
+        )
+        healthcheck_status = healthcheck.status_code
+    except Exception as e:
+        healthcheck_error = str(e)
 
-    headers = {
-        "x-auth-user": user,
-        "x-auth-key": hash_kosync_key(key),
-    }
+    if _is_builtin_kosync_test_url(url):
+        if healthcheck_status == 200:
+            return {
+                "ok": True,
+                "message": (
+                    "Built-in KOSync bridge is reachable. "
+                    "Typed credentials look ready and will take effect after you save settings."
+                ),
+            }
+        if healthcheck_status is not None:
+            return {
+                "ok": False,
+                "message": f"Built-in KOSync bridge healthcheck returned {healthcheck_status}",
+            }
+        return {
+            "ok": False,
+            "message": (
+                "Built-in KOSync bridge is not reachable"
+                + (f": {healthcheck_error}" if healthcheck_error else "")
+            ),
+        }
+
     auth = requests.get(_build_test_url(url, "users/auth"), headers=headers, timeout=5)
     if auth.status_code == 200:
+        if healthcheck_status not in (None, 200):
+            return {
+                "ok": True,
+                "message": (
+                    "Server is reachable and credentials are valid "
+                    f"(healthcheck returned {healthcheck_status})"
+                ),
+            }
+        if healthcheck_error:
+            return {
+                "ok": True,
+                "message": (
+                    "Server is reachable and credentials are valid "
+                    f"(healthcheck error: {healthcheck_error})"
+                ),
+            }
         return {"ok": True, "message": "Server is reachable and credentials are valid"}
     if auth.status_code in (401, 403):
         return {"ok": False, "message": f"Authentication failed ({auth.status_code}) — check username or password"}
     if auth.status_code == 500:
         return {"ok": False, "message": "Remote KOSync server is not configured"}
+    if healthcheck_status is not None:
+        return {
+            "ok": False,
+            "message": (
+                f"Auth check returned {auth.status_code}; "
+                f"healthcheck returned {healthcheck_status}"
+            ),
+        }
+    if healthcheck_error:
+        return {
+            "ok": False,
+            "message": (
+                f"Auth check returned {auth.status_code}; "
+                f"healthcheck error: {healthcheck_error}"
+            ),
+        }
     return {"ok": False, "message": f"Auth check returned {auth.status_code}"}
 
 
@@ -4698,7 +5462,7 @@ def _test_storyteller(enabled: bool, url: str, user: str, pwd: str) -> dict:
 
 def _test_booklore(enabled: bool, url: str, user: str, pwd: str) -> dict:
     if not enabled:
-        return {"ok": False, "message": "Booklore is disabled"}
+        return {"ok": False, "message": "Grimmory is disabled"}
     if not url or not user or not pwd:
         return {"ok": False, "message": "Missing URL, username, or password"}
     r = requests.post(
@@ -4742,8 +5506,13 @@ def _test_hardcover(enabled: bool, token: str) -> dict:
     )
     if r.status_code == 200:
         data = r.json()
-        if data.get('data', {}).get('me'):
-            username = data['data']['me'].get('username', 'unknown')
+        me = data.get('data', {}).get('me')
+        if isinstance(me, list):
+            me = me[0] if me and isinstance(me[0], dict) else None
+        elif not isinstance(me, dict):
+            me = None
+        if me:
+            username = me.get('username', 'unknown')
             return {"ok": True, "message": f"Connected as '{username}'"}
         errors = data.get('errors', [])
         if errors:
@@ -4788,6 +5557,32 @@ def create_app(test_container=None):
     app.context_processor(inject_global_vars)
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
 
+    def format_duration(seconds: int) -> str:
+        """Convert seconds to human-readable duration."""
+        seconds = int(seconds)
+        if seconds < 60:
+            return f"{seconds}s"
+        if seconds < 3600:
+            return f"{seconds // 60}m"
+        h = seconds // 3600
+        m = (seconds % 3600) // 60
+        return f"{h}h {m}m" if m else f"{h}h"
+
+    def format_time_ago(unix_timestamp: float) -> str:
+        """Convert a unix timestamp to relative time from now."""
+        import time as _time
+        diff = _time.time() - unix_timestamp
+        if diff < 60:
+            return f"{int(diff)}s"
+        if diff < 3600:
+            return f"{int(diff // 60)}m"
+        if diff < 86400:
+            return f"{int(diff // 3600)}h"
+        return f"{int(diff // 86400)}d"
+
+    app.jinja_env.filters['format_duration'] = format_duration
+    app.jinja_env.filters['format_time_ago'] = format_time_ago
+
     def _legacy_book_linker_redirect(dummy=None):
         return redirect(url_for('forge'), code=301)
 
@@ -4809,6 +5604,10 @@ def create_app(test_container=None):
     app.add_url_rule('/api/health', 'api_health', api_health)
     app.add_url_rule('/api/restart', 'api_restart', api_restart, methods=['POST'])
     app.add_url_rule('/api/status', 'api_status', api_status)
+    app.add_url_rule('/stats', 'stats_view', stats_view)
+    app.add_url_rule('/api/stats', 'api_stats', api_stats)
+    app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
+    app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
     app.add_url_rule('/logs', 'logs_view', logs_view)
     app.add_url_rule('/api/logs', 'api_logs', api_logs)
     app.add_url_rule('/api/logs/live', 'api_logs_live', api_logs_live)
@@ -4825,6 +5624,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
+    app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
+    app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
 
@@ -4909,13 +5710,13 @@ if __name__ == '__main__':
     books_volume_exists = container.books_dir().exists()
 
     if booklore_configured:
-        logger.info(f"✅ Booklore integration enabled - ebooks sourced from API")
+        logger.info(f"✅ Grimmory integration enabled - ebooks sourced from API")
     elif books_volume_exists:
         logger.info(f"✅ Ebooks directory mounted at {container.books_dir()}")
     else:
         logger.info(
-            "⚠️  NO EBOOK SOURCE CONFIGURED: Neither Booklore integration nor /books volume is available. "
-            "New book matches will fail. Enable Booklore (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
+            "⚠️  NO EBOOK SOURCE CONFIGURED: Neither Grimmory integration nor /books volume is available. "
+            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
             "or mount the ebooks directory to /books."
         )
 

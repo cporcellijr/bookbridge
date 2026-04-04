@@ -5,11 +5,28 @@ Direct model-based interface without dictionary conversions.
 
 import json
 import logging
+from collections import defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 from contextlib import contextmanager
-from .models import DatabaseManager, Book, State, Job, HardcoverDetails, Setting, KosyncDocument, PendingSuggestion, BookloreBook, Base
-from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from .models import (
+    DatabaseManager,
+    Book,
+    State,
+    Job,
+    HardcoverDetails,
+    Setting,
+    KosyncDocument,
+    PendingSuggestion,
+    BookloreBook,
+    ReadingSession,
+    KOReaderBookStat,
+    KOReaderPageStat,
+    Base,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +169,21 @@ class DatabaseService:
         with self.get_session() as session:
             settings = session.query(Setting).all()
             return {s.key: s.value for s in settings}
+
+    def get_json_setting(self, key: str, default=None):
+        """Get a JSON setting value, returning default on missing or invalid JSON."""
+        raw = self.get_setting(key)
+        if raw in (None, ""):
+            return default
+        try:
+            return json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning("Invalid JSON setting for '%s'", key)
+            return default
+
+    def set_json_setting(self, key: str, value) -> Setting:
+        """Persist a JSON-serializable setting value."""
+        return self.set_setting(key, json.dumps(value))
             
     def delete_setting(self, key: str) -> bool:
         """Delete a setting by key."""
@@ -619,7 +651,7 @@ class DatabaseService:
             return doc
 
     def get_kosync_doc_by_booklore_id(self, booklore_id: str) -> Optional[KosyncDocument]:
-        """Find a KOSync document by its Booklore ID."""
+        """Find a KOSync document by its Grimmory ID."""
         with self.get_session() as session:
             doc = session.query(KosyncDocument).filter(
                 KosyncDocument.booklore_id == str(booklore_id)
@@ -752,7 +784,7 @@ class DatabaseService:
 
     # BookloreBook operations
     def get_booklore_book(self, filename: str) -> Optional[BookloreBook]:
-        """Get a cached Booklore book by filename."""
+        """Get a cached Grimmory book by filename."""
         with self.get_session() as session:
             book = session.query(BookloreBook).filter(BookloreBook.filename == filename).first()
             if book:
@@ -760,7 +792,7 @@ class DatabaseService:
             return book
 
     def get_all_booklore_books(self) -> List[BookloreBook]:
-        """Get all cached Booklore books."""
+        """Get all cached Grimmory books."""
         with self.get_session() as session:
             books = session.query(BookloreBook).all()
             for book in books:
@@ -768,7 +800,7 @@ class DatabaseService:
             return books
 
     def save_booklore_book(self, booklore_book: BookloreBook) -> BookloreBook:
-        """Save or update a Booklore book."""
+        """Save or update a Grimmory book."""
         with self.get_session() as session:
             existing = session.query(BookloreBook).filter(
                 BookloreBook.filename == booklore_book.filename
@@ -790,7 +822,7 @@ class DatabaseService:
                 return booklore_book
 
     def delete_booklore_book(self, filename: str) -> bool:
-        """Delete a Booklore book from the cache table."""
+        """Delete a Grimmory book from the cache table."""
         try:
             from src.db.models import BookloreBook
             # Use safe session context manager
@@ -800,12 +832,715 @@ class DatabaseService:
                 session.query(BookloreBook).filter(BookloreBook.filename == filename).delete(synchronize_session=False)
                 return True
         except Exception as e:
-            logger.error(f"❌ Failed to delete Booklore book '{filename}': {e}")
+            logger.error(f"❌ Failed to delete Grimmory book '{filename}': {e}")
             return False
 
 
+    @staticmethod
+    def _normalize_koreader_device_key(device: str = None, device_id: str = None) -> str:
+        return str(device_id or device or "").strip()
+
+    def upsert_koreader_book_stats(self, device: str, device_id: str, books: list[dict]) -> int:
+        """Upsert KOReader book metadata rows for one device."""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        device_key = self._normalize_koreader_device_key(device=device, device_id=device_id)
+        if not device_key:
+            return 0
+
+        rows = []
+        now = datetime.utcnow()
+        for book in books or []:
+            md5 = str(book.get("md5") or book.get("book_md5") or "").strip()
+            if not md5:
+                continue
+
+            rows.append({
+                "md5": md5,
+                "device": str(device or "").strip() or None,
+                "device_id": str(device_id or "").strip() or None,
+                "device_key": device_key,
+                "ko_book_id": book.get("ko_book_id"),
+                "title": str(book.get("title") or "").strip() or None,
+                "authors": str(book.get("authors") or "").strip() or None,
+                "pages": book.get("pages"),
+                "total_read_pages": book.get("total_read_pages"),
+                "total_read_time": book.get("total_read_time"),
+                "last_updated": now,
+            })
+
+        if not rows:
+            return 0
+
+        with self.get_session() as session:
+            stmt = sqlite_insert(KOReaderBookStat).values(rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["md5", "device_key"],
+                set_={
+                    "device": stmt.excluded.device,
+                    "device_id": stmt.excluded.device_id,
+                    "ko_book_id": stmt.excluded.ko_book_id,
+                    "title": stmt.excluded.title,
+                    "authors": stmt.excluded.authors,
+                    "pages": stmt.excluded.pages,
+                    "total_read_pages": stmt.excluded.total_read_pages,
+                    "total_read_time": stmt.excluded.total_read_time,
+                    "last_updated": now,
+                },
+            )
+            session.execute(stmt)
+        return len(rows)
+
+    def bulk_insert_koreader_page_stats(self, device: str, device_id: str, page_stats: list[dict]) -> dict:
+        """Bulk insert KOReader page stats with replay-safe dedupe."""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        device_key = self._normalize_koreader_device_key(device=device, device_id=device_id)
+        if not device_key:
+            return {"accepted": 0, "duplicates": 0}
+
+        rows = []
+        now = datetime.utcnow()
+        for entry in page_stats or []:
+            md5 = str(entry.get("md5") or entry.get("book_md5") or "").strip()
+            if not md5:
+                continue
+
+            try:
+                page = int(entry.get("page"))
+                start_time = float(entry.get("start_time"))
+                duration = max(float(entry.get("duration") or 0), 0.0)
+            except (TypeError, ValueError):
+                continue
+
+            if page < 0 or start_time <= 0:
+                continue
+
+            rows.append({
+                "md5": md5,
+                "device": str(device or "").strip() or None,
+                "device_id": str(device_id or "").strip() or None,
+                "device_key": device_key,
+                "page": page,
+                "start_time": start_time,
+                "duration": duration,
+                "uploaded_at": now,
+            })
+
+        if not rows:
+            return {"accepted": 0, "duplicates": 0}
+
+        with self.get_session() as session:
+            stmt = sqlite_insert(KOReaderPageStat).values(rows)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["md5", "device_key", "page", "start_time"]
+            )
+            result = session.execute(stmt)
+            inserted = max(int(result.rowcount or 0), 0)
+
+        return {
+            "accepted": inserted,
+            "duplicates": max(len(rows) - inserted, 0),
+        }
+
+    @staticmethod
+    def _local_date_from_epoch(timestamp: float, tz_name: str) -> str:
+        return datetime.fromtimestamp(float(timestamp), ZoneInfo(tz_name)).date().isoformat()
+
+    @staticmethod
+    def _date_range(start_date, end_date):
+        days = []
+        cursor = start_date
+        while cursor <= end_date:
+            days.append(cursor)
+            cursor += timedelta(days=1)
+        return days
+
+    @staticmethod
+    def _calculate_streak(activity_dates: set, reference_date) -> int:
+        streak = 0
+        cursor = reference_date
+        while cursor in activity_dates:
+            streak += 1
+            cursor -= timedelta(days=1)
+        return streak
+
+    def _get_koreader_book_links(self, session) -> dict:
+        links = {}
+
+        linked_docs = session.query(KosyncDocument).filter(
+            KosyncDocument.linked_abs_id.isnot(None)
+        ).all()
+        if linked_docs:
+            linked_abs_ids = {doc.linked_abs_id for doc in linked_docs if doc.linked_abs_id}
+            books = session.query(Book).filter(Book.abs_id.in_(linked_abs_ids)).all()
+            books_by_id = {book.abs_id: book for book in books}
+            for doc in linked_docs:
+                book = books_by_id.get(doc.linked_abs_id)
+                if book and doc.document_hash:
+                    links.setdefault(str(doc.document_hash), book)
+
+        direct_books = session.query(Book).filter(Book.kosync_doc_id.isnot(None)).all()
+        for book in direct_books:
+            if book.kosync_doc_id:
+                links.setdefault(str(book.kosync_doc_id), book)
+
+        return links
+
+    def _get_latest_koreader_book_metadata(self, session, md5s: set[str]) -> dict:
+        if not md5s:
+            return {}
+
+        rows = session.query(KOReaderBookStat).filter(KOReaderBookStat.md5.in_(md5s)).order_by(
+            KOReaderBookStat.last_updated.desc(),
+            KOReaderBookStat.id.desc(),
+        ).all()
+        metadata = {}
+        for row in rows:
+            metadata.setdefault(row.md5, row)
+        return metadata
+
+    def _build_koreader_daily_totals(
+        self,
+        session,
+        md5s: set[str],
+        tz_name: str,
+        start_date=None,
+        end_date=None,
+    ) -> list[dict]:
+        if not md5s:
+            return []
+
+        query = session.query(KOReaderPageStat.start_time, KOReaderPageStat.duration)
+        query = query.filter(KOReaderPageStat.md5.in_(md5s))
+        if start_date is not None:
+            start_epoch = datetime.combine(
+                start_date,
+                datetime.min.time(),
+                tzinfo=ZoneInfo(tz_name),
+            ).timestamp()
+            query = query.filter(KOReaderPageStat.start_time >= start_epoch)
+        if end_date is not None:
+            next_day = end_date + timedelta(days=1)
+            end_epoch = datetime.combine(
+                next_day,
+                datetime.min.time(),
+                tzinfo=ZoneInfo(tz_name),
+            ).timestamp()
+            query = query.filter(KOReaderPageStat.start_time < end_epoch)
+
+        buckets = defaultdict(lambda: {"seconds": 0, "pages": 0})
+        for row in query.all():
+            date_key = self._local_date_from_epoch(row.start_time, tz_name)
+            buckets[date_key]["seconds"] += int(max(row.duration or 0, 0))
+            buckets[date_key]["pages"] += 1
+
+        if start_date is None or end_date is None:
+            return [
+                {"date": date_key, "seconds": values["seconds"], "pages": values["pages"]}
+                for date_key, values in sorted(buckets.items())
+            ]
+
+        return [
+            {
+                "date": day.isoformat(),
+                "seconds": buckets[day.isoformat()]["seconds"],
+                "pages": buckets[day.isoformat()]["pages"],
+            }
+            for day in self._date_range(start_date, end_date)
+        ]
+
+    def _get_koreader_activity_dates(self, session, md5s: set[str], tz_name: str) -> set:
+        if not md5s:
+            return set()
+
+        rows = session.query(KOReaderPageStat.start_time).filter(KOReaderPageStat.md5.in_(md5s)).all()
+        return {
+            datetime.fromisoformat(self._local_date_from_epoch(row.start_time, tz_name)).date()
+            for row in rows
+        }
+
+    def get_koreader_dashboard_summary(self, tz_name: str) -> Optional[dict]:
+        """Get high-level KOReader reading stats for the dashboard."""
+        with self.get_session() as session:
+            book_links = self._get_koreader_book_links(session)
+            md5s = set(book_links.keys())
+            if not md5s:
+                return None
+
+            from sqlalchemy import func
+
+            total_seconds = int(
+                session.query(func.coalesce(func.sum(KOReaderPageStat.duration), 0))
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .scalar()
+                or 0
+            )
+            pages_read = int(
+                session.query(func.count(KOReaderPageStat.id))
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .scalar()
+                or 0
+            )
+            books_tracked = int(
+                session.query(KOReaderPageStat.md5)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .distinct()
+                .count()
+            )
+
+            now_local = datetime.now(ZoneInfo(tz_name)).date()
+            week_start = now_local - timedelta(days=6)
+            daily = self._build_koreader_daily_totals(
+                session,
+                md5s,
+                tz_name,
+                start_date=week_start,
+                end_date=now_local,
+            )
+            activity_dates = self._get_koreader_activity_dates(session, md5s, tz_name)
+            if not activity_dates:
+                return None
+
+            week_total = sum(day["seconds"] for day in daily)
+            best_day = max(daily, key=lambda day: day["seconds"], default=None)
+
+            return {
+                "booksTracked": books_tracked,
+                "daysRead": len(activity_dates),
+                "totalSeconds": total_seconds,
+                "pagesRead": pages_read,
+                "trackedBookIds": sorted({book.abs_id for book in book_links.values() if getattr(book, "abs_id", None)}),
+                "weekTotalSeconds": week_total,
+                "dailyAverageSeconds": int(week_total / max(len(daily), 1)),
+                "bestDay": best_day,
+                "currentStreakDays": self._calculate_streak(activity_dates, now_local),
+            }
+
+    def get_koreader_daily_totals(self, days: int, tz_name: str) -> list[dict]:
+        """Get recent KOReader daily totals."""
+        with self.get_session() as session:
+            md5s = set(self._get_koreader_book_links(session).keys())
+            if not md5s:
+                return []
+
+            end_date = datetime.now(ZoneInfo(tz_name)).date()
+            start_date = end_date - timedelta(days=max(int(days or 1) - 1, 0))
+            return self._build_koreader_daily_totals(
+                session,
+                md5s,
+                tz_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+    def get_koreader_activity_dates(self, tz_name: str) -> list[str]:
+        """Get all KOReader activity dates in the configured timezone."""
+        with self.get_session() as session:
+            md5s = set(self._get_koreader_book_links(session).keys())
+            if not md5s:
+                return []
+
+            dates = self._get_koreader_activity_dates(session, md5s, tz_name)
+            return [day.isoformat() for day in sorted(dates)]
+
+    def get_koreader_heatmap(self, year: int, tz_name: str) -> list[dict]:
+        """Get KOReader daily totals for one calendar year."""
+        with self.get_session() as session:
+            md5s = set(self._get_koreader_book_links(session).keys())
+            if not md5s:
+                return []
+
+            start_date = datetime(year, 1, 1).date()
+            end_date = datetime(year, 12, 31).date()
+            return self._build_koreader_daily_totals(
+                session,
+                md5s,
+                tz_name,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+    def get_koreader_books_for_date(self, date_str: str, tz_name: str) -> dict:
+        """Get linked KOReader books with activity for one local date."""
+        target_date = datetime.fromisoformat(str(date_str)).date()
+        tz = ZoneInfo(tz_name)
+        start_epoch = datetime.combine(target_date, datetime.min.time(), tzinfo=tz).timestamp()
+        end_epoch = datetime.combine(target_date + timedelta(days=1), datetime.min.time(), tzinfo=tz).timestamp()
+
+        with self.get_session() as session:
+            book_links = self._get_koreader_book_links(session)
+            md5s = set(book_links.keys())
+            if not md5s:
+                return {
+                    "date": target_date.isoformat(),
+                    "totalSeconds": 0,
+                    "totalPages": 0,
+                    "totalBooks": 0,
+                    "books": [],
+                }
+
+            metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+            rows = (
+                session.query(KOReaderPageStat)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .filter(KOReaderPageStat.start_time >= start_epoch)
+                .filter(KOReaderPageStat.start_time < end_epoch)
+                .order_by(KOReaderPageStat.start_time.asc())
+                .all()
+            )
+
+            if not rows:
+                return {
+                    "date": target_date.isoformat(),
+                    "totalSeconds": 0,
+                    "totalPages": 0,
+                    "totalBooks": 0,
+                    "books": [],
+                }
+
+            grouped = {}
+            session_gap_seconds = 1800
+
+            for row in rows:
+                book = book_links.get(row.md5)
+                if not book:
+                    continue
+
+                meta = metadata_by_md5.get(row.md5)
+                entry = grouped.setdefault(row.md5, {
+                    "md5": row.md5,
+                    "absId": getattr(book, "abs_id", None),
+                    "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
+                    "author": getattr(book, "abs_author", None) or getattr(meta, "authors", None),
+                    "totalSeconds": 0,
+                    "pagesRead": 0,
+                    "sessionCount": 0,
+                    "firstStartedAt": None,
+                    "lastEndedAt": None,
+                    "_session_state": {},
+                })
+
+                duration = int(max(row.duration or 0, 0))
+                event_end = float(row.start_time + max(row.duration or 0, 0))
+                entry["totalSeconds"] += duration
+                entry["pagesRead"] += 1
+                entry["firstStartedAt"] = int(row.start_time) if entry["firstStartedAt"] is None else min(entry["firstStartedAt"], int(row.start_time))
+                entry["lastEndedAt"] = int(event_end) if entry["lastEndedAt"] is None else max(entry["lastEndedAt"], int(event_end))
+
+                previous_end = entry["_session_state"].get(row.device_key)
+                if previous_end is None or (float(row.start_time) - float(previous_end)) > session_gap_seconds:
+                    entry["sessionCount"] += 1
+                entry["_session_state"][row.device_key] = event_end
+
+            books = []
+            for entry in grouped.values():
+                entry.pop("_session_state", None)
+                books.append(entry)
+
+            books.sort(key=lambda item: (int(item.get("lastEndedAt") or 0), int(item.get("totalSeconds") or 0)), reverse=True)
+
+            return {
+                "date": target_date.isoformat(),
+                "totalSeconds": sum(int(book.get("totalSeconds") or 0) for book in books),
+                "totalPages": sum(int(book.get("pagesRead") or 0) for book in books),
+                "totalBooks": len(books),
+                "books": books,
+            }
+
+    def get_koreader_calendar_month(self, month_str: str, tz_name: str) -> dict:
+        """Get linked KOReader book activity grouped by local day for one month."""
+        month_start = datetime.fromisoformat(f"{str(month_str)}-01").date()
+        if month_start.month == 12:
+            next_month = datetime(month_start.year + 1, 1, 1).date()
+        else:
+            next_month = datetime(month_start.year, month_start.month + 1, 1).date()
+
+        tz = ZoneInfo(tz_name)
+        start_epoch = datetime.combine(month_start, datetime.min.time(), tzinfo=tz).timestamp()
+        end_epoch = datetime.combine(next_month, datetime.min.time(), tzinfo=tz).timestamp()
+
+        with self.get_session() as session:
+            book_links = self._get_koreader_book_links(session)
+            md5s = set(book_links.keys())
+            if not md5s:
+                return {
+                    "month": month_start.strftime("%Y-%m"),
+                    "days": {},
+                }
+
+            metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+            rows = (
+                session.query(KOReaderPageStat)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .filter(KOReaderPageStat.start_time >= start_epoch)
+                .filter(KOReaderPageStat.start_time < end_epoch)
+                .order_by(KOReaderPageStat.start_time.asc())
+                .all()
+            )
+
+            day_buckets = {}
+            for row in rows:
+                book = book_links.get(row.md5)
+                if not book:
+                    continue
+
+                local_date = self._local_date_from_epoch(row.start_time, tz_name)
+                day_bucket = day_buckets.setdefault(local_date, {})
+                meta = metadata_by_md5.get(row.md5)
+                entry = day_bucket.setdefault(row.md5, {
+                    "md5": row.md5,
+                    "absId": getattr(book, "abs_id", None),
+                    "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
+                    "author": getattr(book, "abs_author", None) or getattr(meta, "authors", None),
+                    "totalSeconds": 0,
+                    "pagesRead": 0,
+                    "lastEndedAt": 0,
+                })
+
+                duration = int(max(row.duration or 0, 0))
+                event_end = int(float(row.start_time + max(row.duration or 0, 0)))
+                entry["totalSeconds"] += duration
+                entry["pagesRead"] += 1
+                entry["lastEndedAt"] = max(int(entry["lastEndedAt"] or 0), event_end)
+
+            normalized_days = {}
+            for date_key, books in day_buckets.items():
+                ordered_books = sorted(
+                    books.values(),
+                    key=lambda item: (int(item.get("totalSeconds") or 0), int(item.get("lastEndedAt") or 0)),
+                    reverse=True,
+                )
+                normalized_days[date_key] = ordered_books
+
+            return {
+                "month": month_start.strftime("%Y-%m"),
+                "days": normalized_days,
+            }
+
+    def get_koreader_recent_sessions(self, limit: int, tz_name: str) -> list[dict]:
+        """Derive recent reading sessions from KOReader page stats."""
+        with self.get_session() as session:
+            book_links = self._get_koreader_book_links(session)
+            md5s = set(book_links.keys())
+            if not md5s:
+                return []
+
+            metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+            sample_size = max(int(limit or 10) * 400, 4000)
+            rows = (
+                session.query(KOReaderPageStat)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .order_by(KOReaderPageStat.start_time.desc())
+                .limit(sample_size)
+                .all()
+            )
+            if not rows:
+                return []
+
+            rows = list(reversed(rows))
+            grouped_rows = defaultdict(list)
+            for row in rows:
+                grouped_rows[(row.md5, row.device_key)].append(row)
+
+            sessions = []
+            session_gap_seconds = 1800
+            for (md5, device_key), grouped in grouped_rows.items():
+                current = None
+                for row in grouped:
+                    duration = int(max(row.duration or 0, 0))
+                    event_end = float(row.start_time + max(row.duration or 0, 0))
+                    if current is None:
+                        current = {
+                            "md5": md5,
+                            "deviceKey": device_key,
+                            "startTime": float(row.start_time),
+                            "endTime": event_end,
+                            "durationSeconds": duration,
+                            "pagesRead": 1,
+                        }
+                        continue
+
+                    gap = float(row.start_time) - float(current["endTime"])
+                    if gap > session_gap_seconds:
+                        sessions.append(current)
+                        current = {
+                            "md5": md5,
+                            "deviceKey": device_key,
+                            "startTime": float(row.start_time),
+                            "endTime": event_end,
+                            "durationSeconds": duration,
+                            "pagesRead": 1,
+                        }
+                        continue
+
+                    current["endTime"] = max(float(current["endTime"]), event_end)
+                    current["durationSeconds"] += duration
+                    current["pagesRead"] += 1
+
+                if current is not None:
+                    sessions.append(current)
+
+            sessions.sort(key=lambda entry: entry["endTime"], reverse=True)
+
+            normalized = []
+            for entry in sessions[: max(int(limit or 10), 1)]:
+                md5 = entry["md5"]
+                book = book_links.get(md5)
+                meta = metadata_by_md5.get(md5)
+                normalized.append({
+                    "id": f"reading-{md5}-{int(entry['startTime'])}",
+                    "activityType": "reading",
+                    "absId": getattr(book, "abs_id", None),
+                    "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
+                    "author": getattr(meta, "authors", None),
+                    "durationSeconds": int(entry["durationSeconds"]),
+                    "pagesRead": int(entry["pagesRead"]),
+                    "startedAt": int(entry["startTime"]),
+                    "endedAt": int(entry["endTime"]),
+                    "deviceKey": entry["deviceKey"],
+                })
+
+            return normalized
+
+    # Reading session operations
+    def record_reading_session(self, abs_id: str, session_type: str, start_time: float,
+                               end_time: float, duration_seconds: int,
+                               start_progress: float = None, end_progress: float = None,
+                               leader_client: str = None) -> None:
+        """Record a local reading session for dashboard stats.
+
+        Callers must pre-compute duration_seconds (exact telemetry or heuristic).
+        This method only persists and applies a safety cap.
+        """
+        try:
+            if duration_seconds <= 0:
+                return
+            # Safety cap at 4 hours
+            duration_seconds = min(duration_seconds, 14400)
+
+            session = ReadingSession(
+                abs_id=abs_id,
+                session_type=session_type,
+                start_time=start_time,
+                end_time=end_time,
+                duration_seconds=duration_seconds,
+                start_progress=start_progress,
+                end_progress=end_progress,
+                leader_client=leader_client,
+            )
+            with self.get_session() as db_session:
+                db_session.add(session)
+        except Exception as e:
+            logger.debug(f"Failed to record reading session for '{abs_id}': {e}")
+
+    def get_reading_stats(self, abs_id: str) -> Optional[dict]:
+        """Get aggregated reading stats for one book."""
+        from sqlalchemy import func, case
+
+        with self.get_session() as session:
+            row = session.query(
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('listen_seconds'),
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type != 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('read_seconds'),
+                func.count(ReadingSession.id).label('session_count'),
+                func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
+                func.max(ReadingSession.end_time).label('last_session_time'),
+            ).filter(ReadingSession.abs_id == abs_id).first()
+
+            if not row or row.session_count == 0:
+                return None
+
+            return {
+                'listen_seconds': int(row.listen_seconds),
+                'read_seconds': int(row.read_seconds),
+                'session_count': int(row.session_count),
+                'avg_session_seconds': int(row.total_duration) // int(row.session_count),
+                'last_session_time': row.last_session_time,
+            }
+
+    def get_all_reading_stats(self) -> dict:
+        """Bulk fetch reading stats for all books. Returns dict[abs_id, stats_dict]."""
+        from sqlalchemy import func, case
+
+        with self.get_session() as session:
+            rows = session.query(
+                ReadingSession.abs_id,
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('listen_seconds'),
+                func.coalesce(func.sum(case(
+                    (ReadingSession.session_type != 'AUDIOBOOK', ReadingSession.duration_seconds),
+                    else_=0
+                )), 0).label('read_seconds'),
+                func.count(ReadingSession.id).label('session_count'),
+                func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
+                func.max(ReadingSession.end_time).label('last_session_time'),
+            ).group_by(ReadingSession.abs_id).all()
+
+            result = {}
+            for row in rows:
+                if row.session_count == 0:
+                    continue
+                result[row.abs_id] = {
+                    'listen_seconds': int(row.listen_seconds),
+                    'read_seconds': int(row.read_seconds),
+                    'session_count': int(row.session_count),
+                    'avg_session_seconds': int(row.total_duration) // int(row.session_count),
+                    'last_session_time': row.last_session_time,
+                }
+            return result
+
+    def delete_recent_estimated_kosync_session(
+        self,
+        abs_id: str,
+        start_time: float,
+        end_time: float,
+        start_progress: float = None,
+        end_progress: float = None,
+        time_window_seconds: int = 600,
+        progress_tolerance: float = 0.02,
+    ) -> bool:
+        """Delete the closest overlapping estimated KoSync session for a book."""
+        with self.get_session() as session:
+            candidates = session.query(ReadingSession).filter(
+                ReadingSession.abs_id == abs_id,
+                ReadingSession.leader_client.like('KoSync:%'),
+                ReadingSession.start_time >= (start_time - time_window_seconds),
+                ReadingSession.start_time <= (start_time + time_window_seconds),
+                ReadingSession.end_time >= (end_time - time_window_seconds),
+                ReadingSession.end_time <= (end_time + time_window_seconds),
+            ).all()
+
+            best = None
+            best_score = None
+            for candidate in candidates:
+                if start_progress is not None and candidate.start_progress is not None:
+                    if abs(float(candidate.start_progress) - float(start_progress)) > progress_tolerance:
+                        continue
+                if end_progress is not None and candidate.end_progress is not None:
+                    if abs(float(candidate.end_progress) - float(end_progress)) > progress_tolerance:
+                        continue
+
+                score = abs(float(candidate.start_time) - float(start_time)) + abs(float(candidate.end_time) - float(end_time))
+                if best is None or score < best_score:
+                    best = candidate
+                    best_score = score
+
+            if not best:
+                return False
+
+            session.delete(best)
+            return True
+
     def clear_all_booklore_books(self) -> bool:
-        """Delete all cached Booklore books."""
+        """Delete all cached Grimmory books."""
         session = self.db_manager.get_session()
         try:
             session.query(BookloreBook).delete(synchronize_session=False)
@@ -813,7 +1548,7 @@ class DatabaseService:
             return True
         except Exception as e:
             session.rollback()
-            logger.error(f"âŒ Failed to clear Booklore cache table: {e}")
+            logger.error(f"âŒ Failed to clear Grimmory cache table: {e}")
             return False
         finally:
             session.close()
@@ -946,7 +1681,7 @@ class DatabaseMigrator:
                 )
                 self.db_service.save_state(state)
 
-            # Handle Booklore data
+            # Handle Grimmory data
             if 'booklore_pct' in data:
                 state = State(
                     abs_id=abs_id,

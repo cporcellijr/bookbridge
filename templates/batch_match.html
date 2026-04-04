@@ -448,7 +448,7 @@
             margin-top: 6px;
         }
 
-        .source-badge.booklore {
+        .source-badge.grimmory {
             background: rgba(76, 175, 80, 0.2);
             color: #81c784;
         }
@@ -506,6 +506,39 @@
         .add-to-queue-btn {
             width: 100%;
             margin-top: 16px;
+        }
+
+        .submit-feedback {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            margin-top: 12px;
+            color: rgba(255, 255, 255, 0.72);
+            font-size: 13px;
+        }
+
+        .submit-feedback.show {
+            display: inline-flex;
+        }
+
+        .submit-feedback.block.show {
+            display: flex;
+        }
+
+        .submit-feedback-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-top-color: #93a5f6;
+            border-radius: 50%;
+            animation: submit-spin 0.8s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes submit-spin {
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         /* Queue Area */
@@ -830,7 +863,8 @@
                             </div>
                             <div class="book-title">
                                 {{ ab.title }}
-                                <span class="source-badge {{ ab.source.lower().replace(' ', '') }}">{{ ab.source }}</span>
+                                {% set ab_src = 'Grimmory' if ab.source == 'BookLore' else ab.source %}
+                                <span class="source-badge {{ ab_src.lower().replace(' ', '') }}">{{ ab_src }}</span>
                             </div>
                         </div>
                         {% endfor %}
@@ -901,9 +935,14 @@
                         search.</div>
                     {% endif %}
 
-                    <button type="submit" class="btn btn-success add-to-queue-btn" id="addToQueueBtn" disabled>
+                    <button type="submit" class="btn btn-success add-to-queue-btn" id="addToQueueBtn" disabled
+                        data-primary-action="selection-actions"
+                        data-working-label="Adding to queue..."
+                        data-working-message="Adding this match to the batch queue..."
+                        data-feedback-target="selectionFeedback">
                         ➕ Add to Queue
                     </button>
+                    <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
                 </form>
             </div>
 
@@ -945,14 +984,22 @@
                 <div class="queue-actions">
                     <form method="POST" action="/batch-match">
                         <input type="hidden" name="action" value="process_queue">
-                        <button type="submit" class="btn btn-success w-100">
+                        <button type="submit" class="btn btn-success w-100"
+                            data-primary-action="queue-actions"
+                            data-working-label="Processing queue..."
+                            data-working-message="Processing queued matches and returning to the dashboard..."
+                            data-feedback-target="queueFeedback">
                             ✅ Process All ({{ queue|length }})
                         </button>
                     </form>
 
                     <form method="POST" action="/batch-match">
                         <input type="hidden" name="action" value="forge_and_match_queue">
-                        <button type="submit" class="btn btn-primary w-100">
+                        <button type="submit" class="btn btn-primary w-100"
+                            data-primary-action="queue-actions"
+                            data-working-label="Forging + matching..."
+                            data-working-message="Forging queued Storyteller editions and saving matches..."
+                            data-feedback-target="queueFeedback">
                             Forge + Match ({{ queue|length }})
                         </button>
                     </form>
@@ -964,6 +1011,7 @@
                             🗑️ Clear Queue
                         </button>
                     </form>
+                    <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
                 </div>
                 {% else %}
                 <div class="empty-queue">
@@ -980,6 +1028,55 @@
         let selectedAudioSource = null;
         let selectedEbookFilename = null;
         let selectedStorytellerUuid = null;
+        let batchSubmitInFlight = false;
+
+        function showBatchSubmitFeedback(targetId, message) {
+            const feedback = document.getElementById(targetId);
+            if (!feedback) return;
+
+            if (!message) {
+                feedback.classList.remove('show');
+                feedback.innerHTML = '';
+                return;
+            }
+
+            feedback.classList.add('show');
+            feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+        }
+
+        function setBatchButtonHtml(button, html) {
+            button.innerHTML = html;
+        }
+
+        function getPrimarySubmitter(form) {
+            return form.querySelector('[data-primary-action]:not([disabled])');
+        }
+
+        function startBatchSubmitState(submitter) {
+            if (!submitter || batchSubmitInFlight) {
+                return false;
+            }
+
+            batchSubmitInFlight = true;
+            const groupName = submitter.dataset.primaryAction || '';
+            if (groupName) {
+                document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
+                    if (!button.dataset.originalHtml) {
+                        button.dataset.originalHtml = button.innerHTML;
+                    }
+                    button.disabled = true;
+                });
+            } else {
+                submitter.disabled = true;
+            }
+
+            setBatchButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
+            showBatchSubmitFeedback(
+                submitter.dataset.feedbackTarget || '',
+                submitter.dataset.workingMessage || 'Working...'
+            );
+            return true;
+        }
 
         // Initialise from server-side auto-selects (single-match logic)
         (function init() {
@@ -1055,6 +1152,25 @@
                 btn.disabled = true;
             }
         }
+
+        document.querySelectorAll('form[action="/batch-match"]').forEach((form) => {
+            if (form.querySelector('input[name="action"][value="clear_queue"]')) {
+                return;
+            }
+            if (form.querySelector('input[name="action"][value="remove_from_queue"]')) {
+                return;
+            }
+
+            form.addEventListener('submit', (event) => {
+                const submitter = event.submitter || document.activeElement || getPrimarySubmitter(form);
+                if (!submitter || !submitter.dataset.primaryAction) {
+                    return;
+                }
+                if (!startBatchSubmitState(submitter)) {
+                    event.preventDefault();
+                }
+            });
+        });
     </script>
 </body>
 

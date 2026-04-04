@@ -4,13 +4,49 @@
 
 All notable changes to ABS-KoSync Enhanced will be documented in this file.
 
+## [6.4.0] - 2026-04-04
+
+### Added
+
+- Added an optional **Bridge Sync** KOReader plugin for pulling bridge-managed books onto a device-managed folder.
+- Added **Find IDs** helpers for Audiobookshelf and Grimmory library ID fields in Settings, including quick pick dropdowns.
+- Added an **Audiobookshelf disabled mode** by treating `disabled` as an intentional off switch for ABS URL or token settings.
+- Added Grimmory shelf and magic shelf support for **Bridge Sync** plugin collection syncing.
+- Added a Grimmory shelf picker in Settings to make Bridge Sync collection setup easier.
+
+### Changed
+
+- The **Whisper Model** field in Settings now accepts custom values instead of only the built-in preset list.
+- The **Bridge Sync** KOReader plugin now keeps its settings submenu open while you make multiple configuration changes, and the **Managed Folder** setting now uses a folder picker instead of manual path entry.
+- Storyteller Forge now uploads staged EPUB and audio files directly to Storyteller over the REST/TUS API instead of relying on watched-library folder hand-offs.
+- Storyteller direct-upload settings now expose `STORYTELLER_UPLOAD_CHUNK_SIZE` for tuning TUS PATCH chunk size when needed.
+- Grimmory compatibility was broadened across search, cache refresh, downloads, and progress/session handling so newer Grimmory installs work more reliably as both ebook and audiobook sources.
+- Settings now test the values currently typed into the form, and saving settings shows a restart-wait page until the application is healthy again.
+- Dashboard cards now show reading session details.
+- Match, Batch Match, Suggestions, and Forge now show clearer working feedback when you start an action.
+- Built-in KOSync testing in Settings now works with the values currently in the form.
+
+### Fixed
+
+- Fixed Grimmory session writes so reading and listening sessions stay in the strict format Grimmory expects.
+- Fixed Storyteller TUS `Upload-Metadata` formatting for direct Forge uploads. Metadata pairs are now serialized without post-comma whitespace, which restores compatibility with Storyteller `web-v2.9.3` and prevents `400 Invalid upload-metadata` failures during Auto-Forge and manual Forge.
+- Fixed Storyteller direct-upload and post-import issues, including `Upload-Metadata` formatting, import readiness timing, duplicate Forge triggers, and several incorrect locator/progress writes.
+- Fixed Grimmory progress writes, single-file audiobook Forge downloads, cache hydration edge cases, and truncated downloads that could break matching or syncing.
+- Fixed suggestions and sync edge cases around finished books, instant-sync replays, sentence-level KOReader locators, and cross-format rollback handling.
+- Fixed deadband rollback behavior so tiny audiobook-vs-ebook gaps still avoid leader flapping without pushing older ABS progress back onto newer high-confidence ebook locators.
+- Fixed Grimmory session reporting so reading and listening sessions are recorded more reliably.
+- Fixed dashboard sync warnings so old inactive states do not create misleading out-of-sync messages.
+- Fixed the built-in KOSync Test button so it no longer requires saving first.
+
+---
+
 ## [6.3.3] - 2026-03-08
 
 ### Added
 
 - Added a dedicated **Library Suggestions** page for scanning unmatched titles, reviewing likely audiobook and ebook pairs, and queueing approved matches in bulk.
-- Added support for using **Booklore audiobooks** as the audio side of a sync, including matching, batch processing, suggestions, Forge, and dashboard tracking.
-- Added more flexible linking flows, including **ebook-only links**, **Storyteller-only links**, and a one-click **Refresh Booklore Cache** action in Settings.
+- Added support for using **Grimmory audiobooks** as the audio side of a sync, including matching, batch processing, suggestions, Forge, and dashboard tracking.
+- Added more flexible linking flows, including **ebook-only links**, **Storyteller-only links**, and a one-click **Refresh Grimmory Cache** action in Settings.
 
 ### Changed
 
@@ -22,7 +58,7 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 
 - Fixed cases where small cross-format differences could cause progress bounce-backs or an incorrect reset when switching between audiobook and ebook apps.
 - Fixed ebook-only links getting stuck in processing by skipping audiobook preparation work they do not need.
-- Fixed edge cases where Storyteller-only links or stale Booklore data could break matching, hashing, or syncing until the book was refreshed.
+- Fixed edge cases where Storyteller-only links or stale Grimmory data could break matching, hashing, or syncing until the book was refreshed.
 
 ---
 
@@ -30,11 +66,11 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 
 ### Enhancements
 
-- **Test Connection Buttons**: Added diagnostic "Test" buttons to every service section in Settings (ABS, KOSync, Storyteller, Booklore, CWA, Hardcover, Telegram). Each button performs a live connectivity check and returns specific error messages — distinguishing wrong URL, wrong credentials, DNS failure, timeout, and disabled/unconfigured states.
+- **Test Connection Buttons**: Added diagnostic "Test" buttons to every service section in Settings (ABS, KOSync, Storyteller, Grimmory, CWA, Hardcover, Telegram). Each button performs a live connectivity check and returns specific error messages — distinguishing wrong URL, wrong credentials, DNS failure, timeout, and disabled/unconfigured states.
 - **Instant Sync Toggle**: Added `INSTANT_SYNC_ENABLED` setting to enable or disable event-driven instant sync globally. When off, the ABS Socket.IO listener and KoSync push trigger are both inactive and the bridge falls back to the standard background poll cycle.
 - **Instant Sync Settings**: Added `ABS_SOCKET_DEBOUNCE_SECONDS` (default 30s) to control how long the socket listener waits after a playback event before triggering a sync. Tune this lower for faster response or higher to avoid hammering downstream services during active scrubbing.
-- **Per-Client Polling**: Storyteller and Booklore can now be configured with their own poll intervals, independent of the global sync cycle. Set either client to `custom` mode in Settings and choose a polling interval (in seconds). The poller checks for position changes on active books only and triggers a targeted sync when a real change is detected.
-- **Shared Write Suppression**: Centralized write-tracking into a single `write_tracker` module. All clients (ABS, KoSync, Storyteller, Booklore) now share the same suppression logic to prevent feedback loops after the bridge pushes a progress update.
+- **Per-Client Polling**: Storyteller and Grimmory can now be configured with their own poll intervals, independent of the global sync cycle. Set either client to `custom` mode in Settings and choose a polling interval (in seconds). The poller checks for position changes on active books only and triggers a targeted sync when a real change is detected.
+- **Shared Write Suppression**: Centralized write-tracking into a single `write_tracker` module. All clients (ABS, KoSync, Storyteller, Grimmory) now share the same suppression logic to prevent feedback loops after the bridge pushes a progress update.
 - **Storyteller Transcript Priority Source**: Added Storyteller forced-alignment transcript ingestion as the top transcript source during matching/linking (priority: Storyteller -> SMIL -> Whisper).
 - **New Optional Setting `STORYTELLER_ASSETS_DIR`**: Added Settings/UI support for Storyteller assets root (`{root}/assets/{title}/transcriptions`). This source is opt-in and skipped when unset.
 - **Native Storyteller Alignment Maps**: Added direct map generation from `wordTimeline` data (`chapter`, local UTF-16 char, local ts, global ts) without anchor rebuild.
@@ -42,31 +78,31 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 - **Storyteller Backfill Action**: Added a Settings maintenance action to bulk ingest/re-ingest Storyteller transcripts for existing Storyteller-linked books and rebuild storyteller-native alignments.
 - **Storyteller Transcript Ingest in Forge Pipeline**: Added transcript ingestion and anchored alignment generation directly in the forge workflow.
 - **Suggestion Discovery from Socket Events**: Unknown-book Socket.IO progress events now trigger suggestion discovery to surface likely matches automatically.
-- **Event-Driven Real-Time Sync**: Added ABS Socket.IO listener for near-instant sync. When you play/pause an audiobook in Audiobookshelf, progress automatically syncs to all configured clients (KoSync, Storyteller, Booklore, Hardcover) within ~30 seconds — no more waiting for the poll cycle. Also triggers instant sync on KoSync PUT from KOReader. Configurable via `ABS_SOCKET_ENABLED` and `ABS_SOCKET_DEBOUNCE_SECONDS`.
+- **Event-Driven Real-Time Sync**: Added ABS Socket.IO listener for near-instant sync. When you play/pause an audiobook in Audiobookshelf, progress automatically syncs to all configured clients (KoSync, Storyteller, Grimmory, Hardcover) within ~30 seconds — no more waiting for the poll cycle. Also triggers instant sync on KoSync PUT from KOReader. Configurable via `ABS_SOCKET_ENABLED` and `ABS_SOCKET_DEBOUNCE_SECONDS`.
 - **Dashboard Search**: Added instant client-side search filter to the dashboard. Users can now type in a "Search books..." field to filter the library by title or author in real time without a page reload.
 - **Sync Now & Mark Complete Actions**: Added quick-action buttons to each book card — ⚡ triggers an immediate background sync cycle, and ✅ marks a book as finished across all configured platforms with an optional mapping cleanup prompt.
 - **Dashboard Version Badge**: Cleaned up the version display badge. Dev builds now show `Build dev-N` and official releases show `vX.Y.Z` without redundant prefixes.
 
 ### Bug Fixes
 
-- **Settings Save Not Restarting**: Fixed a critical bug where saving settings from the UI did not actually restart the application. The restart function called `sys.exit(0)` from a background thread, which in Python only raises `SystemExit` in that thread — the main process kept running with stale configuration. All service singletons (Booklore, Storyteller, ABS socket, etc.) retained their old URLs, credentials, and settings until the container was fully rebuilt. Replaced with `os.kill(SIGTERM)` to properly signal the main process.
-- **Booklore Refresh Retry Storm**: Fixed an infinite retry loop when Booklore is slow or unreachable. Failed cache refreshes left the cache timestamp at zero, causing every subsequent sync cycle to immediately retry the full library scan — spiking CPU and flooding logs. Added a 5-minute cooldown after failed refreshes that suppresses retries while preserving normal cache TTL behavior on the happy path.
+- **Settings Save Not Restarting**: Fixed a critical bug where saving settings from the UI did not actually restart the application. The restart function called `sys.exit(0)` from a background thread, which in Python only raises `SystemExit` in that thread — the main process kept running with stale configuration. All service singletons (Grimmory, Storyteller, ABS socket, etc.) retained their old URLs, credentials, and settings until the container was fully rebuilt. Replaced with `os.kill(SIGTERM)` to properly signal the main process.
+- **Grimmory Refresh Retry Storm**: Fixed an infinite retry loop when Grimmory is slow or unreachable. Failed cache refreshes left the cache timestamp at zero, causing every subsequent sync cycle to immediately retry the full library scan — spiking CPU and flooding logs. Added a 5-minute cooldown after failed refreshes that suppresses retries while preserving normal cache TTL behavior on the happy path.
 - **ABS Socket.IO Auth Reliability**: The socket connection was previously sending the auth token at the transport level (HTTP headers + Socket.IO CONNECT packet) in addition to the `"auth"` event. On some ABS setups this caused both the primary token and the fallback to be rejected immediately. Auth is now sent exclusively via the `"auth"` event (the canonical ABS flow). If authentication fails, the listener disconnects cleanly and the bridge automatically falls back to the standard poll cycle — sync continues uninterrupted.
 - **Storyteller Filename Prefix Compatibility**: Ingestion now accepts both `00000-xxxxx.json` and `00001-xxxxx.json` chapter prefixes.
 - **Storyteller Format Guardrails**: Backfill/ingest now validates chapter JSON shape (`dict` with `wordTimeline`) before ingesting, preventing invalid files from failing alignment after copy.
 - **ABS Sync Lag with Storyteller Transcripts**: Fixed delayed ABS synchronization behavior for Storyteller-transcript-backed books.
 - **Tri-Link Drift and Storyteller Jump Detection**: Corrected drift handling and jump-detection logic to prevent incorrect position propagation.
-- **Storyteller Backfill and BookLore Reset Fallback**: Fixed backfill messaging/flow and BookLore clear/reset fallback behavior.
+- **Storyteller Backfill and Grimmory Reset Fallback**: Fixed backfill messaging/flow and Grimmory clear/reset fallback behavior.
 - **KOSync Hash Mismatch**: Resolved a hash mismatch issue that occurred when the device epub differs from the bridge epub, preventing stale progress lookups.
 - **KOSync Shadow Documents**: Fixed an issue where stale shadow documents could be returned in GET progress responses, causing incorrect sync positions.
 - **KOSync Admin Endpoints**: Corrected auth handling on admin endpoints to allow dashboard access while keeping sensitive operations protected.
-- **Booklore Double Search**: Fixed a redundant double-search issue in Booklore book lookups, improving match performance.
+- **Grimmory Double Search**: Fixed a redundant double-search issue in Grimmory book lookups, improving match performance.
 - **Database Schema**: Consolidated schema repair into a single clean Alembic migration, reducing startup migration time and preventing edge-case schema conflicts.
 - **Mark Complete Crash**: Fixed a `TypeError` in the `mark_complete` endpoint caused by invalid `LocatorResult` keyword arguments.
 - **LRUCache Thread Safety**: Added `threading.Lock` to the `LRUCache` class in `ebook_utils.py`. The cache is accessed concurrently by the sync daemon, forge background jobs, and web server requests, but `OrderedDict.move_to_end()` and `popitem()` are not thread-safe for concurrent mutation.
 - **Forge Service Audio Copying**: Fixed an indentation error in the audio file copying logic that prevented files from being copied when found via exact path or suffix matching.
 - **ABS Socket.IO Feedback Loop**: Fixed a self-triggering sync loop where BookBridge's own ABS progress writes fired a `user_item_progress_updated` socket event, which the listener then treated as a real user change and scheduled another sync cycle. A module-level write-suppression tracker now stamps each book after a write; any socket event arriving within 60 seconds of that stamp is silently dropped. A single real progress change now produces exactly one sync cycle instead of three.
-- **Booklore Full Library Scan on Progress Update**: Fixed `update_progress()` calling `_refresh_book_cache()` after every successful write, which fetched all books from the Booklore API on every sync cycle. Progress is now applied to the cached entry in-place. Full library scans still occur on initial load and the hourly staleness check.
+- **Grimmory Full Library Scan on Progress Update**: Fixed `update_progress()` calling `_refresh_book_cache()` after every successful write, which fetched all books from the Grimmory API on every sync cycle. Progress is now applied to the cached entry in-place. Full library scans still occur on initial load and the hourly staleness check.
 
 ### Maintenance
 
@@ -79,16 +115,16 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 ### � Critical Update Requirements
 
 - **Storyteller API v2 Requirement:** The bridge has fully transitioned to the Storyteller REST API v2 endpoints (`/api/v2/`). **You MUST update your Storyteller container to the latest version to use Bridge v6.3.0.** Legacy Storyteller versions are no longer supported and will result in 404 connection errors.
-- **Docker Compose Volume Mounts for "Forge":** The new Auto-Forge pipeline requires proper volume mapping for directory transfers. Ensure your `docker-compose.yml` includes mappings for `STORYTELLER_LIBRARY_DIR`, `BOOKS_DIR`, and any relevant processing directories for the Forge tab to function without "Directory not found" errors.
+- **Docker Compose Volume Mounts for "Forge":** The new Auto-Forge pipeline requires the local content paths it reads from, such as `BOOKS_DIR` and any optional transcript/local-fallback mounts, to be mapped correctly in `docker-compose.yml`.
 - **Database Migration:** This update includes a major database schema upgrade (Alembic) to support the Tri-Link architecture. **Highly Recommended: Backup your `database.db` and legacy JSON files before pulling this update.** If you encounter a boot-loop due to a locked database, simply deleting the DB and letting it rebuild is the fastest fix, as the bridge can auto-match most entries automatically.
 - **KOSync "Stuck" Progress on Old Links:** Books matched under older versions of the bridge might lack the `original_ebook_filename` required by the new Tri-Link architecture. If an older book stops syncing progress to KOReader after this update, simply delete the mapping from the dashboard and re-match it to rebuild the link correctly.
 
 ### �🚀 New Features & Integrations
 
 - **Tri-Link Architecture**: Maintain a three-way link between ABS audiobook, KOReader ebook, and Storyteller entries.
-- **Auto-Forge Pipeline**: Automated downloading, staging, and hand-off to Storyteller for processing.
+- **Auto-Forge Pipeline**: Automated downloading, staging, and upload to Storyteller for processing.
 - **Hardcover.app Audiobook Support**: Link specific editions and sync listening progress (in seconds).
-- **Booklore & CWA (OPDS) Integration**: Fetch ebooks from Booklore and OPDS sources, including backward-compatible fallbacks for Booklore v2.
+- **Grimmory & CWA (OPDS) Integration**: Fetch ebooks from Grimmory and OPDS sources, including backward-compatible fallbacks for Grimmory v2.
 - **Split-Port Security Mode**: Run sync and admin UI on separate ports.
 - **New Transcription Providers**: Support for Whisper.cpp Server, Deepgram API, and CUDA GPU acceleration.
 - **Advanced Anchor Mapping**: Implemented BS4-to-LXML Hybrid Anchor Mapping and SMIL Extractor Smart Duration Mapping for perfect KOReader xpath generation.
@@ -106,7 +142,7 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 - **KOReader Sync**: Fixed KOReader sync crashes caused by an XPath double `body` tag issue.
 - **KOSync Sync Integrity**: Prevented destructive progress pushes, preserved manual hash overrides, and fixed KOSync hash overwrites by Storyteller artifacts.
 - **Storyteller Stability**: Fixed race conditions in Storyteller ingestion and removed conflicting Storyteller fallback collection logic.
-- **System Stability**: Fixed special characters in filenames breaking glob searches, corrected Booklore shelf assignment issues during batch matching, and resolved legacy KOSync client headers, legacy exception types, and sync position payloads.
+- **System Stability**: Fixed special characters in filenames breaking glob searches, corrected Grimmory shelf assignment issues during batch matching, and resolved legacy KOSync client headers, legacy exception types, and sync position payloads.
 - **Database Persistence & Migrations**: Forced absolute paths for SQLite connections to prevent ephemeral Docker data loss, auto-upgraded legacy DB-migrated books, and prevented legacy DB crashes on startup via Alembic stamping.
 - **XPath Hardening**: Defaulted Crengine-safe XPath suffixes, and hardened generation against fragile inline tags to prevent parsing drift.
 
@@ -236,7 +272,7 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 - Fuzzy text matching for position alignment
 - Docker containerization
 - Auto-add to ABS collections
-- Booklore shelf integration
+- Grimmory shelf integration
 
 ---
 
@@ -320,20 +356,20 @@ If you see "Using Storyteller SQLite fallback", check your credentials.
 | `STORYTELLER_POLL_SECONDS` | `45` | Poll interval used when `STORYTELLER_POLL_MODE=custom` |
 | `STORYTELLER_ASSETS_DIR` | empty | Optional root path for Storyteller transcript assets |
 
-### Booklore
+### Grimmory
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BOOKLORE_ENABLED` | `false` | Enable Booklore integration |
-| `BOOKLORE_SERVER` | empty | Booklore server URL |
-| `BOOKLORE_USER` | empty | Booklore username |
-| `BOOKLORE_PASSWORD` | empty | Booklore password |
+| `BOOKLORE_ENABLED` | `false` | Enable Grimmory integration |
+| `BOOKLORE_SERVER` | empty | Grimmory server URL |
+| `BOOKLORE_USER` | empty | Grimmory username |
+| `BOOKLORE_PASSWORD` | empty | Grimmory password |
 | `BOOKLORE_SHELF_NAME` | `Kobo` | Shelf name used for linked ebooks |
-| `BOOKLORE_LIBRARY_ID` | empty | Optional Booklore library restriction |
-| `BOOKLORE_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` gives Booklore its own polling interval. |
+| `BOOKLORE_LIBRARY_ID` | empty | Optional Grimmory library restriction |
+| `BOOKLORE_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` gives Grimmory its own polling interval. |
 | `BOOKLORE_POLL_SECONDS` | `300` | Poll interval used when `BOOKLORE_POLL_MODE=custom` |
 
-### Booklore Advanced
+### Grimmory Advanced
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -416,15 +452,14 @@ If you see "Using Storyteller SQLite fallback", check your credentials.
 | `DATA_DIR` | `/data` | Database, cache, and working state |
 | `BOOKS_DIR` | `/books` | Local ebook library path inside the container |
 | `AUDIOBOOKS_DIR` | `/audiobooks` | Optional local audiobook path |
-| `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Forge destination path |
-| `PROCESSING_DIR` | `/tmp` | Temporary Forge staging directory |
+| `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Optional local Storyteller library path for fallback/download helpers |
+| `STORYTELLER_UPLOAD_CHUNK_SIZE` | `5242880` | TUS upload chunk size in bytes for direct Storyteller uploads |
 | `EBOOK_CACHE_SIZE` | `3` | Parsed-ebook cache size |
 | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs |
 | `JOB_RETRY_DELAY_MINS` | `15` | Delay before retrying failed jobs |
 
 <details>
 <summary>Archived legacy reference</summary>
-
 
 <!-- markdownlint-disable MD060 -->
 
@@ -462,16 +497,16 @@ If you see "Using Storyteller SQLite fallback", check your credentials.
 | `STORYTELLER_USER` | — | Storyteller username |
 | `STORYTELLER_PASSWORD` | — | Storyteller password |
 
-### Booklore
+### Grimmory
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BOOKLORE_ENABLED` | `false` | Enable Booklore integration |
-| `BOOKLORE_SERVER` | — | Booklore server URL |
-| `BOOKLORE_USER` | — | Booklore username |
-| `BOOKLORE_PASSWORD` | — | Booklore password |
-| `BOOKLORE_SHELF_NAME` | `Kobo` | Name of the Booklore shelf to auto-add synced books to |
-| `BOOKLORE_LIBRARY_ID` | — | Restrict sync to a specific Booklore library ID |
+| `BOOKLORE_ENABLED` | `false` | Enable Grimmory integration |
+| `BOOKLORE_SERVER` | — | Grimmory server URL |
+| `BOOKLORE_USER` | — | Grimmory username |
+| `BOOKLORE_PASSWORD` | — | Grimmory password |
+| `BOOKLORE_SHELF_NAME` | `Kobo` | Name of the Grimmory shelf to auto-add synced books to |
+| `BOOKLORE_LIBRARY_ID` | — | Restrict sync to a specific Grimmory library ID |
 
 ### CWA (Calibre-Web Automated)
 

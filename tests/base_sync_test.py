@@ -121,6 +121,8 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
         kosync_client = Mock()
         booklore_client = Mock()
         booklore_client._cache_timestamp = 0
+        booklore_client.find_book_by_filename.return_value = {"id": "test-booklore-id"}
+        booklore_client.download_book.return_value = None
         hardcover_client = Mock()
         storyteller_client = Mock() # Renamed from storyteller_db
         ebook_parser = Mock()
@@ -242,7 +244,9 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
                 "Storyteller": storyteller_sync_client,
                 "BookLore": booklore_sync_client
             },
-            epub_cache_dir=Path(self.temp_dir) / 'epub_cache'
+            epub_cache_dir=Path(self.temp_dir) / 'epub_cache',
+            data_dir=Path(self.temp_dir),
+            books_dir=Path(self.temp_dir) / 'books'
         )
 
         # Mock the ABS client's _update_abs_progress_with_offset method
@@ -423,9 +427,10 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
                 self.assertIn(f"{self.get_expected_leader()} leads at {target_percentage}.0000%", log_output,
                               f"Logs should show {self.get_expected_leader()} as leader")
 
-                # Verify progress changes are logged
-                self.assertIn(f"📊 {self.get_expected_leader()}: {from_percentage}.0000% -> {target_percentage}.0000%", log_output,
-                              f"Logs should show {self.get_expected_leader()} progress change")
+                # Verify progress changes are logged (display label may differ from client key)
+                display_label = getattr(self, 'get_expected_leader_display', self.get_expected_leader)()
+                self.assertIn(f"📊 {display_label}: {from_percentage}.0000% -> {target_percentage}.0000%", log_output,
+                              f"Logs should show {display_label} progress change")
 
             return log_output
 

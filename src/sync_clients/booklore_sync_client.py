@@ -22,7 +22,7 @@ class BookloreSyncClient(SyncClient):
         return self.booklore_client.check_connection()
 
     def get_supported_sync_types(self) -> set:
-        """Booklore participates in both audiobook and ebook sync modes."""
+        """Grimmory participates in both audiobook and ebook sync modes."""
         return {'audiobook', 'ebook'}
 
     @staticmethod
@@ -34,13 +34,13 @@ class BookloreSyncClient(SyncClient):
         if not epub:
             return False
 
-        # If the selected ebook source is explicitly BookLore, always include
-        # the BookLore ebook client even when the audio source is also BookLore.
+        # If the selected ebook source is explicitly Grimmory, always include
+        # the Grimmory ebook client even when the audio source is also Grimmory.
         if getattr(book, "ebook_source", None) == "BookLore":
             return True
 
         # Otherwise only participate when the ebook can actually be resolved
-        # against the BookLore library cache.
+        # against the Grimmory library cache.
         target = self.booklore_client.find_book_by_filename(epub, allow_refresh=False)
         return bool(target)
 
@@ -50,7 +50,7 @@ class BookloreSyncClient(SyncClient):
         bl_pct, bl_cfi = self.booklore_client.get_progress(epub)
 
         if bl_pct is None:
-            logger.warning("⚠️ BookLore percentage is None - returning None for service state")
+            logger.warning("⚠️ Grimmory percentage is None - returning None for service state")
             return None
 
         # Get previous BookLore state
@@ -64,7 +64,7 @@ class BookloreSyncClient(SyncClient):
             delta=delta,
             threshold=self.delta_kosync_thresh,
             is_configured=self.booklore_client.is_configured(),
-            display=("BookLore", "{prev:.4%} -> {curr:.4%}"),
+            display=("Grimmory", "{prev:.4%} -> {curr:.4%}"),
             value_formatter=lambda v: f"{v*100:.4f}%"
         )
 

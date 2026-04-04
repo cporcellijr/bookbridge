@@ -111,7 +111,7 @@ class BookLoreAudioSyncClient(SyncClient):
         if position_ms is None:
             if current_pct is not None and duration is not None:
                 logger.debug(
-                    "BookLoreAudio read fallback: book_id=%s mode=percentage_only pct=%.4f duration=%.2fs",
+                    "GrimmoryAudio read fallback: book_id=%s mode=percentage_only pct=%.4f duration=%.2fs",
                     book_id,
                     float(current_pct),
                     float(duration),
@@ -121,7 +121,7 @@ class BookLoreAudioSyncClient(SyncClient):
 
         if track_index is None:
             logger.debug(
-                "BookLoreAudio read resolved: book_id=%s mode=single_stream stored_position_ms=%s",
+                "GrimmoryAudio read resolved: book_id=%s mode=single_stream stored_position_ms=%s",
                 book_id,
                 position_ms,
             )
@@ -133,7 +133,7 @@ class BookLoreAudioSyncClient(SyncClient):
                 continue
             absolute_ms = track["start_ms"] + max(position_ms, 0)
             logger.debug(
-                "BookLoreAudio read resolved: book_id=%s mode=track_reconstructed track_index=%s "
+                "GrimmoryAudio read resolved: book_id=%s mode=track_reconstructed track_index=%s "
                 "stored_position_ms=%s absolute_position_ms=%s",
                 book_id,
                 track_index,
@@ -144,7 +144,7 @@ class BookLoreAudioSyncClient(SyncClient):
 
         if current_pct is not None and duration is not None:
             logger.debug(
-                "BookLoreAudio read fallback: book_id=%s mode=percentage_fallback track_index=%s "
+                "GrimmoryAudio read fallback: book_id=%s mode=percentage_fallback track_index=%s "
                 "stored_position_ms=%s pct=%.4f duration=%.2fs",
                 book_id,
                 track_index,
@@ -155,7 +155,7 @@ class BookLoreAudioSyncClient(SyncClient):
             return max(0.0, min(float(duration), float(current_pct) * float(duration)))
 
         logger.debug(
-            "BookLoreAudio read unresolved: book_id=%s mode=missing_track_metadata track_index=%s stored_position_ms=%s",
+            "GrimmoryAudio read unresolved: book_id=%s mode=missing_track_metadata track_index=%s stored_position_ms=%s",
             book_id,
             track_index,
             position_ms,
@@ -246,7 +246,7 @@ class BookLoreAudioSyncClient(SyncClient):
             delta=delta,
             threshold=self.delta_abs_thresh,
             is_configured=self.booklore_client.is_configured(),
-            display=("BookLoreAudio", "{prev:.4%} -> {curr:.4%}"),
+            display=("GrimmoryAudio", "{prev:.4%} -> {curr:.4%}"),
             value_seconds_formatter=lambda v: f"{v:.2f}s",
             value_formatter=lambda v: f"{v:.4%}",
         )
@@ -276,7 +276,7 @@ class BookLoreAudioSyncClient(SyncClient):
 
         if target_ts is None:
             logger.warning(
-                "BookLoreAudio: cannot update '%s' because no target timestamp could be resolved",
+                "GrimmoryAudio: cannot update '%s' because no target timestamp could be resolved",
                 getattr(book, "abs_title", book.abs_id),
             )
             return SyncResult(None, False)
@@ -285,7 +285,7 @@ class BookLoreAudioSyncClient(SyncClient):
         info = self.booklore_client.get_audiobook_info(book_id) or {}
         resume_fields = self._resolve_resume_fields(book_id, target_ts, info=info)
         logger.debug(
-            "BookLoreAudio write resolved: book_id=%s mode=%s absolute_target_ms=%s "
+            "GrimmoryAudio write resolved: book_id=%s mode=%s absolute_target_ms=%s "
             "resume_position_ms=%s track_index=%s",
             book_id,
             resume_fields["mode"],

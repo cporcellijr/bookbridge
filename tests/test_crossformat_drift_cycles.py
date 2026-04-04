@@ -107,6 +107,13 @@ def _manager_with_deterministic_mapping():
     manager = SyncManager.__new__(SyncManager)
     manager.ebook_parser = _DeterministicParser()
     manager.alignment_service = _DeterministicAlignmentService(chars_per_second=4.0)
+    manager.booklore_client = MagicMock()
+    manager.booklore_client.find_book_by_filename.return_value = None
+    manager.books_dir = None
+    manager.epub_cache_dir = Path("/tmp/epub_cache")
+    manager._sync_cycle_local_epub_cache = {}
+    # Make _get_local_epub return a dummy path so normalization can proceed
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
     manager.sync_clients = {"ABS": _LeaderClient(), "KoSync": _LeaderClient()}
     manager.cross_format_deadband_seconds = 2.0
     manager._sync_cycle_ebook_cache = {}

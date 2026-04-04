@@ -15,6 +15,7 @@ class TestSuggestionLogic(unittest.TestCase):
         self.mock_db = Mock()
         self.mock_db.get_books_by_status.return_value = []
         self.mock_db.get_all_books.return_value = []
+        self.mock_db.get_all_pending_suggestions.return_value = []
         
         self.mock_abs = Mock()
         self.mock_booklore = Mock()

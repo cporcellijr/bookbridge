@@ -11,9 +11,9 @@ Get your library syncing in about 10 minutes.
 Before you begin, you should have:
 
 - Docker and Docker Compose
-- A working Audiobookshelf server
+- A working Audiobookshelf server if you want audiobook matching or ABS sync
 - An ebook folder on the Docker host
-- Optional: KOSync, Booklore, Storyteller, or Hardcover if you want those integrations
+- Optional: KOSync, Grimmory, Storyteller, or Hardcover if you want those integrations
 
 ---
 
@@ -39,7 +39,7 @@ If you want searches scoped to one ABS library:
 If you plan to use them, also keep these handy:
 
 - KOSync URL, username, and password
-- Booklore URL, username, and password
+- Grimmory URL, username, and password
 - Storyteller URL, username, and password
 
 ---
@@ -69,11 +69,11 @@ services:
       - TZ=America/New_York
       - LOG_LEVEL=INFO
       # - KOSYNC_PORT=5758  # Optional: enable split-port mode
-      # Configure ABS, KOSync, Booklore, Storyteller, and other services in the Web UI.
+      # Configure ABS, KOSync, Grimmory, Storyteller, and other services in the Web UI.
     volumes:
       - ./data:/data
       - /path/to/ebooks:/books
-      # - /path/to/storyteller/library:/storyteller_library  # Optional: Forge output
+      # - /path/to/storyteller/library:/storyteller_library  # Optional: local Storyteller fallback/download access
       # - /path/to/storyteller/assets:/storyteller/assets    # Optional: Storyteller transcript ingest
 ```
 
@@ -90,7 +90,9 @@ If you want to expose only the KOSync endpoint to the internet:
 !!! tip "Optional Integrations"
     It is usually easiest to start with the minimal compose file above and finish configuration in the Web UI.
 
-    If you enable Booklore, the bridge can use it for both ebook matching and Booklore audiobook sources.
+    If you enable Grimmory, the bridge can use it for both ebook matching and Grimmory audiobook sources.
+
+    Forge uploads directly to Storyteller over the API, so a Storyteller library mount is not required for normal Forge imports.
 
     If you mount Storyteller assets at `/storyteller/assets`, set **Storyteller Assets Path** in Settings to `/storyteller`.
     The assets path can be configured entirely in the UI; `STORYTELLER_ASSETS_DIR` is optional.
@@ -117,11 +119,13 @@ docker compose logs -f
 2. Enter your **Audiobookshelf Server URL**, **API Token**, and **Library ID**.
 3. Add any optional services you want to use:
    - KOSync
-   - Booklore
+   - Grimmory
    - Storyteller
    - Hardcover
-4. If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller`.
-5. Click **Save Settings** and wait for the app to restart.
+4. Use the **Test** button on any service section if you want to check a service before saving.
+5. If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller`.
+6. If you are setting up an ebook-only or maintenance-focused install, you can enter `disabled` in the ABS URL or token field instead of connecting Audiobookshelf.
+7. Click **Save Settings** and wait for the app to come back.
 
 ---
 
@@ -140,9 +144,19 @@ You can start in either of these ways:
 ### Add Book
 
 1. Open **Add Book**.
-2. Pick an ABS audiobook, a Booklore audiobook, or leave audio on **None / Skip** for an ebook-only link.
+2. Pick an ABS audiobook, a Grimmory audiobook, or leave audio on **None / Skip** for an ebook-only link.
 3. Optionally pick a Storyteller title.
 4. Pick the standard ebook.
 5. Click **Create Mapping**.
 
 That is enough to get syncing started. The normal background cycle runs every 5 minutes by default, and instant sync can react faster when supported by the source.
+
+---
+
+## Optional: KOReader Plugin
+
+If you want KOReader to download and manage bridge-provided books for you, you can also install the optional **Bridge Sync** KOReader plugin from the project's GitHub Releases page.
+
+If you install it, you can later use the Grimmory settings to turn selected Grimmory shelves into KOReader collections for synced books.
+
+This is optional. The bridge works without it.

@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 class KOReaderDeviceSyncService:
     """Build and resolve the optional KOReader managed-folder sync manifest."""
 
+    _UNSORTED_SHELF_NAME = "Unsorted"
+
     _ABS_FILENAME_RE = re.compile(r"^(?P<item_id>.+?)_(?:abs|abs_search|direct)\.[^.]+$", re.IGNORECASE)
     _CWA_FILENAME_RE = re.compile(r"^cwa_(?P<cwa_id>[^.]+)\.[^.]+$", re.IGNORECASE)
     _KAVITA_FILENAME_RE = re.compile(r"^kavita_(?P<kavita_id>[^.]+)\.[^.]+$", re.IGNORECASE)
@@ -40,47 +42,45 @@ class KOReaderDeviceSyncService:
         self.kavita_client = kavita_client
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir is not None else Path("/data/epub_cache")
 
-    def build_manifest(self) -> dict:
-        books = sorted(
+    def _get_active_books(self) -> list:
+        return sorted(
             self.database_service.get_books_by_status("active"),
             key=lambda book: (str(getattr(book, "abs_title", "") or "").lower(), str(book.abs_id)),
         )
+
+    def build_manifest(self, shelf_mapping: dict[str, list[str]] | None = None) -> dict:
+        books = self._get_active_books()
+        filename_map = self._build_manifest_filename_map(books)
         items = []
-        preferred_names = []
 
         for book in books:
-            source_filename = self._select_source_filename(book)
-            if not source_filename:
+            resolved = self._resolve_download_artifact(book)
+            if not resolved:
                 continue
 
-            content_hash = self._select_content_hash(book)
-            if not content_hash:
-                logger.warning(
-                    "Skipping KOReader device-sync manifest item for '%s': missing kosync_doc_id",
-                    sanitize_log_data(getattr(book, "abs_title", None) or getattr(book, "abs_id", None)),
-                )
+            filename = filename_map.get(str(book.abs_id))
+            if not filename:
                 continue
 
-            suffix = Path(source_filename).suffix or ".epub"
-            preferred_name = self._build_preferred_filename(book, suffix)
-            preferred_names.append(preferred_name.lower())
             items.append({
                 "abs_id": str(book.abs_id),
                 "title": str(getattr(book, "abs_title", "") or ""),
-                "content_hash": str(content_hash),
+                "content_hash": resolved["content_hash"],
                 "download_path": f"/koreader/device-sync/books/{quote(str(book.abs_id), safe='')}/download",
-                "size": self._try_get_size(source_filename),
-                "_preferred_filename": preferred_name,
+                "size": None,
+                "filename": filename,
             })
 
-        collision_counts = Counter(preferred_names)
-        for item in items:
-            preferred_name = item.pop("_preferred_filename")
-            if collision_counts[preferred_name.lower()] > 1:
-                stem = Path(preferred_name).stem
-                suffix = Path(preferred_name).suffix
-                preferred_name = f"{stem}__{item['abs_id'][:8]}{suffix}"
-            item["filename"] = preferred_name
+        if shelf_mapping:
+            books_by_abs = {str(book.abs_id): book for book in books}
+            for item in items:
+                book = books_by_abs.get(item["abs_id"])
+                if book:
+                    source_id = getattr(book, "ebook_source_id", None)
+                    if source_id and str(source_id) in shelf_mapping:
+                        item["shelves"] = shelf_mapping[str(source_id)]
+                    else:
+                        item["shelves"] = [self._UNSORTED_SHELF_NAME]
 
         return {
             "generated_at": int(time.time()),
@@ -94,48 +94,48 @@ class KOReaderDeviceSyncService:
         if not book or getattr(book, "status", None) != "active":
             return None
 
-        source_filename = self._select_source_filename(book)
-        if not source_filename:
+        resolved = self._resolve_download_artifact(book)
+        if not resolved:
             return None
-
-        source_path = self._resolve_source_path(book, source_filename)
-        if not source_path or not source_path.exists():
-            logger.warning(
-                "KOReader device-sync could not resolve original ebook for '%s' (%s)",
-                sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
-                sanitize_log_data(source_filename),
-            )
-            return None
-
-        content_hash = self._select_content_hash(book)
-        if not content_hash:
-            try:
-                content_hash = self.ebook_parser.get_kosync_id(source_path)
-            except Exception as e:
-                logger.warning(
-                    "KOReader device-sync could not compute content hash for '%s': %s",
-                    sanitize_log_data(source_filename),
-                    e,
-                )
-                return None
 
         filename = self._resolve_manifest_filename(book)
         mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return {
-            "path": source_path,
+            "path": resolved["path"],
             "filename": filename,
-            "content_hash": str(content_hash),
+            "content_hash": resolved["content_hash"],
             "mime_type": mime_type,
         }
 
     def _resolve_manifest_filename(self, target_book) -> str:
-        manifest = self.build_manifest()
         target_abs_id = str(target_book.abs_id)
-        for item in manifest.get("books", []):
-            if item.get("abs_id") == target_abs_id:
-                return item["filename"]
+        filename_map = self._build_manifest_filename_map(self._get_active_books())
+        if target_abs_id in filename_map:
+            return filename_map[target_abs_id]
         source_filename = self._select_source_filename(target_book) or f"{target_abs_id}.epub"
         return self._build_preferred_filename(target_book, Path(source_filename).suffix or ".epub")
+
+    def _build_manifest_filename_map(self, books: list) -> dict[str, str]:
+        preferred_by_abs = {}
+        collision_counts = Counter()
+
+        for book in books:
+            source_filename = self._select_source_filename(book)
+            if not source_filename:
+                continue
+            preferred_name = self._build_preferred_filename(book, Path(source_filename).suffix or ".epub")
+            preferred_by_abs[str(book.abs_id)] = preferred_name
+            collision_counts[preferred_name.lower()] += 1
+
+        filename_map = {}
+        for abs_id, preferred_name in preferred_by_abs.items():
+            resolved_name = preferred_name
+            if collision_counts[preferred_name.lower()] > 1:
+                stem = Path(preferred_name).stem
+                suffix = Path(preferred_name).suffix
+                resolved_name = f"{stem}__{abs_id[:8]}{suffix}"
+            filename_map[abs_id] = resolved_name
+        return filename_map
 
     def _select_source_filename(self, book) -> Optional[str]:
         for candidate in (
@@ -154,6 +154,51 @@ class KOReaderDeviceSyncService:
     def _select_content_hash(self, book) -> Optional[str]:
         value = str(getattr(book, "kosync_doc_id", "") or "").strip()
         return value or None
+
+    def _resolve_download_artifact(self, book) -> Optional[dict]:
+        source_filename = self._select_source_filename(book)
+        if not source_filename:
+            return None
+
+        source_path = self._resolve_source_path(book, source_filename)
+        if not source_path or not source_path.exists():
+            logger.warning(
+                "KOReader device-sync could not resolve original ebook for '%s' (%s)",
+                sanitize_log_data(getattr(book, "abs_title", None) or getattr(book, "abs_id", None)),
+                sanitize_log_data(source_filename),
+            )
+            return None
+
+        try:
+            content_hash = self.ebook_parser.get_kosync_id(source_path)
+        except Exception as e:
+            logger.warning(
+                "KOReader device-sync could not compute content hash for '%s': %s",
+                sanitize_log_data(source_filename),
+                e,
+            )
+            return None
+
+        content_hash = str(content_hash or "").strip()
+        if not content_hash:
+            logger.warning(
+                "KOReader device-sync could not compute a non-empty content hash for '%s'",
+                sanitize_log_data(source_filename),
+            )
+            return None
+
+        stored_hash = self._select_content_hash(book)
+        if stored_hash and stored_hash != content_hash:
+            logger.debug(
+                "KOReader device-sync serving resolved hash for '%s' instead of stored kosync_doc_id",
+                sanitize_log_data(getattr(book, "abs_title", None) or source_filename),
+            )
+
+        return {
+            "path": source_path,
+            "source_filename": source_filename,
+            "content_hash": content_hash,
+        }
 
     def _build_preferred_filename(self, book, suffix: str) -> str:
         base = str(getattr(book, "abs_title", "") or "").strip()
@@ -228,7 +273,7 @@ class KOReaderDeviceSyncService:
             return cache_path.exists() and cache_path.stat().st_size > 0
         except Exception as e:
             logger.warning(
-                "KOReader device-sync Booklore download failed for '%s': %s",
+                "KOReader device-sync Grimmory download failed for '%s': %s",
                 sanitize_log_data(source_filename),
                 e,
             )

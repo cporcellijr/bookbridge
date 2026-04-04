@@ -2,6 +2,8 @@
 import os
 import re
 import time
+import base64
+import mimetypes
 import logging
 import requests
 from typing import Optional, Dict, Tuple
@@ -640,39 +642,6 @@ class StorytellerAPIClient:
             return results
         return []
 
-    def find_book_by_staged_path(self, staged_folder_name: str, staged_epub_name: str) -> Optional[str]:
-        """Find a book UUID by matching its ebook file path suffix.
-
-        Matches against the path suffix '/{folder}/{epub}' to avoid
-        dependence on absolute library paths which vary per user.
-        Returns the book UUID if found, None otherwise.
-        """
-        expected_suffix = f"/{staged_folder_name}/{staged_epub_name}"
-        response = self._make_request("GET", "/api/v2/books", None)
-        if not response or response.status_code != 200:
-            return None
-
-        all_books = response.json()
-        for book in all_books:
-            if self._check_path_match(book, expected_suffix):
-                return book.get('uuid') or book.get('id')
-
-        return None
-
-    def _check_path_match(self, book: dict, expected_suffix: str) -> bool:
-        """Check all fields in a book object for a path ending match."""
-        for key, val in book.items():
-            if isinstance(val, str) and val.endswith(expected_suffix):
-                logger.info(f"⚡ Forge: Path match on '{key}': {val}")
-                return True
-            if isinstance(val, dict):
-                for sub_key, sub_val in val.items():
-                    if isinstance(sub_val, str) and sub_val.endswith(expected_suffix):
-                        logger.info(f"⚡ Forge: Path match on '{key}.{sub_key}': {sub_val}")
-                        return True
-
-        return False
-
     @staticmethod
     def _is_readaloud_not_ready(status_code: int, body: str) -> bool:
         body_lower = (body or "").lower()
@@ -812,6 +781,126 @@ class StorytellerAPIClient:
     def get_progress_with_fragment(self, ebook_filename: str) -> Tuple[Optional[float], Optional[int], Optional[str], Optional[str]]:
         """Legacy compatibility wrapper."""
         return self.get_progress_by_filename(ebook_filename)
+
+    # ── TUS Resumable Upload ───────────────────────────────────────────
+
+    @staticmethod
+    def _encode_tus_metadata(pairs: Dict[str, str]) -> str:
+        """Encode metadata pairs for TUS Upload-Metadata header.
+
+        Format: comma-separated 'key base64value' pairs.
+        """
+        parts = []
+        for key, value in pairs.items():
+            encoded = base64.b64encode(str(value).encode("utf-8")).decode("ascii")
+            parts.append(f"{key} {encoded}")
+        return ",".join(parts)
+
+    def _tus_upload_file(self, file_path: str, book_uuid: str,
+                         filetype: Optional[str] = None,
+                         relative_path: Optional[str] = None) -> bool:
+        """Upload a file to Storyteller via TUS resumable upload protocol."""
+        file_path = Path(file_path)
+        file_size = file_path.stat().st_size
+        filename = file_path.name
+
+        chunk_size = int(os.environ.get("STORYTELLER_UPLOAD_CHUNK_SIZE", "5242880"))
+
+        metadata = {"bookUuid": book_uuid, "filename": filename}
+        if filetype:
+            metadata["filetype"] = filetype
+        if relative_path:
+            metadata["relativePath"] = relative_path
+
+        token = self._get_fresh_token()
+        if not token:
+            logger.error("TUS upload: failed to get auth token")
+            return False
+
+        try:
+            create_resp = requests.post(
+                f"{self.base_url}/api/v2/books/upload",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Tus-Resumable": "1.0.0",
+                    "Upload-Length": str(file_size),
+                    "Upload-Metadata": self._encode_tus_metadata(metadata),
+                    "Content-Length": "0",
+                },
+                timeout=30,
+            )
+            if create_resp.status_code != 201:
+                logger.error(f"TUS create failed ({create_resp.status_code}): {create_resp.text[:200]}")
+                return False
+
+            upload_url = create_resp.headers.get("Location")
+            if not upload_url:
+                logger.error("TUS create response missing Location header")
+                return False
+
+            if upload_url.startswith("/"):
+                upload_url = f"{self.base_url}{upload_url}"
+
+            logger.info(f"TUS upload started: '{filename}' ({file_size} bytes) → {book_uuid}")
+
+            offset = 0
+            with open(file_path, "rb") as f:
+                while offset < file_size:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+
+                    token = self._get_fresh_token()
+                    if not token:
+                        logger.error("TUS upload: lost auth token mid-upload")
+                        return False
+
+                    patch_resp = requests.patch(
+                        upload_url,
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Tus-Resumable": "1.0.0",
+                            "Upload-Offset": str(offset),
+                            "Content-Type": "application/offset+octet-stream",
+                        },
+                        data=chunk,
+                        timeout=120,
+                    )
+                    if patch_resp.status_code not in (200, 204):
+                        logger.error(f"TUS PATCH failed at offset {offset} ({patch_resp.status_code}): {patch_resp.text[:200]}")
+                        return False
+
+                    offset += len(chunk)
+                    pct = int(offset / file_size * 100)
+                    logger.debug(f"TUS upload progress: {pct}% ({offset}/{file_size})")
+
+            logger.info(f"TUS upload complete: '{filename}' → {book_uuid}")
+            return True
+
+        except Exception as e:
+            logger.error(f"TUS upload error for '{filename}': {e}")
+            return False
+
+    def upload_epub(self, file_path: str, book_uuid: str) -> bool:
+        """Upload an EPUB file to Storyteller via TUS."""
+        return self._tus_upload_file(file_path, book_uuid, filetype="application/epub+zip")
+
+    def upload_audio_file(self, file_path: str, book_uuid: str, relative_path: Optional[str] = None) -> bool:
+        """Upload an audio file to Storyteller via TUS."""
+        ext = Path(file_path).suffix.lower()
+        mime_map = {
+            ".mp3": "audio/mpeg",
+            ".m4b": "audio/mp4",
+            ".m4a": "audio/mp4",
+            ".flac": "audio/flac",
+            ".ogg": "audio/ogg",
+            ".opus": "audio/opus",
+            ".wav": "audio/wav",
+            ".aac": "audio/aac",
+        }
+        filetype = mime_map.get(ext) or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        return self._tus_upload_file(file_path, book_uuid, filetype=filetype, relative_path=relative_path)
+
 
 def create_storyteller_client():
     return StorytellerAPIClient()

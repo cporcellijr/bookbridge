@@ -23,8 +23,7 @@ class ABSSyncClient(SyncClient):
         self.delta_abs_thresh = float(os.getenv("SYNC_DELTA_ABS_SECONDS", 60))
 
     def is_configured(self) -> bool:
-        # ABS is always considered configured (it's the primary service)
-        return True
+        return self.abs_client.is_configured()
 
     def check_connection(self):
         return self.abs_client.check_connection()

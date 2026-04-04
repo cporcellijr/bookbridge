@@ -121,7 +121,7 @@ class SyncManager:
         return result
 
     def _get_non_story_ebook_filename(self, book: Book | None) -> str | None:
-        """Preferred EPUB for KoSync/Booklore/ABS ebook operations."""
+        """Preferred EPUB for KoSync/Grimmory/ABS ebook operations."""
         if not book:
             return None
         original = getattr(book, "original_ebook_filename", None)
@@ -167,7 +167,7 @@ class SyncManager:
     def _get_locator_target_epub(self, book: Book | None, leader_name: str | None) -> str | None:
         """
         Locator generation target EPUB used for cross-client updates.
-        Prefer non-Storyteller EPUB so KoSync/Booklore/ABS locators stay stable,
+        Prefer non-Storyteller EPUB so KoSync/Grimmory/ABS locators stay stable,
         but fall back to Storyteller artifact when that's all we have.
         """
         return self._get_non_story_ebook_filename(book) or self._get_storyteller_ebook_filename(book)
@@ -294,7 +294,7 @@ class SyncManager:
             regenerated_error = None
 
             # Prefer a fresh CFI derived from the canonical target offset instead of
-            # dropping to percent-only BookLore writes.
+            # dropping to percent-only Grimmory writes.
             try:
                 regenerated_locator = self.ebook_parser.get_locator_from_char_offset(target_epub, int(target_offset))
                 candidate_cfi = getattr(regenerated_locator, "cfi", None)
@@ -304,7 +304,7 @@ class SyncManager:
                     if regenerated_offset is not None:
                         regenerated_error = abs(int(regenerated_offset) - int(target_offset))
             except Exception as regen_err:
-                logger.debug(f"'{book.abs_id}' Failed to regenerate CFI for BookLore fallback: {regen_err}")
+                logger.debug(f"'{book.abs_id}' Failed to regenerate CFI for Grimmory fallback: {regen_err}")
 
             if regenerated_cfi:
                 safe_locator.cfi = regenerated_cfi
@@ -652,7 +652,7 @@ class SyncManager:
 
     def _resolve_local_epub_uncached(self, ebook_filename):
         """
-        Get local path to EPUB file, downloading from Booklore if necessary.
+        Get local path to EPUB file, downloading from Grimmory if necessary.
         """
         # First, try to find on filesystem
         books_search_dir = self.books_dir or Path("/books")
@@ -669,12 +669,12 @@ class SyncManager:
             logger.info(f"🔍 Found EPUB in cache: '{cached_path}'")
             return cached_path
 
-        # Try to download from Booklore API
+        # Try to download from Grimmory API
         # Note: We use hasattr to prevent crashes if BookloreClient wasn't updated with these methods yet
         if hasattr(self.booklore_client, 'is_configured') and self.booklore_client.is_configured():
             book = self.booklore_client.find_book_by_filename(ebook_filename)
             if book:
-                logger.info(f"⚡ Downloading EPUB from Booklore: {sanitize_log_data(ebook_filename)}")
+                logger.info(f"⚡ Downloading EPUB from Grimmory: {sanitize_log_data(ebook_filename)}")
                 if hasattr(self.booklore_client, 'download_book'):
                     content = self.booklore_client.download_book(book['id'])
                     if content:
@@ -683,11 +683,11 @@ class SyncManager:
                         logger.info(f"✅ Downloaded EPUB to cache: '{cached_path}'")
                         return cached_path
                     else:
-                        logger.error(f"❌ Failed to download EPUB content from Booklore")
+                        logger.error(f"❌ Failed to download EPUB content from Grimmory")
             else:
-                logger.error(f"❌ EPUB not found in Booklore: {sanitize_log_data(ebook_filename)}")
+                logger.error(f"❌ EPUB not found in Grimmory: {sanitize_log_data(ebook_filename)}")
             if not filesystem_matches:
-                logger.error(f"❌ EPUB not found on filesystem and Booklore not configured")
+                logger.error(f"❌ EPUB not found on filesystem and Grimmory not configured")
 
         return None
 
@@ -860,9 +860,9 @@ class SyncManager:
     def queue_suggestion(self, abs_id: str) -> None:
         """Schedule ebook-discovery for an unmapped ABS book seen via Socket.IO.
 
-        No-ops if suggestions are disabled, the book is already mapped, or a
-        suggestion already exists. Uses an in-flight set to prevent duplicate
-        discovery threads for the same abs_id.
+        No-ops if suggestions are disabled, the book is already mapped, a
+        suggestion already exists, or the book is >70% complete.
+        Uses an in-flight set to prevent duplicate discovery threads.
         """
         if os.environ.get("SUGGESTIONS_ENABLED", "true").lower() != "true":
             return
@@ -878,6 +878,15 @@ class SyncManager:
             self._suggestion_in_flight.add(abs_id)
 
         try:
+            # Skip books that are mostly finished
+            if self.abs_client:
+                progress_data = self.abs_client.get_progress(abs_id)
+                if progress_data:
+                    pct = progress_data.get('progress', 0)
+                    if pct > 0.70 or progress_data.get('isFinished'):
+                        logger.debug(f"Skipping suggestion for {abs_id}: progress {pct:.1%} > 70% or finished")
+                        return
+
             logger.info(
                 f"ABS Socket.IO: Queuing suggestion discovery for unknown book '{abs_id[:12]}...'"
             )
@@ -898,7 +907,20 @@ class SyncManager:
             # optimization: get all mapped IDs to avoid suggesting existing books (even if inactive)
             all_books = self.database_service.get_all_books()
             mapped_ids = {b.abs_id for b in all_books}
-            
+
+            # Dismiss existing pending suggestions for books now >70% complete
+            existing_suggestions = self.database_service.get_all_pending_suggestions()
+            for suggestion in existing_suggestions:
+                item_data = abs_progress_map.get(suggestion.source_id)
+                if not item_data:
+                    continue
+                duration = item_data.get('duration', 0)
+                if duration > 0:
+                    pct = item_data.get('currentTime', 0) / duration
+                    if pct > 0.70 or item_data.get('isFinished'):
+                        logger.info(f"🧹 Dismissing suggestion for '{suggestion.title}': progress {pct:.1%} > 70%")
+                        self.database_service.dismiss_suggestion(suggestion.source_id)
+
             logger.debug(f"Checking for suggestions: {len(abs_progress_map)} books with progress, {len(mapped_ids)} already mapped")
 
             for abs_id, item_data in abs_progress_map.items():
@@ -908,7 +930,7 @@ class SyncManager:
 
                 duration = item_data.get('duration', 0)
                 current_time = item_data.get('currentTime', 0)
-                
+
                 if duration > 0:
                     pct = current_time / duration
                     if pct > 0.01:
@@ -916,14 +938,14 @@ class SyncManager:
                         if self.database_service.suggestion_exists(abs_id):
                             logger.debug(f"Skipping {abs_id}: suggestion already exists/dismissed")
                             continue
-                            
+
                         # Check if book is already mostly finished (>70%)
                         # If a user has listened to >70% elsewhere, they probably don't need a suggestion
                         if pct > 0.70:
                              logger.debug(f"Skipping {abs_id}: progress {pct:.1%} > 70% threshold")
                              continue
-                        
-                        logger.debug(f"Creating suggestion for {abs_id} (progress: {pct:.1%})")    
+
+                        logger.debug(f"Creating suggestion for {abs_id} (progress: {pct:.1%})")
                         self._create_suggestion(abs_id, item_data)
                     else:
                         logger.debug(f"Skipping {abs_id}: progress {pct:.1%} below 1% threshold")
@@ -964,11 +986,11 @@ class SyncManager:
             
             found_filenames = set()
             
-            # 2a. Search Booklore
+            # 2a. Search Grimmory
             if self.booklore_client and self.booklore_client.is_configured():
                 try:
                     bl_results = self.booklore_client.search_books(search_title)
-                    logger.debug(f"Booklore returned {len(bl_results)} results for '{search_title}'")
+                    logger.debug(f"Grimmory returned {len(bl_results)} results for '{search_title}'")
                     for b in bl_results:
                          # Filter for EPUBs
                          fname = b.get('fileName', '')
@@ -983,7 +1005,7 @@ class SyncManager:
                                  "confidence": "high" if search_title.lower() in b.get('title', '').lower() else "medium"
                              })
                 except Exception as e:
-                    logger.warning(f"⚠️ Booklore search failed during suggestion: {e}")
+                    logger.warning(f"⚠️ Grimmory search failed during suggestion: {e}")
 
             # 2b. Search Local Filesystem
             if self.books_dir and self.books_dir.exists():
@@ -1219,10 +1241,10 @@ class SyncManager:
             
             epub_path = None
             if self.library_service and item_details:
-                # Try Priority Chain (ABS Direct -> Booklore -> CWA -> ABS Search)
+                # Try Priority Chain (ABS Direct -> Grimmory -> CWA -> ABS Search)
                 epub_path = self.library_service.acquire_ebook(item_details)
 
-            # Fallback to legacy logic (Local Filesystem / Cache / Booklore Classic)
+            # Fallback to legacy logic (Local Filesystem / Cache / Grimmory Classic)
             if not epub_path:
                 epub_path = self._get_local_epub(ebook_filename)
                 
@@ -1484,7 +1506,7 @@ class SyncManager:
         
         This prevents:
         - API noise on short books (0.3s changes don't count)
-        - API noise on long books (BookLore's 20s rounding errors filtered)
+        - API noise on long books (Grimmory's 20s rounding errors filtered)
         - Missing real progress on all books (30s+ changes do count)
         """
         delta_pct = config[client_name].delta
@@ -1503,6 +1525,45 @@ class SyncManager:
             if delta_seconds > MIN_TIME_THRESHOLD:
                 return True
                 
+        return False
+
+    def _should_skip_deadband_rollback(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        client_name: str,
+        client_state,
+        abs_id: str,
+        title_snip: str,
+    ) -> bool:
+        """Avoid pushing a slightly older audio leader onto richer ebook locators."""
+        primary_audio_client = self._get_primary_audio_client_name(book)
+        if leader != primary_audio_client or client_name == primary_audio_client:
+            return False
+
+        client_source = client_state.current.get("_normalization_source")
+        if client_source not in {"xpath", "cfi", "href_frag", "href_progression"}:
+            return False
+
+        leader_ts = leader_state.current.get("ts")
+        client_ts = client_state.current.get("_normalized_ts")
+        if leader_ts is None or client_ts is None:
+            return False
+
+        try:
+            ts_delta = float(client_ts) - float(leader_ts)
+        except (TypeError, ValueError):
+            return False
+
+        if 0 < ts_delta <= self.cross_format_deadband_seconds:
+            logger.info(
+                f"🔒 '{abs_id}' '{title_snip}' Skipping rollback to '{client_name}' "
+                f"(leader={leader} ts={float(leader_ts):.1f}s, client_ts={float(client_ts):.1f}s, "
+                f"delta={ts_delta:.2f}s, source={client_source})"
+            )
+            return True
+
         return False
 
     def _determine_leader(self, config, book, abs_id, title_snip):
@@ -1744,7 +1805,7 @@ class SyncManager:
             if hasattr(storyteller_client.storyteller_client, 'clear_cache'):
                 storyteller_client.storyteller_client.clear_cache()
                 
-        # Refresh Library Metadata (Booklore) — throttle to once per 15 minutes
+        # Refresh Library Metadata (Grimmory) — throttle to once per 15 minutes
         if self.library_service and (time.time() - self._last_library_sync > 900):
             self.library_service.sync_library_books()
             self._last_library_sync = time.time()
@@ -1856,7 +1917,7 @@ class SyncManager:
                         # Do not continue here, let the consolidated check handle it
 
                 # Check for Character Delta Threshold (Fix 2B)
-                # Loop through ebook clients (KoSync, Storyteller, BookLore, ABS_Ebook)
+                # Loop through ebook clients (KoSync, Storyteller, Grimmory, ABS_Ebook)
                 # If state.delta > 0 and book has epub, get total chars via extract_text_and_map
                 # Calculate char_delta = int(state.delta * total_chars)
                 # If char_delta >= self.delta_chars_thresh, log it and set significant_diff = True
@@ -2047,7 +2108,17 @@ class SyncManager:
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
-                        request = UpdateProgressRequest(locator, txt, previous_location=config.get(client_name).previous_pct if config.get(client_name) else None)
+                        client_state = config.get(client_name)
+                        if client_state and self._should_skip_deadband_rollback(
+                            book, leader, leader_state, client_name, client_state, abs_id, title_snip
+                        ):
+                            continue
+
+                        request = UpdateProgressRequest(
+                            locator,
+                            txt,
+                            previous_location=client_state.previous_pct if client_state else None,
+                        )
                         result = client.update_progress(book, request)
                         results[client_name] = result
                     except Exception as e:
@@ -2090,6 +2161,30 @@ class SyncManager:
 
                 logger.info(f"💾 '{abs_id}' '{title_snip}' States saved to database")
 
+                # ── Local Reading Session Recording (always fires) ──
+                if leader_pct != leader_state.previous_pct:
+                    try:
+                        self._record_local_reading_session(
+                            book, leader, leader_state, prev_states_by_client, current_time
+                        )
+                    except Exception:
+                        pass  # Non-blocking
+
+                # ── Grimmory Reading Session Recording ──
+                if (
+                    os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
+                    and self.booklore_client
+                    and self.booklore_client.is_configured()
+                    and leader_pct != leader_state.previous_pct
+                    and leader.lower() != 'kosync'  # Plugin handles KOSync→Grimmory
+                ):
+                    try:
+                        self._record_grimmory_reading_session(
+                            book, leader, leader_state, prev_states_by_client, current_time
+                        )
+                    except Exception:
+                        pass  # Non-blocking: never prevent sync
+
                 # Debugging crash: Flush logs to ensure we see this before any potential hard crash
                 for handler in logger.handlers:
                     handler.flush()
@@ -2102,6 +2197,192 @@ class SyncManager:
                 logger.error(f"❌ Sync error: {e}")
 
         logger.debug("End of sync cycle for active books")
+
+    def _compute_session_duration(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        prev_states_by_client: dict,
+        current_time: float,
+    ) -> int | None:
+        """Compute an accurate session duration in seconds. Returns None if indeterminate."""
+        leader_pct = leader_state.current.get('pct', 0)
+        prev_pct = leader_state.previous_pct or 0.0
+        prev_state = prev_states_by_client.get(leader.lower())
+
+        primary_audio_client = self._get_primary_audio_client_name(book)
+        is_audio_leader = (leader == primary_audio_client)
+
+        # Audio Tier: ABS/audio playback timestamp delta
+        if is_audio_leader:
+            current_ts = leader_state.current.get('ts')
+            previous_ts = prev_state.timestamp if prev_state else None
+            if current_ts is not None and previous_ts is not None and current_ts > previous_ts:
+                delta = int(current_ts - previous_ts)
+                if 0 < delta <= 14400:
+                    return delta
+
+        # Progress-delta heuristic (universal fallback)
+        progress_delta = abs(leader_pct - prev_pct)
+        if progress_delta > 0:
+            total_time = getattr(book, 'duration', None) or getattr(book, 'audio_duration', None) or 36000
+            estimated = int(progress_delta * total_time)
+            return max(60, min(estimated, 3600))  # clamp [1min, 1hr]
+
+        return None
+
+    def _record_local_reading_session(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        prev_states_by_client: dict,
+        current_time: float,
+    ) -> None:
+        """Record a local reading session for dashboard stats. Always fires on progress change."""
+        try:
+            # Plugin handles all KOSync ebook sessions directly
+            if leader.lower() == 'kosync':
+                return
+
+            leader_pct = leader_state.current.get('pct', 0)
+            prev_pct = leader_state.previous_pct or 0.0
+
+            prev_state = prev_states_by_client.get(leader.lower())
+            start_time = (
+                prev_state.last_updated
+                if prev_state and prev_state.last_updated
+                else current_time - 60
+            )
+
+            primary_audio_client = self._get_primary_audio_client_name(book)
+            is_audio_leader = (leader == primary_audio_client)
+
+            if is_audio_leader:
+                session_type = "AUDIOBOOK"
+            else:
+                ebook_filename = getattr(book, 'ebook_filename', '') or ''
+                if ebook_filename.lower().endswith('.epub'):
+                    session_type = "EPUB"
+                elif ebook_filename.lower().endswith('.pdf'):
+                    session_type = "PDF"
+                else:
+                    session_type = "EBOOK"
+
+            duration_seconds = self._compute_session_duration(
+                book, leader, leader_state, prev_states_by_client, current_time
+            )
+            if duration_seconds is None or duration_seconds <= 0:
+                return
+
+            self.database_service.record_reading_session(
+                abs_id=book.abs_id,
+                session_type=session_type,
+                start_time=start_time,
+                end_time=current_time,
+                duration_seconds=duration_seconds,
+                start_progress=prev_pct,
+                end_progress=leader_pct,
+                leader_client=leader,
+            )
+        except Exception:
+            pass  # Never block sync
+
+    def _record_grimmory_reading_session(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        prev_states_by_client: dict,
+        current_time: float,
+    ) -> None:
+        """Record a reading session to Grimmory when progress changes on a tracked book."""
+        leader_pct = leader_state.current.get('pct', 0)
+        prev_pct = leader_state.previous_pct or 0.0
+
+        # Compute accurate duration, then backdate start_time so Grimmory's
+        # internal (end_time - start_time) math produces the correct value.
+        duration_seconds = self._compute_session_duration(
+            book, leader, leader_state, prev_states_by_client, current_time
+        )
+        if duration_seconds is None or duration_seconds <= 0:
+            duration_seconds = 60  # Conservative 1-minute fallback for Grimmory
+        start_time = current_time - duration_seconds
+
+        primary_audio_client = self._get_primary_audio_client_name(book)
+        is_audio_leader = (leader == primary_audio_client)
+
+        if is_audio_leader:
+            # Path 1: Audio Session (Strict Isolation - No Ebook Double Dip)
+            audio_grimmory_id = None
+            if getattr(book, 'audio_source', None) == "BookLore":
+                audio_grimmory_id = getattr(book, 'audio_provider_book_id', None) or getattr(book, 'audio_source_id', None)
+
+            # If using ABS audio, fallback to logging the audiobook session against the linked Grimmory ebook ID
+            grimmory_id = audio_grimmory_id
+            if not grimmory_id:
+                grimmory_id = self._resolve_grimmory_ebook_id(book)
+
+            if grimmory_id:
+                try:
+                    self.booklore_client.create_reading_session(
+                        book_id=int(grimmory_id),
+                        start_time=start_time,
+                        end_time=current_time,
+                        start_progress=prev_pct,
+                        end_progress=leader_pct,
+                        book_type="AUDIOBOOK",
+                    )
+                except (TypeError, ValueError):
+                    pass
+        else:
+            # Path 2: Ebook Session (Strict Isolation - Only if reading)
+            ebook_grimmory_id = self._resolve_grimmory_ebook_id(book)
+            if ebook_grimmory_id:
+                book_type = None
+                ebook_filename = getattr(book, 'ebook_filename', '') or ''
+                if ebook_filename.lower().endswith('.epub'):
+                    book_type = "EPUB"
+                elif ebook_filename.lower().endswith('.pdf'):
+                    book_type = "PDF"
+
+                cfi = leader_state.current.get('cfi')
+                try:
+                    self.booklore_client.create_reading_session(
+                        book_id=int(ebook_grimmory_id),
+                        start_time=start_time,
+                        end_time=current_time,
+                        start_progress=prev_pct,
+                        end_progress=leader_pct,
+                        book_type=book_type,
+                        end_location=cfi,
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+    def _resolve_grimmory_ebook_id(self, book):
+        """Resolve the Grimmory book ID for a book's ebook. Returns int or None."""
+        # Fast path: book explicitly sourced from Grimmory
+        if getattr(book, 'ebook_source', None) == "BookLore" and getattr(book, 'ebook_source_id', None):
+            try:
+                return int(book.ebook_source_id)
+            except (TypeError, ValueError):
+                pass
+
+        # Slow path: filename lookup (no cache refresh to avoid blocking sync)
+        epub = getattr(book, 'original_ebook_filename', None) or getattr(book, 'ebook_filename', None)
+        if not epub:
+            return None
+
+        bl_book = self.booklore_client.find_book_by_filename(epub, allow_refresh=False)
+        if bl_book and bl_book.get('id'):
+            try:
+                return int(bl_book['id'])
+            except (TypeError, ValueError):
+                pass
+
+        return None
 
     def clear_progress(self, abs_id):
         """

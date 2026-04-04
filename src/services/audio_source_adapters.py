@@ -226,7 +226,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
         hinted_ms = ("ms" in key) or ("millis" in key)
         if not hinted_ms:
             return raw_value / 1000.0 if raw_value >= 100000 else raw_value
-        # Some BookLore builds expose ms-suffixed keys with second values.
+        # Some Grimmory builds expose ms-suffixed keys with second values.
         # Only scale down when values look like true milliseconds.
         return raw_value / 1000.0 if raw_value >= 100000 else raw_value
 
@@ -263,7 +263,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 continue
             info = book.get("audiobookInfo") or {}
             duration = self._extract_duration_seconds(info)
-            title = book.get("title") or book.get("fileName") or f"BookLore {book_id}"
+            title = book.get("title") or book.get("fileName") or f"Grimmory {book_id}"
             provider_file_id = info.get("bookFileId") or book.get("bookFileId")
             results.append(
                 AudioResult(
@@ -298,7 +298,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
         tracks = info.get("tracks") or []
         track_mode = "tracks"
         if not tracks:
-            # Some BookLore payloads expose chapter markers but no per-file tracks.
+            # Some Grimmory payloads expose chapter markers but no per-file tracks.
             # In this shape, stream endpoint often serves a single full-book file.
             chapters = info.get("chapters") or []
             if chapters:
@@ -321,13 +321,13 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 ]
         if not tracks:
             logger.warning(
-                "BookLore audio files unavailable: source_id=%s info_keys=%s",
+                "Grimmory audio files unavailable: source_id=%s info_keys=%s",
                 source_id,
                 sorted(info.keys()) if isinstance(info, dict) else [],
             )
             return []
         logger.debug(
-            "BookLore audio files: source_id=%s mode=%s count=%s",
+            "Grimmory audio files: source_id=%s mode=%s count=%s",
             source_id,
             track_mode,
             len(tracks),
@@ -348,7 +348,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 ok = self.booklore_client.download_audiobook_track(source_id, download_index, local_path)
                 if not ok:
                     raise RuntimeError(
-                        f"BookLore track download failed for book_id={source_id} track_index={download_index}"
+                        f"Grimmory track download failed for book_id={source_id} track_index={download_index}"
                     )
             files.append(
                 {
@@ -440,7 +440,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             use_ms_duration = self._infer_ms_scale(duration_values_raw, duration_has_ms, raw_total_duration)
 
             logger.debug(
-                "BookLore audio chapter unit inference: source_id=%s start_ms=%s end_ms=%s duration_ms=%s raw_total=%s",
+                "Grimmory audio chapter unit inference: source_id=%s start_ms=%s end_ms=%s duration_ms=%s raw_total=%s",
                 source_id,
                 use_ms_start,
                 use_ms_end,
@@ -466,7 +466,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 )
 
             # Decide whether chapter rows are absolute ranges or duration-only rows.
-            # Some BookLore payloads expose per-chapter durations as end/duration fields.
+            # Some Grimmory payloads expose per-chapter durations as end/duration fields.
             explicit_start_count = sum(1 for row in converted_rows if row["explicit_start"])
             end_values = [row["end"] for row in converted_rows if row["end"] is not None]
             ends_monotonic = (
@@ -527,7 +527,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             valid = [c for c in normalized if c.get("end", 0) > c.get("start", 0)]
             if valid:
                 logger.debug(
-                    "BookLore audio chapters: source_id=%s mode=%s count=%s end=%.1fs",
+                    "Grimmory audio chapters: source_id=%s mode=%s count=%s end=%.1fs",
                     source_id,
                     mode,
                     len(valid),
@@ -558,7 +558,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 )
                 cursor += duration
             logger.debug(
-                "BookLore audio chapters: source_id=%s mode=tracks count=%s end=%.1fs",
+                "Grimmory audio chapters: source_id=%s mode=tracks count=%s end=%.1fs",
                 source_id,
                 len(synthetic),
                 float(synthetic[-1]["end"]) if synthetic else 0.0,
@@ -569,7 +569,7 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
         if total_duration <= 0:
             return []
         logger.debug(
-            "BookLore audio chapters: source_id=%s mode=duration_only count=1 end=%.1fs",
+            "Grimmory audio chapters: source_id=%s mode=duration_only count=1 end=%.1fs",
             source_id,
             float(total_duration),
         )
