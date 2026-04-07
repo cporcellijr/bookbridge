@@ -331,16 +331,16 @@
                     ["Active Days", d => d.stats?.activeDays ?? 0, "Days with any synced activity"],
                     ["Total Activity", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Reading + listening time"],
                     ["Current Streak", d => `${d.stats?.currentStreakDays ?? 0} days`, "Continuous active days"],
-                    ["Books With Activity", d => d.stats?.booksWithActivity ?? 0, "Distinct linked books"]
+                    ["Books With Activity", d => d.stats?.booksWithActivity ?? 0, "Distinct books"]
                 ]
             },
             reading: {
                 title: "Reading activity",
                 subtitle: "Derived from KOReader page-level statistics uploads and grouped into approximate dashboard sessions.",
                 emptyTitle: "No reading stats yet",
-                emptyBody: "Use the Bridge Sync plugin menu item “Sync Reading Stats” after linking books in BookBridge to populate this view.",
+                emptyBody: "Use the Bridge Sync plugin menu item “Sync Reading Stats” to populate this view with KOReader reading activity.",
                 cards: [
-                    ["Books Tracked", d => d.stats?.booksTracked ?? 0, "Linked KOReader books with activity"],
+                    ["Books Tracked", d => d.stats?.booksTracked ?? 0, "All KOReader books with activity"],
                     ["Days Read", d => d.stats?.daysRead ?? 0, "Days with reading events"],
                     ["Total Reading", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated reading time"],
                     ["Pages Read", d => d.stats?.pagesRead ?? 0, "Uploaded page events"]
@@ -490,7 +490,7 @@
 
             const books = Array.isArray(payload.books) ? payload.books : [];
             if (!books.length) {
-                dayDetailBody.innerHTML = `<div class="empty-state"><h3>No linked KOReader books that day</h3><p>This day had no linked reading activity after timezone bucketing, or the books have not been linked in BookBridge yet.</p></div>`;
+                dayDetailBody.innerHTML = `<div class="empty-state"><h3>No KOReader books that day</h3><p>This day had no KOReader reading activity after timezone bucketing.</p></div>`;
                 return;
             }
 
@@ -500,7 +500,7 @@
                         <article class="day-book-item">
                             <div class="day-book-main">
                                 <div class="day-book-title">${escapeHtml(book.title || "Unknown book")}</div>
-                                <div class="day-book-meta">${escapeHtml(book.author || "Unknown author")}</div>
+                                <div class="day-book-meta">${escapeHtml([book.author || "Unknown author", book.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · "))}</div>
                                 <div class="day-book-meta">First activity ${escapeHtml(formatRelativeTime(book.firstStartedAt || 0))} · Last activity ${escapeHtml(formatRelativeTime(book.lastEndedAt || 0))}</div>
                             </div>
                             <div class="day-book-stats">
@@ -577,10 +577,11 @@
 
                 weekCells.forEach((cell, dayIndex) => {
                     cell.books.forEach(book => {
-                        const key = String(book.absId || book.md5 || `${cell.iso}-${book.title}`);
+                        const key = String(book.bookKey || book.absId || book.md5 || `${cell.iso}-${book.title}`);
                         const existing = perBook.get(key) || {
                             key,
                             title: book.title || "Unknown book",
+                            isLinked: book.isLinked !== false,
                             totalSeconds: 0,
                             days: [],
                             color: bookColor(key)
@@ -606,6 +607,7 @@
                             bookSegments.push({
                                 key: book.key,
                                 title: book.title,
+                                isLinked: book.isLinked,
                                 start,
                                 end: previous,
                                 totalSeconds: book.totalSeconds,
@@ -666,7 +668,7 @@
                                                 type="button"
                                                 class="calendar-span"
                                                 data-reading-date="${week.cells[segment.start].iso}"
-                                                title="${escapeHtml(segment.title)}"
+                                                title="${escapeHtml(segment.isLinked === false ? `Unlinked · ${segment.title}` : segment.title)}"
                                                 style="grid-column:${segment.start + 1} / ${segment.end + 2}; grid-row:${segment.lane + 2}; background:${segment.color.background}; border-color:${segment.color.border};"
                                             >
                                                 <span class="calendar-span-text">${escapeHtml(trimTitle(segment.title))}</span>
@@ -724,7 +726,7 @@
                         ${sessions.map(session => {
                             const type = session.activityType === "reading" ? "reading" : "listening";
                             const icon = type === "reading" ? "📖" : "🎧";
-                            const meta = [session.author || null, type === "reading" && session.pagesRead ? `${session.pagesRead} pages` : null].filter(Boolean).join(" · ");
+                            const meta = [session.author || null, type === "reading" && session.pagesRead ? `${session.pagesRead} pages` : null, type === "reading" && session.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · ");
                             return `<article class="recent-item"><div class="recent-main"><div class="recent-badge ${type}">${icon}</div><div class="recent-text"><div class="recent-title">${escapeHtml(session.title || "Unknown title")}</div><div class="recent-meta">${escapeHtml(meta || (type === "reading" ? "Reading session" : "Listening session"))}</div></div></div><div class="recent-side"><div class="recent-duration">${escapeHtml(formatDurationLong(session.durationSeconds || 0))}</div><div class="recent-time">${escapeHtml(formatRelativeTime(session.endedAt || session.startedAt || 0))}</div></div></article>`;
                         }).join("")}
                     </div>

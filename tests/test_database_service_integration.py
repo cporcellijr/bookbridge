@@ -9,7 +9,9 @@ import json
 import tempfile
 import time
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -216,6 +218,102 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
                 session.query(self.ReadingSession).filter(self.ReadingSession.abs_id == test_abs_id).count(),
                 0,
             )
+
+    def test_koreader_stats_include_linked_and_unlinked_books(self):
+        """KOReader dashboard queries should include unlinked activity alongside linked books."""
+        base_time = datetime.now(ZoneInfo("UTC")).replace(hour=12, minute=0, second=0, microsecond=0)
+
+        linked_book = self.Book(
+            abs_id='abs-linked',
+            abs_title='Linked Bridge Book',
+            ebook_filename='linked.epub',
+            kosync_doc_id='md5-linked',
+            status='active',
+            duration=3600.0,
+        )
+        self.db_service.save_book(linked_book)
+
+        accepted_books = self.db_service.upsert_koreader_book_stats(
+            device='KOReader',
+            device_id='device-1',
+            books=[
+                {
+                    'md5': 'md5-linked',
+                    'title': 'Linked KOReader Title',
+                    'authors': 'Linked Author',
+                    'pages': 120,
+                },
+                {
+                    'md5': 'md5-unlinked',
+                    'title': 'Unlinked KOReader Title',
+                    'authors': 'Unlinked Author',
+                    'pages': 240,
+                },
+            ],
+        )
+        self.assertEqual(accepted_books, 2)
+
+        insert_result = self.db_service.bulk_insert_koreader_page_stats(
+            device='KOReader',
+            device_id='device-1',
+            page_stats=[
+                {
+                    'md5': 'md5-linked',
+                    'page': 10,
+                    'start_time': (base_time - timedelta(minutes=50)).timestamp(),
+                    'duration': 120,
+                },
+                {
+                    'md5': 'md5-linked',
+                    'page': 11,
+                    'start_time': (base_time - timedelta(minutes=47)).timestamp(),
+                    'duration': 180,
+                },
+                {
+                    'md5': 'md5-unlinked',
+                    'page': 42,
+                    'start_time': (base_time - timedelta(minutes=18)).timestamp(),
+                    'duration': 240,
+                },
+                {
+                    'md5': 'md5-unlinked',
+                    'page': 43,
+                    'start_time': (base_time - timedelta(minutes=12)).timestamp(),
+                    'duration': 60,
+                },
+            ],
+        )
+        self.assertEqual(insert_result['accepted'], 4)
+
+        summary = self.db_service.get_koreader_dashboard_summary('UTC')
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary['booksTracked'], 2)
+        self.assertEqual(summary['linkedBooksTracked'], 1)
+        self.assertEqual(summary['unlinkedBooksTracked'], 1)
+        self.assertEqual(summary['totalSeconds'], 600)
+        self.assertEqual(summary['pagesRead'], 4)
+        self.assertEqual(summary['daysRead'], 1)
+        self.assertEqual(summary['trackedBookIds'], ['abs-linked'])
+        self.assertEqual(set(summary['trackedBookKeys']), {'abs:abs-linked', 'koreader:md5-unlinked'})
+
+        day_payload = self.db_service.get_koreader_books_for_date(base_time.date().isoformat(), 'UTC')
+        self.assertEqual(day_payload['totalBooks'], 2)
+        self.assertEqual(day_payload['totalPages'], 4)
+        self.assertEqual(day_payload['totalSeconds'], 600)
+        unlinked_day_book = next(book for book in day_payload['books'] if book['isLinked'] is False)
+        self.assertIsNone(unlinked_day_book['absId'])
+        self.assertEqual(unlinked_day_book['bookKey'], 'koreader:md5-unlinked')
+        self.assertEqual(unlinked_day_book['title'], 'Unlinked KOReader Title')
+
+        calendar_payload = self.db_service.get_koreader_calendar_month(base_time.strftime('%Y-%m'), 'UTC')
+        self.assertIn(base_time.date().isoformat(), calendar_payload['days'])
+        self.assertEqual(len(calendar_payload['days'][base_time.date().isoformat()]), 2)
+        self.assertTrue(any(book['isLinked'] is False for book in calendar_payload['days'][base_time.date().isoformat()]))
+
+        recent_sessions = self.db_service.get_koreader_recent_sessions(10, 'UTC')
+        self.assertEqual(len(recent_sessions), 2)
+        self.assertTrue(any(session['bookKey'] == 'abs:abs-linked' and session['isLinked'] for session in recent_sessions))
+        self.assertTrue(any(session['bookKey'] == 'koreader:md5-unlinked' and session['isLinked'] is False for session in recent_sessions))
 
     def test_create_states(self):
         """Test creating state records for multiple clients."""
@@ -931,7 +1029,6 @@ class TestLegacyDatabaseMigration(unittest.TestCase):
                 self.fail(f"DatabaseService raised {type(e).__name__} on fresh database: {e}")
 
             self.assertTrue(Path(db_path).exists(), "Database file was not created")
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

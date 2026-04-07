@@ -987,6 +987,14 @@ class DatabaseService:
 
         return links
 
+    def _get_all_koreader_active_md5s(self, session) -> set[str]:
+        rows = session.query(KOReaderPageStat.md5).distinct().all()
+        return {
+            str(row[0]).strip()
+            for row in rows
+            if row and row[0] and str(row[0]).strip()
+        }
+
     def _get_latest_koreader_book_metadata(self, session, md5s: set[str]) -> dict:
         if not md5s:
             return {}
@@ -999,6 +1007,30 @@ class DatabaseService:
         for row in rows:
             metadata.setdefault(row.md5, row)
         return metadata
+
+    def _build_koreader_book_contexts(self, session, md5s: set[str]) -> dict:
+        if not md5s:
+            return {}
+
+        book_links = self._get_koreader_book_links(session)
+        metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+        contexts = {}
+
+        for md5 in md5s:
+            book = book_links.get(md5)
+            meta = metadata_by_md5.get(md5)
+            abs_id = getattr(book, "abs_id", None)
+            is_linked = bool(abs_id)
+            contexts[md5] = {
+                "md5": md5,
+                "absId": abs_id,
+                "bookKey": f"abs:{abs_id}" if abs_id else f"koreader:{md5}",
+                "isLinked": is_linked,
+                "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
+                "author": getattr(book, "abs_author", None) or getattr(meta, "authors", None),
+            }
+
+        return contexts
 
     def _build_koreader_daily_totals(
         self,
@@ -1063,10 +1095,11 @@ class DatabaseService:
     def get_koreader_dashboard_summary(self, tz_name: str) -> Optional[dict]:
         """Get high-level KOReader reading stats for the dashboard."""
         with self.get_session() as session:
-            book_links = self._get_koreader_book_links(session)
-            md5s = set(book_links.keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return None
+
+            contexts = self._build_koreader_book_contexts(session, md5s)
 
             from sqlalchemy import func
 
@@ -1104,13 +1137,28 @@ class DatabaseService:
 
             week_total = sum(day["seconds"] for day in daily)
             best_day = max(daily, key=lambda day: day["seconds"], default=None)
+            linked_book_ids = sorted({
+                context["absId"]
+                for context in contexts.values()
+                if context.get("absId")
+            })
+            tracked_book_keys = sorted({
+                context["bookKey"]
+                for context in contexts.values()
+                if context.get("bookKey")
+            })
+            linked_books_tracked = sum(1 for context in contexts.values() if context.get("isLinked"))
+            books_tracked = len(contexts)
 
             return {
                 "booksTracked": books_tracked,
+                "linkedBooksTracked": linked_books_tracked,
+                "unlinkedBooksTracked": max(books_tracked - linked_books_tracked, 0),
                 "daysRead": len(activity_dates),
                 "totalSeconds": total_seconds,
                 "pagesRead": pages_read,
-                "trackedBookIds": sorted({book.abs_id for book in book_links.values() if getattr(book, "abs_id", None)}),
+                "trackedBookIds": linked_book_ids,
+                "trackedBookKeys": tracked_book_keys,
                 "weekTotalSeconds": week_total,
                 "dailyAverageSeconds": int(week_total / max(len(daily), 1)),
                 "bestDay": best_day,
@@ -1120,7 +1168,7 @@ class DatabaseService:
     def get_koreader_daily_totals(self, days: int, tz_name: str) -> list[dict]:
         """Get recent KOReader daily totals."""
         with self.get_session() as session:
-            md5s = set(self._get_koreader_book_links(session).keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return []
 
@@ -1137,7 +1185,7 @@ class DatabaseService:
     def get_koreader_activity_dates(self, tz_name: str) -> list[str]:
         """Get all KOReader activity dates in the configured timezone."""
         with self.get_session() as session:
-            md5s = set(self._get_koreader_book_links(session).keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return []
 
@@ -1147,7 +1195,7 @@ class DatabaseService:
     def get_koreader_heatmap(self, year: int, tz_name: str) -> list[dict]:
         """Get KOReader daily totals for one calendar year."""
         with self.get_session() as session:
-            md5s = set(self._get_koreader_book_links(session).keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return []
 
@@ -1162,15 +1210,14 @@ class DatabaseService:
             )
 
     def get_koreader_books_for_date(self, date_str: str, tz_name: str) -> dict:
-        """Get linked KOReader books with activity for one local date."""
+        """Get KOReader books with activity for one local date."""
         target_date = datetime.fromisoformat(str(date_str)).date()
         tz = ZoneInfo(tz_name)
         start_epoch = datetime.combine(target_date, datetime.min.time(), tzinfo=tz).timestamp()
         end_epoch = datetime.combine(target_date + timedelta(days=1), datetime.min.time(), tzinfo=tz).timestamp()
 
         with self.get_session() as session:
-            book_links = self._get_koreader_book_links(session)
-            md5s = set(book_links.keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return {
                     "date": target_date.isoformat(),
@@ -1180,7 +1227,7 @@ class DatabaseService:
                     "books": [],
                 }
 
-            metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+            contexts = self._build_koreader_book_contexts(session, md5s)
             rows = (
                 session.query(KOReaderPageStat)
                 .filter(KOReaderPageStat.md5.in_(md5s))
@@ -1203,16 +1250,17 @@ class DatabaseService:
             session_gap_seconds = 1800
 
             for row in rows:
-                book = book_links.get(row.md5)
-                if not book:
+                context = contexts.get(row.md5)
+                if not context:
                     continue
 
-                meta = metadata_by_md5.get(row.md5)
-                entry = grouped.setdefault(row.md5, {
+                entry = grouped.setdefault(context["bookKey"], {
+                    "bookKey": context["bookKey"],
                     "md5": row.md5,
-                    "absId": getattr(book, "abs_id", None),
-                    "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
-                    "author": getattr(book, "abs_author", None) or getattr(meta, "authors", None),
+                    "absId": context["absId"],
+                    "isLinked": context["isLinked"],
+                    "title": context["title"],
+                    "author": context["author"],
                     "totalSeconds": 0,
                     "pagesRead": 0,
                     "sessionCount": 0,
@@ -1249,7 +1297,7 @@ class DatabaseService:
             }
 
     def get_koreader_calendar_month(self, month_str: str, tz_name: str) -> dict:
-        """Get linked KOReader book activity grouped by local day for one month."""
+        """Get KOReader book activity grouped by local day for one month."""
         month_start = datetime.fromisoformat(f"{str(month_str)}-01").date()
         if month_start.month == 12:
             next_month = datetime(month_start.year + 1, 1, 1).date()
@@ -1261,15 +1309,14 @@ class DatabaseService:
         end_epoch = datetime.combine(next_month, datetime.min.time(), tzinfo=tz).timestamp()
 
         with self.get_session() as session:
-            book_links = self._get_koreader_book_links(session)
-            md5s = set(book_links.keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return {
                     "month": month_start.strftime("%Y-%m"),
                     "days": {},
                 }
 
-            metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+            contexts = self._build_koreader_book_contexts(session, md5s)
             rows = (
                 session.query(KOReaderPageStat)
                 .filter(KOReaderPageStat.md5.in_(md5s))
@@ -1281,18 +1328,19 @@ class DatabaseService:
 
             day_buckets = {}
             for row in rows:
-                book = book_links.get(row.md5)
-                if not book:
+                context = contexts.get(row.md5)
+                if not context:
                     continue
 
                 local_date = self._local_date_from_epoch(row.start_time, tz_name)
                 day_bucket = day_buckets.setdefault(local_date, {})
-                meta = metadata_by_md5.get(row.md5)
-                entry = day_bucket.setdefault(row.md5, {
+                entry = day_bucket.setdefault(context["bookKey"], {
+                    "bookKey": context["bookKey"],
                     "md5": row.md5,
-                    "absId": getattr(book, "abs_id", None),
-                    "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
-                    "author": getattr(book, "abs_author", None) or getattr(meta, "authors", None),
+                    "absId": context["absId"],
+                    "isLinked": context["isLinked"],
+                    "title": context["title"],
+                    "author": context["author"],
                     "totalSeconds": 0,
                     "pagesRead": 0,
                     "lastEndedAt": 0,
@@ -1321,12 +1369,11 @@ class DatabaseService:
     def get_koreader_recent_sessions(self, limit: int, tz_name: str) -> list[dict]:
         """Derive recent reading sessions from KOReader page stats."""
         with self.get_session() as session:
-            book_links = self._get_koreader_book_links(session)
-            md5s = set(book_links.keys())
+            md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return []
 
-            metadata_by_md5 = self._get_latest_koreader_book_metadata(session, md5s)
+            contexts = self._build_koreader_book_contexts(session, md5s)
             sample_size = max(int(limit or 10) * 400, 4000)
             rows = (
                 session.query(KOReaderPageStat)
@@ -1341,18 +1388,22 @@ class DatabaseService:
             rows = list(reversed(rows))
             grouped_rows = defaultdict(list)
             for row in rows:
-                grouped_rows[(row.md5, row.device_key)].append(row)
+                context = contexts.get(row.md5)
+                if not context:
+                    continue
+                grouped_rows[(context["bookKey"], row.device_key)].append(row)
 
             sessions = []
             session_gap_seconds = 1800
-            for (md5, device_key), grouped in grouped_rows.items():
+            for (book_key, device_key), grouped in grouped_rows.items():
                 current = None
                 for row in grouped:
                     duration = int(max(row.duration or 0, 0))
                     event_end = float(row.start_time + max(row.duration or 0, 0))
                     if current is None:
                         current = {
-                            "md5": md5,
+                            "bookKey": book_key,
+                            "md5": row.md5,
                             "deviceKey": device_key,
                             "startTime": float(row.start_time),
                             "endTime": event_end,
@@ -1365,7 +1416,8 @@ class DatabaseService:
                     if gap > session_gap_seconds:
                         sessions.append(current)
                         current = {
-                            "md5": md5,
+                            "bookKey": book_key,
+                            "md5": row.md5,
                             "deviceKey": device_key,
                             "startTime": float(row.start_time),
                             "endTime": event_end,
@@ -1386,14 +1438,16 @@ class DatabaseService:
             normalized = []
             for entry in sessions[: max(int(limit or 10), 1)]:
                 md5 = entry["md5"]
-                book = book_links.get(md5)
-                meta = metadata_by_md5.get(md5)
+                context = contexts.get(md5) or {}
+                book_key_safe = str(entry["bookKey"]).replace(":", "-")
                 normalized.append({
-                    "id": f"reading-{md5}-{int(entry['startTime'])}",
+                    "id": f"reading-{book_key_safe}-{int(entry['startTime'])}",
                     "activityType": "reading",
-                    "absId": getattr(book, "abs_id", None),
-                    "title": getattr(book, "abs_title", None) or getattr(meta, "title", None) or "Unknown book",
-                    "author": getattr(meta, "authors", None),
+                    "bookKey": entry["bookKey"],
+                    "absId": context.get("absId"),
+                    "isLinked": bool(context.get("isLinked")),
+                    "title": context.get("title") or "Unknown book",
+                    "author": context.get("author"),
                     "durationSeconds": int(entry["durationSeconds"]),
                     "pagesRead": int(entry["pagesRead"]),
                     "startedAt": int(entry["startTime"]),

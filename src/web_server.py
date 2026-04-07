@@ -4492,10 +4492,13 @@ def _build_reading_stats_payload(tz):
             "recentSessions": [],
             "activityDates": [],
             "trackedBookIds": [],
+            "trackedBookKeys": [],
         }
 
     stats = summary or {}
     stats.setdefault("booksTracked", 0)
+    stats.setdefault("linkedBooksTracked", 0)
+    stats.setdefault("unlinkedBooksTracked", 0)
     stats.setdefault("daysRead", len(activity_dates))
     stats.setdefault("totalSeconds", 0)
     stats.setdefault("pagesRead", 0)
@@ -4507,6 +4510,7 @@ def _build_reading_stats_payload(tz):
         datetime.now(tz).date(),
     ))
     stats.setdefault("trackedBookIds", [])
+    stats.setdefault("trackedBookKeys", [])
 
     return {
         "available": True,
@@ -4516,6 +4520,7 @@ def _build_reading_stats_payload(tz):
         "recentSessions": recent_sessions,
         "activityDates": activity_dates,
         "trackedBookIds": stats.get("trackedBookIds") or [],
+        "trackedBookKeys": stats.get("trackedBookKeys") or [],
     }
 
 
@@ -4587,13 +4592,19 @@ def _build_combined_stats_payload(listening, reading, tz):
     }
     all_activity_dates = listening_dates | reading_dates
 
+    listening_book_keys = {
+        f"abs:{book_id}"
+        for book_id in ((listening or {}).get("trackedBookIds") or [])
+        if book_id
+    }
+    reading_book_keys = set((reading or {}).get("trackedBookKeys") or [])
+
     combined_stats = {
         "activeDays": len(all_activity_dates),
         "totalSeconds": int(((listening or {}).get("stats") or {}).get("totalSeconds") or 0)
         + int(((reading or {}).get("stats") or {}).get("totalSeconds") or 0),
         "booksWithActivity": len(
-            set((listening or {}).get("trackedBookIds") or [])
-            | set((reading or {}).get("trackedBookIds") or [])
+            listening_book_keys | reading_book_keys
         ),
         "weekTotalSeconds": sum(int(row.get("seconds") or 0) for row in combined_daily),
         "dailyAverageSeconds": int(
@@ -4643,6 +4654,7 @@ def api_stats():
             "recentSessions": [],
             "activityDates": [],
             "trackedBookIds": [],
+            "trackedBookKeys": [],
         }
 
     combined = _build_combined_stats_payload(
@@ -4659,12 +4671,16 @@ def api_stats():
             "daily": reading.get("daily"),
             "heatmap": reading.get("heatmap"),
             "recentSessions": reading.get("recentSessions"),
+            "trackedBookIds": reading.get("trackedBookIds"),
+            "trackedBookKeys": reading.get("trackedBookKeys"),
         } if reading else {
             "available": False,
             "stats": None,
             "daily": [],
             "heatmap": [],
             "recentSessions": [],
+            "trackedBookIds": [],
+            "trackedBookKeys": [],
         },
         "combined": combined,
     }

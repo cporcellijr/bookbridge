@@ -1473,6 +1473,135 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         
         print("[OK] Clear stale suggestions API test passed")
 
+    @patch('src.web_server._build_listening_stats_payload')
+    @patch('src.web_server._write_cached_stats')
+    @patch('src.web_server._read_cached_stats', return_value=None)
+    def test_api_stats_combines_unlinked_koreader_books(self, _mock_read_cached, mock_write_cached, mock_listening_stats):
+        today = '2026-04-07'
+        mock_listening_stats.return_value = {
+            'available': True,
+            'stats': {
+                'activeDays': 1,
+                'totalSeconds': 900,
+                'currentStreakDays': 1,
+            },
+            'daily': [{'date': today, 'seconds': 900}],
+            'heatmap': [{'date': today, 'seconds': 900}],
+            'recentSessions': [{
+                'id': 'listening-1',
+                'activityType': 'listening',
+                'absId': 'abs-linked',
+                'title': 'Linked Bridge Book',
+                'durationSeconds': 900,
+                'startedAt': 1712487600,
+                'endedAt': 1712488500,
+            }],
+            'activityDates': [today],
+            'trackedBookIds': ['abs-linked'],
+        }
+        self.mock_database_service.get_koreader_dashboard_summary.return_value = {
+            'booksTracked': 2,
+            'linkedBooksTracked': 1,
+            'unlinkedBooksTracked': 1,
+            'daysRead': 1,
+            'totalSeconds': 600,
+            'pagesRead': 4,
+            'trackedBookIds': ['abs-linked'],
+            'trackedBookKeys': ['abs:abs-linked', 'koreader:md5-unlinked'],
+            'weekTotalSeconds': 600,
+            'dailyAverageSeconds': 85,
+            'bestDay': {'date': today, 'seconds': 600, 'pages': 4},
+            'currentStreakDays': 1,
+        }
+        self.mock_database_service.get_koreader_daily_totals.return_value = [{'date': today, 'seconds': 600, 'pages': 4}]
+        self.mock_database_service.get_koreader_heatmap.return_value = [{'date': today, 'seconds': 600, 'pages': 4}]
+        self.mock_database_service.get_koreader_recent_sessions.return_value = [
+            {
+                'id': 'reading-linked',
+                'activityType': 'reading',
+                'bookKey': 'abs:abs-linked',
+                'absId': 'abs-linked',
+                'isLinked': True,
+                'title': 'Linked Bridge Book',
+                'author': 'Linked Author',
+                'durationSeconds': 300,
+                'pagesRead': 2,
+                'startedAt': 1712484000,
+                'endedAt': 1712484300,
+                'deviceKey': 'device-1',
+            },
+            {
+                'id': 'reading-unlinked',
+                'activityType': 'reading',
+                'bookKey': 'koreader:md5-unlinked',
+                'absId': None,
+                'isLinked': False,
+                'title': 'Loose KOReader Book',
+                'author': 'Unlinked Author',
+                'durationSeconds': 300,
+                'pagesRead': 2,
+                'startedAt': 1712485000,
+                'endedAt': 1712485300,
+                'deviceKey': 'device-1',
+            },
+        ]
+        self.mock_database_service.get_koreader_activity_dates.return_value = [today]
+
+        response = self.client.get('/api/stats')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['reading']['available'])
+        self.assertEqual(data['reading']['stats']['booksTracked'], 2)
+        self.assertEqual(data['reading']['stats']['linkedBooksTracked'], 1)
+        self.assertEqual(data['reading']['stats']['unlinkedBooksTracked'], 1)
+        self.assertEqual(data['reading']['trackedBookKeys'], ['abs:abs-linked', 'koreader:md5-unlinked'])
+        self.assertEqual(data['combined']['stats']['booksWithActivity'], 2)
+        self.assertTrue(any(session['isLinked'] is False for session in data['reading']['recentSessions']))
+        mock_write_cached.assert_called_once()
+
+    def test_api_stats_reading_day_supports_unlinked_books(self):
+        payload = {
+            'date': '2026-04-07',
+            'totalSeconds': 600,
+            'totalPages': 4,
+            'totalBooks': 2,
+            'books': [
+                {
+                    'bookKey': 'abs:abs-linked',
+                    'absId': 'abs-linked',
+                    'isLinked': True,
+                    'title': 'Linked Bridge Book',
+                    'author': 'Linked Author',
+                    'totalSeconds': 300,
+                    'pagesRead': 2,
+                    'sessionCount': 1,
+                    'firstStartedAt': 1712484000,
+                    'lastEndedAt': 1712484300,
+                },
+                {
+                    'bookKey': 'koreader:md5-unlinked',
+                    'absId': None,
+                    'isLinked': False,
+                    'title': 'Loose KOReader Book',
+                    'author': 'Unlinked Author',
+                    'totalSeconds': 300,
+                    'pagesRead': 2,
+                    'sessionCount': 1,
+                    'firstStartedAt': 1712485000,
+                    'lastEndedAt': 1712485300,
+                },
+            ],
+        }
+        self.mock_database_service.get_koreader_books_for_date.return_value = payload
+
+        response = self.client.get('/api/stats/reading-day?date=2026-04-07')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['totalBooks'], 2)
+        self.assertTrue(any(book['isLinked'] is False and book['absId'] is None for book in data['books']))
+
 
 class FindEbookFileTest(unittest.TestCase):
     """Test find_ebook_file function handles special characters in filenames."""
