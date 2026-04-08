@@ -685,13 +685,42 @@ class EbookParser:
                     return "/text()" if i == 1 else f"/text()[{i}]"
         return None
 
+    def _build_inline_step(self, parent_el, inline_child) -> Optional[str]:
+        """
+        Return the XPath step for inline_child relative to parent_el.
+        Returns '/span' or '/span[2]' — used when text lives inside an inline
+        child element rather than directly under the structural block ancestor.
+        Returns None if inline_child is not a direct child of parent_el.
+        """
+        try:
+            tag = self._local_tag_name(inline_child)
+            if not tag:
+                return None
+            direct_children = list(parent_el)
+            if inline_child not in direct_children:
+                return None
+            siblings = [s for s in direct_children if self._local_tag_name(s) == tag]
+            if len(siblings) == 1:
+                return f"/{tag}"
+            return f"/{tag}[{siblings.index(inline_child) + 1}]"
+        except Exception:
+            return None
+
     def _build_crengine_safe_text_xpath(self, element, spine_index, html_content) -> str:
+        el_tag = self._local_tag_name(element)
         anchor = self._nearest_crengine_anchor(element)
         suffix = self._first_non_empty_direct_text_suffix(anchor)
 
-        # If the text was inside a flattened inline tag, the anchor won't have direct text in XML.
-        # But Crengine WILL flatten it, so we trust the anchor and default to the first text node
-        # instead of falling back to the start of the chapter.
+        if not suffix and anchor is not element and el_tag in self.CRENGINE_FRAGILE_INLINE_TAGS:
+            # Structural anchor has no direct text — all text lives inside an inline child
+            # (common in EPUBs where every <p> wraps content in <span>).
+            # Include the inline element in the XPath so CREngine can resolve the text node.
+            inline_step = self._build_inline_step(anchor, element)
+            if inline_step:
+                inline_text_suffix = self._first_non_empty_direct_text_suffix(element) or "/text()"
+                xpath_base = self._build_xpath(anchor)
+                return f"/body/DocFragment[{spine_index}]/{xpath_base}{inline_step}{inline_text_suffix}.0"
+
         if not suffix:
             suffix = "/text()"
 
