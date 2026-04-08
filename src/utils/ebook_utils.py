@@ -557,6 +557,8 @@ class EbookParser:
 
                         perfect_ko = self.get_perfect_ko_xpath(filename, match_index)
 
+                        fragment_id = self.get_fragment_for_tag(target_tag)
+
                         return LocatorResult(
                             percentage=percentage,
                             xpath=final_xpath,
@@ -564,7 +566,7 @@ class EbookParser:
                             match_index=match_index,
                             cfi=cfi,
                             href=item['href'],
-                            fragment=None,
+                            fragment=fragment_id,
                             css_selector=css_selector,
                             chapter_progress=chapter_progress
                         )
@@ -573,6 +575,21 @@ class EbookParser:
         except Exception as e:
             logger.error(f"❌ Error finding text in '{filename}': {e}")
             return None
+
+    def get_fragment_for_tag(self, tag):
+        """
+        Walks backwards from the given tag to find the nearest element with an id.
+        Returns the id of the element if found, otherwise None.
+        This id is used by the Storyteller to sync progress.
+        """
+        fragment_id = None
+        curr_tag = tag
+        while curr_tag and curr_tag.name not in ['[document]', 'html', 'body']:
+            if curr_tag.has_attr('id') and curr_tag['id']:
+                fragment_id = curr_tag['id']
+                break
+            curr_tag = curr_tag.parent
+        return fragment_id
 
     def get_locator_from_char_offset(self, filename, char_offset: int) -> Optional[LocatorResult]:
         """

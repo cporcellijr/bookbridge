@@ -26,8 +26,7 @@ class StorytellerAPIClient:
         self._book_cache: Dict[str, Dict] = {}
         self._cache_timestamp = 0
         self._token = None
-        self._token_timestamp = 0
-        self._token_max_age = 30
+        self._token_expire_timestamp = 0
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
         self._filename_to_book_cache = {}  # Cache filename -> book mapping
@@ -44,7 +43,7 @@ class StorytellerAPIClient:
         return bool(self.username and self.password)
 
     def _get_fresh_token(self) -> Optional[str]:
-        if self._token and (time.time() - self._token_timestamp) < self._token_max_age:
+        if self._token and time.time() < self._token_expire_timestamp:
             return self._token
         if not self.username or not self.password:
             # logger.warning("Storyteller API: No credentials configured")
@@ -59,7 +58,7 @@ class StorytellerAPIClient:
             if response.status_code == 200:
                 data = response.json()
                 self._token = data.get("access_token")
-                self._token_timestamp = time.time()
+                self._token_expire_timestamp = data.get("expires_in") / 1000
                 return self._token
         except Exception as e:
             logger.error(f"❌ Storyteller login error: {e}")
