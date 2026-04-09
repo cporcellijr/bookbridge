@@ -796,6 +796,10 @@
                         <div class="help-text">URL to your Calibre-Web Automated instance (e.g.
                             http://192.168.1.100:8083)</div>
                     </div>
+
+                    <!-- OPDS Library -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">OPDS Library</h4>
                     <div class="form-group">
                         <label>Username</label>
                         <input type="text" name="CWA_USERNAME" value="{{ get_val('CWA_USERNAME') }}">
@@ -803,6 +807,21 @@
                     <div class="form-group">
                         <label>Password</label>
                         <input type="password" name="CWA_PASSWORD" value="{{ get_val('CWA_PASSWORD') }}">
+                    </div>
+
+                    <!-- Reading Progress Sync -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Reading Progress Sync</h4>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="cwa_sync_toggle" name="CWA_SYNC_ENABLED"
+                            {% if get_bool('CWA_SYNC_ENABLED') %}checked{% endif %}>
+                        <label for="cwa_sync_toggle">Enable Sync</label>
+                        <div class="help-text">Sync reading progress via CWA's Kobo sync protocol. Works with stock Kobo and KOReader.</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Kobo Auth Token</label>
+                        <input type="password" name="CWA_SYNC_TOKEN" value="{{ get_val('CWA_SYNC_TOKEN') }}">
+                        <div class="help-text">From CWA → User Settings → Kobo Sync Token.</div>
                     </div>
                 </div>
             </div>
@@ -1473,7 +1492,7 @@
             kosync: ['KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY'],
             storyteller: ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
-            cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD'],
+            cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
         };

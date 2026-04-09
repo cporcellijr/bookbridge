@@ -1341,6 +1341,7 @@ def settings():
             'BOOKLORE_ENABLED',
             'GRIMMORY_READING_SESSIONS',
             'CWA_ENABLED',
+            'CWA_SYNC_ENABLED',
             'HARDCOVER_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
@@ -5326,6 +5327,7 @@ def test_connection(service: str):
             _normalize_test_url(data.get('CWA_SERVER')),
             _coerce_test_str(data.get('CWA_USERNAME')),
             _coerce_test_str(data.get('CWA_PASSWORD')),
+            _coerce_test_str(data.get('CWA_SYNC_TOKEN')),
         ),
         'hardcover': lambda data: _test_hardcover(
             _coerce_test_bool(data.get('HARDCOVER_ENABLED')),
@@ -5477,17 +5479,43 @@ def _test_booklore(enabled: bool, url: str, user: str, pwd: str) -> dict:
     return {"ok": False, "message": f"Login returned {r.status_code}"}
 
 
-def _test_cwa(enabled: bool, url: str, user: str, pwd: str) -> dict:
+def _test_cwa(enabled: bool, url: str, user: str, pwd: str, sync_token: str = "") -> dict:
     if not enabled or not url:
         return {"ok": False, "message": "CWA not configured or disabled"}
-    r = requests.get(f"{url}/opds", auth=(user, pwd) if user else None, timeout=5)
-    if r.status_code == 200:
-        if r.text.lstrip().lower().startswith(('<!doctype html', '<html')):
-            return {"ok": False, "message": "Authentication failed — server returned login page instead of OPDS feed"}
-        return {"ok": True, "message": "Connected to OPDS feed"}
-    if r.status_code in (401, 403):
-        return {"ok": False, "message": "Invalid credentials"}
-    return {"ok": False, "message": f"Server returned {r.status_code}"}
+
+    results = []
+
+    # Test OPDS if credentials are provided
+    if user and pwd:
+        try:
+            r = requests.get(f"{url}/opds", auth=(user, pwd), timeout=5)
+            if r.status_code == 200 and not r.text.lstrip().lower().startswith(('<!doctype html', '<html')):
+                results.append("OPDS: OK")
+            elif r.status_code in (401, 403):
+                results.append("OPDS: Invalid credentials")
+            else:
+                results.append(f"OPDS: Failed ({r.status_code})")
+        except Exception as e:
+            results.append(f"OPDS: {_test_conn_error(e)}")
+
+    # Test Kobo sync if token is provided
+    if sync_token:
+        try:
+            r = requests.get(f"{url}/kobo/{sync_token}/v1/initialization", timeout=5)
+            if r.status_code == 200:
+                results.append("Sync: OK")
+            elif r.status_code in (401, 403):
+                results.append("Sync: Invalid token")
+            else:
+                results.append(f"Sync: Failed ({r.status_code})")
+        except Exception as e:
+            results.append(f"Sync: {_test_conn_error(e)}")
+
+    if not results:
+        return {"ok": False, "message": "No OPDS credentials or sync token configured"}
+
+    all_ok = all("OK" in r for r in results)
+    return {"ok": all_ok, "message": "\n".join(results)}
 
 
 def _test_hardcover(enabled: bool, token: str) -> dict:

@@ -83,6 +83,9 @@ def test_dependency_injection():
         booklore_sync_client = container.booklore_sync_client()
         print(f"[OK] BookloreSyncClient: {type(booklore_sync_client).__name__}")
 
+        cwa_sync_client = container.cwa_sync_client()
+        print(f"[OK] CWASyncClient: {type(cwa_sync_client).__name__}")
+
         # Test 5: Test SyncManager creation with DI
         print("\n[TEST] Testing SyncManager creation with DI...")
 

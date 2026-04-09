@@ -210,6 +210,14 @@
                     </span>
                 </div>
                 {% endif %}
+
+                {% if integrations.cwa and mapping.states.cwa is defined %}
+                <div class="service-item" title="CWA Kobo Sync">
+                    <span class="service-icon-emoji">📖</span>
+                    <span class="service-name">CWA</span>
+                    <span class="service-value">{{ '%.1f' | format(mapping.states.cwa.percentage|default(0)) }}%</span>
+                </div>
+                {% endif %}
             </div>
             {% endif %}
 

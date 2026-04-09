@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import logging
 import base64
@@ -13,12 +14,13 @@ class CWAClient:
         raw_url = os.environ.get("CWA_SERVER", "").rstrip('/')
         if raw_url.endswith('/opds'):
             raw_url = raw_url[:-5]
-        
+
         # Ensure scheme is present (case-insensitive check)
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
-            
+
         self.base_url = raw_url
+        self._uuid_cache: dict[str, str] = {}
         
         # Sanitize credentials (strip whitespace)
         self.username = os.environ.get("CWA_USERNAME", "").strip()
@@ -383,3 +385,44 @@ class CWAClient:
             if os.path.exists(output_path):
                 os.remove(output_path)
             return False
+
+    def get_book_uuid(self, calibre_id: str) -> str | None:
+        """Resolve a Calibre book ID to its UUID via OPDS search."""
+        if calibre_id in self._uuid_cache:
+            return self._uuid_cache[calibre_id]
+
+        if not self.is_configured():
+            return None
+
+        try:
+            template = self._get_search_template()
+            if not template:
+                return None
+
+            search_url = template.replace("{searchTerms}", quote(calibre_id))
+            r = self._make_request(search_url, timeout=10)
+            if r.status_code != 200:
+                return None
+
+            root = ET.fromstring(r.text)
+            ns = {'atom': 'http://www.w3.org/2005/Atom'}
+
+            for entry in root.findall('atom:entry', ns):
+                id_elem = entry.find('atom:id', ns)
+                if id_elem is not None and id_elem.text:
+                    uuid_match = re.search(
+                        r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
+                        id_elem.text, re.IGNORECASE,
+                    )
+                    if uuid_match:
+                        uuid = uuid_match.group(1)
+                        self._uuid_cache[calibre_id] = uuid
+                        logger.debug(f"📖 CWA: Resolved '{calibre_id}' -> UUID {uuid}")
+                        return uuid
+
+            self._uuid_cache[calibre_id] = None
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ CWA UUID resolution error for '{calibre_id}': {e}")
+            return None

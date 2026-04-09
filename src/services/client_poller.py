@@ -23,6 +23,7 @@ class ClientPoller:
         ('Storyteller', 'STORYTELLER'),
         ('BookLore', 'BOOKLORE'),
         ('BookLoreAudio', 'BOOKLORE_AUDIO'),
+        ('CWA', 'CWA_SYNC'),
     ]
 
     def __init__(self, database_service, sync_manager, sync_clients_dict: dict):

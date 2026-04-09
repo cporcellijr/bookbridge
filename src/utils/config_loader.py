@@ -28,7 +28,9 @@ ALL_SETTINGS = [
 
     # CWA (Calibre-Web Automated)
     'CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD',
-    
+    'CWA_SYNC_ENABLED', 'CWA_SYNC_TOKEN',
+    'CWA_SYNC_POLL_MODE', 'CWA_SYNC_POLL_SECONDS',
+
     # Hardcover
     'HARDCOVER_ENABLED', 'HARDCOVER_TOKEN',
     
@@ -101,6 +103,10 @@ DEFAULT_CONFIG = {
     'CWA_SERVER': '',
     'CWA_USERNAME': '',
     'CWA_PASSWORD': '',
+    'CWA_SYNC_ENABLED': 'false',
+    'CWA_SYNC_TOKEN': '',
+    'CWA_SYNC_POLL_MODE': 'global',
+    'CWA_SYNC_POLL_SECONDS': '300',
     'HARDCOVER_ENABLED': 'false',
     'TELEGRAM_ENABLED': 'false',
     'SUGGESTIONS_ENABLED': 'false',
