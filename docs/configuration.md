@@ -131,9 +131,22 @@ Advanced Grimmory cache tuning:
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable | `CWA_ENABLED` | `false` | Turns on OPDS / CWA ebook search and download. |
-| Server URL | `CWA_SERVER` | empty | CWA base URL. |
-| Username | `CWA_USERNAME` | empty | Optional username. |
-| Password | `CWA_PASSWORD` | empty | Optional password. |
+| Server URL | `CWA_SERVER` | empty | CWA base URL (shared with CWA Sync below). |
+| Username | `CWA_USERNAME` | empty | Optional username for OPDS access. |
+| Password | `CWA_PASSWORD` | empty | Optional password for OPDS access. |
+
+#### CWA Sync
+
+Bidirectional reading progress sync with Calibre-Web Automated. Enables syncing between Audiobookshelf and any device that syncs with CWA (e.g., stock Kobo e-readers). Uses CWA's Kobo sync protocol internally.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Enable | `CWA_SYNC_ENABLED` | `false` | Turns on CWA progress sync. |
+| Auth Token | `CWA_SYNC_TOKEN` | empty | Token from CWA's Kobo sync settings page. |
+| Poll Mode | `CWA_SYNC_POLL_MODE` | `global` | `global` uses the main poll interval; `custom` uses the value below. |
+| Poll Interval | `CWA_SYNC_POLL_SECONDS` | `300` | Seconds between polls (when poll mode is `custom`). |
+
+**Setup:** Configure CWA (above) first with the server URL. Then enable CWA Sync and paste the auth token from your CWA user's Kobo sync settings page (`/kobo_auth`). Use "Test Connection" in the settings UI to verify.
 
 #### Hardcover.app
 

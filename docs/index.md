@@ -17,7 +17,7 @@
 
 **ABS-KoSync Enhanced** is a self-hosted sync engine for audiobooks and ebooks. It keeps your reading and listening position aligned across multiple apps, whether the source is Audiobookshelf, Grimmory, KOReader, or Storyteller.
 
-### Five-Way Synchronization
+### Six-Way Synchronization
 
 | Platform | Type | Capability |
 | :--- | :--- | :--- |
@@ -25,6 +25,7 @@
 | **KOReader / KOSync** | Ebooks | Full read/write sync |
 | **Storyteller** | Read-along reader | Full read/write sync |
 | **Grimmory** | Ebooks + audiobooks | Full read/write sync |
+| **CWA (Calibre-Web Automated)** | Ebooks (Kobo e-readers) | Full read/write sync |
 | **Hardcover.app** | Reading tracker | Write-only tracking |
 
 ---

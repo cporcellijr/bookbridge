@@ -14,6 +14,7 @@ from dependency_injector import containers, providers
 from src.api.api_clients import ABSClient, KoSyncClient
 from src.api.booklore_client import BookloreClient
 from src.api.cwa_client import CWAClient
+from src.api.cwa_sync_api import CWASyncApi
 from src.api.hardcover_client import HardcoverClient
 from src.api.storyteller_api import StorytellerAPIClient
 from src.db.database_service import DatabaseService
@@ -34,6 +35,7 @@ from src.sync_clients.booklore_sync_client import BookloreSyncClient
 from src.sync_clients.booklore_audio_sync_client import BookLoreAudioSyncClient
 from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
+from src.sync_clients.cwa_sync_client import CWASyncClient
 from src.sync_manager import SyncManager
 
 logger = logging.getLogger(__name__)
@@ -95,7 +97,10 @@ class Container(containers.DeclarativeContainer):
 
     cwa_client = providers.Singleton(CWAClient)
 
-
+    cwa_sync_api = providers.Singleton(
+        CWASyncApi,
+        cwa_client=cwa_client,
+    )
 
     # Ebook parser
     ebook_parser = providers.Singleton(
@@ -222,6 +227,13 @@ class Container(containers.DeclarativeContainer):
         database_service
     )
 
+    cwa_sync_client = providers.Singleton(
+        CWASyncClient,
+        cwa_sync_api,
+        cwa_client,
+        ebook_parser,
+    )
+
     abs_audio_source_adapter = providers.Singleton(
         ABSAudioSourceAdapter,
         abs_client=abs_client,
@@ -246,7 +258,8 @@ class Container(containers.DeclarativeContainer):
         Storyteller=storyteller_sync_client,
         BookLore=booklore_sync_client,
         BookLoreAudio=booklore_audio_sync_client,
-        Hardcover=hardcover_sync_client
+        Hardcover=hardcover_sync_client,
+        CWA=cwa_sync_client,
     )
 
     # Sync Manager

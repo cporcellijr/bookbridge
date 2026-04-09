@@ -804,6 +804,48 @@
                         <label>Password</label>
                         <input type="password" name="CWA_PASSWORD" value="{{ get_val('CWA_PASSWORD') }}">
                     </div>
+                    <div class="form-group full-width">
+                        <label>
+                            <input type="checkbox" name="CWA_HIDE_LOCAL_EBOOKS" {% if get_bool('CWA_HIDE_LOCAL_EBOOKS') %}checked{% endif %}>
+                            Hide local ebook files when matching
+                        </label>
+                        <div class="help-text">When enabled, local filesystem ebooks are hidden from match results since CWA manages the same library.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CWA Sync (Optional) -->
+            <div class="settings-section">
+                {% set cwa_sync_enabled = get_bool('CWA_SYNC_ENABLED') %}
+                <div class="section-header">
+                    <h3>CWA Sync</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('cwa_sync', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_cwa_sync" name="CWA_SYNC_ENABLED"
+                                onchange="toggleSection('cwa_sync_body', this.checked)" {% if cwa_sync_enabled %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="cwa_sync_body" class="section-body {% if not cwa_sync_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <label>Sync Auth Token</label>
+                        <input type="password" name="CWA_SYNC_TOKEN" value="{{ get_val('CWA_SYNC_TOKEN') }}">
+                        <div class="help-text">Token from your CWA user's Kobo sync settings page. Uses the same CWA Server URL configured above.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Poll Mode</label>
+                        <select name="CWA_SYNC_POLL_MODE">
+                            <option value="global" {% if get_val('CWA_SYNC_POLL_MODE') == 'global' %}selected{% endif %}>Global</option>
+                            <option value="custom" {% if get_val('CWA_SYNC_POLL_MODE') == 'custom' %}selected{% endif %}>Custom</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Poll Interval (seconds)</label>
+                        <input type="number" name="CWA_SYNC_POLL_SECONDS" value="{{ get_val('CWA_SYNC_POLL_SECONDS') }}">
+                    </div>
                 </div>
             </div>
 
@@ -1474,6 +1516,7 @@
             storyteller: ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD'],
+            cwa_sync: ['CWA_SYNC_ENABLED', 'CWA_SYNC_TOKEN', 'CWA_SERVER'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
         };

@@ -1349,6 +1349,7 @@ def settings():
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
             'SHELFMARK_ENABLED',
+            'CWA_SYNC_ENABLED',
         ]
 
         # Current settings in DB
@@ -5344,6 +5345,11 @@ def test_connection(service: str):
             _coerce_test_str(data.get('CWA_USERNAME')),
             _coerce_test_str(data.get('CWA_PASSWORD')),
         ),
+        'cwa_sync': lambda data: _test_cwa_sync(
+            _coerce_test_bool(data.get('CWA_SYNC_ENABLED')),
+            _normalize_test_url(data.get('CWA_SERVER')),
+            _coerce_test_str(data.get('CWA_SYNC_TOKEN')),
+        ),
         'hardcover': lambda data: _test_hardcover(
             _coerce_test_bool(data.get('HARDCOVER_ENABLED')),
             _coerce_test_str(data.get('HARDCOVER_TOKEN')),
@@ -5504,6 +5510,21 @@ def _test_cwa(enabled: bool, url: str, user: str, pwd: str) -> dict:
         return {"ok": True, "message": "Connected to OPDS feed"}
     if r.status_code in (401, 403):
         return {"ok": False, "message": "Invalid credentials"}
+    return {"ok": False, "message": f"Server returned {r.status_code}"}
+
+
+def _test_cwa_sync(enabled: bool, url: str, token: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "CWA Sync is disabled"}
+    if not url:
+        return {"ok": False, "message": "Missing CWA Server URL (configure in the CWA section above)"}
+    if not token:
+        return {"ok": False, "message": "Missing sync auth token"}
+    r = requests.get(f"{url}/kobo/{token}/v1/library/sync", timeout=5)
+    if r.status_code == 200:
+        return {"ok": True, "message": "Connected to CWA sync API"}
+    if r.status_code in (401, 403):
+        return {"ok": False, "message": "Invalid auth token"}
     return {"ok": False, "message": f"Server returned {r.status_code}"}
 
 

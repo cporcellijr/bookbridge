@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import logging
 import base64
@@ -13,12 +14,13 @@ class CWAClient:
         raw_url = os.environ.get("CWA_SERVER", "").rstrip('/')
         if raw_url.endswith('/opds'):
             raw_url = raw_url[:-5]
-        
+
         # Ensure scheme is present (case-insensitive check)
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
-            
+
         self.base_url = raw_url
+        self._uuid_cache: dict[str, str] = {}
         
         # Sanitize credentials (strip whitespace)
         self.username = os.environ.get("CWA_USERNAME", "").strip()
@@ -268,14 +270,13 @@ class CWAClient:
 
                     # Extract ID from entry (OPDS uses atom:id)
                     entry_id = None
-                    import re
 
                     # 1. Try to extract ID from links (Most reliable for Calibre-Web)
                     # Look for /opds/book/123 or /books/123 in any link
                     for link in entry.findall('atom:link', namespaces):
                         href = link.get('href', '')
-                        # Regex matches /book/123 or /books/123 anywhere in the path
-                        id_match = re.search(r'/(?:book|books)/(\d+)', href)
+                        # Regex matches /book/123, /books/123, or /download/123 anywhere in the path
+                        id_match = re.search(r'/(?:book|books|download)/(\d+)', href)
                         if id_match:
                             entry_id = id_match.group(1)
                             break
@@ -365,21 +366,80 @@ class CWAClient:
             logger.info(f"⬇️ CWA: Downloading ebook from {download_url}")
             # Clear cookies manually for download too
             self.session.cookies.clear()
-            
+
             with self.session.get(download_url, stream=True, timeout=120) as r:
                 r.raise_for_status()
                 with open(output_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
-            
+
             # Verify file size
             if os.path.getsize(output_path) < 1024:
                 logger.warning(f"⚠️ Downloaded file is too small ({os.path.getsize(output_path)} bytes), likely failed")
                 return False
-                
+
             return True
         except Exception as e:
             logger.error(f"❌ CWA Download failed: {e}")
             if os.path.exists(output_path):
                 os.remove(output_path)
             return False
+
+    def get_book_uuid(self, calibre_id: str) -> str | None:
+        """
+        Resolve a Calibre book ID or title to its UUID via OPDS search.
+        Results are cached in memory to avoid repeated lookups.
+        Uses the OPDS search endpoint (which works with auth) and extracts
+        the UUID from the atom:id field (urn:uuid:...).
+        """
+        if calibre_id in self._uuid_cache:
+            return self._uuid_cache[calibre_id]
+
+        if not self.is_configured():
+            return None
+
+        try:
+            # Use OPDS search — works with auth and returns atom:id with UUID
+            query = calibre_id
+            template = self._get_search_template()
+            if not template:
+                logger.warning(f"⚠️ CWA: No search template for UUID lookup of '{calibre_id}'")
+                return None
+
+            safe_query = quote(query)
+            search_url = template.replace("{searchTerms}", safe_query)
+            r = self._make_request(search_url, timeout=10)
+            if r.status_code != 200:
+                logger.warning(f"⚠️ CWA UUID lookup failed for '{calibre_id}': HTTP {r.status_code}")
+                return None
+
+            root = ET.fromstring(r.text)
+            ns = {'atom': 'http://www.w3.org/2005/Atom'}
+
+            for entry in root.findall('atom:entry', ns):
+                title_elem = entry.find('atom:title', ns)
+                title = title_elem.text if title_elem is not None else ""
+
+                # For non-numeric IDs (titles), prefer exact match
+                if not calibre_id.isdigit() and title.lower() != calibre_id.lower():
+                    continue
+
+                id_elem = entry.find('atom:id', ns)
+                if id_elem is not None and id_elem.text:
+                    uuid_match = re.search(
+                        r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',
+                        id_elem.text, re.IGNORECASE,
+                    )
+                    if uuid_match:
+                        uuid = uuid_match.group(1)
+                        self._uuid_cache[calibre_id] = uuid
+                        logger.debug(f"📖 CWA: Resolved '{calibre_id}' -> UUID {uuid}")
+                        return uuid
+
+            logger.warning(f"⚠️ CWA: No UUID found for '{calibre_id}'")
+            self._uuid_cache[calibre_id] = None  # negative cache
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ CWA UUID resolution error for '{calibre_id}': {e}")
+            return None

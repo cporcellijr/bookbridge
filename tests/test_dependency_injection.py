@@ -70,6 +70,7 @@ def test_dependency_injection():
         from src.sync_clients.kosync_sync_client import KoSyncSyncClient
         from src.sync_clients.storyteller_sync_client import StorytellerSyncClient
         from src.sync_clients.booklore_sync_client import BookloreSyncClient
+        from src.sync_clients.cwa_sync_client import CWASyncClient
 
         abs_sync_client = container.abs_sync_client()
         print(f"[OK] ABSSyncClient: {type(abs_sync_client).__name__}")
@@ -82,6 +83,9 @@ def test_dependency_injection():
 
         booklore_sync_client = container.booklore_sync_client()
         print(f"[OK] BookloreSyncClient: {type(booklore_sync_client).__name__}")
+
+        cwa_sync_client = container.cwa_sync_client()
+        print(f"[OK] CWASyncClient: {type(cwa_sync_client).__name__}")
 
         # Test 5: Test SyncManager creation with DI
         print("\n[TEST] Testing SyncManager creation with DI...")
