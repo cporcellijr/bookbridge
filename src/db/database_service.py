@@ -499,7 +499,15 @@ class DatabaseService:
             existing = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == details.abs_id).first()
 
             if existing:
-                for attr in ['storygraph_book_id', 'storygraph_url', 'isbn', 'asin', 'matched_by']:
+                for attr in [
+                    'storygraph_book_id',
+                    'storygraph_url',
+                    'storygraph_edition_id',
+                    'storygraph_pages',
+                    'isbn',
+                    'asin',
+                    'matched_by',
+                ]:
                     if hasattr(details, attr):
                         new_value = getattr(details, attr)
                         if new_value is None and getattr(existing, attr) is not None:

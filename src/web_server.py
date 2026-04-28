@@ -2743,6 +2743,11 @@ def match():
         if hardcover_sync_client and hardcover_sync_client.is_configured():
             hardcover_sync_client._automatch_hardcover(book)
 
+        # Trigger StoryGraph Automatch
+        storygraph_sync_client = container.sync_clients().get('StoryGraph')
+        if storygraph_sync_client and storygraph_sync_client.is_configured():
+            storygraph_sync_client._automatch_storygraph(book)
+
         if not str(abs_id).startswith('booklore:'):
             container.abs_client().add_to_collection(abs_id, ABS_COLLECTION_NAME)
         if container.booklore_client().is_configured():
@@ -2978,6 +2983,10 @@ def batch_match():
                     hardcover_sync_client = container.sync_clients().get('Hardcover')
                     if hardcover_sync_client and hardcover_sync_client.is_configured():
                         hardcover_sync_client._automatch_hardcover(book)
+
+                    storygraph_sync_client = container.sync_clients().get('StoryGraph')
+                    if storygraph_sync_client and storygraph_sync_client.is_configured():
+                        storygraph_sync_client._automatch_storygraph(book)
 
                     if not str(item['abs_id']).startswith('booklore:'):
                         container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
@@ -3250,6 +3259,10 @@ def batch_match():
                 hardcover_sync_client = container.sync_clients().get('Hardcover')
                 if hardcover_sync_client and hardcover_sync_client.is_configured():
                     hardcover_sync_client._automatch_hardcover(book)
+
+                storygraph_sync_client = container.sync_clients().get('StoryGraph')
+                if storygraph_sync_client and storygraph_sync_client.is_configured():
+                    storygraph_sync_client._automatch_storygraph(book)
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
@@ -3849,6 +3862,10 @@ def suggestions_page():
                 hardcover_sync_client = container.sync_clients().get('Hardcover')
                 if hardcover_sync_client and hardcover_sync_client.is_configured():
                     hardcover_sync_client._automatch_hardcover(book)
+
+                storygraph_sync_client = container.sync_clients().get('StoryGraph')
+                if storygraph_sync_client and storygraph_sync_client.is_configured():
+                    storygraph_sync_client._automatch_storygraph(book)
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
