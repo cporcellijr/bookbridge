@@ -137,10 +137,44 @@ Advanced Grimmory cache tuning:
 
 #### Hardcover.app
 
+Hardcover provides modern reading tracking with a beautiful UI.
+
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable | `HARDCOVER_ENABLED` | `false` | Turns on Hardcover updates. |
 | API Token | `HARDCOVER_TOKEN` | empty | Personal API token from Hardcover. |
+
+Hardcover notes:
+
+- When enabled, progress is synced from KOReader/Audiobookshelf to Hardcover.
+- Use the **Edition Picker** on the dashboard to select which specific edition to track.
+
+#### StoryGraph
+
+StoryGraph is a popular alternative to Goodreads that focuses on reading data and moods.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Enable | `STORYGRAPH_ENABLED` | `false` | Turns on StoryGraph updates. |
+| Session Cookie | `STORYGRAPH_SESSION_COOKIE` | empty | `_storygraph_session` cookie value. |
+| Remember User Token | `STORYGRAPH_REMEMBER_USER_TOKEN` | empty | `remember_user_token` cookie value. |
+
+StoryGraph notes:
+
+- Requires browser cookies for authentication. See the [User Guide](user-guide.md#storygraph-authentication) for instructions on how to retrieve these.
+- Supports **Edition Picking**: Select specific editions (Paperback, Kindle, etc.) to ensure accurate page counts.
+- **Switch Editions**: The bridge can automatically "switch" your tracked edition on StoryGraph to match your selection.
+
+#### Progress Tracker Provider
+
+Since Hardcover and StoryGraph serve similar purposes, the bridge uses an "either-or" mode for active tracking.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Provider | `PROGRESS_TRACKER_PROVIDER` | `none` | `none`, `hardcover`, or `storygraph`. |
+
+- Selecting a provider in the UI automatically enables that service and disables the other.
+- If you want to use both simultaneously for different books, you must currently manage the "Enable" toggles manually in Settings (not recommended).
 
 #### Telegram Notifications
 
