@@ -642,6 +642,12 @@
                                 %}>Filename (Fast)</option>
                         </select>
                     </div>
+                    <div class="form-group full-width">
+                        <label>KoSync PUT debounce seconds</label>
+                        <input type="number" min="0" name="KOSYNC_PUT_DEBOUNCE_SECONDS"
+                            value="{{ get_val('KOSYNC_PUT_DEBOUNCE_SECONDS') or '300' }}">
+                        <div class="help-text">Wait this many seconds after KoReader stops sending PUTs before running the sync cycle.</div>
+                    </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="kosync_pct" name="KOSYNC_USE_PERCENTAGE_FROM_SERVER" {% if
                             get_bool('KOSYNC_USE_PERCENTAGE_FROM_SERVER') %}checked{% endif %}>
@@ -826,6 +832,25 @@
                 </div>
             </div>
 
+            <!-- Progress Tracker Provider (Either/Or) -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>Progress Tracker</h3>
+                </div>
+                <div class="section-body">
+                    <div class="form-group full-width">
+                        <label>Provider</label>
+                        <select name="PROGRESS_TRACKER_PROVIDER" id="progress_tracker_provider" onchange="onTrackerProviderChange(this.value)">
+                            {% set tracker_provider = get_val('PROGRESS_TRACKER_PROVIDER', 'none') %}
+                            <option value="none" {% if tracker_provider == 'none' %}selected{% endif %}>None</option>
+                            <option value="hardcover" {% if tracker_provider == 'hardcover' %}selected{% endif %}>Hardcover</option>
+                            <option value="storygraph" {% if tracker_provider == 'storygraph' %}selected{% endif %}>StoryGraph</option>
+                        </select>
+                        <div class="help-text">Either-or mode: only one progress tracker integration is active at a time.</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Hardcover.app (Optional) -->
             <div class="settings-section">
                 {% set hardcover_configured = get_val('HARDCOVER_TOKEN') != '' %}
@@ -848,6 +873,36 @@
                     <div class="form-group full-width">
                         <label>API Token</label>
                         <input type="password" name="HARDCOVER_TOKEN" value="{{ get_val('HARDCOVER_TOKEN') }}">
+                    </div>
+                </div>
+            </div>
+
+            <!-- StoryGraph (Optional) -->
+            <div class="settings-section">
+                {% set storygraph_configured = get_val('STORYGRAPH_SESSION_COOKIE') != '' and get_val('STORYGRAPH_REMEMBER_USER_TOKEN') != '' %}
+                {% set storygraph_enabled = get_bool('STORYGRAPH_ENABLED') or (storygraph_configured and
+                get_val('STORYGRAPH_ENABLED') == '') %}
+                <div class="section-header">
+                    <h3>StoryGraph</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('storygraph', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_storygraph" name="STORYGRAPH_ENABLED"
+                                onchange="toggleSection('storygraph_body', this.checked)" {% if storygraph_enabled
+                                %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="storygraph_body" class="section-body {% if not storygraph_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <label>Session Cookie (_storygraph_session)</label>
+                        <input type="password" name="STORYGRAPH_SESSION_COOKIE" value="{{ get_val('STORYGRAPH_SESSION_COOKIE') }}">
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Remember User Token</label>
+                        <input type="password" name="STORYGRAPH_REMEMBER_USER_TOKEN" value="{{ get_val('STORYGRAPH_REMEMBER_USER_TOKEN') }}">
                     </div>
                 </div>
             </div>
@@ -1494,8 +1549,29 @@
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
+            storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
         };
+
+        function onTrackerProviderChange(provider) {
+            const hardcoverToggle = document.getElementById('toggle_hardcover');
+            const storygraphToggle = document.getElementById('toggle_storygraph');
+            if (!hardcoverToggle || !storygraphToggle) return;
+
+            if (provider === 'hardcover') {
+                hardcoverToggle.checked = true;
+                storygraphToggle.checked = false;
+            } else if (provider === 'storygraph') {
+                hardcoverToggle.checked = false;
+                storygraphToggle.checked = true;
+            } else {
+                hardcoverToggle.checked = false;
+                storygraphToggle.checked = false;
+            }
+
+            toggleSection('hardcover_body', hardcoverToggle.checked);
+            toggleSection('storygraph_body', storygraphToggle.checked);
+        }
 
         function getTestConnectionPayload(service) {
             const payload = {};
@@ -1788,6 +1864,11 @@
             if (providerSelect) {
                 providerSelect.addEventListener('change', toggleProviderSettings);
                 toggleProviderSettings(); // Initial state
+            }
+
+            const trackerProviderSelect = document.getElementById('progress_tracker_provider');
+            if (trackerProviderSelect) {
+                onTrackerProviderChange(trackerProviderSelect.value);
             }
 
             // 3. GPU Warning

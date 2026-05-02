@@ -86,6 +86,11 @@ class TestHardcoverClient(unittest.TestCase):
         mock_post.assert_called_once()
         mock_sleep.assert_not_called()
 
+    def test_is_configured_false_when_storygraph_provider_selected(self):
+        with patch.dict(os.environ, {"PROGRESS_TRACKER_PROVIDER": "storygraph"}, clear=False):
+            client = HardcoverClient()
+            self.assertFalse(client.is_configured())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

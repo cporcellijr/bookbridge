@@ -18,6 +18,7 @@ from .models import (
     State,
     Job,
     HardcoverDetails,
+    StorygraphDetails,
     Setting,
     KosyncDocument,
     PendingSuggestion,
@@ -281,11 +282,12 @@ class DatabaseService:
                 session.query(Job).filter(Job.abs_id == old_abs_id).update({Job.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(KosyncDocument).filter(KosyncDocument.linked_abs_id == old_abs_id).update({KosyncDocument.linked_abs_id: new_abs_id}, synchronize_session=False)
                 
-                # Cleanup non-migratable data (Alignment/Hardcover)
+                # Cleanup non-migratable data (Alignment/Hardcover/StoryGraph)
                 from .models import BookAlignment # Import here to avoid circulars if any, though likely safe at top
                 try:
                     session.query(BookAlignment).filter(BookAlignment.abs_id == old_abs_id).delete(synchronize_session=False)
                     session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == old_abs_id).delete(synchronize_session=False)
+                    session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == old_abs_id).delete(synchronize_session=False)
                 except Exception: pass
                 
                 logger.info(f"✅ Migrated data from '{old_abs_id}' to '{new_abs_id}'")
@@ -478,6 +480,63 @@ class DatabaseService:
         """Get all hardcover details."""
         with self.get_session() as session:
             details = session.query(HardcoverDetails).all()
+            for detail in details:
+                session.expunge(detail)
+            return details
+
+    # StorygraphDetails operations
+    def get_storygraph_details(self, abs_id: str) -> Optional[StorygraphDetails]:
+        """Get StoryGraph details for a book."""
+        with self.get_session() as session:
+            details = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == abs_id).first()
+            if details:
+                session.expunge(details)
+            return details
+
+    def save_storygraph_details(self, details: StorygraphDetails) -> StorygraphDetails:
+        """Save or update StoryGraph details."""
+        with self.get_session() as session:
+            existing = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == details.abs_id).first()
+
+            if existing:
+                for attr in [
+                    'storygraph_book_id',
+                    'storygraph_url',
+                    'storygraph_edition_id',
+                    'storygraph_pages',
+                    'isbn',
+                    'asin',
+                    'matched_by',
+                ]:
+                    if hasattr(details, attr):
+                        new_value = getattr(details, attr)
+                        if new_value is None and getattr(existing, attr) is not None:
+                            continue
+                        setattr(existing, attr, new_value)
+                session.flush()
+                session.refresh(existing)
+                session.expunge(existing)
+                return existing
+
+            session.add(details)
+            session.flush()
+            session.refresh(details)
+            session.expunge(details)
+            return details
+
+    def delete_storygraph_details(self, abs_id: str) -> bool:
+        """Delete StoryGraph details for a book."""
+        with self.get_session() as session:
+            details = session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == abs_id).first()
+            if details:
+                session.delete(details)
+                return True
+            return False
+
+    def get_all_storygraph_details(self) -> List[StorygraphDetails]:
+        """Get all StoryGraph details."""
+        with self.get_session() as session:
+            details = session.query(StorygraphDetails).all()
             for detail in details:
                 session.expunge(detail)
             return details

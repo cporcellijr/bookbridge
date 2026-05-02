@@ -7,7 +7,7 @@ import time
 import traceback
 from pathlib import Path
 import schedule
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait
 import re
 
 import json
@@ -636,7 +636,9 @@ class SyncManager:
                 )
                 futures[future] = client_name
 
-            for future in as_completed(futures, timeout=15):
+            done, not_done = wait(futures.keys(), timeout=15)
+
+            for future in done:
                 client_name = futures[future]
                 try:
                     state = future.result()
@@ -644,6 +646,10 @@ class SyncManager:
                         config[client_name] = state
                 except Exception as e:
                     logger.warning(f"⚠️ '{client_name}' state fetch failed: {e}")
+
+            for future in not_done:
+                client_name = futures[future]
+                logger.warning(f"⚠️ '{client_name}' state fetch timed out after 15s")
 
         return config
 

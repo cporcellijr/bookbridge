@@ -22,6 +22,7 @@ class MockContainer:
         self.mock_booklore_client = Mock()
         self.mock_storyteller_client = Mock()
         self.mock_hardcover_client = Mock()
+        self.mock_storygraph_client = Mock()
         self.mock_transcriber = Mock()
         self.mock_ebook_parser = Mock()
         self.mock_forge_service = Mock()
@@ -43,6 +44,9 @@ class MockContainer:
 
     def hardcover_client(self):
         return self.mock_hardcover_client
+
+    def storygraph_client(self):
+        return self.mock_storygraph_client
 
     def transcriber(self):
         return self.mock_transcriber

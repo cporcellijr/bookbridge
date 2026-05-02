@@ -79,6 +79,9 @@ class HardcoverClient:
         return float(2 ** (attempt - 1))
 
     def is_configured(self):
+        provider = (os.environ.get("PROGRESS_TRACKER_PROVIDER") or "").strip().lower()
+        if provider and provider != "hardcover":
+            return False
         enabled_val = os.environ.get("HARDCOVER_ENABLED", "").lower()
         if enabled_val == "false":
             return False
@@ -813,4 +816,3 @@ class HardcoverClient:
 
 
 # [END FILE]
-

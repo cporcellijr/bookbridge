@@ -28,6 +28,7 @@ from src.utils.logging_utils import sanitize_log_data
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
+from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
 from src.version import APP_VERSION, get_update_status
 from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
@@ -313,6 +314,8 @@ def setup_dependencies(app, test_container=None):
     # Register Hardcover Blueprint and initialize with dependencies
     init_hardcover_routes(database_service, container)
     app.register_blueprint(hardcover_bp)
+    init_storygraph_routes(database_service, container)
+    app.register_blueprint(storygraph_bp)
 
     logger.info(f"🚀 Web server dependencies initialized (DATA_DIR={DATA_DIR})")
 
@@ -696,6 +699,8 @@ def _upsert_storyteller_mapping(
     abs_title=None,
     storyteller_uuid=None,
     ebook_filename=None,
+    ebook_source=None,
+    ebook_source_id=None,
     existing_book=None,
     duration=None,
 ):
@@ -709,11 +714,14 @@ def _upsert_storyteller_mapping(
 
     selected_storyteller_uuid = (storyteller_uuid or "").strip() or None
     selected_ebook_filename = (ebook_filename or "").strip() or None
+    selected_ebook_source = _normalize_text_source_type(ebook_source)
+    selected_ebook_source_id = str(ebook_source_id or "").strip() or None
+    requested_abs_id = str(abs_id or "").strip() or None
 
     target_book = existing_book
     if mode_hint == "existing":
-        if target_book is None and abs_id:
-            target_book = database_service.get_book(abs_id)
+        if target_book is None and requested_abs_id:
+            target_book = database_service.get_book(requested_abs_id)
         if not target_book:
             return None, "Book not found", 404
 
@@ -778,31 +786,77 @@ def _upsert_storyteller_mapping(
             return None, "Could not compute KOSync ID for ebook", 404
 
     created_ebook_only = False
+    migration_source_id = None
     if mode_hint == "ebook_only_create":
         existing_by_hash = database_service.get_book_by_kosync_id(kosync_doc_id)
+        preferred_abs_id = requested_abs_id
+        if not preferred_abs_id and selected_ebook_source == "ABS" and selected_ebook_source_id:
+            preferred_abs_id = selected_ebook_source_id
+
         if existing_by_hash:
-            target_book = existing_by_hash
-            logger.info(
-                "Match ebook-only create: reusing existing mapping '%s' for hash '%s'",
-                sanitize_log_data(target_book.abs_id),
-                kosync_doc_id,
-            )
+            if preferred_abs_id and existing_by_hash.abs_id != preferred_abs_id:
+                migration_source_id = existing_by_hash.abs_id
+                target_book = database_service.get_book(preferred_abs_id)
+                if not target_book:
+                    from src.db.models import Book
+
+                    target_book = Book(
+                        abs_id=preferred_abs_id,
+                        abs_title=existing_by_hash.abs_title or abs_title,
+                        sync_mode=getattr(existing_by_hash, "sync_mode", "ebook_only") or "ebook_only",
+                    )
+                    created_ebook_only = True
+                for attr in (
+                    "audio_source",
+                    "audio_source_id",
+                    "audio_title",
+                    "audio_cover_url",
+                    "audio_duration",
+                    "audio_provider_book_id",
+                    "audio_provider_file_id",
+                    "ebook_filename",
+                    "ebook_source",
+                    "ebook_source_id",
+                    "original_ebook_filename",
+                    "transcript_file",
+                    "transcript_source",
+                    "storyteller_uuid",
+                    "abs_ebook_item_id",
+                    "duration",
+                    "status",
+                ):
+                    existing_value = getattr(existing_by_hash, attr, None)
+                    if existing_value and not getattr(target_book, attr, None):
+                        setattr(target_book, attr, existing_value)
+                logger.info(
+                    "Match ebook-only create: migrating mapping '%s' -> '%s' for hash '%s'",
+                    sanitize_log_data(existing_by_hash.abs_id),
+                    sanitize_log_data(preferred_abs_id),
+                    kosync_doc_id,
+                )
+            else:
+                target_book = existing_by_hash
+                logger.info(
+                    "Match ebook-only create: reusing existing mapping '%s' for hash '%s'",
+                    sanitize_log_data(target_book.abs_id),
+                    kosync_doc_id,
+                )
         if not target_book:
             from src.db.models import Book
 
-            synthetic_abs_id = f"ebook-{kosync_doc_id[:16]}"
-            target_book = database_service.get_book(synthetic_abs_id)
+            target_abs_id = preferred_abs_id or f"ebook-{kosync_doc_id[:16]}"
+            target_book = database_service.get_book(target_abs_id)
             if not target_book:
-                inferred_title = abs_title or Path(resolved_ebook_filename).stem or synthetic_abs_id
+                inferred_title = abs_title or Path(resolved_ebook_filename).stem or target_abs_id
                 target_book = Book(
-                    abs_id=synthetic_abs_id,
+                    abs_id=target_abs_id,
                     abs_title=inferred_title,
                     sync_mode="ebook_only",
                 )
                 created_ebook_only = True
                 logger.info(
                     "Match ebook-only create: creating new mapping '%s' for '%s'",
-                    sanitize_log_data(synthetic_abs_id),
+                    sanitize_log_data(target_abs_id),
                     sanitize_log_data(inferred_title),
                 )
 
@@ -813,6 +867,12 @@ def _upsert_storyteller_mapping(
     target_book.ebook_filename = resolved_ebook_filename
     target_book.kosync_doc_id = kosync_doc_id
     target_book.status = "pending"
+    if selected_ebook_source:
+        target_book.ebook_source = selected_ebook_source
+    if selected_ebook_source_id:
+        target_book.ebook_source_id = selected_ebook_source_id
+        if selected_ebook_source == "ABS":
+            target_book.abs_ebook_item_id = selected_ebook_source_id
 
     if original_ebook_filename:
         target_book.original_ebook_filename = original_ebook_filename
@@ -855,6 +915,23 @@ def _upsert_storyteller_mapping(
     saved_book = database_service.save_book(target_book)
     if not isinstance(getattr(saved_book, "abs_id", None), str):
         saved_book = target_book
+
+    if migration_source_id and migration_source_id != saved_book.abs_id:
+        try:
+            database_service.migrate_book_data(migration_source_id, saved_book.abs_id)
+            database_service.delete_book(migration_source_id)
+            logger.info(
+                "Match ebook-only create: migrated '%s' into '%s'",
+                sanitize_log_data(migration_source_id),
+                sanitize_log_data(saved_book.abs_id),
+            )
+        except Exception as merge_err:
+            logger.error(
+                "Match ebook-only create: failed to migrate '%s' into '%s': %s",
+                sanitize_log_data(migration_source_id),
+                sanitize_log_data(saved_book.abs_id),
+                merge_err,
+            )
 
     if selected_storyteller_uuid and container.storyteller_client().is_configured():
         try:
@@ -1344,6 +1421,7 @@ def settings():
             'CWA_ENABLED',
             'CWA_SYNC_ENABLED',
             'HARDCOVER_ENABLED',
+            'STORYGRAPH_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
@@ -1777,6 +1855,7 @@ def _build_dashboard_mapping(
     states_by_book,
     integrations,
     hardcover_by_book,
+    storygraph_by_book,
     reading_stats_by_book,
     cached_booklore_by_filename,
 ):
@@ -1882,6 +1961,24 @@ def _build_dashboard_mapping(
             "hardcover_title": None,
         })
 
+    storygraph_details = storygraph_by_book.get(book.abs_id)
+    if storygraph_details:
+        mapping.update({
+            "storygraph_book_id": storygraph_details.storygraph_book_id,
+            "storygraph_linked": True,
+            "storygraph_url": storygraph_details.storygraph_url,
+            "storygraph_title": book.abs_title,
+            "storygraph_matched_by": storygraph_details.matched_by,
+        })
+    else:
+        mapping.update({
+            "storygraph_book_id": None,
+            "storygraph_linked": False,
+            "storygraph_url": None,
+            "storygraph_title": None,
+            "storygraph_matched_by": None,
+        })
+
     mapping["storyteller_legacy_link"] = "storyteller" in state_by_client and not book.storyteller_uuid
 
     if mapping.get("sync_mode") == "ebook_only":
@@ -1907,6 +2004,9 @@ def _build_dashboard_mapping(
     else:
         mapping["hardcover_url"] = None
 
+    if not mapping.get("storygraph_url") and mapping.get("storygraph_book_id"):
+        mapping["storygraph_url"] = f"https://app.thestorygraph.com/books/{mapping['storygraph_book_id']}"
+
     mapping["sync_warning_pct"] = _compute_dashboard_sync_warning_pct(mapping, integrations)
     mapping["is_out_of_sync"] = mapping["sync_warning_pct"] > 5.0
     mapping["unified_progress"] = min(max_progress, 100.0)
@@ -1931,10 +2031,12 @@ def _build_dashboard_mappings(
     all_states,
     integrations,
     all_hardcover=None,
+    all_storygraph=None,
     reading_stats_by_book=None,
     cached_booklore_by_filename=None,
 ):
     hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
+    storygraph_by_book = {s.abs_id: s for s in (all_storygraph or [])}
     states_by_book = _group_dashboard_states_by_book(all_states)
     reading_stats_by_book = reading_stats_by_book or {}
     cached_booklore_by_filename = cached_booklore_by_filename or {}
@@ -1949,6 +2051,7 @@ def _build_dashboard_mappings(
             states_by_book,
             integrations,
             hardcover_by_book,
+            storygraph_by_book,
             reading_stats_by_book,
             cached_booklore_by_filename,
         )
@@ -2001,6 +2104,7 @@ def index():
     books = database_service.get_all_books()
     all_states = database_service.get_all_states()
     all_hardcover = database_service.get_all_hardcover_details()
+    all_storygraph = database_service.get_all_storygraph_details()
     all_reading_stats = database_service.get_all_reading_stats()
     cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
     integrations = _build_dashboard_integrations()
@@ -2009,6 +2113,7 @@ def index():
         all_states,
         integrations,
         all_hardcover=all_hardcover,
+        all_storygraph=all_storygraph,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
     )
@@ -2379,11 +2484,25 @@ def match():
                 return "Please select a text source (Storyteller or Standard Ebook)", 400
 
             storyteller_meta = _get_storyteller_display_metadata(storyteller_uuid)
-            ebook_only_title = (
-                Path(selected_filename).stem
-                if selected_filename
-                else (storyteller_meta.get("title") or f"storyteller_{storyteller_uuid or 'book'}")
-            )
+            ebook_only_title = None
+            if ebook_source == 'ABS' and ebook_source_id:
+                try:
+                    item_details = container.abs_client().get_item_details(ebook_source_id)
+                except Exception as e:
+                    logger.warning(
+                        "Match: failed ABS ebook metadata lookup for '%s': %s",
+                        sanitize_log_data(ebook_source_id),
+                        e,
+                    )
+                    item_details = None
+                metadata = (item_details or {}).get('media', {}).get('metadata', {})
+                ebook_only_title = (metadata.get('title') or '').strip() or None
+            if not ebook_only_title:
+                ebook_only_title = (
+                    Path(selected_filename).stem
+                    if selected_filename
+                    else (storyteller_meta.get("title") or f"storyteller_{storyteller_uuid or 'book'}")
+                )
             logger.info(
                 "Match: entering ebook-only create path (storyteller_selected=%s, ebook_selected=%s)",
                 bool(storyteller_uuid),
@@ -2391,9 +2510,12 @@ def match():
             )
             saved_book, err_msg, err_code = _upsert_storyteller_mapping(
                 mode_hint="ebook_only_create",
+                abs_id=ebook_source_id if ebook_source == 'ABS' and ebook_source_id else None,
                 abs_title=ebook_only_title,
                 storyteller_uuid=storyteller_uuid,
                 ebook_filename=selected_filename,
+                ebook_source=ebook_source,
+                ebook_source_id=ebook_source_id,
                 duration=0.0,
             )
             if err_msg:
@@ -2620,6 +2742,11 @@ def match():
         hardcover_sync_client = container.sync_clients().get('Hardcover')
         if hardcover_sync_client and hardcover_sync_client.is_configured():
             hardcover_sync_client._automatch_hardcover(book)
+
+        # Trigger StoryGraph Automatch
+        storygraph_sync_client = container.sync_clients().get('StoryGraph')
+        if storygraph_sync_client and storygraph_sync_client.is_configured():
+            storygraph_sync_client._automatch_storygraph(book)
 
         if not str(abs_id).startswith('booklore:'):
             container.abs_client().add_to_collection(abs_id, ABS_COLLECTION_NAME)
@@ -2856,6 +2983,10 @@ def batch_match():
                     hardcover_sync_client = container.sync_clients().get('Hardcover')
                     if hardcover_sync_client and hardcover_sync_client.is_configured():
                         hardcover_sync_client._automatch_hardcover(book)
+
+                    storygraph_sync_client = container.sync_clients().get('StoryGraph')
+                    if storygraph_sync_client and storygraph_sync_client.is_configured():
+                        storygraph_sync_client._automatch_storygraph(book)
 
                     if not str(item['abs_id']).startswith('booklore:'):
                         container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
@@ -3128,6 +3259,10 @@ def batch_match():
                 hardcover_sync_client = container.sync_clients().get('Hardcover')
                 if hardcover_sync_client and hardcover_sync_client.is_configured():
                     hardcover_sync_client._automatch_hardcover(book)
+
+                storygraph_sync_client = container.sync_clients().get('StoryGraph')
+                if storygraph_sync_client and storygraph_sync_client.is_configured():
+                    storygraph_sync_client._automatch_storygraph(book)
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
@@ -3727,6 +3862,10 @@ def suggestions_page():
                 hardcover_sync_client = container.sync_clients().get('Hardcover')
                 if hardcover_sync_client and hardcover_sync_client.is_configured():
                     hardcover_sync_client._automatch_hardcover(book)
+
+                storygraph_sync_client = container.sync_clients().get('StoryGraph')
+                if storygraph_sync_client and storygraph_sync_client.is_configured():
+                    storygraph_sync_client._automatch_storygraph(book)
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
@@ -4741,6 +4880,7 @@ def api_status():
     books = database_service.get_all_books()
     all_states = database_service.get_all_states()
     all_hardcover = database_service.get_all_hardcover_details()
+    all_storygraph = database_service.get_all_storygraph_details()
     all_reading_stats = database_service.get_all_reading_stats()
     cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
     integrations = _build_dashboard_integrations()
@@ -4749,6 +4889,7 @@ def api_status():
         all_states,
         integrations,
         all_hardcover=all_hardcover,
+        all_storygraph=all_storygraph,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
     )
@@ -5350,6 +5491,11 @@ def test_connection(service: str):
             _coerce_test_bool(data.get('HARDCOVER_ENABLED')),
             _coerce_test_str(data.get('HARDCOVER_TOKEN')),
         ),
+        'storygraph': lambda data: _test_storygraph(
+            _coerce_test_bool(data.get('STORYGRAPH_ENABLED')),
+            _coerce_test_str(data.get('STORYGRAPH_SESSION_COOKIE')),
+            _coerce_test_str(data.get('STORYGRAPH_REMEMBER_USER_TOKEN')),
+        ),
         'telegram': lambda data: _test_telegram(
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
             _coerce_test_str(data.get('TELEGRAM_BOT_TOKEN')),
@@ -5568,6 +5714,32 @@ def _test_hardcover(enabled: bool, token: str) -> dict:
     return {"ok": False, "message": f"API returned {r.status_code}"}
 
 
+def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "StoryGraph is disabled"}
+    if not session_cookie or not remember_user_token:
+        return {"ok": False, "message": "Missing StoryGraph session cookies"}
+
+    cookie = f"_storygraph_session={session_cookie}; remember_user_token={remember_user_token}"
+    r = requests.get(
+        "https://app.thestorygraph.com/users/sign_in",
+        headers={
+            "Cookie": cookie,
+            "User-Agent": "ABS-KoSync-Bridge/StoryGraph",
+        },
+        timeout=10,
+        allow_redirects=False,
+    )
+    location = (r.headers.get("Location") or r.headers.get("location") or "").lower()
+    if r.status_code in (302, 303) and "/users/sign_in" not in location:
+        return {"ok": True, "message": "StoryGraph session accepted"}
+    if r.status_code in (200, 401, 403):
+        return {"ok": False, "message": "Invalid StoryGraph session cookies"}
+    if r.status_code in (302, 303) and "/users/sign_in" in location:
+        return {"ok": False, "message": "Invalid StoryGraph session cookies"}
+    return {"ok": False, "message": f"StoryGraph returned {r.status_code}"}
+
+
 def _test_telegram(enabled: bool, token: str) -> dict:
     if not enabled or not token:
         return {"ok": False, "message": "Telegram not configured or disabled"}
@@ -5783,5 +5955,4 @@ if __name__ == '__main__':
         logger.info(f"🚀 Split-Port Mode Active: Sync-only server on port {sync_port}")
 
     app.run(host='0.0.0.0', port=5757, debug=False)
-
 

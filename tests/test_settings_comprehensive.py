@@ -2,6 +2,7 @@
 import unittest
 import tempfile
 import os
+import re
 from pathlib import Path
 from unittest.mock import Mock, patch
 import sys
@@ -13,7 +14,6 @@ class MockContainer:
     """Mock container for testing."""
     def __init__(self):
         self.mock_database_service = Mock()
-        self.mock_database_service.get_all_settings.return_value = {}
         self.mock_sync_manager = Mock()
         self.mock_sync_manager.get_abs_title.return_value = 'Test'
         
@@ -23,6 +23,7 @@ class MockContainer:
     def booklore_client(self): return Mock()
     def storyteller_client(self): return Mock()
     def hardcover_client(self): return Mock()
+    def storygraph_client(self): return Mock()
     def transcriber(self): return Mock()
     def ebook_parser(self): return Mock()
     def sync_clients(self): return {}
@@ -34,8 +35,13 @@ class TestSettingsComprehensive(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         os.environ['DATA_DIR'] = self.temp_dir
+        self.settings_store = {}
         
         self.mock_container = MockContainer()
+        self.mock_container.mock_database_service.get_all_settings.side_effect = lambda: dict(self.settings_store)
+        self.mock_container.mock_database_service.set_setting.side_effect = (
+            lambda key, value: self.settings_store.__setitem__(key, value)
+        )
         
         # Mock database initialization
         def mock_init_db(data_dir):
@@ -58,9 +64,17 @@ class TestSettingsComprehensive(unittest.TestCase):
             'KOSYNC_ENABLED',
             'STORYTELLER_ENABLED',
             'BOOKLORE_ENABLED',
+            'GRIMMORY_READING_SESSIONS',
+            'CWA_ENABLED',
+            'CWA_SYNC_ENABLED',
             'HARDCOVER_ENABLED',
+            'STORYGRAPH_ENABLED',
             'TELEGRAM_ENABLED',
-            'SUGGESTIONS_ENABLED'
+            'SUGGESTIONS_ENABLED',
+            'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
+            'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
+            'INSTANT_SYNC_ENABLED',
+            'SHELFMARK_ENABLED',
         ]
 
     def tearDown(self):
@@ -141,6 +155,30 @@ class TestSettingsComprehensive(unittest.TestCase):
         
         for key, val in test_data.items():
             self.mock_container.mock_database_service.set_setting.assert_any_call(key, val)
+
+    @patch('src.web_server.restart_server')
+    def test_storygraph_enabled_persists_after_save_and_reload(self, mock_restart):
+        response = self.client.post('/settings', data={
+            'SYNC_PERIOD_MINS': '5',
+            'STORYGRAPH_ENABLED': 'on',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Restarting the application', response.data)
+        self.assertEqual(self.settings_store.get('STORYGRAPH_ENABLED'), 'true')
+
+        os.environ.pop('STORYGRAPH_ENABLED', None)
+
+        from src.utils.config_loader import ConfigLoader
+        ConfigLoader.load_settings(self.mock_container.mock_database_service)
+
+        html = self._render_settings_template_source()
+        self.assertRegex(
+            html,
+            re.compile(
+                r'<input type="checkbox" id="toggle_storygraph" name="STORYGRAPH_ENABLED"[\s\S]*?checked',
+                re.IGNORECASE,
+            ),
+        )
 
     def test_settings_get_renders_custom_whisper_model_as_text_value(self):
         with patch.dict(os.environ, {'WHISPER_MODEL': 'custom-q5_k_m'}, clear=False):

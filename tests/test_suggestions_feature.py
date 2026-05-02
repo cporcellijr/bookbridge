@@ -17,12 +17,14 @@ class MockContainer:
         self.mock_abs_client = Mock()
         self.mock_booklore_client = Mock()
         self.mock_storyteller_client = Mock()
+        self.mock_storygraph_client = Mock()
         self.mock_database_service = Mock()
         # Ensure get_all_settings returns a dict
         self.mock_database_service.get_all_settings.return_value = {}
         # Ensure list return values for iteration
         self.mock_database_service.get_books_by_status.return_value = []
         self.mock_database_service.get_all_books.return_value = []
+        self.mock_database_service.get_all_storygraph_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         
         self.mock_ebook_parser = Mock()
@@ -38,6 +40,7 @@ class MockContainer:
     def abs_client(self): return self.mock_abs_client
     def booklore_client(self): return self.mock_booklore_client
     def storyteller_client(self): return self.mock_storyteller_client
+    def storygraph_client(self): return self.mock_storygraph_client
     def ebook_parser(self): return self.mock_ebook_parser
     def database_service(self): return self.mock_database_service
     def hardcover_client(self): return self.mock_hardcover_client

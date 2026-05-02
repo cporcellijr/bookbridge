@@ -19,6 +19,7 @@ class MockContainer:
         self.mock_abs_client = Mock()
         self.mock_booklore_client = Mock()
         self.mock_storyteller_client = Mock()
+        self.mock_storygraph_client = Mock()
         self.mock_database_service = Mock()
         self.mock_ebook_parser = Mock()
         self.mock_forge_service = Mock()
@@ -26,6 +27,7 @@ class MockContainer:
         # Default DB behavior
         self.mock_database_service.get_all_settings.return_value = {}
         self.mock_database_service.get_all_books.return_value = []
+        self.mock_database_service.get_all_storygraph_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_ignored_suggestion_source_ids.return_value = []
         self.mock_database_service.get_kosync_doc_by_filename.return_value = None
@@ -66,7 +68,8 @@ class MockContainer:
 
         # Default sync clients map
         self._sync_clients = {
-            "Hardcover": Mock(is_configured=Mock(return_value=False))
+            "Hardcover": Mock(is_configured=Mock(return_value=False)),
+            "StoryGraph": Mock(is_configured=Mock(return_value=False)),
         }
 
     def sync_manager(self):
@@ -80,6 +83,9 @@ class MockContainer:
 
     def storyteller_client(self):
         return self.mock_storyteller_client
+
+    def storygraph_client(self):
+        return self.mock_storygraph_client
 
     def ebook_parser(self):
         return self.mock_ebook_parser

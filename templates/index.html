@@ -211,6 +211,34 @@
                 </div>
                 {% endif %}
 
+                {% if integrations.storygraph %}
+                <div class="service-item progress-item-hc">
+                    <a href="{{ mapping.storygraph_url|default('https://app.thestorygraph.com') }}" target="_blank"
+                        rel="noopener noreferrer"
+                        title="{% if mapping.storygraph_book_id %}Open {{ mapping.storygraph_title }} in StoryGraph{% else %}Not linked to StoryGraph{% endif %}"
+                        class="hc-link {% if not mapping.storygraph_book_id %}pe-none{% endif %}">
+                        <img src="/static/storygraph.svg" alt="SG"
+                            class="service-icon {% if not mapping.storygraph_book_id %}grayscale-muted{% endif %}"
+                            onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
+                        <span class="hidden service-icon-emoji">SG</span>
+                    </a>
+                    <span class="service-name">StoryGraph</span>
+                    <span class="service-value cursor-pointer color-inherit" title="Click to edit StoryGraph link"
+                        data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.storygraph_title|default('')|escape }}"
+                        onclick="linkStorygraph(event)">
+                        {% if mapping.storygraph_book_id %}
+                        {% if mapping.states.storygraph is defined %}
+                        {{ '%.0f' | format(mapping.states.storygraph.percentage|default(0)) }}%
+                        {% else %}
+                        0%
+                        {% endif %}
+                        {% else %}
+                        <span class="link-icon">+</span>
+                        {% endif %}
+                    </span>
+                </div>
+                {% endif %}
+
                 {% if integrations.cwa and mapping.states.cwa is defined %}
                 <div class="service-item" title="CWA Kobo Sync">
                     <span class="service-icon-emoji">📖</span>
@@ -2381,6 +2409,55 @@
             </div>
         </div>
         <script src="/static/js/hardcover-modal.js"></script>
+        <div id="storygraph-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeStorygraphModal()"></div>
+            <div class="hc-modal-content">
+                <div class="hc-modal-header">
+                    <h3>Link to StoryGraph</h3>
+                    <button class="hc-modal-close" onclick="closeStorygraphModal()" aria-label="Close">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <div id="sg-loading" class="hc-loading" style="display:none;">
+                        <div class="hc-loading-spinner"></div>
+                        <div class="hc-loading-text">Searching StoryGraph...</div>
+                    </div>
+                    <div id="sg-found" style="display:none;">
+                        <div class="hc-book-info">
+                            <div class="hc-book-title" id="sg-title"></div>
+                            <div class="hc-book-author" id="sg-author"></div>
+                        </div>
+                        <div class="sg-editions-label" id="sg-editions-label">Select Edition</div>
+                        <div id="sg-editions"></div>
+                        <p class="hc-text-muted">
+                            <a id="sg-found-url" href="#" target="_blank" rel="noopener noreferrer">Open in StoryGraph</a>
+                        </p>
+                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">Wrong book?
+                                Enter URL, ID, or search text manually</a></p>
+                    </div>
+                    <div id="sg-manual" style="display:none;">
+                        <p>Enter StoryGraph URL, book ID, or search text:</p>
+                        <input type="text" id="sg-input" placeholder="https://app.thestorygraph.com/books/...">
+                        <button onclick="resolveStorygraphManualInput()">Resolve</button>
+                    </div>
+                    <div id="sg-error" style="display:none;">
+                        <p id="sg-error-msg" class="hc-text-error"></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">Try entering a URL or search text
+                                manually</a></p>
+                    </div>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeStorygraphModal()">Cancel</button>
+                    <button id="sg-link-btn" class="hc-btn-link" onclick="linkSelectedStorygraphBook()" disabled>Link
+                        Book</button>
+                </div>
+            </div>
+        </div>
+        <script src="/static/js/storygraph-modal.js"></script>
         <!-- Storyteller Link Modal -->
         <div id="st-modal" class="hidden">
             <div class="st-modal-content">

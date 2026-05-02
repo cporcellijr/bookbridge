@@ -15,10 +15,14 @@ class _MatchFlowContainer:
         self._abs_client = Mock()
         self._booklore_client = Mock()
         self._storyteller_client = Mock()
+        self._storygraph_client = Mock()
         self._database_service = Mock()
         self._database_service.get_all_settings.return_value = {}
 
-        self._sync_clients = {"Hardcover": Mock(is_configured=Mock(return_value=False))}
+        self._sync_clients = {
+            "Hardcover": Mock(is_configured=Mock(return_value=False)),
+            "StoryGraph": Mock(is_configured=Mock(return_value=False)),
+        }
         self._ebook_parser = Mock()
         self._forge_service = Mock(active_tasks=set())
 
@@ -33,6 +37,9 @@ class _MatchFlowContainer:
 
     def storyteller_client(self):
         return self._storyteller_client
+
+    def storygraph_client(self):
+        return self._storygraph_client
 
     def database_service(self):
         return self._database_service

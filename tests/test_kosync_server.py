@@ -1016,6 +1016,26 @@ class TestKosyncEstimatedSessions(unittest.TestCase):
         self.assertEqual(kwargs['leader_client'], 'KoSync:Readest iOS')
         manager.booklore_client.create_reading_session.assert_called_once()
 
+    def test_get_kosync_put_debounce_seconds_uses_config(self):
+        original_value = os.environ.get('KOSYNC_PUT_DEBOUNCE_SECONDS')
+        try:
+            os.environ.pop('KOSYNC_PUT_DEBOUNCE_SECONDS', None)
+            self.assertEqual(self.ks._get_kosync_put_debounce_seconds(), 300)
+
+            os.environ['KOSYNC_PUT_DEBOUNCE_SECONDS'] = '45'
+            self.assertEqual(self.ks._get_kosync_put_debounce_seconds(), 45)
+
+            os.environ['KOSYNC_PUT_DEBOUNCE_SECONDS'] = '-10'
+            self.assertEqual(self.ks._get_kosync_put_debounce_seconds(), 0)
+
+            os.environ['KOSYNC_PUT_DEBOUNCE_SECONDS'] = 'invalid'
+            self.assertEqual(self.ks._get_kosync_put_debounce_seconds(), 300)
+        finally:
+            if original_value is None:
+                os.environ.pop('KOSYNC_PUT_DEBOUNCE_SECONDS', None)
+            else:
+                os.environ['KOSYNC_PUT_DEBOUNCE_SECONDS'] = original_value
+
     def test_gap_over_five_minutes_splits_estimated_sessions(self):
         db = MagicMock()
         manager = MagicMock()

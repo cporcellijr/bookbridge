@@ -93,6 +93,7 @@ class Book(Base):
     states = relationship("State", back_populates="book", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="book", cascade="all, delete-orphan")
     hardcover_details = relationship("HardcoverDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
+    storygraph_details = relationship("StorygraphDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
     reading_sessions = relationship("ReadingSession", back_populates="book", cascade="all, delete-orphan")
 
@@ -168,6 +169,47 @@ class HardcoverDetails(Base):
 
     def __repr__(self):
         return f"<HardcoverDetails(abs_id='{self.abs_id}', hardcover_book_id='{self.hardcover_book_id}')>"
+
+
+class StorygraphDetails(Base):
+    """
+    StorygraphDetails model storing StoryGraph book matching information.
+    """
+    __tablename__ = 'storygraph_details'
+
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
+    storygraph_book_id = Column(String(255))
+    storygraph_url = Column(String(1000))
+    storygraph_edition_id = Column(String(255), nullable=True)
+    storygraph_pages = Column(Integer, nullable=True)
+    isbn = Column(String(255))
+    asin = Column(String(255))
+    matched_by = Column(String(50))  # 'isbn', 'asin', 'title_author', 'title', 'manual'
+
+    book = relationship("Book", back_populates="storygraph_details")
+
+    def __init__(
+        self,
+        abs_id: str,
+        storygraph_book_id: str = None,
+        storygraph_url: str = None,
+        storygraph_edition_id: str = None,
+        storygraph_pages: int = None,
+        isbn: str = None,
+        asin: str = None,
+        matched_by: str = None,
+    ):
+        self.abs_id = abs_id
+        self.storygraph_book_id = storygraph_book_id
+        self.storygraph_url = storygraph_url
+        self.storygraph_edition_id = storygraph_edition_id
+        self.storygraph_pages = storygraph_pages
+        self.isbn = isbn
+        self.asin = asin
+        self.matched_by = matched_by
+
+    def __repr__(self):
+        return f"<StorygraphDetails(abs_id='{self.abs_id}', storygraph_book_id='{self.storygraph_book_id}')>"
 
 
 class State(Base):

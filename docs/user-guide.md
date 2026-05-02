@@ -267,3 +267,23 @@ If **Regenerate Missing Data on Reset** is enabled, the bridge can also rebuild 
 ### Logs
 
 Open **Logs** to inspect live application logs for matching, syncing, Storyteller ingest, Grimmory refreshes, and background jobs.
+
+---
+
+## StoryGraph Authentication
+
+StoryGraph does not have an official public API for third-party apps, so the bridge uses browser cookies to authenticate.
+
+### How to get your cookies:
+
+1. Log in to [The StoryGraph](https://app.thestorygraph.com) in your browser.
+2. Open **Developer Tools** (usually `F12` or `Right Click -> Inspect`).
+3. Go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox).
+4. Expand **Cookies** and select `https://app.thestorygraph.com`.
+5. Find and copy the values for:
+   - `_storygraph_session`
+   - `remember_user_token`
+6. Paste these into the **StoryGraph** section in **Settings**.
+
+> [!WARNING]
+> If you log out of StoryGraph in your browser, your session cookie might expire. If the bridge fails to sync to StoryGraph, you may need to refresh these cookies.

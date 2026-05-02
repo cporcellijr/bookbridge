@@ -54,6 +54,7 @@ _kosync_open_sessions_lock = threading.Lock()
 _KOSYNC_SESSION_GAP_SECONDS = 300
 _KOSYNC_SESSION_MIN_SECONDS = 30
 _KOSYNC_SESSION_MAX_SECONDS = 7200
+_KOSYNC_PUT_DEBOUNCE_SECONDS_DEFAULT = 300
 _KOSYNC_DEVICE_SESSION_REGISTRY_KEY = "KOSYNC_DEVICE_SESSION_REGISTRY"
 _kosync_device_session_registry = None
 _kosync_device_session_registry_lock = threading.Lock()
@@ -257,6 +258,15 @@ def _supports_estimated_kosync_sessions(device: str | None, device_id: str | Non
     return True
 
 
+def _get_kosync_put_debounce_seconds() -> int:
+    """Return the KoSync PUT debounce interval in seconds."""
+    try:
+        value = int(os.environ.get("KOSYNC_PUT_DEBOUNCE_SECONDS", str(_KOSYNC_PUT_DEBOUNCE_SECONDS_DEFAULT)))
+        return max(0, value)
+    except ValueError:
+        return _KOSYNC_PUT_DEBOUNCE_SECONDS_DEFAULT
+
+
 def _get_kosync_session_key(doc_hash: str, device: str, device_id: str) -> str:
     device_key = _get_kosync_device_key(device, device_id) or "unknown"
     return f"{doc_hash}::{device_key}"
@@ -455,7 +465,7 @@ def _update_grouped_kosync_session(book, doc_hash: str, device: str, device_id: 
 
 def _kosync_debounce_loop() -> None:
     """Check every 10s for books that stopped receiving KoSync PUTs."""
-    debounce_seconds = int(os.environ.get('ABS_SOCKET_DEBOUNCE_SECONDS', '30'))
+    debounce_seconds = _get_kosync_put_debounce_seconds()
     while True:
         time.sleep(10)
         now = time.time()
@@ -477,9 +487,9 @@ def _kosync_debounce_loop() -> None:
                     daemon=True,
                 ).start()
 
-        # Clean up entries older than 5 minutes
+        # Clean up entries older than the same debounce window.
         with _kosync_debounce_lock:
-            stale = [k for k, v in _kosync_debounce.items() if now - v['last_event'] > 300]
+            stale = [k for k, v in _kosync_debounce.items() if now - v['last_event'] > debounce_seconds]
             for k in stale:
                 del _kosync_debounce[k]
 

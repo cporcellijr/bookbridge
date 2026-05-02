@@ -1011,6 +1011,101 @@ class EbookParser:
 
         return '/'.join(parts)
 
+    def _iter_docfragment_candidates(self, spine_map, reported_spine_index):
+        """
+        Yield spine items ordered by proximity to the reported DocFragment index.
+        KOReader can report fragment numbers that drift away from the physical
+        EPUB spine because of internal chunking, so nearby items are valid
+        fallbacks when the reported segment does not resolve cleanly.
+        """
+        by_index = {item.get("spine_index"): item for item in spine_map}
+        seen = set()
+
+        def _get_candidate(index):
+            item = by_index.get(index)
+            if item is None or index in seen:
+                return None
+            seen.add(index)
+            return item
+
+        exact_item = _get_candidate(reported_spine_index)
+        if exact_item is not None:
+            yield exact_item
+
+        if not by_index:
+            return
+
+        max_distance = max(abs(index - reported_spine_index) for index in by_index.keys())
+        for distance in range(1, max_distance + 1):
+            previous_item = _get_candidate(reported_spine_index - distance)
+            if previous_item is not None:
+                yield previous_item
+
+            next_item = _get_candidate(reported_spine_index + distance)
+            if next_item is not None:
+                yield next_item
+
+    def _resolve_xpath_target_node(self, filename, spine_map, reported_spine_index, clean_xpath):
+        """
+        Resolve the XPath against the reported DocFragment first, then against
+        nearby spine items when KOReader fragment numbering drifts.
+        """
+        candidate_items = list(self._iter_docfragment_candidates(spine_map, reported_spine_index))
+
+        def _log_fallback(candidate_item):
+            if candidate_item['spine_index'] != reported_spine_index:
+                logger.info(
+                    "KOReader DocFragment fallback mapped reported DocFragment[%s] to spine %s for '%s'",
+                    reported_spine_index,
+                    candidate_item['spine_index'],
+                    Path(filename).name,
+                )
+
+        def _strict_resolve(tree):
+            try:
+                elements = tree.xpath(clean_xpath)
+            except Exception as e:
+                logger.debug(f"XPath query failed: {e}")
+                elements = []
+
+            if not elements and clean_xpath.startswith('./'):
+                try:
+                    elements = tree.xpath(clean_xpath[2:])
+                except Exception:
+                    pass
+
+            if not elements:
+                id_match = re.search(r"@id='([^']+)'", clean_xpath)
+                if id_match:
+                    try:
+                        elements = tree.xpath(f"//*[@id='{id_match.group(1)}']")
+                    except Exception:
+                        pass
+
+            return elements
+
+        for candidate_item in candidate_items:
+            tree = html.fromstring(candidate_item['content'])
+            elements = _strict_resolve(tree)
+            if elements:
+                _log_fallback(candidate_item)
+                return candidate_item, tree, elements[0]
+
+        simple_path = re.sub(r'\[\d+]', '', clean_xpath)
+        if simple_path != clean_xpath:
+            for candidate_item in candidate_items:
+                tree = html.fromstring(candidate_item['content'])
+                try:
+                    elements = tree.xpath(simple_path)
+                except Exception:
+                    elements = []
+                if elements:
+                    _log_fallback(candidate_item)
+                    return candidate_item, tree, elements[0]
+
+        logger.warning(f"Could not resolve XPath in {filename}: {clean_xpath}")
+        return None, None, None
+
     def resolve_xpath(self, filename, xpath_str):
         """
         RESOLVER:
@@ -1028,10 +1123,6 @@ class EbookParser:
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
 
-            target_item = next((i for i in spine_map if i['spine_index'] == spine_index), None)
-            if not target_item:
-                return None
-
             # Parse path and offset
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
             offset_match = re.search(r'/text\(\)\.(\d+)$', relative_path)
@@ -1041,29 +1132,19 @@ class EbookParser:
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
 
-            tree = html.fromstring(target_item['content'])
-            
-            elements = []
-            try:
-                elements = tree.xpath(clean_xpath)
-            except Exception as e:
-                logger.debug(f"XPath query failed: {e}")
-            
-            # [Fallback logic from original code for finding elements...]
-            if not elements and clean_xpath.startswith('./'):
-                try: elements = tree.xpath(clean_xpath[2:])
-                except Exception: pass
+            target_item, tree, target_node = self._resolve_xpath_target_node(
+                filename,
+                spine_map,
+                spine_index,
+                clean_xpath,
+            )
+            if target_item is None or target_node is None:
+                return None
+            elements = [target_node]
 
-            if not elements:
-                id_match = re.search(r"@id='([^']+)'", clean_xpath)
-                if id_match:
-                    try: elements = tree.xpath(f"//*[@id='{id_match.group(1)}']")
-                    except Exception: pass
+            
 
-            if not elements:
-                simple_path = re.sub(r'\[\d+]', '', clean_xpath)
-                try: elements = tree.xpath(simple_path)
-                except Exception: pass
+
 
             if not elements:
                 logger.warning(f"⚠️ Could not resolve XPath in {filename}: {clean_xpath}")
@@ -1163,12 +1244,6 @@ class EbookParser:
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
 
-            target_item = next((i for i in spine_map if i['spine_index'] == spine_index), None)
-            if not target_item:
-                return None
-
-            bs4_chapter_text = BeautifulSoup(target_item['content'], 'html.parser').get_text(separator=' ', strip=True)
-
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
             offset_match = re.search(r'/text\(\)\.(\d+)$', relative_path)
             target_offset = int(offset_match.group(1)) if offset_match else 0
@@ -1177,7 +1252,15 @@ class EbookParser:
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
 
-            tree = html.fromstring(target_item['content'])
+            target_item, tree, target_node = self._resolve_xpath_target_node(
+                filename,
+                spine_map,
+                spine_index,
+                clean_xpath,
+            )
+            if target_item is None or target_node is None:
+                return None
+            bs4_chapter_text = BeautifulSoup(target_item['content'], 'html.parser').get_text(separator=' ', strip=True)
 
             elements = []
             try:
@@ -1312,6 +1395,38 @@ class EbookParser:
                         global_offset,
                     )
                     return global_offset
+
+            # Tier: LXML-based position fallback (last resort when text-matching fails).
+            # Mirrors the fallback in resolve_xpath(). Less precise than text-anchoring
+            # but still produces an "xpath"-sourced offset, which is high-confidence.
+            preceding_len = 0
+            found_target = False
+            SEPARATOR_LEN = 1
+            for node in tree.iter():
+                if node == target_node:
+                    found_target = True
+                    if node.text and target_offset > 0:
+                        raw_segment = node.text[: min(len(node.text), target_offset)]
+                        preceding_len += len(raw_segment.strip())
+                    elif target_offset > 0:
+                        preceding_len += target_offset
+                    break
+                if node.text and node.text.strip():
+                    preceding_len += len(node.text.strip()) + SEPARATOR_LEN
+                if node.tail and node.tail.strip():
+                    preceding_len += len(node.tail.strip()) + SEPARATOR_LEN
+
+            if found_target:
+                local_offset = preceding_len
+                if chapter_len > 0:
+                    local_offset = min(local_offset, chapter_len)
+                global_offset = min(full_len, chapter_base + local_offset)
+                logger.debug(
+                    "XPath->index tier=lxml_position_fallback local_offset=%s global_offset=%s",
+                    local_offset,
+                    global_offset,
+                )
+                return global_offset
 
             logger.debug("XPath->index BS4 fallback failed deterministically; returning None")
             return None

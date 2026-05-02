@@ -16,6 +16,7 @@ from src.api.booklore_client import BookloreClient
 from src.api.cwa_client import CWAClient
 from src.api.cwa_sync_api import CWASyncApi
 from src.api.hardcover_client import HardcoverClient
+from src.api.storygraph_client import StorygraphClient
 from src.api.storyteller_api import StorytellerAPIClient
 from src.db.database_service import DatabaseService
 from src.utils.ebook_utils import EbookParser
@@ -36,6 +37,7 @@ from src.sync_clients.booklore_audio_sync_client import BookLoreAudioSyncClient
 from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
 from src.sync_clients.cwa_sync_client import CWASyncClient
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
+from src.sync_clients.storygraph_sync_client import StorygraphSyncClient
 from src.sync_manager import SyncManager
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,7 @@ class Container(containers.DeclarativeContainer):
     kavita_client = providers.Object(None)
 
     hardcover_client = providers.Singleton(HardcoverClient)
+    storygraph_client = providers.Singleton(StorygraphClient)
 
     cwa_client = providers.Singleton(CWAClient)
 
@@ -234,6 +237,14 @@ class Container(containers.DeclarativeContainer):
         database_service
     )
 
+    storygraph_sync_client = providers.Singleton(
+        StorygraphSyncClient,
+        storygraph_client,
+        ebook_parser,
+        abs_client,
+        database_service
+    )
+
     abs_audio_source_adapter = providers.Singleton(
         ABSAudioSourceAdapter,
         abs_client=abs_client,
@@ -259,7 +270,8 @@ class Container(containers.DeclarativeContainer):
         BookLore=booklore_sync_client,
         BookLoreAudio=booklore_audio_sync_client,
         CWA=cwa_sync_client,
-        Hardcover=hardcover_sync_client
+        Hardcover=hardcover_sync_client,
+        StoryGraph=storygraph_sync_client
     )
 
     # Sync Manager

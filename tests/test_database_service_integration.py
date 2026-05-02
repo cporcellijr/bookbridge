@@ -898,6 +898,18 @@ class TestLegacyDatabaseMigration(unittest.TestCase):
                 FOREIGN KEY (abs_id) REFERENCES books(abs_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE storygraph_details (
+                abs_id TEXT PRIMARY KEY,
+                storygraph_book_id TEXT,
+                storygraph_url TEXT,
+                storygraph_edition_id TEXT,
+                storygraph_pages INTEGER,
+                isbn TEXT,
+                asin TEXT,
+                matched_by TEXT,
+                FOREIGN KEY (abs_id) REFERENCES books(abs_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE states (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 abs_id TEXT NOT NULL,

@@ -44,6 +44,20 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['abs_id'], ['books.abs_id'], ondelete='CASCADE'),
     )
 
+    # Create storygraph_details table with CASCADE foreign key
+    op.create_table(
+        'storygraph_details',
+        sa.Column('abs_id', sa.String(255), primary_key=True),
+        sa.Column('storygraph_book_id', sa.String(255), nullable=True),
+        sa.Column('storygraph_url', sa.String(1000), nullable=True),
+        sa.Column('storygraph_edition_id', sa.String(255), nullable=True),
+        sa.Column('storygraph_pages', sa.Integer(), nullable=True),
+        sa.Column('isbn', sa.String(255), nullable=True),
+        sa.Column('asin', sa.String(255), nullable=True),
+        sa.Column('matched_by', sa.String(50), nullable=True),
+        sa.ForeignKeyConstraint(['abs_id'], ['books.abs_id'], ondelete='CASCADE'),
+    )
+
     # Create states table
     op.create_table(
         'states',
