@@ -49,6 +49,12 @@ services:
       # - CWA_USERNAME=user
       # - CWA_PASSWORD=pass
 
+      # Authoritative ABS↔ebook mapping via Calibre identifiers (audiobookshelf_id).
+      # When enabled, library suggestion scans bypass fuzzy matching for any Calibre
+      # book whose audiobookshelf_id matches the ABS libraryItemId.
+      # - CALIBRE_USE_ABS_IDENTIFIER=true
+      # - CALIBRE_LIBRARY_PATH=/calibre-library
+
     volumes:
       # === REQUIRED ===
       - ./data:/data                    # App data (database, cache)
@@ -58,6 +64,10 @@ services:
       # Forge uploads directly over the Storyteller API.
       # - /path/to/storyteller/library:/storyteller_library # Optional: local fallback/download access
       # - /path/to/storyteller/assets:/storyteller/assets   # Optional: transcript ingest
+
+      # === OPTIONAL: Calibre library (for CALIBRE_USE_ABS_IDENTIFIER) ===
+      # Mount read-only to allow direct metadata.db lookups.
+      # - /path/to/calibre-library:/calibre-library:ro
 
     networks:
       - your-network

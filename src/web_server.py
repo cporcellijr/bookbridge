@@ -963,7 +963,7 @@ def _upsert_storyteller_mapping(
 class EbookResult:
     """Wrapper to provide consistent interface for ebooks from Grimmory, CWA, ABS, or filesystem."""
 
-    def __init__(self, name, title=None, subtitle=None, authors=None, booklore_id=None, path=None, source=None, source_id=None):
+    def __init__(self, name, title=None, subtitle=None, authors=None, booklore_id=None, path=None, source=None, source_id=None, abs_identifier=None):
         self.name = name
         self.title = title or Path(name).stem
         self.subtitle = subtitle or ''
@@ -972,6 +972,7 @@ class EbookResult:
         self.path = path # Public path
         self.source = source  # 'booklore', 'cwa', 'abs', 'filesystem'
         self.source_id = source_id or booklore_id # Generic ID for any source
+        self.abs_identifier = abs_identifier  # audiobookshelf_id from Calibre identifiers, if known
         # Has metadata if we have a real title (not just filename) or booklore_id
         self.has_metadata = booklore_id is not None or (title is not None and title != name)
 
@@ -1128,16 +1129,30 @@ def get_searchable_ebooks(search_term):
             if library_service and library_service.cwa_client and library_service.cwa_client.is_configured():
                 cwa_results = library_service.cwa_client.search_ebooks(search_term)
                 if cwa_results:
+                    try:
+                        calibre_resolver = container.calibre_identifier_resolver()
+                    except Exception:
+                        calibre_resolver = None
+                    resolver_enabled = bool(calibre_resolver and calibre_resolver.is_enabled())
+
                     for cr in cwa_results:
                         fname = f"cwa_{cr.get('id', 'unknown')}.{cr.get('ext', 'epub')}"
                         if fname.lower() not in found_filenames:
+                            cwa_id = cr.get('id')
+                            abs_identifier = None
+                            if resolver_enabled and cwa_id:
+                                try:
+                                    abs_identifier = calibre_resolver.get_abs_id(cwa_id)
+                                except Exception as e:
+                                    logger.debug(f"Calibre identifier lookup failed for {cwa_id}: {e}")
                             results.append(EbookResult(
                                 name=fname,
                                 title=cr.get('title'),
                                 authors=cr.get('author'),
                                 path=cr.get('download_url'),
                                 source='CWA',
-                                source_id=cr.get('id')
+                                source_id=cwa_id,
+                                abs_identifier=abs_identifier,
                             ))
                             found_filenames.add(fname.lower())
                             if cr.get('title'):
@@ -1174,6 +1189,30 @@ def get_searchable_ebooks(search_term):
         )
 
     return results
+
+
+def _promote_authoritative_ebook_matches(audiobooks, ebooks):
+    """Stable-sort ebooks so any whose abs_identifier matches an audiobook source_id rises to the top."""
+    if not ebooks or not audiobooks:
+        return ebooks
+    ab_ids = set()
+    for ab in audiobooks:
+        sid = getattr(ab, 'source_id', None)
+        if sid is not None:
+            sid_str = str(sid).strip()
+            if sid_str:
+                ab_ids.add(sid_str)
+    if not ab_ids:
+        return ebooks
+
+    def _key(eb):
+        ident = getattr(eb, 'abs_identifier', None)
+        if ident and str(ident).strip() in ab_ids:
+            return 0
+        return 1
+
+    ebooks.sort(key=_key)
+    return ebooks
 
 
 def _build_bridge_key(audio_source, audio_source_id):
@@ -2920,7 +2959,8 @@ def match():
 
         # Use new search method
         ebooks = get_searchable_ebooks(search)
-        
+        ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
+
         # Search Storyteller
         if container.storyteller_client().is_configured():
             try:
@@ -3434,6 +3474,7 @@ def batch_match():
         # Use new search method
         ebooks = get_searchable_ebooks(search)
         ebooks.sort(key=lambda x: x.name.lower())
+        ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
 
         # Search Storyteller
         if container.storyteller_client().is_configured():
@@ -3449,6 +3490,11 @@ def batch_match():
 def _get_suggestions_service():
     from src.services.suggestions_service import SuggestionsService
 
+    try:
+        calibre_resolver = container.calibre_identifier_resolver()
+    except Exception:
+        calibre_resolver = None
+
     return SuggestionsService(
         database_service=database_service,
         container=container,
@@ -3458,6 +3504,7 @@ def _get_suggestions_service():
         audiobook_matches_search=audiobook_matches_search,
         get_abs_author=get_abs_author,
         logger=logger,
+        calibre_identifier_resolver=calibre_resolver,
     )
 
 

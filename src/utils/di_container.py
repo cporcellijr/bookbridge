@@ -29,6 +29,7 @@ from src.services.migration_service import MigrationService # [NEW]
 from src.services.forge_service import ForgeService
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter
+from src.services.calibre_identifier_resolver import CalibreIdentifierResolver
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.sync_clients.kosync_sync_client import KoSyncSyncClient
 from src.sync_clients.storyteller_sync_client import StorytellerSyncClient
@@ -103,6 +104,11 @@ class Container(containers.DeclarativeContainer):
     cwa_sync_api = providers.Singleton(
         CWASyncApi,
         cwa_client=cwa_client
+    )
+
+    calibre_identifier_resolver = providers.Singleton(
+        CalibreIdentifierResolver,
+        cwa_client=cwa_client,
     )
 
     # Ebook parser

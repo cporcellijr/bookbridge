@@ -14,6 +14,7 @@ class SuggestionsService:
         audiobook_matches_search: Callable[[dict, str], bool],
         get_abs_author: Callable[[dict], str],
         logger,
+        calibre_identifier_resolver: Optional[Any] = None,
     ):
         self.database_service = database_service
         self.container = container
@@ -23,6 +24,7 @@ class SuggestionsService:
         self.audiobook_matches_search = audiobook_matches_search
         self.get_abs_author = get_abs_author
         self.logger = logger
+        self.calibre_identifier_resolver = calibre_identifier_resolver
 
     @staticmethod
     def _candidate_title(candidate: Any) -> str:
@@ -51,6 +53,9 @@ class SuggestionsService:
 
     def _prepare_candidate_pool(self, candidates: List[Any]) -> List[dict]:
         prepared = []
+        resolver = self.calibre_identifier_resolver
+        resolver_enabled = bool(resolver and resolver.is_enabled())
+
         for candidate in candidates or []:
             candidate_title = self._candidate_title(candidate)
             if not candidate_title:
@@ -58,14 +63,24 @@ class SuggestionsService:
 
             candidate_author = self._candidate_author(candidate)
             candidate_source = (getattr(candidate, 'source', None) or '').strip()
+            source_id = getattr(candidate, 'source_id', None) or getattr(candidate, 'booklore_id', None)
+
+            abs_identifier = getattr(candidate, 'abs_identifier', None)
+            if not abs_identifier and resolver_enabled and candidate_source.upper() == 'CWA' and source_id:
+                try:
+                    abs_identifier = resolver.get_abs_id(source_id)
+                except Exception as e:
+                    self.logger.debug(f"Calibre identifier lookup failed for {source_id}: {e}")
+
             prepared.append({
                 "title": candidate_title,
                 "author": candidate_author,
                 "source": candidate_source,
-                "source_id": getattr(candidate, 'source_id', None) or getattr(candidate, 'booklore_id', None),
+                "source_id": source_id,
                 "search_text": f"{candidate_title} {candidate_author}".strip(),
                 "name": getattr(candidate, 'name', ''),
                 "display_name": getattr(candidate, 'display_name', None) or getattr(candidate, 'name', ''),
+                "abs_identifier": abs_identifier,
             })
 
         return prepared
@@ -204,6 +219,32 @@ class SuggestionsService:
 
         return ignored_source_ids
 
+    def _find_authoritative_match(
+        self,
+        candidate_pool: List[dict],
+        audio_source_id: str,
+    ) -> Optional[dict]:
+        """If any candidate's audiobookshelf_id identifier matches the audio source,
+        return a 100-score match dict. Else None."""
+        if not audio_source_id:
+            return None
+        target = str(audio_source_id).strip()
+        if not target:
+            return None
+
+        for candidate_info in candidate_pool:
+            ident = candidate_info.get("abs_identifier")
+            if ident and str(ident).strip() == target:
+                return {
+                    "ebook_filename": candidate_info["name"],
+                    "display_name": candidate_info["display_name"],
+                    "author": candidate_info.get("author", ""),
+                    "source": candidate_info.get("source", ""),
+                    "source_id": candidate_info.get("source_id"),
+                    "score": 100.0,
+                }
+        return None
+
     def _scan_single_audiobook(self, ab: dict, candidate_pool: List[dict]) -> Optional[dict]:
         """Scan one unmatched audiobook and return a suggestion dict or None."""
         from rapidfuzz import fuzz
@@ -225,6 +266,32 @@ class SuggestionsService:
             except Exception as e:
                 self.logger.warning(f"Suggestion scan failed to search ebooks for '{audio_title}': {e}")
                 return None
+
+        authoritative = self._find_authoritative_match(per_book_pool, audio_source_id)
+        if authoritative is not None:
+            self.logger.info(
+                f"📌 Authoritative match via audiobookshelf_id for '{audio_title}' "
+                f"-> {authoritative.get('display_name') or authoritative.get('name')}"
+            )
+            audio_cover_url = self._audio_cover_url(ab, audio_source, audio_source_id)
+            audio_duration = self._audio_duration(ab)
+            return {
+                "bridge_key": bridge_key,
+                "audio_source": audio_source,
+                "audio_source_id": audio_source_id,
+                "audio_title": audio_title,
+                "audio_author": audio_author,
+                "audio_duration": audio_duration,
+                "audio_cover_url": audio_cover_url,
+                "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
+                "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
+                "abs_id": bridge_key,
+                "abs_title": audio_title,
+                "abs_author": audio_author,
+                "duration": audio_duration,
+                "cover_url": audio_cover_url,
+                "matches": [authoritative],
+            }
 
         matches = []
         for candidate_info in per_book_pool:

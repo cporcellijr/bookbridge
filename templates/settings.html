@@ -838,6 +838,28 @@
                         <input type="password" name="CWA_SYNC_TOKEN" value="{{ get_val('CWA_SYNC_TOKEN') }}">
                         <div class="help-text">From CWA → User Settings → Kobo Sync Token.</div>
                     </div>
+
+                    <!-- Authoritative Identifier Mapping -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Authoritative ABS Identifier Mapping</h4>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="calibre_use_abs_identifier_toggle" name="CALIBRE_USE_ABS_IDENTIFIER"
+                            onchange="toggleSection('calibre_identifier_body', this.checked)"
+                            {% if get_bool('CALIBRE_USE_ABS_IDENTIFIER') %}checked{% endif %}>
+                        <label for="calibre_use_abs_identifier_toggle">Use Calibre <code>audiobookshelf_id</code> identifier</label>
+                        <div class="help-text">When set by the
+                            <a href="https://github.com/jbhul/Audiobookshelf-calibre-plugin" target="_blank" rel="noopener">Audiobookshelf-calibre-plugin</a>,
+                            this identifier is treated as authoritative and bypasses fuzzy title/author matching during library suggestion scans.</div>
+                    </div>
+                    <div id="calibre_identifier_body" class="full-width {% if not get_bool('CALIBRE_USE_ABS_IDENTIFIER') %}collapsed{% endif %}">
+                        <div class="form-group full-width">
+                            <label>Calibre Library Path</label>
+                            <input type="text" name="CALIBRE_LIBRARY_PATH" value="{{ get_val('CALIBRE_LIBRARY_PATH') }}"
+                                placeholder="/calibre-library">
+                            <div class="help-text">Optional. Path inside the container to the Calibre library directory (containing <code>metadata.db</code>).
+                                If unset, identifiers are read via the CWA <code>/ajax/book/{id}</code> endpoint as fallback.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

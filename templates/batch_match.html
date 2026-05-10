@@ -473,6 +473,11 @@
             color: #a78bfa;
         }
 
+        .source-badge.linked {
+            background: rgba(76, 175, 80, 0.22);
+            color: #81c784;
+        }
+
         /* Ebook Select (kept for fallback but hidden when cards shown) */
         select.ebook-select {
             width: 100%;
@@ -914,6 +919,7 @@
                             data-source-type="{{ eb.source }}"
                             data-source-id="{{ eb.source_id }}"
                             data-source-path="{{ eb.path if eb.path else '' }}"
+                            data-abs-identifier="{{ eb.abs_identifier or '' }}"
                             onclick="selectEbookCard(this, '{{ eb.name }}', '{{ eb.display_name | replace("'", "\\'") }}')">
                             <div class="resource-icon">📖</div>
                             <div class="resource-title" title="{{ eb.display_name }}">
@@ -925,6 +931,9 @@
                             {% if eb.source %}
                             {% set badge_cls = eb.source.lower().replace(' ', '') %}
                             <span class="source-badge {{ badge_cls }}">{{ eb.source }}</span>
+                            {% endif %}
+                            {% if eb.abs_identifier %}
+                            <span class="source-badge linked" title="Authoritative match via Calibre audiobookshelf_id">📌 Linked</span>
                             {% endif %}
                         </div>
                         {% endfor %}
