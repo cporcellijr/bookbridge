@@ -107,6 +107,37 @@ class KoSyncSyncClient(SyncClient):
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
         pct = request.locator_result.percentage
         ko_id = book.kosync_doc_id if book else None
+        writeback_mode = os.getenv("KOSYNC_WRITEBACK_MODE", "generated_xpath").strip().lower()
+
+        if writeback_mode in {"preserve_existing_locator", "preserve_device_locator"} and pct is not None and pct > 0:
+            _, existing_xpath = self.kosync_client.get_progress(ko_id)
+            if existing_xpath:
+                logger.info(
+                    "Preserving existing KoSync locator for '%s' while updating percentage to %.4f%%",
+                    book.abs_title if book else "unknown",
+                    pct * 100.0,
+                )
+                success = self.kosync_client.update_progress(ko_id, pct, existing_xpath)
+                return SyncResult(
+                    pct,
+                    success,
+                    {
+                        'pct': pct,
+                        'xpath': existing_xpath,
+                        'preserved_existing_locator': True,
+                    },
+                )
+
+            logger.warning(
+                "Skipping KoSync update for '%s': KOSYNC_WRITEBACK_MODE=%s but no existing locator is available",
+                book.abs_title if book else "unknown",
+                writeback_mode,
+            )
+            return SyncResult(
+                location=pct,
+                success=False,
+                updated_state={'pct': pct, 'xpath': None, 'skipped': True},
+            )
 
         epub = (
             (getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None))

@@ -54,6 +54,7 @@ Use this when you want KOReader devices to sync directly with the bridge.
 | Username | `KOSYNC_USER` | empty | KOReader username. |
 | Password | `KOSYNC_KEY` | empty | KOReader password. |
 | Hash Method | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
+| Write-back Mode | `KOSYNC_WRITEBACK_MODE` | `generated_xpath` | `generated_xpath` preserves current behavior. `preserve_existing_locator` reuses the current KOReader locator while updating percentage so ABS-led sync does not overwrite KOReader positions with generated XPaths. |
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Split-Port Listener | `KOSYNC_PORT` | empty | Optional dedicated KOSync port for internet-safe exposure. |
 

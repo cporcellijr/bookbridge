@@ -416,6 +416,7 @@ def inject_global_vars():
             'ABS_PROGRESS_OFFSET_SECONDS': '0',
             'EBOOK_CACHE_SIZE': '3',
             'KOSYNC_HASH_METHOD': 'content',
+            'KOSYNC_WRITEBACK_MODE': 'generated_xpath',
             'TELEGRAM_LOG_LEVEL': 'ERROR',
             'SHELFMARK_URL': '',
             'KOSYNC_ENABLED': 'false',
@@ -6342,4 +6343,3 @@ if __name__ == '__main__':
         logger.info(f"🚀 Split-Port Mode Active: Sync-only server on port {sync_port}")
 
     app.run(host='0.0.0.0', port=5757, debug=False)
-

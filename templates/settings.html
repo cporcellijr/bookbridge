@@ -643,6 +643,18 @@
                         </select>
                     </div>
                     <div class="form-group full-width">
+                        <label>Write-back Mode</label>
+                        <select name="KOSYNC_WRITEBACK_MODE">
+                            <option value="generated_xpath" {% if get_val('KOSYNC_WRITEBACK_MODE')=='generated_xpath' %}selected{% endif %}>
+                                Generated XPath (current behavior)
+                            </option>
+                            <option value="preserve_existing_locator" {% if get_val('KOSYNC_WRITEBACK_MODE')=='preserve_existing_locator' %}selected{% endif %}>
+                                Preserve existing KOReader locator
+                            </option>
+                        </select>
+                        <div class="help-text">Preserve existing locator avoids replacing KOReader positions with generated XPaths.</div>
+                    </div>
+                    <div class="form-group full-width">
                         <label>KoSync PUT debounce seconds</label>
                         <input type="number" min="0" name="KOSYNC_PUT_DEBOUNCE_SECONDS"
                             value="{{ get_val('KOSYNC_PUT_DEBOUNCE_SECONDS') or '300' }}">
