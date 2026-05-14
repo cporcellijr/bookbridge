@@ -11,10 +11,12 @@ from src.sync_clients.sync_client_interface import SyncClient, SyncResult, Updat
 logger = logging.getLogger(__name__)
 
 class KoSyncSyncClient(SyncClient):
-    _FRAGILE_INLINE_SEGMENT_RE = re.compile(
-        r"/(?:span|em|strong|b|i|u|small|sub|sup|font|mark|abbr|cite|code|q|time|s|del|ins)(?:\[\d+\])?/",
-        re.IGNORECASE,
-    )
+    _KOSYNC_BLOCK_TAGS = {
+        "p", "li",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "blockquote", "figcaption", "dd", "dt", "td", "th",
+        "div", "section", "article", "pre",
+    }
 
     def __init__(self, kosync_client: KoSyncClient, ebook_parser: EbookParser):
         super().__init__(ebook_parser)
@@ -91,18 +93,27 @@ class KoSyncSyncClient(SyncClient):
 
         clean_xpath = re.sub(r"/{2,}", "/", clean_xpath).rstrip("/")
 
-        if not re.match(r"^/body/DocFragment\[\d+\](/.+)?$", clean_xpath):
+        match = re.match(r"^(/body/DocFragment\[\d+\])/(.+)$", clean_xpath)
+        if not match:
             return None
-        if self._FRAGILE_INLINE_SEGMENT_RE.search(clean_xpath):
+
+        prefix, relative_path = match.groups()
+        steps = [step for step in relative_path.split("/") if step]
+        last_block_idx = None
+        normalized_steps = []
+
+        for idx, step in enumerate(steps):
+            normalized_step = re.sub(r"\.\d+$", "", step)
+            tag_match = re.match(r"^([A-Za-z][\w:-]*)(?:\[\d+\])?$", normalized_step)
+            normalized_steps.append(normalized_step)
+            if tag_match and tag_match.group(1).lower() in self._KOSYNC_BLOCK_TAGS:
+                last_block_idx = idx
+
+        if last_block_idx is None:
             return None
 
-        if re.search(r"/text\(\)(\[\d+\])?\.\d+$", clean_xpath):
-            return clean_xpath
-
-        if re.search(r"/text\(\)(\[\d+\])?$", clean_xpath):
-            return f"{clean_xpath}.0"
-
-        return f"{clean_xpath}/text().0"
+        block_path = "/".join(normalized_steps[:last_block_idx + 1])
+        return f"{prefix}/{block_path}.0"
 
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
         pct = request.locator_result.percentage
@@ -113,9 +124,9 @@ class KoSyncSyncClient(SyncClient):
             if book
             else None
         )
-        # Always use sentence-level XPaths for KOSync.
-        # Character-level offsets don't survive cross-engine rendering differences
-        # between our parser and KOReader's CREngine.
+        # Always collapse generated KoSync positions to block-level XPointers.
+        # Text-node and inline offsets can resolve poorly in KOReader/CREngine,
+        # while paragraph-level anchors survive renderer differences better.
         safe_xpath = None
         if epub and pct is not None and pct > 0:
             sentence_xpath = self.ebook_parser.get_sentence_level_ko_xpath(epub, pct)
