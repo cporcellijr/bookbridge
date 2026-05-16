@@ -804,6 +804,11 @@ class KoSyncClient:
         CRITICAL FIX: Returns TUPLE (percentage, xpath_string)
         This prevents the 'cannot unpack non-iterable float' crash.
         """
+        pct, xpath, _metadata = self.get_progress_with_metadata(doc_id)
+        return pct, xpath
+
+    def get_progress_with_metadata(self, doc_id):
+        """Return percentage, progress locator, and bridge-specific response metadata."""
         headers = kosync_auth_headers(self.user, self.auth_token)
         url = f"{self.base_url}/syncs/progress/{doc_id}"
         try:
@@ -813,11 +818,11 @@ class KoSyncClient:
                 pct = float(data.get('percentage', 0))
                 # Grab the raw progress string (XPath)
                 xpath = data.get('progress')
-                return pct, xpath
+                return pct, xpath, data
         except Exception as e:
             logger.error(f"❌ Error fetching KoSync progress for doc '{doc_id}': {e}")
             pass
-        return None, None
+        return None, None, {}
 
     def update_progress(self, doc_id, percentage, xpath=None):
         if not self.is_configured(): return False
@@ -853,4 +858,3 @@ class KoSyncClient:
             logger.error(f"❌ Failed to update KoSync: {e}")
             return False
 # [END FILE]
-

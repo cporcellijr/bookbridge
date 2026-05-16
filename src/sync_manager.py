@@ -1693,7 +1693,19 @@ class SyncManager:
                     if name != changed_client and name in vals
                 ]
 
-                if changed_source == "percent_fallback" and primary_audio_client in vals:
+                recent_external_kosync_put = (
+                    changed_client.lower() == "kosync"
+                    and bool(config[changed_client].current.get("_kosync_recent_external_put"))
+                )
+                if changed_source == "percent_fallback" and primary_audio_client in vals and recent_external_kosync_put:
+                    device = config[changed_client].current.get("_kosync_last_put_device") or "unknown"
+                    age = config[changed_client].current.get("_kosync_last_put_age_seconds")
+                    age_msg = f", age={age:.1f}s" if isinstance(age, (int, float)) else ""
+                    logger.info(
+                        f"🔄 '{abs_id}' '{title_snip}' Trusting recent external KoSync PUT from "
+                        f"'{device}' despite source=percent_fallback{age_msg}"
+                    )
+                elif changed_source == "percent_fallback" and primary_audio_client in vals:
                     single_delta_low_conf = True
                     low_conf_single_delta_client = changed_client
                     logger.info(

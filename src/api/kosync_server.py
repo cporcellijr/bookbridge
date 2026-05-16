@@ -58,6 +58,65 @@ _KOSYNC_PUT_DEBOUNCE_SECONDS_DEFAULT = 300
 _KOSYNC_DEVICE_SESSION_REGISTRY_KEY = "KOSYNC_DEVICE_SESSION_REGISTRY"
 _kosync_device_session_registry = None
 _kosync_device_session_registry_lock = threading.Lock()
+_kosync_recent_external_puts: dict = {}
+_kosync_recent_external_puts_lock = threading.Lock()
+
+
+def _recent_external_put_ttl_seconds() -> int:
+    configured = os.environ.get("KOSYNC_RECENT_EXTERNAL_PUT_SECONDS")
+    if configured:
+        try:
+            return max(0, int(configured))
+        except ValueError:
+            logger.warning("Invalid KOSYNC_RECENT_EXTERNAL_PUT_SECONDS=%r; using default", configured)
+    return 600
+
+
+def _record_recent_external_kosync_put(
+    document_hash: str,
+    device: str | None,
+    device_id: str | None,
+    percentage,
+    now_ts: float,
+) -> None:
+    if not document_hash:
+        return
+    with _kosync_recent_external_puts_lock:
+        _kosync_recent_external_puts[document_hash] = {
+            "timestamp": now_ts,
+            "device": device or "",
+            "device_id": device_id or "",
+            "percentage": float(percentage or 0),
+        }
+
+
+def _recent_external_kosync_put_metadata(document_hash: str | None, percentage=None) -> dict:
+    if not document_hash:
+        return {}
+    now_ts = time.time()
+    ttl = _recent_external_put_ttl_seconds()
+    with _kosync_recent_external_puts_lock:
+        entry = _kosync_recent_external_puts.get(document_hash)
+        if not entry:
+            return {}
+        age = now_ts - float(entry.get("timestamp") or 0)
+        if ttl <= 0 or age > ttl:
+            _kosync_recent_external_puts.pop(document_hash, None)
+            return {}
+
+    if percentage is not None:
+        try:
+            if abs(float(entry.get("percentage") or 0) - float(percentage or 0)) > 0.0001:
+                return {}
+        except (TypeError, ValueError):
+            return {}
+
+    return {
+        "_bridge_recent_external_put": True,
+        "_bridge_recent_external_put_age_seconds": round(age, 3),
+        "_bridge_recent_external_put_device": entry.get("device") or "",
+        "_bridge_recent_external_put_device_id": entry.get("device_id") or "",
+    }
 
 def signal_manifest_rebuild() -> None:
     """Wake the manifest prebuilder thread so it rebuilds on the next cycle."""
@@ -613,14 +672,21 @@ def kosync_get_progress(doc_id):
             )
             if poison_pill is not None:
                 return poison_pill
-            return jsonify({
+            response_data = {
                 "device": kosync_doc.device or "",
                 "device_id": kosync_doc.device_id or "",
                 "document": kosync_doc.document_hash,
                 "percentage": float(kosync_doc.percentage) if kosync_doc.percentage else 0,
                 "progress": kosync_doc.progress or "",
                 "timestamp": int(kosync_doc.timestamp.timestamp()) if kosync_doc.timestamp else 0
-            }), 200
+            }
+            response_data.update(
+                _recent_external_kosync_put_metadata(
+                    kosync_doc.document_hash,
+                    response_data["percentage"],
+                )
+            )
+            return jsonify(response_data), 200
         # Document exists but has no progress and no linked book — fall through
         # to try sibling resolution for better data
 
@@ -737,6 +803,8 @@ def kosync_put_progress():
         kosync_doc.timestamp = now
 
     _database_service.save_kosync_document(kosync_doc)
+    if not is_internal:
+        _record_recent_external_kosync_put(doc_hash, device, device_id, percentage, now_ts)
 
     # Update linked book if exists
     linked_book = None
@@ -1500,14 +1568,21 @@ def _respond_from_book_states(doc_id, book):
         poison_pill = _suppress_empty_progress_response(doc_id, float(best_doc.percentage), best_doc.progress)
         if poison_pill is not None:
             return poison_pill
-        return jsonify({
+        response_data = {
             "device": "abs-kosync-bridge",
             "device_id": "abs-kosync-bridge",
             "document": doc_id,
             "percentage": float(best_doc.percentage),
             "progress": best_doc.progress or "",
             "timestamp": int(best_doc.timestamp.timestamp()) if best_doc.timestamp else 0
-        }), 200
+        }
+        response_data.update(
+            _recent_external_kosync_put_metadata(
+                best_doc.document_hash,
+                response_data["percentage"],
+            )
+        )
+        return jsonify(response_data), 200
 
     if not states:
         return jsonify({"message": "Document not found on server"}), 502

@@ -36,7 +36,14 @@ class KoSyncSyncClient(SyncClient):
 
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
         ko_id = book.kosync_doc_id
-        ko_pct, ko_xpath = self.kosync_client.get_progress(ko_id)
+        ko_metadata = {}
+        if hasattr(self.kosync_client, "get_progress_with_metadata"):
+            try:
+                ko_pct, ko_xpath, ko_metadata = self.kosync_client.get_progress_with_metadata(ko_id)
+            except (TypeError, ValueError):
+                ko_pct, ko_xpath = self.kosync_client.get_progress(ko_id)
+        else:
+            ko_pct, ko_xpath = self.kosync_client.get_progress(ko_id)
         book_label = f"'{title_snip}' " if title_snip else ""
         if ko_pct is None:
             if ko_xpath is None:
@@ -52,8 +59,15 @@ class KoSyncSyncClient(SyncClient):
 
         delta = abs(ko_pct - prev_kosync_pct)
 
+        current = {"pct": ko_pct, "xpath": ko_xpath}
+        if ko_metadata.get("_bridge_recent_external_put"):
+            current["_kosync_recent_external_put"] = True
+            current["_kosync_last_put_device"] = ko_metadata.get("_bridge_recent_external_put_device") or ""
+            current["_kosync_last_put_device_id"] = ko_metadata.get("_bridge_recent_external_put_device_id") or ""
+            current["_kosync_last_put_age_seconds"] = ko_metadata.get("_bridge_recent_external_put_age_seconds")
+
         return ServiceState(
-            current={"pct": ko_pct, "xpath": ko_xpath},
+            current=current,
             previous_pct=prev_kosync_pct,
             delta=delta,
             threshold=self.delta_kosync_thresh,

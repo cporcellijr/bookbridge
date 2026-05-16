@@ -545,6 +545,66 @@ def test_deadband_allows_switch_when_delta_exceeds_threshold():
     assert leader_pct == config["KoSync"].current["pct"]
 
 
+def test_recent_external_kosync_percent_fallback_can_lead():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {"ABS": _Client(), "KoSync": _Client()}
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 28667.3, "KoSync": 30400.0}
+    )
+
+    config = {
+        "ABS": _state({"pct": 0.415762, "ts": 28667.3}),
+        "KoSync": _state(
+            {
+                "pct": 0.441,
+                "_normalization_source": "percent_fallback",
+                "_kosync_recent_external_put": True,
+                "_kosync_last_put_device": "Kobo_monza",
+                "_kosync_last_put_age_seconds": 247.0,
+            }
+        ),
+    }
+    book = SimpleNamespace(duration=68940, transcript_file="DB_MANAGED")
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-1", "Leviathan Wakes")
+
+    assert leader == "KoSync"
+    assert leader_pct == config["KoSync"].current["pct"]
+
+
+def test_stale_kosync_percent_fallback_is_demoted():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {"ABS": _Client(), "KoSync": _Client()}
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 28667.3, "KoSync": 30400.0}
+    )
+
+    config = {
+        "ABS": _state({"pct": 0.415762, "ts": 28667.3}),
+        "KoSync": _state({"pct": 0.441, "_normalization_source": "percent_fallback"}),
+    }
+    book = SimpleNamespace(duration=68940, transcript_file="DB_MANAGED")
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-1", "Leviathan Wakes")
+
+    assert leader == "ABS"
+    assert leader_pct == config["ABS"].current["pct"]
+
+
 def test_deadband_rollback_guard_skips_high_conf_locator_client():
     manager = SyncManager.__new__(SyncManager)
     manager.cross_format_deadband_seconds = 2.0
