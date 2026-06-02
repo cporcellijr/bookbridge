@@ -21,30 +21,39 @@ class BookMappingService:
     """Creates `Book` records for shelf-watch auto-matches and ebook-only fallbacks."""
 
     def __init__(self, database_service, booklore_client, ebook_parser,
-                 abs_client, sync_clients):
+                 abs_client, sync_clients, bookorbit_client=None):
         self.database_service = database_service
         self.booklore_client = booklore_client
+        self.bookorbit_client = bookorbit_client
         self.ebook_parser = ebook_parser
         self.abs_client = abs_client
         # `sync_clients` is a dict-like provider (DI Dict provider yields a dict)
         self.sync_clients = sync_clients
 
-    def _compute_kosync_id(self, ebook_filename: str, booklore_ebook_id: Optional[str]) -> Optional[str]:
-        """Compute the KOSync document hash for a Grimmory-hosted ebook.
+    def _library_client_for_source(self, source_name: Optional[str]):
+        """Pick the library client that hosts the ebook, by source label."""
+        if source_name == 'BookOrbit':
+            return self.bookorbit_client
+        return self.booklore_client
 
-        Mirrors the Grimmory-API branch of `get_kosync_id_for_ebook` in
+    def _compute_kosync_id(self, ebook_filename: str, source_ebook_id: Optional[str],
+                           source_name: Optional[str] = 'BookLore') -> Optional[str]:
+        """Compute the KOSync document hash for a library-hosted ebook.
+
+        Mirrors the library-API branch of `get_kosync_id_for_ebook` in
         `web_server.py`. Filesystem fallbacks are intentionally omitted: the
-        shelf-watch flow is always anchored on a Grimmory book so we can rely
-        on the Grimmory download path.
+        shelf-watch flow is always anchored on a library book so we can rely on
+        the source's download path (Grimmory or BookOrbit).
         """
-        if not booklore_ebook_id:
+        if not source_ebook_id:
             return None
-        if not self.booklore_client.is_configured():
+        client = self._library_client_for_source(source_name)
+        if not client or not client.is_configured():
             return None
         try:
-            content = self.booklore_client.download_book(booklore_ebook_id)
+            content = client.download_book(source_ebook_id)
         except Exception as e:
-            logger.warning(f"Shelf-watch: Grimmory download failed for kosync hash: {e}")
+            logger.warning(f"Shelf-watch: {source_name} download failed for kosync hash: {e}")
             return None
         if not content:
             return None
@@ -102,11 +111,11 @@ class BookMappingService:
         audio_source_id = str(audio_source_id).strip()
         ebook_filename = str(ebook_filename).strip()
 
-        kosync_doc_id = self._compute_kosync_id(ebook_filename, booklore_ebook_id)
+        kosync_doc_id = self._compute_kosync_id(ebook_filename, booklore_ebook_id, ebook_source)
         if not kosync_doc_id:
             logger.warning(
                 f"Shelf-watch: could not compute kosync id for '{ebook_filename}' "
-                f"(booklore_id={booklore_ebook_id}); skipping mapping"
+                f"(source_id={booklore_ebook_id}); skipping mapping"
             )
             return None
 
@@ -185,7 +194,9 @@ class BookMappingService:
             logger.warning("Shelf-watch: create_ebook_only_mapping missing ebook_filename")
             return None
 
-        kosync_doc_id = self._compute_kosync_id(ebook_filename, booklore_ebook_id or ebook_source_id)
+        kosync_doc_id = self._compute_kosync_id(
+            ebook_filename, booklore_ebook_id or ebook_source_id, ebook_source
+        )
         if not kosync_doc_id:
             logger.warning(
                 f"Shelf-watch: could not compute kosync id for ebook-only mapping '{ebook_filename}'"

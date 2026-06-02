@@ -74,6 +74,7 @@ class SyncManager:
                  library_service: LibraryService = None,
                  migration_service: MigrationService = None,
                  shelf_watch_service=None,
+                 shelf_watch_services=None,
                  audio_source_adapters: dict | None = None,
                  epub_cache_dir=None,
                  data_dir=None,
@@ -94,6 +95,11 @@ class SyncManager:
         self.library_service = library_service
         self.migration_service = migration_service
         self.shelf_watch_service = shelf_watch_service
+        # Support multiple shelf watchers (Grimmory + BookOrbit). Fall back to the
+        # single legacy service when a list isn't provided (older tests / callers).
+        self.shelf_watch_services = list(shelf_watch_services) if shelf_watch_services else (
+            [shelf_watch_service] if shelf_watch_service else []
+        )
         self.audio_source_adapters = audio_source_adapters or {}
         
         self.data_dir = data_dir
@@ -1884,20 +1890,26 @@ class SyncManager:
             self.library_service.sync_library_books()
             self._last_library_sync = time.time()
 
-        # Grimmory "Up Next" shelf watch — runs only in global poll mode and only
-        # on full cycles (not Instant Sync). Custom mode runs the check from
-        # ClientPoller instead so we don't double-fire.
+        # "Up Next" shelf watch (Grimmory + BookOrbit) — runs only in global poll
+        # mode and only on full cycles (not Instant Sync). Custom mode runs the
+        # check from ClientPoller instead so we don't double-fire.
         # getattr handles older tests that build SyncManager via __new__ and skip __init__.
-        shelf_watch = getattr(self, 'shelf_watch_service', None)
-        if (
-            shelf_watch
-            and not target_abs_id
-            and os.environ.get('BOOKLORE_POLL_MODE', 'global').lower() == 'global'
-        ):
-            try:
-                shelf_watch.process_watch_shelf()
-            except Exception as e:
-                logger.warning(f"Shelf-watch run failed: {e}")
+        shelf_watchers = getattr(self, 'shelf_watch_services', None)
+        if shelf_watchers is None:
+            legacy = getattr(self, 'shelf_watch_service', None)
+            shelf_watchers = [legacy] if legacy else []
+        if not target_abs_id:
+            for shelf_watch in shelf_watchers:
+                try:
+                    # Each watcher gates on its own source's poll mode.
+                    runs_global = getattr(shelf_watch, 'runs_in_global_cycle', None)
+                    if runs_global is not None and not runs_global():
+                        continue
+                    if runs_global is None and os.environ.get('BOOKLORE_POLL_MODE', 'global').lower() != 'global':
+                        continue
+                    shelf_watch.process_watch_shelf()
+                except Exception as e:
+                    logger.warning(f"Shelf-watch run failed: {e}")
 
         # Get active books directly from database service
         active_books = []

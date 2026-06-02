@@ -301,7 +301,8 @@ def setup_dependencies(app, test_container=None):
     # `from src.web_server import ...` it would create a second, uninitialized
     # module instance (with container=None), so we inject the factory here.
     try:
-        container.shelf_watch_service().set_suggestions_service_factory(_get_suggestions_service)
+        for _sw in container.shelf_watch_services():
+            _sw.set_suggestions_service_factory(_get_suggestions_service)
     except Exception as e:
         logger.warning(f"Could not wire shelf_watch_service suggestions factory: {e}")
 
@@ -2117,6 +2118,23 @@ def _compute_dashboard_sync_warning_pct(mapping, integrations):
         return 0.0
 
     return round(max(progress_values) - min(progress_values), 1)
+
+
+def _shelf_watch_clients_for(meta: dict):
+    """Resolve (library_client, watch_shelf, kobo_shelf) for a shelf-watch
+    suggestion based on its origin source (Grimmory vs BookOrbit)."""
+    source = (meta or {}).get('source_name') or 'BookLore'
+    if source == 'BookOrbit':
+        return (
+            container.bookorbit_client(),
+            os.environ.get('BOOKORBIT_SHELF_WATCH_NAME', 'Up Next'),
+            os.environ.get('BOOKORBIT_SHELF_NAME', 'Kobo'),
+        )
+    return (
+        container.booklore_client(),
+        os.environ.get('BOOKLORE_SHELF_WATCH_NAME', 'Up Next'),
+        os.environ.get('BOOKLORE_SHELF_NAME', 'Kobo'),
+    )
 
 
 def _format_dashboard_last_sync(latest_update_time):
@@ -4117,16 +4135,13 @@ def suggestions_page():
                         if (
                             sw_pending
                             and getattr(sw_pending, 'origin', None) == 'shelf_watch'
-                            and container.booklore_client().is_configured()
                         ):
                             try:
                                 meta = sw_pending.origin_metadata or {}
+                                lib_client, watch_shelf, _kobo = _shelf_watch_clients_for(meta)
                                 grimmory_filename = meta.get('grimmory_filename')
-                                watch_shelf = os.environ.get('BOOKLORE_SHELF_WATCH_NAME', 'Up Next')
-                                if grimmory_filename:
-                                    container.booklore_client().remove_from_shelf(
-                                        grimmory_filename, watch_shelf,
-                                    )
+                                if grimmory_filename and lib_client and lib_client.is_configured():
+                                    lib_client.remove_from_shelf(grimmory_filename, watch_shelf)
                             except Exception as bl_err:
                                 logger.warning(f"Shelf-watch approval Up Next removal failed: {bl_err}")
                     continue
@@ -4236,15 +4251,14 @@ def suggestions_page():
                 if (
                     shelf_watch_pending
                     and getattr(shelf_watch_pending, 'origin', None) == 'shelf_watch'
-                    and container.booklore_client().is_configured()
                 ):
                     try:
                         meta = shelf_watch_pending.origin_metadata or {}
+                        lib_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
                         grimmory_filename = meta.get('grimmory_filename')
-                        watch_shelf = os.environ.get('BOOKLORE_SHELF_WATCH_NAME', 'Up Next')
-                        if grimmory_filename:
-                            container.booklore_client().move_between_shelves(
-                                grimmory_filename, watch_shelf, BOOKLORE_SHELF_NAME,
+                        if grimmory_filename and lib_client and lib_client.is_configured():
+                            lib_client.move_between_shelves(
+                                grimmory_filename, watch_shelf, kobo_shelf,
                             )
                     except Exception as bl_err:
                         logger.warning(f"Shelf-watch approval move failed: {bl_err}")
@@ -6464,7 +6478,7 @@ if __name__ == '__main__':
         database_service=database_service,
         sync_manager=manager,
         sync_clients_dict=container.sync_clients(),
-        shelf_watch_service=container.shelf_watch_service(),
+        shelf_watch_services=container.shelf_watch_services_by_client(),
     )
     poller_thread = threading.Thread(target=client_poller.start, daemon=True)
     poller_thread.start()

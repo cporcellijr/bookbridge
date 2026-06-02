@@ -307,6 +307,7 @@ class Container(containers.DeclarativeContainer):
         BookMappingService,
         database_service=database_service,
         booklore_client=booklore_client,
+        bookorbit_client=bookorbit_client,
         ebook_parser=ebook_parser,
         abs_client=abs_client,
         sync_clients=providers.Dict(
@@ -315,14 +316,35 @@ class Container(containers.DeclarativeContainer):
         ),
     )
 
-    # Grimmory "Up Next" shelf watcher. SuggestionsService is lazy-imported from
-    # web_server at first use to avoid the module-load-time cycle (web_server
-    # owns the closures the SuggestionsService captures).
+    # "Up Next" shelf watchers (Grimmory + BookOrbit). SuggestionsService is
+    # lazy-imported from web_server at first use to avoid the module-load-time
+    # cycle (web_server owns the closures the SuggestionsService captures).
     shelf_watch_service = providers.Singleton(
         ShelfWatchService,
         booklore_client=booklore_client,
         database_service=database_service,
         book_mapping_service=book_mapping_service,
+        source_name='BookLore',
+        env_prefix='BOOKLORE',
+    )
+
+    shelf_watch_service_bookorbit = providers.Singleton(
+        ShelfWatchService,
+        booklore_client=bookorbit_client,
+        database_service=database_service,
+        book_mapping_service=book_mapping_service,
+        source_name='BookOrbit',
+        env_prefix='BOOKORBIT',
+    )
+
+    shelf_watch_services = providers.List(
+        shelf_watch_service,
+        shelf_watch_service_bookorbit,
+    )
+
+    shelf_watch_services_by_client = providers.Dict(
+        BookLore=shelf_watch_service,
+        BookOrbit=shelf_watch_service_bookorbit,
     )
 
     # Sync Manager
@@ -342,6 +364,7 @@ class Container(containers.DeclarativeContainer):
         library_service=library_service,
         migration_service=migration_service,
         shelf_watch_service=shelf_watch_service,
+        shelf_watch_services=shelf_watch_services,
         audio_source_adapters=audio_source_adapters,
 
         epub_cache_dir=epub_cache_dir,

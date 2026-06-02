@@ -31,19 +31,26 @@ class ShelfWatchService:
     """Orchestrator for the Grimmory Up Next shelf-watch auto-matching flow."""
 
     def __init__(self, booklore_client, database_service, book_mapping_service,
-                 suggestions_service_factory=None):
+                 suggestions_service_factory=None, source_name='BookLore',
+                 env_prefix='BOOKLORE'):
         """Args:
-            booklore_client: BookloreClient instance.
+            booklore_client: the library client (BookloreClient or BookOrbitClient).
+                Both expose the same shelf surface (is_configured, get_all_shelves,
+                list_books_on_shelf, move_between_shelves).
             database_service: DatabaseService instance.
             book_mapping_service: BookMappingService instance.
             suggestions_service_factory: optional callable returning a fully-wired
                 SuggestionsService. When None, the service lazy-imports
                 `web_server._get_suggestions_service` at first use.
+            source_name: ebook source label written to mappings ('BookLore' / 'BookOrbit').
+            env_prefix: settings prefix for this source ('BOOKLORE' / 'BOOKORBIT').
         """
         self.booklore_client = booklore_client
         self.database_service = database_service
         self.book_mapping_service = book_mapping_service
         self._suggestions_service_factory = suggestions_service_factory
+        self._source_name = source_name
+        self._env_prefix = env_prefix
 
     def set_suggestions_service_factory(self, factory):
         """Inject the SuggestionsService factory at runtime.
@@ -66,36 +73,47 @@ class ShelfWatchService:
 
     # ---- env helpers ----------------------------------------------------
 
-    @staticmethod
-    def _is_enabled() -> bool:
+    def _is_enabled(self) -> bool:
         # HTML checkbox values arrive as 'on'; match the rest of the codebase's
         # get_bool() helper which treats 'true'/'1'/'yes'/'on' as truthy.
-        raw = os.environ.get('BOOKLORE_SHELF_WATCH_ENABLED', 'false')
+        raw = os.environ.get(f'{self._env_prefix}_SHELF_WATCH_ENABLED', 'false')
         return str(raw).strip().lower() in ('true', '1', 'yes', 'on')
 
-    @staticmethod
-    def _watch_shelf_name() -> str:
-        return (os.environ.get('BOOKLORE_SHELF_WATCH_NAME') or 'Up Next').strip()
+    def _watch_shelf_name(self) -> str:
+        return (os.environ.get(f'{self._env_prefix}_SHELF_WATCH_NAME') or 'Up Next').strip()
 
-    @staticmethod
-    def _kobo_shelf_name() -> str:
-        return (os.environ.get('BOOKLORE_SHELF_NAME') or 'Kobo').strip()
+    def _kobo_shelf_name(self) -> str:
+        return (os.environ.get(f'{self._env_prefix}_SHELF_NAME') or 'Kobo').strip()
 
-    @staticmethod
-    def _threshold() -> float:
-        raw = os.environ.get('BOOKLORE_SHELF_WATCH_THRESHOLD', '95')
+    def _threshold(self) -> float:
+        raw = os.environ.get(f'{self._env_prefix}_SHELF_WATCH_THRESHOLD', '95')
         try:
             return max(0.0, min(100.0, float(raw)))
         except (TypeError, ValueError):
             return 95.0
 
-    @staticmethod
-    def _rescan_hours() -> float:
-        raw = os.environ.get('BOOKLORE_SHELF_WATCH_RESCAN_HOURS', '24')
+    def _rescan_hours(self) -> float:
+        raw = os.environ.get(f'{self._env_prefix}_SHELF_WATCH_RESCAN_HOURS', '24')
         try:
             return max(0.0, float(raw))
         except (TypeError, ValueError):
             return 24.0
+
+    @property
+    def env_prefix(self) -> str:
+        return self._env_prefix
+
+    def runs_in_global_cycle(self) -> bool:
+        """True when this source polls in 'global' mode, so the full sync cycle
+        (not ClientPoller) should drive the shelf-watch check."""
+        return os.environ.get(f'{self._env_prefix}_POLL_MODE', 'global').lower() == 'global'
+
+    def _scan_key(self, source_book_id: str) -> str:
+        """Throttle-table key. BookLore keeps the bare id (back-compat); other
+        sources are namespaced so numeric ids can't collide across sources."""
+        if self._source_name == 'BookLore':
+            return str(source_book_id)
+        return f"{self._source_name.lower()}:{source_book_id}"
 
     # ---- main entry point ----------------------------------------------
 
@@ -245,7 +263,7 @@ class ShelfWatchService:
                 grimmory_book, filename, grimmory_id, watch_shelf, kobo_shelf,
             )
             self.database_service.upsert_shelf_watch_scan(
-                grimmory_id, filename, top_score=None, status=outcome_status,
+                self._scan_key(grimmory_id), filename, top_score=None, status=outcome_status,
             )
             return outcome_status
 
@@ -263,7 +281,7 @@ class ShelfWatchService:
             # No shelf move — book stays on Up Next.
 
         self.database_service.upsert_shelf_watch_scan(
-            grimmory_id, filename, top_score=top_score, status=outcome_status,
+            self._scan_key(grimmory_id), filename, top_score=top_score, status=outcome_status,
         )
         return outcome_status
 
@@ -279,7 +297,7 @@ class ShelfWatchService:
             audio_provider_book_id=top_match.get('audio_provider_book_id'),
             audio_provider_file_id=top_match.get('audio_provider_file_id'),
             ebook_filename=filename,
-            ebook_source='BookLore',
+            ebook_source=self._source_name,
             ebook_source_id=grimmory_id,
             booklore_ebook_id=grimmory_id,
         )
@@ -300,7 +318,7 @@ class ShelfWatchService:
         saved = self.book_mapping_service.create_ebook_only_mapping(
             ebook_filename=filename,
             ebook_title=grimmory_book.get('title'),
-            ebook_source='BookLore',
+            ebook_source=self._source_name,
             ebook_source_id=grimmory_id,
             booklore_ebook_id=grimmory_id,
         )
@@ -325,6 +343,7 @@ class ShelfWatchService:
             'grimmory_id': grimmory_id,
             'grimmory_filename': filename,
             'grimmory_title': grimmory_book.get('title') or '',
+            'source_name': self._source_name,
         }
         suggestion = PendingSuggestion(
             source_id=bridge_key,
@@ -350,7 +369,7 @@ class ShelfWatchService:
         Grimmory ID, or `booklore:` bridge key.
         """
         try:
-            if self.database_service.get_book(f"booklore:{grimmory_id}"):
+            if self.database_service.get_book(f"{self._source_name.lower()}:{grimmory_id}"):
                 return True
         except Exception:
             pass
@@ -359,12 +378,12 @@ class ShelfWatchService:
                 return True
         except Exception:
             pass
-        # Catch ebook-only mappings created from this Grimmory book via its source id.
+        # Catch ebook-only mappings created from this source book via its source id.
         # _is_already_mapped is also tolerant of int vs str id mismatches.
         try:
             if hasattr(self.database_service, 'get_book_by_ebook_source'):
                 gid_str = str(grimmory_id)
-                if self.database_service.get_book_by_ebook_source('BookLore', gid_str):
+                if self.database_service.get_book_by_ebook_source(self._source_name, gid_str):
                     return True
         except Exception:
             pass
@@ -374,7 +393,7 @@ class ShelfWatchService:
         if window.total_seconds() <= 0:
             return False
         try:
-            scan = self.database_service.get_shelf_watch_scan(grimmory_id)
+            scan = self.database_service.get_shelf_watch_scan(self._scan_key(grimmory_id))
         except Exception:
             return False
         if not scan or not scan.last_scan_at:

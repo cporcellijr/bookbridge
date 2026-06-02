@@ -575,3 +575,130 @@ class BookOrbitClient:
         status = resp.status_code if resp else "no response"
         logger.error("BookOrbit audiobook update failed: book_id=%s status=%s", book_id, status)
         return False
+
+    # ------------------------------------------------------------------
+    # Ebook download (for KOSync hash computation in BookMappingService)
+    # ------------------------------------------------------------------
+
+    def download_book(self, book_id) -> Optional[bytes]:
+        """Download the primary ebook file's bytes, or None."""
+        file_id = self._resolve_primary_file_id(book_id, "ebook")
+        if file_id is None:
+            logger.warning("BookOrbit: no primary ebook file to download for book %s", book_id)
+            return None
+        resp = self._make_request("GET", f"/api/v1/books/files/{file_id}/download")
+        if resp and resp.status_code == 200:
+            return resp.content
+        status = resp.status_code if resp else "no response"
+        logger.error("BookOrbit ebook download failed: file %s status=%s", file_id, status)
+        return None
+
+    # ------------------------------------------------------------------
+    # Collections (writable manual shelves — used for "Up Next"/Kobo)
+    # ------------------------------------------------------------------
+
+    def get_all_shelves(self) -> list:
+        """Return all collections as dicts ``{id, name, ...}`` (shelf parity)."""
+        resp = self._make_request("GET", "/api/v1/collections")
+        if not resp or resp.status_code != 200:
+            return []
+        data = self._parse_json(resp)
+        return data if isinstance(data, list) else []
+
+    def _get_collection_id(self, name: str) -> Optional[int]:
+        if not name:
+            return None
+        target = name.strip().lower()
+        for col in self.get_all_shelves():
+            if isinstance(col, dict) and (col.get("name") or "").strip().lower() == target:
+                return col.get("id")
+        return None
+
+    def ensure_shelf_exists(self, name: str, icon: str = "bookmark") -> Optional[int]:
+        cid = self._get_collection_id(name)
+        if cid is not None:
+            return cid
+        resp = self._make_request("POST", "/api/v1/collections", {"name": name, "icon": icon})
+        if resp and resp.status_code in (200, 201):
+            data = self._parse_json(resp)
+            if isinstance(data, dict):
+                return data.get("id")
+        logger.error("BookOrbit: failed to create collection '%s'", name)
+        return None
+
+    def list_books_on_shelf(self, shelf_name: str) -> list:
+        """List books on a collection, enriched with the primary ebook filename.
+
+        Returns dicts shaped for ShelfWatchService: ``{id, title, author, fileName}``.
+        Resolving the filename per book also seeds the filename→id index so a
+        subsequent ``move_between_shelves(filename, ...)`` can map back to the id.
+        """
+        cid = self._get_collection_id(shelf_name)
+        if cid is None:
+            return []
+        resp = self._make_request("GET", f"/api/v1/collections/{cid}/books")
+        if not resp or resp.status_code != 200:
+            return []
+        data = self._parse_json(resp)
+        items = data.get("items") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        out = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            book_id = raw.get("id")
+            detail = self.get_book_detail(book_id)
+            filename = ""
+            if detail:
+                pf = self._primary_file(detail, kind="ebook") or self._primary_file(detail)
+                filename = (pf or {}).get("filename") or ""
+            out.append({
+                "id": book_id,
+                "title": (raw.get("title") or "").strip(),
+                "author": self._format_authors(raw.get("authors")),
+                "fileName": filename,
+            })
+        return out
+
+    def _resolve_book_id_for_filename(self, filename: str) -> Optional[int]:
+        with self._cache_lock:
+            bid = self._filename_index.get(Path(filename).name.lower())
+        if bid is not None:
+            return bid
+        info = self.find_book_by_filename(filename)
+        return info.get("id") if info else None
+
+    def add_to_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
+        cid = self.ensure_shelf_exists(shelf_name)
+        book_id = self._resolve_book_id_for_filename(ebook_filename)
+        if cid is None or book_id is None:
+            return False
+        resp = self._make_request(
+            "POST", f"/api/v1/collections/{cid}/books", {"bookIds": [int(book_id)]}
+        )
+        return bool(resp and resp.status_code in (200, 201, 204))
+
+    def remove_from_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
+        cid = self._get_collection_id(shelf_name)
+        book_id = self._resolve_book_id_for_filename(ebook_filename)
+        if cid is None or book_id is None:
+            return False
+        resp = self._make_request(
+            "DELETE", f"/api/v1/collections/{cid}/books", {"bookIds": [int(book_id)]}
+        )
+        return bool(resp and resp.status_code in (200, 201, 204))
+
+    def move_between_shelves(self, ebook_filename: str, from_shelf: str, to_shelf: str) -> bool:
+        book_id = self._resolve_book_id_for_filename(ebook_filename)
+        if book_id is None:
+            return False
+        to_cid = self.ensure_shelf_exists(to_shelf)
+        if to_cid is not None:
+            self._make_request(
+                "POST", f"/api/v1/collections/{to_cid}/books", {"bookIds": [int(book_id)]}
+            )
+        from_cid = self._get_collection_id(from_shelf)
+        if from_cid is not None:
+            self._make_request(
+                "DELETE", f"/api/v1/collections/{from_cid}/books", {"bookIds": [int(book_id)]}
+            )
+        return to_cid is not None
