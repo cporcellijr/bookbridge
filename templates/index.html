@@ -130,6 +130,19 @@
                 </a>
                 {% endif %}
 
+                {% if integrations.bookorbitaudio and mapping.audio_source == 'BookOrbit' %}
+                <a href="{{ get_val('BOOKORBIT_SERVER')|default('#') }}" target="_blank" rel="noopener noreferrer"
+                    class="service-item" title="Open BookOrbit audiobook">
+                    <span class="service-icon-emoji">🪐</span>
+                    <span class="service-name">BO Audio</span>
+                    {% if mapping.states.bookorbitaudio is defined %}
+                    <span class="service-value">{{ '%.1f' | format(mapping.states.bookorbitaudio.percentage|default(0)) }}%</span>
+                    {% else %}
+                    <span class="service-value">0.0%</span>
+                    {% endif %}
+                </a>
+                {% endif %}
+
                 {% if integrations.abs and mapping.sync_mode != 'ebook_only' and mapping.abs_url %}
                 <a href="{{ mapping.abs_url }}" target="_blank" rel="noopener noreferrer" class="service-item"
                     title="Open in Audiobookshelf">
@@ -198,6 +211,21 @@
                     <span class="service-value">
                         {% if mapping.states.booklore is defined %}
                         {{ '%.1f' | format(mapping.states.booklore.percentage) }}%
+                        {% else %}
+                        0.0%
+                        {% endif %}
+                    </span>
+                </a>
+                {% endif %}
+
+                {% if integrations.bookorbit and (mapping.states.bookorbit is defined or mapping.ebook_source == 'BookOrbit') %}
+                <a href="{{ get_val('BOOKORBIT_SERVER')|default('#') }}" target="_blank" rel="noopener noreferrer"
+                    class="service-item" title="Open in BookOrbit">
+                    <span class="service-icon-emoji">🪐</span>
+                    <span class="service-name">BookOrbit</span>
+                    <span class="service-value">
+                        {% if mapping.states.bookorbit is defined %}
+                        {{ '%.1f' | format(mapping.states.bookorbit.percentage) }}%
                         {% else %}
                         0.0%
                         {% endif %}

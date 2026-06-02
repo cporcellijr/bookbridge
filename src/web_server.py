@@ -2104,6 +2104,9 @@ def _get_dashboard_sync_warning_clients(mapping, integrations):
     if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
         client_names.append('bookloreaudio')
 
+    if integrations.get('bookorbitaudio') and mapping.get('audio_source') == 'BookOrbit':
+        client_names.append('bookorbitaudio')
+
     if integrations.get('kosync'):
         client_names.append('kosync')
 
@@ -2119,6 +2122,12 @@ def _get_dashboard_sync_warning_clients(mapping, integrations):
         or 'booklore' in mapping.get('states', {})
     ):
         client_names.append('booklore')
+
+    if integrations.get('bookorbit') and (
+        mapping.get('ebook_source') == 'BookOrbit'
+        or 'bookorbit' in mapping.get('states', {})
+    ):
+        client_names.append('bookorbit')
 
     return client_names
 
@@ -2229,6 +2238,8 @@ def _build_dashboard_mapping(
         "audio_duration": getattr(book, "audio_duration", None) or book.duration or 0,
         "audio_cover_url": getattr(book, "audio_cover_url", None),
         "ebook_filename": book.ebook_filename,
+        "ebook_source": getattr(book, "ebook_source", None),
+        "ebook_source_id": getattr(book, "ebook_source_id", None),
         "kosync_doc_id": book.kosync_doc_id,
         "transcript_file": book.transcript_file,
         "status": book.status,
