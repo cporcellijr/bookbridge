@@ -827,6 +827,82 @@
             </div>
 
 
+            <!-- BookOrbit (Optional) -->
+            <div class="settings-section">
+                {% set bookorbit_configured = get_val('BOOKORBIT_SERVER') != '' %}
+                {% set bookorbit_enabled = get_bool('BOOKORBIT_ENABLED') %}
+                <div class="section-header">
+                    <h3>BookOrbit</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('bookorbit', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_bookorbit" name="BOOKORBIT_ENABLED"
+                                onchange="toggleSection('bookorbit_body', this.checked)" {% if bookorbit_enabled
+                                %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="bookorbit_body" class="section-body {% if not bookorbit_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <label>Server URL</label>
+                        <input type="text" name="BOOKORBIT_SERVER" value="{{ get_val('BOOKORBIT_SERVER') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" name="BOOKORBIT_USER" value="{{ get_val('BOOKORBIT_USER') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" name="BOOKORBIT_PASSWORD" value="{{ get_val('BOOKORBIT_PASSWORD') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Collection Name</label>
+                        <input type="text" name="BOOKORBIT_SHELF_NAME" value="{{ get_val('BOOKORBIT_SHELF_NAME') }}">
+                        <div class="help-text">BookOrbit "collection" auto-matched books are moved to on success.</div>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="bookorbit_sessions" name="BOOKORBIT_READING_SESSIONS"
+                            {% if get_bool('BOOKORBIT_READING_SESSIONS') %}checked{% endif %}>
+                        <label for="bookorbit_sessions">Record Reading Sessions</label>
+                    </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">"Up Next" Collection Auto-Match</h4>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="bookorbit_shelf_watch" name="BOOKORBIT_SHELF_WATCH_ENABLED"
+                            onchange="toggleSection('bookorbit_shelf_watch_body', this.checked)"
+                            {% if get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %}checked{% endif %}>
+                        <label for="bookorbit_shelf_watch">Watch a BookOrbit collection for auto-matching</label>
+                    </div>
+                    <div id="bookorbit_shelf_watch_body" class="full-width" {% if not get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %}style="display:none;"{% endif %}>
+                        <div class="form-group full-width">
+                            <label>Watch Collection Name</label>
+                            <input type="text" name="BOOKORBIT_SHELF_WATCH_NAME"
+                                value="{{ get_val('BOOKORBIT_SHELF_WATCH_NAME', 'Up Next') }}"
+                                placeholder="Up Next">
+                            <div class="help-text">Create a collection in <b>BookOrbit</b> with this name. Books placed on it are auto-matched on each poll cycle and moved to <code>{{ get_val('BOOKORBIT_SHELF_NAME', 'Kobo') }}</code> on success.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Auto-Match Threshold (%)</label>
+                            <input type="number" name="BOOKORBIT_SHELF_WATCH_THRESHOLD" min="60" max="100"
+                                value="{{ get_val('BOOKORBIT_SHELF_WATCH_THRESHOLD', '95') }}">
+                            <div class="help-text">Matches at or above this score auto-create a mapping. Lower-scoring matches become pending Suggestions.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Rescan Cooldown (hours)</label>
+                            <input type="number" name="BOOKORBIT_SHELF_WATCH_RESCAN_HOURS" min="1"
+                                value="{{ get_val('BOOKORBIT_SHELF_WATCH_RESCAN_HOURS', '24') }}">
+                            <div class="help-text">Books on the watch collection with no audio candidate are re-scanned no more often than this.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+
             <!-- CWA (Optional) -->
             <div class="settings-section">
                 {% set cwa_configured = get_val('CWA_SERVER') != '' %}
@@ -1168,6 +1244,24 @@
                             <input type="number" name="BOOKLORE_POLL_SECONDS" min="10"
                                    value="{{ get_val('BOOKLORE_POLL_SECONDS', '300') }}">
                             <div class="help-text">Recommended: 300s for Grimmory.</div>
+                        </div>
+                        {% endif %}
+
+                        {% if get_bool('BOOKORBIT_ENABLED') %}
+                        <div class="form-group" style="align-items: center;">
+                            <label>BookOrbit Poll Mode</label>
+                            <select name="BOOKORBIT_POLL_MODE" id="bookorbit_poll_mode"
+                                    onchange="togglePollSeconds('bookorbit_poll_seconds_row', this.value)">
+                                <option value="global" {% if get_val('BOOKORBIT_POLL_MODE', 'global') == 'global' %}selected{% endif %}>Global</option>
+                                <option value="custom" {% if get_val('BOOKORBIT_POLL_MODE') == 'custom' %}selected{% endif %}>Custom</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="bookorbit_poll_seconds_row"
+                             {% if get_val('BOOKORBIT_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
+                            <label>BookOrbit Poll Interval (seconds)</label>
+                            <input type="number" name="BOOKORBIT_POLL_SECONDS" min="10"
+                                   value="{{ get_val('BOOKORBIT_POLL_SECONDS', '300') }}">
+                            <div class="help-text">Recommended: 300s for BookOrbit.</div>
                         </div>
                         {% endif %}
 
@@ -1652,6 +1746,7 @@
             kosync: ['KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY'],
             storyteller: ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
+            bookorbit: ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],

@@ -6001,6 +6001,12 @@ def test_connection(service: str):
             _coerce_test_str(data.get('BOOKLORE_USER')),
             _coerce_test_str(data.get('BOOKLORE_PASSWORD')),
         ),
+        'bookorbit': lambda data: _test_bookorbit(
+            _coerce_test_bool(data.get('BOOKORBIT_ENABLED')),
+            _normalize_test_url(data.get('BOOKORBIT_SERVER')),
+            _coerce_test_str(data.get('BOOKORBIT_USER')),
+            _coerce_test_str(data.get('BOOKORBIT_PASSWORD')),
+        ),
         'cwa': lambda data: _test_cwa(
             _coerce_test_bool(data.get('CWA_ENABLED')),
             _normalize_test_url(data.get('CWA_SERVER')),
@@ -6160,6 +6166,25 @@ def _test_booklore(enabled: bool, url: str, user: str, pwd: str) -> dict:
         return {"ok": True, "message": "Authenticated successfully"}
     if r.status_code in (401, 403):
         return {"ok": False, "message": "Invalid username or password"}
+    return {"ok": False, "message": f"Login returned {r.status_code}"}
+
+
+def _test_bookorbit(enabled: bool, url: str, user: str, pwd: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "BookOrbit is disabled"}
+    if not url or not user or not pwd:
+        return {"ok": False, "message": "Missing URL, username, or password"}
+    r = requests.post(
+        f"{url}/api/v1/auth/login",
+        json={"username": user, "password": pwd},
+        timeout=10,
+    )
+    if r.status_code == 200:
+        return {"ok": True, "message": "Authenticated successfully"}
+    if r.status_code in (401, 403):
+        return {"ok": False, "message": "Invalid username or password"}
+    if r.status_code == 429:
+        return {"ok": False, "message": "Login throttled (429) — wait a minute and try again"}
     return {"ok": False, "message": f"Login returned {r.status_code}"}
 
 

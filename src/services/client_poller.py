@@ -23,6 +23,8 @@ class ClientPoller:
         ('Storyteller', 'STORYTELLER'),
         ('BookLore', 'BOOKLORE'),
         ('BookLoreAudio', 'BOOKLORE_AUDIO'),
+        ('BookOrbit', 'BOOKORBIT'),
+        ('BookOrbitAudio', 'BOOKORBIT_AUDIO'),
         ('CWA', 'CWA_SYNC'),
     ]
 

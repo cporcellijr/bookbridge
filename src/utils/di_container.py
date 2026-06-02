@@ -13,6 +13,7 @@ from dependency_injector import containers, providers
 # Import all the classes we'll be using
 from src.api.api_clients import ABSClient, KoSyncClient
 from src.api.booklore_client import BookloreClient
+from src.api.bookorbit_client import BookOrbitClient
 from src.api.cwa_client import CWAClient
 from src.api.cwa_sync_api import CWASyncApi
 from src.api.hardcover_client import HardcoverClient
@@ -37,6 +38,8 @@ from src.sync_clients.kosync_sync_client import KoSyncSyncClient
 from src.sync_clients.storyteller_sync_client import StorytellerSyncClient
 from src.sync_clients.booklore_sync_client import BookloreSyncClient
 from src.sync_clients.booklore_audio_sync_client import BookLoreAudioSyncClient
+from src.sync_clients.bookorbit_sync_client import BookOrbitSyncClient
+from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClient
 from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
 from src.sync_clients.cwa_sync_client import CWASyncClient
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
@@ -96,6 +99,7 @@ class Container(containers.DeclarativeContainer):
         BookloreClient,
         database_service=database_service
     )
+    bookorbit_client = providers.Singleton(BookOrbitClient)
     kavita_client = providers.Object(None)
 
     hardcover_client = providers.Singleton(HardcoverClient)
@@ -224,6 +228,19 @@ class Container(containers.DeclarativeContainer):
         alignment_service=alignment_service,
     )
 
+    bookorbit_sync_client = providers.Singleton(
+        BookOrbitSyncClient,
+        bookorbit_client,
+        ebook_parser,
+    )
+
+    bookorbit_audio_sync_client = providers.Singleton(
+        BookOrbitAudioSyncClient,
+        bookorbit_client,
+        ebook_parser,
+        alignment_service=alignment_service,
+    )
+
     abs_ebook_sync_client = providers.Singleton(
         ABSEbookSyncClient,
         abs_client,
@@ -277,6 +294,8 @@ class Container(containers.DeclarativeContainer):
         Storyteller=storyteller_sync_client,
         BookLore=booklore_sync_client,
         BookLoreAudio=booklore_audio_sync_client,
+        BookOrbit=bookorbit_sync_client,
+        BookOrbitAudio=bookorbit_audio_sync_client,
         CWA=cwa_sync_client,
         Hardcover=hardcover_sync_client,
         StoryGraph=storygraph_sync_client
