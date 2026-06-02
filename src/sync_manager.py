@@ -1721,6 +1721,8 @@ class SyncManager:
                         f"'{changed_client}' (low-confidence source=percent_fallback); evaluating all candidates"
                     )
                 elif changed_ts is not None and other_ts:
+                    max_other_ts = max(other_ts)
+                    NORMALIZED_LEAD_EPSILON_SECONDS = 2.0
                     changed_raw_pct = vals.get(changed_client)
                     changed_locator_pct = config[changed_client].current.get("_locator_pct")
                     has_locator_mismatch = (
@@ -1729,16 +1731,20 @@ class SyncManager:
                         and abs(changed_locator_pct - changed_raw_pct) > 0.01
                     )
 
-                    if has_locator_mismatch:
-                        max_other_ts = max(other_ts)
-                        NORMALIZED_LEAD_EPSILON_SECONDS = 2.0
-                        if changed_ts <= (max_other_ts + NORMALIZED_LEAD_EPSILON_SECONDS):
-                            single_delta_low_conf = True
-                            logger.info(
-                                f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
-                                f"'{changed_client}' (raw/locator mismatch and not ahead on normalized timeline: "
-                                f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
-                            )
+                    MATERIAL_ROLLBACK_SECONDS = 30.0
+                    material_rollback = changed_ts < (max_other_ts - MATERIAL_ROLLBACK_SECONDS)
+                    mismatch_not_ahead = has_locator_mismatch and changed_ts <= (max_other_ts + NORMALIZED_LEAD_EPSILON_SECONDS)
+                    if material_rollback or mismatch_not_ahead:
+                        single_delta_low_conf = True
+                        if material_rollback:
+                            reason = f"material rollback on normalized timeline (> {MATERIAL_ROLLBACK_SECONDS:.0f}s behind)"
+                        else:
+                            reason = "raw/locator mismatch and not ahead on normalized timeline"
+                        logger.info(
+                            f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
+                            f"'{changed_client}' ({reason}: "
+                            f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
+                        )
 
         if len(clients_with_delta) == 1 and not single_delta_low_conf:
             # Only one client changed - that client is the leader (most recent change wins)
