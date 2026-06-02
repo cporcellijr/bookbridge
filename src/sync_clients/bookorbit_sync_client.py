@@ -61,8 +61,15 @@ class BookOrbitSyncClient(SyncClient):
         return self.client.find_book_by_filename(epub, allow_refresh=False)
 
     def supports_book(self, book: Book) -> bool:
-        if getattr(book, "ebook_source", None) == "BookOrbit":
-            return True
+        # An explicit ebook source is authoritative — never hijack a book that
+        # belongs to Grimmory/CWA/ABS/etc. just because BookOrbit also hosts the
+        # same file (both libraries can point at the same /books disk).
+        src = (getattr(book, "ebook_source", None) or "").strip().lower()
+        if src:
+            return src == "bookorbit"
+        # Legacy Grimmory mappings predate ebook_source and are tagged via booklore_id.
+        if getattr(book, "booklore_id", None):
+            return False
         epub = self._resolve_epub_filename(book)
         if not epub:
             return False
