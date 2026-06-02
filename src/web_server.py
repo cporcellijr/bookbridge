@@ -657,6 +657,40 @@ def _is_storyteller_artifact_filename(filename):
     return bool(filename and re.match(r"^storyteller_[0-9a-fA-F-]+\.epub$", filename))
 
 
+def _shelve_matched_ebook(shelf_filename):
+    """Add a newly matched ebook to the Kobo shelf and clear it from the
+    shelf-watch "Up Next" shelf.
+
+    Auto-matching moves a book Up Next -> Kobo, but approving a suggestion (or a
+    manual match) historically only added to Kobo and left the book sitting on Up
+    Next. Once the book is stored as a match it no longer belongs in the to-read
+    queue, so mirror the auto-match behaviour here. The Up Next removal is gated on
+    the shelf-watch feature being enabled to avoid touching shelves for users who
+    don't use it.
+    """
+    if not shelf_filename or not container.booklore_client().is_configured():
+        return
+    bl = container.booklore_client()
+    try:
+        bl.add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{BOOKLORE_SHELF_NAME}': {e}"
+        )
+
+    watch_enabled = str(os.environ.get('BOOKLORE_SHELF_WATCH_ENABLED', 'false')).strip().lower() in (
+        'true', '1', 'yes', 'on'
+    )
+    watch_shelf = (os.environ.get('BOOKLORE_SHELF_WATCH_NAME') or 'Up Next').strip()
+    if watch_enabled and watch_shelf and watch_shelf != BOOKLORE_SHELF_NAME:
+        try:
+            bl.remove_from_shelf(shelf_filename, watch_shelf)
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Failed to remove '{sanitize_log_data(shelf_filename)}' from watch shelf '{watch_shelf}': {e}"
+            )
+
+
 def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original_ebook_filename=None):
     """Resolve a Storyteller artifact path.
 
@@ -3047,7 +3081,7 @@ def match():
             # Use original filename for shelf if we switched to storyteller
             shelf_filename = original_ebook_filename or ebook_filename
             if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
-                container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+                _shelve_matched_ebook(shelf_filename)
         if container.storyteller_client().is_configured():
             if book.storyteller_uuid:
                 container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
@@ -3284,7 +3318,7 @@ def batch_match():
                         container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
                     if container.booklore_client().is_configured():
                         shelf_filename = original_ebook_filename or ebook_filename
-                        container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+                        _shelve_matched_ebook(shelf_filename)
                     if container.storyteller_client().is_configured() and book.storyteller_uuid:
                         container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
 
@@ -3559,7 +3593,7 @@ def batch_match():
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
                 if container.booklore_client().is_configured():
                     shelf_filename = original_ebook_filename or ebook_filename
-                    container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+                    _shelve_matched_ebook(shelf_filename)
                 if container.storyteller_client().is_configured():
                     if book.storyteller_uuid:
                         container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
