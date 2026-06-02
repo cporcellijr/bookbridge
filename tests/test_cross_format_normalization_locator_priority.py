@@ -425,6 +425,44 @@ def test_single_non_abs_delta_must_be_ahead_on_normalized_timeline():
     assert leader_pct == config["ABS"].current["pct"]
 
 
+def test_single_kosync_delta_behind_abs_does_not_lead():
+    manager = SyncManager.__new__(SyncManager)
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {
+        "ABS": _Client(),
+        "KoSync": _Client(),
+        "Hardcover": _Client(),
+    }
+    manager.cross_format_deadband_seconds = 2.0
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 15310.7, "KoSync": 7812.8, "Hardcover": 14600.0}
+    )
+
+    book = SimpleNamespace(duration=21175.4, transcript_file="DB_MANAGED", audio_source="ABS")
+    config = {
+        "ABS": _state({"pct": 0.7230, "ts": 15310.7}),
+        "KoSync": _state(
+            {
+                "pct": 0.3913,
+                "xpath": "/body/DocFragment[7]/body/div/p[706]/text()[1].0",
+                "_normalization_source": "xpath",
+            }
+        ),
+        "Hardcover": _state({"pct": 0.7344}),
+    }
+    config["KoSync"].previous_pct = 0.7360
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-heart", "Heart the Lover")
+
+    assert leader == "ABS"
+    assert leader_pct == config["ABS"].current["pct"]
+
+
 def test_single_storyteller_delta_with_href_progression_is_not_demoted():
     manager = SyncManager.__new__(SyncManager)
 
