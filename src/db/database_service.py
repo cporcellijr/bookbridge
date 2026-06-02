@@ -226,6 +226,18 @@ class DatabaseService:
                 session.expunge(book)
             return book
 
+    def update_book_kosync_doc_id(self, abs_id: str, kosync_doc_id: str) -> bool:
+        """Update only a book's kosync_doc_id column.
+
+        Used to reconcile the stored hash with the hash of the ebook actually served
+        to KOReader, without rewriting the rest of the book row.
+        """
+        with self.get_session() as session:
+            updated = session.query(Book).filter(Book.abs_id == abs_id).update(
+                {Book.kosync_doc_id: kosync_doc_id}, synchronize_session=False
+            )
+            return bool(updated)
+
     def get_all_books(self) -> List[Book]:
         """Get all books as model objects."""
         with self.get_session() as session:
