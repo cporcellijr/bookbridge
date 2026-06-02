@@ -340,6 +340,34 @@ def _get_kosync_session_type(book) -> str:
     return "EBOOK"
 
 
+def _forward_reading_session_to_bookorbit(
+    book, start_time, end_time, start_progress, end_progress, book_type=None
+) -> None:
+    """Forward a reading session to BookOrbit when the book's ebook is hosted there."""
+    if os.environ.get("BOOKORBIT_READING_SESSIONS", "true").lower() != "true":
+        return
+    if not book or getattr(book, "ebook_source", None) != "BookOrbit":
+        return
+    client = getattr(_manager, "bookorbit_client", None) if _manager else None
+    if not client or not client.is_configured():
+        return
+    source_id = getattr(book, "ebook_source_id", None)
+    if not source_id:
+        return
+    try:
+        client.create_reading_session(
+            book_id=int(source_id),
+            start_time=float(start_time),
+            end_time=float(end_time),
+            start_progress=start_progress,
+            end_progress=end_progress,
+            book_type=book_type,
+        )
+        logger.debug(f"Forwarded session to BookOrbit for '{getattr(book, 'abs_title', '?')}' (id={source_id})")
+    except Exception as e:
+        logger.warning(f"Session upload: BookOrbit forwarding failed for '{getattr(book, 'abs_id', '?')}': {e}")
+
+
 def _persist_grouped_kosync_session(session_data: dict) -> None:
     if not _supports_estimated_kosync_sessions(session_data["device"], session_data["device_id"]):
         logger.debug(
@@ -394,6 +422,19 @@ def _persist_grouped_kosync_session(session_data: dict) -> None:
                 )
         except Exception as e:
             logger.warning("KOSync session forwarding failed for '%s': %s", session_data["abs_id"], e)
+
+    try:
+        bo_book = _database_service.get_book(session_data["abs_id"])
+        _forward_reading_session_to_bookorbit(
+            bo_book,
+            session_data["start_time"],
+            session_data["last_time"],
+            session_data["start_progress"],
+            session_data["last_progress"],
+            book_type=session_data["session_type"],
+        )
+    except Exception as e:
+        logger.warning("KOSync BookOrbit session forwarding failed for '%s': %s", session_data["abs_id"], e)
 
 
 def _discard_open_kosync_session(document_hash: str | None, device: str | None, device_id: str | None) -> bool:
@@ -1270,6 +1311,11 @@ def kosync_upload_sessions():
                     logger.debug(f"Forwarded session to Grimmory for '{book.abs_title}' (id={grimmory_id})")
             except Exception as e:
                 logger.warning(f"Session upload: Grimmory forwarding failed for '{abs_id}': {e}")
+
+        # Forward to BookOrbit if the ebook is hosted there
+        _forward_reading_session_to_bookorbit(
+            book, start_time, end_time, start_progress, end_progress, book_type=session_type
+        )
 
     logger.info(f"Session upload: accepted={accepted}, rejected={rejected}")
     return jsonify({"accepted": accepted, "rejected": rejected}), 200

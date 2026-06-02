@@ -594,6 +594,64 @@ class BookOrbitClient:
         return None
 
     # ------------------------------------------------------------------
+    # Reading sessions (per file)
+    # ------------------------------------------------------------------
+
+    def create_reading_session(
+        self,
+        book_id: int,
+        start_time: float,
+        end_time: float,
+        start_progress: float,
+        end_progress: float,
+        book_type: Optional[str] = None,
+        start_location: Optional[str] = None,
+        end_location: Optional[str] = None,
+    ) -> bool:
+        """Record a reading session on the book's primary file.
+
+        Progress args are 0-1 fractions; BookOrbit's session fields are 0-100.
+        """
+        duration_seconds = int(end_time - start_time)
+        if duration_seconds <= 0:
+            return False
+        max_duration = 14400  # cap at 4h, mirroring the Grimmory client
+        if duration_seconds > max_duration:
+            duration_seconds = max_duration
+
+        kind = "audiobook" if (book_type or "").lower() in ("audiobook", "audio") else "ebook"
+        file_id = self._resolve_primary_file_id(book_id, kind)
+        if file_id is None:
+            file_id = self._resolve_primary_file_id(book_id, "ebook")
+        if file_id is None:
+            logger.debug("BookOrbit: no file to attach reading session for book %s", book_id)
+            return False
+
+        import uuid
+        from datetime import datetime, timezone
+
+        start_pct = round(float(start_progress) * 100, 2)
+        end_pct = round(float(end_progress) * 100, 2)
+        payload = {
+            "sessionId": str(uuid.uuid4()),
+            "startedAt": datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat(),
+            "endedAt": datetime.fromtimestamp(end_time, tz=timezone.utc).isoformat(),
+            "durationSeconds": duration_seconds,
+            "progressDelta": round(end_pct - start_pct, 2),
+            "endProgress": end_pct,
+        }
+        resp = self._make_request("POST", f"/api/v1/books/files/{file_id}/sessions", payload)
+        if resp and resp.status_code in (200, 201, 202, 204):
+            logger.debug(
+                "BookOrbit: recorded reading session for book %s file %s (%ds, %.1f%%->%.1f%%)",
+                book_id, file_id, duration_seconds, start_pct, end_pct,
+            )
+            return True
+        status = resp.status_code if resp else "no response"
+        logger.debug("BookOrbit: failed to record session for book %s: %s", book_id, status)
+        return False
+
+    # ------------------------------------------------------------------
     # Collections (writable manual shelves — used for "Up Next"/Kobo)
     # ------------------------------------------------------------------
 
