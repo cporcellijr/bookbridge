@@ -310,6 +310,30 @@ class BookOrbitClient:
         self._last_refresh_failed = False
         return self._refresh_book_cache()
 
+    def get_all_ebooks(self) -> list:
+        """Ebook-kind books enriched with their primary filename, for the
+        suggestions candidate pool. Filenames come from per-book detail (cached),
+        so the first full scan per TTL is the only expensive one."""
+        out = []
+        for info in self.get_all_books():
+            if info.get("kind") != "ebook":
+                continue
+            book_id = info.get("id")
+            detail = self.get_book_detail(book_id)
+            if not detail:
+                continue
+            pf = self._primary_file(detail, kind="ebook")
+            filename = (pf or {}).get("filename")
+            if not filename:
+                continue
+            out.append({
+                "id": book_id,
+                "title": info.get("title") or detail.get("title") or "",
+                "authors": info.get("authors") or self._format_authors(detail.get("authors")),
+                "fileName": filename,
+            })
+        return out
+
     # ------------------------------------------------------------------
     # Book detail (resolves primary file id, filename, duration, chapters)
     # ------------------------------------------------------------------

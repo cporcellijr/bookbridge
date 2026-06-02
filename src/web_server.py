@@ -1190,6 +1190,28 @@ def get_searchable_ebooks(search_term):
         except Exception as e:
             logger.warning(f"⚠️ Grimmory search failed: {e}")
 
+    # 1b. BookOrbit
+    if container.bookorbit_client().is_configured():
+        try:
+            bo_books = container.bookorbit_client().get_all_ebooks()
+            for b in bo_books or []:
+                fname = b.get('fileName', '')
+                if not fname.lower().endswith('.epub'):
+                    continue
+                if fname.lower() in found_filenames:
+                    continue
+                found_filenames.add(fname.lower())
+                found_stems.add(Path(fname).stem.lower())
+                results.append(EbookResult(
+                    name=fname,
+                    title=b.get('title'),
+                    authors=b.get('authors'),
+                    source='BookOrbit',
+                    source_id=b.get('id'),
+                ))
+        except Exception as e:
+            logger.warning(f"⚠️ BookOrbit search failed: {e}")
+
     # 2. ABS ebook libraries
     if search_term:
         try:
