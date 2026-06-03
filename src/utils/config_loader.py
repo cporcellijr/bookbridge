@@ -206,7 +206,14 @@ class ConfigLoader:
             # Check if we have any settings
             existing_settings = db_service.get_all_settings()
             if existing_settings:
-                # Already bootstrapped
+                # Already bootstrapped: reconcile by adding any NEW settings keys that
+                # were introduced after this install was first seeded. Additive only —
+                # never overwrites a value the user has already set.
+                missing = [k for k in ALL_SETTINGS if k not in existing_settings]
+                for key in missing:
+                    db_service.set_setting(key, str(DEFAULT_CONFIG.get(key, "")))
+                if missing:
+                    logger.info(f"➕ Added {len(missing)} new setting(s) to existing config: {missing}")
                 return
 
             logger.info("🚀 Bootstrapping configuration from environment variables...")
