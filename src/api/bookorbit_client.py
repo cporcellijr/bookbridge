@@ -254,12 +254,17 @@ class BookOrbitClient:
         try:
             new_cache: dict = {}
             page = 0
-            size = 200
-            while True:
+            # BookOrbit caps page size at 50 (it echoes "size":50 even for larger
+            # requests). Page by 50 and stop once we've accumulated `total`.
+            size = 50
+            max_pages = 2000  # safety against a bad/zero total
+            total = 0
+            while page < max_pages:
                 resp = self._make_request(
                     "POST", "/api/v1/books/query", {"page": page, "size": size}
                 )
-                if not resp or resp.status_code != 200:
+                # POST /books/query returns 201 Created (not 200).
+                if not resp or resp.status_code not in (200, 201):
                     self._last_refresh_failed = True
                     return False
                 data = self._parse_json(resp)
@@ -275,7 +280,7 @@ class BookOrbitClient:
                         new_cache[info["id"]] = info
                 total = data.get("total") or 0
                 page += 1
-                if page * size >= total or not items:
+                if not items or len(new_cache) >= total:
                     break
 
             with self._cache_lock:
