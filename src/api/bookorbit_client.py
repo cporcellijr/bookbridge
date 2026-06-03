@@ -254,14 +254,15 @@ class BookOrbitClient:
         try:
             new_cache: dict = {}
             page = 0
-            # BookOrbit caps page size at 50 (it echoes "size":50 even for larger
-            # requests). Page by 50 and stop once we've accumulated `total`.
+            # /books/query expects pagination NESTED under "pagination" (the
+            # server reads query.pagination.page/size; a flat {page,size} is
+            # ignored and always returns page 0). offset = page*size.
             size = 50
             max_pages = 2000  # safety against a bad/zero total
             total = 0
             while page < max_pages:
                 resp = self._make_request(
-                    "POST", "/api/v1/books/query", {"page": page, "size": size}
+                    "POST", "/api/v1/books/query", {"pagination": {"page": page, "size": size}}
                 )
                 # POST /books/query returns 201 Created (not 200).
                 if not resp or resp.status_code not in (200, 201):
