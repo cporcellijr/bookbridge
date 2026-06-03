@@ -2294,6 +2294,22 @@ class SyncManager:
                     except Exception:
                         pass  # Non-blocking: never prevent sync
 
+                # ── BookOrbit Reading Session Recording ──
+                if (
+                    os.environ.get("BOOKORBIT_READING_SESSIONS", "true").lower() == "true"
+                    and getattr(self, "bookorbit_client", None)
+                    and self.bookorbit_client.is_configured()
+                    and getattr(book, "ebook_source", None) == "BookOrbit"
+                    and leader_pct != leader_state.previous_pct
+                    and leader.lower() != 'kosync'  # kosync_server handles KOSync->BookOrbit
+                ):
+                    try:
+                        self._record_bookorbit_reading_session(
+                            book, leader, leader_state, prev_states_by_client, current_time
+                        )
+                    except Exception:
+                        pass  # Non-blocking: never prevent sync
+
                 # Debugging crash: Flush logs to ensure we see this before any potential hard crash
                 for handler in logger.handlers:
                     handler.flush()
@@ -2469,6 +2485,59 @@ class SyncManager:
                     )
                 except (TypeError, ValueError):
                     pass
+
+    def _record_bookorbit_reading_session(
+        self,
+        book,
+        leader: str,
+        leader_state,
+        prev_states_by_client: dict,
+        current_time: float,
+    ) -> None:
+        """Record a reading session to BookOrbit when progress changes on a
+        BookOrbit-hosted ebook. The session is logged against the BookOrbit book
+        (ebook_source_id); audio-leader sessions fall back to the ebook file."""
+        book_id = getattr(book, "ebook_source_id", None)
+        if not book_id:
+            return
+
+        leader_pct = leader_state.current.get('pct', 0)
+        prev_pct = leader_state.previous_pct or 0.0
+
+        duration_seconds = self._compute_session_duration(
+            book, leader, leader_state, prev_states_by_client, current_time
+        )
+        if duration_seconds is None or duration_seconds <= 0:
+            duration_seconds = 60
+        start_time = current_time - duration_seconds
+
+        primary_audio_client = self._get_primary_audio_client_name(book)
+        is_audio_leader = (leader == primary_audio_client)
+        end_location = None
+        if is_audio_leader:
+            book_type = "AUDIOBOOK"
+        else:
+            ebook_filename = getattr(book, 'ebook_filename', '') or ''
+            if ebook_filename.lower().endswith('.epub'):
+                book_type = "EPUB"
+            elif ebook_filename.lower().endswith('.pdf'):
+                book_type = "PDF"
+            else:
+                book_type = "EBOOK"
+            end_location = leader_state.current.get('cfi')
+
+        try:
+            self.bookorbit_client.create_reading_session(
+                book_id=int(book_id),
+                start_time=start_time,
+                end_time=current_time,
+                start_progress=prev_pct,
+                end_progress=leader_pct,
+                book_type=book_type,
+                end_location=end_location,
+            )
+        except (TypeError, ValueError):
+            pass
 
     def _resolve_grimmory_ebook_id(self, book):
         """Resolve the Grimmory book ID for a book's ebook. Returns int or None."""
