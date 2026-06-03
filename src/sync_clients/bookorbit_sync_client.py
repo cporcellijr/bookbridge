@@ -30,7 +30,9 @@ class BookOrbitSyncClient(SyncClient):
         return self.client.check_connection()
 
     def get_supported_sync_types(self) -> set:
-        return {"ebook"}
+        # Participate in both modes: as the ebook target in audiobook<->ebook
+        # matches (audiobook mode) and in ebook-only mappings. Mirrors Grimmory.
+        return {"audiobook", "ebook"}
 
     @staticmethod
     def _resolve_epub_filename(book: Book) -> Optional[str]:
