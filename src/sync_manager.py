@@ -2296,7 +2296,7 @@ class SyncManager:
 
                 # ── BookOrbit Reading Session Recording ──
                 if (
-                    os.environ.get("BOOKORBIT_READING_SESSIONS", "true").lower() == "true"
+                    os.environ.get("BOOKORBIT_READING_SESSIONS", "true").strip().lower() in ("true", "1", "yes", "on")
                     and getattr(self, "bookorbit_client", None)
                     and self.bookorbit_client.is_configured()
                     and getattr(book, "ebook_source", None) == "BookOrbit"

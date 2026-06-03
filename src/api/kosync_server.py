@@ -344,7 +344,7 @@ def _forward_reading_session_to_bookorbit(
     book, start_time, end_time, start_progress, end_progress, book_type=None
 ) -> None:
     """Forward a reading session to BookOrbit when the book's ebook is hosted there."""
-    if os.environ.get("BOOKORBIT_READING_SESSIONS", "true").lower() != "true":
+    if os.environ.get("BOOKORBIT_READING_SESSIONS", "true").strip().lower() not in ("true", "1", "yes", "on"):
         return
     if not book or getattr(book, "ebook_source", None) != "BookOrbit":
         return
