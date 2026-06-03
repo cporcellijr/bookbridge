@@ -1959,6 +1959,17 @@
                 </a>
                 {% endif %}
 
+                {% if get_val('BOOKORBIT_SERVER') and get_bool('BOOKORBIT_ENABLED') %}
+                <a href="{{ get_val('BOOKORBIT_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
+                    title="BookOrbit Library">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                </a>
+                {% endif %}
+
                 {% if shelfmark_url and (get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and
                 get_val('SHELFMARK_ENABLED') == '')) %}
                 <a href="/shelfmark" class="nav-icon-link" title="Shelfmark Tool" target="_blank"
