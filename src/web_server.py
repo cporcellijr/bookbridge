@@ -1180,8 +1180,34 @@ def get_suggestion_audiobooks():
     return records
 
 
+def _ebook_title_key(value):
+    """Normalize a title/filename-stem to an alphanumeric key for joining."""
+    return re.sub(r'[\W_]+', '', (value or '').lower())
+
+
+def _build_local_ebook_title_index():
+    """Map normalized title -> filename for every epub on the local /books disk.
+
+    BookBridge and BookOrbit share the same files, so this lets us pair
+    BookOrbit's clean metadata (title/author, no filename) with real filenames
+    without a per-book BookOrbit detail call. Indexes both the full stem and the
+    'Title' portion before ' - ' (filenames are 'Title - Author (year).epub')."""
+    index = {}
+    try:
+        if EBOOK_DIR.exists():
+            for eb in EBOOK_DIR.glob("**/*.epub"):
+                stem = eb.stem
+                title_part = stem.split(" - ", 1)[0]
+                for key in (_ebook_title_key(title_part), _ebook_title_key(stem)):
+                    if key:
+                        index.setdefault(key, eb.name)
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to build local ebook title index: {e}")
+    return index
+
+
 def get_searchable_ebooks(search_term):
-    """Get ebooks from Grimmory API, filesystem, ABS, and CWA.
+    """Get ebooks from Grimmory API, BookOrbit, filesystem, ABS, and CWA.
     Returns list of EbookResult objects for consistent interface."""
 
     results = []
@@ -1218,11 +1244,19 @@ def get_searchable_ebooks(search_term):
     if container.bookorbit_client().is_configured():
         try:
             if search_term:
+                # Targeted search returns real filenames (bounded result set).
                 bo_books = container.bookorbit_client().search_ebooks(search_term)
+                local_index = None
             else:
+                # Full scan: light candidates (clean title/author, no filename).
+                # Pair each with a real filename from the shared /books disk so we
+                # avoid a throttled detail call per book.
                 bo_books = container.bookorbit_client().get_all_ebooks()
+                local_index = _build_local_ebook_title_index()
             for b in bo_books or []:
-                fname = b.get('fileName', '')
+                fname = b.get('fileName') or ''
+                if not fname and local_index is not None:
+                    fname = local_index.get(_ebook_title_key(b.get('title'))) or ''
                 if not fname.lower().endswith('.epub'):
                     continue
                 if fname.lower() in found_filenames:

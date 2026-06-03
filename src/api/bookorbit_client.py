@@ -371,16 +371,23 @@ class BookOrbitClient:
         return out
 
     def get_all_ebooks(self) -> list:
-        """Ebook-kind books enriched with their primary filename, for the
-        suggestions candidate pool (no search term). Filenames come from per-book
-        detail (cached), so the first full scan per TTL is the only expensive one."""
+        """Light ebook-kind candidates for the suggestions pool: ``{id, title,
+        authors}`` straight from the book cache — NO per-book detail calls.
+
+        BookOrbit's list API omits filenames and a detail call per book (~1000s)
+        would hit the request throttle, so we deliberately skip filenames here.
+        Matching only needs title+author; the real filename is resolved cheaply
+        elsewhere (local /books index for the pool, or by id at apply time)."""
         out = []
         for info in self.get_all_books():
             if info.get("kind") != "ebook":
                 continue
-            enriched = self._enrich_ebook(info["id"], info)
-            if enriched:
-                out.append(enriched)
+            out.append({
+                "id": info.get("id"),
+                "title": info.get("title") or "",
+                "authors": info.get("authors") or "",
+                "fileName": None,
+            })
         return out
 
     # ------------------------------------------------------------------
