@@ -1193,7 +1193,10 @@ def get_searchable_ebooks(search_term):
     # 1b. BookOrbit
     if container.bookorbit_client().is_configured():
         try:
-            bo_books = container.bookorbit_client().get_all_ebooks()
+            if search_term:
+                bo_books = container.bookorbit_client().search_ebooks(search_term)
+            else:
+                bo_books = container.bookorbit_client().get_all_ebooks()
             for b in bo_books or []:
                 fname = b.get('fileName', '')
                 if not fname.lower().endswith('.epub'):

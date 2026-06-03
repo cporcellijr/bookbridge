@@ -310,28 +310,60 @@ class BookOrbitClient:
         self._last_refresh_failed = False
         return self._refresh_book_cache()
 
+    def _enrich_ebook(self, book_id, light: dict) -> Optional[dict]:
+        """Resolve an ebook's primary filename (via cached detail) for candidate use."""
+        detail = self.get_book_detail(book_id)
+        if not detail:
+            return None
+        pf = self._primary_file(detail, kind="ebook")
+        filename = (pf or {}).get("filename")
+        if not filename:
+            return None
+        return {
+            "id": book_id,
+            "title": (light or {}).get("title") or detail.get("title") or "",
+            "authors": (light or {}).get("authors") or self._format_authors(detail.get("authors")),
+            "fileName": filename,
+        }
+
+    def search_ebooks(self, search_term: str, limit: int = 25) -> list:
+        """Targeted server-side ebook search for the manual-match picker.
+
+        Mirrors BookloreClient.search_books: query BookOrbit's metadata search,
+        keep ebook-kind hits, and enrich just those few with their filename.
+        """
+        if not search_term:
+            return []
+        resp = self._make_request(
+            "POST", "/api/v1/books/query", {"page": 0, "size": limit, "search": search_term}
+        )
+        if not resp or resp.status_code != 200:
+            return []
+        data = self._parse_json(resp)
+        items = data.get("items") if isinstance(data, dict) else []
+        out = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            info = self._build_light_info(raw)
+            if not info or info.get("kind") != "ebook":
+                continue
+            enriched = self._enrich_ebook(info["id"], info)
+            if enriched:
+                out.append(enriched)
+        return out
+
     def get_all_ebooks(self) -> list:
         """Ebook-kind books enriched with their primary filename, for the
-        suggestions candidate pool. Filenames come from per-book detail (cached),
-        so the first full scan per TTL is the only expensive one."""
+        suggestions candidate pool (no search term). Filenames come from per-book
+        detail (cached), so the first full scan per TTL is the only expensive one."""
         out = []
         for info in self.get_all_books():
             if info.get("kind") != "ebook":
                 continue
-            book_id = info.get("id")
-            detail = self.get_book_detail(book_id)
-            if not detail:
-                continue
-            pf = self._primary_file(detail, kind="ebook")
-            filename = (pf or {}).get("filename")
-            if not filename:
-                continue
-            out.append({
-                "id": book_id,
-                "title": info.get("title") or detail.get("title") or "",
-                "authors": info.get("authors") or self._format_authors(detail.get("authors")),
-                "fileName": filename,
-            })
+            enriched = self._enrich_ebook(info["id"], info)
+            if enriched:
+                out.append(enriched)
         return out
 
     # ------------------------------------------------------------------

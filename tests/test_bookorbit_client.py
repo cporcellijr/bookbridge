@@ -152,6 +152,36 @@ def test_create_reading_session_rejects_nonpositive_duration(client):
         assert client.create_reading_session(3, 1000.0, 1000.0, 0.1, 0.2) is False
 
 
+def test_search_ebooks_filters_to_ebook_kind_and_enriches(client):
+    query_items = {
+        "items": [
+            {"id": 1, "title": "Guests", "authors": ["A"],
+             "files": [{"id": 11, "format": "epub", "role": "primary"}]},
+            {"id": 2, "title": "An Audiobook", "authors": ["B"],
+             "files": [{"id": 22, "format": "m4b", "role": "primary"}]},
+        ]
+    }
+
+    def fake_request(method, endpoint, payload=None):
+        assert payload.get("search") == "guests"
+        return _Resp(query_items)
+
+    details = {
+        1: {"id": 1, "title": "Guests", "authors": [{"name": "A"}],
+            "files": [{"id": 11, "format": "epub", "role": "primary", "filename": "Guests.epub"}]},
+    }
+    with patch.object(client, '_make_request', side_effect=fake_request), \
+         patch.object(client, 'get_book_detail', side_effect=lambda bid, force=False: details.get(bid)):
+        out = client.search_ebooks("guests")
+    assert len(out) == 1  # audiobook excluded
+    assert out[0]["fileName"] == "Guests.epub"
+    assert out[0]["id"] == 1
+
+
+def test_search_ebooks_empty_term_returns_empty(client):
+    assert client.search_ebooks("") == []
+
+
 def test_download_book_returns_content(client):
     with patch.object(client, '_resolve_primary_file_id', return_value=12), \
          patch.object(client, '_make_request', return_value=_Resp(status_code=200, content=b"PK\x03\x04epub")):
