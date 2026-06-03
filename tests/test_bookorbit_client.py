@@ -45,11 +45,28 @@ def test_classify_format():
     assert BookOrbitClient._classify_format("txt") is None
 
 
-def test_get_ebook_progress_converts_percent_to_fraction(client):
-    with patch.object(client, '_make_request', return_value=_Resp({"percentage": 42.5, "cfi": "epubcfi(/6/4)"})):
+def test_get_ebook_progress_parses_list_response(client):
+    # The real API returns a LIST of per-file entries.
+    payload = [{"fileId": 2459, "cfi": "epubcfi(/6/4)", "pageNumber": None, "percentage": 42.5}]
+    with patch.object(client, '_make_request', return_value=_Resp(payload)):
         pct, cfi = client.get_ebook_progress(7)
     assert pct == pytest.approx(0.425)
     assert cfi == "epubcfi(/6/4)"
+
+
+def test_get_ebook_progress_unstarted_is_zero_not_none(client):
+    # Unstarted book -> single entry at 0; must read as 0.0 so BookOrbit stays a
+    # writable follower (None would drop it from sync and deadlock first write).
+    payload = [{"fileId": 2459, "cfi": None, "percentage": 0}]
+    with patch.object(client, '_make_request', return_value=_Resp(payload)):
+        pct, cfi = client.get_ebook_progress(7)
+    assert pct == 0.0
+    assert cfi is None
+
+
+def test_get_ebook_progress_error_returns_none(client):
+    with patch.object(client, '_make_request', return_value=_Resp(None, status_code=500)):
+        assert client.get_ebook_progress(7) == (None, None)
 
 
 def test_get_audiobook_progress_shape(client):

@@ -540,7 +540,14 @@ class BookOrbitClient:
     # ------------------------------------------------------------------
 
     def get_ebook_progress(self, book_id) -> tuple:
-        """Returns (pct_fraction 0-1, cfi) or (None, None)."""
+        """Returns (pct_fraction 0-1, cfi). (None, None) only on a real failure.
+
+        GET /books/:id/progress returns a LIST of per-file entries
+        ``[{fileId, cfi, pageNumber, percentage, updatedAt}]`` (percentage 0-100).
+        An unstarted book returns one entry at percentage 0 — that must read as
+        0.0 (a writable follower), NOT None (which would drop BookOrbit from sync
+        and deadlock its first write).
+        """
         resp = self._make_request("GET", f"/api/v1/books/{book_id}/progress")
         if not resp:
             return None, None
@@ -549,12 +556,25 @@ class BookOrbitClient:
         if resp.status_code != 200:
             return None, None
         data = self._parse_json(resp)
-        if not isinstance(data, dict):
-            return None, None
-        raw_pct = data.get("percentage")
-        if raw_pct is None:
-            return None, None
-        return self._to_pct_fraction(raw_pct), data.get("cfi")
+        if isinstance(data, dict):
+            entries = [data]
+        elif isinstance(data, list):
+            entries = [e for e in data if isinstance(e, dict)]
+        else:
+            entries = []
+        if not entries:
+            return 0.0, None
+
+        if len(entries) == 1:
+            chosen = entries[0]
+        else:
+            primary_file_id = self._resolve_primary_file_id(book_id, "ebook")
+            chosen = next((e for e in entries if e.get("fileId") == primary_file_id), None) \
+                or max(entries, key=lambda e: e.get("percentage") or 0)
+
+        raw_pct = chosen.get("percentage")
+        pct = self._to_pct_fraction(raw_pct) if raw_pct is not None else 0.0
+        return (pct if pct is not None else 0.0), chosen.get("cfi")
 
     def update_ebook_progress(
         self, book_info: dict, percentage: float, locator: Optional[LocatorResult] = None
