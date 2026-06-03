@@ -658,9 +658,9 @@ def _is_storyteller_artifact_filename(filename):
     return bool(filename and re.match(r"^storyteller_[0-9a-fA-F-]+\.epub$", filename))
 
 
-def _shelve_matched_ebook(shelf_filename):
+def _shelve_matched_ebook(shelf_filename, ebook_source=None):
     """Add a newly matched ebook to the Kobo shelf and clear it from the
-    shelf-watch "Up Next" shelf.
+    shelf-watch "Up Next" shelf, on whichever library hosts the ebook.
 
     Auto-matching moves a book Up Next -> Kobo, but approving a suggestion (or a
     manual match) historically only added to Kobo and left the book sitting on Up
@@ -669,23 +669,36 @@ def _shelve_matched_ebook(shelf_filename):
     the shelf-watch feature being enabled to avoid touching shelves for users who
     don't use it.
     """
-    if not shelf_filename or not container.booklore_client().is_configured():
+    if not shelf_filename:
         return
-    bl = container.booklore_client()
+
+    if (ebook_source or "").strip().lower() == "bookorbit":
+        client = container.bookorbit_client()
+        kobo_shelf = (os.environ.get("BOOKORBIT_SHELF_NAME") or "Kobo").strip()
+        watch_enabled = str(os.environ.get("BOOKORBIT_SHELF_WATCH_ENABLED", "false")).strip().lower() in (
+            "true", "1", "yes", "on"
+        )
+        watch_shelf = (os.environ.get("BOOKORBIT_SHELF_WATCH_NAME") or "Up Next").strip()
+    else:
+        client = container.booklore_client()
+        kobo_shelf = BOOKLORE_SHELF_NAME
+        watch_enabled = str(os.environ.get("BOOKLORE_SHELF_WATCH_ENABLED", "false")).strip().lower() in (
+            "true", "1", "yes", "on"
+        )
+        watch_shelf = (os.environ.get("BOOKLORE_SHELF_WATCH_NAME") or "Up Next").strip()
+
+    if not client.is_configured():
+        return
     try:
-        bl.add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+        client.add_to_shelf(shelf_filename, kobo_shelf)
     except Exception as e:
         logger.warning(
-            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{BOOKLORE_SHELF_NAME}': {e}"
+            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}"
         )
 
-    watch_enabled = str(os.environ.get('BOOKLORE_SHELF_WATCH_ENABLED', 'false')).strip().lower() in (
-        'true', '1', 'yes', 'on'
-    )
-    watch_shelf = (os.environ.get('BOOKLORE_SHELF_WATCH_NAME') or 'Up Next').strip()
-    if watch_enabled and watch_shelf and watch_shelf != BOOKLORE_SHELF_NAME:
+    if watch_enabled and watch_shelf and watch_shelf != kobo_shelf:
         try:
-            bl.remove_from_shelf(shelf_filename, watch_shelf)
+            client.remove_from_shelf(shelf_filename, watch_shelf)
         except Exception as e:
             logger.warning(
                 f"⚠️ Failed to remove '{sanitize_log_data(shelf_filename)}' from watch shelf '{watch_shelf}': {e}"
@@ -2355,6 +2368,17 @@ def _build_dashboard_mapping(
     else:
         mapping["booklore_url"] = None
 
+    # BookOrbit deep links — frontend book route is /book/:bookId.
+    _bo_base = (os.environ.get("BOOKORBIT_SERVER") or "").rstrip("/")
+    if _bo_base and mapping.get("ebook_source") == "BookOrbit" and mapping.get("ebook_source_id"):
+        mapping["bookorbit_url"] = f"{_bo_base}/book/{mapping['ebook_source_id']}"
+    else:
+        mapping["bookorbit_url"] = None
+    if _bo_base and mapping.get("audio_source") == "BookOrbit" and mapping.get("audio_source_id"):
+        mapping["bookorbit_audio_url"] = f"{_bo_base}/book/{mapping['audio_source_id']}"
+    else:
+        mapping["bookorbit_audio_url"] = None
+
     mapping.update({
         "goodreads_rating": None,
         "goodreads_review_count": None,
@@ -3131,11 +3155,10 @@ def match():
 
         if not str(abs_id).startswith('booklore:'):
             container.abs_client().add_to_collection(abs_id, ABS_COLLECTION_NAME)
-        if container.booklore_client().is_configured():
-            # Use original filename for shelf if we switched to storyteller
-            shelf_filename = original_ebook_filename or ebook_filename
-            if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
-                _shelve_matched_ebook(shelf_filename)
+        # Use original filename for shelf if we switched to storyteller
+        shelf_filename = original_ebook_filename or ebook_filename
+        if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
+            _shelve_matched_ebook(shelf_filename, getattr(book, "ebook_source", None))
         if container.storyteller_client().is_configured():
             if book.storyteller_uuid:
                 container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
@@ -3645,9 +3668,9 @@ def batch_match():
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
-                if container.booklore_client().is_configured():
-                    shelf_filename = original_ebook_filename or ebook_filename
-                    _shelve_matched_ebook(shelf_filename)
+                shelf_filename = original_ebook_filename or ebook_filename
+                if shelf_filename:
+                    _shelve_matched_ebook(shelf_filename, item.get('ebook_source'))
                 if container.storyteller_client().is_configured():
                     if book.storyteller_uuid:
                         container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)

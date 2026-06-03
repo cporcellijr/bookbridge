@@ -131,7 +131,7 @@
                 {% endif %}
 
                 {% if integrations.bookorbitaudio and mapping.audio_source == 'BookOrbit' %}
-                <a href="{{ get_val('BOOKORBIT_SERVER')|default('#') }}" target="_blank" rel="noopener noreferrer"
+                <a href="{{ mapping.bookorbit_audio_url|default(get_val('BOOKORBIT_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
                     class="service-item" title="Open BookOrbit audiobook">
                     <span class="service-icon-emoji">🪐</span>
                     <span class="service-name">BO Audio</span>
@@ -219,7 +219,7 @@
                 {% endif %}
 
                 {% if integrations.bookorbit and (mapping.states.bookorbit is defined or mapping.ebook_source == 'BookOrbit') %}
-                <a href="{{ get_val('BOOKORBIT_SERVER')|default('#') }}" target="_blank" rel="noopener noreferrer"
+                <a href="{{ mapping.bookorbit_url|default(get_val('BOOKORBIT_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
                     class="service-item" title="Open in BookOrbit">
                     <span class="service-icon-emoji">🪐</span>
                     <span class="service-name">BookOrbit</span>
