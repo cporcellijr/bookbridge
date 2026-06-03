@@ -24,6 +24,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 from difflib import SequenceMatcher
+from urllib.parse import quote
 
 import requests
 
@@ -326,29 +327,40 @@ class BookOrbitClient:
             "fileName": filename,
         }
 
-    def search_ebooks(self, search_term: str, limit: int = 25) -> list:
-        """Targeted server-side ebook search for the manual-match picker.
+    # BookOrbit's GET /books/search rejects limit > 20 with HTTP 400.
+    _SEARCH_MAX_LIMIT = 20
 
-        Mirrors BookloreClient.search_books: query BookOrbit's metadata search,
-        keep ebook-kind hits, and enrich just those few with their filename.
-        """
-        if not search_term:
+    def _search_raw(self, query: str, limit: int = 20) -> list:
+        """BookOrbit metadata search. Uses GET /books/search?q= — the `search`
+        field on POST /books/query is a no-op (does not filter). Returns hit dicts
+        shaped ``{id, title, authors, libraryName, formats:[...]}`` (no filename)."""
+        if not query:
             return []
-        resp = self._make_request(
-            "POST", "/api/v1/books/query", {"page": 0, "size": limit, "search": search_term}
-        )
+        limit = max(1, min(int(limit), self._SEARCH_MAX_LIMIT))
+        resp = self._make_request("GET", f"/api/v1/books/search?q={quote(query)}&limit={limit}")
         if not resp or resp.status_code != 200:
             return []
         data = self._parse_json(resp)
-        items = data.get("items") if isinstance(data, dict) else []
+        return data if isinstance(data, list) else []
+
+    @staticmethod
+    def _hit_is_ebook(hit: dict) -> bool:
+        return any(str(f).lower() in _EBOOK_FORMATS for f in (hit.get("formats") or []))
+
+    def search_ebooks(self, search_term: str, limit: int = 20) -> list:
+        """Targeted server-side ebook search for the manual-match picker.
+
+        Mirrors BookloreClient.search_books: query BookOrbit's metadata search,
+        keep ebook-format hits, and enrich just those few with their filename.
+        """
         out = []
-        for raw in items or []:
-            if not isinstance(raw, dict):
+        for hit in self._search_raw(search_term, limit):
+            if not isinstance(hit, dict) or not self._hit_is_ebook(hit):
                 continue
-            info = self._build_light_info(raw)
-            if not info or info.get("kind") != "ebook":
-                continue
-            enriched = self._enrich_ebook(info["id"], info)
+            enriched = self._enrich_ebook(
+                hit.get("id"),
+                {"title": hit.get("title"), "authors": self._format_authors(hit.get("authors"))},
+            )
             if enriched:
                 out.append(enriched)
         return out
@@ -437,9 +449,9 @@ class BookOrbitClient:
     def find_book_by_filename(self, ebook_filename: str, allow_refresh: bool = True) -> Optional[dict]:
         """Best-effort filename → book resolution.
 
-        List rows omit filenames, so we resolve via the metadata `search` query
-        (by filename stem) and confirm against each candidate's detail files.
-        Resolved filenames are indexed so repeat lookups are O(1).
+        Search hits omit filenames, so we run the metadata search (GET
+        /books/search?q=) on the filename stem and confirm against each
+        candidate's detail files. Resolved filenames are indexed for O(1) repeats.
         """
         if not ebook_filename:
             return None
@@ -447,32 +459,25 @@ class BookOrbitClient:
         with self._cache_lock:
             indexed = self._filename_index.get(target_name)
         if indexed is not None:
-            return self.get_book_by_id(indexed)
+            return self.get_book_by_id(indexed) or {"id": indexed}
 
         if not allow_refresh:
             return None
 
         stem = Path(ebook_filename).stem
-        resp = self._make_request("POST", "/api/v1/books/query", {"page": 0, "size": 20, "search": stem})
-        candidates = []
-        if resp and resp.status_code == 200:
-            data = self._parse_json(resp)
-            if isinstance(data, dict):
-                candidates = data.get("items") or []
-
         target_stem_norm = self._normalize_string(stem)
-        for raw in candidates:
-            if not isinstance(raw, dict):
+        for hit in self._search_raw(stem, limit=20):
+            if not isinstance(hit, dict):
                 continue
-            detail = self.get_book_detail(raw.get("id"))
+            detail = self.get_book_detail(hit.get("id"))
             if not detail:
                 continue
             for f in detail.get("files") or []:
                 fname = (f.get("filename") or "") if isinstance(f, dict) else ""
-                if fname.lower() == target_name:
-                    return self._build_light_info(raw) or {"id": raw.get("id")}
-                if fname and self._normalize_string(Path(fname).stem) == target_stem_norm:
-                    return self._build_light_info(raw) or {"id": raw.get("id")}
+                if not fname:
+                    continue
+                if fname.lower() == target_name or self._normalize_string(Path(fname).stem) == target_stem_norm:
+                    return {"id": hit.get("id"), "title": hit.get("title")}
         return None
 
     def find_book_by_title(self, title: str) -> Optional[dict]:

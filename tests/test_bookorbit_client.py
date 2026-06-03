@@ -152,19 +152,16 @@ def test_create_reading_session_rejects_nonpositive_duration(client):
         assert client.create_reading_session(3, 1000.0, 1000.0, 0.1, 0.2) is False
 
 
-def test_search_ebooks_filters_to_ebook_kind_and_enriches(client):
-    query_items = {
-        "items": [
-            {"id": 1, "title": "Guests", "authors": ["A"],
-             "files": [{"id": 11, "format": "epub", "role": "primary"}]},
-            {"id": 2, "title": "An Audiobook", "authors": ["B"],
-             "files": [{"id": 22, "format": "m4b", "role": "primary"}]},
-        ]
-    }
+def test_search_ebooks_uses_search_endpoint_and_filters_by_format(client):
+    # GET /books/search returns hits with `formats` (no files/filename).
+    hits = [
+        {"id": 1, "title": "Guests", "authors": ["A"], "libraryName": "Ebooks", "formats": ["epub"]},
+        {"id": 2, "title": "An Audiobook", "authors": ["B"], "libraryName": "Audiobooks", "formats": ["m4b"]},
+    ]
 
     def fake_request(method, endpoint, payload=None):
-        assert payload.get("search") == "guests"
-        return _Resp(query_items)
+        assert method == "GET" and endpoint.startswith("/api/v1/books/search?q=")
+        return _Resp(hits)
 
     details = {
         1: {"id": 1, "title": "Guests", "authors": [{"name": "A"}],
@@ -173,7 +170,7 @@ def test_search_ebooks_filters_to_ebook_kind_and_enriches(client):
     with patch.object(client, '_make_request', side_effect=fake_request), \
          patch.object(client, 'get_book_detail', side_effect=lambda bid, force=False: details.get(bid)):
         out = client.search_ebooks("guests")
-    assert len(out) == 1  # audiobook excluded
+    assert len(out) == 1  # m4b audiobook excluded by format
     assert out[0]["fileName"] == "Guests.epub"
     assert out[0]["id"] == 1
 
