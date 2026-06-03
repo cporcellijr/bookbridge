@@ -466,18 +466,27 @@ class BookOrbitClient:
 
         stem = Path(ebook_filename).stem
         target_stem_norm = self._normalize_string(stem)
-        for hit in self._search_raw(stem, limit=20):
-            if not isinstance(hit, dict):
-                continue
-            detail = self.get_book_detail(hit.get("id"))
-            if not detail:
-                continue
-            for f in detail.get("files") or []:
-                fname = (f.get("filename") or "") if isinstance(f, dict) else ""
-                if not fname:
+        seen_ids = set()
+        # BookOrbit search matches on metadata (title), so a "Title - Author.epub"
+        # stem often returns nothing. Try the full stem, then the portion before
+        # the first " - " (usually the title), confirming by the real filename.
+        queries = [stem]
+        if " - " in stem:
+            queries.append(stem.split(" - ", 1)[0].strip())
+        for q in queries:
+            for hit in self._search_raw(q, limit=20):
+                if not isinstance(hit, dict) or hit.get("id") in seen_ids:
                     continue
-                if fname.lower() == target_name or self._normalize_string(Path(fname).stem) == target_stem_norm:
-                    return {"id": hit.get("id"), "title": hit.get("title")}
+                seen_ids.add(hit.get("id"))
+                detail = self.get_book_detail(hit.get("id"))
+                if not detail:
+                    continue
+                for f in detail.get("files") or []:
+                    fname = (f.get("filename") or "") if isinstance(f, dict) else ""
+                    if not fname:
+                        continue
+                    if fname.lower() == target_name or self._normalize_string(Path(fname).stem) == target_stem_norm:
+                        return {"id": hit.get("id"), "title": hit.get("title")}
         return None
 
     def find_book_by_title(self, title: str) -> Optional[dict]:
@@ -786,15 +795,32 @@ class BookOrbitClient:
         info = self.find_book_by_filename(filename)
         return info.get("id") if info else None
 
-    def add_to_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
+    def add_book_id_to_shelf(self, book_id, shelf_name: str) -> bool:
+        """Add a known BookOrbit book id to a collection (no filename lookup)."""
+        if book_id is None:
+            return False
         cid = self.ensure_shelf_exists(shelf_name)
-        book_id = self._resolve_book_id_for_filename(ebook_filename)
-        if cid is None or book_id is None:
+        if cid is None:
             return False
         resp = self._make_request(
             "POST", f"/api/v1/collections/{cid}/books", {"bookIds": [int(book_id)]}
         )
         return bool(resp and resp.status_code in (200, 201, 204))
+
+    def remove_book_id_from_shelf(self, book_id, shelf_name: str) -> bool:
+        if book_id is None:
+            return False
+        cid = self._get_collection_id(shelf_name)
+        if cid is None:
+            return False
+        resp = self._make_request(
+            "DELETE", f"/api/v1/collections/{cid}/books", {"bookIds": [int(book_id)]}
+        )
+        return bool(resp and resp.status_code in (200, 201, 204))
+
+    def add_to_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
+        book_id = self._resolve_book_id_for_filename(ebook_filename)
+        return self.add_book_id_to_shelf(book_id, shelf_name)
 
     def remove_from_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
         cid = self._get_collection_id(shelf_name)

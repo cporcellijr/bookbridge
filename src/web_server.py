@@ -658,7 +658,7 @@ def _is_storyteller_artifact_filename(filename):
     return bool(filename and re.match(r"^storyteller_[0-9a-fA-F-]+\.epub$", filename))
 
 
-def _shelve_matched_ebook(shelf_filename, ebook_source=None):
+def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=None):
     """Add a newly matched ebook to the Kobo shelf and clear it from the
     shelf-watch "Up Next" shelf, on whichever library hosts the ebook.
 
@@ -672,7 +672,8 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None):
     if not shelf_filename:
         return
 
-    if (ebook_source or "").strip().lower() == "bookorbit":
+    is_bookorbit = (ebook_source or "").strip().lower() == "bookorbit"
+    if is_bookorbit:
         client = container.bookorbit_client()
         kobo_shelf = (os.environ.get("BOOKORBIT_SHELF_NAME") or "Kobo").strip()
         watch_enabled = str(os.environ.get("BOOKORBIT_SHELF_WATCH_ENABLED", "false")).strip().lower() in (
@@ -689,8 +690,15 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None):
 
     if not client.is_configured():
         return
+
+    # Prefer the known BookOrbit book id (filenames like "Title - Author.epub"
+    # don't reliably resolve via BookOrbit's title-based search).
+    use_id = is_bookorbit and ebook_source_id and hasattr(client, "add_book_id_to_shelf")
     try:
-        client.add_to_shelf(shelf_filename, kobo_shelf)
+        if use_id:
+            client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
+        else:
+            client.add_to_shelf(shelf_filename, kobo_shelf)
     except Exception as e:
         logger.warning(
             f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}"
@@ -698,7 +706,10 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None):
 
     if watch_enabled and watch_shelf and watch_shelf != kobo_shelf:
         try:
-            client.remove_from_shelf(shelf_filename, watch_shelf)
+            if use_id:
+                client.remove_book_id_from_shelf(ebook_source_id, watch_shelf)
+            else:
+                client.remove_from_shelf(shelf_filename, watch_shelf)
         except Exception as e:
             logger.warning(
                 f"⚠️ Failed to remove '{sanitize_log_data(shelf_filename)}' from watch shelf '{watch_shelf}': {e}"
@@ -3158,7 +3169,8 @@ def match():
         # Use original filename for shelf if we switched to storyteller
         shelf_filename = original_ebook_filename or ebook_filename
         if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
-            _shelve_matched_ebook(shelf_filename, getattr(book, "ebook_source", None))
+            _shelve_matched_ebook(shelf_filename, getattr(book, "ebook_source", None),
+                                  getattr(book, "ebook_source_id", None))
         if container.storyteller_client().is_configured():
             if book.storyteller_uuid:
                 container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
@@ -3670,7 +3682,8 @@ def batch_match():
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
                 shelf_filename = original_ebook_filename or ebook_filename
                 if shelf_filename:
-                    _shelve_matched_ebook(shelf_filename, item.get('ebook_source'))
+                    _shelve_matched_ebook(shelf_filename, item.get('ebook_source'),
+                                          item.get('ebook_source_id'))
                 if container.storyteller_client().is_configured():
                     if book.storyteller_uuid:
                         container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
