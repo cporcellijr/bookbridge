@@ -37,13 +37,10 @@ logger = logging.getLogger("bookorbit-backfill")
 
 
 def _is_grimmory_sourced(book) -> bool:
+    # Grimmory mappings are tagged under any of these variants depending on the
+    # match path that created them.
     src = (getattr(book, "ebook_source", None) or "").strip().lower()
-    if src == "booklore":
-        return True
-    # Legacy Grimmory mappings predate ebook_source and are tagged via booklore_id.
-    if not src and getattr(book, "booklore_id", None):
-        return True
-    return False
+    return src in ("booklore", "grimmory")
 
 
 def main() -> int:

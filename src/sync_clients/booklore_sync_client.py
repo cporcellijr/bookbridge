@@ -35,11 +35,12 @@ class BookloreSyncClient(SyncClient):
             return False
 
         # An explicit ebook source is authoritative. Match Grimmory regardless of
-        # casing ('BookLore'/'Booklore'); never hijack a book explicitly owned by
-        # another ebook source (e.g. BookOrbit), even if Grimmory hosts the same file.
+        # the tag variant it was saved under ('BookLore'/'Booklore'/'Grimmory');
+        # never hijack a book explicitly owned by another ebook source (e.g.
+        # BookOrbit), even if Grimmory hosts the same file.
         src = (getattr(book, "ebook_source", None) or "").strip().lower()
         if src:
-            return src == "booklore"
+            return src in ("booklore", "grimmory")
 
         # Otherwise (legacy/unsourced) only participate when the ebook can actually
         # be resolved against the Grimmory library cache.

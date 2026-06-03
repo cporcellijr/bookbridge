@@ -67,9 +67,6 @@ class BookOrbitSyncClient(SyncClient):
         src = (getattr(book, "ebook_source", None) or "").strip().lower()
         if src:
             return src == "bookorbit"
-        # Legacy Grimmory mappings predate ebook_source and are tagged via booklore_id.
-        if getattr(book, "booklore_id", None):
-            return False
         epub = self._resolve_epub_filename(book)
         if not epub:
             return False
