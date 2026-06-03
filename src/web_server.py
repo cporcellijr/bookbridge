@@ -1648,6 +1648,11 @@ def settings():
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
             'SHELFMARK_ENABLED',
+            'OLLAMA_ENABLED',
+            'OLLAMA_RERANK_SUGGESTIONS',
+            'OLLAMA_JUDGE_SUGGESTIONS',
+            'OLLAMA_ALIGN_FALLBACK',
+            'OLLAMA_TRACKER_MATCH',
         ]
 
         # Current settings in DB
@@ -3766,6 +3771,11 @@ def _get_suggestions_service():
     except Exception:
         calibre_resolver = None
 
+    try:
+        ollama_client = container.ollama_client()
+    except Exception:
+        ollama_client = None
+
     return SuggestionsService(
         database_service=database_service,
         container=container,
@@ -3776,6 +3786,7 @@ def _get_suggestions_service():
         get_abs_author=get_abs_author,
         logger=logger,
         calibre_identifier_resolver=calibre_resolver,
+        ollama_client=ollama_client,
     )
 
 
@@ -6147,6 +6158,12 @@ def test_connection(service: str):
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
             _coerce_test_str(data.get('TELEGRAM_BOT_TOKEN')),
         ),
+        'ollama': lambda data: _test_ollama(
+            _coerce_test_bool(data.get('OLLAMA_ENABLED')),
+            _normalize_test_url(data.get('OLLAMA_URL')),
+            _coerce_test_str(data.get('OLLAMA_EMBED_MODEL')),
+            _coerce_test_str(data.get('OLLAMA_CHAT_MODEL')),
+        ),
     }
     tester = testers.get(service)
     if not tester:
@@ -6155,6 +6172,39 @@ def test_connection(service: str):
         return jsonify(tester(payload))
     except Exception as e:
         return jsonify({"ok": False, "message": _test_conn_error(e)})
+
+
+def _test_ollama(enabled: bool, url: str, embed_model: str, chat_model: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "Ollama is disabled"}
+    if not url:
+        return {"ok": False, "message": "Missing Ollama server URL"}
+
+    embed_model = embed_model or "nomic-embed-text"
+    chat_model = chat_model or "qwen2.5:14b"
+
+    r = requests.get(f"{url}/api/tags", timeout=10)
+    if r.status_code != 200:
+        return {"ok": False, "message": f"Ollama returned HTTP {r.status_code}"}
+
+    models = [m.get("name", "") for m in (r.json() or {}).get("models", []) if m.get("name")]
+
+    def _present(name: str) -> bool:
+        # Ollama tags include the tag suffix (e.g. "qwen2.5:14b"); match exact or base name.
+        base = name.split(":", 1)[0]
+        return any(m == name or m.split(":", 1)[0] == base for m in models)
+
+    missing = [m for m in (embed_model, chat_model) if not _present(m)]
+    if missing:
+        pulls = " ; ".join(f"ollama pull {m}" for m in missing)
+        return {
+            "ok": False,
+            "message": f"Connected, but missing model(s): {', '.join(missing)}. Run: {pulls}",
+        }
+    return {
+        "ok": True,
+        "message": f"Connected. Models present: {embed_model} ✓, {chat_model} ✓",
+    }
 
 
 def _test_abs(url: str, token: str) -> dict:

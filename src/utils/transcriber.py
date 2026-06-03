@@ -35,8 +35,9 @@ logger = logging.getLogger(__name__)
 
 class AudioTranscriber:
     # [UPDATED] Accepted smil_extractor and polisher as arguments
-    def __init__(self, data_dir, smil_extractor, polisher: Polisher):
+    def __init__(self, data_dir, smil_extractor, polisher: Polisher, ollama_client=None):
         self.data_dir = data_dir
+        self.ollama_client = ollama_client
         self.cache_root = data_dir / "audio_cache"
         self.cache_root.mkdir(parents=True, exist_ok=True)
 
@@ -869,6 +870,66 @@ class AudioTranscriber:
 
         return alignment_points
 
+    def _ollama_align_fallback(self, clean_search, windows, hint_percentage, data, title_prefix="") -> Optional[float]:
+        """Optional semantic rescue when lexical fuzzy matching fails.
+
+        Embeds the search text and candidate windows via Ollama and returns the
+        timestamp of the most semantically similar window above a configured
+        cosine threshold. Returns None if disabled, unavailable, or below threshold.
+        """
+        client = self.ollama_client
+        if not client or not client.is_configured():
+            return None
+        if os.environ.get("OLLAMA_ALIGN_FALLBACK", "false").lower() != "true":
+            return None
+        if not clean_search or not windows:
+            return None
+
+        try:
+            threshold = float(os.environ.get("OLLAMA_ALIGN_SIM_THRESHOLD", 0.72))
+        except (TypeError, ValueError):
+            threshold = 0.72
+
+        # Bound the candidate set: prefer the hint neighborhood, else cap to a window budget.
+        candidates = windows
+        if hint_percentage is not None and data:
+            try:
+                total_duration = data[-1]['end']
+                hint_start = max(0, hint_percentage - 0.15) * total_duration
+                hint_end = min(1.0, hint_percentage + 0.15) * total_duration
+                nearby = [w for w in windows if hint_start <= w['start'] <= hint_end]
+                if nearby:
+                    candidates = nearby
+            except Exception:
+                candidates = windows
+        max_windows = 40
+        if len(candidates) > max_windows:
+            candidates = candidates[:max_windows]
+
+        texts = [w['text'] for w in candidates]
+        vectors = client.embed([clean_search] + texts)
+        if not vectors or len(vectors) != len(texts) + 1:
+            return None
+
+        from src.api.ollama_client import cosine_similarity
+
+        search_vec = vectors[0]
+        best_window = None
+        best_cos = 0.0
+        for window, vec in zip(candidates, vectors[1:]):
+            cos = cosine_similarity(search_vec, vec)
+            if cos > best_cos:
+                best_cos = cos
+                best_window = window
+
+        if best_window is not None and best_cos >= threshold:
+            logger.info(
+                f"🧠 {title_prefix}Semantic alignment rescue at {best_window['start']:.1f}s "
+                f"(cosine {best_cos:.2f}) - '{sanitize_log_data(clean_search)}'"
+            )
+            return best_window['start']
+        return None
+
     @time_execution
     def find_time_for_text(self, transcript_path, search_text, hint_percentage=None, char_offset=None, book_title=None) -> Optional[float]:
         """
@@ -1012,6 +1073,9 @@ class AudioTranscriber:
                 logger.info(f"✅ {title_prefix}Match found at {best_match['start']:.1f}s | Confidence: {best_score}% - '{sanitize_log_data(clean_search)}'")
                 return best_match['start']
             else:
+                rescue = self._ollama_align_fallback(clean_search, windows, hint_percentage, data, title_prefix)
+                if rescue is not None:
+                    return rescue
                 logger.warning(f"⚠️ {title_prefix}No good match found (best: {best_score}% < {self.match_threshold}%)")
                 return None
 

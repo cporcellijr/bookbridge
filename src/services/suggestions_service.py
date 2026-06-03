@@ -1,3 +1,4 @@
+import os
 from typing import Callable, List, Set, Any, Dict, Optional
 
 
@@ -15,6 +16,7 @@ class SuggestionsService:
         get_abs_author: Callable[[dict], str],
         logger,
         calibre_identifier_resolver: Optional[Any] = None,
+        ollama_client: Optional[Any] = None,
     ):
         self.database_service = database_service
         self.container = container
@@ -25,6 +27,9 @@ class SuggestionsService:
         self.get_abs_author = get_abs_author
         self.logger = logger
         self.calibre_identifier_resolver = calibre_identifier_resolver
+        self.ollama_client = ollama_client
+        # Per-scan embedding cache (text -> vector); a fresh service is built per scan.
+        self._ollama_embed_cache: Dict[str, Any] = {}
 
     @staticmethod
     def _candidate_title(candidate: Any) -> str:
@@ -334,6 +339,8 @@ class SuggestionsService:
         for m in matches:
             m.pop('_direct_match', None)
 
+        matches = self._apply_ollama_reranking(audio_title, audio_author, matches)
+
         audio_cover_url = self._audio_cover_url(ab, audio_source, audio_source_id)
         audio_duration = self._audio_duration(ab)
         return {
@@ -354,6 +361,168 @@ class SuggestionsService:
             "cover_url": audio_cover_url,
             "matches": matches,
         }
+
+    # --- Ollama-assisted re-ranking (optional, gated) -------------------------
+
+    @staticmethod
+    def _env_true(key: str) -> bool:
+        return os.environ.get(key, "false").lower() == "true"
+
+    @staticmethod
+    def _env_float(key: str, default: float) -> float:
+        try:
+            return float(os.environ.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _ollama_ready(self) -> bool:
+        client = self.ollama_client
+        return bool(client and client.is_configured())
+
+    def _embed_texts(self, texts: List[str]) -> Optional[Dict[str, Any]]:
+        """Embed texts (using the per-scan cache). Returns {text: vector} or None on failure."""
+        cache = self._ollama_embed_cache
+        unique = [t for t in dict.fromkeys(texts) if t]
+        missing = [t for t in unique if t not in cache]
+        if missing:
+            vectors = self.ollama_client.embed(missing)
+            if vectors is None:
+                return None
+            for text, vec in zip(missing, vectors):
+                cache[text] = vec
+        return {t: cache.get(t) for t in texts}
+
+    def _apply_ollama_reranking(
+        self, audio_title: str, audio_author: str, matches: List[dict]
+    ) -> List[dict]:
+        """Run the optional embedding re-rank → judge → file-resolution pipeline."""
+        if not matches or not self._ollama_ready():
+            return matches
+
+        matches = self._ollama_rerank_band(audio_title, audio_author, matches)
+        matches = self._ollama_judge_and_resolve(audio_title, audio_author, matches)
+        return matches
+
+    def _ollama_rerank_band(
+        self, audio_title: str, audio_author: str, matches: List[dict]
+    ) -> List[dict]:
+        """Stage 1: re-rank the borderline score band by semantic (embedding) similarity."""
+        if not self._env_true("OLLAMA_RERANK_SUGGESTIONS"):
+            return matches
+
+        band_min = self._env_float("OLLAMA_RERANK_BAND_MIN", 60.0)
+        band_max = self._env_float("OLLAMA_RERANK_BAND_MAX", 95.0)
+
+        above = [m for m in matches if m.get("score", 0) > band_max]
+        band = [m for m in matches if band_min <= m.get("score", 0) <= band_max]
+        below = [m for m in matches if m.get("score", 0) < band_min]
+        if len(band) < 2:
+            return matches
+
+        audio_text = f"{audio_title} {audio_author}".strip()
+        cand_texts = [
+            f"{m.get('display_name') or ''} {m.get('author') or ''}".strip() for m in band
+        ]
+        embedded = self._embed_texts([audio_text] + cand_texts)
+        if embedded is None:
+            self.logger.info("Ollama re-rank skipped (embedding unavailable)")
+            return matches
+        audio_vec = embedded.get(audio_text)
+        if not audio_vec:
+            return matches
+
+        from src.api.ollama_client import cosine_similarity
+
+        for m, ct in zip(band, cand_texts):
+            cand_vec = embedded.get(ct)
+            cos = cosine_similarity(audio_vec, cand_vec) if cand_vec else 0.0
+            m["score"] = round(0.6 * m.get("score", 0) + 40.0 * cos, 1)
+
+        above.sort(key=lambda m: m.get("score", 0), reverse=True)
+        band.sort(key=lambda m: m.get("score", 0), reverse=True)
+        return above + band + below
+
+    def _ollama_judge_and_resolve(
+        self, audio_title: str, audio_author: str, matches: List[dict]
+    ) -> List[dict]:
+        """Stage 2: judge ambiguous top-2; Stage 3: resolve the real file on a confident verdict."""
+        if not self._env_true("OLLAMA_JUDGE_SUGGESTIONS") or len(matches) < 2:
+            return matches
+
+        margin = self._env_float("OLLAMA_JUDGE_MARGIN", 5.0)
+        if (matches[0].get("score", 0) - matches[1].get("score", 0)) > margin:
+            return matches  # top match is already clear; don't spend a chat call
+
+        candidates = matches[:3]
+        lines = [
+            f"{i}. title: {m.get('display_name') or ''} | author: {m.get('author') or ''}"
+            for i, m in enumerate(candidates)
+        ]
+        prompt = (
+            "You are matching an audiobook to its ebook edition. Decide which candidate "
+            "ebook is the SAME WORK as the audiobook (same book, any edition or translation), "
+            "or none of them.\n"
+            f"Audiobook: title: {audio_title} | author: {audio_author}\n"
+            "Candidate ebooks:\n" + "\n".join(lines) + "\n"
+            'Respond ONLY with JSON: {"choice": <candidate number or null>, '
+            '"confidence": <integer 0-100>, "reason": "<short>"}'
+        )
+        result = self.ollama_client.judge(prompt)
+        if not isinstance(result, dict):
+            return matches
+
+        choice = result.get("choice")
+        try:
+            confidence = float(result.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if not isinstance(choice, int) or not (0 <= choice < len(candidates)):
+            return matches
+
+        chosen = candidates[choice]
+        self.logger.info(
+            f"🧠 Ollama judge picked '{chosen.get('display_name')}' for '{audio_title}' "
+            f"(confidence {confidence:.0f})"
+        )
+        # Pin the chosen match to the top.
+        matches = [chosen] + [m for m in matches if m is not chosen]
+
+        if confidence >= self._env_float("OLLAMA_JUDGE_CONFIDENCE_MIN", 85.0):
+            self._resolve_real_file(audio_title, chosen)
+        return matches
+
+    def _resolve_real_file(self, audio_title: str, chosen: dict) -> None:
+        """Stage 3: targeted search to fill in the authoritative file the light pool omitted."""
+        from rapidfuzz import fuzz
+
+        try:
+            candidates = self.get_searchable_ebooks(audio_title)
+        except Exception as e:
+            self.logger.warning(f"Ollama file-resolution search failed for '{audio_title}': {e}")
+            return
+
+        pool = self._prepare_candidate_pool(candidates)
+        if not pool:
+            return
+
+        target = f"{chosen.get('display_name') or ''} {chosen.get('author') or ''}".strip()
+        best = None
+        best_score = 0.0
+        for cand in pool:
+            score = float(fuzz.token_sort_ratio(target, cand.get("search_text", "")))
+            if score > best_score:
+                best_score = score
+                best = cand
+
+        if best and best_score >= 80 and best.get("name"):
+            chosen["ebook_filename"] = best["name"]
+            if best.get("source_id"):
+                chosen["source_id"] = best["source_id"]
+            if best.get("source"):
+                chosen["source"] = best["source"]
+            self.logger.info(
+                f"🔎 Resolved real file for '{audio_title}' -> {best['name']} (match {best_score:.0f})"
+            )
 
     def _build_audiobook_candidate_pool(self) -> List[dict]:
         """Build searchable audiobook candidates once per shelf-watch scan.

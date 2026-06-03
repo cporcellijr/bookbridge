@@ -1140,6 +1140,99 @@
                 </div>
             </div>
 
+            <!-- Ollama (Local LLM) -->
+            <div class="settings-section">
+                {% set ollama_enabled = get_bool('OLLAMA_ENABLED') %}
+                <div class="section-header">
+                    <h3>Ollama (Local LLM)</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('ollama', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_ollama" name="OLLAMA_ENABLED"
+                                onchange="toggleSection('ollama_body', this.checked)" {% if ollama_enabled %}checked{%
+                                endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="ollama_body" class="section-body {% if not ollama_enabled %}collapsed{% endif %}">
+                    <div class="full-width">
+                        <p class="help-text">
+                            Use a local Ollama server to semantically improve book-match suggestions and rescue
+                            failed audio↔text alignments. All features below are off until you enable them, and fall
+                            back to the existing behavior if Ollama is unreachable.
+                        </p>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Ollama Server URL</label>
+                        <input type="text" name="OLLAMA_URL" value="{{ get_val('OLLAMA_URL') }}">
+                        <div class="help-text">e.g. http://ollama:11434 (container DNS) or http://localhost:11434</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Embedding Model</label>
+                        <input type="text" name="OLLAMA_EMBED_MODEL" value="{{ get_val('OLLAMA_EMBED_MODEL') }}">
+                        <div class="help-text">e.g. nomic-embed-text (run: ollama pull nomic-embed-text)</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Chat / Judge Model</label>
+                        <input type="text" name="OLLAMA_CHAT_MODEL" value="{{ get_val('OLLAMA_CHAT_MODEL') }}">
+                        <div class="help-text">e.g. qwen2.5:14b</div>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_rerank" name="OLLAMA_RERANK_SUGGESTIONS" {% if
+                            get_bool('OLLAMA_RERANK_SUGGESTIONS') %}checked{% endif %}>
+                        <label for="ollama_rerank">Re-rank suggestions by semantic similarity (embeddings)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Re-rank Band Min Score</label>
+                        <input type="number" name="OLLAMA_RERANK_BAND_MIN"
+                            value="{{ get_val('OLLAMA_RERANK_BAND_MIN') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Re-rank Band Max Score</label>
+                        <input type="number" name="OLLAMA_RERANK_BAND_MAX"
+                            value="{{ get_val('OLLAMA_RERANK_BAND_MAX') }}">
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_judge" name="OLLAMA_JUDGE_SUGGESTIONS" {% if
+                            get_bool('OLLAMA_JUDGE_SUGGESTIONS') %}checked{% endif %}>
+                        <label for="ollama_judge">Use chat model to judge ambiguous matches (and resolve the real
+                            file on a confident verdict)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Judge Margin (points)</label>
+                        <input type="number" name="OLLAMA_JUDGE_MARGIN" value="{{ get_val('OLLAMA_JUDGE_MARGIN') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Judge Confidence Min (file resolution)</label>
+                        <input type="number" name="OLLAMA_JUDGE_CONFIDENCE_MIN"
+                            value="{{ get_val('OLLAMA_JUDGE_CONFIDENCE_MIN') }}">
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_align" name="OLLAMA_ALIGN_FALLBACK" {% if
+                            get_bool('OLLAMA_ALIGN_FALLBACK') %}checked{% endif %}>
+                        <label for="ollama_align">Semantic alignment fallback when fuzzy text matching fails</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Alignment Similarity Threshold (0-1)</label>
+                        <input type="number" step="0.01" name="OLLAMA_ALIGN_SIM_THRESHOLD"
+                            value="{{ get_val('OLLAMA_ALIGN_SIM_THRESHOLD') }}">
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_tracker" name="OLLAMA_TRACKER_MATCH" {% if
+                            get_bool('OLLAMA_TRACKER_MATCH') %}checked{% endif %}>
+                        <label for="ollama_tracker">Verify Hardcover/StoryGraph matches with the LLM (crafts the
+                            search, judges candidates; writes nothing if none match). ISBN/ASIN matches are
+                            unaffected; uses the Judge Confidence Min above.</label>
+                    </div>
+                </div>
+            </div>
+
             <div class="settings-section">
                 <div class="section-header">
                     <h3>Sync Behavior</h3>
@@ -1751,6 +1844,7 @@
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
+            ollama: ['OLLAMA_ENABLED', 'OLLAMA_URL', 'OLLAMA_EMBED_MODEL', 'OLLAMA_CHAT_MODEL'],
         };
 
         function onTrackerProviderChange(provider) {

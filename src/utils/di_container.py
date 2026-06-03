@@ -17,6 +17,7 @@ from src.api.bookorbit_client import BookOrbitClient
 from src.api.cwa_client import CWAClient
 from src.api.cwa_sync_api import CWASyncApi
 from src.api.hardcover_client import HardcoverClient
+from src.api.ollama_client import OllamaClient
 from src.api.storygraph_client import StorygraphClient
 from src.api.storyteller_api import StorytellerAPIClient
 from src.db.database_service import DatabaseService
@@ -102,6 +103,8 @@ class Container(containers.DeclarativeContainer):
     bookorbit_client = providers.Singleton(BookOrbitClient)
     kavita_client = providers.Object(None)
 
+    ollama_client = providers.Singleton(OllamaClient)
+
     hardcover_client = providers.Singleton(HardcoverClient)
     storygraph_client = providers.Singleton(StorygraphClient)
 
@@ -178,7 +181,8 @@ class Container(containers.DeclarativeContainer):
         AudioTranscriber,
         data_dir,
         smil_extractor,
-        polisher  # [UPDATED] Injected dependency
+        polisher,  # [UPDATED] Injected dependency
+        ollama_client=ollama_client
     )
 
     forge_service = providers.Singleton(
@@ -259,7 +263,8 @@ class Container(containers.DeclarativeContainer):
         hardcover_client,
         ebook_parser,
         abs_client,
-        database_service
+        database_service,
+        ollama_client=ollama_client
     )
 
     storygraph_sync_client = providers.Singleton(
@@ -267,7 +272,8 @@ class Container(containers.DeclarativeContainer):
         storygraph_client,
         ebook_parser,
         abs_client,
-        database_service
+        database_service,
+        ollama_client=ollama_client
     )
 
     abs_audio_source_adapter = providers.Singleton(

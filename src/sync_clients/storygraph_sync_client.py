@@ -1,9 +1,11 @@
 import logging
+import os
 import time
 from typing import Optional
 
 from src.api.storygraph_client import StorygraphClient
 from src.db.models import Book, State, StorygraphDetails
+from src.services.llm_matching import craft_search_terms, judge_best_candidate, tracker_match_enabled
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 
 logger = logging.getLogger(__name__)
@@ -12,11 +14,12 @@ logger = logging.getLogger(__name__)
 class StorygraphSyncClient(SyncClient):
     """Follower-only StoryGraph sync client (either-or mode)."""
 
-    def __init__(self, storygraph_client: StorygraphClient, ebook_parser, abs_client=None, database_service=None):
+    def __init__(self, storygraph_client: StorygraphClient, ebook_parser, abs_client=None, database_service=None, ollama_client=None):
         super().__init__(ebook_parser)
         self.storygraph_client = storygraph_client
         self.abs_client = abs_client
         self.database_service = database_service
+        self.ollama_client = ollama_client
         self._book_id_cache: dict[str, str] = {}
 
     def is_configured(self) -> bool:
@@ -61,12 +64,25 @@ class StorygraphSyncClient(SyncClient):
 
         match = None
         matched_by = None
+
+        # When LLM tracker matching is on, the title-based fallback is replaced by the
+        # craft → judge path below; ISBN/ASIN stay authoritative either way.
+        use_llm = (
+            tracker_match_enabled()
+            and self.ollama_client is not None
+            and self.ollama_client.is_configured()
+            and bool(title)
+        )
+
         search_strategies = [
             ('isbn', isbn),
             ('asin', asin),
-            ('title_author', title if title and author else ''),
-            ('title', title),
         ]
+        if not use_llm:
+            search_strategies += [
+                ('title_author', title if title and author else ''),
+                ('title', title),
+            ]
 
         for strategy, value in search_strategies:
             if not value:
@@ -84,6 +100,23 @@ class StorygraphSyncClient(SyncClient):
             if match and match.get('book_id'):
                 matched_by = strategy
                 break
+
+        # LLM-verified title fallback: craft a clean query, judge candidates, write nothing if none.
+        if not match and use_llm:
+            craft_title, craft_author = craft_search_terms(self.ollama_client, title, author)
+            try:
+                candidates = self.storygraph_client.search_books(craft_title, craft_author)
+            except Exception as exc:
+                logger.warning("StoryGraph LLM match search failed for '%s': %s", title, exc)
+                candidates = []
+            conf_min = float(os.environ.get('OLLAMA_JUDGE_CONFIDENCE_MIN', 85))
+            idx = judge_best_candidate(self.ollama_client, craft_title, craft_author, candidates, conf_min)
+            if idx is None:
+                logger.info("🧠 StoryGraph: LLM found no confident match for '%s'; leaving for manual", title)
+                return
+            match = dict(candidates[idx])
+            matched_by = 'title_author_llm'
+            logger.info("🧠 StoryGraph: LLM matched '%s' -> '%s'", title, match.get('title'))
 
         if not match or not match.get('book_id'):
             return
