@@ -161,6 +161,35 @@ class TestSuggestionJudge(_OllamaEnvGuard):
         self.assertEqual(result[0]["ebook_filename"], "")
 
 
+class TestStage3VolumeGuard(_OllamaEnvGuard):
+    def _svc(self, ebooks):
+        return _make_service(_StubOllama(), ebooks=ebooks)
+
+    def test_does_not_resolve_base_title_to_sequel(self):
+        ebooks = [_Candidate(
+            name="Heretic Spellblade 2 - K.D. Robertson.epub",
+            title="Heretic Spellblade 2", authors="K.D. Robertson", source_id="x")]
+        chosen = {"display_name": "Heretic Spellblade", "author": "K.D. Robertson", "ebook_filename": ""}
+        self._svc(ebooks)._resolve_real_file("Heretic Spellblade", chosen)
+        self.assertEqual(chosen["ebook_filename"], "")  # sequel rejected
+
+    def test_resolves_matching_volume(self):
+        ebooks = [_Candidate(
+            name="Returner's Defiance 2 - Bruce Sentar.epub",
+            title="Returner's Defiance 2", authors="Bruce Sentar", source_id="y")]
+        chosen = {"display_name": "Returner's Defiance 2", "author": "Bruce Sentar", "ebook_filename": ""}
+        self._svc(ebooks)._resolve_real_file("Returner's Defiance 2", chosen)
+        self.assertEqual(chosen["ebook_filename"], "Returner's Defiance 2 - Bruce Sentar.epub")
+
+    def test_strips_unabridged_suffix_before_volume_compare(self):
+        ebooks = [_Candidate(
+            name="Royal Dragons 3 - Marcus Sloss.epub",
+            title="Royal Dragons 3", authors="Marcus Sloss", source_id="z")]
+        chosen = {"display_name": "Royal Dragons 3", "author": "Marcus Sloss", "ebook_filename": ""}
+        self._svc(ebooks)._resolve_real_file("Royal Dragons 3 (Unabridged)", chosen)
+        self.assertEqual(chosen["ebook_filename"], "Royal Dragons 3 - Marcus Sloss.epub")
+
+
 class TestAlignmentFallback(_OllamaEnvGuard):
     def _make_transcriber(self, ollama_client):
         self._tmp = tempfile.TemporaryDirectory()

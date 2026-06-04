@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Callable, List, Set, Any, Dict, Optional
 
 
@@ -515,6 +516,17 @@ class SuggestionsService:
                 best = cand
 
         if best and best_score >= 80 and best.get("name"):
+            # Volume guard: a base title ("Heretic Spellblade") fuzzy-matches its sequel
+            # ("Heretic Spellblade 2") well above threshold. Refuse to attach the wrong
+            # volume's file — the audiobook title carries the authoritative volume number.
+            audio_vol = self._trailing_volume(audio_title)
+            cand_vol = self._trailing_volume(best.get("title"))
+            if audio_vol != cand_vol:
+                self.logger.info(
+                    f"🔎 Skipped file resolution for '{audio_title}': volume mismatch "
+                    f"(audio vol={audio_vol}, candidate '{best.get('title')}' vol={cand_vol})"
+                )
+                return
             chosen["ebook_filename"] = best["name"]
             if best.get("source_id"):
                 chosen["source_id"] = best["source_id"]
@@ -523,6 +535,14 @@ class SuggestionsService:
             self.logger.info(
                 f"🔎 Resolved real file for '{audio_title}' -> {best['name']} (match {best_score:.0f})"
             )
+
+    @staticmethod
+    def _trailing_volume(title: Optional[str]) -> Optional[str]:
+        """Extract a trailing volume number, ignoring trailing parentheticals like '(Unabridged)'."""
+        text = (title or "").strip()
+        text = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+        match = re.search(r"(\d+)\s*$", text)
+        return match.group(1) if match else None
 
     def _build_audiobook_candidate_pool(self) -> List[dict]:
         """Build searchable audiobook candidates once per shelf-watch scan.
