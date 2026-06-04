@@ -78,15 +78,24 @@ class HardcoverSyncClient(SyncClient):
         if existing_details:
             return  # Already matched
 
-        item = self.abs_client.get_item_details(book.abs_id)
-        if not item:
-            return
+        item = self.abs_client.get_item_details(book.abs_id) if self.abs_client else None
+        if item:
+            meta = item.get('media', {}).get('metadata', {})
+            isbn = meta.get('isbn')
+            asin = meta.get('asin')
+            title = meta.get('title')
+            author = meta.get('authorName')
+        else:
+            # Ebook-only book (no ABS item): source identifiers from the EPUB itself.
+            ebook_meta = self.ebook_parser.get_book_metadata(book.ebook_filename) if self.ebook_parser else {}
+            title = ebook_meta.get('title') or book.abs_title
+            author = ebook_meta.get('author')
+            isbn = ebook_meta.get('isbn')
+            asin = ebook_meta.get('asin')
+            meta = {'title': title}  # keep log statements below working without an ABS item
 
-        meta = item.get('media', {}).get('metadata', {})
-        isbn = meta.get('isbn')
-        asin = meta.get('asin')
-        title = meta.get('title')
-        author = meta.get('authorName')
+        if not title:
+            return
 
         # Try different search strategies in order of preference
         match = None
@@ -94,8 +103,9 @@ class HardcoverSyncClient(SyncClient):
         first_rejected = None
         first_rejected_by = None
 
-        # When LLM tracker matching is on, the title-based fallback is replaced by the
-        # craft → judge path below; ISBN/ASIN stay authoritative either way.
+        # LLM tracker matching is a last-resort rescue only: the normal ISBN/ASIN and
+        # title searches below always run first, so the LLM can add matches it would
+        # otherwise miss but can never suppress a match the plain search already found.
         use_llm = (
             tracker_match_enabled()
             and self.ollama_client is not None
@@ -106,12 +116,14 @@ class HardcoverSyncClient(SyncClient):
         search_strategies = [
             (lambda: self.hardcover_client.search_by_isbn(isbn) if isbn else None, 'isbn', isbn),
             (lambda: self.hardcover_client.search_by_isbn(asin) if asin else None, 'asin', asin),
+            (lambda: self.hardcover_client.search_by_title_author(title, author) if (title and author) else None, 'title_author', title and author),
         ]
+        # Blind title-only fuzzy matching grabs the wrong book when many share a title;
+        # with the LLM on we route title-only candidates through the judge below instead.
         if not use_llm:
-            search_strategies += [
-                (lambda: self.hardcover_client.search_by_title_author(title, author) if (title and author) else None, 'title_author', title and author),
-                (lambda: self.hardcover_client.search_by_title_author(title, "") if title else None, 'title', title),
-            ]
+            search_strategies.append(
+                (lambda: self.hardcover_client.search_by_title_author(title, "") if title else None, 'title', title)
+            )
 
         for search_func, strategy_name, condition in search_strategies:
             if not match and condition:
@@ -152,11 +164,13 @@ class HardcoverSyncClient(SyncClient):
                     match['pages'] = -1  # Sentinel: audiobook, no pages
                     logger.info(f"📚 Hardcover: '{sanitize_log_data(meta.get('title'))}' matched as audiobook ({audio_seconds}s)")
 
-        # LLM-verified title fallback: craft a clean query, judge candidates, write nothing if none.
+        # LLM rescue: clean the title, then list candidates title-only for maximum recall
+        # (the judge uses the author for precision, so we deliberately don't constrain the
+        # query by author here), and let the judge pick the one true book or write nothing.
         if not match and use_llm:
             try:
                 craft_title, craft_author = craft_search_terms(self.ollama_client, title, author)
-                candidates = self.hardcover_client.list_candidates_by_title_author(craft_title, craft_author)
+                candidates = self.hardcover_client.list_candidates_by_title_author(craft_title, "")
             except HardcoverRateLimitError:
                 logger.warning(
                     "⚠️ Hardcover: Rate limited during LLM match for '%s'; skipping for now",

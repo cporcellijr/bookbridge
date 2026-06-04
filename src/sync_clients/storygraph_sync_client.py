@@ -45,28 +45,37 @@ class StorygraphSyncClient(SyncClient):
 
     def _automatch_storygraph(self, book: Book, set_initial_status: bool = True) -> None:
         """Automatically match an ABS book to StoryGraph during processing."""
-        if not self.is_configured() or not self.database_service or not self.abs_client:
+        if not self.is_configured() or not self.database_service:
             return
 
         existing_details = self.database_service.get_storygraph_details(book.abs_id)
         if existing_details:
             return
 
-        item = self.abs_client.get_item_details(book.abs_id)
-        if not item:
-            return
+        item = self.abs_client.get_item_details(book.abs_id) if self.abs_client else None
+        if item:
+            meta = item.get('media', {}).get('metadata', {}) or {}
+            title = meta.get('title') or book.abs_title or ''
+            author = meta.get('authorName') or ''
+            isbn = meta.get('isbn') or ''
+            asin = meta.get('asin') or ''
+        else:
+            # Ebook-only book (no ABS item): source identifiers from the EPUB itself.
+            ebook_meta = self.ebook_parser.get_book_metadata(book.ebook_filename) if self.ebook_parser else {}
+            title = ebook_meta.get('title') or book.abs_title or ''
+            author = ebook_meta.get('author') or ''
+            isbn = ebook_meta.get('isbn') or ''
+            asin = ebook_meta.get('asin') or ''
 
-        meta = item.get('media', {}).get('metadata', {}) or {}
-        title = meta.get('title') or book.abs_title or ''
-        author = meta.get('authorName') or ''
-        isbn = meta.get('isbn') or ''
-        asin = meta.get('asin') or ''
+        if not title:
+            return
 
         match = None
         matched_by = None
 
-        # When LLM tracker matching is on, the title-based fallback is replaced by the
-        # craft → judge path below; ISBN/ASIN stay authoritative either way.
+        # LLM tracker matching is a last-resort rescue only: the normal ISBN/ASIN and
+        # title searches below always run first, so the LLM can add matches it would
+        # otherwise miss but can never suppress a match the plain search already found.
         use_llm = (
             tracker_match_enabled()
             and self.ollama_client is not None
@@ -77,12 +86,12 @@ class StorygraphSyncClient(SyncClient):
         search_strategies = [
             ('isbn', isbn),
             ('asin', asin),
+            ('title_author', title if title and author else ''),
         ]
+        # Blind title-only fuzzy matching grabs the wrong book when many share a title;
+        # with the LLM on we route title-only candidates through the judge below instead.
         if not use_llm:
-            search_strategies += [
-                ('title_author', title if title and author else ''),
-                ('title', title),
-            ]
+            search_strategies.append(('title', title))
 
         for strategy, value in search_strategies:
             if not value:
@@ -101,11 +110,13 @@ class StorygraphSyncClient(SyncClient):
                 matched_by = strategy
                 break
 
-        # LLM-verified title fallback: craft a clean query, judge candidates, write nothing if none.
+        # LLM rescue: clean the title, then search title-only for maximum recall (the judge
+        # uses the author for precision, so we deliberately don't constrain the query by
+        # author here), and let the judge pick the one true book or write nothing.
         if not match and use_llm:
             craft_title, craft_author = craft_search_terms(self.ollama_client, title, author)
             try:
-                candidates = self.storygraph_client.search_books(craft_title, craft_author)
+                candidates = self.storygraph_client.search_books(craft_title, "")
             except Exception as exc:
                 logger.warning("StoryGraph LLM match search failed for '%s': %s", title, exc)
                 candidates = []

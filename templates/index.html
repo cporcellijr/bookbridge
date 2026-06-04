@@ -263,10 +263,11 @@
 
                 {% if integrations.storygraph %}
                 <div class="service-item progress-item-hc">
-                    <a href="{{ mapping.storygraph_url|default('https://app.thestorygraph.com') }}" target="_blank"
-                        rel="noopener noreferrer"
-                        title="{% if mapping.storygraph_book_id %}Open {{ mapping.storygraph_title }} in StoryGraph{% else %}Not linked to StoryGraph{% endif %}"
-                        class="hc-link {% if not mapping.storygraph_book_id %}pe-none{% endif %}">
+                    <a href="{% if mapping.storygraph_book_id %}{{ mapping.storygraph_url|default('https://app.thestorygraph.com') }}{% else %}#{% endif %}"
+                        {% if mapping.storygraph_book_id %}target="_blank" rel="noopener noreferrer"{% endif %}
+                        title="{% if mapping.storygraph_book_id %}Open {{ mapping.storygraph_title }} in StoryGraph{% else %}Link to StoryGraph{% endif %}"
+                        class="hc-link {% if not mapping.storygraph_book_id %}cursor-pointer{% endif %}"
+                        {% if not mapping.storygraph_book_id %}data-abs-id="{{ mapping.abs_id }}" data-title="" onclick="linkStorygraph(event); return false;"{% endif %}>
                         <img src="/static/storygraph.svg" alt="SG"
                             class="service-icon {% if not mapping.storygraph_book_id %}grayscale-muted{% endif %}"
                             onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">

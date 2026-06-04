@@ -83,10 +83,11 @@ class TestHardcoverLlmMatch(_EnvGuard):
             ollama_client=ollama,
         )
 
-    def test_llm_match_writes_and_skips_legacy_fuzzy(self):
+    def test_llm_rescues_after_legacy_fuzzy_misses(self):
         os.environ["OLLAMA_TRACKER_MATCH"] = "true"
         hc = MagicMock()
         hc.is_configured.return_value = True
+        hc.search_by_title_author.return_value = None  # plain fuzzy finds nothing -> LLM rescue
         hc.list_candidates_by_title_author.return_value = [
             {"book_id": 1, "title": "Clean", "author": "Auth", "slug": "clean"}
         ]
@@ -96,15 +97,32 @@ class TestHardcoverLlmMatch(_EnvGuard):
         svc = self._client(_StubOllama(craft=None, judge={"choice": 0, "confidence": 95}), hc)
         svc._automatch_hardcover(MagicMock(abs_id="abs1", abs_title="Some Book"))
 
-        hc.search_by_title_author.assert_not_called()  # legacy fuzzy bypassed
+        hc.search_by_title_author.assert_called()  # plain fuzzy always runs first
+        # Rescue searches title-only for recall; the judge applies the author.
+        hc.list_candidates_by_title_author.assert_called_once_with("Some Book", "")
         saved = svc.database_service.save_hardcover_details.call_args[0][0]
         self.assertEqual(saved.matched_by, "title_author_llm")
         hc.update_status.assert_called_once()
+
+    def test_plain_title_match_skips_llm(self):
+        os.environ["OLLAMA_TRACKER_MATCH"] = "true"
+        hc = MagicMock()
+        hc.is_configured.return_value = True
+        hc.search_by_title_author.return_value = {
+            "book_id": 7, "slug": "s", "edition_id": 4, "pages": 250, "title": "Some Book"
+        }
+        ollama = _StubOllama(judge={"choice": 0, "confidence": 99})
+        svc = self._client(ollama, hc)
+        svc._automatch_hardcover(MagicMock(abs_id="abs1", abs_title="Some Book"))
+
+        self.assertEqual(ollama.calls, [])  # plain match wins, LLM never consulted
+        hc.list_candidates_by_title_author.assert_not_called()
 
     def test_llm_no_match_writes_nothing(self):
         os.environ["OLLAMA_TRACKER_MATCH"] = "true"
         hc = MagicMock()
         hc.is_configured.return_value = True
+        hc.search_by_title_author.return_value = None  # plain fuzzy finds nothing
         hc.list_candidates_by_title_author.return_value = [{"book_id": 1, "title": "X", "author": "Y"}]
         svc = self._client(_StubOllama(judge={"choice": None, "confidence": 0}), hc)
         svc._automatch_hardcover(MagicMock(abs_id="abs1", abs_title="Some Book"))
@@ -159,17 +177,19 @@ class TestStorygraphLlmMatch(_EnvGuard):
         os.environ["OLLAMA_TRACKER_MATCH"] = "true"
         sg = MagicMock()
         sg.is_configured.return_value = True
+        sg.resolve_book.return_value = None  # plain ISBN/title search finds nothing
         sg.search_books.return_value = [{"book_id": "b1", "title": "X", "author": "Y"}]
         svc = self._client(_StubOllama(judge={"choice": None, "confidence": 0}), sg)
         svc._automatch_storygraph(MagicMock(abs_id="abs1", abs_title="Some Book"))
 
+        sg.resolve_book.assert_called()  # plain search always runs first
         svc.database_service.save_storygraph_details.assert_not_called()
-        sg.resolve_book.assert_not_called()
 
-    def test_llm_match_writes(self):
+    def test_llm_rescues_after_plain_search_misses(self):
         os.environ["OLLAMA_TRACKER_MATCH"] = "true"
         sg = MagicMock()
         sg.is_configured.return_value = True
+        sg.resolve_book.return_value = None  # plain search finds nothing -> LLM rescue
         sg.search_books.return_value = [{"book_id": "b9", "title": "Clean", "author": "Auth"}]
         sg.get_book_editions.return_value = []
         sg.get_book_rating.return_value = {}
@@ -177,8 +197,76 @@ class TestStorygraphLlmMatch(_EnvGuard):
         svc = self._client(_StubOllama(judge={"choice": 0, "confidence": 95}), sg)
         svc._automatch_storygraph(MagicMock(abs_id="abs1", abs_title="Some Book"))
 
+        sg.resolve_book.assert_called()  # plain search ran first, then LLM rescued
+        # Rescue searches title-only for recall; the judge applies the author.
+        sg.search_books.assert_called_once_with("Some Book", "")
         svc.database_service.save_storygraph_details.assert_called_once()
-        sg.resolve_book.assert_not_called()  # title fallback handled by LLM, not legacy resolve
+
+    def test_plain_match_skips_llm(self):
+        os.environ["OLLAMA_TRACKER_MATCH"] = "true"
+        sg = MagicMock()
+        sg.is_configured.return_value = True
+        sg.resolve_book.return_value = {"book_id": "b5", "title": "Some Book", "author": "Some Author"}
+        sg.get_book_editions.return_value = []
+        sg.get_book_rating.return_value = {}
+        sg.book_url.return_value = "http://sg/books/b5"
+        ollama = _StubOllama(judge={"choice": 0, "confidence": 99})
+        svc = self._client(ollama, sg)
+        svc._automatch_storygraph(MagicMock(abs_id="abs1", abs_title="Some Book"))
+
+        self.assertEqual(ollama.calls, [])  # plain resolve wins, LLM never consulted
+        sg.search_books.assert_not_called()
+        svc.database_service.save_storygraph_details.assert_called_once()
+
+
+class TestEbookOnlyMetadataFallback(_EnvGuard):
+    """ABS-less ebook-only books should match from EPUB-embedded identifiers."""
+
+    def test_storygraph_uses_epub_metadata_when_no_abs_item(self):
+        sg = MagicMock()
+        sg.is_configured.return_value = True
+        sg.resolve_book.return_value = {"book_id": "sgX", "title": "Appalachian Siren", "author": "Leslie Kurt"}
+        sg.get_book_editions.return_value = []
+        sg.get_book_rating.return_value = {}
+        sg.book_url.return_value = "http://sg/books/sgX"
+        parser = MagicMock()
+        parser.get_book_metadata.return_value = {
+            "title": "Appalachian Siren", "author": "Leslie Kurt", "isbn": "9798875931147", "asin": "B0CTXDLTKC",
+        }
+        svc = StorygraphSyncClient(
+            storygraph_client=sg,
+            ebook_parser=parser,
+            abs_client=MagicMock(get_item_details=MagicMock(return_value=None)),  # ebook-only: no ABS item
+            database_service=MagicMock(get_storygraph_details=MagicMock(return_value=None)),
+            ollama_client=None,
+        )
+        svc._automatch_storygraph(MagicMock(abs_id="ebook-1", abs_title="Appalachian Siren_ Backwoods Ex - Leslie Kurt", ebook_filename="Appalachian Siren.epub"))
+
+        parser.get_book_metadata.assert_called_once_with("Appalachian Siren.epub")
+        # ISBN from the EPUB drives the authoritative search.
+        sg.resolve_book.assert_any_call(title="Appalachian Siren", author="Leslie Kurt", isbn="9798875931147")
+        svc.database_service.save_storygraph_details.assert_called_once()
+
+    def test_hardcover_uses_epub_metadata_when_no_abs_item(self):
+        hc = MagicMock()
+        hc.is_configured.return_value = True
+        hc.search_by_isbn.return_value = {"book_id": 42, "slug": "appalachian-siren", "edition_id": 7, "pages": 280, "title": "Appalachian Siren"}
+        parser = MagicMock()
+        parser.get_book_metadata.return_value = {
+            "title": "Appalachian Siren", "author": "Leslie Kurt", "isbn": "9798875931147", "asin": "B0CTXDLTKC",
+        }
+        svc = HardcoverSyncClient(
+            hardcover_client=hc,
+            ebook_parser=parser,
+            abs_client=MagicMock(get_item_details=MagicMock(return_value=None)),  # ebook-only: no ABS item
+            database_service=MagicMock(get_hardcover_details=MagicMock(return_value=None)),
+            ollama_client=None,
+        )
+        svc._automatch_hardcover(MagicMock(abs_id="ebook-1", abs_title="Appalachian Siren_ Backwoods Ex - Leslie Kurt", ebook_filename="Appalachian Siren.epub"))
+
+        parser.get_book_metadata.assert_called_once_with("Appalachian Siren.epub")
+        hc.search_by_isbn.assert_any_call("9798875931147")
+        svc.database_service.save_hardcover_details.assert_called_once()
 
 
 if __name__ == "__main__":

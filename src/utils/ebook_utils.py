@@ -104,6 +104,51 @@ class EbookParser:
 
         raise FileNotFoundError(f"Could not locate {filename}")
 
+    def get_book_metadata(self, filename: str) -> dict:
+        """Extract {title, author, isbn, asin} from an ebook's embedded metadata.
+
+        Resolves `filename` under books_dir and reads the EPUB's Dublin Core fields.
+        Used to match ABS-less (ebook-only) books to trackers. Returns empty strings
+        for anything missing and never raises.
+        """
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
+        if not filename:
+            return result
+        try:
+            path = self.resolve_book_path(filename)
+        except FileNotFoundError:
+            return result
+        try:
+            book = epub.read_epub(str(path))
+        except Exception as e:
+            logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}")
+            return result
+
+        titles = book.get_metadata("DC", "title")
+        if titles and titles[0][0]:
+            result["title"] = titles[0][0].strip()
+
+        creators = book.get_metadata("DC", "creator")
+        if creators and creators[0][0]:
+            result["author"] = creators[0][0].strip()
+
+        for value, attrs in book.get_metadata("DC", "identifier"):
+            raw = (value or "").strip()
+            if not raw:
+                continue
+            scheme = ""
+            for k, v in (attrs or {}).items():
+                if str(k).endswith("scheme"):
+                    scheme = (v or "").upper()
+                    break
+            low = raw.lower()
+            if not result["isbn"] and (scheme == "ISBN" or low.startswith("urn:isbn:")):
+                result["isbn"] = re.sub(r"^urn:isbn:", "", low).replace("-", "").strip()
+            elif not result["asin"] and (scheme == "AMAZON" or low.startswith("urn:amazon:")):
+                result["asin"] = re.sub(r"^urn:amazon:", "", raw, flags=re.IGNORECASE).strip()
+
+        return result
+
     def get_kosync_id(self, filepath):
         filepath = Path(filepath)
         if self.hash_method == "filename":
