@@ -1981,6 +1981,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             },
         ]
         self.mock_database_service.get_koreader_activity_dates.return_value = [today]
+        self.mock_database_service.get_koreader_hour_histogram.return_value = [
+            {'hour': h, 'seconds': 0, 'pages': 0} for h in range(24)
+        ]
+        self.mock_database_service.get_koreader_book_list.return_value = []
+        self.mock_database_service.get_koreader_yearly_recap.return_value = {
+            'year': 2026, 'months': [{'month': m, 'seconds': 0, 'pages': 0, 'finished': 0} for m in range(1, 13)],
+            'totalSeconds': 0, 'totalPages': 0, 'booksFinished': 0, 'finishedBooks': [], 'availableYears': [],
+        }
 
         response = self.client.get('/api/stats')
 

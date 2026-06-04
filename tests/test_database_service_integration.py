@@ -315,6 +315,66 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertTrue(any(session['bookKey'] == 'abs:abs-linked' and session['isLinked'] for session in recent_sessions))
         self.assertTrue(any(session['bookKey'] == 'koreader:md5-unlinked' and session['isLinked'] is False for session in recent_sessions))
 
+    def test_koreader_pages_and_new_stats_methods(self):
+        """Pages should match KOReader's total_read_pages; new stat methods derive from page events."""
+        base = datetime.now(ZoneInfo("UTC")).replace(hour=21, minute=0, second=0, microsecond=0)
+        year = base.year
+
+        book_a = self.Book(
+            abs_id='abs-a', abs_title='Book A', ebook_filename='a.epub',
+            kosync_doc_id='md5-a', status='active', duration=3600.0,
+        )
+        self.db_service.save_book(book_a)
+
+        self.db_service.upsert_koreader_book_stats(
+            device='KOReader', device_id='d1',
+            books=[
+                {'md5': 'md5-a', 'title': 'Book A KO', 'authors': 'Auth A', 'pages': 200, 'total_read_pages': 100},
+                {'md5': 'md5-fin', 'title': 'Finished Book', 'authors': 'Auth F', 'pages': 300, 'total_read_pages': 300},
+            ],
+        )
+        # md5-a has a re-read of page 5 (events=4, distinct pages=3) but device total_read_pages=100.
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='KOReader', device_id='d1',
+            page_stats=[
+                {'md5': 'md5-a', 'page': 5, 'start_time': (base - timedelta(minutes=40)).timestamp(), 'duration': 60},
+                {'md5': 'md5-a', 'page': 5, 'start_time': (base - timedelta(minutes=39)).timestamp(), 'duration': 30},
+                {'md5': 'md5-a', 'page': 6, 'start_time': (base - timedelta(minutes=38)).timestamp(), 'duration': 90},
+                {'md5': 'md5-a', 'page': 7, 'start_time': (base - timedelta(minutes=37)).timestamp(), 'duration': 120},
+                {'md5': 'md5-fin', 'page': 299, 'start_time': (base - timedelta(minutes=10)).timestamp(), 'duration': 45},
+            ],
+        )
+
+        summary = self.db_service.get_koreader_dashboard_summary('UTC')
+        # Device-matching pages = 100 + 300 = 400 (NOT events=5, NOT distinct=4).
+        self.assertEqual(summary['pagesRead'], 400)
+        self.assertEqual(summary['totalSeconds'], 345)
+        self.assertGreater(summary['pagesPerHour'], 0)
+        self.assertGreaterEqual(summary['secondsPerPage'], 0)
+
+        histogram = self.db_service.get_koreader_hour_histogram('UTC')
+        self.assertEqual(len(histogram), 24)
+        self.assertEqual(sum(bucket['seconds'] for bucket in histogram), 345)
+
+        books = {b['bookKey']: b for b in self.db_service.get_koreader_book_list('UTC')}
+        self.assertEqual(books['abs:abs-a']['pagesRead'], 100)   # device, not event count
+        self.assertEqual(books['abs:abs-a']['percentComplete'], 50.0)
+
+        detail = self.db_service.get_koreader_book_detail('abs:abs-a', 'UTC')
+        self.assertEqual(detail['pagesRead'], 100)
+        self.assertGreaterEqual(detail['sessionCount'], 1)
+        self.assertTrue(detail['sessions'])
+        self.assertTrue(detail['heatmap'])
+
+        recap = self.db_service.get_koreader_yearly_recap(year, 'UTC')
+        self.assertEqual(len(recap['months']), 12)
+        self.assertEqual(recap['totalPages'], 4)   # distinct (md5,page) in the year
+        self.assertIn(year, recap['availableYears'])
+        finished_keys = {b['bookKey'] for b in recap['finishedBooks']}
+        self.assertEqual(recap['booksFinished'], 1)
+        self.assertIn('koreader:md5-fin', finished_keys)   # 300/300 = 100% complete
+        self.assertNotIn('abs:abs-a', finished_keys)       # 100/200 = 50%, not finished
+
     def test_create_states(self):
         """Test creating state records for multiple clients."""
         test_abs_id = 'test-book-states'

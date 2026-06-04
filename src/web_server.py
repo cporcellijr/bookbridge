@@ -5077,6 +5077,74 @@ def _normalize_listening_session(session_data):
     }
 
 
+def _years_from_days(all_days):
+    years = set()
+    for key in (all_days or {}):
+        try:
+            years.add(int(str(key).split("-")[0]))
+        except (IndexError, ValueError):
+            pass
+    return sorted(years)
+
+
+def _build_listening_yearly_recap(all_days, year, items_finished):
+    """Year-in-review for listening: monthly hours from the ABS daily map.
+
+    Per-month 'finished' is not available at daily granularity (would need an extra
+    ABS media-progress call), so finishedBooks stays empty and booksFinished reflects
+    the all-time items count for context only.
+    """
+    months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+    total_seconds = 0
+    for key, value in (all_days or {}).items():
+        date_str = str(key)
+        if not date_str.startswith(f"{year}-"):
+            continue
+        try:
+            month_index = int(date_str.split("-")[1]) - 1
+        except (IndexError, ValueError):
+            continue
+        seconds = int(round(float(value or 0)))
+        months[month_index]["seconds"] += seconds
+        total_seconds += seconds
+    return {
+        "year": year,
+        "months": months,
+        "totalSeconds": total_seconds,
+        "totalPages": 0,
+        "booksFinished": int(items_finished or 0),
+        "finishedBooks": [],
+        "availableYears": _years_from_days(all_days),
+    }
+
+
+def _build_listening_book_list():
+    """Per-audiobook rollup from the bridge's own AUDIOBOOK reading sessions."""
+    stats_by_id = database_service.get_all_reading_stats()
+    if not stats_by_id:
+        return []
+    books = {book.abs_id: book for book in database_service.get_all_books()}
+    result = []
+    for abs_id, stats in stats_by_id.items():
+        listen_seconds = int(stats.get("listen_seconds") or 0)
+        if listen_seconds <= 0:
+            continue
+        book = books.get(abs_id)
+        result.append({
+            "bookKey": f"abs:{abs_id}",
+            "absId": abs_id,
+            "isLinked": True,
+            "title": getattr(book, "abs_title", None) or "Unknown book",
+            "author": None,
+            "totalSeconds": listen_seconds,
+            "sessionCount": int(stats.get("session_count") or 0),
+            "avgSessionSeconds": int(stats.get("avg_session_seconds") or 0),
+            "lastReadAt": int(stats["last_session_time"]) if stats.get("last_session_time") else None,
+        })
+    result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+    return result
+
+
 def _build_listening_stats_payload(tz):
     try:
         abs_client = container.abs_client()
@@ -5113,6 +5181,10 @@ def _build_listening_stats_payload(tz):
     summary["itemsFinished"] = len(raw_stats.get("items") or {})
     summary["daysListened"] = len(all_activity_dates)
 
+    session_durations = [int(s.get("durationSeconds") or 0) for s in normalized_sessions if s.get("durationSeconds")]
+    summary["avgSessionSeconds"] = int(sum(session_durations) / len(session_durations)) if session_durations else 0
+    summary["hoursPerDay"] = round(summary.get("dailyAverageSeconds", 0) / 3600, 2)
+
     return {
         "available": True,
         "stats": summary,
@@ -5123,6 +5195,8 @@ def _build_listening_stats_payload(tz):
         "trackedBookIds": sorted({
             session.get("absId") for session in normalized_sessions if session.get("absId")
         }),
+        "books": _build_listening_book_list(),
+        "yearlyRecap": _build_listening_yearly_recap(all_days, datetime.now(tz).year, summary["itemsFinished"]),
     }
 
 
@@ -5133,6 +5207,9 @@ def _build_reading_stats_payload(tz):
     heatmap = database_service.get_koreader_heatmap(datetime.now(tz).year, tz_name)
     recent_sessions = database_service.get_koreader_recent_sessions(10, tz_name)
     activity_dates = database_service.get_koreader_activity_dates(tz_name)
+    hour_histogram = database_service.get_koreader_hour_histogram(tz_name)
+    books = database_service.get_koreader_book_list(tz_name)
+    yearly_recap = database_service.get_koreader_yearly_recap(datetime.now(tz).year, tz_name)
 
     if not summary and not any(int(row.get("seconds") or 0) > 0 for row in daily):
         return {
@@ -5144,6 +5221,9 @@ def _build_reading_stats_payload(tz):
             "activityDates": [],
             "trackedBookIds": [],
             "trackedBookKeys": [],
+            "hourHistogram": hour_histogram,
+            "books": [],
+            "yearlyRecap": yearly_recap,
         }
 
     stats = summary or {}
@@ -5172,6 +5252,9 @@ def _build_reading_stats_payload(tz):
         "activityDates": activity_dates,
         "trackedBookIds": stats.get("trackedBookIds") or [],
         "trackedBookKeys": stats.get("trackedBookKeys") or [],
+        "hourHistogram": hour_histogram,
+        "books": books,
+        "yearlyRecap": yearly_recap,
     }
 
 
@@ -5217,6 +5300,75 @@ def _merge_recent_sessions(listening_sessions, reading_sessions, limit=10):
     merged = list(listening_sessions or []) + list(reading_sessions or [])
     merged.sort(key=lambda row: int(row.get("endedAt") or 0), reverse=True)
     return merged[: max(int(limit or 10), 1)]
+
+
+def _merge_book_lists(reading_books, listening_books):
+    """Union reading + listening per-book rows by bookKey (linked books merge)."""
+    merged = {}
+    for source, items in (("reading", reading_books), ("listening", listening_books)):
+        for item in items or []:
+            key = item.get("bookKey")
+            if not key:
+                continue
+            entry = merged.setdefault(key, {
+                "bookKey": key, "absId": item.get("absId"),
+                "isLinked": bool(item.get("isLinked")),
+                "title": item.get("title"), "author": item.get("author"),
+                "readingSeconds": 0, "listeningSeconds": 0, "totalSeconds": 0,
+                "pagesRead": 0, "lastReadAt": 0, "percentComplete": None,
+            })
+            seconds = int(item.get("totalSeconds") or 0)
+            if source == "reading":
+                entry["readingSeconds"] += seconds
+                entry["pagesRead"] = item.get("pagesRead") or entry["pagesRead"]
+                if item.get("percentComplete") is not None:
+                    entry["percentComplete"] = item.get("percentComplete")
+            else:
+                entry["listeningSeconds"] += seconds
+            entry["totalSeconds"] = entry["readingSeconds"] + entry["listeningSeconds"]
+            entry["lastReadAt"] = max(int(entry["lastReadAt"] or 0), int(item.get("lastReadAt") or 0))
+            if not entry.get("title") and item.get("title"):
+                entry["title"] = item.get("title")
+
+    result = list(merged.values())
+    for entry in result:
+        entry["lastReadAt"] = entry["lastReadAt"] or None
+    result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+    return result
+
+
+def _build_combined_yearly_recap(reading_recap, listening_recap):
+    """Merge reading + listening monthly hours; finished timeline comes from reading."""
+    reading_months = (reading_recap or {}).get("months") or []
+    listening_months = (listening_recap or {}).get("months") or []
+    months = []
+    for index in range(12):
+        rm = reading_months[index] if index < len(reading_months) else {}
+        lm = listening_months[index] if index < len(listening_months) else {}
+        read_secs = int(rm.get("seconds") or 0)
+        listen_secs = int(lm.get("seconds") or 0)
+        months.append({
+            "month": index + 1,
+            "seconds": read_secs + listen_secs,
+            "readingSeconds": read_secs,
+            "listeningSeconds": listen_secs,
+            "pages": int(rm.get("pages") or 0),
+            "finished": int(rm.get("finished") or 0) + int(lm.get("finished") or 0),
+        })
+    finished_books = list((reading_recap or {}).get("finishedBooks") or [])
+    available_years = sorted(
+        set((reading_recap or {}).get("availableYears") or [])
+        | set((listening_recap or {}).get("availableYears") or [])
+    )
+    return {
+        "year": (reading_recap or listening_recap or {}).get("year"),
+        "months": months,
+        "totalSeconds": sum(month["seconds"] for month in months),
+        "totalPages": (reading_recap or {}).get("totalPages") or 0,
+        "booksFinished": len(finished_books),
+        "finishedBooks": finished_books,
+        "availableYears": available_years,
+    }
 
 
 def _build_combined_stats_payload(listening, reading, tz):
@@ -5271,6 +5423,12 @@ def _build_combined_stats_payload(listening, reading, tz):
         "daily": combined_daily,
         "heatmap": combined_heatmap,
         "recentSessions": combined_sessions,
+        "hourHistogram": (reading or {}).get("hourHistogram") or [],
+        "books": _merge_book_lists((reading or {}).get("books"), (listening or {}).get("books")),
+        "yearlyRecap": _build_combined_yearly_recap(
+            (reading or {}).get("yearlyRecap"),
+            (listening or {}).get("yearlyRecap"),
+        ),
     }
 
 
@@ -5324,6 +5482,9 @@ def api_stats():
             "recentSessions": reading.get("recentSessions"),
             "trackedBookIds": reading.get("trackedBookIds"),
             "trackedBookKeys": reading.get("trackedBookKeys"),
+            "hourHistogram": reading.get("hourHistogram") or [],
+            "books": reading.get("books") or [],
+            "yearlyRecap": reading.get("yearlyRecap"),
         } if reading else {
             "available": False,
             "stats": None,
@@ -5332,6 +5493,9 @@ def api_stats():
             "recentSessions": [],
             "trackedBookIds": [],
             "trackedBookKeys": [],
+            "hourHistogram": [],
+            "books": [],
+            "yearlyRecap": None,
         },
         "combined": combined,
     }
@@ -5383,6 +5547,84 @@ def api_stats_reading_calendar():
         return jsonify({"error": "Failed to load reading calendar"}), 500
 
     return jsonify(payload)
+
+
+def api_stats_book_detail():
+    key = str(request.args.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "Missing key"}), 400
+
+    try:
+        tz = _get_stats_timezone()
+        tz_name = getattr(tz, "key", str(tz))
+        reading = database_service.get_koreader_book_detail(key, tz_name)
+
+        abs_id = None
+        if key.startswith("abs:"):
+            abs_id = key.split("abs:", 1)[1]
+        elif reading and reading.get("absId"):
+            abs_id = reading.get("absId")
+
+        listening = None
+        if abs_id:
+            row = database_service.get_reading_stats(abs_id)
+            if row and int(row.get("listen_seconds") or 0) > 0:
+                book = database_service.get_book(abs_id)
+                listening = {
+                    "absId": abs_id,
+                    "title": getattr(book, "abs_title", None),
+                    "totalSeconds": int(row.get("listen_seconds") or 0),
+                    "sessionCount": int(row.get("session_count") or 0),
+                    "avgSessionSeconds": int(row.get("avg_session_seconds") or 0),
+                    "lastReadAt": int(row["last_session_time"]) if row.get("last_session_time") else None,
+                }
+
+        if not reading and not listening:
+            return jsonify({"error": "No detail for this book"}), 404
+
+        title = (reading or {}).get("title") or (listening or {}).get("title") or "Unknown book"
+        return jsonify({
+            "bookKey": key, "absId": abs_id, "title": title,
+            "reading": reading, "listening": listening,
+        })
+    except Exception as e:
+        logger.warning("Stats API: book detail failed for %s: %s", key, e)
+        return jsonify({"error": "Failed to load book detail"}), 500
+
+
+def api_stats_yearly_recap():
+    scope = str(request.args.get("scope") or "combined").strip().lower()
+    year_str = str(request.args.get("year") or "").strip()
+
+    tz = _get_stats_timezone()
+    tz_name = getattr(tz, "key", str(tz))
+    try:
+        year = int(year_str) if year_str else datetime.now(tz).year
+    except ValueError:
+        return jsonify({"error": "Invalid year"}), 400
+
+    try:
+        reading_recap = database_service.get_koreader_yearly_recap(year, tz_name)
+
+        listening_recap = None
+        try:
+            abs_client = container.abs_client()
+            raw_stats = abs_client.get_listening_stats() if abs_client else None
+        except Exception:
+            raw_stats = None
+        if raw_stats:
+            listening_recap = _build_listening_yearly_recap(
+                raw_stats.get("days") or {}, year, len(raw_stats.get("items") or {})
+            )
+
+        if scope == "reading":
+            return jsonify(reading_recap)
+        if scope == "listening":
+            return jsonify(listening_recap or _build_listening_yearly_recap({}, year, 0))
+        return jsonify(_build_combined_yearly_recap(reading_recap, listening_recap))
+    except Exception as e:
+        logger.warning("Stats API: yearly recap failed for %s/%s: %s", scope, year, e)
+        return jsonify({"error": "Failed to load yearly recap"}), 500
 
 
 def api_status():
@@ -6541,6 +6783,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/stats', 'api_stats', api_stats)
     app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
     app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
+    app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
+    app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
     app.add_url_rule('/logs', 'logs_view', logs_view)
     app.add_url_rule('/api/logs', 'api_logs', api_logs)
     app.add_url_rule('/api/logs/live', 'api_logs_live', api_logs_live)

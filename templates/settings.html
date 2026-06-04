@@ -1257,6 +1257,12 @@
                         <input type="number" step="0.1" name="SYNC_DELTA_BETWEEN_CLIENTS_PERCENT"
                             value="{{ get_val('SYNC_DELTA_BETWEEN_CLIENTS_PERCENT') }}">
                     </div>
+                    <div class="form-group">
+                        <label>Reading Session Gap (Minutes)</label>
+                        <input type="number" min="1" name="KOREADER_SESSION_GAP_MINUTES"
+                            value="{{ get_val('KOREADER_SESSION_GAP_MINUTES') or '30' }}">
+                        <small>Idle gap that splits KOReader page events into separate reading sessions on the stats page.</small>
+                    </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="xpath_fallback" name="XPATH_FALLBACK_TO_PREVIOUS_SEGMENT" {% if
                             get_bool('XPATH_FALLBACK_TO_PREVIOUS_SEGMENT') %}checked{% endif %}>

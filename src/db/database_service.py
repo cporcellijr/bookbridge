@@ -5,6 +5,7 @@ Direct model-based interface without dictionary conversions.
 
 import json
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1241,12 +1242,7 @@ class DatabaseService:
                 .scalar()
                 or 0
             )
-            pages_read = int(
-                session.query(func.count(KOReaderPageStat.id))
-                .filter(KOReaderPageStat.md5.in_(md5s))
-                .scalar()
-                or 0
-            )
+            pages_read = self._koreader_pages_read(session, md5s)
             books_tracked = int(
                 session.query(KOReaderPageStat.md5)
                 .filter(KOReaderPageStat.md5.in_(md5s))
@@ -1289,6 +1285,8 @@ class DatabaseService:
                 "daysRead": len(activity_dates),
                 "totalSeconds": total_seconds,
                 "pagesRead": pages_read,
+                "pagesPerHour": round(pages_read / (total_seconds / 3600), 1) if total_seconds > 0 else 0,
+                "secondsPerPage": int(total_seconds / pages_read) if pages_read > 0 else 0,
                 "trackedBookIds": linked_book_ids,
                 "trackedBookKeys": tracked_book_keys,
                 "weekTotalSeconds": week_total,
@@ -1379,7 +1377,7 @@ class DatabaseService:
                 }
 
             grouped = {}
-            session_gap_seconds = 1800
+            session_gap_seconds = self._session_gap_seconds()
 
             for row in rows:
                 context = contexts.get(row.md5)
@@ -1526,7 +1524,7 @@ class DatabaseService:
                 grouped_rows[(context["bookKey"], row.device_key)].append(row)
 
             sessions = []
-            session_gap_seconds = 1800
+            session_gap_seconds = self._session_gap_seconds()
             for (book_key, device_key), grouped in grouped_rows.items():
                 current = None
                 for row in grouped:
@@ -1588,6 +1586,308 @@ class DatabaseService:
                 })
 
             return normalized
+
+    def _session_gap_seconds(self) -> int:
+        """Idle gap (seconds) that splits KOReader page events into sessions."""
+        try:
+            minutes = float(os.environ.get("KOREADER_SESSION_GAP_MINUTES", "30"))
+        except (TypeError, ValueError):
+            minutes = 30.0
+        return int(max(minutes, 1) * 60)
+
+    @staticmethod
+    def _reconstruct_sessions(rows, gap_seconds: int) -> list[dict]:
+        """Cluster ordered page-stat rows into sessions, split per device on idle gaps.
+
+        Returns sessions newest-first as {startTime, endTime, durationSeconds, pagesRead}.
+        """
+        by_device = defaultdict(list)
+        for row in rows:
+            by_device[row.device_key].append(row)
+
+        sessions = []
+        for grouped in by_device.values():
+            grouped.sort(key=lambda r: r.start_time)
+            current = None
+            for row in grouped:
+                duration = int(max(row.duration or 0, 0))
+                event_end = float(row.start_time + max(row.duration or 0, 0))
+                if current is None:
+                    current = {"startTime": float(row.start_time), "endTime": event_end,
+                               "durationSeconds": duration, "pagesRead": 1}
+                elif (float(row.start_time) - float(current["endTime"])) > gap_seconds:
+                    sessions.append(current)
+                    current = {"startTime": float(row.start_time), "endTime": event_end,
+                               "durationSeconds": duration, "pagesRead": 1}
+                else:
+                    current["endTime"] = max(float(current["endTime"]), event_end)
+                    current["durationSeconds"] += duration
+                    current["pagesRead"] += 1
+            if current is not None:
+                sessions.append(current)
+
+        sessions.sort(key=lambda s: s["endTime"], reverse=True)
+        for s in sessions:
+            s["startTime"] = int(s["startTime"])
+            s["endTime"] = int(s["endTime"])
+        return sessions
+
+    @staticmethod
+    def _distinct_pages_count(session, md5s, start_epoch=None, end_epoch=None) -> int:
+        """Count distinct (md5, page) screen-pages in an optional time window."""
+        if not md5s:
+            return 0
+        query = session.query(KOReaderPageStat.md5, KOReaderPageStat.page).filter(
+            KOReaderPageStat.md5.in_(md5s)
+        )
+        if start_epoch is not None:
+            query = query.filter(KOReaderPageStat.start_time >= start_epoch)
+        if end_epoch is not None:
+            query = query.filter(KOReaderPageStat.start_time < end_epoch)
+        return query.distinct().count()
+
+    def _koreader_pages_read(self, session, md5s, metadata: dict = None) -> int:
+        """All-time 'pages read' matching KOReader's own number.
+
+        Uses KOReader's per-book ``total_read_pages`` (which applies its read-time
+        threshold, so it matches the device), falling back to distinct screen-pages
+        for any md5 that has page stats but no uploaded book-stats row.
+        """
+        if not md5s:
+            return 0
+        if metadata is None:
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+        total = 0
+        missing = set()
+        for md5 in md5s:
+            meta = metadata.get(md5)
+            if meta and meta.total_read_pages:
+                total += int(meta.total_read_pages)
+            else:
+                missing.add(md5)
+        if missing:
+            total += self._distinct_pages_count(session, missing)
+        return total
+
+    def _percent_complete_for_md5s(self, metadata: dict, md5s) -> Optional[float]:
+        """Best-effort % complete from KOReader book metadata across a book's md5s."""
+        best_read = 0
+        total_pages = 0
+        for md5 in md5s:
+            meta = metadata.get(md5)
+            if meta and meta.pages and (meta.total_read_pages or 0) >= best_read:
+                best_read = meta.total_read_pages or 0
+                total_pages = meta.pages or 0
+        if total_pages > 0:
+            return round(min(best_read / total_pages, 1.0) * 100, 1)
+        return None
+
+    def get_koreader_hour_histogram(self, tz_name: str) -> list[dict]:
+        """Reading activity bucketed by local hour-of-day (0-23)."""
+        buckets = [{"hour": h, "seconds": 0, "pages": 0} for h in range(24)]
+        with self.get_session() as session:
+            md5s = self._get_all_koreader_active_md5s(session)
+            if not md5s:
+                return buckets
+            tz = ZoneInfo(tz_name)
+            rows = (
+                session.query(KOReaderPageStat.start_time, KOReaderPageStat.duration)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .all()
+            )
+            for row in rows:
+                hour = datetime.fromtimestamp(float(row.start_time), tz).hour
+                buckets[hour]["seconds"] += int(max(row.duration or 0, 0))
+                buckets[hour]["pages"] += 1
+        return buckets
+
+    def get_koreader_book_list(self, tz_name: str) -> list[dict]:
+        """Per-book reading rollup for the books list (newest activity first)."""
+        with self.get_session() as session:
+            md5s = self._get_all_koreader_active_md5s(session)
+            if not md5s:
+                return []
+            contexts = self._build_koreader_book_contexts(session, md5s)
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+            keys_md5 = defaultdict(set)
+            for md5, ctx in contexts.items():
+                keys_md5[ctx["bookKey"]].add(md5)
+
+            rows = (
+                session.query(KOReaderPageStat.md5, KOReaderPageStat.start_time, KOReaderPageStat.duration)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .all()
+            )
+            agg = {}
+            for row in rows:
+                ctx = contexts.get(row.md5)
+                if not ctx:
+                    continue
+                entry = agg.setdefault(ctx["bookKey"], {
+                    "bookKey": ctx["bookKey"], "absId": ctx["absId"], "isLinked": ctx["isLinked"],
+                    "title": ctx["title"], "author": ctx["author"],
+                    "totalSeconds": 0, "lastReadAt": 0,
+                })
+                entry["totalSeconds"] += int(max(row.duration or 0, 0))
+                entry["lastReadAt"] = max(entry["lastReadAt"], int(float(row.start_time + max(row.duration or 0, 0))))
+
+            result = []
+            for key, entry in agg.items():
+                total = entry["totalSeconds"]
+                pages = self._koreader_pages_read(session, keys_md5.get(key, set()), metadata)
+                result.append({
+                    **entry,
+                    "pagesRead": pages,
+                    "lastReadAt": entry["lastReadAt"] or None,
+                    "pagesPerHour": round(pages / (total / 3600), 1) if total > 0 else 0,
+                    "secondsPerPage": int(total / pages) if pages > 0 else 0,
+                    "percentComplete": self._percent_complete_for_md5s(metadata, keys_md5.get(key, set())),
+                })
+            result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+            return result
+
+    def get_koreader_book_detail(self, book_key: str, tz_name: str) -> Optional[dict]:
+        """Full per-book reading detail: pace, sessions, daily heatmap, completion."""
+        with self.get_session() as session:
+            all_md5s = self._get_all_koreader_active_md5s(session)
+            if not all_md5s:
+                return None
+            contexts = self._build_koreader_book_contexts(session, all_md5s)
+            md5s = {md5 for md5, ctx in contexts.items() if ctx["bookKey"] == book_key}
+            if not md5s:
+                return None
+            ctx = contexts[next(iter(md5s))]
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+
+            rows = (
+                session.query(KOReaderPageStat)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .order_by(KOReaderPageStat.start_time.asc())
+                .all()
+            )
+            if not rows:
+                return None
+
+            sessions = self._reconstruct_sessions(rows, self._session_gap_seconds())
+            total_seconds = sum(int(max(r.duration or 0, 0)) for r in rows)
+            pages_read = self._koreader_pages_read(session, md5s, metadata)
+            session_count = len(sessions)
+
+            daily_seconds = defaultdict(int)
+            daily_pages = defaultdict(set)
+            for row in rows:
+                date_key = self._local_date_from_epoch(row.start_time, tz_name)
+                daily_seconds[date_key] += int(max(row.duration or 0, 0))
+                daily_pages[date_key].add((row.md5, row.page))
+            heatmap = [
+                {"date": key, "seconds": daily_seconds[key], "pages": len(daily_pages[key])}
+                for key in sorted(daily_seconds)
+            ]
+
+            return {
+                "bookKey": book_key, "absId": ctx["absId"], "isLinked": ctx["isLinked"],
+                "title": ctx["title"], "author": ctx["author"],
+                "totalSeconds": total_seconds, "pagesRead": pages_read,
+                "sessionCount": session_count,
+                "avgSessionSeconds": int(total_seconds / session_count) if session_count else 0,
+                "pagesPerHour": round(pages_read / (total_seconds / 3600), 1) if total_seconds > 0 else 0,
+                "secondsPerPage": int(total_seconds / pages_read) if pages_read > 0 else 0,
+                "firstReadAt": int(rows[0].start_time),
+                "lastReadAt": int(float(rows[-1].start_time + max(rows[-1].duration or 0, 0))),
+                "percentComplete": self._percent_complete_for_md5s(metadata, md5s),
+                "heatmap": heatmap,
+                "sessions": sessions[:50],
+            }
+
+    def _koreader_available_years(self, session, md5s, tz_name: str) -> list[int]:
+        from sqlalchemy import func
+        bounds = (
+            session.query(func.min(KOReaderPageStat.start_time), func.max(KOReaderPageStat.start_time))
+            .filter(KOReaderPageStat.md5.in_(md5s))
+            .first()
+        )
+        if not bounds or bounds[0] is None:
+            return []
+        tz = ZoneInfo(tz_name)
+        first_year = datetime.fromtimestamp(float(bounds[0]), tz).year
+        last_year = datetime.fromtimestamp(float(bounds[1]), tz).year
+        return list(range(first_year, last_year + 1))
+
+    def get_koreader_yearly_recap(self, year: int, tz_name: str) -> dict:
+        """Year-in-review for reading: monthly totals + books finished that year."""
+        empty_months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+        with self.get_session() as session:
+            md5s = self._get_all_koreader_active_md5s(session)
+            if not md5s:
+                return {"year": year, "months": empty_months, "totalSeconds": 0,
+                        "totalPages": 0, "booksFinished": 0, "finishedBooks": [], "availableYears": []}
+
+            contexts = self._build_koreader_book_contexts(session, md5s)
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+            keys_md5 = defaultdict(set)
+            for md5, ctx in contexts.items():
+                keys_md5[ctx["bookKey"]].add(md5)
+
+            tz = ZoneInfo(tz_name)
+            start_epoch = datetime(year, 1, 1, tzinfo=tz).timestamp()
+            end_epoch = datetime(year + 1, 1, 1, tzinfo=tz).timestamp()
+            rows = (
+                session.query(
+                    KOReaderPageStat.md5, KOReaderPageStat.page,
+                    KOReaderPageStat.start_time, KOReaderPageStat.duration,
+                )
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .filter(KOReaderPageStat.start_time >= start_epoch)
+                .filter(KOReaderPageStat.start_time < end_epoch)
+                .all()
+            )
+
+            months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+            month_pages = [set() for _ in range(12)]
+            year_pages = set()
+            last_event_by_key = {}
+            for row in rows:
+                ctx = contexts.get(row.md5)
+                if not ctx:
+                    continue
+                local_dt = datetime.fromtimestamp(float(row.start_time), tz)
+                bucket = months[local_dt.month - 1]
+                bucket["seconds"] += int(max(row.duration or 0, 0))
+                month_pages[local_dt.month - 1].add((row.md5, row.page))
+                year_pages.add((row.md5, row.page))
+                event_end = float(row.start_time + max(row.duration or 0, 0))
+                last_event_by_key[ctx["bookKey"]] = max(last_event_by_key.get(ctx["bookKey"], 0), event_end)
+
+            for index, bucket in enumerate(months):
+                bucket["pages"] = len(month_pages[index])
+
+            # KOReader's true read-status lives in .sdr sidecars (not ingested), so we
+            # approximate "finished" from pages read. KOReader's read-time threshold makes
+            # total_read_pages undercount, so 95% is treated as effectively complete.
+            finished_books = []
+            for book_key, last_end in last_event_by_key.items():
+                pct = self._percent_complete_for_md5s(metadata, keys_md5.get(book_key, set()))
+                if pct is None or pct < 95:
+                    continue
+                ctx = contexts[next(iter(keys_md5[book_key]))]
+                finished_dt = datetime.fromtimestamp(last_end, tz)
+                finished_books.append({
+                    "bookKey": book_key, "absId": ctx["absId"],
+                    "title": ctx["title"], "author": ctx["author"],
+                    "finishedAt": int(last_end), "month": finished_dt.month,
+                })
+                months[finished_dt.month - 1]["finished"] += 1
+            finished_books.sort(key=lambda item: item["finishedAt"], reverse=True)
+
+            return {
+                "year": year,
+                "months": months,
+                "totalSeconds": sum(m["seconds"] for m in months),
+                "totalPages": len(year_pages),
+                "booksFinished": len(finished_books),
+                "finishedBooks": finished_books,
+                "availableYears": self._koreader_available_years(session, md5s, tz_name),
+            }
 
     # Reading session operations
     def record_reading_session(self, abs_id: str, session_type: str, start_time: float,
