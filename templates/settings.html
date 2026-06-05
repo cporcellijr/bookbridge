@@ -1137,6 +1137,15 @@
                             matching ebooks from your library.
                         </p>
                     </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="kosync_auto_map" name="KOSYNC_AUTO_MAP_ON_AGREEMENT"
+                            {% if get_bool('KOSYNC_AUTO_MAP_ON_AGREEMENT') %}checked{% endif %}>
+                        <label for="kosync_auto_map">Auto-map on exact agreement</label>
+                        <small>When you read an unmapped ebook, skip the suggestion and link it automatically if a
+                            matching identifier (ISBN/ASIN) is found, or if the fuzzy matcher and Ollama both agree
+                            on a single exact audiobook. Ambiguous matches still become suggestions. Requires Ollama
+                            for the fuzzy-agreement path.</small>
+                    </div>
                 </div>
             </div>
 

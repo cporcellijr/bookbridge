@@ -96,6 +96,7 @@ class BookMappingService:
         ebook_source: Optional[str] = None,
         ebook_source_id: Optional[str] = None,
         booklore_ebook_id: Optional[str] = None,
+        kosync_doc_id: Optional[str] = None,
     ) -> Optional[Book]:
         """Create or update a full sync mapping for a shelf-watch auto-match.
 
@@ -111,7 +112,9 @@ class BookMappingService:
         audio_source_id = str(audio_source_id).strip()
         ebook_filename = str(ebook_filename).strip()
 
-        kosync_doc_id = self._compute_kosync_id(ebook_filename, booklore_ebook_id, ebook_source)
+        # Callers that already know the KOSync hash (e.g. the filesystem read path) pass it
+        # directly; library-anchored callers compute it from the source download.
+        kosync_doc_id = kosync_doc_id or self._compute_kosync_id(ebook_filename, booklore_ebook_id, ebook_source)
         if not kosync_doc_id:
             logger.warning(
                 f"Shelf-watch: could not compute kosync id for '{ebook_filename}' "

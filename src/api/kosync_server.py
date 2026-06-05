@@ -17,6 +17,8 @@ from typing import Optional
 from flask import Blueprint, jsonify, request, send_file
 
 from src.utils.kosync_headers import hash_kosync_key
+from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.services.llm_matching import judge_best_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -756,6 +758,162 @@ def kosync_get_progress(doc_id):
     return jsonify({"message": "Document not found on server"}), 502
 
 
+def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
+    """Score every ABS audiobook against the EPUB's title/author.
+
+    Returns candidates (loosely gated on title overlap) with real similarity scores,
+    identifiers, and listening progress — the input for both auto-map and suggestions.
+    """
+    candidates = []
+    try:
+        abs_client = _container.abs_client()
+    except Exception:
+        return candidates
+    if not abs_client.is_configured():
+        return candidates
+
+    title = (ebook_meta.get("title") or "").strip() or Path(epub_filename).stem
+    author = (ebook_meta.get("author") or "").strip()
+    clean_title = clean_book_title(title)
+
+    try:
+        audiobooks = abs_client.get_all_audiobooks()
+    except Exception as e:
+        logger.warning(f"⚠️ Auto-discovery: error listing audiobooks: {e}")
+        return candidates
+
+    logger.debug(f"Auto-discovery: scoring '{title}' (author='{author}') against {len(audiobooks)} audiobooks")
+    for ab in audiobooks:
+        media = ab.get("media", {}) or {}
+        metadata = media.get("metadata", {}) or {}
+        ab_title = metadata.get("title") or ab.get("name", "") or ""
+        ab_author = metadata.get("authorName", "") or ""
+        if not ab_title:
+            continue
+
+        title_sim = calculate_similarity(clean_title, clean_book_title(ab_title))
+        if title_sim < 0.55:
+            continue
+        author_sim = calculate_similarity(author.lower(), ab_author.lower()) if (author and ab_author) else None
+
+        duration = media.get("duration", 0)
+        progress_pct = 0
+        if duration and duration > 0:
+            try:
+                ab_progress = abs_client.get_progress(ab["id"])
+                if ab_progress:
+                    progress_pct = ab_progress.get("progress", 0) * 100
+            except Exception as e:
+                logger.debug(f"Auto-discovery: failed to get ABS progress: {e}")
+
+        candidates.append({
+            "abs_id": ab["id"],
+            "title": ab_title,
+            "author": ab_author,
+            "isbn": (metadata.get("isbn") or "").strip(),
+            "asin": (metadata.get("asin") or "").strip(),
+            "duration": duration,
+            "progress_pct": progress_pct,
+            "title_sim": title_sim,
+            "author_sim": author_sim,
+        })
+
+    candidates.sort(key=lambda c: c["title_sim"], reverse=True)
+    return candidates
+
+
+def _select_auto_map_candidate(ebook_meta, candidates):
+    """Decide whether one audiobook is an exact, unambiguous match worth auto-mapping.
+
+    Tier 0: EPUB ISBN/ASIN matches an audiobook identifier (authoritative, no LLM).
+    Tier 1: a single strong fuzzy match (title>=0.90, author>=0.80) with no rival, that
+    the Ollama judge confirms is the same work. Returns (candidate, reason) or (None, None).
+    """
+    pool = [c for c in candidates if (c.get("progress_pct") or 0) <= 75]
+    if not pool:
+        return None, None
+
+    # Tier 0 — identifier match.
+    epub_ids = {str(v).replace("-", "").lower() for v in (ebook_meta.get("isbn"), ebook_meta.get("asin")) if v}
+    if epub_ids:
+        for candidate in pool:
+            cand_ids = {str(v).replace("-", "").lower() for v in (candidate.get("isbn"), candidate.get("asin")) if v}
+            if epub_ids & cand_ids:
+                return candidate, "identifier"
+
+    # Tier 1 — strict fuzzy agreement, single unambiguous candidate.
+    author_known = bool((ebook_meta.get("author") or "").strip())
+    strong = [
+        c for c in pool
+        if c["title_sim"] >= 0.90 and (not author_known or (c.get("author_sim") or 0) >= 0.80)
+    ]
+    if len(strong) != 1:
+        return None, None
+    best = strong[0]
+    if any(c is not best and c["title_sim"] >= best["title_sim"] - 0.05 for c in pool):
+        return None, None  # a rival is too close — ambiguous, leave for the user
+
+    try:
+        ollama = _container.ollama_client()
+    except Exception:
+        ollama = None
+    if not ollama or not ollama.is_configured():
+        return None, None  # no Ollama → never auto-map on fuzzy alone
+
+    conf_min = float(os.environ.get("OLLAMA_JUDGE_CONFIDENCE_MIN", 85))
+    idx = judge_best_candidate(
+        ollama,
+        (ebook_meta.get("title") or "").strip(),
+        (ebook_meta.get("author") or "").strip(),
+        [{"title": best["title"], "author": best["author"]}],
+        conf_min,
+    )
+    if idx == 0:
+        return best, "agreement"
+    return None, None
+
+
+def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason):
+    """Create a full ebook↔audiobook mapping and link the KOSync document. Returns Book or None."""
+    try:
+        mapping_service = _container.book_mapping_service()
+    except Exception as e:
+        logger.warning(f"Auto-map: book mapping service unavailable: {e}")
+        return None
+
+    saved = mapping_service.create_audio_mapping_from_match(
+        audio_source="abs",
+        audio_source_id=candidate["abs_id"],
+        audio_title=candidate["title"],
+        ebook_filename=epub_filename,
+        audio_duration=candidate.get("duration") or None,
+        audio_cover_url=f"/api/cover-proxy/{candidate['abs_id']}",
+        kosync_doc_id=doc_hash_val,
+    )
+    if not saved:
+        return None
+
+    try:
+        _database_service.link_kosync_document(doc_hash_val, saved.abs_id)
+    except Exception as e:
+        logger.debug(f"Auto-map: link_kosync_document failed: {e}")
+    try:
+        _database_service.dismiss_suggestion(doc_hash_val)
+    except Exception:
+        pass
+
+    logger.info(
+        f"✅ Auto-mapped '{candidate['title']}' (abs {candidate['abs_id']}) ↔ '{epub_filename}' "
+        f"via {reason} (title_sim={candidate.get('title_sim')}, author_sim={candidate.get('author_sim')})"
+    )
+    if _manager:
+        try:
+            _manager.sync_cycle(target_abs_id=saved.abs_id)
+        except Exception as e:
+            logger.debug(f"Auto-map: initial sync_cycle failed: {e}")
+    return saved
+
+
 @kosync_sync_bp.route('/syncs/progress', methods=['PUT'])
 @kosync_sync_bp.route('/koreader/syncs/progress', methods=['PUT'])
 @kosync_auth_required
@@ -877,69 +1035,42 @@ def kosync_put_progress():
                             return
                         
                         title = Path(epub_filename).stem
-                        
-                        # Step 1: Check if there's a matching audiobook in ABS
-                        audiobook_matches = []
-                        if _container.abs_client().is_configured():
-                            try:
-                                audiobooks = _container.abs_client().get_all_audiobooks()
-                                search_term = title
-                                
-                                logger.debug(f"Auto-discovery: Searching for audiobook matching '{search_term}' in {len(audiobooks)} audiobooks")
-                                
-                                for ab in audiobooks:
-                                    media = ab.get('media', {})
-                                    metadata = media.get('metadata', {})
-                                    ab_title = (metadata.get('title') or ab.get('name', ''))
-                                    ab_author = metadata.get('authorName', '')
-                                    
-                                    # Use same simple matching as UI search (normalized substring)
-                                    def normalize(s):
-                                        import re
-                                        return re.sub(r'[^\w\s]', '', s.lower())
-                                    
-                                    search_norm = normalize(search_term)
-                                    title_norm = normalize(ab_title)
-                                    author_norm = normalize(ab_author)
-                                    
-                                    if (search_norm and title_norm) and (search_norm in title_norm or title_norm in search_norm):
-                                        # Skip books with high progress (>75%) - they're already mostly done
-                                        duration = media.get('duration', 0)
-                                        progress_pct = 0
-                                        if duration > 0:
-                                            # Get progress from ABS for this audiobook
-                                            try:
-                                                ab_progress = _container.abs_client().get_progress(ab['id'])
-                                                if ab_progress:
-                                                    progress_pct = ab_progress.get('progress', 0) * 100
-                                            except Exception as e:
-                                                logger.debug(f"Failed to get ABS progress during auto-discovery: {e}")
-                                        
-                                        if progress_pct > 75:
-                                            logger.debug(f"Auto-discovery: Skipping '{ab_title}' - already {progress_pct:.0f}% complete")
-                                            continue
-                                        
-                                        logger.debug(f"Auto-discovery: Matched '{ab_title}' by {ab_author} for search term '{search_term}'")
-                                        audiobook_matches.append({
-                                            "source": "abs",
-                                            "abs_id": ab['id'],
-                                            "title": ab_title,
-                                            "author": ab_author,
-                                            "duration": duration,
-                                            "confidence": "high"
-                                        })
-                                        
-                            except Exception as e:
-                                logger.warning(f"⚠️ Error searching ABS for audiobooks: {e}")
-                        
-                        # Step 2: If audiobook matches found, create a suggestion for user review
+                        ebook_meta = {}
+                        try:
+                            ebook_meta = _container.ebook_parser().get_book_metadata(epub_filename) or {}
+                        except Exception as e:
+                            logger.debug(f"Auto-discovery: EPUB metadata read failed: {e}")
+                        if not ebook_meta.get("title"):
+                            ebook_meta["title"] = title
+
+                        # Step 1: Score audiobook candidates against the ebook's title/author.
+                        candidates = _autodiscovery_audiobook_candidates(epub_filename, ebook_meta)
+
+                        # Step 2a: Auto-map when the bridge + Ollama (or an identifier) agree on one exact match.
+                        if candidates and os.environ.get('KOSYNC_AUTO_MAP_ON_AGREEMENT', 'true').lower() == 'true':
+                            chosen, reason = _select_auto_map_candidate(ebook_meta, candidates)
+                            if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason):
+                                return
+
+                        # Step 2b: Otherwise, suggest plausible matches for the user to confirm.
+                        audiobook_matches = [
+                            {
+                                "source": "abs",
+                                "abs_id": c["abs_id"],
+                                "title": c["title"],
+                                "author": c["author"],
+                                "duration": c["duration"],
+                                "confidence": "high" if c["title_sim"] >= 0.85 else "medium",
+                            }
+                            for c in candidates if (c.get("progress_pct") or 0) <= 75
+                        ]
                         if audiobook_matches:
                             # Check if suggestion already exists (pending OR dismissed - don't re-suggest)
                             if not _database_service.suggestion_exists(doc_hash_val):
                                 suggestion = PendingSuggestion(
                                     source_id=doc_hash_val,
-                                    title=title,
-                                    author=None,  # Could extract from EPUB metadata
+                                    title=ebook_meta.get("title") or title,
+                                    author=ebook_meta.get("author"),
                                     cover_url=f"/api/cover-proxy/{audiobook_matches[0]['abs_id']}",
                                     matches_json=json.dumps(audiobook_matches + [{
                                         "source": "ebook",
@@ -950,7 +1081,7 @@ def kosync_put_progress():
                                 _database_service.save_pending_suggestion(suggestion)
                                 logger.info(f"💡 Created suggestion for '{title}' - found {len(audiobook_matches)} audiobook match(es)")
                             return
-                        
+
                         # Step 3: No audiobook found - fall back to ebook-only mapping
                         logger.info(f"📖 No audiobook match for '{title}' - creating ebook-only mapping")
                         book_id = f"ebook-{doc_hash_val[:16]}"

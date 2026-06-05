@@ -1632,6 +1632,7 @@ def settings():
     if request.method == 'POST':
         bool_keys = [
             'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
+            'KOSYNC_AUTO_MAP_ON_AGREEMENT',
             'SYNC_ABS_EBOOK',
             'XPATH_FALLBACK_TO_PREVIOUS_SEGMENT',
             'KOSYNC_ENABLED',

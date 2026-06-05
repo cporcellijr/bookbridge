@@ -1140,5 +1140,94 @@ class TestKosyncEstimatedSessions(unittest.TestCase):
         self.assertAlmostEqual(kwargs['end_progress'], 0.4930)
 
 
+class TestAutoMapSelection(unittest.TestCase):
+    """The auto-map gate: identifier tier, strict fuzzy + Ollama agreement, safety rails."""
+
+    def _candidate(self, **overrides):
+        base = {
+            "abs_id": "ab1", "title": "Sublimation", "author": "Isabel J. Kim",
+            "isbn": "", "asin": "", "duration": 3600, "progress_pct": 0,
+            "title_sim": 0.97, "author_sim": 0.95,
+        }
+        base.update(overrides)
+        return base
+
+    def test_identifier_tier_matches_without_ollama(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = False
+        # Weak fuzzy, but the ASIN matches -> authoritative auto-map, no LLM needed.
+        candidate = self._candidate(asin="B0CTXDLTKC", title_sim=0.40, author_sim=0.10)
+        with patch.object(kosync_server, '_container', container):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim", "isbn": "", "asin": "b0ctxdltkc"},
+                [candidate],
+            )
+        self.assertEqual(reason, "identifier")
+        self.assertEqual(chosen["abs_id"], "ab1")
+
+    def test_fuzzy_agreement_with_judge(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+            )
+        self.assertEqual(reason, "agreement")
+        self.assertEqual(chosen["abs_id"], "ab1")
+
+    def test_judge_rejection_blocks_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=None):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+            )
+        self.assertIsNone(chosen)
+        self.assertIsNone(reason)
+
+    def test_ambiguous_candidates_block_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        # Two near-equal strong matches -> ambiguous, must not auto-map.
+        candidates = [
+            self._candidate(abs_id="a", title_sim=0.96),
+            self._candidate(abs_id="b", title_sim=0.94),
+        ]
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+            )
+        self.assertIsNone(chosen)
+
+    def test_no_ollama_blocks_fuzzy_path(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = False
+        with patch.object(kosync_server, '_container', container):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+            )
+        self.assertIsNone(chosen)   # strong fuzzy but no LLM and no ID -> suggest instead
+
+    def test_already_listened_candidate_excluded(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"},
+                [self._candidate(progress_pct=90)],
+            )
+        self.assertIsNone(chosen)
+
+
 if __name__ == '__main__':
     unittest.main()
