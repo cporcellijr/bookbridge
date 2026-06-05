@@ -2236,6 +2236,33 @@ class FindEbookFileTest(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.name, filename)
 
+
+class TestAudiobookSearchVariants(unittest.TestCase):
+    """Filename-style suggestion titles relax to the bare title so ABS can match."""
+
+    def test_filename_stem_relaxes_to_title(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("sublimation - isabel j. kim (2026)"),
+            ["sublimation - isabel j. kim (2026)", "sublimation - isabel j. kim", "sublimation"],
+        )
+
+    def test_extension_and_year_stripped(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(_audiobook_search_variants("Blister (2016).epub"), ["Blister (2016).epub", "Blister"])
+
+    def test_clean_query_is_unchanged(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(_audiobook_search_variants("Sublimation"), ["Sublimation"])
+
+    def test_title_with_author_suffix(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("The Lord of the Rings - J.R.R. Tolkien"),
+            ["The Lord of the Rings - J.R.R. Tolkien", "The Lord of the Rings"],
+        )
+
+
 if __name__ == '__main__':
     print("TEST Clean Flask Integration Testing with Dependency Injection")
     print("=" * 70)

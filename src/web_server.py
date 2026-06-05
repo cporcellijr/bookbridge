@@ -1140,6 +1140,43 @@ def get_searchable_audiobooks(search_term):
     return results
 
 
+def _audiobook_search_variants(term):
+    """Progressive query relaxations for a (possibly filename-derived) term.
+
+    Yields the raw term, then with the file extension and a trailing "(year)"
+    removed, then just the title before " - <author>". ABS title search is strict,
+    so reviewing a suggestion whose title is a filename stem
+    ("Title - Author (2026)") needs the bare title to match.
+    """
+    term = (term or "").strip()
+    variants = []
+
+    def _add(value):
+        value = (value or "").strip()
+        if value and value not in variants:
+            variants.append(value)
+
+    _add(term)
+    no_ext = re.sub(r'\.(epub|pdf|mobi|azw3?|cbz|cbr|m4b|mp3)$', '', term, flags=re.IGNORECASE)
+    no_year = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', no_ext).strip()
+    _add(no_year)
+    if ' - ' in no_year:
+        _add(no_year.split(' - ')[0])
+    return variants
+
+
+def _search_audiobooks_with_fallback(term):
+    """Search audiobooks, relaxing a filename-style term until something matches."""
+    results = []
+    for index, variant in enumerate(_audiobook_search_variants(term)):
+        results = get_searchable_audiobooks(variant)
+        if results:
+            if index > 0:
+                logger.debug("Audiobook search matched on relaxed term %r (from %r)", variant, term)
+            break
+    return results
+
+
 def get_suggestion_audiobooks():
     """Return provider-normalized audiobook records for suggestions scan."""
     records = []
@@ -3234,7 +3271,7 @@ def match():
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
     if search:
-        audiobooks = get_searchable_audiobooks(search)
+        audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
         ebooks = get_searchable_ebooks(search)
@@ -3746,7 +3783,7 @@ def batch_match():
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
     if search:
-        audiobooks = get_searchable_audiobooks(search)
+        audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
         ebooks = get_searchable_ebooks(search)

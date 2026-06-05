@@ -1241,6 +1241,8 @@ class BookloreClient:
 
     def search_audiobooks(self, search_term, include_info=True):
         """Search Grimmory for audiobook-capable books."""
+        if not self.is_configured():
+            return []
         safe_term = str(search_term or "").strip()
 
         def collect_results(books):
