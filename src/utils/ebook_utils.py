@@ -1174,6 +1174,21 @@ class EbookParser:
             if next_item is not None:
                 yield next_item
 
+    @staticmethod
+    def _split_xpath_char_offset(relative_path: str):
+        """Split a KOReader relative xpath into (clean_xpath, char_offset).
+
+        KOReader appends the trailing character offset as ".NNN". It may sit on a
+        text node ("/text().5", "/text()[2].5") OR directly on an element when the
+        position is at an element boundary ("p[167].0"). All forms must be stripped
+        before the path is handed to an XPath engine, otherwise lxml rejects the
+        leftover ".0" as an "Invalid expression".
+        """
+        offset_match = re.search(r'(?:/text\(\)(?:\[\d+\])?)?\.(\d+)$', relative_path)
+        offset = int(offset_match.group(1)) if offset_match else 0
+        clean_xpath = re.sub(r'(?:/text\(\)(?:\[\d+\])?)?\.\d+$', '', relative_path)
+        return clean_xpath, offset
+
     def _resolve_xpath_target_node(self, filename, spine_map, reported_spine_index, clean_xpath):
         """
         Resolve the XPath against the reported DocFragment first, then against
@@ -1257,9 +1272,7 @@ class EbookParser:
             # "/text()[N].MMM" (Nth text node when inline children split a
             # paragraph's text into multiple nodes). Both must be recognised.
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
-            offset_match = re.search(r'/text\(\)(?:\[\d+\])?\.(\d+)$', relative_path)
-            target_offset = int(offset_match.group(1)) if offset_match else 0
-            clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+            clean_xpath, target_offset = self._split_xpath_char_offset(relative_path)
 
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
@@ -1377,9 +1390,7 @@ class EbookParser:
             full_text, spine_map = self.extract_text_and_map(book_path)
 
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
-            offset_match = re.search(r'/text\(\)(?:\[\d+\])?\.(\d+)$', relative_path)
-            target_offset = int(offset_match.group(1)) if offset_match else 0
-            clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+            clean_xpath, target_offset = self._split_xpath_char_offset(relative_path)
 
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath

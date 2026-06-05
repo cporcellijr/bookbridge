@@ -108,5 +108,28 @@ class TestKOReaderXPathFragileParagraphSubstitution(unittest.TestCase):
         self.assertIs(substitute, ps[1])
 
 
+class TestSplitXpathCharOffset(unittest.TestCase):
+    """KOReader offsets must be stripped for both /text() and bare-element forms."""
+
+    def test_text_node_offset(self):
+        self.assertEqual(EbookParser._split_xpath_char_offset("/body/p[169]/text().0"), ("/body/p[169]", 0))
+
+    def test_indexed_text_node_offset(self):
+        self.assertEqual(EbookParser._split_xpath_char_offset("/body/p[167]/text()[2].5"), ("/body/p[167]", 5))
+
+    def test_bare_element_offset_is_stripped(self):
+        # Regression: "p[167].0" previously left ".0" in the xpath -> lxml "Invalid expression".
+        self.assertEqual(EbookParser._split_xpath_char_offset("/body/p[167].0"), ("/body/p[167]", 0))
+
+    def test_no_offset_unchanged(self):
+        self.assertEqual(EbookParser._split_xpath_char_offset("/body/p[167]"), ("/body/p[167]", 0))
+
+    def test_stripped_xpath_is_valid_lxml(self):
+        # The whole point: the cleaned path must parse as XPath.
+        clean, _ = EbookParser._split_xpath_char_offset("/body/p[167].0")
+        tree = html.fromstring("<html><body><p>a</p><p>b</p></body></html>")
+        tree.xpath("." + clean)  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()
