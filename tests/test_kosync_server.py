@@ -1229,5 +1229,28 @@ class TestAutoMapSelection(unittest.TestCase):
         self.assertIsNone(chosen)
 
 
+class TestResolveLibraryEbookSource(unittest.TestCase):
+    """Auto-map resolves a filesystem EPUB to its BookOrbit/Grimmory identity."""
+
+    def test_resolves_bookorbit_by_filename(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.bookorbit_client.return_value.is_configured.return_value = True
+        container.bookorbit_client.return_value.find_book_by_filename.return_value = {
+            "id": 3530, "fileName": "Blister (2016).epub",
+        }
+        with patch.object(kosync_server, '_container', container):
+            source, source_id = kosync_server._resolve_library_ebook_source("Blister (2016).epub")
+        self.assertEqual((source, source_id), ("BookOrbit", "3530"))
+
+    def test_none_when_no_library_configured(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.bookorbit_client.return_value.is_configured.return_value = False
+        container.booklore_client.return_value.is_configured.return_value = False
+        with patch.object(kosync_server, '_container', container):
+            self.assertEqual(kosync_server._resolve_library_ebook_source("x.epub"), (None, None))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -873,6 +873,32 @@ def _select_auto_map_candidate(ebook_meta, candidates):
     return None, None
 
 
+def _resolve_library_ebook_source(epub_filename):
+    """Resolve a filesystem EPUB to its library identity (BookOrbit/Grimmory).
+
+    The mapping must reference the library copy by source id so progress actually
+    syncs to BookOrbit/Grimmory rather than treating it as a bare local file.
+    Returns (source, source_id) or (None, None).
+    """
+    try:
+        bookorbit = _container.bookorbit_client()
+        if bookorbit and bookorbit.is_configured():
+            match = bookorbit.find_book_by_filename(epub_filename, allow_refresh=False)
+            if match and match.get("id") is not None:
+                return "BookOrbit", str(match["id"])
+    except Exception as e:
+        logger.debug(f"Auto-map: BookOrbit filename resolve failed: {e}")
+    try:
+        booklore = _container.booklore_client()
+        if booklore and booklore.is_configured():
+            match = booklore.find_book_by_filename(epub_filename, allow_refresh=False)
+            if match and match.get("id") is not None:
+                return "BookLore", str(match["id"])
+    except Exception as e:
+        logger.debug(f"Auto-map: Grimmory filename resolve failed: {e}")
+    return None, None
+
+
 def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason):
     """Create a full ebook↔audiobook mapping and link the KOSync document. Returns Book or None."""
     try:
@@ -881,6 +907,8 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         logger.warning(f"Auto-map: book mapping service unavailable: {e}")
         return None
 
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+
     saved = mapping_service.create_audio_mapping_from_match(
         audio_source="abs",
         audio_source_id=candidate["abs_id"],
@@ -888,6 +916,9 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         ebook_filename=epub_filename,
         audio_duration=candidate.get("duration") or None,
         audio_cover_url=f"/api/cover-proxy/{candidate['abs_id']}",
+        ebook_source=ebook_source,
+        ebook_source_id=ebook_source_id,
+        booklore_ebook_id=ebook_source_id if ebook_source == "BookLore" else None,
         kosync_doc_id=doc_hash_val,
     )
     if not saved:
@@ -902,9 +933,10 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
     except Exception:
         pass
 
+    ebook_label = f"{saved.ebook_source}:{saved.ebook_source_id}" if saved.ebook_source else "local file"
     logger.info(
         f"✅ Auto-mapped '{candidate['title']}' (abs {candidate['abs_id']}) ↔ '{epub_filename}' "
-        f"via {reason} (title_sim={candidate.get('title_sim')}, author_sim={candidate.get('author_sim')})"
+        f"[ebook={ebook_label}] via {reason} (title_sim={candidate.get('title_sim')}, author_sim={candidate.get('author_sim')})"
     )
     if _manager:
         try:

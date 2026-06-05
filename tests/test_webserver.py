@@ -2263,6 +2263,40 @@ class TestAudiobookSearchVariants(unittest.TestCase):
         )
 
 
+class TestEbookSearchProviderPreference(unittest.TestCase):
+    """Relaxed ebook search should surface the library copy and prefer it over the local file."""
+
+    def test_provider_upgrades_local_file(self):
+        import src.web_server as ws
+        from types import SimpleNamespace
+        fname = "Sublimation - Isabel J. Kim (2026).epub"
+
+        def fake_search(term):
+            # Only the bare title matches BookOrbit; the filename-stem term hits only the local file.
+            if term == "sublimation":
+                return [SimpleNamespace(name=fname, source="BookOrbit", source_id="42")]
+            return [SimpleNamespace(name=fname, source="Local File", source_id=None)]
+
+        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+            out = ws._search_ebooks_with_fallback("sublimation - isabel j. kim (2026)")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].source, "BookOrbit")
+
+    def test_local_file_kept_when_no_provider(self):
+        import src.web_server as ws
+        from types import SimpleNamespace
+
+        def fake_search(term):
+            return [SimpleNamespace(name="OnlyLocal.epub", source="Local File", source_id=None)]
+
+        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+            out = ws._search_ebooks_with_fallback("only local (2020).epub")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].source, "Local File")
+
+
 if __name__ == '__main__':
     print("TEST Clean Flask Integration Testing with Dependency Injection")
     print("=" * 70)

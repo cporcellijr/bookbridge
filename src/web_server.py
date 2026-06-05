@@ -1177,6 +1177,36 @@ def _search_audiobooks_with_fallback(term):
     return results
 
 
+def _ebook_is_provider(ebook):
+    """True for a library-backed ebook (BookOrbit/Grimmory/ABS/CWA), not a bare file."""
+    return bool(getattr(ebook, "source", None) and getattr(ebook, "source", None) != "Local File")
+
+
+def _search_ebooks_with_fallback(term):
+    """Search ebooks across the raw + relaxed terms and merge.
+
+    The library providers (BookOrbit/Grimmory) use strict title search, so a
+    filename-stem term ("Title - Author (2026)") only matches the local file. The
+    relaxed title lets the provider match; results are deduped by filename with the
+    provider entry preferred over the bare local file so the picker offers the
+    library copy (whose progress actually syncs).
+    """
+    by_name = {}
+    order = []
+    for variant in _audiobook_search_variants(term):
+        for ebook in get_searchable_ebooks(variant):
+            key = (getattr(ebook, "name", "") or "").lower()
+            if not key:
+                continue
+            existing = by_name.get(key)
+            if existing is None:
+                by_name[key] = ebook
+                order.append(key)
+            elif _ebook_is_provider(ebook) and not _ebook_is_provider(existing):
+                by_name[key] = ebook  # upgrade a local-file hit to the library copy
+    return [by_name[key] for key in order]
+
+
 def get_suggestion_audiobooks():
     """Return provider-normalized audiobook records for suggestions scan."""
     records = []
@@ -3274,7 +3304,7 @@ def match():
         audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
-        ebooks = get_searchable_ebooks(search)
+        ebooks = _search_ebooks_with_fallback(search)
         ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
 
         # Search Storyteller
@@ -3786,7 +3816,7 @@ def batch_match():
         audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
-        ebooks = get_searchable_ebooks(search)
+        ebooks = _search_ebooks_with_fallback(search)
         ebooks.sort(key=lambda x: x.name.lower())
         ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
 
