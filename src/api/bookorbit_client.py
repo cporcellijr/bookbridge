@@ -353,6 +353,12 @@ class BookOrbitClient:
     def _hit_is_ebook(hit: dict) -> bool:
         return any(str(f).lower() in _EBOOK_FORMATS for f in (hit.get("formats") or []))
 
+    def search_any(self, search_term: str, limit: int = 20) -> list:
+        """Metadata search across all formats (ebook + audiobook), no per-book
+        detail enrichment. Used for fast "do I own this title?" availability checks.
+        Returns raw hit dicts ``{id, title, authors, formats:[...]}``."""
+        return self._search_raw(search_term, limit)
+
     def search_ebooks(self, search_term: str, limit: int = 20) -> list:
         """Targeted server-side ebook search for the manual-match picker.
 
@@ -630,18 +636,28 @@ class BookOrbitClient:
             "chapters": audio_meta.get("chapters") or [],
         }
 
+    # Unstarted-audiobook baseline: a writable follower at 0, NOT None (None would
+    # drop BookOrbit from sync and deadlock its first write — mirrors get_ebook_progress).
+    _AUDIO_UNSTARTED = {"pct": 0.0, "position_seconds": 0.0, "current_file_id": None}
+
     def get_audiobook_progress(self, book_id) -> Optional[dict]:
-        """Returns {'pct': 0-1, 'position_seconds': float, 'current_file_id': int} or None."""
+        """Returns {'pct': 0-1, 'position_seconds': float, 'current_file_id': int} or None.
+
+        An unstarted audiobook reads as the 0.0 baseline. BookOrbit signals "no
+        progress yet" two ways: 204 No Content (pre-1.9) and, since v1.9.0, HTTP 200
+        with a JSON ``null`` body. Both map to the baseline, never None.
+        """
         resp = self._make_request("GET", f"/api/v1/books/{book_id}/audio-progress")
         if not resp:
             return None
         if resp.status_code == 204:
-            return {"pct": 0.0, "position_seconds": 0.0, "current_file_id": None}
+            return dict(self._AUDIO_UNSTARTED)
         if resp.status_code != 200:
             return None
         data = self._parse_json(resp)
         if not isinstance(data, dict):
-            return None
+            # 200 + null/empty body = unstarted (v1.9.0); treat as the 0.0 baseline.
+            return dict(self._AUDIO_UNSTARTED)
         pct = self._to_pct_fraction(data.get("percentage")) or 0.0
         try:
             position_seconds = float(data.get("positionSeconds") or 0.0)
