@@ -73,9 +73,10 @@ class EbookParser:
         "mark", "abbr", "cite", "code", "q", "time", "s", "del", "ins"
     }
 
-    def __init__(self, books_dir, epub_cache_dir=None):
+    def __init__(self, books_dir, epub_cache_dir=None, ollama_client=None):
         self.books_dir = Path(books_dir)
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir else Path("/data/epub_cache")
+        self.ollama_client = ollama_client
 
         cache_size = int(os.getenv("EBOOK_CACHE_SIZE", 3))
         self.cache = LRUCache(capacity=cache_size)
@@ -508,6 +509,67 @@ class EbookParser:
             found_anchor = False
         return xpath, target_tag, found_anchor
 
+    _SEMANTIC_WINDOW_CHARS = 1500
+    _SEMANTIC_MAX_WINDOWS = 40
+    _SEMANTIC_EMBED_MAX_CHARS = 4000  # keep embedded text under the model's token limit
+
+    def _semantic_text_fallback(self, search_phrase: str, full_text: str,
+                                hint_percentage: Optional[float]) -> int:
+        """Embedding-based position rescue when fuzzy matching fails.
+
+        Slices the hint neighborhood (or the whole book) into windows, embeds them
+        alongside the search phrase, and returns a char index inside the most
+        similar window — or -1 when disabled, unavailable, or below threshold.
+        """
+        client = self.ollama_client
+        if not client or not client.is_configured():
+            return -1
+        if os.getenv("OLLAMA_EBOOK_TEXT_FALLBACK", "false").lower() != "true":
+            return -1
+        clean_search = " ".join((search_phrase or "").split())
+        if not clean_search or not full_text:
+            return -1
+
+        try:
+            threshold = float(os.getenv("OLLAMA_ALIGN_SIM_THRESHOLD", 0.72))
+        except (TypeError, ValueError):
+            threshold = 0.72
+
+        total_len = len(full_text)
+        region_start = 0
+        region = full_text
+        if hint_percentage is not None:
+            region_start = int(max(0.0, hint_percentage - 0.10) * total_len)
+            region_end = int(min(1.0, hint_percentage + 0.10) * total_len)
+            if full_text[region_start:region_end].strip():
+                region = full_text[region_start:region_end]
+            else:
+                region_start = 0
+
+        size = max(self._SEMANTIC_WINDOW_CHARS, -(-len(region) // self._SEMANTIC_MAX_WINDOWS))
+        windows = []
+        for start in range(0, len(region), size):
+            text = region[start:start + size]
+            if text.strip():
+                windows.append((region_start + start, text))
+        if not windows:
+            return -1
+
+        from src.services.llm_matching import best_semantic_window
+
+        embed_texts = [t[:self._SEMANTIC_EMBED_MAX_CHARS] for _, t in windows]
+        best = best_semantic_window(client, clean_search, embed_texts, threshold)
+        if best is None:
+            return -1
+        win_start, win_text = windows[best[0]]
+        # Refine inside the winning window; fall back to its start.
+        alignment = rapidfuzz.fuzz.partial_ratio_alignment(clean_search, win_text, score_cutoff=50)
+        offset = alignment.dest_start if alignment else 0
+        logger.info(
+            f"🧠 Semantic position rescue: window at char {win_start} (cosine {best[1]:.2f})"
+        )
+        return win_start + offset
+
     def find_text_location(self, filename, search_phrase, hint_percentage=None) -> Optional[LocatorResult]:
         """
         Uses BS4 Engine. Good for fuzzy matching phrases from external apps.
@@ -577,6 +639,10 @@ class EbookParser:
                         search_phrase, full_text, score_cutoff=cutoff
                     )
                     if alignment: match_index = alignment.dest_start
+
+            # 4. Semantic fallback (optional, Ollama-gated)
+            if match_index == -1:
+                match_index = self._semantic_text_fallback(search_phrase, full_text, hint_percentage)
 
             if match_index != -1:
                 percentage = match_index / total_len

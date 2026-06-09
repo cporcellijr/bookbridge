@@ -922,26 +922,15 @@ class AudioTranscriber:
         if len(candidates) > max_windows:
             candidates = candidates[:max_windows]
 
+        from src.services.llm_matching import best_semantic_window
+
         texts = [w['text'] for w in candidates]
-        vectors = client.embed([clean_search] + texts)
-        if not vectors or len(vectors) != len(texts) + 1:
-            return None
-
-        from src.api.ollama_client import cosine_similarity
-
-        search_vec = vectors[0]
-        best_window = None
-        best_cos = 0.0
-        for window, vec in zip(candidates, vectors[1:]):
-            cos = cosine_similarity(search_vec, vec)
-            if cos > best_cos:
-                best_cos = cos
-                best_window = window
-
-        if best_window is not None and best_cos >= threshold:
+        best = best_semantic_window(client, clean_search, texts, threshold)
+        if best is not None:
+            best_window = candidates[best[0]]
             logger.info(
                 f"🧠 {title_prefix}Semantic alignment rescue at {best_window['start']:.1f}s "
-                f"(cosine {best_cos:.2f}) - '{sanitize_log_data(clean_search)}'"
+                f"(cosine {best[1]:.2f}) - '{sanitize_log_data(clean_search)}'"
             )
             return best_window['start']
         return None

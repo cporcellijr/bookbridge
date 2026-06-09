@@ -125,7 +125,8 @@ class Container(containers.DeclarativeContainer):
     ebook_parser = providers.Singleton(
         EbookParser,
         books_dir,
-        epub_cache_dir=epub_cache_dir
+        epub_cache_dir=epub_cache_dir,
+        ollama_client=ollama_client
     )
 
     # Smil Extractor Provider

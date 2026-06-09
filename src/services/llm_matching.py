@@ -152,3 +152,35 @@ def rescue_from_catalog(
     if choice is None:
         return None
     return shortlist[choice]
+
+
+def best_semantic_window(
+    ollama_client: Any,
+    query: str,
+    texts: List[str],
+    threshold: float,
+) -> Optional[Tuple[int, float]]:
+    """Embed `query` and candidate `texts`; return (best_index, cosine) or None.
+
+    Returns the index of the most semantically similar text only when its cosine
+    similarity clears `threshold`; otherwise None so callers keep their fallback.
+    """
+    if not _ready(ollama_client) or not query or not texts:
+        return None
+    vectors = ollama_client.embed([query] + texts)
+    if not vectors or len(vectors) != len(texts) + 1:
+        return None
+
+    from src.api.ollama_client import cosine_similarity
+
+    query_vec = vectors[0]
+    best_idx = None
+    best_cos = 0.0
+    for i, vec in enumerate(vectors[1:]):
+        cos = cosine_similarity(query_vec, vec)
+        if cos > best_cos:
+            best_cos = cos
+            best_idx = i
+    if best_idx is not None and best_cos >= threshold:
+        return best_idx, best_cos
+    return None
