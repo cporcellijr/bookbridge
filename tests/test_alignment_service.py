@@ -341,6 +341,50 @@ def test_anchor_rescue_noop_when_disabled(mock_db):
     ]
 
 
+class _RecordingTopicOllama(_TopicOllama):
+    """Topic stub that also records every text passed to embed()."""
+
+    def __init__(self):
+        super().__init__()
+        self.embedded_texts = []
+
+    def embed(self, texts):
+        self.embedded_texts.extend(texts)
+        return super().embed(texts)
+
+
+def test_anchor_rescue_caps_embedded_window_length(mock_db):
+    # Long books produce windows beyond the embedder's token limit; only a
+    # bounded prefix may be sent while anchor char offsets still span the book.
+    stub = _RecordingTopicOllama()
+    service = AlignmentService(mock_db, Polisher(), ollama_client=stub)
+    half = 250_000
+    long_text = ("ocean " * (half // 6)) + ("mountain " * (half // 9))
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
+        alignment_map, method = service._generate_alignment_map_with_method(
+            _topic_segments(), long_text
+        )
+    assert method == "llm_anchor"
+    cap = AlignmentService._EMBED_WINDOW_MAX_CHARS
+    assert all(len(t) <= cap for t in stub.embedded_texts)
+    assert alignment_map[-1]["char"] == len(long_text)
+
+
+def test_anchor_rescue_short_book_texts_unchanged(mock_db):
+    stub = _RecordingTopicOllama()
+    service = AlignmentService(mock_db, Polisher(), ollama_client=stub)
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
+        service._generate_alignment_map_with_method(_topic_segments(), _topic_book_text())
+    cap = AlignmentService._EMBED_WINDOW_MAX_CHARS
+    # Short-book windows are far below the cap, so nothing is truncated.
+    assert stub.embedded_texts
+    assert all(len(t) < cap for t in stub.embedded_texts)
+
+
 def test_anchor_rescue_noop_without_client(mock_db):
     service = AlignmentService(mock_db, Polisher(), ollama_client=None)
     with pytest.MonkeyPatch.context() as mp:

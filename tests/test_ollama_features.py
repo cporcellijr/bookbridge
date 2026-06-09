@@ -29,7 +29,7 @@ class _StubOllama:
             out.append(self._vectors[t])
         return out
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
         self.judge_calls += 1
         return self._judge_result
 
@@ -54,7 +54,7 @@ class _RecordingOllama:
             out.append(self._vectors[t])
         return out
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
         self.calls.append("judge")
         return self._judge_result
 
@@ -77,7 +77,27 @@ class _KeywordOllama:
                 out.append([0.4, 0.4])
         return out
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
+        return None
+
+
+class _CountingOllama:
+    """Stub with a real embed_model that counts texts sent to embed()."""
+
+    embed_model = "stub-embed"
+
+    def __init__(self, vector=None):
+        self._vector = vector or [1.0, 0.0]
+        self.embedded_texts = []
+
+    def is_configured(self):
+        return True
+
+    def embed(self, texts):
+        self.embedded_texts.extend(texts)
+        return [self._vector for _ in texts]
+
+    def judge(self, prompt, schema=None):
         return None
 
 
@@ -431,6 +451,66 @@ class TestEmbeddingRetrieval(_OllamaEnvGuard):
         cache = {}
         svc._embedding_retrieval([("ab2", ab)], pool, cache)
         self.assertLess(cache["ab2"]["matches"][0]["score"], 90)
+
+
+class TestPersistentEmbedCache(unittest.TestCase):
+    """Embeddings persist in the DB so later scans skip re-embedding titles."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        from src.db.database_service import DatabaseService
+
+        self.db = DatabaseService(str(Path(self._tmp.name) / "test.db"))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _service(self, stub):
+        svc = _make_service(stub)
+        svc.database_service = self.db
+        return svc
+
+    def test_second_scan_serves_from_db_cache(self):
+        stub1 = _CountingOllama()
+        svc1 = self._service(stub1)
+        result = svc1._embed_texts(["alpha title", "beta title"])
+        self.assertIsNotNone(result)
+        self.assertEqual(sorted(stub1.embedded_texts), ["alpha title", "beta title"])
+
+        # Fresh service (new scan) — same texts must come from the DB, not Ollama.
+        stub2 = _CountingOllama()
+        svc2 = self._service(stub2)
+        result = svc2._embed_texts(["alpha title", "beta title"])
+        self.assertEqual(result["alpha title"], [1.0, 0.0])
+        self.assertEqual(stub2.embedded_texts, [])
+
+    def test_model_change_prunes_old_rows(self):
+        svc1 = self._service(_CountingOllama())
+        svc1._embed_texts(["alpha title"])
+
+        stub2 = _CountingOllama()
+        stub2.embed_model = "other-model"
+        svc2 = self._service(stub2)
+        svc2._embed_texts(["alpha title"])
+        # The stub-embed row was pruned when the model changed.
+        self.assertEqual(self.db.get_cached_embeddings("stub-embed", [
+            SuggestionsService._text_hash("alpha title")
+        ]), {})
+        self.assertEqual(stub2.embedded_texts, ["alpha title"])
+
+    def test_mocked_database_service_is_harmless(self):
+        stub = _CountingOllama()
+        svc = _make_service(stub)  # database_service is a MagicMock
+        result = svc._embed_texts(["alpha title"])
+        self.assertEqual(result["alpha title"], [1.0, 0.0])
+        self.assertEqual(stub.embedded_texts, ["alpha title"])
+
+    def test_stub_without_embed_model_skips_db(self):
+        svc = self._service(_StubOllama(vectors={"x": [0.5]}))
+        result = svc._embed_texts(["x"])
+        self.assertEqual(result["x"], [0.5])
+        rows = self.db.get_cached_embeddings("", [SuggestionsService._text_hash("x")])
+        self.assertEqual(rows, {})
 
 
 class TestTranscriptCachePersistence(unittest.TestCase):

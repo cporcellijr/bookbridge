@@ -178,7 +178,8 @@ class HardcoverSyncClient(SyncClient):
                 )
                 return
             conf_min = float(os.environ.get('OLLAMA_JUDGE_CONFIDENCE_MIN', 85))
-            idx = judge_best_candidate(self.ollama_client, craft_title, craft_author, candidates, conf_min)
+            idx = judge_best_candidate(self.ollama_client, craft_title, craft_author, candidates, conf_min,
+                                       isbn=(isbn or asin or ''))
             if idx is None:
                 logger.info(
                     f"🧠 Hardcover: LLM found no confident match for '{sanitize_log_data(title)}'; leaving for manual"

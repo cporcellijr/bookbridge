@@ -23,7 +23,7 @@ MAX_DETAIL_FETCHES_PER_REFRESH_CYCLE = int(
 MAX_DETAIL_FETCHES_PER_SEARCH = 20
 
 class BookloreClient:
-    def __init__(self, database_service=None):
+    def __init__(self, database_service=None, ollama_client=None):
         raw_url = os.environ.get("BOOKLORE_SERVER", "").rstrip('/')
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
@@ -31,10 +31,13 @@ class BookloreClient:
         self.username = os.environ.get("BOOKLORE_USER")
         self.password = os.environ.get("BOOKLORE_PASSWORD")
         self.db = database_service
-        
+        self.ollama_client = ollama_client
+
         # In-memory cache for performance (populated from DB)
-        self._book_cache = {} 
+        self._book_cache = {}
         self._book_id_cache = {}
+        # Memoized LLM filename-rescue verdicts (stem -> cached filename or None)
+        self._llm_filename_match_cache = {}
         self._cache_timestamp = 0
         self._last_refresh_failed = False
         self._last_refresh_attempt = 0
@@ -744,6 +747,7 @@ class BookloreClient:
             logger.debug("Grimmory: Cache refresh already in progress; skipping duplicate refresh request")
             return True
 
+        self._llm_filename_match_cache = {}
         self._last_refresh_attempt = time.time()
         try:
             all_books_list = []
@@ -1219,9 +1223,53 @@ class BookloreClient:
         # If not found, try refreshing cache once
         if allow_refresh and time.time() - self._cache_timestamp > 60 and not self._is_refresh_on_cooldown():
             if self._refresh_book_cache():
-                return self.find_book_by_filename(ebook_filename, allow_refresh=False)
+                refreshed = self.find_book_by_filename(ebook_filename, allow_refresh=False)
+                if refreshed is not None:
+                    return refreshed
 
+        # 5. LLM rescue over the cached catalog (last resort; skipped on hot
+        # sync paths, which pass allow_refresh=False).
+        if allow_refresh:
+            return self._llm_match_by_filename(target_stem)
         return None
+
+    def _llm_match_by_filename(self, target_stem):
+        """Judge-confirmed rescue over the cached book list. Returns book_info or None."""
+        from src.services.llm_matching import library_match_enabled, rescue_from_catalog
+
+        client = self.ollama_client
+        if not library_match_enabled() or not (client and client.is_configured()):
+            return None
+
+        if target_stem in self._llm_filename_match_cache:
+            cached_name = self._llm_filename_match_cache[target_stem]
+            if cached_name is None:
+                return None
+            with self._cache_lock:
+                return self._book_cache.get(cached_name)
+
+        cache_items = self._snapshot_book_cache_items()
+        if not cache_items:
+            return None
+
+        import re
+        query = re.sub(r'[_\.\-]+', ' ', target_stem).strip()
+        entries = []
+        for cached_name, book_info in cache_items:
+            title = (book_info.get('title') or '').strip() or Path(cached_name).stem
+            entries.append({
+                'title': title,
+                'author': self._format_authors(book_info.get('authors')),
+            })
+        min_conf = float(os.environ.get('OLLAMA_JUDGE_CONFIDENCE_MIN', 85))
+        choice = rescue_from_catalog(client, query, entries, min_conf)
+        if choice is None:
+            self._llm_filename_match_cache[target_stem] = None
+            return None
+        cached_name, book_info = cache_items[choice]
+        self._llm_filename_match_cache[target_stem] = cached_name
+        logger.info(f"🧠 Grimmory LLM match: '{target_stem}' → '{cached_name}'")
+        return book_info
 
     def get_all_books(self):
         """Get all books from cache, refreshing if necessary."""

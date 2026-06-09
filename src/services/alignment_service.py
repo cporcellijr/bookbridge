@@ -21,6 +21,10 @@ from src.utils.logging_utils import time_execution
 logger = logging.getLogger(__name__)
 
 class AlignmentService:
+    # Max chars of a window sent to the embedder (~1000 tokens, safely under
+    # nomic-embed-text's 2048-token context).
+    _EMBED_WINDOW_MAX_CHARS = 4000
+
     def __init__(self, database_service, polisher: Polisher, ollama_client=None):
         self.database_service = database_service
         self.polisher = polisher
@@ -580,8 +584,12 @@ class AlignmentService:
         if len(t_windows) < 2 or len(b_windows) < 2:
             return None
 
-        t_texts = [w["text"] for w in t_windows]
-        b_texts = [w["text"] for w in b_windows]
+        # Embedding models silently truncate long inputs (nomic-embed-text caps at
+        # ~2048 tokens); embed a bounded prefix so the cutoff point is known. The
+        # window offsets are untouched — both sides compare co-located prefixes.
+        cap = self._EMBED_WINDOW_MAX_CHARS
+        t_texts = [w["text"][:cap] for w in t_windows]
+        b_texts = [w["text"][:cap] for w in b_windows]
         vectors = self.ollama_client.embed(t_texts + b_texts)
         if not vectors or len(vectors) != len(t_texts) + len(b_texts):
             logger.info("   🧠 Anchor rescue skipped (embedding unavailable)")

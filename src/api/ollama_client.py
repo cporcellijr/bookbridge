@@ -8,11 +8,16 @@ import json
 import logging
 import math
 import os
+import time
 from typing import List, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# Judge responses are tiny JSON objects; cap generation so a confused model
+# can't stream tokens until the request timeout.
+_JUDGE_NUM_PREDICT = 200
 
 
 def cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -37,6 +42,7 @@ class OllamaClient:
     def __init__(self):
         self.session = requests.Session()
         self._embed_endpoint_missing = False  # set True if /api/embed 404s once
+        self._schema_format_unsupported = False  # set True if a schema `format` 400s once
 
     # --- configuration (read live from os.environ, like other clients) ---
 
@@ -52,11 +58,38 @@ class OllamaClient:
     def chat_model(self) -> str:
         return os.environ.get("OLLAMA_CHAT_MODEL", "qwen2.5:14b")
 
+    @property
+    def keep_alive(self) -> str:
+        return os.environ.get("OLLAMA_KEEP_ALIVE", "5m").strip()
+
     def is_configured(self) -> bool:
         return (
             os.environ.get("OLLAMA_ENABLED", "false").lower() == "true"
             and bool(self.base_url)
         )
+
+    def _chat_options(self) -> dict:
+        options = {"temperature": 0.0, "num_predict": _JUDGE_NUM_PREDICT}
+        raw_ctx = os.environ.get("OLLAMA_NUM_CTX", "").strip()
+        if raw_ctx:
+            try:
+                options["num_ctx"] = int(raw_ctx)
+            except ValueError:
+                logger.warning(f"Ignoring non-integer OLLAMA_NUM_CTX: {raw_ctx!r}")
+        return options
+
+    def _with_keep_alive(self, payload: dict) -> dict:
+        if self.keep_alive:
+            payload["keep_alive"] = self.keep_alive
+        return payload
+
+    def _post(self, url: str, payload: dict, timeout: int) -> requests.Response:
+        """POST with a single retry on transient connection errors (not timeouts)."""
+        try:
+            return self.session.post(url, json=payload, timeout=timeout)
+        except requests.exceptions.ConnectionError:
+            time.sleep(0.5)
+            return self.session.post(url, json=payload, timeout=timeout)
 
     # --- model discovery (also powers the settings Test button) ---
 
@@ -95,9 +128,9 @@ class OllamaClient:
 
     def _embed_batch(self, texts: List[str]) -> Optional[List[List[float]]]:
         try:
-            r = self.session.post(
+            r = self._post(
                 f"{self.base_url}/api/embed",
-                json={"model": self.embed_model, "input": texts},
+                self._with_keep_alive({"model": self.embed_model, "input": texts}),
                 timeout=60,
             )
             if r.status_code == 404:
@@ -121,7 +154,7 @@ class OllamaClient:
             for text in texts:
                 r = self.session.post(
                     f"{self.base_url}/api/embeddings",
-                    json={"model": self.embed_model, "prompt": text},
+                    json=self._with_keep_alive({"model": self.embed_model, "prompt": text}),
                     timeout=60,
                 )
                 if r.status_code != 200:
@@ -139,22 +172,35 @@ class OllamaClient:
 
     # --- chat judge ---
 
-    def judge(self, prompt: str) -> Optional[dict]:
-        """Run a JSON-mode chat completion and return the parsed object, or None."""
+    def _post_chat(self, prompt: str, schema: Optional[dict]) -> requests.Response:
+        return self._post(
+            f"{self.base_url}/api/chat",
+            self._with_keep_alive({
+                "model": self.chat_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "format": schema if schema else "json",
+                "options": self._chat_options(),
+            }),
+            timeout=120,
+        )
+
+    def judge(self, prompt: str, schema: Optional[dict] = None) -> Optional[dict]:
+        """Run a JSON-mode chat completion and return the parsed object, or None.
+
+        When `schema` is given it is sent as a structured-output `format` (Ollama
+        >= 0.5); older servers reject that with a 400, in which case we fall back
+        to plain JSON mode for the rest of the process lifetime.
+        """
         if not self.is_configured() or not prompt:
             return None
+        use_schema = schema if (schema and not self._schema_format_unsupported) else None
         try:
-            r = self.session.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.chat_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "format": "json",
-                    "options": {"temperature": 0.0},
-                },
-                timeout=120,
-            )
+            r = self._post_chat(prompt, use_schema)
+            if r.status_code == 400 and use_schema is not None:
+                self._schema_format_unsupported = True
+                logger.info("Ollama rejected schema format; falling back to JSON mode")
+                r = self._post_chat(prompt, None)
             if r.status_code != 200:
                 logger.warning(f"Ollama /api/chat returned {r.status_code}")
                 return None

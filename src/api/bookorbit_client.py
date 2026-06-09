@@ -43,13 +43,17 @@ _AUDIO_FORMATS = {"m4b", "mp3", "m4a", "opus", "ogg", "flac", "aax", "aac"}
 
 
 class BookOrbitClient:
-    def __init__(self):
+    def __init__(self, ollama_client=None):
+        self.ollama_client = ollama_client
         self._token: Optional[str] = None
         self._token_timestamp: float = 0
         self._token_lock = threading.Lock()
 
         self._book_cache: dict = {}        # id -> light book info
         self._filename_index: dict = {}    # filename.lower() -> id (lazily filled)
+        # Memoized LLM rescue verdicts (query -> book id or None); never feeds
+        # _filename_index, which is reserved for filename-confirmed matches.
+        self._llm_match_cache: dict = {}
         self._detail_cache: dict = {}      # id -> (timestamp, detail dict)
         self._cache_timestamp: float = 0
         self._cache_lock = threading.RLock()
@@ -286,6 +290,7 @@ class BookOrbitClient:
 
             with self._cache_lock:
                 self._book_cache = new_cache
+                self._llm_match_cache = {}
                 self._cache_timestamp = time.time()
 
             logger.info("📚 BookOrbit: Loaded %d books", len(new_cache))
@@ -506,6 +511,13 @@ class BookOrbitClient:
                         continue
                     if fname.lower() == target_name or self._normalize_string(Path(fname).stem) == target_stem_norm:
                         return {"id": hit.get("id"), "title": hit.get("title")}
+
+        # LLM rescue over the cached catalog (last resort; linking paths only).
+        humanized = re.sub(r"[_\.\-]+", " ", stem).strip()
+        rescued = self._llm_match_from_cache(humanized, ebook_only=True)
+        if rescued is not None:
+            logger.info("🧠 BookOrbit LLM match: '%s' → '%s'", stem, rescued.get("title"))
+            return {"id": rescued.get("id"), "title": rescued.get("title")}
         return None
 
     def find_book_by_title(self, title: str) -> Optional[dict]:
@@ -530,7 +542,49 @@ class BookOrbitClient:
             ratio = SequenceMatcher(None, title_norm, cached_norm).ratio()
             if ratio > 0.85 and ratio > best_ratio:
                 best_ratio, best = ratio, info
-        return best
+        if best is not None:
+            return best
+
+        rescued = self._llm_match_from_cache(title)
+        if rescued is not None:
+            logger.info("🧠 BookOrbit LLM match: '%s' → '%s'", title, rescued.get("title"))
+        return rescued
+
+    def _llm_match_from_cache(self, query: str, ebook_only: bool = False) -> Optional[dict]:
+        """Judge-confirmed rescue over the cached book list. Returns light info or None."""
+        from src.services.llm_matching import library_match_enabled, rescue_from_catalog
+
+        client = self.ollama_client
+        if not library_match_enabled() or not (client and client.is_configured()) or not query:
+            return None
+
+        memo_key = (query.lower(), ebook_only)
+        if memo_key in self._llm_match_cache:
+            book_id = self._llm_match_cache[memo_key]
+            if book_id is None:
+                return None
+            with self._cache_lock:
+                return self._book_cache.get(book_id)
+
+        with self._cache_lock:
+            items = list(self._book_cache.values())
+        if ebook_only:
+            items = [i for i in items if i.get("kind") == "ebook"]
+        if not items:
+            return None
+
+        entries = [
+            {"title": i.get("title") or "", "author": i.get("authors") or ""}
+            for i in items
+        ]
+        min_conf = float(os.environ.get("OLLAMA_JUDGE_CONFIDENCE_MIN", 85))
+        choice = rescue_from_catalog(client, query, entries, min_conf)
+        if choice is None:
+            self._llm_match_cache[memo_key] = None
+            return None
+        info = items[choice]
+        self._llm_match_cache[memo_key] = info.get("id")
+        return info
 
     # ------------------------------------------------------------------
     # Progress conversion helpers

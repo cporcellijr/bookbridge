@@ -96,14 +96,15 @@ class Container(containers.DeclarativeContainer):
         )
     )
 
+    ollama_client = providers.Singleton(OllamaClient)
+
     booklore_client = providers.Singleton(
         BookloreClient,
-        database_service=database_service
+        database_service=database_service,
+        ollama_client=ollama_client
     )
-    bookorbit_client = providers.Singleton(BookOrbitClient)
+    bookorbit_client = providers.Singleton(BookOrbitClient, ollama_client=ollama_client)
     kavita_client = providers.Object(None)
-
-    ollama_client = providers.Singleton(OllamaClient)
 
     hardcover_client = providers.Singleton(HardcoverClient)
     storygraph_client = providers.Singleton(StorygraphClient)
@@ -124,7 +125,8 @@ class Container(containers.DeclarativeContainer):
     ebook_parser = providers.Singleton(
         EbookParser,
         books_dir,
-        epub_cache_dir=epub_cache_dir
+        epub_cache_dir=epub_cache_dir,
+        ollama_client=ollama_client
     )
 
     # Smil Extractor Provider

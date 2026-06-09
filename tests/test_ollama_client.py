@@ -17,7 +17,10 @@ class _FakeResp:
 class _EnvGuard(unittest.TestCase):
     """Base that snapshots/restores the OLLAMA_* env between tests."""
 
-    OLLAMA_KEYS = ["OLLAMA_ENABLED", "OLLAMA_URL", "OLLAMA_EMBED_MODEL", "OLLAMA_CHAT_MODEL"]
+    OLLAMA_KEYS = [
+        "OLLAMA_ENABLED", "OLLAMA_URL", "OLLAMA_EMBED_MODEL", "OLLAMA_CHAT_MODEL",
+        "OLLAMA_KEEP_ALIVE", "OLLAMA_NUM_CTX",
+    ]
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.OLLAMA_KEYS}
@@ -25,6 +28,8 @@ class _EnvGuard(unittest.TestCase):
         os.environ["OLLAMA_URL"] = "http://ollama:11434"
         os.environ["OLLAMA_EMBED_MODEL"] = "nomic-embed-text"
         os.environ["OLLAMA_CHAT_MODEL"] = "qwen2.5:14b"
+        os.environ.pop("OLLAMA_KEEP_ALIVE", None)
+        os.environ.pop("OLLAMA_NUM_CTX", None)
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -111,6 +116,103 @@ class TestOllamaClient(_EnvGuard):
         client.session = MagicMock()
         client.session.get.return_value = _FakeResp(200, {"models": [{"name": "qwen2.5:14b"}]})
         self.assertEqual(client.list_models(), ["qwen2.5:14b"])
+
+
+class TestOllamaClientOptions(_EnvGuard):
+    def test_embed_payload_includes_keep_alive(self):
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"embeddings": [[0.1]]})
+        client.embed(["a"])
+        payload = client.session.post.call_args.kwargs["json"]
+        self.assertEqual(payload["keep_alive"], "5m")
+
+    def test_empty_keep_alive_omitted(self):
+        os.environ["OLLAMA_KEEP_ALIVE"] = ""
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"embeddings": [[0.1]]})
+        client.embed(["a"])
+        payload = client.session.post.call_args.kwargs["json"]
+        self.assertNotIn("keep_alive", payload)
+
+    def test_judge_options_include_num_predict_and_ctx(self):
+        os.environ["OLLAMA_NUM_CTX"] = "8192"
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"message": {"content": "{}"}})
+        client.judge("prompt")
+        options = client.session.post.call_args.kwargs["json"]["options"]
+        self.assertEqual(options["num_predict"], 200)
+        self.assertEqual(options["num_ctx"], 8192)
+        self.assertEqual(options["temperature"], 0.0)
+
+    def test_judge_omits_num_ctx_when_unset(self):
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"message": {"content": "{}"}})
+        client.judge("prompt")
+        options = client.session.post.call_args.kwargs["json"]["options"]
+        self.assertNotIn("num_ctx", options)
+
+    def test_retry_once_on_connection_error(self):
+        import requests as _requests
+
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.side_effect = [
+            _requests.exceptions.ConnectionError("blip"),
+            _FakeResp(200, {"embeddings": [[0.1]]}),
+        ]
+        self.assertEqual(client.embed(["a"]), [[0.1]])
+        self.assertEqual(client.session.post.call_count, 2)
+
+    def test_no_second_retry_on_persistent_connection_error(self):
+        import requests as _requests
+
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.side_effect = _requests.exceptions.ConnectionError("down")
+        # _embed_batch fails after its retry; legacy fallback also fails after its own.
+        self.assertIsNone(client.embed(["a"]))
+
+
+class TestOllamaStructuredOutputs(_EnvGuard):
+    SCHEMA = {"type": "object", "properties": {"choice": {"type": "integer"}}}
+
+    def test_schema_sent_as_format(self):
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"message": {"content": '{"choice": 1}'}})
+        result = client.judge("pick", schema=self.SCHEMA)
+        self.assertEqual(result, {"choice": 1})
+        payload = client.session.post.call_args.kwargs["json"]
+        self.assertEqual(payload["format"], self.SCHEMA)
+
+    def test_no_schema_uses_json_format(self):
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.return_value = _FakeResp(200, {"message": {"content": "{}"}})
+        client.judge("pick")
+        payload = client.session.post.call_args.kwargs["json"]
+        self.assertEqual(payload["format"], "json")
+
+    def test_schema_400_falls_back_to_json_and_sticks(self):
+        client = OllamaClient()
+        client.session = MagicMock()
+        client.session.post.side_effect = [
+            _FakeResp(400),
+            _FakeResp(200, {"message": {"content": '{"choice": 2}'}}),
+            _FakeResp(200, {"message": {"content": '{"choice": 3}'}}),
+        ]
+        result = client.judge("pick", schema=self.SCHEMA)
+        self.assertEqual(result, {"choice": 2})
+        self.assertTrue(client._schema_format_unsupported)
+        # Subsequent calls skip the schema entirely.
+        client.judge("pick again", schema=self.SCHEMA)
+        payload = client.session.post.call_args.kwargs["json"]
+        self.assertEqual(payload["format"], "json")
+        self.assertEqual(client.session.post.call_count, 3)
 
 
 if __name__ == "__main__":
