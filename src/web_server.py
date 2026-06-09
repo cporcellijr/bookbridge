@@ -1724,6 +1724,8 @@ def settings():
             'OLLAMA_ALIGN_CONTENT_GUARD',
             'OLLAMA_SUGGEST_JUDGE_GATE',
             'OLLAMA_TRACKER_MATCH',
+            'OLLAMA_LIBRARY_MATCH',
+            'OLLAMA_EBOOK_TEXT_FALLBACK',
         ]
 
         # Current settings in DB

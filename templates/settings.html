@@ -1188,6 +1188,18 @@
                         <input type="text" name="OLLAMA_CHAT_MODEL" value="{{ get_val('OLLAMA_CHAT_MODEL') }}">
                         <div class="help-text">e.g. qwen2.5:14b</div>
                     </div>
+                    <div class="form-group">
+                        <label>Keep Alive</label>
+                        <input type="text" name="OLLAMA_KEEP_ALIVE" value="{{ get_val('OLLAMA_KEEP_ALIVE') }}">
+                        <div class="help-text">How long Ollama keeps models loaded after a request (e.g. 5m, 1h,
+                            -1 = forever, 0 = unload immediately). Empty = server default.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Chat Context Length (num_ctx)</label>
+                        <input type="number" name="OLLAMA_NUM_CTX" value="{{ get_val('OLLAMA_NUM_CTX') }}">
+                        <div class="help-text">Context window for judge calls. Empty = server default. Raise if
+                            judge prompts get truncated; costs VRAM.</div>
+                    </div>
 
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="ollama_rerank" name="OLLAMA_RERANK_SUGGESTIONS" {% if
@@ -1237,6 +1249,13 @@
                             get_bool('OLLAMA_ALIGN_FALLBACK') %}checked{% endif %}>
                         <label for="ollama_align">Semantic alignment fallback when fuzzy text matching fails</label>
                     </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_ebook_text" name="OLLAMA_EBOOK_TEXT_FALLBACK" {% if
+                            get_bool('OLLAMA_EBOOK_TEXT_FALLBACK') %}checked{% endif %}>
+                        <label for="ollama_ebook_text">Semantic position rescue for ebook text lookups (KoSync /
+                            Storyteller): when fuzzy phrase matching fails, find the position by embedding
+                            similarity. Uses the Alignment Similarity Threshold below.</label>
+                    </div>
                     <div class="form-group">
                         <label>Alignment Similarity Threshold (0-1)</label>
                         <input type="number" step="0.01" name="OLLAMA_ALIGN_SIM_THRESHOLD"
@@ -1277,6 +1296,13 @@
                         <label for="ollama_tracker">Verify Hardcover/StoryGraph matches with the LLM (crafts the
                             search, judges candidates; writes nothing if none match). ISBN/ASIN matches are
                             unaffected; uses the Judge Confidence Min above.</label>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_library" name="OLLAMA_LIBRARY_MATCH" {% if
+                            get_bool('OLLAMA_LIBRARY_MATCH') %}checked{% endif %}>
+                        <label for="ollama_library">Library match rescue (Grimmory &amp; BookOrbit): when
+                            filename/title matching fails, shortlist the library and let the judge pick the
+                            one true book. Skipped on hot sync paths; uses the Judge Confidence Min above.</label>
                     </div>
                 </div>
             </div>

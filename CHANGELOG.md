@@ -4,6 +4,28 @@
 
 All notable changes to ABS-KoSync Enhanced will be documented in this file.
 
+## [Unreleased]
+
+### What's New
+
+- **LLM match rescue for Grimmory and BookOrbit.** When filename/title matching fails to link an ebook to a Grimmory or BookOrbit library entry, the bridge now shortlists the cached library by fuzzy similarity and asks the Ollama judge to confirm the one true book (Settings → Ollama → "Library match rescue", `OLLAMA_LIBRARY_MATCH`, on by default). Hot sync/poll paths never pay LLM latency — the rescue only runs on linking paths — and verdicts are memoized until the next library refresh.
+
+- **Semantic position rescue for ebook text lookups.** When KoSync/Storyteller position lookups can't fuzzy-match a phrase in the EPUB (paraphrased narration, transcription noise), the bridge can now locate the position by embedding similarity over the hint neighborhood, then refine to a character offset (`OLLAMA_EBOOK_TEXT_FALLBACK`, on by default, threshold shared with the alignment fallback).
+
+- **Persistent embedding cache.** Suggestion scans no longer re-embed the whole library's titles every scan: embeddings are cached in a new `embedding_cache` table keyed by model + text hash (Alembic migration included). Rows for other models and rows older than 90 days are pruned automatically.
+
+- **Structured outputs for the Ollama judge.** Judge calls now send a JSON schema (Ollama ≥ 0.5) so verdicts always come back with the right keys and types — older Ollama servers automatically fall back to plain JSON mode.
+
+- **Ollama performance and reliability options.** New settings: **Keep Alive** (`OLLAMA_KEEP_ALIVE`, default 5m) controls how long models stay loaded between requests, and **Chat Context Length** (`OLLAMA_NUM_CTX`) overrides the judge's context window. Judge generation is now capped (`num_predict`) so a confused model can't stream until the timeout, and transient connection blips are retried once instead of aborting a whole scan's re-ranking.
+
+- **Richer judge prompts.** Hardcover/StoryGraph match verification now includes series, release year, and the audiobook's ISBN/ASIN in the judge prompt when available, improving disambiguation of sequels and editions.
+
+- **Ollama Test button reports model details.** The settings Test button now queries `/api/show` and displays each model's context length and capabilities, and warns when the configured embedding model doesn't report embedding capability.
+
+### Fixed
+
+- **Silent embedding truncation in alignment anchor rescue.** For long books, alignment windows could exceed the embedding model's token limit and Ollama silently truncated them at an unknown point. Windows are now embedded as a bounded prefix (4,000 chars) so anchors stay reliable on big books.
+
 ## [6.7.0] - 2026-05-11
 
 ### What's New
