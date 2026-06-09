@@ -271,8 +271,25 @@ class HardcoverClient:
         if not book_ids:
             return []
 
-        # Fetch details for up to 10 books to compare
-        book_query = """
+        # Fetch details for up to 10 books to compare. Try the enriched query
+        # (year + series, for better LLM judging) and fall back to the basic
+        # field set if the live schema rejects it.
+        book_query_enriched = """
+        query ($ids: [Int!]) {
+            books(where: { id: { _in: $ids }}) {
+                id
+                title
+                slug
+                cached_contributors
+                release_year
+                book_series {
+                    position
+                    series { name }
+                }
+            }
+        }
+        """
+        book_query_basic = """
         query ($ids: [Int!]) {
             books(where: { id: { _in: $ids }}) {
                 id
@@ -283,7 +300,9 @@ class HardcoverClient:
         }
         """
 
-        book_result = self.query(book_query, {"ids": book_ids})
+        book_result = self.query(book_query_enriched, {"ids": book_ids})
+        if not book_result or not book_result.get("books"):
+            book_result = self.query(book_query_basic, {"ids": book_ids})
         if not book_result or not book_result.get("books"):
             return []
 
@@ -295,13 +314,34 @@ class HardcoverClient:
         normalized = []
         for book in candidates:
             authors = self._extract_authors_from_cached(book.get("cached_contributors"))
-            normalized.append({
+            entry = {
                 "book_id": book.get("id"),
                 "title": book.get("title"),
                 "author": authors[0] if authors else "",
                 "slug": book.get("slug"),
-            })
+            }
+            if book.get("release_year"):
+                entry["year"] = book["release_year"]
+            series_label = self._format_series(book.get("book_series"))
+            if series_label:
+                entry["series"] = series_label
+            normalized.append(entry)
         return normalized
+
+    @staticmethod
+    def _format_series(book_series) -> str:
+        """Format the first series link as 'Name #position' (or '' when absent)."""
+        if not isinstance(book_series, list):
+            return ""
+        for link in book_series:
+            if not isinstance(link, dict):
+                continue
+            name = ((link.get("series") or {}).get("name") or "").strip()
+            if not name:
+                continue
+            position = link.get("position")
+            return f"{name} #{position}" if position is not None else name
+        return ""
 
     def resolve_match_for_book(self, book: Dict) -> Optional[Dict]:
         """Resolve a chosen candidate to the standard match dict (edition + pages/audio)."""

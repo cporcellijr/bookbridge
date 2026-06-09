@@ -325,13 +325,17 @@ class StorygraphClient:
             seen_ids.add(book_id)
 
             author_link = card.select_one("a[href^='/authors/']")
-            results.append(
-                {
-                    "book_id": book_id,
-                    "title": title_link.get_text(" ", strip=True),
-                    "author": author_link.get_text(" ", strip=True) if author_link else "",
-                }
-            )
+            entry = {
+                "book_id": book_id,
+                "title": title_link.get_text(" ", strip=True),
+                "author": author_link.get_text(" ", strip=True) if author_link else "",
+            }
+            series_link = card.select_one("a[href^='/series/']")
+            if series_link:
+                series = series_link.get_text(" ", strip=True)
+                if series:
+                    entry["series"] = series
+            results.append(entry)
 
         return results
 

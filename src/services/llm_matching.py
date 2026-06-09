@@ -73,30 +73,40 @@ def craft_search_terms(ollama_client: Any, title: str, author: str) -> Tuple[str
     return title, author
 
 
+def _candidate_line(index: int, candidate: dict) -> str:
+    line = f"{index}. title: {candidate.get('title') or ''} | author: {candidate.get('author') or ''}"
+    if candidate.get("series"):
+        line += f" | series: {candidate['series']}"
+    if candidate.get("year"):
+        line += f" | year: {candidate['year']}"
+    return line
+
+
 def judge_best_candidate(
     ollama_client: Any,
     title: str,
     author: str,
     candidates: List[dict],
     min_confidence: float,
+    isbn: str = "",
 ) -> Optional[int]:
     """Return the index of the candidate that is the same work, or None.
 
-    `candidates` items must expose 'title' and (optionally) 'author'. Returns an index
-    only when the model is confident (>= min_confidence); otherwise None so the caller
-    writes nothing.
+    `candidates` items must expose 'title' and (optionally) 'author', 'series',
+    'year'. Returns an index only when the model is confident (>= min_confidence);
+    otherwise None so the caller writes nothing.
     """
     if not _ready(ollama_client) or not candidates:
         return None
 
-    lines = [
-        f"{i}. title: {c.get('title') or ''} | author: {c.get('author') or ''}"
-        for i, c in enumerate(candidates)
-    ]
+    lines = [_candidate_line(i, c) for i, c in enumerate(candidates)]
+    target = f"Target: title: {title} | author: {author}"
+    if isbn:
+        target += f" | isbn: {isbn}"
     prompt = (
         "Decide which candidate book is the SAME WORK as the target (same book, any "
         "edition or translation), or none of them.\n"
-        f"Target: title: {title} | author: {author}\n"
+        f"{target}\n"
         "Candidates:\n" + "\n".join(lines) + "\n"
         'Respond ONLY with JSON: {"choice": <candidate number or null>, '
         '"confidence": <integer 0-100>}'

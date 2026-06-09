@@ -72,6 +72,28 @@ class TestLlmMatchingHelpers(_EnvGuard):
     def test_judge_none_without_client(self):
         self.assertIsNone(judge_best_candidate(None, "B", "y", [{"title": "B"}], 85))
 
+    def test_judge_prompt_includes_series_year_and_isbn(self):
+        stub = _StubOllama(judge={"choice": 0, "confidence": 95})
+        cands = [
+            {"title": "A", "author": "x", "series": "Saga #2", "year": 2019},
+            {"title": "B", "author": "y"},
+        ]
+        judge_best_candidate(stub, "A", "x", cands, 85, isbn="9781234567890")
+        prompt = stub.calls[-1]
+        self.assertIn("series: Saga #2", prompt)
+        self.assertIn("year: 2019", prompt)
+        self.assertIn("isbn: 9781234567890", prompt)
+        # Candidates without the metadata keep the plain line format.
+        self.assertIn("1. title: B | author: y\n", prompt + "\n")
+
+    def test_judge_prompt_unchanged_without_metadata(self):
+        stub = _StubOllama(judge={"choice": 0, "confidence": 95})
+        judge_best_candidate(stub, "A", "x", [{"title": "A", "author": "x"}], 85)
+        prompt = stub.calls[-1]
+        self.assertNotIn("series:", prompt)
+        self.assertNotIn("year:", prompt)
+        self.assertNotIn("isbn:", prompt)
+
 
 class TestHardcoverLlmMatch(_EnvGuard):
     def _client(self, ollama, hc):
