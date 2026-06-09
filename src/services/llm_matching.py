@@ -37,6 +37,11 @@ def tracker_match_enabled() -> bool:
     return os.environ.get("OLLAMA_TRACKER_MATCH", "false").lower() == "true"
 
 
+def library_match_enabled() -> bool:
+    """Gates LLM match rescue for library managers (Grimmory, BookOrbit)."""
+    return os.environ.get("OLLAMA_LIBRARY_MATCH", "false").lower() == "true"
+
+
 def _ready(ollama_client: Any) -> bool:
     return bool(ollama_client and ollama_client.is_configured())
 
@@ -109,3 +114,41 @@ def judge_best_candidate(
     if isinstance(choice, int) and 0 <= choice < len(candidates) and confidence >= min_confidence:
         return choice
     return None
+
+
+def rescue_from_catalog(
+    ollama_client: Any,
+    query: str,
+    entries: List[dict],
+    min_confidence: float,
+    shortlist_size: int = 5,
+    fuzzy_floor: float = 50.0,
+) -> Optional[int]:
+    """Pick the catalog entry that is the same work as `query`, or None.
+
+    Shortlists `entries` (dicts with 'title' and optionally 'author') by fuzzy
+    similarity so the judge sees a handful of plausible candidates, then asks the
+    chat model to confirm one. Returns an index into `entries`.
+    """
+    if not _ready(ollama_client) or not query or not entries:
+        return None
+    from rapidfuzz import fuzz
+
+    scored = []
+    for i, entry in enumerate(entries):
+        haystack = f"{entry.get('title') or ''} {entry.get('author') or ''}".strip()
+        if not haystack:
+            continue
+        score = fuzz.token_set_ratio(query.lower(), haystack.lower())
+        if score >= fuzzy_floor:
+            scored.append((score, i))
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    shortlist = [i for _, i in scored[:shortlist_size]]
+    choice = judge_best_candidate(
+        ollama_client, query, "", [entries[i] for i in shortlist], min_confidence
+    )
+    if choice is None:
+        return None
+    return shortlist[choice]
