@@ -6565,10 +6565,43 @@ def _test_ollama(enabled: bool, url: str, embed_model: str, chat_model: str) -> 
                 f"Those features will silently fall back until you run: {pulls}"
             ),
         }
-    return {
-        "ok": True,
-        "message": f"Connected. Models present: {embed_model} ✓, {chat_model} ✓",
-    }
+    embed_info = _ollama_show_info(url, embed_model)
+    chat_info = _ollama_show_info(url, chat_model)
+
+    def _annotate(name: str, info: dict) -> str:
+        parts = []
+        if info.get("context_length"):
+            parts.append(f"ctx {info['context_length']}")
+        if info.get("capabilities"):
+            parts.append(", ".join(info["capabilities"]))
+        return f"{name} ✓ ({'; '.join(parts)})" if parts else f"{name} ✓"
+
+    message = f"Connected. {_annotate(embed_model, embed_info)}, {_annotate(chat_model, chat_info)}"
+    embed_caps = embed_info.get("capabilities") or []
+    if embed_caps and "embedding" not in embed_caps:
+        message += f". Warning: {embed_model} does not report embedding capability"
+    return {"ok": True, "message": message}
+
+
+def _ollama_show_info(url: str, model: str) -> dict:
+    """Best-effort /api/show probe: {'context_length': int|None, 'capabilities': list}."""
+    info = {"context_length": None, "capabilities": []}
+    try:
+        r = requests.post(f"{url}/api/show", json={"model": model}, timeout=10)
+        if r.status_code != 200:
+            return info
+        data = r.json() or {}
+        model_info = data.get("model_info") or {}
+        for key, value in model_info.items():
+            if key.endswith(".context_length") and isinstance(value, int):
+                info["context_length"] = value
+                break
+        caps = data.get("capabilities")
+        if isinstance(caps, list):
+            info["capabilities"] = [c for c in caps if isinstance(c, str)]
+    except Exception:
+        pass
+    return info
 
 
 def _test_abs(url: str, token: str) -> dict:
