@@ -29,7 +29,7 @@ class _StubOllama:
             out.append(self._vectors[t])
         return out
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
         self.judge_calls += 1
         return self._judge_result
 
@@ -54,7 +54,7 @@ class _RecordingOllama:
             out.append(self._vectors[t])
         return out
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
         self.calls.append("judge")
         return self._judge_result
 
@@ -77,7 +77,7 @@ class _KeywordOllama:
                 out.append([0.4, 0.4])
         return out
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
         return None
 
 

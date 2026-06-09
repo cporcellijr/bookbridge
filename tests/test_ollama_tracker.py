@@ -18,7 +18,7 @@ class _StubOllama:
     def is_configured(self):
         return True
 
-    def judge(self, prompt):
+    def judge(self, prompt, schema=None):
         self.calls.append(prompt)
         if "Raw title" in prompt:
             return self.craft

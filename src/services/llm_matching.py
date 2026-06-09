@@ -11,6 +11,27 @@ from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Structured-output schemas (Ollama >= 0.5). OllamaClient falls back to plain
+# JSON mode automatically on servers that don't support them.
+CRAFT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "author": {"type": "string"},
+    },
+    "required": ["title", "author"],
+}
+
+JUDGE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "choice": {"type": ["integer", "null"]},
+        "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+        "reason": {"type": "string"},
+    },
+    "required": ["choice", "confidence"],
+}
+
 
 def tracker_match_enabled() -> bool:
     return os.environ.get("OLLAMA_TRACKER_MATCH", "false").lower() == "true"
@@ -38,7 +59,7 @@ def craft_search_terms(ollama_client: Any, title: str, author: str) -> Tuple[str
         f"Raw author: {author}\n"
         'Respond ONLY with JSON: {"title": "<clean title>", "author": "<clean author>"}'
     )
-    result = ollama_client.judge(prompt)
+    result = ollama_client.judge(prompt, schema=CRAFT_SCHEMA)
     if isinstance(result, dict):
         clean_title = (result.get("title") or "").strip()
         clean_author = (result.get("author") or "").strip()
@@ -75,7 +96,7 @@ def judge_best_candidate(
         'Respond ONLY with JSON: {"choice": <candidate number or null>, '
         '"confidence": <integer 0-100>}'
     )
-    result = ollama_client.judge(prompt)
+    result = ollama_client.judge(prompt, schema=JUDGE_SCHEMA)
     if not isinstance(result, dict):
         return None
 

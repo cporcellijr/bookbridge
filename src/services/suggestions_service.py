@@ -739,7 +739,9 @@ class SuggestionsService:
             'Respond ONLY with JSON: {"choice": <candidate number or null>, '
             '"confidence": <integer 0-100>, "reason": "<short>"}'
         )
-        result = self.ollama_client.judge(prompt)
+        from src.services.llm_matching import JUDGE_SCHEMA
+
+        result = self.ollama_client.judge(prompt, schema=JUDGE_SCHEMA)
         if not isinstance(result, dict):
             return None, 0.0
         choice = result.get("choice")
