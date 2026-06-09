@@ -32,7 +32,9 @@ class SuggestionsService:
         self.calibre_identifier_resolver = calibre_identifier_resolver
         self.ollama_client = ollama_client
         # Per-scan embedding cache (text -> vector); a fresh service is built per scan.
+        # Backed by the persistent embedding_cache table across scans.
         self._ollama_embed_cache: Dict[str, Any] = {}
+        self._embed_cache_pruned = False
 
     @staticmethod
     def _candidate_title(candidate: Any) -> str:
@@ -415,11 +417,14 @@ class SuggestionsService:
     def _embed_texts(self, texts: List[str]) -> Optional[Dict[str, Any]]:
         """Embed texts (using the per-scan cache). Returns {text: vector} or None on failure.
 
+        Misses are served from the persistent embedding_cache table first, then Ollama.
         Large requests are chunked so a whole-library embed doesn't blow the HTTP timeout.
         """
         cache = self._ollama_embed_cache
         unique = [t for t in dict.fromkeys(texts) if t]
         missing = [t for t in unique if t not in cache]
+        missing = self._load_embeddings_from_db(missing)
+        new_vectors: Dict[str, Any] = {}
         for start in range(0, len(missing), self._EMBED_BATCH):
             chunk = missing[start:start + self._EMBED_BATCH]
             vectors = self.ollama_client.embed(chunk)
@@ -427,7 +432,55 @@ class SuggestionsService:
                 return None
             for text, vec in zip(chunk, vectors):
                 cache[text] = vec
+                new_vectors[text] = vec
+        self._store_embeddings_in_db(new_vectors)
         return {t: cache.get(t) for t in texts}
+
+    @staticmethod
+    def _text_hash(text: str) -> str:
+        import hashlib
+
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _embed_model_name(self) -> str:
+        return str(getattr(self.ollama_client, "embed_model", "") or "")
+
+    def _load_embeddings_from_db(self, missing: List[str]) -> List[str]:
+        """Fill the per-scan cache from the persistent table; returns texts still missing.
+
+        Best-effort: any DB problem (including mocked services in tests) leaves
+        `missing` unchanged so the scan proceeds against Ollama directly.
+        """
+        model = self._embed_model_name()
+        if not missing or not model:
+            return missing
+        try:
+            if not self._embed_cache_pruned:
+                self._embed_cache_pruned = True
+                self.database_service.prune_embedding_cache(model)
+            hashes = {self._text_hash(t): t for t in missing}
+            db_hits = self.database_service.get_cached_embeddings(model, list(hashes.keys()))
+            if not isinstance(db_hits, dict):
+                return missing
+            for text_hash, vector in db_hits.items():
+                text = hashes.get(text_hash)
+                if text and isinstance(vector, list):
+                    self._ollama_embed_cache[text] = vector
+            return [t for t in missing if t not in self._ollama_embed_cache]
+        except Exception as e:
+            self.logger.debug(f"Embedding cache read skipped: {e}")
+            return missing
+
+    def _store_embeddings_in_db(self, new_vectors: Dict[str, Any]) -> None:
+        model = self._embed_model_name()
+        if not new_vectors or not model:
+            return
+        try:
+            self.database_service.save_cached_embeddings(
+                model, {self._text_hash(t): v for t, v in new_vectors.items()}
+            )
+        except Exception as e:
+            self.logger.debug(f"Embedding cache write skipped: {e}")
 
     # Embeddings re-rank the top survivors, not just a mid-score band: band_min is a
     # floor (weaker candidates aren't worth embedding) and the strongest few above it

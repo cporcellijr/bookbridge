@@ -2,7 +2,7 @@
 SQLAlchemy ORM models for abs-kosync-bridge database.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -552,6 +552,29 @@ class BookloreBook(Base):
         self.title = title
         self.authors = authors
         self.raw_metadata = raw_metadata
+
+
+class EmbeddingCache(Base):
+    """
+    Persistent cache of Ollama embeddings, keyed by (model, sha256 of the text).
+    Lets suggestion scans skip re-embedding unchanged library titles.
+    """
+    __tablename__ = 'embedding_cache'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model = Column(String(255), nullable=False)
+    text_hash = Column(String(64), nullable=False)
+    vector_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_embedding_cache_model_hash', 'model', 'text_hash', unique=True),
+    )
+
+    def __init__(self, model: str, text_hash: str, vector_json: str):
+        self.model = model
+        self.text_hash = text_hash
+        self.vector_json = vector_json
 
 
 # Database configuration
