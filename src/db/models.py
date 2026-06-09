@@ -399,13 +399,17 @@ class BookAlignment(Base):
     abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
     alignment_map_json = Column(Text, nullable=False)  # JSON-encoded list of dicts or optimized structure
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # How the map was built: 'lexical', 'llm_anchor', 'linear', 'storyteller',
+    # 'storyteller_linear'. NULL = pre-provenance (built before LLM alignment shipped).
+    align_method = Column(String(32), nullable=True)
 
     # Relationship
     book = relationship("Book", back_populates="alignment")
 
-    def __init__(self, abs_id: str, alignment_map_json: str):
+    def __init__(self, abs_id: str, alignment_map_json: str, align_method: str = None):
         self.abs_id = abs_id
         self.alignment_map_json = alignment_map_json
+        self.align_method = align_method
 
 
 class ReadingSession(Base):

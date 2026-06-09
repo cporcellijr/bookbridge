@@ -28,6 +28,7 @@ from .models import (
     KOReaderBookStat,
     KOReaderPageStat,
     ShelfWatchScan,
+    BookAlignment,
     Base,
 )
 
@@ -238,6 +239,87 @@ class DatabaseService:
                 {Book.kosync_doc_id: kosync_doc_id}, synchronize_session=False
             )
             return bool(updated)
+
+    def set_book_status(self, abs_id: str, status: str) -> bool:
+        """Set a book's status column (e.g. 'pending' to queue re-processing)."""
+        with self.get_session() as session:
+            updated = session.query(Book).filter(Book.abs_id == abs_id).update(
+                {Book.status: status}, synchronize_session=False
+            )
+            return bool(updated)
+
+    def get_alignment_provenance(self) -> dict:
+        """Report how each stored alignment map was built.
+
+        Returns {'summary': {method: count, ...}, 'books': [{abs_id, title,
+        align_method, llm_used, last_updated}, ...]}. NULL align_method (maps built
+        before provenance tracking) is reported as 'pre_llm'.
+        """
+        with self.get_session() as session:
+            rows = (
+                session.query(BookAlignment, Book.abs_title)
+                .outerjoin(Book, Book.abs_id == BookAlignment.abs_id)
+                .all()
+            )
+            # A map is worth re-aligning only if it's a flat linear fallback (lexical
+            # anchoring failed) or pre-provenance/unknown — a clean lexical or llm_anchor
+            # map gains nothing from a re-run.
+            realign_methods = {None, "linear", "storyteller_linear"}
+            books = []
+            summary: dict = {}
+            for alignment, title in rows:
+                method = alignment.align_method or "pre_llm"
+                summary[method] = summary.get(method, 0) + 1
+                books.append({
+                    "abs_id": alignment.abs_id,
+                    "title": title or alignment.abs_id,
+                    "align_method": alignment.align_method,
+                    "llm_used": alignment.align_method == "llm_anchor",
+                    "needs_realign": alignment.align_method in realign_methods,
+                    "last_updated": alignment.last_updated.isoformat() if alignment.last_updated else None,
+                })
+            books.sort(key=lambda b: (b["llm_used"], (b["align_method"] or "")))
+            needs_realign = sum(1 for b in books if b["needs_realign"])
+            return {"summary": summary, "total": len(books), "needs_realign": needs_realign, "books": books}
+
+    def backfill_alignment_methods(self) -> int:
+        """Classify legacy NULL-method maps without re-transcribing, by inspecting the
+        stored map: a <=2-point map is a flat linear fallback (lexical anchoring failed →
+        an LLM re-align could help); more points means lexical anchoring already succeeded
+        (re-aligning adds nothing). Returns how many rows were updated."""
+        import json as _json
+        updated = 0
+        with self.get_session() as session:
+            rows = session.query(BookAlignment).filter(BookAlignment.align_method.is_(None)).all()
+            for alignment in rows:
+                try:
+                    points = len(_json.loads(alignment.alignment_map_json))
+                except Exception:
+                    continue
+                alignment.align_method = "linear" if points <= 2 else "lexical"
+                updated += 1
+        return updated
+
+    def get_books_needing_llm_realign(self) -> List[str]:
+        """abs_ids whose alignment is pre-LLM (NULL) or a flat linear fallback — i.e. the
+        maps that re-running under the LLM-enabled pipeline could actually improve.
+
+        A clean 'lexical' map is already accurate (the embedding rescue only fires when
+        lexical anchoring fails), so it is intentionally excluded.
+        """
+        from sqlalchemy import or_
+        with self.get_session() as session:
+            rows = (
+                session.query(BookAlignment.abs_id)
+                .filter(
+                    or_(
+                        BookAlignment.align_method.is_(None),
+                        BookAlignment.align_method.in_(["linear", "storyteller_linear"]),
+                    )
+                )
+                .all()
+            )
+            return [r[0] for r in rows]
 
     def get_all_books(self) -> List[Book]:
         """Get all books as model objects."""

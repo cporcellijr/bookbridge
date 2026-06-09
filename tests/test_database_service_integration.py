@@ -86,6 +86,50 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertIsNotNone(retrieved_book)
         self.assertEqual(retrieved_book.abs_id, test_abs_id)
 
+    def _seed_alignment(self, abs_id, title, points, method=None):
+        from src.db.models import BookAlignment
+        self.db_service.save_book(self.Book(abs_id=abs_id, abs_title=title, status='active'))
+        amap = [{'char': i, 'ts': float(i)} for i in range(points)]
+        with self.db_service.get_session() as session:
+            session.add(BookAlignment(
+                abs_id=abs_id, alignment_map_json=json.dumps(amap), align_method=method
+            ))
+
+    def test_backfill_alignment_methods_classifies_by_shape(self):
+        # A 2-point map = linear fallback; a many-point map = lexical success.
+        self._seed_alignment('lin-1', 'Linear Book', points=2)
+        self._seed_alignment('lex-1', 'Lexical Book', points=500)
+
+        updated = self.db_service.backfill_alignment_methods()
+        self.assertEqual(updated, 2)
+
+        prov = self.db_service.get_alignment_provenance()
+        self.assertEqual(prov['summary'].get('linear'), 1)
+        self.assertEqual(prov['summary'].get('lexical'), 1)
+        # Only the linear map is flagged for re-alignment.
+        self.assertEqual(prov['needs_realign'], 1)
+        flagged = {b['abs_id']: b['needs_realign'] for b in prov['books']}
+        self.assertTrue(flagged['lin-1'])
+        self.assertFalse(flagged['lex-1'])
+        # Re-running is a no-op (nothing left NULL).
+        self.assertEqual(self.db_service.backfill_alignment_methods(), 0)
+
+    def test_get_books_needing_llm_realign_targets_only_linear(self):
+        self._seed_alignment('lin-2', 'Linear', points=2)
+        self._seed_alignment('lex-2', 'Lexical', points=300)
+        self._seed_alignment('llm-2', 'Rescued', points=40, method='llm_anchor')
+        self.db_service.backfill_alignment_methods()
+
+        needing = self.db_service.get_books_needing_llm_realign()
+        self.assertIn('lin-2', needing)
+        self.assertNotIn('lex-2', needing)     # clean lexical map — no value re-aligning
+        self.assertNotIn('llm-2', needing)     # already LLM-built
+
+    def test_set_book_status(self):
+        self.db_service.save_book(self.Book(abs_id='st-1', abs_title='S', status='active'))
+        self.assertTrue(self.db_service.set_book_status('st-1', 'pending'))
+        self.assertEqual(self.db_service.get_book('st-1').status, 'pending')
+
     def test_delete_book(self):
         """Test deleting a book record with cascading deletes for states and hardcover details."""
         test_abs_id = 'test-book-delete'

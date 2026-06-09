@@ -141,7 +141,8 @@ class Container(containers.DeclarativeContainer):
     alignment_service = providers.Singleton(
         AlignmentService,
         database_service=database_service,
-        polisher=polisher
+        polisher=polisher,
+        ollama_client=ollama_client
     )
 
     library_service = providers.Singleton(

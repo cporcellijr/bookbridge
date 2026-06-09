@@ -822,12 +822,22 @@ def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
     return candidates
 
 
+def _trailing_volume(title):
+    """Extract a trailing volume number, ignoring trailing parentheticals like '(Unabridged)'."""
+    text = (title or "").strip()
+    text = re.sub(r"\s*\([^)]*\)\s*$", "", text).strip()
+    match = re.search(r"(\d+)\s*$", text)
+    return match.group(1) if match else None
+
+
 def _select_auto_map_candidate(ebook_meta, candidates):
     """Decide whether one audiobook is an exact, unambiguous match worth auto-mapping.
 
     Tier 0: EPUB ISBN/ASIN matches an audiobook identifier (authoritative, no LLM).
-    Tier 1: a single strong fuzzy match (title>=0.90, author>=0.80) with no rival, that
-    the Ollama judge confirms is the same work. Returns (candidate, reason) or (None, None).
+    Tier 1: among the strong fuzzy candidates (title>=0.90, author>=0.80, capped at 3),
+    the Ollama judge confidently picks the same work, no confusingly-named rival sits just
+    outside the strong set, and the chosen volume number matches the EPUB's. Returns
+    (candidate, reason) or (None, None).
     """
     pool = [c for c in candidates if (c.get("progress_pct") or 0) <= 75]
     if not pool:
@@ -841,17 +851,14 @@ def _select_auto_map_candidate(ebook_meta, candidates):
             if epub_ids & cand_ids:
                 return candidate, "identifier"
 
-    # Tier 1 — strict fuzzy agreement, single unambiguous candidate.
+    # Tier 1 — strict fuzzy gate, then let the Ollama judge arbitrate the strong set.
     author_known = bool((ebook_meta.get("author") or "").strip())
     strong = [
         c for c in pool
         if c["title_sim"] >= 0.90 and (not author_known or (c.get("author_sim") or 0) >= 0.80)
     ]
-    if len(strong) != 1:
-        return None, None
-    best = strong[0]
-    if any(c is not best and c["title_sim"] >= best["title_sim"] - 0.05 for c in pool):
-        return None, None  # a rival is too close — ambiguous, leave for the user
+    if not strong or len(strong) > 3:
+        return None, None  # nothing strong, or too many rivals — leave for manual review
 
     try:
         ollama = _container.ollama_client()
@@ -860,17 +867,35 @@ def _select_auto_map_candidate(ebook_meta, candidates):
     if not ollama or not ollama.is_configured():
         return None, None  # no Ollama → never auto-map on fuzzy alone
 
+    epub_title = (ebook_meta.get("title") or "").strip()
+    epub_author = (ebook_meta.get("author") or "").strip()
     conf_min = float(os.environ.get("OLLAMA_JUDGE_CONFIDENCE_MIN", 85))
+
     idx = judge_best_candidate(
         ollama,
-        (ebook_meta.get("title") or "").strip(),
-        (ebook_meta.get("author") or "").strip(),
-        [{"title": best["title"], "author": best["author"]}],
+        epub_title,
+        epub_author,
+        [{"title": c["title"], "author": c["author"]} for c in strong],
         conf_min,
     )
-    if idx == 0:
-        return best, "agreement"
-    return None, None
+    if idx is None:
+        return None, None
+    best = strong[idx]
+
+    # A non-strong rival with a near-equal title (e.g. same name, different author) is
+    # genuine ambiguity the judge never saw — leave it for the user.
+    strong_ids = {id(c) for c in strong}
+    if any(
+        id(c) not in strong_ids and c["title_sim"] >= best["title_sim"] - 0.05
+        for c in pool
+    ):
+        return None, None
+
+    # Volume guard: a base title fuzzy-matches its sequel well above threshold; the
+    # trailing volume number must agree so we never auto-map the wrong book in a series.
+    if _trailing_volume(epub_title) != _trailing_volume(best["title"]):
+        return None, None
+    return best, "agreement"
 
 
 def _resolve_library_ebook_source(epub_filename):

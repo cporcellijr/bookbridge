@@ -1190,19 +1190,49 @@ class TestAutoMapSelection(unittest.TestCase):
         self.assertIsNone(chosen)
         self.assertIsNone(reason)
 
-    def test_ambiguous_candidates_block_auto_map(self):
+    def test_judge_arbitrates_close_strong_candidates(self):
         from src.api import kosync_server
         container = MagicMock()
         container.ollama_client.return_value.is_configured.return_value = True
-        # Two near-equal strong matches -> ambiguous, must not auto-map.
+        # Two near-equal strong matches (same work) -> the judge confidently picks one.
         candidates = [
             self._candidate(abs_id="a", title_sim=0.96),
             self._candidate(abs_id="b", title_sim=0.94),
         ]
         with patch.object(kosync_server, '_container', container), \
-             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0) as judge:
             chosen, reason = kosync_server._select_auto_map_candidate(
                 {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+            )
+        # The judge saw both strong candidates and picked the first.
+        self.assertEqual(len(judge.call_args.args[3]), 2)
+        self.assertEqual(reason, "agreement")
+        self.assertEqual(chosen["abs_id"], "a")
+
+    def test_too_many_strong_candidates_block_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        # More than 3 strong rivals -> too ambiguous, leave for manual review.
+        candidates = [self._candidate(abs_id=f"a{i}") for i in range(4)]
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0) as judge:
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+            )
+        self.assertIsNone(chosen)
+        judge.assert_not_called()
+
+    def test_volume_mismatch_blocks_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        # Judge confidently picks the sequel, but the EPUB is volume 1 -> volume guard blocks.
+        candidate = self._candidate(title="Heretic Spellblade 2", author_sim=0.95, title_sim=0.93)
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Heretic Spellblade", "author": "K.D. Robertson"}, [candidate]
             )
         self.assertIsNone(chosen)
 

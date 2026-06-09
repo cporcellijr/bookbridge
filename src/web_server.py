@@ -1720,6 +1720,9 @@ def settings():
             'OLLAMA_RERANK_SUGGESTIONS',
             'OLLAMA_JUDGE_SUGGESTIONS',
             'OLLAMA_ALIGN_FALLBACK',
+            'OLLAMA_ALIGN_ANCHOR_RESCUE',
+            'OLLAMA_ALIGN_CONTENT_GUARD',
+            'OLLAMA_SUGGEST_JUDGE_GATE',
             'OLLAMA_TRACKER_MATCH',
         ]
 
@@ -2945,6 +2948,48 @@ def forge_process():
         "title": title,
         "author": author,
     }), 202
+
+
+def alignments_llm_status():
+    """API: Report how each stored alignment map was built (which used the LLM)."""
+    try:
+        # Self-heal legacy maps: classify NULL provenance by map shape (no re-transcription)
+        # so the report and the re-align target list are accurate.
+        database_service.backfill_alignment_methods()
+        return jsonify(database_service.get_alignment_provenance())
+    except Exception as e:
+        logger.error(f"❌ Failed to read alignment provenance: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def alignments_realign():
+    """API: Queue alignment maps for re-processing under the LLM-enabled pipeline.
+
+    Body: {"abs_id": "..."} for one book, or {"scope": "all_non_llm"} to queue every
+    pre-LLM/linear map. Sets the books' status to 'pending' so the forge pipeline
+    rebuilds them on the next cycle.
+    """
+    data = request.get_json(silent=True) or {}
+    abs_id = (data.get("abs_id") or "").strip()
+    scope = (data.get("scope") or "").strip()
+
+    try:
+        if abs_id:
+            targets = [abs_id]
+        elif scope == "all_non_llm":
+            targets = database_service.get_books_needing_llm_realign()
+        else:
+            return jsonify({"error": "Provide 'abs_id' or scope 'all_non_llm'"}), 400
+
+        queued = 0
+        for target in targets:
+            if database_service.set_book_status(target, "pending"):
+                queued += 1
+        logger.info(f"🔁 Re-align queued {queued} book(s) (scope='{scope or 'single'}')")
+        return jsonify({"queued": queued})
+    except Exception as e:
+        logger.error(f"❌ Failed to queue re-align: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 def match():
@@ -6504,12 +6549,21 @@ def _test_ollama(enabled: bool, url: str, embed_model: str, chat_model: str) -> 
         base = name.split(":", 1)[0]
         return any(m == name or m.split(":", 1)[0] == base for m in models)
 
+    # Label each model by the features it powers so the operator knows what breaks.
+    roles = {
+        embed_model: "embeddings — suggestion re-ranking & alignment fallback",
+        chat_model: "judge — match disambiguation & tracker matching",
+    }
     missing = [m for m in (embed_model, chat_model) if not _present(m)]
     if missing:
-        pulls = " ; ".join(f"ollama pull {m}" for m in missing)
+        details = "; ".join(f"{m} ({roles[m]})" for m in missing)
+        pulls = " && ".join(f"ollama pull {m}" for m in missing)
         return {
             "ok": False,
-            "message": f"Connected, but missing model(s): {', '.join(missing)}. Run: {pulls}",
+            "message": (
+                f"Connected, but missing model(s): {details}. "
+                f"Those features will silently fall back until you run: {pulls}"
+            ),
         }
     return {
         "ok": True,
@@ -6885,7 +6939,9 @@ def create_app(test_container=None):
     app.add_url_rule('/api/forge/search_audio', 'forge_search_audio', forge_search_audio, methods=['GET'])
     app.add_url_rule('/api/forge/search_text', 'forge_search_text', forge_search_text, methods=['GET'])
     app.add_url_rule('/api/forge/process', 'forge_process', forge_process, methods=['POST'])
-    
+    app.add_url_rule('/api/alignments/llm-status', 'alignments_llm_status', alignments_llm_status, methods=['GET'])
+    app.add_url_rule('/api/alignments/realign', 'alignments_realign', alignments_realign, methods=['POST'])
+
     @app.route('/api/forge/active', methods=['GET'])
     def forge_active_tasks():
         return jsonify(list(container.forge_service().active_tasks))

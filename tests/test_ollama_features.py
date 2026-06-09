@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import tempfile
@@ -33,6 +34,31 @@ class _StubOllama:
         return self._judge_result
 
 
+class _RecordingOllama:
+    """Stub that records the order of embed/judge calls (to prove batching)."""
+
+    def __init__(self, vectors=None, judge_result=None):
+        self._vectors = vectors or {}
+        self._judge_result = judge_result
+        self.calls = []
+
+    def is_configured(self):
+        return True
+
+    def embed(self, texts):
+        self.calls.append("embed")
+        out = []
+        for t in texts:
+            if t not in self._vectors:
+                return None
+            out.append(self._vectors[t])
+        return out
+
+    def judge(self, prompt):
+        self.calls.append("judge")
+        return self._judge_result
+
+
 class _Candidate:
     def __init__(self, name, title, authors, source="BookOrbit", source_id="1"):
         self.name = name
@@ -63,6 +89,7 @@ class _OllamaEnvGuard(unittest.TestCase):
         "OLLAMA_ENABLED", "OLLAMA_RERANK_SUGGESTIONS", "OLLAMA_RERANK_BAND_MIN",
         "OLLAMA_RERANK_BAND_MAX", "OLLAMA_JUDGE_SUGGESTIONS", "OLLAMA_JUDGE_MARGIN",
         "OLLAMA_JUDGE_CONFIDENCE_MIN", "OLLAMA_ALIGN_FALLBACK", "OLLAMA_ALIGN_SIM_THRESHOLD",
+        "OLLAMA_SUGGEST_JUDGE_GATE", "OLLAMA_SUGGEST_AUTOKEEP_SCORE",
     ]
 
     def setUp(self):
@@ -107,6 +134,104 @@ class TestSuggestionRerank(_OllamaEnvGuard):
         svc = _make_service(None)
         matches = [{"display_name": "Alpha", "author": "X", "score": 80}]
         self.assertEqual(svc._apply_ollama_reranking("t", "a", matches), matches)
+
+    def test_rerank_rescues_candidate_above_old_band_max(self):
+        # Embeddings are now a primary signal on the head of the list: a near-perfect
+        # fuzzy score (98, above the legacy band_max of 95) is still re-scored, so a
+        # semantically-closer rival can overtake it.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        vectors = {"Beta book Y": [1.0, 0.0], "Alpha X": [0.0, 1.0], "Beta Y": [1.0, 0.0]}
+        svc = _make_service(_StubOllama(vectors=vectors))
+        matches = [
+            {"display_name": "Alpha", "author": "X", "score": 98, "ebook_filename": "a.epub"},
+            {"display_name": "Beta", "author": "Y", "score": 70, "ebook_filename": "b.epub"},
+        ]
+        result = svc._ollama_rerank_band("Beta book", "Y", matches)
+        self.assertEqual(result[0]["display_name"], "Beta")
+
+
+class TestSuggestionBatch(_OllamaEnvGuard):
+    def test_embeds_all_before_judging_any(self):
+        # Under MAX_LOADED_MODELS=1, all embeds must run before any judge so each model
+        # loads once instead of swapping per book.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_JUDGE_MARGIN"] = "100"  # force the judge to fire for every book
+        vectors = {
+            "Beta book Y": [1.0, 0.0], "Alpha X": [0.0, 1.0], "Beta Y": [1.0, 0.0],
+            "Gamma Z": [1.0, 0.0], "Gamma G": [1.0, 0.0], "Delta D": [0.0, 1.0],
+        }
+        stub = _RecordingOllama(vectors=vectors, judge_result={"choice": 0, "confidence": 90})
+        svc = _make_service(stub)
+        suggestions = [
+            {"audio_title": "Beta book", "audio_author": "Y", "matches": [
+                {"display_name": "Alpha", "author": "X", "score": 80, "ebook_filename": "a.epub"},
+                {"display_name": "Beta", "author": "Y", "score": 70, "ebook_filename": "b.epub"},
+            ]},
+            {"audio_title": "Gamma", "audio_author": "Z", "matches": [
+                {"display_name": "Gamma", "author": "G", "score": 80, "ebook_filename": "g.epub"},
+                {"display_name": "Delta", "author": "D", "score": 70, "ebook_filename": "d.epub"},
+            ]},
+        ]
+        svc._apply_ollama_reranking_batch(suggestions)
+        embed_idx = [i for i, c in enumerate(stub.calls) if c == "embed"]
+        judge_idx = [i for i, c in enumerate(stub.calls) if c == "judge"]
+        self.assertTrue(embed_idx and judge_idx)
+        self.assertLess(max(embed_idx), min(judge_idx))
+
+    def test_rerank_flip_forces_judge(self):
+        # When the embedding re-rank overturns the fuzzy winner, the judge must fire even
+        # though the new top-2 margin is wide (it would otherwise be skipped).
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_JUDGE_MARGIN"] = "5"
+        os.environ["OLLAMA_JUDGE_CONFIDENCE_MIN"] = "85"
+        vectors = {"Beta book Y": [1.0, 0.0], "Alpha X": [0.0, 1.0], "Beta Y": [1.0, 0.0]}
+        ebooks = [_Candidate(name="beta_real.epub", title="Beta", authors="Y", source_id="42")]
+        stub = _StubOllama(vectors=vectors, judge_result={"choice": 0, "confidence": 90})
+        svc = _make_service(stub, ebooks=ebooks)
+        suggestions = [{"audio_title": "Beta book", "audio_author": "Y", "matches": [
+            {"display_name": "Alpha", "author": "X", "score": 90, "ebook_filename": "a.epub"},
+            {"display_name": "Beta", "author": "Y", "score": 70, "ebook_filename": ""},
+        ]}]
+        svc._apply_ollama_reranking_batch(suggestions)
+        top = suggestions[0]["matches"][0]
+        self.assertEqual(top["display_name"], "Beta")
+        # File resolution only happens inside the judge path -> proves the judge fired.
+        self.assertEqual(top["ebook_filename"], "beta_real.epub")
+
+    def test_judge_gate_suppresses_unconfirmed(self):
+        # The LLM says none of the candidates is the same work -> drop the suggestion.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "false"
+        os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_SUGGEST_JUDGE_GATE"] = "true"
+        os.environ["OLLAMA_SUGGEST_AUTOKEEP_SCORE"] = "90"
+        stub = _StubOllama(judge_result={"choice": None, "confidence": 0})
+        svc = _make_service(stub)
+        suggestions = [{
+            "bridge_key": "ab-x", "audio_title": "Totally Different", "audio_author": "Nobody",
+            "matches": [
+                {"display_name": "Unrelated Book", "author": "Someone", "score": 72, "ebook_filename": "u.epub"},
+                {"display_name": "Another", "author": "Else", "score": 64, "ebook_filename": "a.epub"},
+            ],
+        }]
+        suppressed = svc._apply_ollama_reranking_batch(suggestions)
+        self.assertIn("ab-x", suppressed)
+
+    def test_judge_gate_autokeeps_strong_match(self):
+        # A strong fuzzy top match is trusted without spending a chat call or suppressing.
+        os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_SUGGEST_JUDGE_GATE"] = "true"
+        os.environ["OLLAMA_SUGGEST_AUTOKEEP_SCORE"] = "90"
+        stub = _StubOllama(judge_result={"choice": None, "confidence": 0})
+        svc = _make_service(stub)
+        suggestions = [{
+            "bridge_key": "ab-y", "audio_title": "Exact Match", "audio_author": "Author",
+            "matches": [{"display_name": "Exact Match", "author": "Author", "score": 98, "ebook_filename": "e.epub"}],
+        }]
+        suppressed = svc._apply_ollama_reranking_batch(suggestions)
+        self.assertNotIn("ab-y", suppressed)
+        self.assertEqual(stub.judge_calls, 0)
 
 
 class TestSuggestionJudge(_OllamaEnvGuard):
@@ -238,6 +363,44 @@ class TestAlignmentFallback(_OllamaEnvGuard):
         tr = self._make_transcriber(_StubOllama())
         windows = [{"start": 10.0, "end": 20.0, "text": "hello world"}]
         self.assertIsNone(tr._ollama_align_fallback("x", windows, None, windows))
+
+
+class TestTranscriptCachePersistence(unittest.TestCase):
+    """Transcripts persist after success so re-align skips re-transcription."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tr = AudioTranscriber(Path(self._tmp.name), MagicMock(), MagicMock())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_prune_keeps_transcript_removes_audio(self):
+        d = self.tr.cache_root / "book1"
+        d.mkdir(parents=True)
+        (d / "_progress.json").write_text('{"done": true, "transcript": []}')
+        (d / "part_000.wav").write_bytes(b"x")
+        (d / "part_000_split_0.wav").write_bytes(b"y")
+
+        self.tr._prune_audio_cache(d)
+
+        self.assertTrue((d / "_progress.json").exists())   # transcript kept
+        self.assertFalse((d / "part_000.wav").exists())    # heavy audio removed
+        self.assertFalse((d / "part_000_split_0.wav").exists())
+
+    def test_process_audio_reuses_completed_transcript(self):
+        abs_id = "book2"
+        d = self.tr.cache_root / abs_id
+        d.mkdir(parents=True)
+        transcript = [{"start": 0.0, "end": 1.0, "text": "hi"}]
+        (d / "_progress.json").write_text(
+            json.dumps({"chunks_completed": 1, "done": True, "transcript": transcript})
+        )
+
+        # Empty audio_urls + no provider needed: a completed cache short-circuits
+        # before any download/transcription.
+        result = self.tr.process_audio(abs_id, [])
+        self.assertEqual(result, transcript)
 
 
 if __name__ == "__main__":

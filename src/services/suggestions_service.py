@@ -2,6 +2,8 @@ import os
 import re
 from typing import Callable, List, Set, Any, Dict, Optional
 
+from src.services.llm_matching import craft_search_terms
+
 
 class SuggestionsService:
     """Service for scanning unmatched audiobooks and producing ebook suggestions."""
@@ -340,7 +342,9 @@ class SuggestionsService:
         for m in matches:
             m.pop('_direct_match', None)
 
-        matches = self._apply_ollama_reranking(audio_title, audio_author, matches)
+        # Ollama re-rank/judge runs in a batched second pass (see
+        # `_apply_ollama_reranking_batch`) so the embed and chat models each load once
+        # for the whole scan instead of swapping per book under MAX_LOADED_MODELS=1.
 
         audio_cover_url = self._audio_cover_url(ab, audio_source, audio_source_id)
         audio_duration = self._audio_duration(ab)
@@ -393,10 +397,19 @@ class SuggestionsService:
                 cache[text] = vec
         return {t: cache.get(t) for t in texts}
 
+    # Embeddings re-rank the top survivors, not just a mid-score band: band_min is a
+    # floor (weaker candidates aren't worth embedding) and the strongest few above it
+    # are re-scored so semantic similarity is a primary signal on the head of the list.
+    _RERANK_TOP_N = 5
+
     def _apply_ollama_reranking(
         self, audio_title: str, audio_author: str, matches: List[dict]
     ) -> List[dict]:
-        """Run the optional embedding re-rank → judge → file-resolution pipeline."""
+        """Single-suggestion embedding re-rank → judge → file-resolution pipeline.
+
+        Retained for callers that score one suggestion at a time; the library scan uses
+        `_apply_ollama_reranking_batch` instead to avoid per-book model swaps.
+        """
         if not matches or not self._ollama_ready():
             return matches
 
@@ -404,25 +417,118 @@ class SuggestionsService:
         matches = self._ollama_judge_and_resolve(audio_title, audio_author, matches)
         return matches
 
+    def _apply_ollama_reranking_batch(self, suggestions: List[dict]) -> Set[str]:
+        """Re-rank (embeddings) then judge-gate (chat) all fresh suggestions, batched by
+        model so each Ollama model loads once.
+
+        With MAX_LOADED_MODELS=1 on the host, interleaving embed (nomic) and judge (qwen)
+        per book swaps models on every call; doing all embeds first, then all judges,
+        collapses N swaps to two model loads for the whole scan. Mutates each suggestion's
+        'matches' in place and returns the set of bridge_keys that should be SUPPRESSED —
+        audiobooks the LLM won't confirm have any real ebook match (so junk / "not even
+        close" suggestions don't surface).
+        """
+        suppressed: Set[str] = set()
+        if not suggestions or not self._ollama_ready():
+            return suppressed
+
+        rerank_on = self._env_true("OLLAMA_RERANK_SUGGESTIONS")
+        judge_on = self._env_true("OLLAMA_JUDGE_SUGGESTIONS")
+        if not rerank_on and not judge_on:
+            return suppressed
+
+        # Phase A — embedding re-rank (nomic loads once).
+        rerankable = [s for s in suggestions if len(s.get("matches") or []) >= 2]
+        if rerank_on and rerankable:
+            self._prewarm_rerank_embeddings(rerankable)
+            for s in rerankable:
+                s["matches"] = self._ollama_rerank_band(
+                    s.get("audio_title", ""), s.get("audio_author", ""), s["matches"]
+                )
+
+        # Phase B — judge gate (qwen loads once). Confirm/pin the top match for the
+        # uncertain suggestions; suppress the ones the LLM won't vouch for.
+        if not judge_on:
+            return suppressed
+
+        gate_on = self._env_true("OLLAMA_SUGGEST_JUDGE_GATE")
+        autokeep = self._env_float("OLLAMA_SUGGEST_AUTOKEEP_SCORE", 90.0)
+        conf_min = self._env_float("OLLAMA_JUDGE_CONFIDENCE_MIN", 85.0)
+        gated = 0
+        for s in suggestions:
+            matches = s.get("matches") or []
+            if not matches:
+                continue
+            # A strong fuzzy+semantic top match is almost certainly correct — trust it
+            # and spend no chat call.
+            if matches[0].get("score", 0) >= autokeep:
+                continue
+
+            gated += 1
+            choice, confidence = self._run_judge(
+                s.get("audio_title", ""), s.get("audio_author", ""), matches[:3]
+            )
+            if choice is not None and confidence >= conf_min:
+                chosen = matches[:3][choice]
+                self.logger.info(
+                    f"🧠 Ollama judge confirmed '{chosen.get('display_name')}' for "
+                    f"'{s.get('audio_title')}' (confidence {confidence:.0f})"
+                )
+                s["matches"] = [chosen] + [m for m in matches if m is not chosen]
+                self._resolve_real_file(s.get("audio_title", ""), s["matches"][0])
+            elif gate_on:
+                # LLM won't confirm any candidate as the same work → drop the suggestion.
+                self.logger.info(
+                    f"🚫 Suppressed suggestion '{s.get('audio_title')}' — LLM found no real "
+                    f"ebook match among the top candidates"
+                )
+                suppressed.add(s.get("bridge_key"))
+
+        if gated:
+            self.logger.info(
+                f"🧠 Judge gate: reviewed {gated} uncertain suggestion(s), suppressed {len(suppressed)}"
+            )
+        return suppressed
+
+    def _rerank_count(self, matches: List[dict], band_min: float) -> int:
+        """How many of the (score-sorted) matches the re-rank pass will re-score."""
+        eligible = sum(1 for m in matches if m.get("score", 0) >= band_min)
+        return min(self._RERANK_TOP_N, eligible)
+
+    def _prewarm_rerank_embeddings(self, suggestions: List[dict]) -> None:
+        """Embed every text the re-rank pass needs in one batched call, so the embed model
+        loads once and per-book re-ranking reads from `_ollama_embed_cache`."""
+        band_min = self._env_float("OLLAMA_RERANK_BAND_MIN", 60.0)
+        texts: List[str] = []
+        for s in suggestions:
+            matches = s.get("matches") or []
+            n = self._rerank_count(matches, band_min)
+            if n < 2:
+                continue
+            texts.append(f"{s.get('audio_title', '')} {s.get('audio_author', '')}".strip())
+            for m in matches[:n]:
+                texts.append(f"{m.get('display_name') or ''} {m.get('author') or ''}".strip())
+        if texts:
+            self._embed_texts(texts)
+
     def _ollama_rerank_band(
         self, audio_title: str, audio_author: str, matches: List[dict]
     ) -> List[dict]:
-        """Stage 1: re-rank the borderline score band by semantic (embedding) similarity."""
+        """Stage 1: re-score the top candidates above the floor by semantic similarity."""
         if not self._env_true("OLLAMA_RERANK_SUGGESTIONS"):
             return matches
 
         band_min = self._env_float("OLLAMA_RERANK_BAND_MIN", 60.0)
-        band_max = self._env_float("OLLAMA_RERANK_BAND_MAX", 95.0)
-
-        above = [m for m in matches if m.get("score", 0) > band_max]
-        band = [m for m in matches if band_min <= m.get("score", 0) <= band_max]
-        below = [m for m in matches if m.get("score", 0) < band_min]
-        if len(band) < 2:
+        n = self._rerank_count(matches, band_min)
+        if n < 2:
             return matches
+
+        rerank = matches[:n]
+        rest = matches[n:]
 
         audio_text = f"{audio_title} {audio_author}".strip()
         cand_texts = [
-            f"{m.get('display_name') or ''} {m.get('author') or ''}".strip() for m in band
+            f"{m.get('display_name') or ''} {m.get('author') or ''}".strip() for m in rerank
         ]
         embedded = self._embed_texts([audio_text] + cand_texts)
         if embedded is None:
@@ -434,50 +540,38 @@ class SuggestionsService:
 
         from src.api.ollama_client import cosine_similarity
 
-        for m, ct in zip(band, cand_texts):
+        for m, ct in zip(rerank, cand_texts):
             cand_vec = embedded.get(ct)
             cos = cosine_similarity(audio_vec, cand_vec) if cand_vec else 0.0
             m["score"] = round(0.6 * m.get("score", 0) + 40.0 * cos, 1)
 
-        above.sort(key=lambda m: m.get("score", 0), reverse=True)
-        band.sort(key=lambda m: m.get("score", 0), reverse=True)
-        return above + band + below
+        reordered = rerank + rest
+        reordered.sort(key=lambda m: m.get("score", 0), reverse=True)
+        return reordered
 
     def _ollama_judge_and_resolve(
-        self, audio_title: str, audio_author: str, matches: List[dict]
+        self, audio_title: str, audio_author: str, matches: List[dict], force: bool = False
     ) -> List[dict]:
-        """Stage 2: judge ambiguous top-2; Stage 3: resolve the real file on a confident verdict."""
+        """Stage 2: judge ambiguous top-2; Stage 3: resolve the real file on a confident verdict.
+
+        Runs when the top two are within `OLLAMA_JUDGE_MARGIN` OR `force` is set (the
+        re-rank pass overturned the fuzzy winner — the case heuristics get wrong most often).
+        """
         if not self._env_true("OLLAMA_JUDGE_SUGGESTIONS") or len(matches) < 2:
             return matches
 
         margin = self._env_float("OLLAMA_JUDGE_MARGIN", 5.0)
-        if (matches[0].get("score", 0) - matches[1].get("score", 0)) > margin:
+        close = (matches[0].get("score", 0) - matches[1].get("score", 0)) <= margin
+        if not close and not force:
             return matches  # top match is already clear; don't spend a chat call
 
-        candidates = matches[:3]
-        lines = [
-            f"{i}. title: {m.get('display_name') or ''} | author: {m.get('author') or ''}"
-            for i, m in enumerate(candidates)
-        ]
-        prompt = (
-            "You are matching an audiobook to its ebook edition. Decide which candidate "
-            "ebook is the SAME WORK as the audiobook (same book, any edition or translation), "
-            "or none of them.\n"
-            f"Audiobook: title: {audio_title} | author: {audio_author}\n"
-            "Candidate ebooks:\n" + "\n".join(lines) + "\n"
-            'Respond ONLY with JSON: {"choice": <candidate number or null>, '
-            '"confidence": <integer 0-100>, "reason": "<short>"}'
-        )
-        result = self.ollama_client.judge(prompt)
-        if not isinstance(result, dict):
-            return matches
+        # Normalize the audiobook title once (shares the already-warm chat model) so
+        # subtitle/edition/narrator cruft doesn't confuse the judge.
+        judge_title, judge_author = craft_search_terms(self.ollama_client, audio_title, audio_author)
 
-        choice = result.get("choice")
-        try:
-            confidence = float(result.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        if not isinstance(choice, int) or not (0 <= choice < len(candidates)):
+        candidates = matches[:3]
+        choice, confidence = self._run_judge(judge_title, judge_author, candidates)
+        if choice is None:
             return matches
 
         chosen = candidates[choice]
@@ -491,6 +585,39 @@ class SuggestionsService:
         if confidence >= self._env_float("OLLAMA_JUDGE_CONFIDENCE_MIN", 85.0):
             self._resolve_real_file(audio_title, chosen)
         return matches
+
+    def _run_judge(self, title: str, author: str, candidates: List[dict]):
+        """Ask the chat model which candidate is the SAME WORK as the audiobook.
+
+        Returns (choice_index | None, confidence). choice is None when the model picks
+        none / returns nothing usable.
+        """
+        if not candidates:
+            return None, 0.0
+        lines = [
+            f"{i}. title: {m.get('display_name') or ''} | author: {m.get('author') or ''}"
+            for i, m in enumerate(candidates)
+        ]
+        prompt = (
+            "You are matching an audiobook to its ebook edition. Decide which candidate "
+            "ebook is the SAME WORK as the audiobook (same book, any edition or translation), "
+            "or none of them.\n"
+            f"Audiobook: title: {title} | author: {author}\n"
+            "Candidate ebooks:\n" + "\n".join(lines) + "\n"
+            'Respond ONLY with JSON: {"choice": <candidate number or null>, '
+            '"confidence": <integer 0-100>, "reason": "<short>"}'
+        )
+        result = self.ollama_client.judge(prompt)
+        if not isinstance(result, dict):
+            return None, 0.0
+        choice = result.get("choice")
+        try:
+            confidence = float(result.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if isinstance(choice, int) and 0 <= choice < len(candidates):
+            return choice, confidence
+        return None, confidence
 
     def _resolve_real_file(self, audio_title: str, chosen: dict) -> None:
         """Stage 3: targeted search to fill in the authoritative file the light pool omitted."""
@@ -828,11 +955,13 @@ class SuggestionsService:
                 scanned_new_total,
             )
 
+        fresh_suggestions = []
         for idx, (bridge_key, ab) in enumerate(new_scan_candidates, start=1):
             suggestion = self._scan_single_audiobook(ab, candidate_pool)
             if suggestion:
                 cache_by_abs[bridge_key] = suggestion
                 no_match_abs_ids_set.discard(bridge_key)
+                fresh_suggestions.append(suggestion)
             else:
                 no_match_abs_ids_set.add(bridge_key)
             scanned_new_done = idx
@@ -847,6 +976,25 @@ class SuggestionsService:
                 reused_cached=reused_cached_count,
                 total_unmatched=total_unmatched,
             )
+
+        # Batched Ollama pass over the freshly scanned suggestions: embed-all, then
+        # judge-all, so each model loads once instead of swapping per book.
+        if fresh_suggestions and self._ollama_ready():
+            emit_progress(
+                phase="reranking",
+                percent=(reused_cached_count + scanned_new_done) / total_unmatched * 100
+                if total_unmatched else 100,
+                message="Refining matches with local LLM...",
+                scanned_new_done=scanned_new_done,
+                scanned_new_total=scanned_new_total,
+                reused_cached=reused_cached_count,
+                total_unmatched=total_unmatched,
+            )
+            suppressed = self._apply_ollama_reranking_batch(fresh_suggestions)
+            for bridge_key in suppressed:
+                if bridge_key:
+                    cache_by_abs.pop(bridge_key, None)
+                    no_match_abs_ids_set.add(bridge_key)
 
         suggestions = list(cache_by_abs.values())
         suggestions.sort(key=lambda s: s.get('matches', [{}])[0].get('score', 0), reverse=True)

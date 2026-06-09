@@ -1195,14 +1195,25 @@
                         <label for="ollama_rerank">Re-rank suggestions by semantic similarity (embeddings)</label>
                     </div>
                     <div class="form-group">
-                        <label>Re-rank Band Min Score</label>
+                        <label>Re-rank Min Score (floor)</label>
                         <input type="number" name="OLLAMA_RERANK_BAND_MIN"
                             value="{{ get_val('OLLAMA_RERANK_BAND_MIN') }}">
+                        <small>Only candidates scoring at or above this fuzzy floor are re-scored by
+                            embeddings; the strongest few above it become the primary semantic signal.</small>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_suggest_gate" name="OLLAMA_SUGGEST_JUDGE_GATE" {% if
+                            get_bool('OLLAMA_SUGGEST_JUDGE_GATE') %}checked{% endif %}>
+                        <label for="ollama_suggest_gate">Suppress suggestions the LLM can't confirm as a real match
+                            (drops "not even close" candidates from the scan results)</label>
                     </div>
                     <div class="form-group">
-                        <label>Re-rank Band Max Score</label>
-                        <input type="number" name="OLLAMA_RERANK_BAND_MAX"
-                            value="{{ get_val('OLLAMA_RERANK_BAND_MAX') }}">
+                        <label>Auto-keep Score (skip LLM check above this)</label>
+                        <input type="number" name="OLLAMA_SUGGEST_AUTOKEEP_SCORE"
+                            value="{{ get_val('OLLAMA_SUGGEST_AUTOKEEP_SCORE') }}">
+                        <small>Matches scoring at/above this are trusted without a chat call; lower-scoring ones
+                            must be confirmed by the judge or they're dropped.</small>
                     </div>
 
                     <div class="checkbox-wrapper full-width">
@@ -1230,6 +1241,34 @@
                         <label>Alignment Similarity Threshold (0-1)</label>
                         <input type="number" step="0.01" name="OLLAMA_ALIGN_SIM_THRESHOLD"
                             value="{{ get_val('OLLAMA_ALIGN_SIM_THRESHOLD') }}">
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_anchor_rescue" name="OLLAMA_ALIGN_ANCHOR_RESCUE" {% if
+                            get_bool('OLLAMA_ALIGN_ANCHOR_RESCUE') %}checked{% endif %}>
+                        <label for="ollama_anchor_rescue">Embedding anchor rescue when n-gram alignment fails
+                            (builds a real map instead of a flat linear fallback)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Anchor Rescue Max Windows</label>
+                        <input type="number" name="OLLAMA_ALIGN_MAX_WINDOWS"
+                            value="{{ get_val('OLLAMA_ALIGN_MAX_WINDOWS') }}">
+                        <small>Caps embedding cost: at most this many transcript and book windows are
+                            embedded per book when the rescue runs.</small>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_content_guard" name="OLLAMA_ALIGN_CONTENT_GUARD" {% if
+                            get_bool('OLLAMA_ALIGN_CONTENT_GUARD') %}checked{% endif %}>
+                        <label for="ollama_content_guard">Content-match guard: refuse to store an alignment when the
+                            audio and ebook are clearly different content (wrong edition / abridged / translation)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Content-Match Min Similarity (0-1)</label>
+                        <input type="number" step="0.01" name="OLLAMA_ALIGN_CONTENT_MIN_SIM"
+                            value="{{ get_val('OLLAMA_ALIGN_CONTENT_MIN_SIM') }}">
+                        <small>Below this best-passage similarity the map is rejected. Keep low to avoid false
+                            rejections.</small>
                     </div>
 
                     <div class="checkbox-wrapper full-width">

@@ -405,6 +405,21 @@ class AudioTranscriber:
 
         return new_files if new_files else [file_path]
 
+    @staticmethod
+    def _prune_audio_cache(book_cache_dir: Path) -> None:
+        """Remove heavy audio artifacts after a successful run but keep `_progress.json`
+        (the finished transcript) so a later re-align can reuse it instead of
+        re-downloading audio and re-running Whisper."""
+        if not book_cache_dir.exists():
+            return
+        for artifact in book_cache_dir.iterdir():
+            if artifact.name == "_progress.json" or artifact.is_dir():
+                continue
+            try:
+                artifact.unlink()
+            except OSError as cleanup_err:
+                logger.debug(f"Transcript cache cleanup skipped {artifact.name}: {cleanup_err}")
+
     @time_execution
     def process_audio(self, abs_id, audio_urls, full_book_text=None, progress_callback=None) -> Optional[list]:
         """
@@ -580,9 +595,10 @@ class AudioTranscriber:
 
                 gc.collect()
 
-            # Clean up cache only on success
-            if book_cache_dir.exists():
-                shutil.rmtree(book_cache_dir)
+            # Clean up cache only on success. Keep `_progress.json` (it holds the finished
+            # transcript) so a later re-align can reuse it via the resume check above and
+            # skip re-downloading/re-running Whisper — only the heavy audio is removed.
+            self._prune_audio_cache(book_cache_dir)
 
             return full_transcript
 
