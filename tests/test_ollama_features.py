@@ -59,6 +59,28 @@ class _RecordingOllama:
         return self._judge_result
 
 
+class _KeywordOllama:
+    """Embeds by topic keyword so retrieval tests can craft semantic matches."""
+
+    def is_configured(self):
+        return True
+
+    def embed(self, texts):
+        out = []
+        for t in texts:
+            low = (t or "").lower()
+            if "ocean" in low:
+                out.append([1.0, 0.0])
+            elif "mountain" in low:
+                out.append([0.0, 1.0])
+            else:
+                out.append([0.4, 0.4])
+        return out
+
+    def judge(self, prompt):
+        return None
+
+
 class _Candidate:
     def __init__(self, name, title, authors, source="BookOrbit", source_id="1"):
         self.name = name
@@ -363,6 +385,52 @@ class TestAlignmentFallback(_OllamaEnvGuard):
         tr = self._make_transcriber(_StubOllama())
         windows = [{"start": 10.0, "end": 20.0, "text": "hello world"}]
         self.assertIsNone(tr._ollama_align_fallback("x", windows, None, windows))
+
+
+class TestTitleNormalization(unittest.TestCase):
+    def test_strips_prefix_and_parens(self):
+        n = SuggestionsService._normalize_title_for_match
+        self.assertEqual(n("01. Astral Odyssey (2024)"), "Astral Odyssey")
+        self.assertEqual(n("Bad Man (readaloud)"), "Bad Man")
+        self.assertEqual(n("1Q84 (Unabridged)"), "1Q84")
+
+    def test_reorders_trailing_article(self):
+        n = SuggestionsService._normalize_title_for_match
+        self.assertEqual(n("Mirror’s Truth, The"), "The Mirror's Truth")
+        self.assertEqual(n("Psalm for the Wild-Built, A"), "A Psalm for the Wild-Built")
+
+
+class TestEmbeddingRetrieval(_OllamaEnvGuard):
+    def _pool_entry(self, title, author, sid, name):
+        return {"title": title, "author": author, "source": "BookOrbit", "source_id": sid,
+                "name": name, "display_name": title, "search_text": f"{title} {author}".strip()}
+
+    def test_retrieval_rescues_semantically_matching_ebook(self):
+        # Audiobook with NO fuzzy match gets a candidate via embedding similarity.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        svc = _make_service(_KeywordOllama())
+        ab = {"bridge_key": "ab1", "audio_title": "The Ocean at the End", "audio_author": "X",
+              "audio_source": "ABS", "audio_source_id": "ab1"}
+        pool = [
+            self._pool_entry("Deep Blue Ocean Tides", "X", "7", "deep.epub"),
+            self._pool_entry("Mountain Peaks", "Y", "8", "mtn.epub"),
+        ]
+        cache = {}
+        svc._embedding_retrieval([("ab1", ab)], pool, cache)
+        self.assertIn("ab1", cache)
+        self.assertEqual(cache["ab1"]["matches"][0]["display_name"], "Deep Blue Ocean Tides")
+
+    def test_retrieval_caps_score_below_autokeep(self):
+        # Pure-embedding candidates must still be judged (never auto-kept).
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_SUGGEST_AUTOKEEP_SCORE"] = "90"
+        svc = _make_service(_KeywordOllama())
+        ab = {"bridge_key": "ab2", "audio_title": "Ocean Deep", "audio_author": "X",
+              "audio_source": "ABS", "audio_source_id": "ab2"}
+        pool = [self._pool_entry("Ocean Currents", "X", "9", "oc.epub")]
+        cache = {}
+        svc._embedding_retrieval([("ab2", ab)], pool, cache)
+        self.assertLess(cache["ab2"]["matches"][0]["score"], 90)
 
 
 class TestTranscriptCachePersistence(unittest.TestCase):

@@ -253,11 +253,81 @@ class SuggestionsService:
                 }
         return None
 
+    # Candidates with a combined fuzzy score below this floor OR a title score below
+    # _SUGGEST_TITLE_STRONG are dropped from the fuzzy pass. The floor is intentionally
+    # low (the embedding retrieval + judge gate downstream handle precision); a strong
+    # title alone survives even when the author string differs in format.
+    _SUGGEST_FUZZY_FLOOR = 45.0
+    _SUGGEST_TITLE_STRONG = 85.0
+
+    @staticmethod
+    def _normalize_title_for_match(text: str) -> str:
+        """Strip surface noise that wrecks fuzzy/embedding scoring: leading numbering
+        ('01. ', '02 '), trailing parentheticals ('(2024)', '(Unabridged)', '(readaloud)'),
+        ', Book N' tails, and a reordered trailing article ('Title, The' -> 'The Title').
+        Smart quotes/dashes are normalized to ASCII."""
+        s = (text or "").strip()
+        if not s:
+            return ""
+        for a, b in (("’", "'"), ("‘", "'"), ("“", '"'),
+                     ("”", '"'), ("–", "-"), ("—", "-")):
+            s = s.replace(a, b)
+        s = re.sub(r"^\s*\d{1,3}\s*[\.\)\-:]?\s+", "", s)  # leading "01. " / "02 " / "1) "
+        for _ in range(3):  # trailing "(...)" / "[...]"
+            new = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", s).strip()
+            if new == s:
+                break
+            s = new
+        s = re.sub(r",?\s*book\s+\d+\s*$", "", s, flags=re.I).strip()
+        m = re.match(r"^(.*?),\s*(the|a|an)$", s, flags=re.I)
+        if m:
+            s = f"{m.group(2)} {m.group(1)}".strip()
+        return s
+
+    @staticmethod
+    def _match_from_pool(candidate_info: dict, score: float) -> dict:
+        """Build a suggestion 'match' dict from a candidate-pool entry."""
+        return {
+            "ebook_filename": candidate_info.get("name", ""),
+            "display_name": candidate_info.get("display_name") or candidate_info.get("name", ""),
+            "author": candidate_info.get("author", ""),
+            "source": candidate_info.get("source", ""),
+            "source_id": candidate_info.get("source_id"),
+            "score": round(score, 1),
+        }
+
+    def _suggestion_shell(self, ab: dict, matches: List[dict]) -> dict:
+        """Build the suggestion dict skeleton (audio metadata + matches)."""
+        audio_source = self._audio_source(ab)
+        audio_source_id = self._audio_source_id(ab)
+        bridge_key = self._audio_bridge_key(ab)
+        audio_title = self._audio_title(ab)
+        audio_author = self._audio_author(ab)
+        audio_cover_url = self._audio_cover_url(ab, audio_source, audio_source_id)
+        audio_duration = self._audio_duration(ab)
+        return {
+            "bridge_key": bridge_key,
+            "audio_source": audio_source,
+            "audio_source_id": audio_source_id,
+            "audio_title": audio_title,
+            "audio_author": audio_author,
+            "audio_duration": audio_duration,
+            "audio_cover_url": audio_cover_url,
+            "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
+            "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
+            # Legacy aliases kept for template/session compatibility.
+            "abs_id": bridge_key,
+            "abs_title": audio_title,
+            "abs_author": audio_author,
+            "duration": audio_duration,
+            "cover_url": audio_cover_url,
+            "matches": matches,
+        }
+
     def _scan_single_audiobook(self, ab: dict, candidate_pool: List[dict]) -> Optional[dict]:
         """Scan one unmatched audiobook and return a suggestion dict or None."""
         from rapidfuzz import fuzz
 
-        audio_source = self._audio_source(ab)
         audio_source_id = self._audio_source_id(ab)
         bridge_key = self._audio_bridge_key(ab)
         audio_title = self._audio_title(ab)
@@ -281,59 +351,36 @@ class SuggestionsService:
                 f"📌 Authoritative match via audiobookshelf_id for '{audio_title}' "
                 f"-> {authoritative.get('display_name') or authoritative.get('name')}"
             )
-            audio_cover_url = self._audio_cover_url(ab, audio_source, audio_source_id)
-            audio_duration = self._audio_duration(ab)
-            return {
-                "bridge_key": bridge_key,
-                "audio_source": audio_source,
-                "audio_source_id": audio_source_id,
-                "audio_title": audio_title,
-                "audio_author": audio_author,
-                "audio_duration": audio_duration,
-                "audio_cover_url": audio_cover_url,
-                "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
-                "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
-                "abs_id": bridge_key,
-                "abs_title": audio_title,
-                "abs_author": audio_author,
-                "duration": audio_duration,
-                "cover_url": audio_cover_url,
-                "matches": [authoritative],
-            }
+            return self._suggestion_shell(ab, [authoritative])
 
+        norm_audio_title = self._normalize_title_for_match(audio_title)
         matches = []
         for candidate_info in per_book_pool:
-            candidate_title = candidate_info["title"]
             candidate_author = candidate_info["author"]
-            candidate_source = candidate_info.get("source", "")
+            norm_candidate_title = self._normalize_title_for_match(candidate_info["title"])
 
-            title_score = float(fuzz.token_sort_ratio(audio_title, candidate_title))
+            title_score = float(fuzz.token_sort_ratio(norm_audio_title, norm_candidate_title))
             if audio_author:
                 author_score = float(fuzz.token_sort_ratio(audio_author, candidate_author)) if candidate_author else 0.0
                 score = (title_score * 0.7) + (author_score * 0.3)
             else:
                 score = title_score
 
-            if score < 60:
+            # Low floor on purpose; a strong title also survives a weak/format-mismatched
+            # author. Embedding retrieval + the judge gate enforce precision downstream.
+            if score < self._SUGGEST_FUZZY_FLOOR and title_score < self._SUGGEST_TITLE_STRONG:
                 continue
 
-            candidate_search_text = candidate_info["search_text"]
             direct_match = self._audiobook_matches_candidate(
                 ab,
-                candidate_search_text,
+                candidate_info["search_text"],
                 audio_title,
                 audio_author,
             )
 
-            matches.append({
-                "ebook_filename": candidate_info["name"],
-                "display_name": candidate_info["display_name"],
-                "author": candidate_author,
-                "source": candidate_source,
-                "source_id": candidate_info.get("source_id"),
-                "score": round(score, 1),
-                "_direct_match": direct_match
-            })
+            match = self._match_from_pool(candidate_info, max(score, 0.0))
+            match["_direct_match"] = direct_match
+            matches.append(match)
 
         if not matches:
             return None
@@ -342,30 +389,9 @@ class SuggestionsService:
         for m in matches:
             m.pop('_direct_match', None)
 
-        # Ollama re-rank/judge runs in a batched second pass (see
-        # `_apply_ollama_reranking_batch`) so the embed and chat models each load once
-        # for the whole scan instead of swapping per book under MAX_LOADED_MODELS=1.
-
-        audio_cover_url = self._audio_cover_url(ab, audio_source, audio_source_id)
-        audio_duration = self._audio_duration(ab)
-        return {
-            "bridge_key": bridge_key,
-            "audio_source": audio_source,
-            "audio_source_id": audio_source_id,
-            "audio_title": audio_title,
-            "audio_author": audio_author,
-            "audio_duration": audio_duration,
-            "audio_cover_url": audio_cover_url,
-            "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
-            "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
-            # Legacy aliases kept for template/session compatibility.
-            "abs_id": bridge_key,
-            "abs_title": audio_title,
-            "abs_author": audio_author,
-            "duration": audio_duration,
-            "cover_url": audio_cover_url,
-            "matches": matches,
-        }
+        # Embedding retrieval + Ollama re-rank/judge run in a batched second pass so the
+        # embed and chat models each load once for the whole scan (MAX_LOADED_MODELS=1).
+        return self._suggestion_shell(ab, matches)
 
     # --- Ollama-assisted re-ranking (optional, gated) -------------------------
 
@@ -384,16 +410,22 @@ class SuggestionsService:
         client = self.ollama_client
         return bool(client and client.is_configured())
 
+    _EMBED_BATCH = 200
+
     def _embed_texts(self, texts: List[str]) -> Optional[Dict[str, Any]]:
-        """Embed texts (using the per-scan cache). Returns {text: vector} or None on failure."""
+        """Embed texts (using the per-scan cache). Returns {text: vector} or None on failure.
+
+        Large requests are chunked so a whole-library embed doesn't blow the HTTP timeout.
+        """
         cache = self._ollama_embed_cache
         unique = [t for t in dict.fromkeys(texts) if t]
         missing = [t for t in unique if t not in cache]
-        if missing:
-            vectors = self.ollama_client.embed(missing)
+        for start in range(0, len(missing), self._EMBED_BATCH):
+            chunk = missing[start:start + self._EMBED_BATCH]
+            vectors = self.ollama_client.embed(chunk)
             if vectors is None:
                 return None
-            for text, vec in zip(missing, vectors):
+            for text, vec in zip(chunk, vectors):
                 cache[text] = vec
         return {t: cache.get(t) for t in texts}
 
@@ -489,6 +521,106 @@ class SuggestionsService:
                 f"🧠 Judge gate: reviewed {gated} uncertain suggestion(s), suppressed {len(suppressed)}"
             )
         return suppressed
+
+    # Embedding nearest-neighbour retrieval: how many ebooks to pull per audiobook and
+    # the minimum cosine to consider. Permissive on purpose — the judge gate filters.
+    _RETRIEVE_TOP_K = 10
+    _RETRIEVE_MIN_SIM = 0.5
+
+    def _embedding_retrieval(self, new_candidates, candidate_pool, cache_by_abs) -> None:
+        """Pull the semantically-nearest ebooks as candidates so real matches that fuzzy
+        scoring missed (number prefixes, '(year)'/'(Unabridged)', author-in-title,
+        reordered or differently-worded titles) still reach the judge gate.
+
+        Augments existing suggestions and rescues audiobooks that produced no fuzzy match.
+        Retrieval scores are capped below the auto-keep threshold so every embedding-only
+        candidate is still confirmed by the judge before it surfaces. Mutates cache_by_abs.
+        """
+        if not self._env_true("OLLAMA_RERANK_SUGGESTIONS") or not self._ollama_ready():
+            return
+        if not candidate_pool or not new_candidates:
+            return
+        try:
+            import numpy as np
+        except Exception:
+            self.logger.info("Embedding retrieval skipped (numpy unavailable)")
+            return
+
+        pool_texts = [
+            f"{self._normalize_title_for_match(p.get('title', ''))} {p.get('author', '')}".strip()
+            for p in candidate_pool
+        ]
+        audio_texts = [
+            f"{self._normalize_title_for_match(self._audio_title(ab))} {self._audio_author(ab)}".strip()
+            for _bk, ab in new_candidates
+        ]
+
+        embedded = self._embed_texts(pool_texts + audio_texts)
+        if embedded is None:
+            self.logger.info("Embedding retrieval skipped (embedding unavailable)")
+            return
+
+        pool_idx, pool_vecs = [], []
+        for i, txt in enumerate(pool_texts):
+            vec = embedded.get(txt)
+            if vec:
+                pool_idx.append(i)
+                pool_vecs.append(vec)
+        if not pool_vecs:
+            return
+        pool_matrix = np.asarray(pool_vecs, dtype=np.float32)
+        pool_matrix /= (np.linalg.norm(pool_matrix, axis=1, keepdims=True) + 1e-8)
+
+        k = min(self._RETRIEVE_TOP_K, len(pool_idx))
+        autokeep = self._env_float("OLLAMA_SUGGEST_AUTOKEEP_SCORE", 90.0)
+        score_cap = max(0.0, autokeep - 1.0)  # never auto-keep a pure-embedding candidate
+        rescued = augmented = 0
+
+        for (bridge_key, ab), atext in zip(new_candidates, audio_texts):
+            avec = embedded.get(atext)
+            if not avec:
+                continue
+            a = np.asarray(avec, dtype=np.float32)
+            a /= (np.linalg.norm(a) + 1e-8)
+            sims = pool_matrix @ a
+            top = np.argpartition(sims, -k)[-k:] if k < len(sims) else np.arange(len(sims))
+            hits = sorted(
+                ((candidate_pool[pool_idx[j]], float(sims[j])) for j in top if sims[j] >= self._RETRIEVE_MIN_SIM),
+                key=lambda x: x[1], reverse=True,
+            )
+            if not hits:
+                continue
+
+            suggestion = cache_by_abs.get(bridge_key)
+            seen = set()
+            if suggestion:
+                for m in suggestion.get("matches", []):
+                    seen.add((m.get("source"), str(m.get("source_id"))))
+                    seen.add(m.get("ebook_filename"))
+
+            new_matches = []
+            for entry, cos in hits:
+                if (entry.get("source"), str(entry.get("source_id"))) in seen or entry.get("name") in seen:
+                    continue
+                new_matches.append(self._match_from_pool(entry, min(100.0 * cos, score_cap)))
+            if not new_matches:
+                continue
+
+            if suggestion:
+                suggestion["matches"].extend(new_matches)
+                suggestion["matches"].sort(key=lambda m: m.get("score", 0), reverse=True)
+                augmented += 1
+            else:
+                shell = self._suggestion_shell(ab, new_matches)
+                if shell.get("bridge_key"):
+                    cache_by_abs[shell["bridge_key"]] = shell
+                    rescued += 1
+
+        if rescued or augmented:
+            self.logger.info(
+                f"🧠 Embedding retrieval: rescued {rescued} no-fuzzy book(s), "
+                f"augmented {augmented} suggestion(s)"
+            )
 
     def _rerank_count(self, matches: List[dict], band_min: float) -> int:
         """How many of the (score-sorted) matches the re-rank pass will re-score."""
@@ -955,15 +1087,13 @@ class SuggestionsService:
                 scanned_new_total,
             )
 
-        fresh_suggestions = []
         for idx, (bridge_key, ab) in enumerate(new_scan_candidates, start=1):
             suggestion = self._scan_single_audiobook(ab, candidate_pool)
             if suggestion:
                 cache_by_abs[bridge_key] = suggestion
                 no_match_abs_ids_set.discard(bridge_key)
-                fresh_suggestions.append(suggestion)
-            else:
-                no_match_abs_ids_set.add(bridge_key)
+            # no-match is finalized AFTER embedding retrieval (which can rescue books that
+            # produced no fuzzy candidate) and the judge gate.
             scanned_new_done = idx
             processed_total = reused_cached_count + scanned_new_done
             percent = (processed_total / total_unmatched) * 100 if total_unmatched else 100
@@ -977,8 +1107,26 @@ class SuggestionsService:
                 total_unmatched=total_unmatched,
             )
 
-        # Batched Ollama pass over the freshly scanned suggestions: embed-all, then
-        # judge-all, so each model loads once instead of swapping per book.
+        # Embedding nearest-neighbour retrieval: pull semantically-matching ebooks that
+        # fuzzy scoring missed (and rescue books with no fuzzy candidate at all).
+        if new_scan_candidates and self._ollama_ready():
+            emit_progress(
+                phase="reranking",
+                percent=(reused_cached_count + scanned_new_done) / total_unmatched * 100
+                if total_unmatched else 100,
+                message="Finding matches with embeddings...",
+                scanned_new_done=scanned_new_done,
+                scanned_new_total=scanned_new_total,
+                reused_cached=reused_cached_count,
+                total_unmatched=total_unmatched,
+            )
+            self._embedding_retrieval(new_scan_candidates, candidate_pool, cache_by_abs)
+
+        # Batched Ollama pass (embed-rerank then judge-gate) over every freshly-built
+        # suggestion, so each model loads once instead of swapping per book.
+        fresh_suggestions = [
+            cache_by_abs[bk] for bk, _ab in new_scan_candidates if bk in cache_by_abs
+        ]
         if fresh_suggestions and self._ollama_ready():
             emit_progress(
                 phase="reranking",
@@ -994,7 +1142,13 @@ class SuggestionsService:
             for bridge_key in suppressed:
                 if bridge_key:
                     cache_by_abs.pop(bridge_key, None)
-                    no_match_abs_ids_set.add(bridge_key)
+
+        # Finalize no-match for the newly scanned books (anything still without a suggestion).
+        for bridge_key, _ab in new_scan_candidates:
+            if bridge_key in cache_by_abs:
+                no_match_abs_ids_set.discard(bridge_key)
+            else:
+                no_match_abs_ids_set.add(bridge_key)
 
         suggestions = list(cache_by_abs.values())
         suggestions.sort(key=lambda s: s.get('matches', [{}])[0].get('score', 0), reverse=True)
