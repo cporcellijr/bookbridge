@@ -197,7 +197,8 @@ class Container(containers.DeclarativeContainer):
         library_service=library_service,
         ebook_parser=ebook_parser,
         transcriber=transcriber,
-        alignment_service=alignment_service
+        alignment_service=alignment_service,
+        bookorbit_client=bookorbit_client
     )
 
     # Sync clients

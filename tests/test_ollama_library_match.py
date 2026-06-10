@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from src.api.booklore_client import BookloreClient
 from src.api.bookorbit_client import BookOrbitClient
+from src.services.llm_matching import rescue_from_catalog
 
 
 class _JudgeOllama:
@@ -162,6 +163,28 @@ class TestBookOrbitLlmRescue(unittest.TestCase):
         client = self._client(ollama)
         with patch.dict(os.environ, _ENV):
             self.assertIsNone(client.find_book_by_filename("stars_beyond-void.epub"))
+
+
+class TestRescueFromCatalogShortlist(unittest.TestCase):
+    """The fuzzy shortlist must survive punctuation/subtitles in catalog titles."""
+
+    def test_subtitled_punctuated_title_reaches_judge(self):
+        # A clean query against a comma+subtitle catalog title used to score below the
+        # floor (token_set_ratio sees 'hobbit,' != 'hobbit') and never reached the judge.
+        ollama = _JudgeOllama({"choice": 0, "confidence": 100})
+        entries = [
+            {"title": "The Hobbit, or There and Back Again", "author": "J.R.R. Tolkien"},
+            {"title": "Dune", "author": "Frank Herbert"},
+        ]
+        choice = rescue_from_catalog(ollama, "The Hobbit", entries, min_confidence=85)
+        self.assertEqual(choice, 0)
+        self.assertEqual(ollama.judge_calls, 1)
+
+    def test_unrelated_query_shortlists_nothing(self):
+        ollama = _JudgeOllama({"choice": 0, "confidence": 100})
+        entries = [{"title": "Completely Different Work", "author": "Someone Else"}]
+        self.assertIsNone(rescue_from_catalog(ollama, "The Hobbit", entries, min_confidence=85))
+        self.assertEqual(ollama.judge_calls, 0)
 
 
 if __name__ == "__main__":

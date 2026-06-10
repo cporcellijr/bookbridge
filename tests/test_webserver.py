@@ -2297,6 +2297,23 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
         self.assertEqual(out[0].source, "Local File")
 
 
+class TestForgeTextItemBuilder(unittest.TestCase):
+    def test_bookorbit_source_preserves_bookorbit_id(self):
+        from src.web_server import _build_forge_text_item
+
+        item = _build_forge_text_item(
+            source_type="BookOrbit",
+            source_id="42",
+            source_path="",
+            original_filename="Book.epub",
+        )
+
+        self.assertEqual(item["source"], "BookOrbit")
+        self.assertEqual(item["bookorbit_id"], "42")
+        self.assertEqual(item["source_id"], "42")
+        self.assertEqual(item["filename"], "Book.epub")
+
+
 if __name__ == '__main__':
     print("TEST Clean Flask Integration Testing with Dependency Injection")
     print("=" * 70)

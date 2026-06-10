@@ -1482,6 +1482,7 @@ def _normalize_text_source_type(raw_source):
     source_map = {
         "booklore": "Booklore",
         "grimmory": "Booklore",
+        "bookorbit": "BookOrbit",
         "abs": "ABS",
         "cwa": "CWA",
         "local file": "Local File",
@@ -1498,8 +1499,10 @@ def _build_forge_text_item(source_type, source_id, source_path, original_filenam
         "source": normalized_source,
         "path": normalized_source_path,
         "booklore_id": normalized_source_id,
+        "bookorbit_id": normalized_source_id,
         "cwa_id": normalized_source_id,
         "abs_id": normalized_source_id,
+        "source_id": normalized_source_id,
         "filename": original_filename,
     }
 
@@ -1507,6 +1510,8 @@ def _build_forge_text_item(source_type, source_id, source_path, original_filenam
         text_item["abs_id"] = normalized_source_id
     if normalized_source == "Booklore":
         text_item["booklore_id"] = normalized_source_id
+    if normalized_source == "BookOrbit":
+        text_item["bookorbit_id"] = normalized_source_id
     if normalized_source == "CWA":
         text_item["cwa_id"] = normalized_source_id
         if normalized_source_path:
@@ -2792,7 +2797,33 @@ def forge_search_text():
         except Exception as e:
             logger.warning(f"⚠️ Forge: Grimmory search failed: {e}")
 
-    # 2. ABS Ebooks
+    # 2. BookOrbit
+    try:
+        bookorbit_client = container.bookorbit_client()
+        if bookorbit_client and bookorbit_client.is_configured():
+            bo_books = bookorbit_client.search_ebooks(query)
+            if bo_books:
+                for b in bo_books:
+                    fname = b.get('fileName') or ''
+                    ext = (b.get('primaryFormat') or Path(fname).suffix.lstrip('.') or 'epub').lower()
+                    if ext != 'epub' and fname and not fname.lower().endswith('.epub'):
+                        continue
+                    key = f"bookorbit_{b.get('id', fname)}"
+                    if key not in found_ids:
+                        found_ids.add(key)
+                        results.append({
+                            "id": key,
+                            "title": b.get('title', fname or 'Unknown'),
+                            "author": _coerce_author_display(b.get('authors')),
+                            "source": "BookOrbit",
+                            "filename": fname,
+                            "bookorbit_id": b.get('id'),
+                            "source_id": b.get('id'),
+                        })
+    except Exception as e:
+        logger.warning(f"⚠️ Forge: BookOrbit search failed: {e}")
+
+    # 3. ABS Ebooks
     try:
         abs_client = container.abs_client()
         if abs_client:
@@ -2816,7 +2847,7 @@ def forge_search_text():
     except Exception as e:
         logger.warning(f"⚠️ Forge: ABS ebook search failed: {e}")
 
-    # 3. CWA
+    # 4. CWA
     try:
         library_service = container.library_service()
         if library_service and library_service.cwa_client and library_service.cwa_client.is_configured():
@@ -2838,7 +2869,7 @@ def forge_search_text():
     except Exception as e:
         logger.warning(f"⚠️ Forge: CWA search failed: {e}")
 
-    # 4. Local files from BOOKS_DIR
+    # 5. Local files from BOOKS_DIR
     try:
         local_books_dir = Path(os.environ.get("BOOKS_DIR", "/books"))
         if local_books_dir.exists():

@@ -19,6 +19,7 @@ class TestForgeService(unittest.TestCase):
         self.mock_db = MagicMock()
         self.mock_abs = MagicMock()
         self.mock_booklore = MagicMock()
+        self.mock_bookorbit = MagicMock()
         self.mock_storyteller = MagicMock()
         self.mock_library = MagicMock()
         self.mock_cwa = MagicMock()
@@ -35,7 +36,8 @@ class TestForgeService(unittest.TestCase):
             library_service=self.mock_library,
             ebook_parser=self.mock_ebook_parser,
             transcriber=self.mock_transcriber,
-            alignment_service=self.mock_alignment
+            alignment_service=self.mock_alignment,
+            bookorbit_client=self.mock_bookorbit
         )
         
         # Suppress logging during tests
@@ -652,6 +654,17 @@ class TestForgeService(unittest.TestCase):
         )
 
         self.mock_booklore.download_book.assert_called_once_with("123")
+
+    def test_auto_forge_accepts_bookorbit_text_source(self):
+        self.mock_bookorbit.download_book.return_value = b"source"
+
+        self._run_auto_forge_pipeline(
+            text_item={"source": "BookOrbit", "bookorbit_id": "42"},
+            ingest_manifest=None,
+            storyteller_alignment_ok=False,
+        )
+
+        self.mock_bookorbit.download_book.assert_called_once_with("42")
 
     def test_auto_forge_uses_storyteller_uuid_collection_path(self):
         """Auto-forge should add Storyteller books to collection by UUID when available."""

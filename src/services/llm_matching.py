@@ -7,9 +7,19 @@ model returns something unusable, they fall back to the caller's existing behavi
 
 import logging
 import os
+import re
 from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_FUZZY_PUNCT = re.compile(r"[^\w\s]")
+
+
+def _fuzzy_norm(text: str) -> str:
+    """Lowercase and turn punctuation into spaces so a clean query still matches a
+    catalog title carrying commas/colons/subtitles (token_set_ratio is otherwise
+    punctuation-sensitive: 'hobbit,' != 'hobbit')."""
+    return _FUZZY_PUNCT.sub(" ", (text or "").lower()).strip()
 
 # Structured-output schemas (Ollama >= 0.5). OllamaClient falls back to plain
 # JSON mode automatically on servers that don't support them.
@@ -144,12 +154,18 @@ def rescue_from_catalog(
         return None
     from rapidfuzz import fuzz
 
+    norm_query = _fuzzy_norm(query)
     scored = []
     for i, entry in enumerate(entries):
-        haystack = f"{entry.get('title') or ''} {entry.get('author') or ''}".strip()
+        haystack = _fuzzy_norm(f"{entry.get('title') or ''} {entry.get('author') or ''}")
         if not haystack:
             continue
-        score = fuzz.token_set_ratio(query.lower(), haystack.lower())
+        # max(token_set, partial): token_set handles word-order/subset, partial catches a
+        # short clean query embedded in a long subtitled catalog title.
+        score = max(
+            fuzz.token_set_ratio(norm_query, haystack),
+            fuzz.partial_ratio(norm_query, haystack),
+        )
         if score >= fuzzy_floor:
             scored.append((score, i))
     if not scored:

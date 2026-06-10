@@ -463,6 +463,11 @@ class TestPersistentEmbedCache(unittest.TestCase):
         self.db = DatabaseService(str(Path(self._tmp.name) / "test.db"))
 
     def tearDown(self):
+        # Release the SQLite connection so Windows can delete the temp DB file.
+        try:
+            self.db.db_manager.close()
+        except Exception:
+            pass
         self._tmp.cleanup()
 
     def _service(self, stub):

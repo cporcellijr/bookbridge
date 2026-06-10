@@ -376,6 +376,11 @@
             color: #93a5f6;
         }
 
+        .source-badge.bookorbit {
+            background: rgba(0, 188, 212, 0.18);
+            color: #80deea;
+        }
+
         .source-badge.cwa {
             background: rgba(255, 152, 0, 0.2);
             color: #ffb74d;
@@ -884,7 +889,7 @@
                         card.onclick = () => selectText(card, item);
 
                         const badgeClass = (item.source || '').toLowerCase().replace(' ', '').replace('file', '');
-                        const badgeMap = { 'booklore': 'booklore', 'abs': 'abs', 'cwa': 'cwa', 'local': 'local' };
+                        const badgeMap = { 'booklore': 'booklore', 'bookorbit': 'bookorbit', 'abs': 'abs', 'cwa': 'cwa', 'local': 'local' };
                         const cls = badgeMap[badgeClass] || 'abs';
 
                         card.innerHTML = `

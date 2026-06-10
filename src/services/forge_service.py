@@ -46,7 +46,18 @@ HARDLINK_STAGE_MODE = "hardlink"
 VALID_STAGE_MODES = {DEFAULT_STAGE_MODE, HARDLINK_STAGE_MODE}
 
 class ForgeService:
-    def __init__(self, database_service, abs_client, booklore_client, storyteller_client, library_service, ebook_parser, transcriber, alignment_service):
+    def __init__(
+        self,
+        database_service,
+        abs_client,
+        booklore_client,
+        storyteller_client,
+        library_service,
+        ebook_parser,
+        transcriber,
+        alignment_service,
+        bookorbit_client=None,
+    ):
         self.database_service = database_service
         self.abs_client = abs_client
         self.booklore_client = booklore_client
@@ -55,6 +66,7 @@ class ForgeService:
         self.ebook_parser = ebook_parser
         self.transcriber = transcriber
         self.alignment_service = alignment_service
+        self.bookorbit_client = bookorbit_client
         self.active_tasks = set()
         self.lock = threading.Lock()
         
@@ -107,6 +119,7 @@ class ForgeService:
         source_map = {
             "grimmory": "Booklore",
             "booklore": "Booklore",
+            "bookorbit": "BookOrbit",
             "abs": "ABS",
             "cwa": "CWA",
             "local file": "Local File",
@@ -885,6 +898,18 @@ class ForgeService:
                         logger.info(f"⚡ Forge: Grimmory epub downloaded")
                     else:
                         logger.error(f"❌ Forge: Grimmory download failed for '{booklore_id}'")
+            elif source == 'BookOrbit':
+                bookorbit_id = text_item.get('bookorbit_id') or text_item.get('source_id')
+                if bookorbit_id and self.bookorbit_client:
+                    content = self.bookorbit_client.download_book(bookorbit_id)
+                    if content:
+                        epub_path.write_bytes(content)
+                        text_success = True
+                        logger.info("⚡ Forge: BookOrbit epub downloaded")
+                    else:
+                        logger.error(f"❌ Forge: BookOrbit download failed for '{bookorbit_id}'")
+                else:
+                    logger.error(f"❌ Forge: BookOrbit client/id unavailable for '{bookorbit_id}'")
             elif source == 'ABS':
                 abs_item_id = text_item.get('abs_id')
                 if abs_item_id:
@@ -1092,6 +1117,13 @@ class ForgeService:
             elif source == 'Booklore':
                 content = self.booklore_client.download_book(text_item.get('booklore_id'))
                 if content: epub_path.write_bytes(content)
+            elif source == 'BookOrbit':
+                bookorbit_id = text_item.get('bookorbit_id') or text_item.get('source_id')
+                content = self.bookorbit_client.download_book(bookorbit_id) if self.bookorbit_client and bookorbit_id else None
+                if content:
+                    epub_path.write_bytes(content)
+                else:
+                    logger.error(f"❌ Auto-Forge: BookOrbit download failed for '{bookorbit_id or 'unknown'}'")
             elif source == 'ABS':
                 ebook_files = self.abs_client.get_ebook_files(text_item.get('abs_id'))
                 if ebook_files: self.abs_client.download_file(ebook_files[0]['stream_url'], epub_path)
