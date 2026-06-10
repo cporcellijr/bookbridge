@@ -1482,6 +1482,7 @@ def _normalize_text_source_type(raw_source):
     source_map = {
         "booklore": "Booklore",
         "grimmory": "Booklore",
+        "bookorbit": "BookOrbit",
         "abs": "ABS",
         "cwa": "CWA",
         "local file": "Local File",
@@ -1507,6 +1508,8 @@ def _build_forge_text_item(source_type, source_id, source_path, original_filenam
         text_item["abs_id"] = normalized_source_id
     if normalized_source == "Booklore":
         text_item["booklore_id"] = normalized_source_id
+    if normalized_source == "BookOrbit":
+        text_item["bookorbit_id"] = normalized_source_id
     if normalized_source == "CWA":
         text_item["cwa_id"] = normalized_source_id
         if normalized_source_path:
@@ -2792,6 +2795,28 @@ def forge_search_text():
         except Exception as e:
             logger.warning(f"⚠️ Forge: Grimmory search failed: {e}")
 
+    # 1b. BookOrbit
+    if container.bookorbit_client().is_configured():
+        try:
+            bo_books = container.bookorbit_client().search_ebooks(query)
+            for b in bo_books or []:
+                fname = b.get('fileName') or ''
+                if not fname.lower().endswith('.epub'):
+                    continue
+                key = f"bookorbit_{b.get('id', fname)}"
+                if key not in found_ids:
+                    found_ids.add(key)
+                    results.append({
+                        "id": key,
+                        "title": b.get('title', fname),
+                        "author": b.get('authors', ''),
+                        "source": "BookOrbit",
+                        "filename": fname,
+                        "bookorbit_id": b.get('id'),
+                    })
+        except Exception as e:
+            logger.warning(f"⚠️ Forge: BookOrbit search failed: {e}")
+
     # 2. ABS Ebooks
     try:
         abs_client = container.abs_client()
@@ -3119,6 +3144,8 @@ def match():
                     audio_title=forge_title,
                     audio_cover_url=audio_cover_url,
                     audio_duration=audio_duration,
+                    ebook_source=normalized_source_type or None,
+                    ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
 
@@ -3142,7 +3169,9 @@ def match():
                     original_ebook_filename=original_filename,
                     kosync_doc_id=kosync_doc_id or f"forging_{abs_id}",
                     status="forging",
-                    duration=manager.get_duration(selected_ab)
+                    duration=manager.get_duration(selected_ab),
+                    ebook_source=normalized_source_type or None,
+                    ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
 
@@ -3597,7 +3626,7 @@ def batch_match():
                     resolved_path = find_ebook_file(original_filename)
                     source_path = str(resolved_path) if resolved_path else ''
 
-                if source_type in ('ABS', 'Booklore', 'CWA') and not source_id:
+                if source_type in ('ABS', 'Booklore', 'BookOrbit', 'CWA') and not source_id:
                     logger.warning(
                         "Batch Forge skipped '%s': missing source id for source type '%s'",
                         sanitize_log_data(item.get('audio_title') or item.get('abs_title') or item.get('abs_id')),
