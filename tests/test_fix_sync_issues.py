@@ -66,6 +66,17 @@ class TestFixSyncIssues(unittest.TestCase):
             self.assertEqual(len(result), expected_len)
             print(f"\n✅ Test Passed: Recovered {len(result)} chars from DB after file check failed.")
 
+    def test_abs_progress_push_sends_zero_time_listened(self):
+        """Bridge pushes are reading-driven and must not accrue ABS listening time."""
+        self.mock_abs_client.update_progress.return_value = {"success": True}
+
+        result, adjusted_ts = self.client._update_abs_progress_with_offset(
+            "abs-1", 500.0, prev_abs_ts=200.0
+        )
+
+        self.assertEqual(adjusted_ts, 500.0)
+        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 500.0, 0)
+
     def test_legacy_file_used_if_exists(self):
         """
         Test that if file EXISTS, we use legacy transcriber method and do NOT call DB.

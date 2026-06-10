@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 from contextlib import contextmanager
@@ -1157,12 +1157,12 @@ class DatabaseService:
         return len(rows)
 
     def bulk_insert_koreader_page_stats(self, device: str, device_id: str, page_stats: list[dict]) -> dict:
-        """Bulk insert KOReader page stats with replay-safe dedupe."""
+        """Bulk insert KOReader page stats with replay-safe dedupe and cross-device echo suppression."""
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         device_key = self._normalize_koreader_device_key(device=device, device_id=device_id)
         if not device_key:
-            return {"accepted": 0, "duplicates": 0}
+            return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
         rows = []
         now = datetime.utcnow()
@@ -1181,6 +1181,13 @@ class DatabaseService:
             if page < 0 or start_time <= 0:
                 continue
 
+            try:
+                total_pages = int(entry.get("total_pages")) if entry.get("total_pages") is not None else None
+            except (TypeError, ValueError):
+                total_pages = None
+            if total_pages is not None and total_pages <= 0:
+                total_pages = None
+
             rows.append({
                 "md5": md5,
                 "device": str(device or "").strip() or None,
@@ -1189,24 +1196,113 @@ class DatabaseService:
                 "page": page,
                 "start_time": start_time,
                 "duration": duration,
+                "total_pages": total_pages,
                 "uploaded_at": now,
             })
 
         if not rows:
-            return {"accepted": 0, "duplicates": 0}
+            return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
         with self.get_session() as session:
-            stmt = sqlite_insert(KOReaderPageStat).values(rows)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["md5", "device_key", "page", "start_time"]
+            # Echo suppression: an event whose (md5, start_time, duration) already exists
+            # under another device_key is a merged copy injected into this device's
+            # statistics.sqlite by the plugin, not new reading on this device.
+            batch_md5s = {row["md5"] for row in rows}
+            foreign = (
+                session.query(KOReaderPageStat.md5, KOReaderPageStat.start_time, KOReaderPageStat.duration)
+                .filter(
+                    KOReaderPageStat.md5.in_(batch_md5s),
+                    KOReaderPageStat.device_key != device_key,
+                )
+                .all()
             )
-            result = session.execute(stmt)
-            inserted = max(int(result.rowcount or 0), 0)
+            foreign_fingerprints = {
+                (item.md5, float(item.start_time), float(item.duration)) for item in foreign
+            }
+            fresh_rows = [
+                row for row in rows
+                if (row["md5"], row["start_time"], row["duration"]) not in foreign_fingerprints
+            ]
+            echoes = len(rows) - len(fresh_rows)
+
+            inserted = 0
+            if fresh_rows:
+                stmt = sqlite_insert(KOReaderPageStat).values(fresh_rows)
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["md5", "device_key", "page", "start_time"]
+                )
+                result = session.execute(stmt)
+                inserted = max(int(result.rowcount or 0), 0)
 
         return {
             "accepted": inserted,
-            "duplicates": max(len(rows) - inserted, 0),
+            "duplicates": max(len(fresh_rows) - inserted, 0),
+            "echoes": echoes,
         }
+
+    def get_merged_koreader_page_stats(
+        self,
+        exclude_device_key: str,
+        md5s: Optional[set[str]] = None,
+        since: Optional[float] = None,
+    ) -> dict:
+        """Page-stat events from all devices except the requesting one, for cross-device merging.
+
+        ``since`` filters on the bridge-side ``uploaded_at`` timestamp (epoch seconds) so
+        late uploads of old reading events are never missed; the returned ``watermark``
+        is the max ``uploaded_at`` seen and should be passed back as the next ``since``.
+        Rows missing ``total_pages`` fall back to the uploading device's book-stats page
+        count; rows with no usable total are skipped (KOReader's rescaling view divides
+        by total_pages).
+        """
+        exclude_device_key = str(exclude_device_key or "").strip()
+        if not exclude_device_key:
+            return {"page_stats": [], "watermark": since}
+
+        with self.get_session() as session:
+            query = session.query(KOReaderPageStat).filter(
+                KOReaderPageStat.device_key != exclude_device_key
+            )
+            if md5s:
+                query = query.filter(KOReaderPageStat.md5.in_(md5s))
+            if since is not None:
+                query = query.filter(
+                    KOReaderPageStat.uploaded_at >= datetime.utcfromtimestamp(float(since))
+                )
+            rows = query.order_by(KOReaderPageStat.start_time.asc()).all()
+            if not rows:
+                return {"page_stats": [], "watermark": since}
+
+            fallback_keys = {(row.md5, row.device_key) for row in rows if not row.total_pages}
+            fallback_pages: dict[tuple[str, str], int] = {}
+            if fallback_keys:
+                meta_rows = (
+                    session.query(KOReaderBookStat.md5, KOReaderBookStat.device_key, KOReaderBookStat.pages)
+                    .filter(KOReaderBookStat.md5.in_({md5 for md5, _ in fallback_keys}))
+                    .all()
+                )
+                for meta in meta_rows:
+                    if meta.pages and int(meta.pages) > 0:
+                        fallback_pages[(meta.md5, meta.device_key)] = int(meta.pages)
+
+            watermark = since
+            results = []
+            for row in rows:
+                if row.uploaded_at is not None:
+                    uploaded_epoch = row.uploaded_at.replace(tzinfo=timezone.utc).timestamp()
+                    if watermark is None or uploaded_epoch > watermark:
+                        watermark = uploaded_epoch
+                total_pages = int(row.total_pages) if row.total_pages else fallback_pages.get((row.md5, row.device_key))
+                if not total_pages or total_pages <= 0:
+                    continue
+                results.append({
+                    "md5": row.md5,
+                    "page": int(row.page),
+                    "start_time": float(row.start_time),
+                    "duration": float(row.duration or 0),
+                    "total_pages": total_pages,
+                })
+            return {"page_stats": results, "watermark": watermark}
 
     @staticmethod
     def _local_date_from_epoch(timestamp: float, tz_name: str) -> str:

@@ -419,6 +419,90 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertIn('koreader:md5-fin', finished_keys)   # 300/300 = 100% complete
         self.assertNotIn('abs:abs-a', finished_keys)       # 100/200 = 50%, not finished
 
+    def test_koreader_page_stats_store_total_pages_and_suppress_echoes(self):
+        """total_pages is persisted; re-uploads of another device's merged events are dropped."""
+        from src.db.models import KOReaderPageStat
+
+        base = datetime.now(ZoneInfo("UTC")).replace(hour=10, minute=0, second=0, microsecond=0)
+        event_time = (base - timedelta(minutes=30)).timestamp()
+
+        result_a = self.db_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 10, 'start_time': event_time, 'duration': 60, 'total_pages': 200},
+            ],
+        )
+        self.assertEqual(result_a['accepted'], 1)
+        self.assertEqual(result_a['echoes'], 0)
+
+        with self.db_service.get_session() as session:
+            row = session.query(KOReaderPageStat).filter_by(device_key='device-a').one()
+            self.assertEqual(row.total_pages, 200)
+
+        # Device B injected device A's event into its local stats DB, then re-uploads it
+        # under its own key (different page number after rescale, same start/duration).
+        result_b = self.db_service.bulk_insert_koreader_page_stats(
+            device='Kindle', device_id='device-b',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 14, 'start_time': event_time, 'duration': 60, 'total_pages': 280},
+                {'md5': 'md5-x', 'page': 15, 'start_time': event_time + 60, 'duration': 45, 'total_pages': 280},
+            ],
+        )
+        self.assertEqual(result_b['echoes'], 1)
+        self.assertEqual(result_b['accepted'], 1)
+
+        with self.db_service.get_session() as session:
+            b_rows = session.query(KOReaderPageStat).filter_by(device_key='device-b').all()
+            self.assertEqual(len(b_rows), 1)
+            self.assertEqual(b_rows[0].page, 15)
+
+    def test_get_merged_koreader_page_stats(self):
+        """Merged feed excludes the requesting device, backfills total_pages, honors since."""
+        base = datetime.now(ZoneInfo("UTC")).replace(hour=10, minute=0, second=0, microsecond=0)
+        t0 = (base - timedelta(hours=2)).timestamp()
+
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 10, 'start_time': t0, 'duration': 60, 'total_pages': 200},
+                {'md5': 'md5-y', 'page': 5, 'start_time': t0 + 100, 'duration': 30},  # no total_pages
+                {'md5': 'md5-z', 'page': 1, 'start_time': t0 + 200, 'duration': 20},  # no fallback either
+            ],
+        )
+        self.db_service.upsert_koreader_book_stats(
+            device='Kobo', device_id='device-a',
+            books=[{'md5': 'md5-y', 'title': 'Y', 'pages': 150}],
+        )
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='Kindle', device_id='device-b',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 14, 'start_time': t0 + 300, 'duration': 90, 'total_pages': 280},
+            ],
+        )
+
+        merged_for_b = self.db_service.get_merged_koreader_page_stats(exclude_device_key='device-b')
+        stats = merged_for_b['page_stats']
+        # device-a's md5-x event (explicit total_pages) and md5-y event (book-stats fallback);
+        # md5-z is dropped because no usable total_pages exists.
+        self.assertEqual(len(stats), 2)
+        by_md5 = {entry['md5']: entry for entry in stats}
+        self.assertEqual(by_md5['md5-x']['total_pages'], 200)
+        self.assertEqual(by_md5['md5-y']['total_pages'], 150)
+        self.assertIsNotNone(merged_for_b['watermark'])
+
+        merged_for_a = self.db_service.get_merged_koreader_page_stats(exclude_device_key='device-a')
+        self.assertEqual(len(merged_for_a['page_stats']), 1)
+        self.assertEqual(merged_for_a['page_stats'][0]['md5'], 'md5-x')
+        self.assertEqual(merged_for_a['page_stats'][0]['page'], 14)
+
+        # 'since' filters on bridge-side uploaded_at: a watermark in the future returns nothing.
+        future = datetime.now(ZoneInfo("UTC")).timestamp() + 3600
+        merged_later = self.db_service.get_merged_koreader_page_stats(
+            exclude_device_key='device-b', since=future
+        )
+        self.assertEqual(merged_later['page_stats'], [])
+        self.assertEqual(merged_later['watermark'], future)
+
     def test_create_states(self):
         """Test creating state records for multiple clients."""
         test_abs_id = 'test-book-states'

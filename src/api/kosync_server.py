@@ -1320,6 +1320,48 @@ def koreader_upload_statistics():
         "accepted_books": int(accepted_books or 0),
         "accepted_page_stats": int(page_insert_result.get("accepted") or 0),
         "duplicate_page_stats": int(page_insert_result.get("duplicates") or 0),
+        "echoed_page_stats": int(page_insert_result.get("echoes") or 0),
+    }), 200
+
+
+@kosync_sync_bp.route('/device-sync/statistics/merged', methods=['GET'])
+@kosync_sync_bp.route('/koreader/device-sync/statistics/merged', methods=['GET'])
+@kosync_auth_required
+def koreader_merged_statistics():
+    """Return other devices' page-stat events so the plugin can merge them locally."""
+    if os.environ.get("KOREADER_COMBINE_DEVICE_STATS", "true").lower() != "true":
+        return jsonify({"enabled": False, "page_stats": []}), 200
+
+    device = str(request.args.get("device") or "").strip()
+    device_id = str(request.args.get("device_id") or "").strip()
+    device_key = (device_id or device).strip()
+    if not device_key:
+        return jsonify({"error": "Missing device identity"}), 400
+
+    if not _database_service:
+        return jsonify({"error": "Database service unavailable"}), 503
+
+    since = None
+    since_raw = request.args.get("since")
+    if since_raw:
+        try:
+            since = float(since_raw)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid 'since' value"}), 400
+
+    try:
+        merged = _database_service.get_merged_koreader_page_stats(
+            exclude_device_key=device_key,
+            since=since,
+        )
+    except Exception as e:
+        logger.error("KOReader merged statistics fetch failed for device '%s': %s", device_key, e)
+        return jsonify({"error": "Failed to fetch merged statistics"}), 500
+
+    return jsonify({
+        "enabled": True,
+        "page_stats": merged.get("page_stats") or [],
+        "watermark": merged.get("watermark"),
     }), 200
 
 
