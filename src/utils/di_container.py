@@ -188,19 +188,6 @@ class Container(containers.DeclarativeContainer):
         ollama_client=ollama_client
     )
 
-    forge_service = providers.Singleton(
-        ForgeService,
-        database_service=database_service,
-        abs_client=abs_client,
-        booklore_client=booklore_client,
-        storyteller_client=storyteller_client,
-        library_service=library_service,
-        ebook_parser=ebook_parser,
-        transcriber=transcriber,
-        alignment_service=alignment_service,
-        bookorbit_client=bookorbit_client
-    )
-
     # Sync clients
     abs_sync_client = providers.Singleton(
         ABSSyncClient,
@@ -309,6 +296,25 @@ class Container(containers.DeclarativeContainer):
         CWA=cwa_sync_client,
         Hardcover=hardcover_sync_client,
         StoryGraph=storygraph_sync_client
+    )
+
+    # Constructed after the sync clients so forge completion can run the same
+    # Hardcover/StoryGraph automatch as the regular match path.
+    forge_service = providers.Singleton(
+        ForgeService,
+        database_service=database_service,
+        abs_client=abs_client,
+        booklore_client=booklore_client,
+        bookorbit_client=bookorbit_client,
+        storyteller_client=storyteller_client,
+        library_service=library_service,
+        ebook_parser=ebook_parser,
+        transcriber=transcriber,
+        alignment_service=alignment_service,
+        sync_clients=providers.Dict(
+            Hardcover=hardcover_sync_client,
+            StoryGraph=storygraph_sync_client,
+        ),
     )
 
     # Book mapping helper for shelf-watch auto-matches + ebook-only fallbacks.

@@ -1720,6 +1720,7 @@ def settings():
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
+            'STORYTELLER_POLL_WAIT_FOR_SETTLE',
             'SHELFMARK_ENABLED',
             'OLLAMA_ENABLED',
             'OLLAMA_RERANK_SUGGESTIONS',
@@ -3150,6 +3151,8 @@ def match():
                     audio_title=forge_title,
                     audio_cover_url=audio_cover_url,
                     audio_duration=audio_duration,
+                    ebook_source=normalized_source_type or None,
+                    ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
 
@@ -3173,7 +3176,9 @@ def match():
                     original_ebook_filename=original_filename,
                     kosync_doc_id=kosync_doc_id or f"forging_{abs_id}",
                     status="forging",
-                    duration=manager.get_duration(selected_ab)
+                    duration=manager.get_duration(selected_ab),
+                    ebook_source=normalized_source_type or None,
+                    ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
 
@@ -3628,7 +3633,7 @@ def batch_match():
                     resolved_path = find_ebook_file(original_filename)
                     source_path = str(resolved_path) if resolved_path else ''
 
-                if source_type in ('ABS', 'Booklore', 'CWA') and not source_id:
+                if source_type in ('ABS', 'Booklore', 'BookOrbit', 'CWA') and not source_id:
                     logger.warning(
                         "Batch Forge skipped '%s': missing source id for source type '%s'",
                         sanitize_log_data(item.get('audio_title') or item.get('abs_title') or item.get('abs_id')),

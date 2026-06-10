@@ -382,6 +382,111 @@ class TestKosyncEndpoints(unittest.TestCase):
         )
         self.assertEqual(response.data, b"epub")
 
+    def _clear_koreader_stats_tables(self):
+        from src import web_server
+        from src.db.models import KOReaderBookStat, KOReaderPageStat
+        with web_server.database_service.get_session() as session:
+            session.query(KOReaderPageStat).delete()
+            session.query(KOReaderBookStat).delete()
+
+    def test_statistics_upload_stores_total_pages_and_reports_echoes(self):
+        self._clear_koreader_stats_tables()
+
+        response = self.client.post(
+            '/koreader/device-sync/statistics',
+            headers=self.auth_headers,
+            json={
+                'device': 'Kobo',
+                'device_id': 'device-a',
+                'books': [],
+                'page_stats': [
+                    {'md5': 'm' * 32, 'page': 3, 'start_time': 1700000000, 'duration': 55, 'total_pages': 120},
+                ],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['accepted_page_stats'], 1)
+        self.assertEqual(data['echoed_page_stats'], 0)
+
+        # Same event re-uploaded from another device is an echo of a merged row.
+        response_echo = self.client.post(
+            '/koreader/device-sync/statistics',
+            headers=self.auth_headers,
+            json={
+                'device': 'Kindle',
+                'device_id': 'device-b',
+                'books': [],
+                'page_stats': [
+                    {'md5': 'm' * 32, 'page': 7, 'start_time': 1700000000, 'duration': 55, 'total_pages': 300},
+                ],
+            },
+        )
+        self.assertEqual(response_echo.status_code, 200)
+        data_echo = response_echo.get_json()
+        self.assertEqual(data_echo['accepted_page_stats'], 0)
+        self.assertEqual(data_echo['echoed_page_stats'], 1)
+
+    def test_merged_statistics_requires_auth(self):
+        response = self.client.get('/koreader/device-sync/statistics/merged?device_id=device-b')
+        self.assertEqual(response.status_code, 401)
+
+    def test_merged_statistics_returns_foreign_events(self):
+        self._clear_koreader_stats_tables()
+        from src import web_server
+
+        web_server.database_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'a' * 32, 'page': 10, 'start_time': 1700000100, 'duration': 60, 'total_pages': 200},
+            ],
+        )
+
+        response = self.client.get(
+            '/koreader/device-sync/statistics/merged?device=Kindle&device_id=device-b',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['enabled'])
+        self.assertEqual(len(data['page_stats']), 1)
+        self.assertEqual(data['page_stats'][0]['md5'], 'a' * 32)
+        self.assertEqual(data['page_stats'][0]['total_pages'], 200)
+        self.assertIsNotNone(data['watermark'])
+
+        # The uploading device gets nothing back (its own events are excluded).
+        response_own = self.client.get(
+            '/koreader/device-sync/statistics/merged?device=Kobo&device_id=device-a',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response_own.status_code, 200)
+        self.assertEqual(response_own.get_json()['page_stats'], [])
+
+    def test_merged_statistics_disabled_by_setting(self):
+        original = os.environ.get('KOREADER_COMBINE_DEVICE_STATS')
+        os.environ['KOREADER_COMBINE_DEVICE_STATS'] = 'false'
+        try:
+            response = self.client.get(
+                '/koreader/device-sync/statistics/merged?device_id=device-b',
+                headers=self.auth_headers,
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertFalse(data['enabled'])
+            self.assertEqual(data['page_stats'], [])
+        finally:
+            if original is None:
+                os.environ.pop('KOREADER_COMBINE_DEVICE_STATS', None)
+            else:
+                os.environ['KOREADER_COMBINE_DEVICE_STATS'] = original
+
+    def test_merged_statistics_requires_device_identity(self):
+        response = self.client.get(
+            '/koreader/device-sync/statistics/merged',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_furthest_wins_rejects_backwards(self):
         """Test that backwards progress is rejected when KOSYNC_FURTHEST_WINS=true."""
         # First PUT at 50%
