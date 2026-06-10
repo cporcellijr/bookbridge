@@ -1105,5 +1105,118 @@ class TestForgeService(unittest.TestCase):
         self.mock_abs.get_audio_files.assert_called_once_with("abs-1")
 
 
+class TestShelveForgedEbook(unittest.TestCase):
+    def setUp(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BOOKLORE_SHELF_NAME", "BOOKORBIT_SHELF_NAME")}
+        env_patcher = patch.dict(os.environ, env, clear=True)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+        self.mock_booklore = MagicMock()
+        self.mock_bookorbit = MagicMock()
+        self.service = ForgeService(
+            database_service=MagicMock(),
+            abs_client=MagicMock(),
+            booklore_client=self.mock_booklore,
+            storyteller_client=MagicMock(),
+            library_service=MagicMock(),
+            ebook_parser=MagicMock(),
+            transcriber=MagicMock(),
+            alignment_service=MagicMock(),
+            bookorbit_client=self.mock_bookorbit,
+        )
+
+    def _book(self, ebook_source=None, ebook_source_id=None):
+        book = MagicMock()
+        book.ebook_source = ebook_source
+        book.ebook_source_id = ebook_source_id
+        return book
+
+    def test_skips_grimmory_when_not_configured(self):
+        self.mock_booklore.is_configured.return_value = False
+        self.service._shelve_forged_ebook(self._book(), "book.epub")
+        self.mock_booklore.add_to_shelf.assert_not_called()
+        self.mock_bookorbit.add_to_shelf.assert_not_called()
+        self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
+
+    def test_shelves_on_grimmory_when_configured(self):
+        self.mock_booklore.is_configured.return_value = True
+        self.service._shelve_forged_ebook(self._book(ebook_source="Booklore"), "book.epub")
+        self.mock_booklore.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
+
+    def test_bookorbit_source_uses_bookorbit_by_id(self):
+        self.mock_bookorbit.is_configured.return_value = True
+        self.service._shelve_forged_ebook(
+            self._book(ebook_source="BookOrbit", ebook_source_id="42"), "book.epub"
+        )
+        self.mock_bookorbit.add_book_id_to_shelf.assert_called_once_with("42", "Kobo")
+        self.mock_booklore.add_to_shelf.assert_not_called()
+
+    def test_bookorbit_source_falls_back_to_filename(self):
+        self.mock_bookorbit.is_configured.return_value = True
+        self.service._shelve_forged_ebook(self._book(ebook_source="BookOrbit"), "book.epub")
+        self.mock_bookorbit.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.mock_booklore.add_to_shelf.assert_not_called()
+
+    def test_bookorbit_source_skipped_when_not_configured(self):
+        self.mock_bookorbit.is_configured.return_value = False
+        self.mock_booklore.is_configured.return_value = True
+        self.service._shelve_forged_ebook(
+            self._book(ebook_source="BookOrbit", ebook_source_id="42"), "book.epub"
+        )
+        self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
+        self.mock_bookorbit.add_to_shelf.assert_not_called()
+        self.mock_booklore.add_to_shelf.assert_not_called()
+
+
+class TestForgeAutomatchProgressTrackers(unittest.TestCase):
+    def _service(self, sync_clients):
+        return ForgeService(
+            database_service=MagicMock(),
+            abs_client=MagicMock(),
+            booklore_client=MagicMock(),
+            storyteller_client=MagicMock(),
+            library_service=MagicMock(),
+            ebook_parser=MagicMock(),
+            transcriber=MagicMock(),
+            alignment_service=MagicMock(),
+            sync_clients=sync_clients,
+        )
+
+    def test_runs_configured_trackers(self):
+        hardcover = MagicMock()
+        hardcover.is_configured.return_value = True
+        storygraph = MagicMock()
+        storygraph.is_configured.return_value = True
+        service = self._service({"Hardcover": hardcover, "StoryGraph": storygraph})
+        book = MagicMock()
+        service._automatch_progress_trackers(book)
+        hardcover._automatch_hardcover.assert_called_once_with(book)
+        storygraph._automatch_storygraph.assert_called_once_with(book)
+
+    def test_skips_unconfigured_trackers(self):
+        storygraph = MagicMock()
+        storygraph.is_configured.return_value = False
+        service = self._service({"StoryGraph": storygraph})
+        service._automatch_progress_trackers(MagicMock())
+        storygraph._automatch_storygraph.assert_not_called()
+
+    def test_no_sync_clients_is_noop(self):
+        service = self._service(None)
+        service._automatch_progress_trackers(MagicMock())
+
+    def test_tracker_failure_does_not_block_other(self):
+        hardcover = MagicMock()
+        hardcover.is_configured.return_value = True
+        hardcover._automatch_hardcover.side_effect = RuntimeError("boom")
+        storygraph = MagicMock()
+        storygraph.is_configured.return_value = True
+        service = self._service({"Hardcover": hardcover, "StoryGraph": storygraph})
+        book = MagicMock()
+        service._automatch_progress_trackers(book)
+        storygraph._automatch_storygraph.assert_called_once_with(book)
+
+
 if __name__ == '__main__':
     unittest.main()

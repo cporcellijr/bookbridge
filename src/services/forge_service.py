@@ -46,10 +46,12 @@ HARDLINK_STAGE_MODE = "hardlink"
 VALID_STAGE_MODES = {DEFAULT_STAGE_MODE, HARDLINK_STAGE_MODE}
 
 class ForgeService:
-    def __init__(self, database_service, abs_client, booklore_client, storyteller_client, library_service, ebook_parser, transcriber, alignment_service):
+    def __init__(self, database_service, abs_client, booklore_client, storyteller_client, library_service, ebook_parser, transcriber, alignment_service, bookorbit_client=None, sync_clients=None):
         self.database_service = database_service
         self.abs_client = abs_client
         self.booklore_client = booklore_client
+        self.bookorbit_client = bookorbit_client
+        self.sync_clients = sync_clients
         self.storyteller_client = storyteller_client
         self.library_service = library_service
         self.ebook_parser = ebook_parser
@@ -107,6 +109,7 @@ class ForgeService:
         source_map = {
             "grimmory": "Booklore",
             "booklore": "Booklore",
+            "bookorbit": "BookOrbit",
             "abs": "ABS",
             "cwa": "CWA",
             "local file": "Local File",
@@ -115,6 +118,42 @@ class ForgeService:
 
     def _should_cleanup_staged_sources(self, stage_mode: str) -> bool:
         return self._normalize_stage_mode(stage_mode) == DEFAULT_STAGE_MODE
+
+    def _shelve_forged_ebook(self, book, shelf_filename: str) -> None:
+        """Add the forged book's ebook to the Kobo shelf on whichever library
+        hosts it (BookOrbit or Grimmory), skipping unconfigured clients."""
+        ebook_source = (getattr(book, 'ebook_source', None) or '').strip().lower() if book else ''
+        if ebook_source == 'bookorbit':
+            if self.bookorbit_client and self.bookorbit_client.is_configured():
+                bookorbit_shelf_name = (os.environ.get("BOOKORBIT_SHELF_NAME") or "Kobo").strip()
+                ebook_source_id = getattr(book, 'ebook_source_id', None)
+                if ebook_source_id and hasattr(self.bookorbit_client, 'add_book_id_to_shelf'):
+                    self.bookorbit_client.add_book_id_to_shelf(ebook_source_id, bookorbit_shelf_name)
+                else:
+                    self.bookorbit_client.add_to_shelf(shelf_filename, bookorbit_shelf_name)
+        elif self.booklore_client and self.booklore_client.is_configured():
+            booklore_shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "Kobo")
+            self.booklore_client.add_to_shelf(shelf_filename, booklore_shelf_name)
+
+    def _automatch_progress_trackers(self, book) -> None:
+        """Run Hardcover/StoryGraph auto-match after a successful forge,
+        mirroring the regular match path in web_server."""
+        try:
+            sync_clients = dict(self.sync_clients) if self.sync_clients else {}
+        except Exception:
+            return
+        hardcover = sync_clients.get('Hardcover')
+        if hardcover and hardcover.is_configured():
+            try:
+                hardcover._automatch_hardcover(book)
+            except Exception as e:
+                logger.warning(f"Auto-Forge: Hardcover automatch failed for '{book.abs_id}': {e}")
+        storygraph = sync_clients.get('StoryGraph')
+        if storygraph and storygraph.is_configured():
+            try:
+                storygraph._automatch_storygraph(book)
+            except Exception as e:
+                logger.warning(f"Auto-Forge: StoryGraph automatch failed for '{book.abs_id}': {e}")
 
     def _stage_local_file(self, src_path: Path, dest_path: Path, stage_mode: str, context: str) -> str:
         src_path = Path(src_path)
@@ -885,6 +924,16 @@ class ForgeService:
                         logger.info(f"⚡ Forge: Grimmory epub downloaded")
                     else:
                         logger.error(f"❌ Forge: Grimmory download failed for '{booklore_id}'")
+            elif source == 'BookOrbit':
+                bookorbit_id = text_item.get('bookorbit_id')
+                if bookorbit_id and self.bookorbit_client:
+                    content = self.bookorbit_client.download_book(bookorbit_id)
+                    if content:
+                        epub_path.write_bytes(content)
+                        text_success = True
+                        logger.info(f"⚡ Forge: BookOrbit epub downloaded")
+                    else:
+                        logger.error(f"❌ Forge: BookOrbit download failed for '{bookorbit_id}'")
             elif source == 'ABS':
                 abs_item_id = text_item.get('abs_id')
                 if abs_item_id:
@@ -1092,6 +1141,10 @@ class ForgeService:
             elif source == 'Booklore':
                 content = self.booklore_client.download_book(text_item.get('booklore_id'))
                 if content: epub_path.write_bytes(content)
+            elif source == 'BookOrbit':
+                if self.bookorbit_client:
+                    content = self.bookorbit_client.download_book(text_item.get('bookorbit_id'))
+                    if content: epub_path.write_bytes(content)
             elif source == 'ABS':
                 ebook_files = self.abs_client.get_ebook_files(text_item.get('abs_id'))
                 if ebook_files: self.abs_client.download_file(ebook_files[0]['stream_url'], epub_path)
@@ -1456,8 +1509,20 @@ class ForgeService:
                                 book.series_sequence = _sseq
                     except Exception as _se:
                         logger.debug(f"Auto-Forge: could not capture series metadata: {_se}")
+                if not getattr(book, 'ebook_source', None):
+                    text_source = self._normalize_text_source(text_item.get('source'))
+                    source_id_key = {
+                        'BookOrbit': 'bookorbit_id',
+                        'Booklore': 'booklore_id',
+                        'ABS': 'abs_id',
+                        'CWA': 'cwa_id',
+                    }.get(text_source)
+                    if source_id_key and text_item.get(source_id_key):
+                        book.ebook_source = text_source
+                        book.ebook_source_id = str(text_item.get(source_id_key))
                 self.database_service.save_book(book)
                 logger.info(f"✅ Auto-Forge: Book {abs_id} updated successfully!")
+                self._automatch_progress_trackers(book)
             else:
                 logger.error(f"❌ Auto-Forge: Book {abs_id} not found in DB to update!")
 
@@ -1467,10 +1532,8 @@ class ForgeService:
                 if not str(abs_id).startswith('booklore:'):
                     self.abs_client.add_to_collection(abs_id, abs_collection_name)
 
-                if self.booklore_client:
-                    shelf_filename = original_filename if original_filename else target_filename
-                    booklore_shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "Kobo")
-                    self.booklore_client.add_to_shelf(shelf_filename, booklore_shelf_name)
+                shelf_filename = original_filename if original_filename else target_filename
+                self._shelve_forged_ebook(book, shelf_filename)
 
                 if self.storyteller_client:
                     if book_uuid and hasattr(self.storyteller_client, 'add_to_collection_by_uuid'):
