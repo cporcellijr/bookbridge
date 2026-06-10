@@ -226,21 +226,17 @@ class ABSSyncClient(SyncClient):
         Args:
             abs_id: ABS library item ID
             ts: New timestamp to set (seconds)
-            prev_abs_ts: Previous ABS timestamp for calculating time_listened
+            prev_abs_ts: Previous ABS timestamp (kept for logging context)
         """
         adjusted_ts = max(round(ts + self.abs_progress_offset, 2), 0)
         if self.abs_progress_offset != 0:
             logger.debug(f"   📐 Adjusted timestamp: {ts}s → {adjusted_ts}s (offset: {self.abs_progress_offset:+.1f}s)")
 
-        # Calculate time_listened as the difference between new and previous position
-        time_listened = max(0, adjusted_ts - prev_abs_ts)
-
-        # Don't send negative time_listened (shouldn't happen, but safety check)
-        if time_listened < 0:
-            time_listened = 0
-
-        logger.debug(f"   ⏱️ time_listened: {time_listened:.1f}s (prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")
-        abs_ok = self.abs_client.update_progress(abs_id, adjusted_ts, time_listened)
+        # Bridge pushes originate from reading progress (KoSync/Storyteller/Grimmory
+        # leader), never from actual playback — send zero timeListened so reading
+        # does not accrue listening time in ABS stats.
+        logger.debug(f"   ⏱️ time_listened: 0s (reading-driven push; prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")
+        abs_ok = self.abs_client.update_progress(abs_id, adjusted_ts, 0)
         if isinstance(abs_ok, dict) and abs_ok.get("success"):
             try:
                 from src.services.write_tracker import record_write

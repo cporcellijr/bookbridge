@@ -1395,12 +1395,14 @@ function BridgeSync:_collectStatisticsPayload()
                 local page = tonumber(page_result[2][i]) or 0
                 local start_time = tonumber(page_result[3][i]) or 0
                 local duration = tonumber(page_result[4][i]) or 0
+                local total_pages = tonumber(page_result[5][i]) or 0
 
                 table.insert(page_stats, {
                     md5 = book.md5,
                     page = page,
                     start_time = start_time,
                     duration = duration,
+                    total_pages = total_pages,
                 })
                 included_md5[book.md5] = true
                 if start_time > max_start_time then
@@ -1449,57 +1451,181 @@ function BridgeSync:_collectStatisticsPayload()
     return payload_or_err, nil
 end
 
+function BridgeSync:_mergeForeignStatistics(payload)
+    local result = { merged = 0, fetched = 0, watermark = nil, err = nil }
+
+    if not SQ3 then
+        result.err = _("SQLite support is unavailable in this KOReader build")
+        return result
+    end
+
+    local db_path = self:_findStatisticsDbPath()
+    if not db_path then
+        result.err = _("statistics.sqlite was not found in the KOReader settings folder")
+        return result
+    end
+
+    local since = tonumber(self.state:readSetting("stats_last_merged_watermark")) or 0
+    local ok, response = self.api:getMergedStatistics(
+        payload.device,
+        payload.device_id,
+        since > 1 and (since - 1) or 0
+    )
+    if not ok then
+        result.err = tostring(response or "Failed to fetch merged statistics")
+        return result
+    end
+
+    if response.enabled == false then
+        return result
+    end
+
+    local page_stats = response.page_stats
+    if type(page_stats) ~= "table" or #page_stats == 0 then
+        result.watermark = tonumber(response.watermark)
+        return result
+    end
+    result.fetched = #page_stats
+
+    local conn = SQ3.open(db_path)
+    if not conn then
+        result.err = _("Failed to open KOReader statistics database")
+        return result
+    end
+
+    local ok_merge, merge_err = pcall(function()
+        conn:exec("PRAGMA busy_timeout = 5000")
+
+        local books_by_md5 = {}
+        local book_result, book_rows = conn:exec("SELECT id, md5 FROM book")
+        if book_result and book_rows then
+            for i = 1, book_rows do
+                local id_book = tonumber(book_result[1][i])
+                local book_md5 = tostring(book_result[2][i] or "")
+                if id_book and book_md5 ~= "" then
+                    books_by_md5[book_md5] = id_book
+                end
+            end
+        end
+
+        conn:exec("BEGIN IMMEDIATE")
+        local changes_before = tonumber(conn:exec("SELECT total_changes()")[1][1]) or 0
+
+        local insert_stmt = conn:prepare(
+            "INSERT OR IGNORE INTO page_stat_data (id_book, page, start_time, duration, total_pages) VALUES (?, ?, ?, ?, ?)"
+        )
+        local touched = {}
+        for _idx, event in ipairs(page_stats) do
+            local id_book = books_by_md5[tostring(event.md5 or "")]
+            local page = tonumber(event.page)
+            local start_time = tonumber(event.start_time)
+            local duration = tonumber(event.duration)
+            local total_pages = tonumber(event.total_pages)
+            if id_book and page and start_time and duration and total_pages and total_pages > 0 then
+                insert_stmt:reset()
+                insert_stmt:bind(id_book, page, start_time, duration, total_pages)
+                insert_stmt:step()
+                touched[id_book] = true
+            end
+        end
+        insert_stmt:close()
+
+        local changes_after = tonumber(conn:exec("SELECT total_changes()")[1][1]) or 0
+        result.merged = math.max(changes_after - changes_before, 0)
+
+        if result.merged > 0 then
+            local update_stmt = conn:prepare([[
+                UPDATE book SET
+                    total_read_time = (SELECT coalesce(sum(duration), 0) FROM page_stat WHERE id_book = book.id),
+                    total_read_pages = (SELECT count(DISTINCT page) FROM page_stat WHERE id_book = book.id)
+                WHERE id = ?
+            ]])
+            for id_book in pairs(touched) do
+                update_stmt:reset()
+                update_stmt:bind(id_book)
+                update_stmt:step()
+            end
+            update_stmt:close()
+        end
+        conn:exec("COMMIT")
+    end)
+
+    if not ok_merge then
+        pcall(function() conn:exec("ROLLBACK") end)
+    end
+    pcall(function() conn:close() end)
+
+    if not ok_merge then
+        result.err = tostring(merge_err or "Failed to merge statistics")
+        result.merged = 0
+        return result
+    end
+
+    result.watermark = tonumber(response.watermark)
+    return result
+end
+
 function BridgeSync:_runStatisticsSync()
     local payload, payload_err = self:_collectStatisticsPayload()
     if not payload then
         error(payload_err or "Failed to build statistics payload")
     end
 
-    if #payload.page_stats == 0 then
-        return {
-            skipped = true,
-            device_key = payload.device_key,
-            watermark = payload.watermark,
-            accepted_books = 0,
-            accepted_page_stats = 0,
-            duplicate_page_stats = 0,
-        }
-    end
-
-    self:logInfo(
-        "Uploading",
-        #payload.page_stats,
-        "reading stat rows and",
-        #payload.books,
-        "book metadata rows"
-    )
-
-    local ok, code, body = self.api:uploadStatistics({
-        device = payload.device,
-        device_id = payload.device_id,
-        books = payload.books,
-        page_stats = payload.page_stats,
-    })
-    if not ok then
-        error(body or ("HTTP " .. tostring(code or "unknown")))
-    end
-
-    local parsed = {}
-    if body and body ~= "" then
-        local ok_json, decoded = pcall(json.decode, body)
-        if ok_json and type(decoded) == "table" then
-            parsed = decoded
-        end
-    end
-
-    return {
-        skipped = false,
+    local result = {
+        skipped = #payload.page_stats == 0,
         device_key = payload.device_key,
         watermark = payload.watermark,
-        accepted_books = tonumber(parsed.accepted_books) or #payload.books,
-        accepted_page_stats = tonumber(parsed.accepted_page_stats) or #payload.page_stats,
-        duplicate_page_stats = tonumber(parsed.duplicate_page_stats) or 0,
+        accepted_books = 0,
+        accepted_page_stats = 0,
+        duplicate_page_stats = 0,
+        merged_page_stats = 0,
+        merge_watermark = nil,
+        merge_error = nil,
     }
+
+    if not result.skipped then
+        self:logInfo(
+            "Uploading",
+            #payload.page_stats,
+            "reading stat rows and",
+            #payload.books,
+            "book metadata rows"
+        )
+
+        local ok, code, body = self.api:uploadStatistics({
+            device = payload.device,
+            device_id = payload.device_id,
+            books = payload.books,
+            page_stats = payload.page_stats,
+        })
+        if not ok then
+            error(body or ("HTTP " .. tostring(code or "unknown")))
+        end
+
+        local parsed = {}
+        if body and body ~= "" then
+            local ok_json, decoded = pcall(json.decode, body)
+            if ok_json and type(decoded) == "table" then
+                parsed = decoded
+            end
+        end
+
+        result.accepted_books = tonumber(parsed.accepted_books) or #payload.books
+        result.accepted_page_stats = tonumber(parsed.accepted_page_stats) or #payload.page_stats
+        result.duplicate_page_stats = tonumber(parsed.duplicate_page_stats) or 0
+    end
+
+    local merge = self:_mergeForeignStatistics(payload)
+    result.merged_page_stats = merge.merged or 0
+    result.merge_watermark = merge.watermark
+    result.merge_error = merge.err
+    if merge.err then
+        self:logWarn("Cross-device stats merge failed:", merge.err)
+    elseif result.merged_page_stats > 0 then
+        self:logInfo("Merged", result.merged_page_stats, "reading stat rows from other devices")
+    end
+
+    return result
 end
 
 function BridgeSync:syncReadingStats(silent)
@@ -1576,17 +1702,21 @@ function BridgeSync:syncReadingStats(silent)
     if result.watermark and tonumber(result.watermark) then
         self.state:saveSetting("stats_last_uploaded_start_time", tonumber(result.watermark))
     end
+    if result.merge_watermark and tonumber(result.merge_watermark) then
+        self.state:saveSetting("stats_last_merged_watermark", tonumber(result.merge_watermark))
+    end
     self.state:flush()
 
     local message
-    if result.skipped then
+    if result.skipped and (result.merged_page_stats or 0) == 0 then
         message = _("Reading stats are already up to date.")
     else
         message = T(
-            _("Reading stats synced.\nAccepted rows: %1\nDuplicates: %2\nBooks: %3"),
+            _("Reading stats synced.\nAccepted rows: %1\nDuplicates: %2\nBooks: %3\nMerged from other devices: %4"),
             result.accepted_page_stats or 0,
             result.duplicate_page_stats or 0,
-            result.accepted_books or 0
+            result.accepted_books or 0,
+            result.merged_page_stats or 0
         )
     end
 

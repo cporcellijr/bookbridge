@@ -504,6 +504,7 @@ class KOReaderPageStat(Base):
     page = Column(Integer, nullable=False)
     start_time = Column(Float, nullable=False, index=True)
     duration = Column(Float, nullable=False)
+    total_pages = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     def __init__(
@@ -515,6 +516,7 @@ class KOReaderPageStat(Base):
         duration: float,
         device: str = None,
         device_id: str = None,
+        total_pages: int = None,
     ):
         self.md5 = md5
         self.device = device
@@ -523,6 +525,7 @@ class KOReaderPageStat(Base):
         self.page = page
         self.start_time = start_time
         self.duration = duration
+        self.total_pages = total_pages
         self.uploaded_at = datetime.utcnow()
 
 
