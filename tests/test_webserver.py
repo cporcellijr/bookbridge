@@ -756,6 +756,41 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIsNone(saved_book.transcript_file)
         self.mock_database_service.dismiss_suggestion.assert_called_once_with('story-link-1')
 
+    @patch('src.web_server.ingest_storyteller_transcripts', return_value=None)
+    def test_api_storyteller_link_works_for_audiobook_mode_books(self, mock_ingest):
+        """Cards with an audio↔ebook match can link Storyteller just like ebook-only ones."""
+        from src.db.models import Book
+
+        test_book = Book(
+            abs_id='story-link-audio',
+            abs_title='Audio Match Book',
+            ebook_filename='original.epub',
+            original_ebook_filename='original.epub',
+            sync_mode='audiobook',
+            storyteller_uuid=None,
+            status='active'
+        )
+        self.mock_database_service.get_book.return_value = test_book
+        self.mock_storyteller_client.download_book.return_value = True
+        self.mock_abs_client.get_item_details.return_value = {
+            'media': {'chapters': [{'start': 0.0, 'end': 10.0}]}
+        }
+
+        response = self.client.post('/api/storyteller/link/story-link-audio', json={'uuid': 'uuid-audio'})
+
+        self.assertEqual(response.status_code, 200)
+        saved_book = self.mock_database_service.save_book.call_args[0][0]
+        self.assertEqual(saved_book.storyteller_uuid, 'uuid-audio')
+        self.assertEqual(saved_book.sync_mode, 'audiobook')
+        self.assertEqual(saved_book.transcript_source, 'storyteller')
+        # The original ebook stays recorded while the artifact becomes the active file.
+        self.assertEqual(saved_book.original_ebook_filename, 'original.epub')
+        self.assertNotEqual(saved_book.ebook_filename, 'original.epub')
+        self.assertEqual(saved_book.status, 'pending')
+        # Audiobook-mode ingest receives the ABS chapters (not chapterless).
+        chapters_arg = mock_ingest.call_args[0][2]
+        self.assertTrue(chapters_arg)
+
     def test_api_storyteller_link_real_ingest_persists_manifest(self):
         from src.db.models import Book
 
@@ -1720,6 +1755,47 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertFalse(data['ok'])
         self.assertEqual(data['message'], 'StoryGraph is disabled')
         mock_get.assert_not_called()
+
+    def test_storyteller_link_affordance_renders_for_audiobook_mode(self):
+        """Audiobook↔ebook matched cards without a Storyteller UUID offer the Link action."""
+        from src.db.models import Book
+
+        self._set_dashboard_integrations(storyteller=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(
+                abs_id='abs-audio-1',
+                abs_title='Audio Match Book',
+                ebook_filename='audio-match.epub',
+                sync_mode='audiobook',
+                storyteller_uuid=None,
+            )
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+
+        html = self._render_index_template_source()
+
+        self.assertIn('title="Link Storyteller"', html)
+        self.assertIn('openStorytellerModal("abs-audio-1"', html)
+
+    def test_storyteller_linked_card_shows_no_link_affordance(self):
+        from src.db.models import Book
+
+        self._set_dashboard_integrations(storyteller=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(
+                abs_id='abs-audio-2',
+                abs_title='Linked Book',
+                ebook_filename='linked.epub',
+                sync_mode='audiobook',
+                storyteller_uuid='uuid-linked',
+            )
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+
+        html = self._render_index_template_source()
+
+        self.assertNotIn('title="Link Storyteller"', html)
+        self.assertIn('Linked via UUID', html)
 
     def test_storygraph_card_renders_on_dashboard(self):
         from src.db.models import Book, State, StorygraphDetails
