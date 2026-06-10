@@ -175,9 +175,8 @@
                 </div>
                 {% endif %}
 
-                {# [CHANGED] Show Storyteller for active links, legacy fixes, and ebook-only rows (link affordance). #}
-                {% if integrations.storyteller and (mapping.states.storyteller is defined or
-                mapping.storyteller_legacy_link or mapping.storyteller_uuid or mapping.sync_mode == 'ebook_only') %}
+                {# [CHANGED] Show Storyteller on every card: progress when linked, Link affordance otherwise. #}
+                {% if integrations.storyteller %}
                 <div class="service-item" title="Storyteller">
                     <img src="/static/storyteller.png" alt="ST" class="service-icon">
                     <span class="service-name">Storyteller</span>
@@ -192,7 +191,7 @@
                         }}%</span>
                     {% elif mapping.storyteller_uuid %}
                     <span class="service-value" title="Linked via UUID">0.0%</span>
-                    {% elif mapping.sync_mode == 'ebook_only' %}
+                    {% else %}
                     <span class="service-value cursor-pointer" style="color: #4FC3F7;"
                         onclick='openStorytellerModal({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
                         title="Link Storyteller">

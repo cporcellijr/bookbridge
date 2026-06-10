@@ -8,6 +8,8 @@ All notable changes to ABS-KoSync Enhanced will be documented in this file.
 
 ### What's New
 
+- **Link Storyteller from any dashboard card.** The "Link" action that ebook-only mappings already had is now available on books with an audio↔ebook match too: the Storyteller row appears on every card when the integration is enabled, and any book without a linked Storyteller UUID gets the clickable Link affordance (opens the same search modal). Linking an audiobook-mode book downloads the Storyteller artifact, preserves the original ebook filename, ingests Storyteller transcripts with ABS chapters, and queues the book for reprocessing — exactly as match-based linking already did.
+
 - **LLM match rescue for Grimmory and BookOrbit.** When filename/title matching fails to link an ebook to a Grimmory or BookOrbit library entry, the bridge now shortlists the cached library by fuzzy similarity and asks the Ollama judge to confirm the one true book (Settings → Ollama → "Library match rescue", `OLLAMA_LIBRARY_MATCH`, on by default). Hot sync/poll paths never pay LLM latency — the rescue only runs on linking paths — and verdicts are memoized until the next library refresh.
 
 - **Semantic position rescue for ebook text lookups.** When KoSync/Storyteller position lookups can't fuzzy-match a phrase in the EPUB (paraphrased narration, transcription noise), the bridge can now locate the position by embedding similarity over the hint neighborhood, then refine to a character offset (`OLLAMA_EBOOK_TEXT_FALLBACK`, on by default, threshold shared with the alignment fallback).
