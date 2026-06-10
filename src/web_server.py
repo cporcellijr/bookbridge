@@ -1718,6 +1718,7 @@ def settings():
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
+            'STORYTELLER_POLL_WAIT_FOR_SETTLE',
             'SHELFMARK_ENABLED',
             'OLLAMA_ENABLED',
             'OLLAMA_RERANK_SUGGESTIONS',

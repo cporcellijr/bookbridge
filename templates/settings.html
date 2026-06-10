@@ -1388,7 +1388,7 @@
                         <div class="form-group" style="align-items: center;">
                             <label>Storyteller Poll Mode</label>
                             <select name="STORYTELLER_POLL_MODE" id="storyteller_poll_mode"
-                                    onchange="togglePollSeconds('storyteller_poll_seconds_row', this.value)">
+                                    onchange="togglePollSeconds('storyteller_poll_seconds_row', this.value); togglePollSeconds('storyteller_poll_settle_row', this.value)">
                                 <option value="global" {% if get_val('STORYTELLER_POLL_MODE', 'global') == 'global' %}selected{% endif %}>Global</option>
                                 <option value="custom" {% if get_val('STORYTELLER_POLL_MODE') == 'custom' %}selected{% endif %}>Custom</option>
                             </select>
@@ -1399,6 +1399,18 @@
                             <input type="number" name="STORYTELLER_POLL_SECONDS" min="10"
                                    value="{{ get_val('STORYTELLER_POLL_SECONDS', '45') }}">
                             <div class="help-text">Recommended: 30–60s for Storyteller (active reading source).</div>
+                        </div>
+                        <div class="form-group" id="storyteller_poll_settle_row"
+                             {% if get_val('STORYTELLER_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
+                            <label>Wait for Position to Settle</label>
+                            <div class="toggle-switch-wrapper">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" name="STORYTELLER_POLL_WAIT_FOR_SETTLE"
+                                        {% if get_bool('STORYTELLER_POLL_WAIT_FOR_SETTLE') %}checked{% endif %}>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="help-text">Hold the sync while the position keeps changing between polls (actively reading); run it once a poll shows no further movement.</div>
                         </div>
                         {% endif %}
 
