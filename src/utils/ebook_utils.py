@@ -1096,6 +1096,25 @@ class EbookParser:
         logger.warning(f"Could not resolve XPath in {filename}: {clean_xpath}")
         return None, None, None
 
+    def _parse_koreader_relative_xpath(self, relative_path: str):
+        """
+        Split KOReader's trailing character offset from the XPath target.
+
+        KOReader usually reports text-node targets such as
+        "/body/p[1]/text().42" or "/body/p[1]/text()[2].42", but pages with
+        images, empty tags, or block-only content can report element-node
+        targets such as "/body/p.0" or "/body/div[1].0".  lxml cannot evaluate
+        the latter until the terminal ".N" offset suffix is removed.
+        """
+        offset_match = re.search(r'\.(\d+)$', relative_path)
+        target_offset = int(offset_match.group(1)) if offset_match else 0
+
+        clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+        if clean_xpath == relative_path:
+            clean_xpath = re.sub(r'\.\d+$', '', relative_path)
+
+        return target_offset, clean_xpath
+
     def resolve_xpath(self, filename, xpath_str):
         """
         RESOLVER:
@@ -1113,14 +1132,11 @@ class EbookParser:
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
 
-            # Parse path and offset. KOReader emits two forms for the trailing
-            # character offset: "/text().NNN" (single text node) and
-            # "/text()[N].MMM" (Nth text node when inline children split a
-            # paragraph's text into multiple nodes). Both must be recognised.
+            # Parse path and offset. KOReader usually emits text-node offsets,
+            # but can emit element-node offsets for image-only or block-only
+            # pages. Both must be recognised before lxml evaluates the path.
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
-            offset_match = re.search(r'/text\(\)(?:\[\d+\])?\.(\d+)$', relative_path)
-            target_offset = int(offset_match.group(1)) if offset_match else 0
-            clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+            target_offset, clean_xpath = self._parse_koreader_relative_xpath(relative_path)
 
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
@@ -1152,14 +1168,12 @@ class EbookParser:
             # 1. Extract anchor text directly from target node content only.
             node_text = target_node.text_content().strip()
             clean_anchor = " ".join(node_text.split())
-            if not clean_anchor:
-                return None
 
             # 2. Find this anchor in the BS4 content (spine_map item)
             # We search specifically in this chapter's content to minimize false positives
             bs4_chapter_text = BeautifulSoup(target_item['content'], 'html.parser').get_text(separator=' ', strip=True)
             
-            local_start_index = bs4_chapter_text.find(clean_anchor)
+            local_start_index = bs4_chapter_text.find(clean_anchor) if clean_anchor else -1
             
             if local_start_index != -1:
                 # Found it! Calculate global position
@@ -1238,9 +1252,7 @@ class EbookParser:
             full_text, spine_map = self.extract_text_and_map(book_path)
 
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
-            offset_match = re.search(r'/text\(\)(?:\[\d+\])?\.(\d+)$', relative_path)
-            target_offset = int(offset_match.group(1)) if offset_match else 0
-            clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+            target_offset, clean_xpath = self._parse_koreader_relative_xpath(relative_path)
 
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
@@ -1290,8 +1302,6 @@ class EbookParser:
 
             node_text = target_node.text_content().strip()
             clean_anchor = " ".join(node_text.split())
-            if not clean_anchor:
-                return None
             chapter_len = max(0, target_item['end'] - target_item['start'])
             chapter_base = target_item['start']
             full_len = len(full_text)

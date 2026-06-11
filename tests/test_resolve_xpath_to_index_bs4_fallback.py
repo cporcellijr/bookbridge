@@ -181,6 +181,38 @@ def test_resolve_xpath_to_index_unbracketed_text_node_offset_still_works():
     assert index == 5
 
 
+def test_resolve_xpath_to_index_element_node_offset():
+    # KOReader can report element-node offsets on formatted chapter/title pages.
+    # The terminal ".N" suffix is a character offset, not part of lxml XPath.
+    html_content = (
+        "<html><body>"
+        "<p>Chapter</p>"
+        "<p>Opening sentence after the formatted heading.</p>"
+        "</body></html>"
+    )
+    parser = _parser_for_single_spine(html_content, start=20)
+
+    index = parser.resolve_xpath_to_index("book.epub", "/body/DocFragment[1]/body/p[1].3")
+
+    assert index == 23
+
+
+def test_resolve_xpath_to_index_empty_element_node_uses_position_fallback(caplog):
+    caplog.set_level(logging.DEBUG)
+    html_content = (
+        "<html><body>"
+        "<div class='chapter-art'><img alt='Chapter art' src='chapter.png'/></div>"
+        "<p>First readable paragraph.</p>"
+        "</body></html>"
+    )
+    parser = _parser_for_single_spine(html_content, start=15)
+
+    index = parser.resolve_xpath_to_index("book.epub", "/body/DocFragment[1]/body/div[1].0")
+
+    assert index == 15
+    assert any("lxml_position_fallback" in record.message for record in caplog.records)
+
+
 def test_resolve_xpath_to_index_falls_back_to_nearby_spine_when_docfragment_drifts(caplog):
     caplog.set_level(logging.INFO)
     parser = _parser_for_spines(
