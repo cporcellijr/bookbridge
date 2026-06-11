@@ -209,7 +209,11 @@ class ABSSyncClient(SyncClient):
                     'pct': self._abs_to_percentage(abs_ts, book) or 0
                 })
 
-            result, final_ts = self._update_abs_progress_with_offset(book.abs_id, ts_for_text, abs_ts if abs_ts is not None else 0.0)
+            prev_ts = abs_ts if abs_ts is not None else 0.0
+            time_listened = (ts_for_text - prev_ts) if request.credit_listening else 0.0
+            result, final_ts = self._update_abs_progress_with_offset(
+                book.abs_id, ts_for_text, prev_ts, time_listened=time_listened
+            )
             # Calculate percentage from timestamp for state
             pct = self._abs_to_percentage(final_ts, book)
             updated_state = {
@@ -220,13 +224,17 @@ class ABSSyncClient(SyncClient):
         logger.warning(f"⚠️ '{book_title}' Not updating ABS progress — could not find timestamp for provided text")
         return SyncResult(None, False)
 
-    def _update_abs_progress_with_offset(self, abs_id, ts, prev_abs_ts: float = 0):
+    def _update_abs_progress_with_offset(self, abs_id, ts, prev_abs_ts: float = 0, time_listened: float = 0):
         """Apply offset to timestamp and update ABS progress.
 
         Args:
             abs_id: ABS library item ID
             ts: New timestamp to set (seconds)
             prev_abs_ts: Previous ABS timestamp (kept for logging context)
+            time_listened: Listening seconds to credit. Normally 0 (a bridge push
+                from reading progress is not playback); a non-zero value is passed
+                only when an audiobook-companion leader advanced the position and the
+                forward audio delta should count as listening time.
         """
         adjusted_ts = max(round(ts + self.abs_progress_offset, 2), 0)
         if self.abs_progress_offset != 0:
@@ -234,9 +242,15 @@ class ABSSyncClient(SyncClient):
 
         # Bridge pushes originate from reading progress (KoSync/Storyteller/Grimmory
         # leader), never from actual playback — send zero timeListened so reading
-        # does not accrue listening time in ABS stats.
-        logger.debug(f"   ⏱️ time_listened: 0s (reading-driven push; prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")
-        abs_ok = self.abs_client.update_progress(abs_id, adjusted_ts, 0)
+        # does not accrue listening time in ABS stats. Exception: an audiobook
+        # companion (Storyteller) advancing the position is treated as listening, so
+        # the caller credits the forward audio delta as time_listened.
+        time_listened = max(0.0, round(float(time_listened or 0.0), 2))
+        if time_listened > 0:
+            logger.debug(f"   ⏱️ time_listened: {time_listened:.1f}s (listening push; prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")
+        else:
+            logger.debug(f"   ⏱️ time_listened: 0s (reading-driven push; prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")
+        abs_ok = self.abs_client.update_progress(abs_id, adjusted_ts, time_listened)
         if isinstance(abs_ok, dict) and abs_ok.get("success"):
             try:
                 from src.services.write_tracker import record_write

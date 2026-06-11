@@ -2234,7 +2234,16 @@ class SyncManager:
                     f"original_epub='{sanitize_log_data(getattr(book, 'original_ebook_filename', None))}'"
                 )
 
-                # Update all other clients and store results
+                # Update all other clients and store results.
+                # When an audiobook companion (Storyteller) is the leader, its forward
+                # advance is treated as listening, so the ABS push credits the audio
+                # delta as listening time instead of zero (STORYTELLER_LISTENING_SESSIONS).
+                primary_audio_client = self._get_primary_audio_client_name(book)
+                credit_listening_leader = (
+                    leader == "Storyteller"
+                    and os.environ.get("STORYTELLER_LISTENING_SESSIONS", "true").strip().lower()
+                    in ("true", "1", "yes", "on")
+                )
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
@@ -2248,6 +2257,7 @@ class SyncManager:
                             locator,
                             txt,
                             previous_location=client_state.previous_pct if client_state else None,
+                            credit_listening=(credit_listening_leader and client_name == primary_audio_client),
                         )
                         result = client.update_progress(book, request)
                         results[client_name] = result

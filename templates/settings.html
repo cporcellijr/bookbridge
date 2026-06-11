@@ -697,6 +697,15 @@
                         </label>
                         <div class="help-text">When enabled, BookBridge uses the original EPUB for text extraction across all Storyteller flows (Auto-Forge, manual Create Mapping, Match, and the Batch Forge/Match flows) instead of downloading and caching Storyteller's ReadAloud EPUB. Requires the original EPUB to be accessible via a mapped library path (<code>/books</code>).</div>
                     </div>
+                    <div class="form-group" style="align-items: center;">
+                        <label>Count as Listening Time</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="STORYTELLER_LISTENING_SESSIONS"
+                                {% if get_bool('STORYTELLER_LISTENING_SESSIONS') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="help-text">When Storyteller leads a sync (you advanced position in Storyteller), credit the forward audio delta as <strong>listening time</strong> in Audiobookshelf instead of a zero-time progress push. Enable if you listen via Storyteller; disable if you only read in it (avoids inflating ABS listening stats).</div>
+                    </div>
                 </div>
             </div>
 
