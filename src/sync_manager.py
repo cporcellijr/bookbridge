@@ -1714,12 +1714,33 @@ class SyncManager:
                         f"'{device}' despite source=percent_fallback{age_msg}"
                     )
                 elif changed_source == "percent_fallback" and primary_audio_client in vals:
-                    single_delta_low_conf = True
-                    low_conf_single_delta_client = changed_client
-                    logger.info(
-                        f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
-                        f"'{changed_client}' (low-confidence source=percent_fallback); evaluating all candidates"
+                    # Bounded forward-progress backstop. A lone percent_fallback mover is
+                    # normally demoted, which lets a stationary audio leader win and roll the
+                    # reader's position backward. Keep it as leader only when it is a genuine
+                    # forward move that already sits ahead of every peer on the normalized
+                    # timeline by more than the deadband. This can never move progress
+                    # backward (the mover is already the furthest point); a stale percent that
+                    # maps behind/ambiguous still demotes via the else branch.
+                    deadband = getattr(self, "cross_format_deadband_seconds", 2.0)
+                    moved_forward = vals[changed_client] > config[changed_client].previous_pct
+                    ahead_of_peers = (
+                        changed_ts is not None
+                        and other_ts
+                        and changed_ts > max(other_ts) + deadband
                     )
+                    if moved_forward and ahead_of_peers:
+                        logger.info(
+                            f"🛟 '{abs_id}' '{title_snip}' Keeping '{changed_client}' as leader: "
+                            f"genuine forward move ahead of stationary peer "
+                            f"(source=percent_fallback, {changed_ts:.1f}s vs max peer {max(other_ts):.1f}s)"
+                        )
+                    else:
+                        single_delta_low_conf = True
+                        low_conf_single_delta_client = changed_client
+                        logger.info(
+                            f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
+                            f"'{changed_client}' (low-confidence source=percent_fallback); evaluating all candidates"
+                        )
                 elif changed_ts is not None and other_ts:
                     max_other_ts = max(other_ts)
                     NORMALIZED_LEAD_EPSILON_SECONDS = 2.0
