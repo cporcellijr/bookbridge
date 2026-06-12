@@ -80,6 +80,7 @@ class EbookParser:
 
         cache_size = int(os.getenv("EBOOK_CACHE_SIZE", 3))
         self.cache = LRUCache(capacity=cache_size)
+        self._media_overlay_ids_cache = LRUCache(capacity=cache_size)
         self.fuzzy_threshold = int(os.getenv("FUZZY_MATCH_THRESHOLD", 80))
         self.hash_method = os.getenv("KOSYNC_HASH_METHOD", "content").lower()
         self.useXpathSegmentFallback = os.getenv("XPATH_FALLBACK_TO_PREVIOUS_SEGMENT", "false").lower() == "true"
@@ -676,7 +677,8 @@ class EbookParser:
 
                         perfect_ko = self.get_perfect_ko_xpath(filename, match_index)
 
-                        fragment_id = self.get_fragment_for_tag(target_tag)
+                        overlay_ids = self.get_media_overlay_fragment_ids(book_path)
+                        fragment_id = self.get_fragment_for_tag(target_tag, valid_ids=overlay_ids)
 
                         return LocatorResult(
                             percentage=percentage,
@@ -695,18 +697,51 @@ class EbookParser:
             logger.error(f"❌ Error finding text in '{filename}': {e}")
             return None
 
-    def get_fragment_for_tag(self, tag):
+    def get_media_overlay_fragment_ids(self, book_path) -> set:
+        """
+        Collect every text fragment id referenced by the EPUB's media-overlay
+        SMIL files. Storyteller's readalong can only seek audio for these ids;
+        anchoring a locator to any other id makes playback fall back to the
+        start of the chapter. Returns an empty set for books without overlays.
+        """
+        str_path = str(book_path)
+        cached = self._media_overlay_ids_cache.get(str_path)
+        if cached is not None:
+            return cached
+
+        ids: set = set()
+        try:
+            with zipfile.ZipFile(str_path) as zf:
+                for name in zf.namelist():
+                    if not name.lower().endswith('.smil'):
+                        continue
+                    content = zf.read(name).decode('utf-8', 'replace')
+                    ids.update(re.findall(r'<text[^>]+src="[^"#]*#([^"]+)"', content))
+        except Exception as e:
+            logger.debug(f"Media overlay scan failed for '{str_path}': {e}")
+
+        self._media_overlay_ids_cache.put(str_path, ids)
+        return ids
+
+    def get_fragment_for_tag(self, tag, valid_ids: Optional[set] = None):
         """
         Walks backwards from the given tag to find the nearest element with an id.
         Returns the id of the element if found, otherwise None.
         This id is used by the Storyteller to sync progress.
+
+        When valid_ids is provided (media-overlay fragment ids), the nearest
+        ancestor id in that set wins so Storyteller readalong can map the
+        fragment to an audio clip; the innermost id is kept as a fallback.
         """
         fragment_id = None
         curr_tag = tag
         while curr_tag and curr_tag.name not in ['[document]', 'html', 'body']:
             if curr_tag.has_attr('id') and curr_tag['id']:
-                fragment_id = curr_tag['id']
-                break
+                candidate = curr_tag['id']
+                if not valid_ids or candidate in valid_ids:
+                    return candidate
+                if fragment_id is None:
+                    fragment_id = candidate
             curr_tag = curr_tag.parent
         return fragment_id
 
