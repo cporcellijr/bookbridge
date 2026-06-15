@@ -135,3 +135,52 @@ def test_storygraph_details_rating_fields(session):
     assert retrieved.storygraph_rating_updated_at == 1710000000.0
 
 
+# --- Journal mode selection (WAL is unsafe on 9p/network filesystems) ---
+from unittest.mock import mock_open
+from src.db.models import DatabaseManager
+
+
+def _make_manager(tmp_path):
+    return DatabaseManager(str(tmp_path / "jm.db"))
+
+
+def test_filesystem_type_for_path_matches_longest_mount():
+    mounts = (
+        "rootfs / overlay rw 0 0\n"
+        "host /data 9p rw 0 0\n"
+        "tmpfs /data/sub tmpfs rw 0 0\n"
+    )
+    with patch("builtins.open", mock_open(read_data=mounts)):
+        assert DatabaseManager._filesystem_type_for_path("/data/database.db") == "9p"
+        assert DatabaseManager._filesystem_type_for_path("/data/sub/x.db") == "tmpfs"
+        assert DatabaseManager._filesystem_type_for_path("/other/x.db") == "overlay"
+
+
+def test_filesystem_type_for_path_handles_escaped_spaces():
+    # /proc/mounts encodes spaces in the mount point as \040
+    mounts = "rootfs / overlay rw 0 0\nhost /mnt/My\\040Data 9p rw 0 0\n"
+    with patch("builtins.open", mock_open(read_data=mounts)):
+        assert DatabaseManager._filesystem_type_for_path("/mnt/My Data/database.db") == "9p"
+
+
+def test_resolve_journal_mode_delete_on_9p(tmp_path):
+    mgr = _make_manager(tmp_path)
+    os.environ.pop("DB_JOURNAL_MODE", None)
+    with patch.object(DatabaseManager, "_filesystem_type_for_path", return_value="9p"):
+        assert mgr._resolve_journal_mode() == "DELETE"
+
+
+def test_resolve_journal_mode_wal_on_local_fs(tmp_path):
+    mgr = _make_manager(tmp_path)
+    os.environ.pop("DB_JOURNAL_MODE", None)
+    with patch.object(DatabaseManager, "_filesystem_type_for_path", return_value="ext4"):
+        assert mgr._resolve_journal_mode() == "WAL"
+
+
+def test_resolve_journal_mode_env_override_wins(tmp_path):
+    mgr = _make_manager(tmp_path)
+    with patch.dict(os.environ, {"DB_JOURNAL_MODE": "truncate"}):
+        with patch.object(DatabaseManager, "_filesystem_type_for_path", return_value="9p"):
+            assert mgr._resolve_journal_mode() == "TRUNCATE"
+
+

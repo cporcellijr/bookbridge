@@ -2,11 +2,16 @@
 SQLAlchemy ORM models for abs-kosync-bridge database.
 """
 
+import logging
+import os
+
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -586,22 +591,34 @@ class DatabaseManager:
     Database manager handling SQLAlchemy engine and session management.
     """
 
+    # WAL mode needs a shared-memory index (mmap) and proper byte-range locking.
+    # Network / passthrough filesystems don't provide them, and on those WAL
+    # silently breaks durability: the -wal/-shm sidecars never reach the backing
+    # store and the main db file is only updated by a checkpoint that never
+    # lands. Use a rollback journal there so each commit writes straight to the
+    # db file. 9p is the Docker Desktop (Windows/macOS) bind-mount filesystem.
+    _WAL_UNSAFE_FILESYSTEMS = {
+        "9p", "v9fs", "nfs", "nfs4", "cifs", "smb3", "smbfs",
+        "fuse", "fuseblk", "vboxsf", "drvfs", "msdos", "vfat", "exfat",
+    }
+
     def __init__(self, db_path: str):
-        import os
         self.db_path = os.path.abspath(db_path)
-        # Increase timeout to reduce lock errors, enable WAL mode for concurrency, allow multi-thread access
+        # Increase timeout to reduce lock errors, allow multi-thread access.
         # Using 4 slashes guarantees an absolute path in SQLAlchemy
         self.engine = create_engine(
-            f'sqlite:///{self.db_path}', 
-            echo=False, 
+            f'sqlite:///{self.db_path}',
+            echo=False,
             connect_args={'timeout': 30, 'check_same_thread': False}
         )
-        
+
+        journal_mode = self._resolve_journal_mode()
+
         from sqlalchemy import event
         @event.listens_for(self.engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA journal_mode={journal_mode}")
             cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.close()
 
@@ -609,6 +626,50 @@ class DatabaseManager:
 
         # Note: Schema creation is handled by Alembic migrations
         # No longer calling Base.metadata.create_all() here
+
+    def _resolve_journal_mode(self) -> str:
+        """Pick a SQLite journal mode safe for the db's filesystem.
+
+        Honors a `DB_JOURNAL_MODE` env override; otherwise uses WAL on local
+        filesystems and a DELETE rollback journal on filesystems that can't
+        support WAL (see `_WAL_UNSAFE_FILESYSTEMS`)."""
+        override = os.environ.get("DB_JOURNAL_MODE", "").strip().upper()
+        if override:
+            return override
+
+        fstype = self._filesystem_type_for_path(self.db_path)
+        if fstype and fstype.lower() in self._WAL_UNSAFE_FILESYSTEMS:
+            logger.warning(
+                "⚠️ Database '%s' is on a '%s' filesystem that does not support "
+                "SQLite WAL; using DELETE journal mode so writes persist.",
+                self.db_path, fstype,
+            )
+            return "DELETE"
+        return "WAL"
+
+    @staticmethod
+    def _filesystem_type_for_path(path: str) -> Optional[str]:
+        """Best-effort fstype of the mount containing `path` (Linux/proc)."""
+        try:
+            # `path` is already absolute (DatabaseManager stores an abspath);
+            # avoid re-running abspath so the matching is OS-independent.
+            target = path
+            best_mount = ""
+            best_fstype = None
+            with open("/proc/mounts", "r") as handle:
+                for line in handle:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    mount_point = parts[1].replace("\\040", " ")
+                    fstype = parts[2]
+                    if (target == mount_point or target.startswith(mount_point.rstrip("/") + "/")) \
+                            and len(mount_point) >= len(best_mount):
+                        best_mount = mount_point
+                        best_fstype = fstype
+            return best_fstype
+        except Exception:
+            return None
 
     def get_session(self):
         """Get a new database session."""
