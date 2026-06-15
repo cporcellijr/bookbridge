@@ -129,6 +129,11 @@ class SyncManager:
         self._sync_cycle_ebook_cache: dict[str, tuple[str, int]] = {}
         self._sync_cycle_local_epub_cache: dict[str, Path | None] = {}
         self._post_cycle_callbacks: list = []
+        # StoryGraph idle-cooldown tracker: {abs_id: {'pct': float, 'changed_at': float}}.
+        # In-memory only; on restart the first observation reseeds 'changed_at', so a post
+        # is deferred at most one cooldown window (completion still bypasses).
+        self._storygraph_cooldown: dict[str, dict] = {}
+        self._storygraph_cooldown_lock = threading.Lock()
 
         self._setup_sync_clients(sync_clients)
         self.startup_checks()
@@ -1631,6 +1636,70 @@ class SyncManager:
 
         return False
 
+    def _handle_storygraph_cooldown(self, book, config, now: float) -> None:
+        """Post StoryGraph progress on a trailing-edge idle cooldown.
+
+        StoryGraph is intentionally excluded from the normal per-cycle dispatch and driven
+        here instead. While a book keeps progressing the timer resets and no write happens;
+        once the book has been idle (no new progress) for STORYGRAPH_UPDATE_COOLDOWN_MINS we
+        post the latest position. Completion (~100%) bypasses the cooldown and posts at once.
+        """
+        EPS = 1e-4
+        COMPLETION_THRESHOLD = 0.99
+        try:
+            sg = self.sync_clients.get('StoryGraph')
+            if not sg or not sg.is_configured():
+                return
+
+            try:
+                cooldown_mins = int(os.environ.get('STORYGRAPH_UPDATE_COOLDOWN_MINS', '60'))
+            except (TypeError, ValueError):
+                cooldown_mins = 60
+
+            pcts = [
+                cfg.current.get('pct')
+                for cfg in config.values()
+                if cfg and cfg.current.get('pct') is not None
+            ]
+            if not pcts:
+                return
+            current_pct = max(pcts)
+
+            abs_id = book.abs_id
+            with self._storygraph_cooldown_lock:
+                rec = self._storygraph_cooldown.get(abs_id)
+                if rec is None or abs(current_pct - rec['pct']) > EPS:
+                    # Progress moved (or first observation) → (re)start the cooldown.
+                    rec = {'pct': current_pct, 'changed_at': now}
+                    self._storygraph_cooldown[abs_id] = rec
+                changed_at = rec['changed_at']
+
+            posted = self.database_service.get_state(abs_id, 'storygraph')
+            posted_pct = posted.percentage if posted else None
+            if posted_pct is not None and abs(current_pct - posted_pct) <= EPS:
+                return  # Already in sync with StoryGraph.
+
+            is_completion = current_pct >= COMPLETION_THRESHOLD
+            settled = cooldown_mins <= 0 or (now - changed_at) >= cooldown_mins * 60
+            if not (is_completion or settled):
+                return
+
+            request = UpdateProgressRequest(LocatorResult(percentage=current_pct))
+            result = sg.update_progress(book, request)
+            if result and result.success:
+                self.database_service.save_state(State(
+                    abs_id=abs_id,
+                    client_name='storygraph',
+                    last_updated=now,
+                    percentage=current_pct,
+                ))
+                reason = 'completion' if is_completion else f'idle≥{cooldown_mins}m'
+                logger.info(
+                    f"📈 '{abs_id}' StoryGraph cooldown post: {current_pct * 100:.1f}% ({reason})"
+                )
+        except Exception as e:
+            logger.warning(f"⚠️ '{getattr(book, 'abs_id', '?')}' StoryGraph cooldown handler failed: {e}")
+
     def _determine_leader(self, config, book, abs_id, title_snip):
         """
         Determines which client should be the leader based on:
@@ -2011,6 +2080,11 @@ class SyncManager:
                 if not config:
                     continue  # No valid states to process
 
+                # StoryGraph is driven by an idle cooldown rather than the per-cycle
+                # dispatch. Evaluate it for every active book each cycle (including idle
+                # books that early-skip below) so the trailing-edge post can fire.
+                self._handle_storygraph_cooldown(book, config, time.time())
+
                 # Check for ABS offline condition (only for audiobook mode)
                 # Check for ABS offline condition (only for audiobook mode)
                 if not (hasattr(book, 'sync_mode') and book.sync_mode == 'ebook_only'):
@@ -2247,6 +2321,9 @@ class SyncManager:
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
+                        if client_name == 'StoryGraph':
+                            # Driven by _handle_storygraph_cooldown, not the dispatch loop.
+                            continue
                         client_state = config.get(client_name)
                         if client_state and self._should_skip_deadband_rollback(
                             book, leader, leader_state, client_name, client_state, abs_id, title_snip

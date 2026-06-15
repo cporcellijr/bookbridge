@@ -523,6 +523,28 @@ def test_parse_cfi_components_supports_range_cfi():
     assert len(element_steps) > 0
 
 
+def test_parse_cfi_components_supports_spine_step_six():
+    parser = EbookParser.__new__(EbookParser)
+
+    spine_step, element_steps, char_offset = parser._parse_cfi_components(
+        "epubcfi(/6/6!/4/232/2/2/2:0)"
+    )
+
+    assert spine_step == 6
+    assert len(element_steps) > 0
+    assert char_offset == 0
+
+
+def test_parse_cfi_components_supports_minimal_cfi_with_spine_step_six():
+    parser = EbookParser.__new__(EbookParser)
+
+    spine_step, element_steps, char_offset = parser._parse_cfi_components("epubcfi(/6/6!/:0)")
+
+    assert spine_step == 6
+    assert element_steps == []
+    assert char_offset == 0
+
+
 def test_generate_cfi_never_emits_empty_element_path():
     parser = EbookParser.__new__(EbookParser)
 

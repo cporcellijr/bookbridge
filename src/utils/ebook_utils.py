@@ -1712,20 +1712,22 @@ class EbookParser:
 
             if redirect_idx is not None:
                 package_steps = [step for step in combined_steps[:redirect_idx] if hasattr(step, "index")]
-                for step in reversed(package_steps):
-                    if step.index != 6:
-                        spine_step = int(step.index)
-                        break
+                # The package marker is the leading `/6` (spine container); the spine item
+                # is the last package step before the redirect. Identify it positionally so
+                # CFIs whose spine step is literally 6 (e.g. `/6/6!/...`) parse correctly.
+                if package_steps:
+                    spine_step = int(package_steps[-1].index)
                 element_steps = [step for step in combined_steps[redirect_idx + 1:] if hasattr(step, "index")]
             else:
                 indexed_steps = [step for step in combined_steps if hasattr(step, "index")]
-                for step in indexed_steps:
-                    if spine_step is None:
-                        if step.index == 6:
-                            continue
-                        spine_step = int(step.index)
-                    else:
-                        element_steps.append(step)
+                # No redirect: skip a single leading `/6` package marker (by position, not
+                # value-loop) so a spine item that is itself 6 is not discarded.
+                if indexed_steps and indexed_steps[0].index == 6 and len(indexed_steps) >= 2:
+                    spine_step = int(indexed_steps[1].index)
+                    element_steps = list(indexed_steps[2:])
+                elif indexed_steps:
+                    spine_step = int(indexed_steps[0].index)
+                    element_steps = list(indexed_steps[1:])
 
             char_offset = int(parsed_offset or 0)
             return spine_step, element_steps, char_offset
