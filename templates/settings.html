@@ -1060,6 +1060,11 @@
                         <label>Remember User Token</label>
                         <input type="password" name="STORYGRAPH_REMEMBER_USER_TOKEN" value="{{ get_val('STORYGRAPH_REMEMBER_USER_TOKEN') }}">
                     </div>
+                    <div class="form-group full-width">
+                        <label>Update Cooldown (minutes)</label>
+                        <input type="number" name="STORYGRAPH_UPDATE_COOLDOWN_MINS" min="0" value="{{ get_val('STORYGRAPH_UPDATE_COOLDOWN_MINS', '60') }}">
+                        <div class="help-text">Wait this many minutes of no new progress before posting to StoryGraph; any new progress resets the timer. Finishing a book posts immediately. 0 = update every cycle.</div>
+                    </div>
                 </div>
             </div>
 
