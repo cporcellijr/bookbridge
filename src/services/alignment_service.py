@@ -287,23 +287,28 @@ class AlignmentService:
         """
         Reverse lookup: Find character offset for a given timestamp.
         """
-        # 1. Fetch Alignment Map
         alignment = self._get_alignment(abs_id)
         if not alignment:
             return None
-        
-        map_points = alignment
+        return self._interpolate_char_for_time(alignment, timestamp)
+
+    @classmethod
+    def _interpolate_char_for_time(cls, map_points: List[Dict], timestamp: float) -> Optional[int]:
+        """Interpolate the character offset for a timestamp within a loaded map."""
+        if not map_points:
+            return None
+
         target_ts = timestamp
-        
-        # 2. Binary search for interval
+
+        # Binary search for interval
         left = 0
         right = len(map_points) - 1
-        
+
         if target_ts <= map_points[0]['ts']:
-            return self._point_char(map_points[0])
+            return cls._point_char(map_points[0])
         if target_ts >= map_points[-1]['ts']:
-            return self._point_char(map_points[-1])
-            
+            return cls._point_char(map_points[-1])
+
         floor_idx = 0
         while left <= right:
             mid = (left + right) // 2
@@ -312,25 +317,51 @@ class AlignmentService:
                 left = mid + 1
             else:
                 right = mid - 1
-        
+
         p1 = map_points[floor_idx]
         if floor_idx + 1 < len(map_points):
             p2 = map_points[floor_idx + 1]
         else:
-            return self._point_char(p1)
-            
-        # 3. Interpolate
+            return cls._point_char(p1)
+
+        # Interpolate
         time_span = p2['ts'] - p1['ts']
-        p1_char = self._point_char(p1)
-        p2_char = self._point_char(p2)
+        p1_char = cls._point_char(p1)
+        p2_char = cls._point_char(p2)
         char_span = p2_char - p1_char
 
-        if time_span == 0: return p1_char
+        if time_span == 0:
+            return p1_char
 
         ratio = (target_ts - p1['ts']) / time_span
         estimated_char = p1_char + (char_span * ratio)
 
         return int(estimated_char)
+
+    def get_progress_for_time(self, abs_id: str, timestamp: float) -> Optional[float]:
+        """
+        Convert an audio timestamp into an ebook text-progress fraction (0..1)
+        via the stored alignment map.
+
+        Audio clients (ABS, etc.) report progress on the time axis
+        (elapsed seconds / duration) while ebook clients report it on the text
+        axis (characters / total characters). The two are not linearly related,
+        so they can only be compared after mapping one onto the other. Returns
+        None when no alignment exists for the book.
+        """
+        alignment = self._get_alignment(abs_id)
+        if not alignment:
+            return None
+
+        max_char = self._point_char(alignment[-1])
+        if max_char <= 0:
+            return None
+
+        char = self._interpolate_char_for_time(alignment, timestamp)
+        if char is None:
+            return None
+
+        return max(0.0, min(char / max_char, 1.0))
 
     @staticmethod
     def _filter_monotonic_lis(anchors: List[Dict]) -> List[Dict]:

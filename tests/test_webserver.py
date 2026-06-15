@@ -1070,6 +1070,79 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertNotIn('Out of sync by 54.0%', html)
         self.assertNotIn('class="book-card out-of-sync"', html)
 
+    def test_index_sync_warning_maps_audio_axis_through_alignment(self):
+        """A sentence-aligned book whose ABS time-axis % differs from the ebook
+        text-axis % must not be flagged out of sync: the audio position is
+        mapped onto the text axis via the alignment map before comparing."""
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='axis-book-1',
+            abs_title='Neverwhere',
+            ebook_filename='storyteller_uuid-axis.epub',
+            storyteller_uuid='uuid-axis-1',
+            sync_mode='audiobook',
+            status='active',
+            duration=49728,
+        )
+        # ABS at 49.6% of the audio TIME axis (ts 24684s); ebook clients at
+        # 56.3% of the TEXT axis. Raw gap = 6.7%, but it is the same sentence.
+        mock_states = [
+            State(abs_id='axis-book-1', client_name='abs', percentage=0.496, timestamp=24684, last_updated=1642291400),
+            State(abs_id='axis-book-1', client_name='kosync', percentage=0.563, xpath='/body/DocFragment[12]/body/p[76]/text().0', last_updated=1642291400),
+            State(abs_id='axis-book-1', client_name='storyteller', percentage=0.563, cfi='epubcfi(/6/28!/4/152/12/2:0)', last_updated=1642291400),
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = []
+        self._set_dashboard_integrations(storyteller=True)
+
+        # Alignment maps ABS ts 24684s -> 56.3% of the ebook text.
+        self.mock_manager.alignment_service.get_progress_for_time.return_value = 0.563
+
+        mapping = self._capture_index_mapping()
+
+        self.mock_manager.alignment_service.get_progress_for_time.assert_called_once_with('axis-book-1', 24684.0)
+        self.assertEqual(mapping['sync_warning_pct'], 0.0)
+        self.assertFalse(mapping['is_out_of_sync'])
+
+    def test_index_sync_warning_without_alignment_falls_back_to_raw(self):
+        """With no alignment map the audio client falls back to its raw
+        percentage so genuine drift is still surfaced."""
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='axis-book-2',
+            abs_title='Neverwhere',
+            ebook_filename='storyteller_uuid-axis2.epub',
+            storyteller_uuid='uuid-axis-2',
+            sync_mode='audiobook',
+            status='active',
+            duration=49728,
+        )
+        mock_states = [
+            State(abs_id='axis-book-2', client_name='abs', percentage=0.496, timestamp=24684, last_updated=1642291400),
+            State(abs_id='axis-book-2', client_name='kosync', percentage=0.563, xpath='/body/DocFragment[12]/body/p[76]/text().0', last_updated=1642291400),
+            State(abs_id='axis-book-2', client_name='storyteller', percentage=0.563, cfi='epubcfi(/6/28!/4/152/12/2:0)', last_updated=1642291400),
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = []
+        self._set_dashboard_integrations(storyteller=True)
+
+        # No alignment available -> None -> fall back to raw percentages.
+        self.mock_manager.alignment_service.get_progress_for_time.return_value = None
+
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['sync_warning_pct'], 6.7)
+        self.assertTrue(mapping['is_out_of_sync'])
+
     def test_index_template_keeps_filename_searchable_but_not_as_author(self):
         from src.db.models import Book, BookloreBook
 

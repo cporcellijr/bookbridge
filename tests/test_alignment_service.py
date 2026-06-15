@@ -100,6 +100,36 @@ def test_get_time_for_text(service, mock_db):
     assert ts == 5.0
 
 
+def test_get_progress_for_time_maps_audio_ts_to_text_fraction(service):
+    # Deliberately non-linear: half the audio time (5.0s) is 60% of the text.
+    # This is the audio-time vs ebook-text axis mismatch the dashboard warning
+    # must account for.
+    service._get_alignment = MagicMock(return_value=[
+        {'char': 0, 'ts': 0.0},
+        {'char': 600, 'ts': 5.0},
+        {'char': 1000, 'ts': 10.0},
+    ])
+
+    assert service.get_progress_for_time("id", 5.0) == pytest.approx(0.60)
+    # Interpolated: ts 2.5 -> char 300 -> 0.30
+    assert service.get_progress_for_time("id", 2.5) == pytest.approx(0.30)
+
+
+def test_get_progress_for_time_clamps_to_bounds(service):
+    service._get_alignment = MagicMock(return_value=[
+        {'char': 0, 'ts': 0.0},
+        {'char': 1000, 'ts': 10.0},
+    ])
+
+    assert service.get_progress_for_time("id", 999.0) == pytest.approx(1.0)
+    assert service.get_progress_for_time("id", -5.0) == pytest.approx(0.0)
+
+
+def test_get_progress_for_time_returns_none_without_alignment(service):
+    service._get_alignment = MagicMock(return_value=None)
+    assert service.get_progress_for_time("id", 5.0) is None
+
+
 def test_probe_storyteller_transcripts_returns_ready_when_assets_not_configured():
     with pytest.MonkeyPatch.context() as mp:
         mp.delenv("STORYTELLER_ASSETS_DIR", raising=False)

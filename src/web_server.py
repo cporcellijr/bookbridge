@@ -2278,6 +2278,49 @@ def _get_dashboard_sync_warning_clients(mapping, integrations):
     return client_names
 
 
+# Clients that report progress on the audio-time axis (elapsed seconds /
+# duration) rather than the ebook-text axis (characters / total). Their raw
+# percentage is not directly comparable to ebook clients, so it is mapped onto
+# the text axis via the alignment map before the drift comparison.
+_AUDIO_AXIS_SYNC_CLIENTS = {'abs', 'bookloreaudio', 'bookorbitaudio'}
+
+
+def _dashboard_text_axis_pct(client_name, state, mapping):
+    """Return a client's progress as an ebook text-axis percentage (0-100).
+
+    Ebook clients already report on the text axis. Audio clients report on the
+    time axis; convert their timestamp to a text fraction via the book's
+    alignment map so the two are comparable. Falls back to the raw percentage
+    when no alignment map is available (e.g. audio-only books)."""
+    percentage = state.get('percentage')
+    if percentage is None:
+        return None
+
+    if client_name not in _AUDIO_AXIS_SYNC_CLIENTS:
+        return float(percentage)
+
+    alignment_service = getattr(manager, "alignment_service", None) if manager else None
+    if not alignment_service:
+        return float(percentage)
+
+    timestamp = state.get('timestamp') or 0
+    if timestamp <= 0:
+        duration = mapping.get('duration') or 0
+        if duration > 0:
+            timestamp = (float(percentage) / 100.0) * duration
+    if timestamp <= 0:
+        return float(percentage)
+
+    try:
+        text_fraction = alignment_service.get_progress_for_time(mapping.get('abs_id'), float(timestamp))
+    except Exception:
+        text_fraction = None
+
+    if not isinstance(text_fraction, (int, float)) or isinstance(text_fraction, bool):
+        return float(percentage)
+    return text_fraction * 100.0
+
+
 def _compute_dashboard_sync_warning_pct(mapping, integrations):
     progress_values = []
     states = mapping.get('states', {})
@@ -2286,10 +2329,13 @@ def _compute_dashboard_sync_warning_pct(mapping, integrations):
         state = states.get(client_name)
         if not state:
             continue
-        percentage = state.get('percentage')
-        if percentage is None or percentage <= 0:
+        raw = state.get('percentage')
+        if raw is None or raw <= 0:
             continue
-        progress_values.append(float(percentage))
+        value = _dashboard_text_axis_pct(client_name, state, mapping)
+        if value is None:
+            continue
+        progress_values.append(value)
 
     if len(progress_values) < 2:
         return 0.0
