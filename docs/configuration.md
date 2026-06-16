@@ -126,6 +126,40 @@ Advanced Grimmory cache tuning:
 | Login Retry Delay | `BOOKLORE_LOGIN_RETRY_DELAY_SECONDS` | `1.1` | Delay before retrying duplicate refresh-token login conflicts. |
 | Login Max Attempts | `BOOKLORE_LOGIN_MAX_ATTEMPTS` | `2` | Maximum login attempts before failing. |
 
+#### BookOrbit
+
+BookOrbit is a newer ebook library manager (with audiobook support, like Grimmory). The bridge treats it as an alternative to Grimmory — you can use either one or both at the same time.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Enable | `BOOKORBIT_ENABLED` | `false` | Turns on BookOrbit support. |
+| Server URL | `BOOKORBIT_SERVER` | empty | BookOrbit base URL. |
+| Username | `BOOKORBIT_USER` | empty | BookOrbit username. |
+| Password | `BOOKORBIT_PASSWORD` | empty | BookOrbit password. |
+| Collection Name | `BOOKORBIT_SHELF_NAME` | `Kobo` | Collection that auto-matched books are moved to on success. |
+| Record Reading Sessions | `BOOKORBIT_READING_SESSIONS` | `true` | Sends reading or listening session updates back to BookOrbit. |
+| Poll Mode | `BOOKORBIT_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls BookOrbit separately. |
+| Poll Interval | `BOOKORBIT_POLL_SECONDS` | `300` | Used when Poll Mode is `custom`. |
+
+Optional "Up Next" collection watch — drop a book onto a collection in BookOrbit and the bridge auto-matches it on the next poll:
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Watch a Collection | `BOOKORBIT_SHELF_WATCH_ENABLED` | `false` | Turns on auto-matching from a watched collection. |
+| Collection Name | `BOOKORBIT_SHELF_WATCH_NAME` | `Up Next` | Create this collection in BookOrbit. Books placed on it are auto-matched and moved to the collection above on success. |
+| Match Threshold | `BOOKORBIT_SHELF_WATCH_THRESHOLD` | `95` | Minimum match confidence (60–100) before a book is auto-linked. |
+| Rescan Interval (Hours) | `BOOKORBIT_SHELF_WATCH_RESCAN_HOURS` | `24` | How often a still-unmatched book on the watch collection is retried. |
+
+BookOrbit notes:
+
+- BookOrbit works like Grimmory across Match, Batch Match, Suggestions, and the dashboard — pick it as the ebook (or audio) source when you create a mapping.
+- Use the **Test** button in Settings to check the connection before saving.
+- **Moving from Grimmory to BookOrbit?** You do not need to rematch. A helper script, `scripts/migrate_grimmory_to_bookorbit.py`, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add `--apply` to commit):
+
+    ```bash
+    docker exec abs_kosync python -m scripts.migrate_grimmory_to_bookorbit --apply
+    ```
+
 #### Calibre-Web Automated (CWA)
 
 | Setting | Env Var | Default | Notes |
@@ -190,6 +224,41 @@ Since Hardcover and StoryGraph serve similar purposes, the bridge uses an "eithe
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Shelfmark URL | `SHELFMARK_URL` | empty | Adds the Shelfmark shortcut when configured. |
+
+#### Ollama (Local LLM, Optional)
+
+This is an advanced, opt-in feature. If you run a local [Ollama](https://ollama.com) server, the bridge can use it to make smarter book-match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything here is **off until you enable it**, and every feature falls back to the normal behavior if Ollama is unreachable — so it never blocks a sync.
+
+Connection:
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Enable | `OLLAMA_ENABLED` | `false` | Master switch for all Ollama features. |
+| Server URL | `OLLAMA_URL` | `http://ollama:11434` | Your Ollama server. Use container DNS (`http://ollama:11434`) or `http://localhost:11434`. |
+| Embedding Model | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Used for similarity. Pull it first: `ollama pull nomic-embed-text`. |
+| Chat / Judge Model | `OLLAMA_CHAT_MODEL` | `qwen2.5:14b` | Used to judge ambiguous matches. |
+| Keep Alive | `OLLAMA_KEEP_ALIVE` | `5m` | How long models stay loaded after a request (`5m`, `1h`, `-1` = forever, `0` = unload now). |
+| Chat Context Length | `OLLAMA_NUM_CTX` | empty | Context window for judge calls. Empty = server default. |
+
+What it can do — each is a separate toggle, and the defaults below only take effect once **Enable** is on:
+
+| Feature | Env Var | Default | What it does |
+| --- | --- | --- | --- |
+| Re-rank suggestions | `OLLAMA_RERANK_SUGGESTIONS` | `true` | Re-scores borderline suggestions by meaning, not just fuzzy text. |
+| Suppress weak suggestions | `OLLAMA_SUGGEST_JUDGE_GATE` | `true` | Drops candidates the model can't confirm as a real match. |
+| Judge ambiguous matches | `OLLAMA_JUDGE_SUGGESTIONS` | `true` | Asks the chat model to resolve close calls. |
+| Alignment fallback | `OLLAMA_ALIGN_FALLBACK` | `true` | Locates a position by meaning when fuzzy text matching fails. |
+| Ebook position rescue | `OLLAMA_EBOOK_TEXT_FALLBACK` | `true` | The same idea for KoSync/Storyteller ebook lookups. |
+| Anchor rescue | `OLLAMA_ALIGN_ANCHOR_RESCUE` | `true` | Builds a real audio↔text map when n-gram alignment fails. |
+| Content guard | `OLLAMA_ALIGN_CONTENT_GUARD` | `true` | Refuses to store an alignment when the audio and ebook are clearly different content (wrong edition, abridged, translation). |
+| Tracker match verify | `OLLAMA_TRACKER_MATCH` | `true` | Double-checks Hardcover/StoryGraph matches before writing. |
+| Library match rescue | `OLLAMA_LIBRARY_MATCH` | `true` | When a Grimmory/BookOrbit ebook won't match by name, shortlists the library and lets the model pick the right book. |
+
+Ollama notes:
+
+- The model never runs on hot sync paths — only on linking, suggestion scans, and alignment work — so day-to-day syncing stays fast.
+- Use the **Test** button to confirm the server is reachable. It reports each model's context length and capabilities, and warns if your embedding model can't actually embed.
+- Finer tuning knobs (score bands, judge margins, similarity thresholds) are available in the Settings UI if you want them, but the defaults are a sensible starting point.
 
 ### Suggestions
 

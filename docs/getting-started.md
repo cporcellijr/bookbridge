@@ -13,7 +13,7 @@ Before you begin, you should have:
 - Docker and Docker Compose
 - A working Audiobookshelf server if you want audiobook matching or ABS sync
 - An ebook folder on the Docker host
-- Optional: KOSync, Grimmory, Storyteller, or Hardcover if you want those integrations
+- Optional: KOSync, Grimmory or BookOrbit, Storyteller, or Hardcover if you want those integrations
 
 ---
 
@@ -39,7 +39,7 @@ If you want searches scoped to one ABS library:
 If you plan to use them, also keep these handy:
 
 - KOSync URL, username, and password
-- Grimmory URL, username, and password
+- Grimmory or BookOrbit URL, username, and password
 - Storyteller URL, username, and password
 
 ---
@@ -119,7 +119,7 @@ docker compose logs -f
 2. Enter your **Audiobookshelf Server URL**, **API Token**, and **Library ID**.
 3. Add any optional services you want to use:
    - KOSync
-   - Grimmory
+   - Grimmory or BookOrbit
    - Storyteller
    - Hardcover
 4. Use the **Test** button on any service section if you want to check a service before saving.

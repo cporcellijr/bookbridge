@@ -4,6 +4,68 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [6.8.0]
+
+The headline additions are a second ebook library manager (BookOrbit) and an optional local-LLM assistant (Ollama), alongside a batch of sync fixes.
+
+### What's New
+
+- **BookOrbit support.** BookOrbit is a newer ebook library manager (with audiobook support) that works just like Grimmory. You can use it instead of Grimmory or alongside it, and pick it as the ebook or audio source when you create a mapping. It also supports an optional "Up Next" collection watch that auto-matches books you drop onto a shelf. See [Configuration → BookOrbit](configuration.md#bookorbit). If you are moving over from Grimmory, a migration script re-points your existing links without rematching.
+
+- **Optional local LLM (Ollama).** If you run a local Ollama server, the bridge can use it to make smarter match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything is off until you turn it on, and every feature falls back to the normal behavior if Ollama is unreachable, so it never blocks a sync. See [Configuration → Ollama](configuration.md#ollama-local-llm-optional).
+
+- **Link Storyteller from any dashboard card.** The "Link" action that ebook-only mappings already had now appears on books with an audio↔ebook match too, so you can attach a Storyteller title to almost any book without rematching it.
+
+- **Combined KOReader reading stats across devices.** If you read the same book on more than one KOReader device, the stats page now adds up the time and pages across them instead of showing each device separately.
+
+- **Expanded stats page.** The stats page has more reading-activity views.
+
+### What Changed
+
+- **Storyteller-led syncs now count as listening time in Audiobookshelf.** When a sync is driven by Storyteller read-along progress, that time is credited back to ABS as listening, so your audiobook stats stay accurate.
+
+### Fixed
+
+- **Database safety on network and virtual filesystems.** On filesystems where SQLite's WAL mode is unreliable (9p, some NFS setups, certain VM shares), the bridge now uses a safer journal mode so the database does not get into a bad state.
+- **Storyteller read-along no longer snaps back** in books that use media-overlay (SMIL) fragment IDs for navigation.
+- **Fewer false rollbacks from KOReader.** Stale or out-of-order KoSync updates are better guarded against, so a delayed write can't quietly push your position backward.
+- **Dashboard "out of sync" warnings** are more accurate for audiobook-vs-ebook comparisons.
+
+---
+
+## [6.7.0] - 2026-05-11
+
+### What's New
+
+- **Ratings on dashboard cards.** Each book shows StoryGraph and Goodreads ratings as small badges under the cover. They are filled in automatically when a book is linked, and a one-time backfill adds them to books you linked earlier.
+- **Sort by rating.** A new **Rating** option in the dashboard sort dropdown orders books by their average rating; books without ratings sort to the bottom.
+- **Series grouping.** Books in the same series can be grouped into a single stacked card with combined progress instead of one card each.
+- **StoryGraph audiobook editions.** The StoryGraph edition picker now recognizes audiobook formats and shows their duration, so audiobook listeners can pick the right edition.
+- **Authoritative ABS matching via Calibre.** If you use the Audiobookshelf calibre plugin, the bridge can read its identifier from Calibre and treat already-mapped books as a sure thing during scans, skipping fuzzy guessing.
+- **Bridge Sync can upload your reading stats.** A new "Auto-Sync Reading Stats" option in the KOReader plugin uploads your page stats automatically, with a cooldown so it stays quiet.
+- **Forge tuning for Storyteller ReadAloud.** New options to skip the ReadAloud EPUB cache and to tune how long the bridge waits for in-flight Storyteller jobs to recover after a restart.
+
+### Fixed
+
+- **KOReader sync was silently dropping to a less accurate percent-only mode** for many EPUBs with inline formatting. Those positions now resolve correctly, restoring the normal anti-rollback protections.
+
+---
+
+## [6.6.0] - 2026-05-01
+
+### What's New
+
+- **StoryGraph integration.** StoryGraph joins Hardcover as a reading tracker, with linking, a matching modal, edition picking, and automatic matching.
+- **Either-or tracker mode.** Each book can be tracked on Hardcover *or* StoryGraph, one at a time, instead of choosing a single tracker for everything.
+- **Calmer KoSync writes.** A new debounce setting groups bursts of KOReader updates together, so rapid page-turns no longer kick off a sync for every single write.
+
+### Fixed
+
+- **A slow service no longer stalls the whole sync cycle.** One unresponsive client used to hold everything up until it timed out; the sync cycle now keeps moving.
+- **Steadier StoryGraph and KOReader handling** for edition lookups, renumbered EPUB fragments, and ebook-only matches that previously could lose their link after a rematch.
+
+---
+
 ## [6.5.0] 2026-4-12
 
 ### What's New
