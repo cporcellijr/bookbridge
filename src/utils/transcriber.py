@@ -430,9 +430,6 @@ class AudioTranscriber:
         # The Orchestrator (SyncManager) should check the DB (AlignmentService) before calling this.
         # However, we CAN check our local cache to resume/skip work if we crashed mid-transcription.
         
-        # Check LRU Cache (in-memory) (Optional, mostly for dev speed)
-        # if abs_id in self._transcript_cache: ...
-
         book_cache_dir = self.cache_root / str(abs_id)
         # Clean up if not resuming? For now, we assume if we are called, we need to run.
         book_cache_dir.mkdir(parents=True, exist_ok=True)

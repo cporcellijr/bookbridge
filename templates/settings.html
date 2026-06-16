@@ -2066,9 +2066,7 @@
                 // Hide Public URL section
                 if (publicGroup) publicGroup.classList.add('hidden');
 
-                // Make internal editable (user must set external server)
-                // We don't necessarily clear it, but maybe we should? 
-                // Let's leave it, user can edit.
+                // Make internal editable so the user can set their external server.
                 internalInput.removeAttribute('readonly');
                 internalInput.style.opacity = "1";
                 internalInput.style.cursor = "text";
@@ -2217,8 +2215,8 @@
         document.addEventListener('DOMContentLoaded', function () {
             const configuredPort = "{{ get_val('KOSYNC_PORT', '5757') }}";
 
-            // Simple generic suggestion as requested
-            let suggestedUrl = `http://localhost:${configuredPort}`;
+            // Generic example so users see the expected shape of an internet-reachable URL.
+            let suggestedUrl = `https://koreader.example.com:${configuredPort}`;
 
             const publicUrlInput = document.getElementById('public_kosync_url');
             publicUrlInput.value = suggestedUrl;

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class StorytellerAPIClient:
     def __init__(self):
-        raw_url = os.environ.get("STORYTELLER_API_URL", "http://localhost:8001").rstrip('/')
+        raw_url = os.environ.get("STORYTELLER_API_URL", "").rstrip('/')
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
         self.base_url = raw_url

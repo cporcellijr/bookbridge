@@ -153,9 +153,6 @@ class Polisher:
             if gap < 2.0: 
                 combined_text = (current_segment['text'] + " " + next_segment['text']).strip()
                 normalized_combo = self.normalize(combined_text)
-                # normalized_source = self.normalize(ebook_full_text) # Warning: This is slow if done every time. 
-                # Optimization: We assume ebook_full_text is passed for context, but searching huge string is costly.
-                # In reality, we should check if the split was "unnatural".
                 
                 # Simple check: Does the first segment end with specific punctuation?
                 # If it ends with . or ? or !, likely a real sentence end.
