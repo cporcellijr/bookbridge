@@ -733,7 +733,7 @@ def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original
     artifact_filename = f"storyteller_{storyteller_uuid}.epub"
     target_path = epub_cache / artifact_filename
 
-    no_epub_cache = os.environ.get("STORYTELLER_NO_EPUB_CACHE", "false").lower() == "true"
+    no_epub_cache = os.environ.get("STORYTELLER_NO_EPUB_CACHE", "false").lower() in ("true", "1", "yes", "on")
     if no_epub_cache and original_ebook_filename:
         original_name = Path(str(original_ebook_filename)).name
         nocache_candidates = [epub_cache / original_name]
@@ -1722,6 +1722,7 @@ def settings():
             'INSTANT_SYNC_ENABLED',
             'STORYTELLER_POLL_WAIT_FOR_SETTLE',
             'STORYTELLER_LISTENING_SESSIONS',
+            'STORYTELLER_NO_EPUB_CACHE',
             'SHELFMARK_ENABLED',
             'OLLAMA_ENABLED',
             'OLLAMA_RERANK_SUGGESTIONS',

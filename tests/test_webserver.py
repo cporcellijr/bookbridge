@@ -2260,6 +2260,25 @@ class TestStorytellerNoCacheFlag(CleanFlaskIntegrationTest):
         self.assertEqual(Path(path), original_path)
         self.mock_storyteller_client.download_book.assert_not_called()
 
+    def test_uses_original_when_flag_value_is_on(self):
+        # The settings toggle (and legacy DBs) store "on", not "true".
+        from src.web_server import _download_storyteller_artifact
+
+        original_path = self.books_dir / "original.epub"
+        original_path.write_bytes(b"epub bytes")
+        self.mock_container.mock_ebook_parser.resolve_book_path.return_value = original_path
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "on"
+
+        filename, path = _download_storyteller_artifact(
+            "uuid-abc",
+            "Some Title",
+            original_ebook_filename="original.epub",
+        )
+
+        self.assertEqual(filename, "original.epub")
+        self.assertEqual(Path(path), original_path)
+        self.mock_storyteller_client.download_book.assert_not_called()
+
     def test_falls_back_to_download_when_original_missing(self):
         from src.web_server import _download_storyteller_artifact
 
