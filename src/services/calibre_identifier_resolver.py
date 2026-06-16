@@ -26,7 +26,8 @@ class CalibreIdentifierResolver:
         self._cwa_warned = False
 
     def is_enabled(self) -> bool:
-        return os.environ.get("CALIBRE_USE_ABS_IDENTIFIER", "false").lower() == "true"
+        from src.utils.config_loader import env_truthy
+        return env_truthy("CALIBRE_USE_ABS_IDENTIFIER")
 
     def refresh(self) -> None:
         with self._lock:

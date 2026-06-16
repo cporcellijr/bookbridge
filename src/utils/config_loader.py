@@ -5,6 +5,19 @@ from src.db.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
+# Accepted truthy spellings for boolean settings. The settings UI checkbox
+# posts "on", env files commonly use "1"/"yes", and our defaults use
+# "true"/"false" — treat them all as enabled so a setting can't silently
+# no-op just because of how it was spelled.
+_TRUTHY = ("true", "1", "yes", "on")
+
+
+def env_truthy(key: str, default: str = "false") -> bool:
+    """Return whether an env/setting value is enabled, accepting any of
+    true/1/yes/on (case-insensitive). Use this for every boolean setting read
+    instead of comparing to "true" directly."""
+    return os.environ.get(key, default).strip().lower() in _TRUTHY
+
 # Full list of settings to manage
 ALL_SETTINGS = [
     # Required ABS

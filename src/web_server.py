@@ -22,7 +22,7 @@ import schedule
 from dependency_injector import providers
 from flask import Flask, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response
 
-from src.utils.config_loader import ConfigLoader
+from src.utils.config_loader import ConfigLoader, env_truthy
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
@@ -733,7 +733,7 @@ def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original
     artifact_filename = f"storyteller_{storyteller_uuid}.epub"
     target_path = epub_cache / artifact_filename
 
-    no_epub_cache = os.environ.get("STORYTELLER_NO_EPUB_CACHE", "false").lower() in ("true", "1", "yes", "on")
+    no_epub_cache = env_truthy("STORYTELLER_NO_EPUB_CACHE")
     if no_epub_cache and original_ebook_filename:
         original_name = Path(str(original_ebook_filename)).name
         nocache_candidates = [epub_cache / original_name]
@@ -1723,6 +1723,11 @@ def settings():
             'STORYTELLER_POLL_WAIT_FOR_SETTLE',
             'STORYTELLER_LISTENING_SESSIONS',
             'STORYTELLER_NO_EPUB_CACHE',
+            'BOOKLORE_SHELF_WATCH_ENABLED',
+            'BOOKORBIT_ENABLED',
+            'BOOKORBIT_READING_SESSIONS',
+            'BOOKORBIT_SHELF_WATCH_ENABLED',
+            'CALIBRE_USE_ABS_IDENTIFIER',
             'SHELFMARK_ENABLED',
             'OLLAMA_ENABLED',
             'OLLAMA_RERANK_SUGGESTIONS',

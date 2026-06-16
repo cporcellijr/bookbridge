@@ -1349,7 +1349,8 @@ class ForgeService:
                 time.sleep(self.storyteller_cleanup_grace_seconds)
 
             # --- DOWNLOAD ---
-            no_epub_cache = os.environ.get("STORYTELLER_NO_EPUB_CACHE", "false").lower() in ("true", "1", "yes", "on")
+            from src.utils.config_loader import env_truthy
+            no_epub_cache = env_truthy("STORYTELLER_NO_EPUB_CACHE")
             target_filename = f"storyteller_{book_uuid}.epub"
             target_path = epub_cache / target_filename
 
