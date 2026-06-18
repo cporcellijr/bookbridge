@@ -15,7 +15,7 @@ Key features:
 import os
 import logging
 import time
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from datetime import date
 
 import requests
@@ -245,21 +245,17 @@ class HardcoverClient:
             }
         return None
 
-    def search_by_title_author(self, title: str, author: str = None) -> Optional[Dict]:
-        """Search by title and author, returning the best fuzzy match."""
-        # Clean the input title for better matching comparison
+    def _search_candidate_books(self, title: str, author: str = None) -> List[Dict]:
+        """Fetch up to 10 candidate books (id, title, slug, cached_contributors) for a query."""
         clean_input_title = clean_book_title(title)
-        clean_input_author = author.lower().strip() if author else ""
-
-        # Construct search query
         search_query = f"{clean_input_title} {author or ''}".strip()
 
         query = """
         query ($query: String!) {
             search(
-                query: $query, 
-                per_page: 10, 
-                page: 1, 
+                query: $query,
+                per_page: 10,
+                page: 1,
                 query_type: "Book"
             ) {
                 ids
@@ -269,14 +265,31 @@ class HardcoverClient:
 
         result = self.query(query, {"query": search_query})
         if not result or not result.get("search") or not result["search"].get("ids"):
-            return None
+            return []
 
         book_ids = result["search"]["ids"]
         if not book_ids:
-            return None
+            return []
 
-        # Fetch details for up to 10 books to compare
-        book_query = """
+        # Fetch details for up to 10 books to compare. Try the enriched query
+        # (year + series, for better LLM judging) and fall back to the basic
+        # field set if the live schema rejects it.
+        book_query_enriched = """
+        query ($ids: [Int!]) {
+            books(where: { id: { _in: $ids }}) {
+                id
+                title
+                slug
+                cached_contributors
+                release_year
+                book_series {
+                    position
+                    series { name }
+                }
+            }
+        }
+        """
+        book_query_basic = """
         query ($ids: [Int!]) {
             books(where: { id: { _in: $ids }}) {
                 id
@@ -287,11 +300,79 @@ class HardcoverClient:
         }
         """
 
-        book_result = self.query(book_query, {"ids": book_ids})
+        book_result = self.query(book_query_enriched, {"ids": book_ids})
         if not book_result or not book_result.get("books"):
+            book_result = self.query(book_query_basic, {"ids": book_ids})
+        if not book_result or not book_result.get("books"):
+            return []
+
+        return book_result["books"]
+
+    def list_candidates_by_title_author(self, title: str, author: str = None) -> List[Dict]:
+        """Return search candidates normalized to {book_id, title, author, slug} for LLM judging."""
+        candidates = self._search_candidate_books(title, author)
+        normalized = []
+        for book in candidates:
+            authors = self._extract_authors_from_cached(book.get("cached_contributors"))
+            entry = {
+                "book_id": book.get("id"),
+                "title": book.get("title"),
+                "author": authors[0] if authors else "",
+                "slug": book.get("slug"),
+            }
+            if book.get("release_year"):
+                entry["year"] = book["release_year"]
+            series_label = self._format_series(book.get("book_series"))
+            if series_label:
+                entry["series"] = series_label
+            normalized.append(entry)
+        return normalized
+
+    @staticmethod
+    def _format_series(book_series) -> str:
+        """Format the first series link as 'Name #position' (or '' when absent)."""
+        if not isinstance(book_series, list):
+            return ""
+        for link in book_series:
+            if not isinstance(link, dict):
+                continue
+            name = ((link.get("series") or {}).get("name") or "").strip()
+            if not name:
+                continue
+            position = link.get("position")
+            return f"{name} #{position}" if position is not None else name
+        return ""
+
+    def resolve_match_for_book(self, book: Dict) -> Optional[Dict]:
+        """Resolve a chosen candidate to the standard match dict (edition + pages/audio)."""
+        book_id = book.get("book_id")
+        if not book_id:
+            return None
+        edition = self.get_default_edition(book_id)
+        pages = edition.get("pages") if edition else None
+        match = {
+            "book_id": book_id,
+            "slug": book.get("slug"),
+            "edition_id": edition.get("id") if edition else None,
+            "pages": pages if (pages and pages > 0) else None,
+            "title": book.get("title"),
+        }
+        # Audiobook-only edition: use the same sentinel the legacy automatch path expects.
+        if (not pages or pages <= 0) and edition and edition.get("audio_seconds") and edition["audio_seconds"] > 0:
+            match["pages"] = -1
+            match["audio_seconds"] = edition["audio_seconds"]
+        return match
+
+    def search_by_title_author(self, title: str, author: str = None) -> Optional[Dict]:
+        """Search by title and author, returning the best fuzzy match."""
+        # Clean the input title for better matching comparison
+        clean_input_title = clean_book_title(title)
+        clean_input_author = author.lower().strip() if author else ""
+
+        candidates = self._search_candidate_books(title, author)
+        if not candidates:
             return None
 
-        candidates = book_result["books"]
         best_match = None
         best_score = 0.0
 

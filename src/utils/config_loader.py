@@ -5,6 +5,19 @@ from src.db.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
+# Accepted truthy spellings for boolean settings. The settings UI checkbox
+# posts "on", env files commonly use "1"/"yes", and our defaults use
+# "true"/"false" — treat them all as enabled so a setting can't silently
+# no-op just because of how it was spelled.
+_TRUTHY = ("true", "1", "yes", "on")
+
+
+def env_truthy(key: str, default: str = "false") -> bool:
+    """Return whether an env/setting value is enabled, accepting any of
+    true/1/yes/on (case-insensitive). Use this for every boolean setting read
+    instead of comparing to "true" directly."""
+    return os.environ.get(key, default).strip().lower() in _TRUTHY
+
 # Full list of settings to manage
 ALL_SETTINGS = [
     # Required ABS
@@ -15,9 +28,11 @@ ALL_SETTINGS = [
     'ABS_SOCKET_ENABLED', 'ABS_SOCKET_DEBOUNCE_SECONDS',
     
     # KOSync
-    'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY', 
+    'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY',
     'KOSYNC_HASH_METHOD', 'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
-    
+    'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS', 'KOSYNC_AUTO_MAP_ON_AGREEMENT',
+    'KOREADER_COMBINE_DEVICE_STATS',
+
     # Storyteller
     'STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD',
     
@@ -25,6 +40,15 @@ ALL_SETTINGS = [
     'BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD', 'BOOKLORE_SHELF_NAME', 'BOOKLORE_LIBRARY_ID',
     'GRIMMORY_READING_SESSIONS',
     'DEVICE_SYNC_COLLECTIONS', 'DEVICE_SYNC_EXCLUDED_SHELVES',
+    'BOOKLORE_SHELF_WATCH_ENABLED', 'BOOKLORE_SHELF_WATCH_NAME',
+    'BOOKLORE_SHELF_WATCH_THRESHOLD', 'BOOKLORE_SHELF_WATCH_RESCAN_HOURS',
+
+    # BookOrbit
+    'BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD',
+    'BOOKORBIT_SHELF_NAME', 'BOOKORBIT_POLL_MODE', 'BOOKORBIT_POLL_SECONDS',
+    'BOOKORBIT_READING_SESSIONS',
+    'BOOKORBIT_SHELF_WATCH_ENABLED', 'BOOKORBIT_SHELF_WATCH_NAME',
+    'BOOKORBIT_SHELF_WATCH_THRESHOLD', 'BOOKORBIT_SHELF_WATCH_RESCAN_HOURS',
 
     # CWA (Calibre-Web Automated)
     'CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD',
@@ -36,11 +60,24 @@ ALL_SETTINGS = [
     'PROGRESS_TRACKER_PROVIDER',
 
     # Hardcover
-    'HARDCOVER_ENABLED', 'HARDCOVER_TOKEN',
+    'HARDCOVER_ENABLED', 'HARDCOVER_TOKEN', 'HARDCOVER_UPDATE_COOLDOWN_MINS',
     
     # StoryGraph
     'STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN',
+    'STORYGRAPH_UPDATE_COOLDOWN_MINS',
     
+    # Ollama (local LLM)
+    'OLLAMA_ENABLED', 'OLLAMA_URL', 'OLLAMA_EMBED_MODEL', 'OLLAMA_CHAT_MODEL',
+    'OLLAMA_KEEP_ALIVE', 'OLLAMA_NUM_CTX',
+    'OLLAMA_RERANK_SUGGESTIONS', 'OLLAMA_RERANK_BAND_MIN', 'OLLAMA_RERANK_BAND_MAX',
+    'OLLAMA_JUDGE_SUGGESTIONS', 'OLLAMA_JUDGE_MARGIN', 'OLLAMA_JUDGE_CONFIDENCE_MIN',
+    'OLLAMA_ALIGN_FALLBACK', 'OLLAMA_ALIGN_SIM_THRESHOLD',
+    'OLLAMA_EBOOK_TEXT_FALLBACK',
+    'OLLAMA_ALIGN_ANCHOR_RESCUE', 'OLLAMA_ALIGN_MAX_WINDOWS',
+    'OLLAMA_ALIGN_CONTENT_GUARD', 'OLLAMA_ALIGN_CONTENT_MIN_SIM',
+    'OLLAMA_SUGGEST_JUDGE_GATE', 'OLLAMA_SUGGEST_AUTOKEEP_SCORE',
+    'OLLAMA_TRACKER_MATCH', 'OLLAMA_LIBRARY_MATCH',
+
     # Telegram
     'TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_LOG_LEVEL',
     
@@ -52,8 +89,9 @@ ALL_SETTINGS = [
     'SYNC_DELTA_BETWEEN_CLIENTS_PERCENT', 'SYNC_DELTA_KOSYNC_WORDS',
     'XPATH_FALLBACK_TO_PREVIOUS_SEGMENT', 'SYNC_ABS_EBOOK', 'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
     'FUZZY_MATCH_THRESHOLD', 'SUGGESTIONS_ENABLED',
-    'INSTANT_SYNC_ENABLED',
-    'STORYTELLER_POLL_MODE', 'STORYTELLER_POLL_SECONDS',
+    'INSTANT_SYNC_ENABLED', 'KOREADER_SESSION_GAP_MINUTES',
+    'STORYTELLER_POLL_MODE', 'STORYTELLER_POLL_SECONDS', 'STORYTELLER_POLL_WAIT_FOR_SETTLE',
+    'STORYTELLER_LISTENING_SESSIONS',
     'BOOKLORE_POLL_MODE', 'BOOKLORE_POLL_SECONDS',
     
     # System
@@ -81,6 +119,7 @@ DEFAULT_CONFIG = {
     'SYNC_DELTA_KOSYNC_PERCENT': '0.5',
     'SYNC_DELTA_BETWEEN_CLIENTS_PERCENT': '0.5',
     'SYNC_DELTA_KOSYNC_WORDS': '400',
+    'KOREADER_SESSION_GAP_MINUTES': '30',
     'FUZZY_MATCH_THRESHOLD': '80',
     'WHISPER_MODEL': 'tiny',
     'WHISPER_DEVICE': 'auto',
@@ -101,7 +140,10 @@ DEFAULT_CONFIG = {
     'ABS_PROGRESS_OFFSET_SECONDS': '0',
     'EBOOK_CACHE_SIZE': '3',
     'KOSYNC_HASH_METHOD': 'content',
+    'KOSYNC_AUTO_MAP_ON_AGREEMENT': 'true',
+    'KOREADER_COMBINE_DEVICE_STATS': 'true',
     'KOSYNC_PUT_DEBOUNCE_SECONDS': '300',
+    'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS': '600',
     'TELEGRAM_LOG_LEVEL': 'ERROR',
     'SHELFMARK_URL': '',
     'SHELFMARK_ENABLED': 'false',
@@ -112,6 +154,22 @@ DEFAULT_CONFIG = {
     'GRIMMORY_READING_SESSIONS': 'true',
     'DEVICE_SYNC_COLLECTIONS': 'off',
     'DEVICE_SYNC_EXCLUDED_SHELVES': '',
+    'BOOKLORE_SHELF_WATCH_ENABLED': 'false',
+    'BOOKLORE_SHELF_WATCH_NAME': 'Up Next',
+    'BOOKLORE_SHELF_WATCH_THRESHOLD': '95',
+    'BOOKLORE_SHELF_WATCH_RESCAN_HOURS': '24',
+    'BOOKORBIT_ENABLED': 'false',
+    'BOOKORBIT_SERVER': '',
+    'BOOKORBIT_USER': '',
+    'BOOKORBIT_PASSWORD': '',
+    'BOOKORBIT_SHELF_NAME': 'Kobo',
+    'BOOKORBIT_POLL_MODE': 'global',
+    'BOOKORBIT_POLL_SECONDS': '300',
+    'BOOKORBIT_READING_SESSIONS': 'true',
+    'BOOKORBIT_SHELF_WATCH_ENABLED': 'false',
+    'BOOKORBIT_SHELF_WATCH_NAME': 'Up Next',
+    'BOOKORBIT_SHELF_WATCH_THRESHOLD': '95',
+    'BOOKORBIT_SHELF_WATCH_RESCAN_HOURS': '24',
     'CWA_ENABLED': 'false',
     'CWA_SERVER': '',
     'CWA_USERNAME': '',
@@ -124,7 +182,32 @@ DEFAULT_CONFIG = {
     'CALIBRE_LIBRARY_PATH': '',
     'PROGRESS_TRACKER_PROVIDER': 'none',
     'HARDCOVER_ENABLED': 'false',
+    'HARDCOVER_UPDATE_COOLDOWN_MINS': '60',
     'STORYGRAPH_ENABLED': 'false',
+    'STORYGRAPH_UPDATE_COOLDOWN_MINS': '60',
+    'OLLAMA_ENABLED': 'false',
+    'OLLAMA_URL': 'http://ollama:11434',
+    'OLLAMA_EMBED_MODEL': 'nomic-embed-text',
+    'OLLAMA_CHAT_MODEL': 'qwen2.5:14b',
+    'OLLAMA_KEEP_ALIVE': '5m',
+    'OLLAMA_NUM_CTX': '',
+    'OLLAMA_RERANK_SUGGESTIONS': 'true',
+    'OLLAMA_RERANK_BAND_MIN': '60',
+    'OLLAMA_RERANK_BAND_MAX': '95',
+    'OLLAMA_JUDGE_SUGGESTIONS': 'true',
+    'OLLAMA_JUDGE_MARGIN': '5',
+    'OLLAMA_JUDGE_CONFIDENCE_MIN': '85',
+    'OLLAMA_ALIGN_FALLBACK': 'true',
+    'OLLAMA_EBOOK_TEXT_FALLBACK': 'true',
+    'OLLAMA_ALIGN_SIM_THRESHOLD': '0.72',
+    'OLLAMA_ALIGN_ANCHOR_RESCUE': 'true',
+    'OLLAMA_ALIGN_MAX_WINDOWS': '80',
+    'OLLAMA_ALIGN_CONTENT_GUARD': 'true',
+    'OLLAMA_ALIGN_CONTENT_MIN_SIM': '0.45',
+    'OLLAMA_SUGGEST_JUDGE_GATE': 'true',
+    'OLLAMA_SUGGEST_AUTOKEEP_SCORE': '90',
+    'OLLAMA_TRACKER_MATCH': 'true',
+    'OLLAMA_LIBRARY_MATCH': 'true',
     'TELEGRAM_ENABLED': 'false',
     'SUGGESTIONS_ENABLED': 'false',
     'KOSYNC_USE_PERCENTAGE_FROM_SERVER': 'false',
@@ -137,6 +220,8 @@ DEFAULT_CONFIG = {
     'INSTANT_SYNC_ENABLED': 'true',
     'STORYTELLER_POLL_MODE': 'global',
     'STORYTELLER_POLL_SECONDS': '45',
+    'STORYTELLER_POLL_WAIT_FOR_SETTLE': 'false',
+    'STORYTELLER_LISTENING_SESSIONS': 'true',
     'BOOKLORE_POLL_MODE': 'global',
     'BOOKLORE_POLL_SECONDS': '300',
     'SMIL_VALIDATION_THRESHOLD': '60',
@@ -159,7 +244,14 @@ class ConfigLoader:
             # Check if we have any settings
             existing_settings = db_service.get_all_settings()
             if existing_settings:
-                # Already bootstrapped
+                # Already bootstrapped: reconcile by adding any NEW settings keys that
+                # were introduced after this install was first seeded. Additive only —
+                # never overwrites a value the user has already set.
+                missing = [k for k in ALL_SETTINGS if k not in existing_settings]
+                for key in missing:
+                    db_service.set_setting(key, str(DEFAULT_CONFIG.get(key, "")))
+                if missing:
+                    logger.info(f"➕ Added {len(missing)} new setting(s) to existing config: {missing}")
                 return
 
             logger.info("🚀 Bootstrapping configuration from environment variables...")

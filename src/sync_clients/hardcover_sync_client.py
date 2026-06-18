@@ -1,8 +1,10 @@
 import logging
+import os
 from typing import Optional
 
 from src.api.hardcover_client import HardcoverClient, HardcoverRateLimitError
 from src.db.models import Book, State, HardcoverDetails
+from src.services.llm_matching import craft_search_terms, judge_best_candidate, tracker_match_enabled
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 from src.utils.ebook_utils import EbookParser
 from src.utils.logging_utils import sanitize_log_data
@@ -16,11 +18,12 @@ class HardcoverSyncClient(SyncClient):
     This integrates Hardcover as a proper sync client in the sync cycle.
     """
 
-    def __init__(self, hardcover_client: HardcoverClient, ebook_parser: EbookParser, abs_client=None, database_service=None):
+    def __init__(self, hardcover_client: HardcoverClient, ebook_parser: EbookParser, abs_client=None, database_service=None, ollama_client=None):
         super().__init__(ebook_parser)
         self.hardcover_client = hardcover_client
         self.abs_client = abs_client  # For fetching book metadata
         self.database_service = database_service
+        self.ollama_client = ollama_client
 
     def is_configured(self) -> bool:
         """Check if Hardcover is configured."""
@@ -75,15 +78,24 @@ class HardcoverSyncClient(SyncClient):
         if existing_details:
             return  # Already matched
 
-        item = self.abs_client.get_item_details(book.abs_id)
-        if not item:
-            return
+        item = self.abs_client.get_item_details(book.abs_id) if self.abs_client else None
+        if item:
+            meta = item.get('media', {}).get('metadata', {})
+            isbn = meta.get('isbn')
+            asin = meta.get('asin')
+            title = meta.get('title')
+            author = meta.get('authorName')
+        else:
+            # Ebook-only book (no ABS item): source identifiers from the EPUB itself.
+            ebook_meta = self.ebook_parser.get_book_metadata(book.ebook_filename) if self.ebook_parser else {}
+            title = ebook_meta.get('title') or book.abs_title
+            author = ebook_meta.get('author')
+            isbn = ebook_meta.get('isbn')
+            asin = ebook_meta.get('asin')
+            meta = {'title': title}  # keep log statements below working without an ABS item
 
-        meta = item.get('media', {}).get('metadata', {})
-        isbn = meta.get('isbn')
-        asin = meta.get('asin')
-        title = meta.get('title')
-        author = meta.get('authorName')
+        if not title:
+            return
 
         # Try different search strategies in order of preference
         match = None
@@ -91,12 +103,27 @@ class HardcoverSyncClient(SyncClient):
         first_rejected = None
         first_rejected_by = None
 
+        # LLM tracker matching is a last-resort rescue only: the normal ISBN/ASIN and
+        # title searches below always run first, so the LLM can add matches it would
+        # otherwise miss but can never suppress a match the plain search already found.
+        use_llm = (
+            tracker_match_enabled()
+            and self.ollama_client is not None
+            and self.ollama_client.is_configured()
+            and bool(title)
+        )
+
         search_strategies = [
             (lambda: self.hardcover_client.search_by_isbn(isbn) if isbn else None, 'isbn', isbn),
             (lambda: self.hardcover_client.search_by_isbn(asin) if asin else None, 'asin', asin),
             (lambda: self.hardcover_client.search_by_title_author(title, author) if (title and author) else None, 'title_author', title and author),
-            (lambda: self.hardcover_client.search_by_title_author(title, "") if title else None, 'title', title),
         ]
+        # Blind title-only fuzzy matching grabs the wrong book when many share a title;
+        # with the LLM on we route title-only candidates through the judge below instead.
+        if not use_llm:
+            search_strategies.append(
+                (lambda: self.hardcover_client.search_by_title_author(title, "") if title else None, 'title', title)
+            )
 
         for search_func, strategy_name, condition in search_strategies:
             if not match and condition:
@@ -136,6 +163,43 @@ class HardcoverSyncClient(SyncClient):
                     match['edition_id'] = edition['id']
                     match['pages'] = -1  # Sentinel: audiobook, no pages
                     logger.info(f"📚 Hardcover: '{sanitize_log_data(meta.get('title'))}' matched as audiobook ({audio_seconds}s)")
+
+        # LLM rescue: clean the title, then list candidates title-only for maximum recall
+        # (the judge uses the author for precision, so we deliberately don't constrain the
+        # query by author here), and let the judge pick the one true book or write nothing.
+        if not match and use_llm:
+            try:
+                craft_title, craft_author = craft_search_terms(self.ollama_client, title, author)
+                candidates = self.hardcover_client.list_candidates_by_title_author(craft_title, "")
+            except HardcoverRateLimitError:
+                logger.warning(
+                    "⚠️ Hardcover: Rate limited during LLM match for '%s'; skipping for now",
+                    sanitize_log_data(meta.get('title')),
+                )
+                return
+            conf_min = float(os.environ.get('OLLAMA_JUDGE_CONFIDENCE_MIN', 85))
+            idx = judge_best_candidate(self.ollama_client, craft_title, craft_author, candidates, conf_min,
+                                       isbn=(isbn or asin or ''))
+            if idx is None:
+                logger.info(
+                    f"🧠 Hardcover: LLM found no confident match for '{sanitize_log_data(title)}'; leaving for manual"
+                )
+                return
+            try:
+                match = self.hardcover_client.resolve_match_for_book(candidates[idx])
+            except HardcoverRateLimitError:
+                logger.warning(
+                    "⚠️ Hardcover: Rate limited resolving LLM match for '%s'; skipping for now",
+                    sanitize_log_data(meta.get('title')),
+                )
+                return
+            if match:
+                matched_by = 'title_author_llm'
+                if match.get('audio_seconds'):
+                    audio_seconds = match['audio_seconds']
+                logger.info(
+                    f"🧠 Hardcover: LLM matched '{sanitize_log_data(title)}' -> '{sanitize_log_data(match.get('title'))}'"
+                )
 
         if match:
             hardcover_details = HardcoverDetails(

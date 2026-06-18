@@ -3,6 +3,7 @@ import os
 import re
 import time
 import base64
+import zipfile
 import mimetypes
 import logging
 import requests
@@ -16,8 +17,16 @@ from src.sync_clients.sync_client_interface import LocatorResult
 logger = logging.getLogger(__name__)
 
 class StorytellerAPIClient:
+    # Audio resources embedded in a ReadAloud EPUB. The bridge only needs the
+    # XHTML + SMIL media overlays to compute valid sync locators, so these are
+    # stripped when caching a slim copy for locator work.
+    _AUDIO_EXTENSIONS = frozenset({
+        ".mp3", ".m4a", ".m4b", ".aac", ".opus", ".ogg", ".oga",
+        ".wav", ".flac", ".mp4", ".m4v",
+    })
+
     def __init__(self):
-        raw_url = os.environ.get("STORYTELLER_API_URL", "http://localhost:8001").rstrip('/')
+        raw_url = os.environ.get("STORYTELLER_API_URL", "").rstrip('/')
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
         self.base_url = raw_url
@@ -747,6 +756,86 @@ class StorytellerAPIClient:
                 return False
             logger.error(f"❌ Failed to download Storyteller book '{book_uuid}' (API & Fallback): {e}")
             raise e
+
+    @classmethod
+    def _strip_audio_from_epub(cls, src_path, dst_path) -> None:
+        """Rewrite an EPUB zip, emptying audio resources.
+
+        Audio entries are kept in the archive (so the OPF manifest stays resolvable
+        for ebooklib) but written empty, shrinking a ~100MB ReadAloud EPUB to ~1MB.
+        Every other resource (XHTML, SMIL overlays, OPF, nav, CSS, images) is copied
+        verbatim, preserving each entry's original compression so the EPUB
+        ``mimetype`` entry stays stored.
+        """
+        src_path = Path(src_path)
+        dst_path = Path(dst_path)
+        with zipfile.ZipFile(src_path, "r") as zin, \
+                zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                ext = os.path.splitext(item.filename)[1].lower()
+                if ext in cls._AUDIO_EXTENSIONS:
+                    placeholder = zipfile.ZipInfo(item.filename, date_time=item.date_time)
+                    placeholder.compress_type = zipfile.ZIP_DEFLATED
+                    zout.writestr(placeholder, b"")
+                else:
+                    zout.writestr(item, zin.read(item.filename))
+
+    def ensure_readaloud_epub_cached(self, book_uuid: str, epub_cache_dir) -> bool:
+        """Ensure a slim (audio-stripped) ReadAloud EPUB is cached for locator work.
+
+        The processed ReadAloud EPUB carries the media-overlay (SMIL) fragment ids
+        required for valid Storyteller sync locators, but it embeds the narration
+        audio (~100MB) and is not cached when ``STORYTELLER_NO_EPUB_CACHE`` (a
+        Forge text-extraction setting) is enabled. Without it the sync path falls
+        back to the original EPUB, whose anchor ids are not in the SMIL guide, and
+        Storyteller's readalong snaps back to the chapter start. This materializes a
+        small audio-stripped copy at ``epub_cache_dir/storyteller_<uuid>.epub`` when
+        one is not already present.
+
+        Returns True when the slim EPUB is present afterwards.
+        """
+        if not book_uuid:
+            return False
+        cache_dir = Path(epub_cache_dir)
+        cache_path = cache_dir / f"storyteller_{book_uuid}.epub"
+        if cache_path.exists():
+            return True
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"⚠️ Could not create epub cache dir '{cache_dir}': {e}")
+            return False
+
+        tmp_full = cache_path.with_name(cache_path.name + ".full.tmp")
+        try:
+            if not self.download_book(book_uuid, tmp_full):
+                logger.warning(
+                    f"⚠️ ReadAloud EPUB download failed for '{book_uuid[:8]}...'; "
+                    "cannot cache slim copy for sync locators"
+                )
+                return False
+            self._strip_audio_from_epub(tmp_full, cache_path)
+            if cache_path.exists():
+                logger.info(
+                    f"📦 Cached slim ReadAloud EPUB for '{book_uuid[:8]}...' "
+                    f"({cache_path.stat().st_size / 1e6:.2f} MB, audio stripped)"
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to materialize slim ReadAloud EPUB for '{book_uuid[:8]}...': {e}")
+            try:
+                if cache_path.exists():
+                    cache_path.unlink()
+            except Exception:
+                pass
+            return False
+        finally:
+            try:
+                if tmp_full.exists():
+                    tmp_full.unlink()
+            except Exception:
+                pass
 
     def trigger_processing(self, book_uuid: str) -> bool:
         """Trigger the Storyteller processing for a book."""

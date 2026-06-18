@@ -34,6 +34,10 @@ class UpdateProgressRequest:
     txt: Optional[str] = None
     # can be percentage or timestamp (ABS)
     previous_location: Optional[float] = None
+    # When True, the ABS push credits the forward audio delta as listening time
+    # instead of zero (used when an audiobook-companion leader like Storyteller
+    # advances the position — see STORYTELLER_LISTENING_SESSIONS).
+    credit_listening: bool = False
 
 @dataclass
 class SyncResult:

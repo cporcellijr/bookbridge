@@ -20,6 +20,12 @@
 - Run **Refresh Grimmory Cache** after moving, rescanning, or replacing Grimmory items.
 - If the old Grimmory item was deleted and recreated with a new ID, rematch that book.
 
+### BookOrbit books are not matching or syncing
+
+- Confirm **BookOrbit** is enabled and configured in Settings, and use the **Test** button to check the connection.
+- BookOrbit behaves like Grimmory: if a book exists in BookOrbit but won't link, make sure its library has been scanned so filenames resolve.
+- If you switched from Grimmory to BookOrbit, you do not need to rematch — run `scripts/migrate_grimmory_to_bookorbit.py` (see the [Configuration Guide](configuration.md#bookorbit)).
+
 ### Storyteller transcripts are not found
 
 - Verify the Docker volume is mounted as host Storyteller assets -> container `/storyteller/assets`.

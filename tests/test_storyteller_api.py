@@ -153,5 +153,92 @@ class TestStorytellerTusUpload(unittest.TestCase):
         self.assertEqual(mock_patch.call_args.kwargs["headers"]["Upload-Offset"], "0")
 
 
+import zipfile
+
+
+@patch.dict(
+    os.environ,
+    {
+        "STORYTELLER_API_URL": "http://test-storyteller:8001",
+        "STORYTELLER_USER": "testuser",
+        "STORYTELLER_PASSWORD": "testpass",
+    },
+)
+class TestStorytellerSlimReadaloudEpub(unittest.TestCase):
+    def setUp(self):
+        self.client = StorytellerAPIClient()
+
+    @staticmethod
+    def _make_epub(path: Path) -> None:
+        """Write a minimal EPUB-like zip with audio + non-audio resources."""
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("mimetype", "application/epub+zip")
+            z.writestr("META-INF/container.xml", "<container/>")
+            z.writestr("text/part0000.html", "<html><body><p>hello</p></body></html>")
+            z.writestr("MediaOverlays/part0000.smil", '<smil><text src="text/part0000.html#id1-s1"/></smil>')
+            z.writestr("audio/part0000.mp3", b"\x00" * 5_000_000)
+            z.writestr("audio/part0001.m4a", b"\x00" * 5_000_000)
+
+    def test_strip_audio_empties_audio_keeps_other_resources(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "full.epub"
+            dst = Path(tmpdir) / "slim.epub"
+            self._make_epub(src)
+
+            self.client._strip_audio_from_epub(src, dst)
+
+            self.assertLess(dst.stat().st_size, src.stat().st_size)
+            with zipfile.ZipFile(dst, "r") as z:
+                names = set(z.namelist())
+                # Audio entries are kept (manifest integrity) but empty.
+                self.assertIn("audio/part0000.mp3", names)
+                self.assertEqual(z.read("audio/part0000.mp3"), b"")
+                self.assertEqual(z.read("audio/part0001.m4a"), b"")
+                # Non-audio resources are preserved verbatim.
+                self.assertEqual(z.read("mimetype").decode(), "application/epub+zip")
+                self.assertIn("id1-s1", z.read("MediaOverlays/part0000.smil").decode())
+                self.assertIn("hello", z.read("text/part0000.html").decode())
+
+    def test_ensure_cached_short_circuits_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            (cache_dir / "storyteller_uuid-1.epub").write_bytes(b"already here")
+
+            with patch.object(self.client, "download_book") as mock_dl:
+                ok = self.client.ensure_readaloud_epub_cached("uuid-1", cache_dir)
+
+            self.assertTrue(ok)
+            mock_dl.assert_not_called()
+
+    def test_ensure_cached_downloads_and_strips_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+
+            def fake_download(uuid, out_path):
+                self._make_epub(Path(out_path))
+                return True
+
+            with patch.object(self.client, "download_book", side_effect=fake_download) as mock_dl:
+                ok = self.client.ensure_readaloud_epub_cached("uuid-2", cache_dir)
+
+            self.assertTrue(ok)
+            mock_dl.assert_called_once()
+            slim = cache_dir / "storyteller_uuid-2.epub"
+            self.assertTrue(slim.exists())
+            with zipfile.ZipFile(slim, "r") as z:
+                self.assertEqual(z.read("audio/part0000.mp3"), b"")
+                self.assertIn("hello", z.read("text/part0000.html").decode())
+            # The transient full download must not be left behind.
+            self.assertFalse((cache_dir / "storyteller_uuid-2.epub.full.tmp").exists())
+
+    def test_ensure_cached_returns_false_on_download_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with patch.object(self.client, "download_book", return_value=False):
+                ok = self.client.ensure_readaloud_epub_cached("uuid-3", cache_dir)
+            self.assertFalse(ok)
+            self.assertFalse((cache_dir / "storyteller_uuid-3.epub").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

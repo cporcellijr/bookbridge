@@ -216,6 +216,35 @@
             .calendar-cell { padding: 6px 8px; }
             .calendar-span { min-height: 24px; font-size: 11px; padding: 0 8px; }
         }
+
+        /* Time-of-day histogram + yearly recap bars */
+        .bar-row { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding-top: 8px; }
+        .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+        .bar-fill { width: 100%; max-width: 26px; border-radius: 6px 6px 2px 2px;
+            background: linear-gradient(180deg, var(--reading) 0%, rgba(79,195,247,.35) 100%); min-height: 2px; transition: opacity .2s; }
+        .bar-fill.listening { background: linear-gradient(180deg, var(--listening) 0%, rgba(155,124,255,.35) 100%); }
+        .bar-fill.muted { background: rgba(255,255,255,.08); }
+        .bar-col:hover .bar-fill { opacity: .82; }
+        .bar-label { font-size: 10px; color: var(--muted-soft); white-space: nowrap; }
+        .recap-toolbar { display: flex; align-items: center; gap: 10px; }
+        .recap-year-btn { background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
+            border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 16px; line-height: 1; }
+        .recap-year-btn:hover:not(:disabled) { background: rgba(255,255,255,.14); }
+        .recap-year-btn:disabled { opacity: .35; cursor: default; }
+        .recap-year-label { font-weight: 700; font-size: 15px; min-width: 52px; text-align: center; }
+        .books-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
+            border-radius: 14px; border: 1px solid var(--border); background: var(--panel-soft); cursor: pointer; transition: all .15s; }
+        .books-row:hover { background: rgba(255,255,255,.07); transform: translateX(2px); }
+        .books-row + .books-row { margin-top: 8px; }
+        .books-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+        .books-side { text-align: right; flex-shrink: 0; }
+        .books-side .v { font-weight: 700; }
+        .books-side .s { font-size: 11px; color: var(--muted-soft); }
+        .pct-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; overflow: hidden; }
+        .pct-bar > span { display: block; height: 100%; background: var(--success); }
+        .scroll-list { max-height: 360px; overflow-y: auto; }
+        .finished-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+        .finished-row:last-child { border-bottom: none; }
     </style>
 </head>
 <body>
@@ -296,6 +325,19 @@
             <div class="day-detail-body" id="day-detail-body"></div>
         </div>
     </div>
+    <div class="day-detail-backdrop" id="book-detail-backdrop" aria-hidden="true">
+        <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
+            <div class="day-detail-head">
+                <div>
+                    <h3 id="book-detail-title">Book detail</h3>
+                    <p id="book-detail-subtitle">Per-book reading and listening statistics.</p>
+                </div>
+                <button type="button" class="day-detail-close" id="book-detail-close" aria-label="Close">×</button>
+            </div>
+            <div class="day-detail-summary" id="book-detail-summary">Loading…</div>
+            <div class="day-detail-body" id="book-detail-body"></div>
+        </div>
+    </div>
     <script src="/static/vendor/chart.umd.min.js"></script>
     <script>
         const BRIDGE_TIMEZONE = {{ get_val('TZ')|tojson }};
@@ -330,6 +372,7 @@
                 cards: [
                     ["Active Days", d => d.stats?.activeDays ?? 0, "Days with any synced activity"],
                     ["Total Activity", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Reading + listening time"],
+                    ["Daily Average", d => formatDurationCompact(d.stats?.dailyAverageSeconds ?? 0), "Average over the last 7 days"],
                     ["Current Streak", d => `${d.stats?.currentStreakDays ?? 0} days`, "Continuous active days"],
                     ["Books With Activity", d => d.stats?.booksWithActivity ?? 0, "Distinct books"]
                 ]
@@ -343,7 +386,8 @@
                     ["Books Tracked", d => d.stats?.booksTracked ?? 0, "All KOReader books with activity"],
                     ["Days Read", d => d.stats?.daysRead ?? 0, "Days with reading events"],
                     ["Total Reading", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated reading time"],
-                    ["Pages Read", d => d.stats?.pagesRead ?? 0, "Uploaded page events"]
+                    ["Pages Read", d => (d.stats?.pagesRead ?? 0).toLocaleString(), "Matches KOReader's own count"],
+                    ["Reading Pace", d => `${d.stats?.pagesPerHour ?? 0}/hr`, "Pages per hour read"]
                 ]
             },
             listening: {
@@ -354,7 +398,9 @@
                 cards: [
                     ["Items Finished", d => d.stats?.itemsFinished ?? 0, "Finished items reported by ABS"],
                     ["Days Listened", d => d.stats?.daysListened ?? 0, "Days with listening time"],
-                    ["Total Listening", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated listening time"]
+                    ["Total Listening", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated listening time"],
+                    ["Hours / Day", d => `${d.stats?.hoursPerDay ?? 0}h`, "Average over the last 7 days"],
+                    ["Avg Session", d => formatDurationCompact(d.stats?.avgSessionSeconds ?? 0), "Recent session length"]
                 ]
             }
         };
@@ -843,6 +889,99 @@
             });
         }
 
+        function monthFull(i) {
+            return ["January","February","March","April","May","June","July","August","September","October","November","December"][i] || "";
+        }
+
+        function hourHistogramPanel(dataset) {
+            const hours = Array.isArray(dataset.hourHistogram) ? dataset.hourHistogram : [];
+            const max = hours.reduce((m, h) => Math.max(m, Number(h.seconds || 0)), 0);
+            if (!max) return "";
+            const peak = hours.reduce((a, h) => (Number(h.seconds || 0) > Number(a.seconds || 0) ? h : a), hours[0]);
+            const hr = n => (n % 12 === 0 ? 12 : n % 12) + (n < 12 ? "a" : "p");
+            const bars = hours.map(h => {
+                const secs = Number(h.seconds || 0);
+                const pct = max ? Math.round((secs / max) * 100) : 0;
+                return `<div class="bar-col" title="${h.hour}:00 · ${escapeHtml(formatDurationLong(secs))}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${h.hour % 3 === 0 ? hr(h.hour) : ""}</div></div>`;
+            }).join("");
+            return `<section class="panel"><div class="panel-head"><h3>Time of day</h3><span>Peak around ${hr(peak.hour)}</span></div><div class="bar-row">${bars}</div></section>`;
+        }
+
+        function booksListPanel(dataset) {
+            const books = Array.isArray(dataset.books) ? dataset.books : [];
+            if (!books.length) return "";
+            const rows = books.slice(0, 80).map(b => {
+                const meta = [];
+                if (b.author) meta.push(escapeHtml(b.author));
+                if (b.pagesRead) meta.push(`${Number(b.pagesRead).toLocaleString()} pages`);
+                if (b.sessionCount) meta.push(`${b.sessionCount} sessions`);
+                if (b.isLinked === false) meta.push("Unlinked");
+                const pace = b.pagesPerHour ? `${b.pagesPerHour}/hr` : (b.lastReadAt ? formatRelativeTime(b.lastReadAt) : "");
+                const pct = (b.percentComplete != null) ? `<div class="pct-bar"><span style="width:${Math.min(b.percentComplete, 100)}%"></span></div>` : "";
+                return `<div class="books-row" data-book-key="${escapeHtml(b.bookKey)}"><div style="min-width:0"><div class="recent-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="books-meta">${meta.join(" · ") || "Activity"}</div>${pct}</div><div class="books-side"><div class="v">${escapeHtml(formatDurationCompact(b.totalSeconds || 0))}</div><div class="s">${escapeHtml(pace)}</div></div></div>`;
+            }).join("");
+            return `<section class="panel"><div class="panel-head"><h3>Books</h3><span>${books.length} tracked · tap for detail</span></div><div class="scroll-list">${rows}</div></section>`;
+        }
+
+        function yearlyRecapInner(recap) {
+            const months = Array.isArray(recap.months) ? recap.months : [];
+            const max = months.reduce((m, x) => Math.max(m, Number(x.seconds || 0)), 0);
+            const labels = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+            const bars = months.map((mo, i) => {
+                const secs = Number(mo.seconds || 0);
+                const pct = max ? Math.round((secs / max) * 100) : 0;
+                const fin = mo.finished ? ` · ${mo.finished} finished` : "";
+                return `<div class="bar-col" title="${monthFull(i)}: ${escapeHtml(formatDurationLong(secs))}${fin}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${labels[i]}</div></div>`;
+            }).join("");
+            const years = Array.isArray(recap.availableYears) ? recap.availableYears : [];
+            const minYear = years.length ? years[0] : recap.year;
+            const maxYear = years.length ? years[years.length - 1] : recap.year;
+            const finished = (recap.finishedBooks || []).slice(0, 40).map(b =>
+                `<div class="finished-row"><div class="recent-title" style="font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="s" style="color:var(--muted-soft);font-size:12px;flex-shrink:0">${escapeHtml(formatLongDate(new Date((b.finishedAt || 0) * 1000).toISOString().slice(0, 10)))}</div></div>`
+            ).join("");
+            const finishedBlock = finished
+                ? `<div style="margin-top:16px"><div class="panel-head" style="margin-bottom:8px"><h3 style="font-size:14px">Finished this year</h3><span>${recap.booksFinished || 0} books</span></div><div class="scroll-list">${finished}</div></div>`
+                : `<div class="empty-state" style="margin-top:12px"><p>No books recorded as finished in ${recap.year}.</p></div>`;
+            return `
+                <div class="panel-head">
+                    <h3>${recap.year} in review</h3>
+                    <div class="recap-toolbar">
+                        <button type="button" class="recap-year-btn" data-recap-year="${recap.year - 1}" ${recap.year <= minYear ? "disabled" : ""}>‹</button>
+                        <span class="recap-year-label">${recap.year}</span>
+                        <button type="button" class="recap-year-btn" data-recap-year="${recap.year + 1}" ${recap.year >= maxYear ? "disabled" : ""}>›</button>
+                    </div>
+                </div>
+                <div class="summary-grid" style="margin-bottom:14px">
+                    <article class="summary-card"><div class="summary-card-label">Time</div><div class="summary-card-value">${escapeHtml(formatDurationCompact(recap.totalSeconds || 0))}</div><div class="summary-card-sub">This year</div></article>
+                    <article class="summary-card"><div class="summary-card-label">Pages</div><div class="summary-card-value">${Number(recap.totalPages || 0).toLocaleString()}</div><div class="summary-card-sub">Read this year</div></article>
+                    <article class="summary-card"><div class="summary-card-label">Finished</div><div class="summary-card-value">${recap.booksFinished || 0}</div><div class="summary-card-sub">Books completed</div></article>
+                </div>
+                <div class="bar-row">${bars}</div>
+                ${finishedBlock}
+            `;
+        }
+
+        function yearlyRecapPanel(dataset) {
+            const recap = dataset.yearlyRecap;
+            if (!recap || !Array.isArray(recap.months)) return "";
+            const hasAny = recap.months.some(m => Number(m.seconds || 0) > 0) || (recap.finishedBooks || []).length;
+            if (!hasAny) return "";
+            return `<section class="panel" id="recap-panel">${yearlyRecapInner(recap)}</section>`;
+        }
+
+        async function loadYearlyRecap(year) {
+            const panel = document.getElementById("recap-panel");
+            if (!panel) return;
+            try {
+                const response = await fetch(`/api/stats/yearly-recap?year=${year}&scope=${state.activeTab}`, { cache: "no-store" });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Failed");
+                panel.innerHTML = yearlyRecapInner(data);
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
         function renderDashboard() {
             destroyChart();
             const config = TAB_CONFIG[state.activeTab];
@@ -854,6 +993,10 @@
                 return;
             }
 
+            const booksPanel = booksListPanel(dataset);
+            const recapPanel = yearlyRecapPanel(dataset);
+            const hourPanel = state.activeTab !== "listening" ? hourHistogramPanel(dataset) : "";
+
             dashboardRoot.innerHTML = `
                 <section class="dashboard-shell">
                     <header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Last 7 days plus yearly activity</div></header>
@@ -862,6 +1005,8 @@
                         <section class="panel"><div class="panel-head"><h3>Weekly activity</h3><span>Daily totals</span></div><div class="chart-wrap"><canvas id="activity-chart" aria-label="Weekly activity chart"></canvas></div></section>
                         ${summaryCards(dataset)}
                     </div>
+                    ${(booksPanel || recapPanel) ? `<div class="insights-grid">${booksPanel}${recapPanel}</div>` : ""}
+                    ${hourPanel ? `<div class="insights-grid">${hourPanel}</div>` : ""}
                     <div class="insights-grid">
                         ${recentSessions(dataset)}
                         ${state.activeTab === "reading" ? calendarPanelSkeleton() : heatmap(dataset)}
@@ -941,6 +1086,86 @@
             if (event.key === "Escape" && dayDetailBackdrop.classList.contains("is-open")) {
                 closeDayDetail();
             }
+        });
+
+        const bookDetailBackdrop = document.getElementById("book-detail-backdrop");
+        const bookDetailTitle = document.getElementById("book-detail-title");
+        const bookDetailSubtitle = document.getElementById("book-detail-subtitle");
+        const bookDetailSummary = document.getElementById("book-detail-summary");
+        const bookDetailBody = document.getElementById("book-detail-body");
+        const bookDetailClose = document.getElementById("book-detail-close");
+
+        function openBookDetailModal() {
+            bookDetailBackdrop.classList.add("is-open");
+            bookDetailBackdrop.setAttribute("aria-hidden", "false");
+        }
+        function closeBookDetailModal() {
+            bookDetailBackdrop.classList.remove("is-open");
+            bookDetailBackdrop.setAttribute("aria-hidden", "true");
+        }
+
+        function renderBookDetail(data) {
+            const reading = data.reading;
+            const listening = data.listening;
+            bookDetailTitle.textContent = data.title || "Book detail";
+            bookDetailSubtitle.textContent = [reading ? "Reading" : null, listening ? "Listening" : null].filter(Boolean).join(" + ") + " statistics";
+
+            const chips = [];
+            if (reading) {
+                chips.push(["Reading time", formatDurationCompact(reading.totalSeconds || 0)]);
+                chips.push(["Pages", Number(reading.pagesRead || 0).toLocaleString()]);
+                chips.push(["Pace", `${reading.pagesPerHour || 0}/hr`]);
+                chips.push(["Sessions", reading.sessionCount || 0]);
+                chips.push(["Avg session", formatDurationCompact(reading.avgSessionSeconds || 0)]);
+                if (reading.percentComplete != null) chips.push(["Complete", `${reading.percentComplete}%`]);
+            }
+            if (listening) {
+                chips.push(["Listening time", formatDurationCompact(listening.totalSeconds || 0)]);
+                if (listening.sessionCount) chips.push(["Listen sessions", listening.sessionCount]);
+            }
+            bookDetailSummary.innerHTML = `<div class="summary-grid">${chips.map(c => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(c[0])}</div><div class="summary-card-value">${escapeHtml(String(c[1]))}</div></article>`).join("")}</div>`;
+
+            let body = "";
+            const sessions = (reading && Array.isArray(reading.sessions)) ? reading.sessions : [];
+            if (sessions.length) {
+                body += `<div class="panel-head" style="margin:4px 0 8px"><h3 style="font-size:14px">Recent reading sessions</h3><span>${sessions.length}</span></div>`;
+                body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(new Date((s.startTime || 0) * 1000).toISOString().slice(0, 10)))}</div><div class="books-meta">${s.pagesRead || 0} pages</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
+            }
+            if (!body) body = `<div class="empty-state"><p>No session breakdown available for this book.</p></div>`;
+            bookDetailBody.innerHTML = body;
+        }
+
+        async function openBookDetail(key) {
+            if (!key) return;
+            openBookDetailModal();
+            bookDetailTitle.textContent = "Book detail";
+            bookDetailSubtitle.textContent = "Loading…";
+            bookDetailSummary.textContent = "Loading…";
+            bookDetailBody.innerHTML = "";
+            try {
+                const response = await fetch(`/api/stats/book-detail?key=${encodeURIComponent(key)}`, { cache: "no-store" });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || "Failed to load");
+                renderBookDetail(data);
+            } catch (error) {
+                bookDetailSubtitle.textContent = "Error";
+                bookDetailSummary.textContent = error.message || "Failed to load book detail.";
+            }
+        }
+
+        bookDetailClose.addEventListener("click", closeBookDetailModal);
+        bookDetailBackdrop.addEventListener("click", event => {
+            if (event.target === bookDetailBackdrop) closeBookDetailModal();
+        });
+        document.addEventListener("keydown", event => {
+            if (event.key === "Escape" && bookDetailBackdrop.classList.contains("is-open")) closeBookDetailModal();
+        });
+
+        dashboardRoot.addEventListener("click", event => {
+            const yearBtn = event.target.closest("[data-recap-year]");
+            if (yearBtn && !yearBtn.disabled) { loadYearlyRecap(Number(yearBtn.dataset.recapYear)); return; }
+            const bookRow = event.target.closest("[data-book-key]");
+            if (bookRow) openBookDetail(bookRow.dataset.bookKey);
         });
 
         refreshButton.addEventListener("click", () => loadStats(true));

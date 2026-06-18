@@ -75,6 +75,12 @@ class TestSettingsComprehensive(unittest.TestCase):
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
             'SHELFMARK_ENABLED',
+            'STORYTELLER_NO_EPUB_CACHE',
+            'BOOKLORE_SHELF_WATCH_ENABLED',
+            'BOOKORBIT_ENABLED',
+            'BOOKORBIT_READING_SESSIONS',
+            'BOOKORBIT_SHELF_WATCH_ENABLED',
+            'CALIBRE_USE_ABS_IDENTIFIER',
         ]
 
     def tearDown(self):

@@ -189,16 +189,46 @@ class KOReaderDeviceSyncService:
 
         stored_hash = self._select_content_hash(book)
         if stored_hash and stored_hash != content_hash:
-            logger.debug(
-                "KOReader device-sync serving resolved hash for '%s' instead of stored kosync_doc_id",
-                sanitize_log_data(getattr(book, "abs_title", None) or source_filename),
-            )
+            # The stored kosync_doc_id was computed at link time and no longer matches
+            # the hash of the ebook actually served to KOReader. Persist the served
+            # file's hash so the stored id converges with what devices report; this
+            # self-heals after one cycle and stops the repeated mismatch.
+            self._reconcile_stored_content_hash(book, stored_hash, content_hash)
 
         return {
             "path": source_path,
             "source_filename": source_filename,
             "content_hash": content_hash,
         }
+
+    def _reconcile_stored_content_hash(self, book, stored_hash: str, content_hash: str) -> None:
+        """Persist the served file's hash as the book's kosync_doc_id when it drifts.
+
+        The existing hash is kept resolvable as a sibling KosyncDocument (linked by
+        abs_id), so previously recorded progress is unaffected by the pointer change.
+        """
+        abs_id = str(getattr(book, "abs_id", "") or "").strip()
+        if not abs_id:
+            return
+        try:
+            if self.database_service.update_book_kosync_doc_id(abs_id, content_hash):
+                # Keep the in-memory model consistent for the rest of this build pass.
+                try:
+                    book.kosync_doc_id = content_hash
+                except Exception:
+                    pass
+                logger.debug(
+                    "KOReader device-sync reconciled kosync_doc_id for '%s' (%s -> %s)",
+                    sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
+                    sanitize_log_data(stored_hash),
+                    sanitize_log_data(content_hash),
+                )
+        except Exception as e:
+            logger.warning(
+                "KOReader device-sync could not reconcile kosync_doc_id for '%s': %s",
+                sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
+                e,
+            )
 
     def _build_preferred_filename(self, book, suffix: str) -> str:
         base = str(getattr(book, "abs_title", "") or "").strip()

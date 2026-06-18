@@ -1021,6 +1021,107 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(call_args[0], ("suggested-original.epub", None))
         self.assertEqual(call_args[1], ("storyteller_story-uuid-suggestions-fallback.epub",))
 
+    # -- STORYTELLER_NO_EPUB_CACHE flag honored in batch flows --
+
+    def _enable_no_cache_with_resolvable_original(self, original_name: str):
+        """Drop a real EPUB file on disk and wire resolve_book_path to it."""
+        original_path = Path(self.temp_dir) / original_name
+        original_path.write_bytes(b"epub bytes")
+        self.mock_container.mock_ebook_parser.resolve_book_path.return_value = original_path
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "true"
+        self.addCleanup(lambda: os.environ.pop("STORYTELLER_NO_EPUB_CACHE", None))
+        return original_path
+
+    @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-forge-nocache")
+    def test_batch_forge_queue_no_epub_cache_uses_original_epub(self, _mock_kosync, _mock_ingest):
+        self._enable_no_cache_with_resolvable_original("batch-forge-original.epub")
+
+        add_response = self.client.post(
+            "/batch-match",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "ebook_filename": "batch-forge-original.epub",
+                "ebook_display_name": "Batch Forge No Cache",
+                "storyteller_uuid": "story-uuid-forge-nocache",
+            },
+        )
+        self.assertEqual(add_response.status_code, 302)
+
+        process_response = self.client.post(
+            "/batch-match",
+            data={"action": "forge_and_match_queue"},
+        )
+        self.assertEqual(process_response.status_code, 302)
+
+        self.mock_container.mock_storyteller_client.download_book.assert_not_called()
+        self.mock_container.mock_database_service.save_book.assert_called_once()
+        saved_book = self.mock_container.mock_database_service.save_book.call_args[0][0]
+        self.assertEqual(saved_book.ebook_filename, "batch-forge-original.epub")
+        self.assertEqual(saved_book.original_ebook_filename, "batch-forge-original.epub")
+        self.assertEqual(saved_book.storyteller_uuid, "story-uuid-forge-nocache")
+
+    @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-match-nocache")
+    def test_batch_match_process_queue_no_epub_cache_uses_original_epub(self, _mock_kosync, _mock_ingest):
+        self._enable_no_cache_with_resolvable_original("batch-match-original.epub")
+
+        add_response = self.client.post(
+            "/batch-match",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "ebook_filename": "batch-match-original.epub",
+                "ebook_display_name": "Batch Match No Cache",
+                "storyteller_uuid": "story-uuid-match-nocache",
+            },
+        )
+        self.assertEqual(add_response.status_code, 302)
+
+        process_response = self.client.post(
+            "/batch-match",
+            data={"action": "process_queue"},
+        )
+        self.assertEqual(process_response.status_code, 302)
+
+        self.mock_container.mock_storyteller_client.download_book.assert_not_called()
+        self.mock_container.mock_database_service.save_book.assert_called_once()
+        saved_book = self.mock_container.mock_database_service.save_book.call_args[0][0]
+        self.assertEqual(saved_book.ebook_filename, "batch-match-original.epub")
+        self.assertEqual(saved_book.original_ebook_filename, "batch-match-original.epub")
+        self.assertEqual(saved_book.storyteller_uuid, "story-uuid-match-nocache")
+
+    @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-suggestions-nocache")
+    def test_suggestions_process_queue_no_epub_cache_uses_original_epub(self, _mock_kosync, _mock_ingest):
+        self._enable_no_cache_with_resolvable_original("suggestions-original.epub")
+
+        add_response = self.client.post(
+            "/suggestions",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "ebook_filename": "suggestions-original.epub",
+                "ebook_display_name": "Suggestions No Cache",
+                "storyteller_uuid": "story-uuid-suggestions-nocache",
+            },
+        )
+        self.assertEqual(add_response.status_code, 302)
+
+        process_response = self.client.post(
+            "/suggestions",
+            data={"action": "process_queue"},
+        )
+        self.assertEqual(process_response.status_code, 302)
+
+        self.mock_container.mock_storyteller_client.download_book.assert_not_called()
+        self.mock_container.mock_database_service.save_book.assert_called_once()
+        saved_book = self.mock_container.mock_database_service.save_book.call_args[0][0]
+        self.assertEqual(saved_book.ebook_filename, "suggestions-original.epub")
+        self.assertEqual(saved_book.original_ebook_filename, "suggestions-original.epub")
+        self.assertEqual(saved_book.storyteller_uuid, "story-uuid-suggestions-nocache")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

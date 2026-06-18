@@ -108,6 +108,66 @@ def test_get_storyteller_ebook_filename_uses_local_epub_cache(tmp_path):
     manager._resolve_local_epub_uncached.assert_called_once_with("storyteller_uuid-123.epub")
 
 
+def test_get_storyteller_ebook_filename_materializes_slim_epub_on_miss(tmp_path):
+    manager = _build_manager(tmp_path)
+    resolved_path = tmp_path / "epub_cache" / "storyteller_uuid-9.epub"
+    manager._resolve_local_epub_uncached = MagicMock(side_effect=[None, resolved_path])
+    manager.storyteller_client.ensure_readaloud_epub_cached.return_value = True
+
+    book = Book(
+        abs_id="book-9",
+        abs_title="Story Book",
+        storyteller_uuid="uuid-9",
+        ebook_filename="The Original.epub",
+        status="active",
+    )
+
+    result = manager._get_storyteller_ebook_filename(book)
+
+    assert result == "storyteller_uuid-9.epub"
+    manager.storyteller_client.ensure_readaloud_epub_cached.assert_called_once_with(
+        "uuid-9", manager.epub_cache_dir
+    )
+
+
+def test_get_storyteller_ebook_filename_falls_back_when_materialize_fails(tmp_path):
+    manager = _build_manager(tmp_path)
+    manager._resolve_local_epub_uncached = MagicMock(return_value=None)
+    manager.storyteller_client.ensure_readaloud_epub_cached.return_value = False
+
+    book = Book(
+        abs_id="book-10",
+        abs_title="Story Book",
+        storyteller_uuid="uuid-10",
+        ebook_filename="The Original.epub",
+        status="active",
+    )
+
+    result = manager._get_storyteller_ebook_filename(book)
+
+    assert result == "The Original.epub"
+    manager.storyteller_client.ensure_readaloud_epub_cached.assert_called_once()
+
+
+def test_get_storyteller_ebook_filename_materialize_attempted_once_per_cycle(tmp_path):
+    manager = _build_manager(tmp_path)
+    manager._resolve_local_epub_uncached = MagicMock(return_value=None)
+    manager.storyteller_client.ensure_readaloud_epub_cached.return_value = False
+
+    book = Book(
+        abs_id="book-11",
+        abs_title="Story Book",
+        storyteller_uuid="uuid-11",
+        ebook_filename="The Original.epub",
+        status="active",
+    )
+
+    manager._get_storyteller_ebook_filename(book)
+    manager._get_storyteller_ebook_filename(book)
+
+    manager.storyteller_client.ensure_readaloud_epub_cached.assert_called_once()
+
+
 def test_iter_update_targets_keeps_kosync_last(tmp_path):
     manager = _build_manager(tmp_path)
     active_clients = {

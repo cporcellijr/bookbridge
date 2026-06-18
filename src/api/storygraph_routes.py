@@ -39,10 +39,26 @@ def _get_abs_metadata(abs_id: str, database_service, container):
         return None, None
 
     item = container.abs_client().get_item_details(abs_id)
-    if not item:
-        return book, None
+    if item:
+        return book, item.get("media", {}).get("metadata", {}) or {}
 
-    return book, item.get("media", {}).get("metadata", {}) or {}
+    # Ebook-only book (no ABS item): fall back to the EPUB's embedded metadata,
+    # normalized to the ABS metadata shape the caller expects.
+    try:
+        ebook_meta = container.ebook_parser().get_book_metadata(book.ebook_filename)
+    except Exception as exc:
+        logger.warning("Failed to read EPUB metadata for %s: %s", abs_id, exc)
+        ebook_meta = {}
+
+    if ebook_meta.get("title") or book.abs_title:
+        return book, {
+            "title": ebook_meta.get("title") or book.abs_title or "",
+            "authorName": ebook_meta.get("author") or "",
+            "isbn": ebook_meta.get("isbn") or "",
+            "asin": ebook_meta.get("asin") or "",
+        }
+
+    return book, None
 
 
 def _match_strategy(meta: dict) -> str:

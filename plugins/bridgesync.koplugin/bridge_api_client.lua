@@ -315,4 +315,35 @@ function APIClient:uploadStatistics(payload)
     })
 end
 
+local function _urlencode(value)
+    return tostring(value or ""):gsub("[^%w%-%.%_%~]", function(char)
+        return string.format("%%%02X", string.byte(char))
+    end)
+end
+
+function APIClient:getMergedStatistics(device, device_id, since)
+    local path = "/koreader/device-sync/statistics/merged"
+        .. "?device=" .. _urlencode(device)
+        .. "&device_id=" .. _urlencode(device_id)
+    if since and tonumber(since) and tonumber(since) > 0 then
+        path = path .. "&since=" .. string.format("%.3f", tonumber(since))
+    end
+
+    local ok, code, body = self:_request("GET", path, nil, nil, {
+        block_timeout = 30,
+        total_timeout = 90,
+        attempts = 2,
+    })
+    if not ok then
+        return false, body or ("HTTP " .. tostring(code))
+    end
+
+    local parsed, result = pcall(json.decode, body or "{}")
+    if not parsed or type(result) ~= "table" then
+        logger.warn("Bridge Sync API: Invalid merged statistics JSON")
+        return false, "Invalid merged statistics response"
+    end
+    return true, result
+end
+
 return APIClient

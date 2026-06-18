@@ -27,6 +27,9 @@
 | **Grimmory** | Ebooks + audiobooks | Full read/write sync |
 | **Hardcover.app** | Reading tracker | Write-only tracking |
 
+!!! note "BookOrbit"
+    [BookOrbit](configuration.md#bookorbit) is also supported as a newer ebook library manager. You can use it in place of, or alongside, Grimmory.
+
 ---
 
 ## Features
@@ -56,8 +59,9 @@
 
 - **Background daemon** with configurable polling.
 - **Instant sync** from ABS playback events and KOReader pushes when enabled.
-- **Per-client polling** for Storyteller and Grimmory.
+- **Per-client polling** for Storyteller, Grimmory, and BookOrbit.
 - **Grimmory cache refresh** and Storyteller backfill maintenance tools.
+- **Optional local-LLM assist (Ollama)** for smarter match suggestions and alignment rescue — off by default.
 
 ---
 

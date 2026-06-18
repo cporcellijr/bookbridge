@@ -130,6 +130,19 @@
                 </a>
                 {% endif %}
 
+                {% if integrations.bookorbitaudio and mapping.audio_source == 'BookOrbit' %}
+                <a href="{{ mapping.bookorbit_audio_url|default(get_val('BOOKORBIT_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
+                    class="service-item" title="Open BookOrbit audiobook">
+                    <span class="service-icon-emoji">🪐</span>
+                    <span class="service-name">BO Audio</span>
+                    {% if mapping.states.bookorbitaudio is defined %}
+                    <span class="service-value">{{ '%.1f' | format(mapping.states.bookorbitaudio.percentage|default(0)) }}%</span>
+                    {% else %}
+                    <span class="service-value">0.0%</span>
+                    {% endif %}
+                </a>
+                {% endif %}
+
                 {% if integrations.abs and mapping.sync_mode != 'ebook_only' and mapping.abs_url %}
                 <a href="{{ mapping.abs_url }}" target="_blank" rel="noopener noreferrer" class="service-item"
                     title="Open in Audiobookshelf">
@@ -162,9 +175,8 @@
                 </div>
                 {% endif %}
 
-                {# [CHANGED] Show Storyteller for active links, legacy fixes, and ebook-only rows (link affordance). #}
-                {% if integrations.storyteller and (mapping.states.storyteller is defined or
-                mapping.storyteller_legacy_link or mapping.storyteller_uuid or mapping.sync_mode == 'ebook_only') %}
+                {# [CHANGED] Show Storyteller on every card: progress when linked, Link affordance otherwise. #}
+                {% if integrations.storyteller %}
                 <div class="service-item" title="Storyteller">
                     <img src="/static/storyteller.png" alt="ST" class="service-icon">
                     <span class="service-name">Storyteller</span>
@@ -179,7 +191,7 @@
                         }}%</span>
                     {% elif mapping.storyteller_uuid %}
                     <span class="service-value" title="Linked via UUID">0.0%</span>
-                    {% elif mapping.sync_mode == 'ebook_only' %}
+                    {% else %}
                     <span class="service-value cursor-pointer" style="color: #4FC3F7;"
                         onclick='openStorytellerModal({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
                         title="Link Storyteller">
@@ -198,6 +210,21 @@
                     <span class="service-value">
                         {% if mapping.states.booklore is defined %}
                         {{ '%.1f' | format(mapping.states.booklore.percentage) }}%
+                        {% else %}
+                        0.0%
+                        {% endif %}
+                    </span>
+                </a>
+                {% endif %}
+
+                {% if integrations.bookorbit and (mapping.states.bookorbit is defined or mapping.ebook_source == 'BookOrbit') %}
+                <a href="{{ mapping.bookorbit_url|default(get_val('BOOKORBIT_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
+                    class="service-item" title="Open in BookOrbit">
+                    <span class="service-icon-emoji">🪐</span>
+                    <span class="service-name">BookOrbit</span>
+                    <span class="service-value">
+                        {% if mapping.states.bookorbit is defined %}
+                        {{ '%.1f' | format(mapping.states.bookorbit.percentage) }}%
                         {% else %}
                         0.0%
                         {% endif %}
@@ -235,10 +262,11 @@
 
                 {% if integrations.storygraph %}
                 <div class="service-item progress-item-hc">
-                    <a href="{{ mapping.storygraph_url|default('https://app.thestorygraph.com') }}" target="_blank"
-                        rel="noopener noreferrer"
-                        title="{% if mapping.storygraph_book_id %}Open {{ mapping.storygraph_title }} in StoryGraph{% else %}Not linked to StoryGraph{% endif %}"
-                        class="hc-link {% if not mapping.storygraph_book_id %}pe-none{% endif %}">
+                    <a href="{% if mapping.storygraph_book_id %}{{ mapping.storygraph_url|default('https://app.thestorygraph.com') }}{% else %}#{% endif %}"
+                        {% if mapping.storygraph_book_id %}target="_blank" rel="noopener noreferrer"{% endif %}
+                        title="{% if mapping.storygraph_book_id %}Open {{ mapping.storygraph_title }} in StoryGraph{% else %}Link to StoryGraph{% endif %}"
+                        class="hc-link {% if not mapping.storygraph_book_id %}cursor-pointer{% endif %}"
+                        {% if not mapping.storygraph_book_id %}data-abs-id="{{ mapping.abs_id }}" data-title="" onclick="linkStorygraph(event); return false;"{% endif %}>
                         <img src="/static/storygraph.svg" alt="SG"
                             class="service-icon {% if not mapping.storygraph_book_id %}grayscale-muted{% endif %}"
                             onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
@@ -1923,6 +1951,17 @@
                 {% if booklore_server and (get_bool('BOOKLORE_ENABLED') or get_val('BOOKLORE_ENABLED') == '') %}
                 <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
                     title="Ebook Library">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                </a>
+                {% endif %}
+
+                {% if get_val('BOOKORBIT_SERVER') and get_bool('BOOKORBIT_ENABLED') %}
+                <a href="{{ get_val('BOOKORBIT_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
+                    title="BookOrbit Library">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
                         stroke-linejoin="round">
                         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>

@@ -15,20 +15,38 @@ class TestKoSyncXPathSafety(unittest.TestCase):
     def test_sanitize_repairs_trailing_slash(self):
         malformed = "/body/DocFragment[9]/body/div[1]/"
         repaired = self.client._sanitize_kosync_xpath(malformed, 0.5)
-        self.assertEqual(repaired, "/body/DocFragment[9]/body/div[1]/text().0")
+        self.assertEqual(repaired, "/body/DocFragment[9]/body/div[1].0")
 
-    def test_sanitize_accepts_indexed_text_nodes(self):
+    def test_sanitize_collapses_indexed_text_nodes_to_block(self):
         indexed = "/body/DocFragment[3]/body/p[2]/text()[2].0"
         repaired = self.client._sanitize_kosync_xpath(indexed, 0.5)
-        self.assertEqual(repaired, indexed)
+        self.assertEqual(repaired, "/body/DocFragment[3]/body/p[2].0")
+
+    def test_sanitize_collapses_direct_text_nodes_to_block(self):
+        text_node = "/body/DocFragment[27]/body/p[90]/text().0"
+        repaired = self.client._sanitize_kosync_xpath(text_node, 0.5)
+        self.assertEqual(repaired, "/body/DocFragment[27]/body/p[90].0")
+
+    def test_sanitize_collapses_inline_text_nodes_to_nearest_block(self):
+        inline_xpath = "/body/DocFragment[28]/body/p[20]/span/text()[2].166"
+        repaired = self.client._sanitize_kosync_xpath(inline_xpath, 0.5)
+        self.assertEqual(repaired, "/body/DocFragment[28]/body/p[20].0")
+
+    def test_sanitize_preserves_parent_structure_when_collapsing_inline_nodes(self):
+        inline_xpath = "/body/DocFragment[10]/body/section/p[4]/em/text().0"
+        repaired = self.client._sanitize_kosync_xpath(inline_xpath, 0.5)
+        self.assertEqual(repaired, "/body/DocFragment[10]/body/section/p[4].0")
 
     def test_empty_xpath_allowed_only_for_clear_progress(self):
         self.assertEqual(self.client._sanitize_kosync_xpath("", 0.0), "")
         self.assertIsNone(self.client._sanitize_kosync_xpath("", 0.2))
 
-    def test_sanitize_rejects_fragile_inline_xpath_segments(self):
+    def test_sanitize_collapses_fragile_inline_xpath_segments(self):
         inline_xpath = "/body/DocFragment[24]/body/p[15]/span[2]/text().0"
-        self.assertIsNone(self.client._sanitize_kosync_xpath(inline_xpath, 0.5))
+        self.assertEqual(
+            self.client._sanitize_kosync_xpath(inline_xpath, 0.5),
+            "/body/DocFragment[24]/body/p[15].0",
+        )
 
     def test_update_progress_skips_malformed_xpath_when_unrecoverable(self):
         self.ebook_parser.get_sentence_level_ko_xpath.return_value = None
@@ -55,7 +73,7 @@ class TestKoSyncXPathSafety(unittest.TestCase):
         self.kosync_api.update_progress.assert_called_once_with(
             "doc-2",
             0.73,
-            "/body/DocFragment[4]/body/p[1]/text().0",
+            "/body/DocFragment[4]/body/p[1].0",
         )
 
     def test_update_progress_replaces_fragile_inline_xpath(self):
@@ -75,7 +93,7 @@ class TestKoSyncXPathSafety(unittest.TestCase):
         self.kosync_api.update_progress.assert_called_once_with(
             "doc-4",
             0.61,
-            "/body/DocFragment[24]/body/p[15]/text().0",
+            "/body/DocFragment[24]/body/p[15].0",
         )
 
     def test_update_progress_clear_flow_forces_empty_xpath(self):

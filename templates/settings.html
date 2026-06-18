@@ -653,6 +653,29 @@
                             get_bool('KOSYNC_USE_PERCENTAGE_FROM_SERVER') %}checked{% endif %}>
                         <label for="kosync_pct">Use Percentage from Server (Ignore Text Matching)</label>
                     </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <div class="full-width" id="bridgesync_plugin_group"
+                        style="background: rgba(102, 126, 234, 0.1); padding: 15px; border-radius: 8px; border: 1px solid rgba(102, 126, 234, 0.2); margin-bottom: 5px;">
+                        <h4 style="margin-bottom: 8px; color: #fff; font-size: 14px;">📥 BridgeSync KOReader Plugin
+                            <span id="bridgesync_plugin_version"
+                                style="font-weight: normal; color: rgba(255,255,255,0.5); font-size: 12px;"></span>
+                        </h4>
+                        <p class="help-text" style="margin: 0 0 10px 0;">Installs books from the bridge byte-for-byte
+                            (so KOReader progress auto-links with no manual matching) and syncs reading stats. Download
+                            below, unzip into your device's <code>koreader/plugins/</code> folder, then restart
+                            KOReader.</p>
+                        <a class="btn" href="/api/kosync-plugin/download" download>⬇️ Download plugin (.zip)</a>
+                    </div>
+                    <script>
+                        fetch('/api/kosync-plugin/version').then(function (r) { return r.ok ? r.json() : null; })
+                            .then(function (d) {
+                                if (d && d.version) {
+                                    document.getElementById('bridgesync_plugin_version').textContent = 'v' + d.version;
+                                }
+                            }).catch(function () { });
+                    </script>
                 </div>
             </div>
 
@@ -695,7 +718,16 @@
                                 {% if get_bool('STORYTELLER_NO_EPUB_CACHE') %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
-                        <div class="help-text">When enabled, Forge uses the original EPUB for text extraction instead of downloading and caching Storyteller's ReadAloud EPUB. Requires the original EPUB to be accessible via a mapped library path.</div>
+                        <div class="help-text">When enabled, BookBridge uses the original EPUB for text extraction across all Storyteller flows (Auto-Forge, manual Create Mapping, Match, and the Batch Forge/Match flows) instead of downloading and caching Storyteller's ReadAloud EPUB. Requires the original EPUB to be accessible via a mapped library path (<code>/books</code>).</div>
+                    </div>
+                    <div class="form-group" style="align-items: center;">
+                        <label>Count as Listening Time</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="STORYTELLER_LISTENING_SESSIONS"
+                                {% if get_bool('STORYTELLER_LISTENING_SESSIONS') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="help-text">When Storyteller leads a sync (you advanced position in Storyteller), credit the forward audio delta as <strong>listening time</strong> in Audiobookshelf instead of a zero-time progress push. Enable if you listen via Storyteller; disable if you only read in it (avoids inflating ABS listening stats).</div>
                     </div>
                 </div>
             </div>
@@ -758,6 +790,46 @@
 
                     <!-- Separator -->
                     <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">"Up Next" Shelf Auto-Match</h4>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="booklore_shelf_watch" name="BOOKLORE_SHELF_WATCH_ENABLED"
+                            onchange="toggleSection('shelf_watch_body', this.checked)"
+                            {% if get_bool('BOOKLORE_SHELF_WATCH_ENABLED') %}checked{% endif %}>
+                        <label for="booklore_shelf_watch">Watch a Grimmory shelf for auto-matching</label>
+                    </div>
+                    <div id="shelf_watch_body" class="full-width" {% if not get_bool('BOOKLORE_SHELF_WATCH_ENABLED') %}style="display:none;"{% endif %}>
+                        <div class="form-group full-width">
+                            <label>Watch Shelf Name</label>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" name="BOOKLORE_SHELF_WATCH_NAME"
+                                    value="{{ get_val('BOOKLORE_SHELF_WATCH_NAME', 'Up Next') }}"
+                                    placeholder="Up Next" style="flex:1;">
+                                <button class="btn" type="button" onclick="checkBookloreWatchShelf()">🔍 Find Shelves</button>
+                            </div>
+                            <select id="booklore_watch_shelf_picker" style="display:none; margin-top:10px;"
+                                onchange="applyShelfPickerSelection('BOOKLORE_SHELF_WATCH_NAME', 'booklore_watch_shelf_picker', true)">
+                                <option value="">Select a shelf...</option>
+                            </select>
+                            <div id="booklore_watch_shelf_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
+                            <div class="help-text">Create a shelf in <b>Grimmory</b> (pick any icon you like there), then use <b>Find Shelves</b> above to select it here. Books placed on this shelf are auto-matched on each poll cycle and moved to <code>{{ get_val('BOOKLORE_SHELF_NAME', 'Kobo') }}</code> on success.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Auto-Match Threshold (%)</label>
+                            <input type="number" name="BOOKLORE_SHELF_WATCH_THRESHOLD" min="60" max="100"
+                                value="{{ get_val('BOOKLORE_SHELF_WATCH_THRESHOLD', '95') }}">
+                            <div class="help-text">Matches at or above this score auto-create a mapping. Lower-scoring matches become pending Suggestions.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Rescan Cooldown (hours)</label>
+                            <input type="number" name="BOOKLORE_SHELF_WATCH_RESCAN_HOURS" min="1"
+                                value="{{ get_val('BOOKLORE_SHELF_WATCH_RESCAN_HOURS', '24') }}">
+                            <div class="help-text">Books on the watch shelf with no audio candidate are re-scanned no more often than this.</div>
+                        </div>
+                    </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
                     <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Device Sync Collections</h4>
 
                     <div class="form-group full-width">
@@ -782,6 +854,82 @@
                         </select>
                         <div id="booklore_shelf_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
                         <div class="help-text">Comma-separated list of Grimmory shelf names to skip when creating KOReader collections.</div>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- BookOrbit (Optional) -->
+            <div class="settings-section">
+                {% set bookorbit_configured = get_val('BOOKORBIT_SERVER') != '' %}
+                {% set bookorbit_enabled = get_bool('BOOKORBIT_ENABLED') %}
+                <div class="section-header">
+                    <h3>BookOrbit</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('bookorbit', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_bookorbit" name="BOOKORBIT_ENABLED"
+                                onchange="toggleSection('bookorbit_body', this.checked)" {% if bookorbit_enabled
+                                %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="bookorbit_body" class="section-body {% if not bookorbit_enabled %}collapsed{% endif %}">
+                    <div class="form-group full-width">
+                        <label>Server URL</label>
+                        <input type="text" name="BOOKORBIT_SERVER" value="{{ get_val('BOOKORBIT_SERVER') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Username</label>
+                        <input type="text" name="BOOKORBIT_USER" value="{{ get_val('BOOKORBIT_USER') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" name="BOOKORBIT_PASSWORD" value="{{ get_val('BOOKORBIT_PASSWORD') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Collection Name</label>
+                        <input type="text" name="BOOKORBIT_SHELF_NAME" value="{{ get_val('BOOKORBIT_SHELF_NAME') }}">
+                        <div class="help-text">BookOrbit "collection" auto-matched books are moved to on success.</div>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="bookorbit_sessions" name="BOOKORBIT_READING_SESSIONS"
+                            {% if get_bool('BOOKORBIT_READING_SESSIONS') %}checked{% endif %}>
+                        <label for="bookorbit_sessions">Record Reading Sessions</label>
+                    </div>
+
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">"Up Next" Collection Auto-Match</h4>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="bookorbit_shelf_watch" name="BOOKORBIT_SHELF_WATCH_ENABLED"
+                            onchange="toggleSection('bookorbit_shelf_watch_body', this.checked)"
+                            {% if get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %}checked{% endif %}>
+                        <label for="bookorbit_shelf_watch">Watch a BookOrbit collection for auto-matching</label>
+                    </div>
+                    <div id="bookorbit_shelf_watch_body" class="full-width" {% if not get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %}style="display:none;"{% endif %}>
+                        <div class="form-group full-width">
+                            <label>Watch Collection Name</label>
+                            <input type="text" name="BOOKORBIT_SHELF_WATCH_NAME"
+                                value="{{ get_val('BOOKORBIT_SHELF_WATCH_NAME', 'Up Next') }}"
+                                placeholder="Up Next">
+                            <div class="help-text">Create a collection in <b>BookOrbit</b> with this name. Books placed on it are auto-matched on each poll cycle and moved to <code>{{ get_val('BOOKORBIT_SHELF_NAME', 'Kobo') }}</code> on success.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Auto-Match Threshold (%)</label>
+                            <input type="number" name="BOOKORBIT_SHELF_WATCH_THRESHOLD" min="60" max="100"
+                                value="{{ get_val('BOOKORBIT_SHELF_WATCH_THRESHOLD', '95') }}">
+                            <div class="help-text">Matches at or above this score auto-create a mapping. Lower-scoring matches become pending Suggestions.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>Rescan Cooldown (hours)</label>
+                            <input type="number" name="BOOKORBIT_SHELF_WATCH_RESCAN_HOURS" min="1"
+                                value="{{ get_val('BOOKORBIT_SHELF_WATCH_RESCAN_HOURS', '24') }}">
+                            <div class="help-text">Books on the watch collection with no audio candidate are re-scanned no more often than this.</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -905,6 +1053,11 @@
                         <label>API Token</label>
                         <input type="password" name="HARDCOVER_TOKEN" value="{{ get_val('HARDCOVER_TOKEN') }}">
                     </div>
+                    <div class="form-group full-width">
+                        <label>Update Cooldown (minutes)</label>
+                        <input type="number" name="HARDCOVER_UPDATE_COOLDOWN_MINS" min="0" value="{{ get_val('HARDCOVER_UPDATE_COOLDOWN_MINS', '60') }}">
+                        <div class="help-text">Wait this many minutes of no new progress before posting to Hardcover; any new progress resets the timer. Finishing a book posts immediately. 0 = update every cycle.</div>
+                    </div>
                 </div>
             </div>
 
@@ -934,6 +1087,11 @@
                     <div class="form-group full-width">
                         <label>Remember User Token</label>
                         <input type="password" name="STORYGRAPH_REMEMBER_USER_TOKEN" value="{{ get_val('STORYGRAPH_REMEMBER_USER_TOKEN') }}">
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Update Cooldown (minutes)</label>
+                        <input type="number" name="STORYGRAPH_UPDATE_COOLDOWN_MINS" min="0" value="{{ get_val('STORYGRAPH_UPDATE_COOLDOWN_MINS', '60') }}">
+                        <div class="help-text">Wait this many minutes of no new progress before posting to StoryGraph; any new progress resets the timer. Finishing a book posts immediately. 0 = update every cycle.</div>
                     </div>
                 </div>
             </div>
@@ -1021,6 +1179,173 @@
                             matching ebooks from your library.
                         </p>
                     </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="kosync_auto_map" name="KOSYNC_AUTO_MAP_ON_AGREEMENT"
+                            {% if get_bool('KOSYNC_AUTO_MAP_ON_AGREEMENT') %}checked{% endif %}>
+                        <label for="kosync_auto_map">Auto-map on exact agreement</label>
+                        <small>When you read an unmapped ebook, skip the suggestion and link it automatically if a
+                            matching identifier (ISBN/ASIN) is found, or if the fuzzy matcher and Ollama both agree
+                            on a single exact audiobook. Ambiguous matches still become suggestions. Requires Ollama
+                            for the fuzzy-agreement path.</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ollama (Local LLM) -->
+            <div class="settings-section">
+                {% set ollama_enabled = get_bool('OLLAMA_ENABLED') %}
+                <div class="section-header">
+                    <h3>Ollama (Local LLM)</h3>
+                    <button class="btn btn-sm" type="button" onclick="testConnection('ollama', this)">🔗 Test</button>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_ollama" name="OLLAMA_ENABLED"
+                                onchange="toggleSection('ollama_body', this.checked)" {% if ollama_enabled %}checked{%
+                                endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="ollama_body" class="section-body {% if not ollama_enabled %}collapsed{% endif %}">
+                    <div class="full-width">
+                        <p class="help-text">
+                            Use a local Ollama server to semantically improve book-match suggestions and rescue
+                            failed audio↔text alignments. All features below are off until you enable them, and fall
+                            back to the existing behavior if Ollama is unreachable.
+                        </p>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Ollama Server URL</label>
+                        <input type="text" name="OLLAMA_URL" value="{{ get_val('OLLAMA_URL') }}">
+                        <div class="help-text">e.g. http://ollama:11434 (container DNS) or http://localhost:11434</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Embedding Model</label>
+                        <input type="text" name="OLLAMA_EMBED_MODEL" value="{{ get_val('OLLAMA_EMBED_MODEL') }}">
+                        <div class="help-text">e.g. nomic-embed-text (run: ollama pull nomic-embed-text)</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Chat / Judge Model</label>
+                        <input type="text" name="OLLAMA_CHAT_MODEL" value="{{ get_val('OLLAMA_CHAT_MODEL') }}">
+                        <div class="help-text">e.g. qwen2.5:14b</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Keep Alive</label>
+                        <input type="text" name="OLLAMA_KEEP_ALIVE" value="{{ get_val('OLLAMA_KEEP_ALIVE') }}">
+                        <div class="help-text">How long Ollama keeps models loaded after a request (e.g. 5m, 1h,
+                            -1 = forever, 0 = unload immediately). Empty = server default.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Chat Context Length (num_ctx)</label>
+                        <input type="number" name="OLLAMA_NUM_CTX" value="{{ get_val('OLLAMA_NUM_CTX') }}">
+                        <div class="help-text">Context window for judge calls. Empty = server default. Raise if
+                            judge prompts get truncated; costs VRAM.</div>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_rerank" name="OLLAMA_RERANK_SUGGESTIONS" {% if
+                            get_bool('OLLAMA_RERANK_SUGGESTIONS') %}checked{% endif %}>
+                        <label for="ollama_rerank">Re-rank suggestions by semantic similarity (embeddings)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Re-rank Min Score (floor)</label>
+                        <input type="number" name="OLLAMA_RERANK_BAND_MIN"
+                            value="{{ get_val('OLLAMA_RERANK_BAND_MIN') }}">
+                        <small>Only candidates scoring at or above this fuzzy floor are re-scored by
+                            embeddings; the strongest few above it become the primary semantic signal.</small>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_suggest_gate" name="OLLAMA_SUGGEST_JUDGE_GATE" {% if
+                            get_bool('OLLAMA_SUGGEST_JUDGE_GATE') %}checked{% endif %}>
+                        <label for="ollama_suggest_gate">Suppress suggestions the LLM can't confirm as a real match
+                            (drops "not even close" candidates from the scan results)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Auto-keep Score (skip LLM check above this)</label>
+                        <input type="number" name="OLLAMA_SUGGEST_AUTOKEEP_SCORE"
+                            value="{{ get_val('OLLAMA_SUGGEST_AUTOKEEP_SCORE') }}">
+                        <small>Matches scoring at/above this are trusted without a chat call; lower-scoring ones
+                            must be confirmed by the judge or they're dropped.</small>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_judge" name="OLLAMA_JUDGE_SUGGESTIONS" {% if
+                            get_bool('OLLAMA_JUDGE_SUGGESTIONS') %}checked{% endif %}>
+                        <label for="ollama_judge">Use chat model to judge ambiguous matches (and resolve the real
+                            file on a confident verdict)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Judge Margin (points)</label>
+                        <input type="number" name="OLLAMA_JUDGE_MARGIN" value="{{ get_val('OLLAMA_JUDGE_MARGIN') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Judge Confidence Min (file resolution)</label>
+                        <input type="number" name="OLLAMA_JUDGE_CONFIDENCE_MIN"
+                            value="{{ get_val('OLLAMA_JUDGE_CONFIDENCE_MIN') }}">
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_align" name="OLLAMA_ALIGN_FALLBACK" {% if
+                            get_bool('OLLAMA_ALIGN_FALLBACK') %}checked{% endif %}>
+                        <label for="ollama_align">Semantic alignment fallback when fuzzy text matching fails</label>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_ebook_text" name="OLLAMA_EBOOK_TEXT_FALLBACK" {% if
+                            get_bool('OLLAMA_EBOOK_TEXT_FALLBACK') %}checked{% endif %}>
+                        <label for="ollama_ebook_text">Semantic position rescue for ebook text lookups (KoSync /
+                            Storyteller): when fuzzy phrase matching fails, find the position by embedding
+                            similarity. Uses the Alignment Similarity Threshold below.</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Alignment Similarity Threshold (0-1)</label>
+                        <input type="number" step="0.01" name="OLLAMA_ALIGN_SIM_THRESHOLD"
+                            value="{{ get_val('OLLAMA_ALIGN_SIM_THRESHOLD') }}">
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_anchor_rescue" name="OLLAMA_ALIGN_ANCHOR_RESCUE" {% if
+                            get_bool('OLLAMA_ALIGN_ANCHOR_RESCUE') %}checked{% endif %}>
+                        <label for="ollama_anchor_rescue">Embedding anchor rescue when n-gram alignment fails
+                            (builds a real map instead of a flat linear fallback)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Anchor Rescue Max Windows</label>
+                        <input type="number" name="OLLAMA_ALIGN_MAX_WINDOWS"
+                            value="{{ get_val('OLLAMA_ALIGN_MAX_WINDOWS') }}">
+                        <small>Caps embedding cost: at most this many transcript and book windows are
+                            embedded per book when the rescue runs.</small>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_content_guard" name="OLLAMA_ALIGN_CONTENT_GUARD" {% if
+                            get_bool('OLLAMA_ALIGN_CONTENT_GUARD') %}checked{% endif %}>
+                        <label for="ollama_content_guard">Content-match guard: refuse to store an alignment when the
+                            audio and ebook are clearly different content (wrong edition / abridged / translation)</label>
+                    </div>
+                    <div class="form-group">
+                        <label>Content-Match Min Similarity (0-1)</label>
+                        <input type="number" step="0.01" name="OLLAMA_ALIGN_CONTENT_MIN_SIM"
+                            value="{{ get_val('OLLAMA_ALIGN_CONTENT_MIN_SIM') }}">
+                        <small>Below this best-passage similarity the map is rejected. Keep low to avoid false
+                            rejections.</small>
+                    </div>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_tracker" name="OLLAMA_TRACKER_MATCH" {% if
+                            get_bool('OLLAMA_TRACKER_MATCH') %}checked{% endif %}>
+                        <label for="ollama_tracker">Verify Hardcover/StoryGraph matches with the LLM (crafts the
+                            search, judges candidates; writes nothing if none match). ISBN/ASIN matches are
+                            unaffected; uses the Judge Confidence Min above.</label>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="ollama_library" name="OLLAMA_LIBRARY_MATCH" {% if
+                            get_bool('OLLAMA_LIBRARY_MATCH') %}checked{% endif %}>
+                        <label for="ollama_library">Library match rescue (Grimmory &amp; BookOrbit): when
+                            filename/title matching fails, shortlist the library and let the judge pick the
+                            one true book. Skipped on hot sync paths; uses the Judge Confidence Min above.</label>
+                    </div>
                 </div>
             </div>
 
@@ -1047,6 +1372,12 @@
                         <label>Client Diff Threshold (%)</label>
                         <input type="number" step="0.1" name="SYNC_DELTA_BETWEEN_CLIENTS_PERCENT"
                             value="{{ get_val('SYNC_DELTA_BETWEEN_CLIENTS_PERCENT') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Reading Session Gap (Minutes)</label>
+                        <input type="number" min="1" name="KOREADER_SESSION_GAP_MINUTES"
+                            value="{{ get_val('KOREADER_SESSION_GAP_MINUTES') or '30' }}">
+                        <small>Idle gap that splits KOReader page events into separate reading sessions on the stats page.</small>
                     </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="xpath_fallback" name="XPATH_FALLBACK_TO_PREVIOUS_SEGMENT" {% if
@@ -1099,7 +1430,7 @@
                         <div class="form-group" style="align-items: center;">
                             <label>Storyteller Poll Mode</label>
                             <select name="STORYTELLER_POLL_MODE" id="storyteller_poll_mode"
-                                    onchange="togglePollSeconds('storyteller_poll_seconds_row', this.value)">
+                                    onchange="togglePollSeconds('storyteller_poll_seconds_row', this.value); togglePollSeconds('storyteller_poll_settle_row', this.value)">
                                 <option value="global" {% if get_val('STORYTELLER_POLL_MODE', 'global') == 'global' %}selected{% endif %}>Global</option>
                                 <option value="custom" {% if get_val('STORYTELLER_POLL_MODE') == 'custom' %}selected{% endif %}>Custom</option>
                             </select>
@@ -1110,6 +1441,18 @@
                             <input type="number" name="STORYTELLER_POLL_SECONDS" min="10"
                                    value="{{ get_val('STORYTELLER_POLL_SECONDS', '45') }}">
                             <div class="help-text">Recommended: 30–60s for Storyteller (active reading source).</div>
+                        </div>
+                        <div class="form-group" id="storyteller_poll_settle_row"
+                             {% if get_val('STORYTELLER_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
+                            <label>Wait for Position to Settle</label>
+                            <div class="toggle-switch-wrapper">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" name="STORYTELLER_POLL_WAIT_FOR_SETTLE"
+                                        {% if get_bool('STORYTELLER_POLL_WAIT_FOR_SETTLE') %}checked{% endif %}>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="help-text">Hold the sync while the position keeps changing between polls (actively reading); run it once a poll shows no further movement.</div>
                         </div>
                         {% endif %}
 
@@ -1128,6 +1471,24 @@
                             <input type="number" name="BOOKLORE_POLL_SECONDS" min="10"
                                    value="{{ get_val('BOOKLORE_POLL_SECONDS', '300') }}">
                             <div class="help-text">Recommended: 300s for Grimmory.</div>
+                        </div>
+                        {% endif %}
+
+                        {% if get_bool('BOOKORBIT_ENABLED') %}
+                        <div class="form-group" style="align-items: center;">
+                            <label>BookOrbit Poll Mode</label>
+                            <select name="BOOKORBIT_POLL_MODE" id="bookorbit_poll_mode"
+                                    onchange="togglePollSeconds('bookorbit_poll_seconds_row', this.value)">
+                                <option value="global" {% if get_val('BOOKORBIT_POLL_MODE', 'global') == 'global' %}selected{% endif %}>Global</option>
+                                <option value="custom" {% if get_val('BOOKORBIT_POLL_MODE') == 'custom' %}selected{% endif %}>Custom</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="bookorbit_poll_seconds_row"
+                             {% if get_val('BOOKORBIT_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
+                            <label>BookOrbit Poll Interval (seconds)</label>
+                            <input type="number" name="BOOKORBIT_POLL_SECONDS" min="10"
+                                   value="{{ get_val('BOOKORBIT_POLL_SECONDS', '300') }}">
+                            <div class="help-text">Recommended: 300s for BookOrbit.</div>
                         </div>
                         {% endif %}
 
@@ -1548,11 +1909,19 @@
             });
         }
 
-        function applyShelfPickerSelection(inputName, selectId) {
+        function applyShelfPickerSelection(inputName, selectId, singleSelect) {
             const input = document.querySelector(`input[name="${inputName}"]`);
             const select = document.getElementById(selectId);
             if (!input || !select || !select.value) return;
-            
+
+            if (singleSelect) {
+                // Watch shelf: a single shelf name, not a comma-separated list.
+                input.value = select.value;
+                if (typeof markDirty === 'function') markDirty();
+                select.value = "";
+                return;
+            }
+
             let currentStr = input.value || '';
             let current = currentStr.split(',').map(s => s.trim()).filter(Boolean);
             if (!current.includes(select.value)) {
@@ -1575,6 +1944,18 @@
             });
         }
 
+        function checkBookloreWatchShelf() {
+            populateLibraryPicker({
+                endpoint: '/api/booklore/shelves',
+                button: event.target,
+                inputName: 'BOOKLORE_SHELF_WATCH_NAME',
+                selectId: 'booklore_watch_shelf_picker',
+                statusId: 'booklore_watch_shelf_picker_status',
+                emptyMessage: 'No shelves found. Create one in Grimmory first, then click Find again.',
+                labelBuilder: (shelf) => `${shelf.name} (${shelf.count} books)`,
+            });
+        }
+
         function checkAbsLibs() {
             populateLibraryPicker({
                 endpoint: '/api/abs/libraries',
@@ -1592,10 +1973,12 @@
             kosync: ['KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY'],
             storyteller: ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
+            bookorbit: ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
+            ollama: ['OLLAMA_ENABLED', 'OLLAMA_URL', 'OLLAMA_EMBED_MODEL', 'OLLAMA_CHAT_MODEL'],
         };
 
         function onTrackerProviderChange(provider) {
@@ -1711,9 +2094,7 @@
                 // Hide Public URL section
                 if (publicGroup) publicGroup.classList.add('hidden');
 
-                // Make internal editable (user must set external server)
-                // We don't necessarily clear it, but maybe we should? 
-                // Let's leave it, user can edit.
+                // Make internal editable so the user can set their external server.
                 internalInput.removeAttribute('readonly');
                 internalInput.style.opacity = "1";
                 internalInput.style.cursor = "text";
@@ -1862,8 +2243,8 @@
         document.addEventListener('DOMContentLoaded', function () {
             const configuredPort = "{{ get_val('KOSYNC_PORT', '5757') }}";
 
-            // Simple generic suggestion as requested
-            let suggestedUrl = `http://localhost:${configuredPort}`;
+            // Generic example so users see the expected shape of an internet-reachable URL.
+            let suggestedUrl = `https://koreader.example.com:${configuredPort}`;
 
             const publicUrlInput = document.getElementById('public_kosync_url');
             publicUrlInput.value = suggestedUrl;

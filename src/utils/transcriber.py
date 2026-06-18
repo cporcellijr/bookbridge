@@ -35,8 +35,9 @@ logger = logging.getLogger(__name__)
 
 class AudioTranscriber:
     # [UPDATED] Accepted smil_extractor and polisher as arguments
-    def __init__(self, data_dir, smil_extractor, polisher: Polisher):
+    def __init__(self, data_dir, smil_extractor, polisher: Polisher, ollama_client=None):
         self.data_dir = data_dir
+        self.ollama_client = ollama_client
         self.cache_root = data_dir / "audio_cache"
         self.cache_root.mkdir(parents=True, exist_ok=True)
 
@@ -404,6 +405,21 @@ class AudioTranscriber:
 
         return new_files if new_files else [file_path]
 
+    @staticmethod
+    def _prune_audio_cache(book_cache_dir: Path) -> None:
+        """Remove heavy audio artifacts after a successful run but keep `_progress.json`
+        (the finished transcript) so a later re-align can reuse it instead of
+        re-downloading audio and re-running Whisper."""
+        if not book_cache_dir.exists():
+            return
+        for artifact in book_cache_dir.iterdir():
+            if artifact.name == "_progress.json" or artifact.is_dir():
+                continue
+            try:
+                artifact.unlink()
+            except OSError as cleanup_err:
+                logger.debug(f"Transcript cache cleanup skipped {artifact.name}: {cleanup_err}")
+
     @time_execution
     def process_audio(self, abs_id, audio_urls, full_book_text=None, progress_callback=None) -> Optional[list]:
         """
@@ -414,9 +430,6 @@ class AudioTranscriber:
         # The Orchestrator (SyncManager) should check the DB (AlignmentService) before calling this.
         # However, we CAN check our local cache to resume/skip work if we crashed mid-transcription.
         
-        # Check LRU Cache (in-memory) (Optional, mostly for dev speed)
-        # if abs_id in self._transcript_cache: ...
-
         book_cache_dir = self.cache_root / str(abs_id)
         # Clean up if not resuming? For now, we assume if we are called, we need to run.
         book_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -579,9 +592,10 @@ class AudioTranscriber:
 
                 gc.collect()
 
-            # Clean up cache only on success
-            if book_cache_dir.exists():
-                shutil.rmtree(book_cache_dir)
+            # Clean up cache only on success. Keep `_progress.json` (it holds the finished
+            # transcript) so a later re-align can reuse it via the resume check above and
+            # skip re-downloading/re-running Whisper — only the heavy audio is removed.
+            self._prune_audio_cache(book_cache_dir)
 
             return full_transcript
 
@@ -869,6 +883,55 @@ class AudioTranscriber:
 
         return alignment_points
 
+    def _ollama_align_fallback(self, clean_search, windows, hint_percentage, data, title_prefix="") -> Optional[float]:
+        """Optional semantic rescue when lexical fuzzy matching fails.
+
+        Embeds the search text and candidate windows via Ollama and returns the
+        timestamp of the most semantically similar window above a configured
+        cosine threshold. Returns None if disabled, unavailable, or below threshold.
+        """
+        client = self.ollama_client
+        if not client or not client.is_configured():
+            return None
+        if os.environ.get("OLLAMA_ALIGN_FALLBACK", "false").lower() != "true":
+            return None
+        if not clean_search or not windows:
+            return None
+
+        try:
+            threshold = float(os.environ.get("OLLAMA_ALIGN_SIM_THRESHOLD", 0.72))
+        except (TypeError, ValueError):
+            threshold = 0.72
+
+        # Bound the candidate set: prefer the hint neighborhood, else cap to a window budget.
+        candidates = windows
+        if hint_percentage is not None and data:
+            try:
+                total_duration = data[-1]['end']
+                hint_start = max(0, hint_percentage - 0.15) * total_duration
+                hint_end = min(1.0, hint_percentage + 0.15) * total_duration
+                nearby = [w for w in windows if hint_start <= w['start'] <= hint_end]
+                if nearby:
+                    candidates = nearby
+            except Exception:
+                candidates = windows
+        max_windows = 40
+        if len(candidates) > max_windows:
+            candidates = candidates[:max_windows]
+
+        from src.services.llm_matching import best_semantic_window
+
+        texts = [w['text'] for w in candidates]
+        best = best_semantic_window(client, clean_search, texts, threshold)
+        if best is not None:
+            best_window = candidates[best[0]]
+            logger.info(
+                f"🧠 {title_prefix}Semantic alignment rescue at {best_window['start']:.1f}s "
+                f"(cosine {best[1]:.2f}) - '{sanitize_log_data(clean_search)}'"
+            )
+            return best_window['start']
+        return None
+
     @time_execution
     def find_time_for_text(self, transcript_path, search_text, hint_percentage=None, char_offset=None, book_title=None) -> Optional[float]:
         """
@@ -1012,6 +1075,9 @@ class AudioTranscriber:
                 logger.info(f"✅ {title_prefix}Match found at {best_match['start']:.1f}s | Confidence: {best_score}% - '{sanitize_log_data(clean_search)}'")
                 return best_match['start']
             else:
+                rescue = self._ollama_align_fallback(clean_search, windows, hint_percentage, data, title_prefix)
+                if rescue is not None:
+                    return rescue
                 logger.warning(f"⚠️ {title_prefix}No good match found (best: {best_score}% < {self.match_threshold}%)")
                 return None
 

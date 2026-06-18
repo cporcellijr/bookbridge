@@ -34,13 +34,15 @@ def test_align_and_store_success(service, mock_db):
     
     # Mock lower-level alignment logic (tested separately in test_generate_alignment_map)
     # We only want to verify the storage flow here
-    service._generate_alignment_map = MagicMock(return_value=[{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}])
-    
+    service._generate_alignment_map_with_method = MagicMock(
+        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical')
+    )
+
     # Ensure DB query returns None (Simulate no existing record)
     session.query.return_value.filter_by.return_value.first.return_value = None
-    
+
     result = service.align_and_store("test_id", segments, ebook_text)
-    
+
     assert result == True
     session.add.assert_called()
 
@@ -96,6 +98,36 @@ def test_get_time_for_text(service, mock_db):
     # Test Interpolation (50 chars -> 5.0s)
     ts = service.get_time_for_text("test_id", "query", char_offset_hint=50)
     assert ts == 5.0
+
+
+def test_get_progress_for_time_maps_audio_ts_to_text_fraction(service):
+    # Deliberately non-linear: half the audio time (5.0s) is 60% of the text.
+    # This is the audio-time vs ebook-text axis mismatch the dashboard warning
+    # must account for.
+    service._get_alignment = MagicMock(return_value=[
+        {'char': 0, 'ts': 0.0},
+        {'char': 600, 'ts': 5.0},
+        {'char': 1000, 'ts': 10.0},
+    ])
+
+    assert service.get_progress_for_time("id", 5.0) == pytest.approx(0.60)
+    # Interpolated: ts 2.5 -> char 300 -> 0.30
+    assert service.get_progress_for_time("id", 2.5) == pytest.approx(0.30)
+
+
+def test_get_progress_for_time_clamps_to_bounds(service):
+    service._get_alignment = MagicMock(return_value=[
+        {'char': 0, 'ts': 0.0},
+        {'char': 1000, 'ts': 10.0},
+    ])
+
+    assert service.get_progress_for_time("id", 999.0) == pytest.approx(1.0)
+    assert service.get_progress_for_time("id", -5.0) == pytest.approx(0.0)
+
+
+def test_get_progress_for_time_returns_none_without_alignment(service):
+    service._get_alignment = MagicMock(return_value=None)
+    assert service.get_progress_for_time("id", 5.0) is None
 
 
 def test_probe_storyteller_transcripts_returns_ready_when_assets_not_configured():
@@ -260,3 +292,171 @@ def test_resolve_storyteller_title_dir_returns_none_when_multiple_transcript_rea
         result = _resolve_storyteller_title_dir(assets_root, "Trad Wife")
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Track C: embedding anchor rescue + content-match guard
+# ---------------------------------------------------------------------------
+
+class _TopicOllama:
+    """Stub OllamaClient: embeds by topic keyword so tests can craft matches.
+
+    Returns [1,0] for 'ocean' text, [0,1] for 'mountain' text, else [0.5,0.5].
+    """
+
+    def __init__(self, configured=True):
+        self._configured = configured
+
+    def is_configured(self):
+        return self._configured
+
+    def embed(self, texts):
+        out = []
+        for t in texts:
+            low = (t or "").lower()
+            if "ocean" in low:
+                out.append([1.0, 0.0])
+            elif "mountain" in low:
+                out.append([0.0, 1.0])
+            else:
+                out.append([0.5, 0.5])
+        return out
+
+
+def _topic_env(mp):
+    mp.setenv("OLLAMA_ALIGN_ANCHOR_RESCUE", "true")
+    mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "true")
+    mp.setenv("OLLAMA_ALIGN_SIM_THRESHOLD", "0.72")
+    mp.setenv("OLLAMA_ALIGN_MAX_WINDOWS", "80")
+    mp.setenv("OLLAMA_ALIGN_CONTENT_MIN_SIM", "0.45")
+
+
+def _topic_book_text():
+    # Two distinct topical halves; no shared 12-gram with the transcript -> lexical fails.
+    return ("ocean " * 60).strip() + " " + ("mountain " * 60).strip()
+
+
+def _topic_segments():
+    return [
+        {"start": 0.0, "end": 10.0, "text": "the sea waves ocean tide rolling"},
+        {"start": 10.0, "end": 20.0, "text": "the peak summit mountain ridge climbing"},
+    ]
+
+
+def test_anchor_rescue_builds_map_when_lexical_fails(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        alignment_map, method = service._generate_alignment_map_with_method(
+            _topic_segments(), _topic_book_text()
+        )
+    assert method == "llm_anchor"
+    assert len(alignment_map) >= 2
+    chars = [p["char"] for p in alignment_map]
+    assert chars == sorted(chars)  # monotonic in char
+
+
+def test_anchor_rescue_noop_when_disabled(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        mp.setenv("OLLAMA_ALIGN_ANCHOR_RESCUE", "false")
+        alignment_map, method = service._generate_alignment_map_with_method(
+            _topic_segments(), _topic_book_text()
+        )
+    assert method == "linear"
+    assert alignment_map == [
+        {"char": 0, "ts": 0.0},
+        {"char": len(_topic_book_text()), "ts": 20.0},
+    ]
+
+
+class _RecordingTopicOllama(_TopicOllama):
+    """Topic stub that also records every text passed to embed()."""
+
+    def __init__(self):
+        super().__init__()
+        self.embedded_texts = []
+
+    def embed(self, texts):
+        self.embedded_texts.extend(texts)
+        return super().embed(texts)
+
+
+def test_anchor_rescue_caps_embedded_window_length(mock_db):
+    # Long books produce windows beyond the embedder's token limit; only a
+    # bounded prefix may be sent while anchor char offsets still span the book.
+    stub = _RecordingTopicOllama()
+    service = AlignmentService(mock_db, Polisher(), ollama_client=stub)
+    half = 250_000
+    long_text = ("ocean " * (half // 6)) + ("mountain " * (half // 9))
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
+        alignment_map, method = service._generate_alignment_map_with_method(
+            _topic_segments(), long_text
+        )
+    assert method == "llm_anchor"
+    cap = AlignmentService._EMBED_WINDOW_MAX_CHARS
+    assert all(len(t) <= cap for t in stub.embedded_texts)
+    assert alignment_map[-1]["char"] == len(long_text)
+
+
+def test_anchor_rescue_short_book_texts_unchanged(mock_db):
+    stub = _RecordingTopicOllama()
+    service = AlignmentService(mock_db, Polisher(), ollama_client=stub)
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
+        service._generate_alignment_map_with_method(_topic_segments(), _topic_book_text())
+    cap = AlignmentService._EMBED_WINDOW_MAX_CHARS
+    # Short-book windows are far below the cap, so nothing is truncated.
+    assert stub.embedded_texts
+    assert all(len(t) < cap for t in stub.embedded_texts)
+
+
+def test_anchor_rescue_noop_without_client(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=None)
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        _map, method = service._generate_alignment_map_with_method(
+            _topic_segments(), _topic_book_text()
+        )
+    assert method == "linear"
+
+
+def test_content_guard_blocks_divergent_content(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
+    segments = [{"start": 0.0, "end": 5.0, "text": "the ocean sea waves"}]
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        ok = service._verify_content_match(segments, "mountain " * 100, abs_id="x")
+    assert ok is False
+
+
+def test_content_guard_allows_matching_content(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
+    segments = [{"start": 0.0, "end": 5.0, "text": "the ocean sea waves"}]
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        ok = service._verify_content_match(segments, "ocean " * 100, abs_id="x")
+    assert ok is True
+
+
+def test_content_guard_noop_when_disabled(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
+    segments = [{"start": 0.0, "end": 5.0, "text": "the ocean sea waves"}]
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
+        ok = service._verify_content_match(segments, "mountain " * 100, abs_id="x")
+    assert ok is True  # guard off -> never blocks
+
+
+def test_content_guard_noop_without_client(mock_db):
+    service = AlignmentService(mock_db, Polisher(), ollama_client=None)
+    segments = [{"start": 0.0, "end": 5.0, "text": "the ocean sea waves"}]
+    with pytest.MonkeyPatch.context() as mp:
+        _topic_env(mp)
+        ok = service._verify_content_match(segments, "mountain " * 100, abs_id="x")
+    assert ok is True

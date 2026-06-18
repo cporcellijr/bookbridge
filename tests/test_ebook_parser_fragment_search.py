@@ -39,6 +39,43 @@ class TestEbookFragmentSearch(unittest.TestCase):
         fragment_id = self.parser.get_fragment_for_tag(target_tag)
         self.assertIsNone(fragment_id)
 
+    def test_prefers_media_overlay_id_over_innermost(self):
+        # Storyteller nesting: outer -sN span is in the SMIL, inner -sentenceN is not.
+        html_content = (
+            "<html><body><p id='p1'>"
+            "<span id='ch1.html-s116'><span id='ch1.html-sentence116'>Why not?</span></span>"
+            "</p></body></html>"
+        )
+        soup = BeautifulSoup(html_content, 'html.parser')
+        target_tag = soup.find(id='ch1.html-sentence116')
+
+        fragment_id = self.parser.get_fragment_for_tag(target_tag, valid_ids={'ch1.html-s116'})
+        self.assertEqual(fragment_id, "ch1.html-s116")
+
+    def test_innermost_id_when_no_ancestor_in_valid_set(self):
+        html_content = (
+            "<html><body><p id='p1'>"
+            "<span id='outer'><span id='inner'>Text.</span></span>"
+            "</p></body></html>"
+        )
+        soup = BeautifulSoup(html_content, 'html.parser')
+        target_tag = soup.find(id='inner')
+
+        fragment_id = self.parser.get_fragment_for_tag(target_tag, valid_ids={'unrelated-id'})
+        self.assertEqual(fragment_id, "inner")
+
+    def test_innermost_id_when_valid_set_empty(self):
+        html_content = (
+            "<html><body><p id='p1'>"
+            "<span id='outer'><span id='inner'>Text.</span></span>"
+            "</p></body></html>"
+        )
+        soup = BeautifulSoup(html_content, 'html.parser')
+        target_tag = soup.find(id='inner')
+
+        fragment_id = self.parser.get_fragment_for_tag(target_tag, valid_ids=set())
+        self.assertEqual(fragment_id, "inner")
+
 
 if __name__ == "__main__":
     unittest.main()

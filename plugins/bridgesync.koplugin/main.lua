@@ -1,5 +1,6 @@
 local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
+local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local LuaSettings = require("luasettings")
@@ -48,7 +49,23 @@ local BridgeSync = WidgetContainer:extend{
     is_doc_only = false,
 }
 
+function BridgeSync:onDispatcherRegisterActions()
+    Dispatcher:registerAction("bridgesync_sync_books", {
+        category = "none",
+        event = "BridgeSyncSyncBooks",
+        title = _("Bridge Sync: Sync books"),
+        general = true,
+    })
+    Dispatcher:registerAction("bridgesync_sync_stats", {
+        category = "none",
+        event = "BridgeSyncSyncStats",
+        title = _("Bridge Sync: Sync reading stats"),
+        general = true,
+    })
+end
+
 function BridgeSync:init()
+    self:onDispatcherRegisterActions()
     self.settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/bridge_sync.lua")
     self.state = LuaSettings:open(DataStorage:getSettingsDir() .. "/bridge_sync_state.lua")
 
@@ -468,7 +485,7 @@ function BridgeSync:_isCooldownActive()
     return (os.time() - self.last_auto_sync_time) < 300
 end
 
-function BridgeSync:_scheduleSync(delay_seconds, silent)
+function BridgeSync:_scheduleSync(delay_seconds, silent, retries_left)
     if self.sync_scheduled then
         return
     end
@@ -476,7 +493,7 @@ function BridgeSync:_scheduleSync(delay_seconds, silent)
     self.sync_scheduled = true
     UIManager:scheduleIn(delay_seconds or 10, function()
         self.sync_scheduled = false
-        if not self.is_enabled or not NetworkMgr:isConnected() then
+        if not self.is_enabled then
             return
         end
         if self:_shouldAvoidAutoSyncWhileReading() then
@@ -484,8 +501,20 @@ function BridgeSync:_scheduleSync(delay_seconds, silent)
             self:logInfo("Deferring auto-sync while a document is open")
             return
         end
+        if not NetworkMgr:isConnected() then
+            -- WiFi isn't up yet (common right after wake): poll instead of giving up so the
+            -- sync fires as soon as it connects, independent of the onNetworkConnected event.
+            local remaining = retries_left or 12  -- ~12 * 10s ≈ 2 min grace for WiFi
+            if remaining > 0 then
+                self:logInfo("Auto-sync waiting for WiFi; will retry")
+                self:_scheduleSync(10, silent, remaining - 1)
+            else
+                self:logInfo("Auto-sync gave up waiting for WiFi")
+            end
+            return  -- needs_wake_sync stays true as a backup for onNetworkConnected
+        end
         self.needs_wake_sync = false
-        self.last_auto_sync_time = os.time()
+        self.last_auto_sync_time = os.time()  -- cooldown only once we actually sync
         Trapper:wrap(function()
             self:syncFromBridge(silent == nil and true or silent)
         end)
@@ -555,9 +584,9 @@ function BridgeSync:onResume()
     end
 
     self.needs_wake_sync = true
-    if NetworkMgr:isConnected() then
-        self:_scheduleSync(self.wake_sync_delay_seconds, true)
-    end
+    -- Schedule unconditionally; the job polls for WiFi itself rather than depending on it
+    -- being connected at this exact instant (it usually isn't right after wake).
+    self:_scheduleSync(self.wake_sync_delay_seconds, true)
     return false
 end
 
@@ -1395,12 +1424,14 @@ function BridgeSync:_collectStatisticsPayload()
                 local page = tonumber(page_result[2][i]) or 0
                 local start_time = tonumber(page_result[3][i]) or 0
                 local duration = tonumber(page_result[4][i]) or 0
+                local total_pages = tonumber(page_result[5][i]) or 0
 
                 table.insert(page_stats, {
                     md5 = book.md5,
                     page = page,
                     start_time = start_time,
                     duration = duration,
+                    total_pages = total_pages,
                 })
                 included_md5[book.md5] = true
                 if start_time > max_start_time then
@@ -1449,57 +1480,234 @@ function BridgeSync:_collectStatisticsPayload()
     return payload_or_err, nil
 end
 
+function BridgeSync:_mergeForeignStatistics(payload)
+    local result = { merged = 0, fetched = 0, watermark = nil, err = nil }
+
+    if not SQ3 then
+        result.err = _("SQLite support is unavailable in this KOReader build")
+        return result
+    end
+
+    local db_path = self:_findStatisticsDbPath()
+    if not db_path then
+        result.err = _("statistics.sqlite was not found in the KOReader settings folder")
+        return result
+    end
+
+    local since = tonumber(self.state:readSetting("stats_last_merged_watermark")) or 0
+    if not self.state:readSetting("stats_merge_backfill_done") then
+        -- One-time full re-pull: books never opened here were silently skipped by older
+        -- plugin versions, which still advanced the watermark past their events. Fetch
+        -- everything once to backfill them; INSERT OR IGNORE keeps the re-merge idempotent.
+        since = 0
+        result.backfill_pending = true
+    end
+    local ok, response = self.api:getMergedStatistics(
+        payload.device,
+        payload.device_id,
+        since > 1 and (since - 1) or 0
+    )
+    if not ok then
+        result.err = tostring(response or "Failed to fetch merged statistics")
+        return result
+    end
+
+    if response.enabled == false then
+        return result
+    end
+
+    local page_stats = response.page_stats
+    if type(page_stats) ~= "table" or #page_stats == 0 then
+        result.watermark = tonumber(response.watermark)
+        return result
+    end
+    result.fetched = #page_stats
+
+    -- Book metadata for the foreign md5s, so books never opened on this device can
+    -- have their local `book` row created before merging the page events.
+    local books_meta_by_md5 = {}
+    if type(response.books) == "table" then
+        for _, b in ipairs(response.books) do
+            local bmd5 = tostring(b.md5 or "")
+            if bmd5 ~= "" then
+                books_meta_by_md5[bmd5] = {
+                    title = tostring(b.title or ""),
+                    authors = tostring(b.authors or ""),
+                    pages = tonumber(b.pages) or 0,
+                }
+            end
+        end
+    end
+
+    local conn = SQ3.open(db_path)
+    if not conn then
+        result.err = _("Failed to open KOReader statistics database")
+        return result
+    end
+
+    local ok_merge, merge_err = pcall(function()
+        conn:exec("PRAGMA busy_timeout = 5000")
+
+        local books_by_md5 = {}
+        local book_result, book_rows = conn:exec("SELECT id, md5 FROM book")
+        if book_result and book_rows then
+            for i = 1, book_rows do
+                local id_book = tonumber(book_result[1][i])
+                local book_md5 = tostring(book_result[2][i] or "")
+                if id_book and book_md5 ~= "" then
+                    books_by_md5[book_md5] = id_book
+                end
+            end
+        end
+
+        conn:exec("BEGIN IMMEDIATE")
+        local changes_before = tonumber(conn:exec("SELECT total_changes()")[1][1]) or 0
+
+        local insert_stmt = conn:prepare(
+            "INSERT OR IGNORE INTO page_stat_data (id_book, page, start_time, duration, total_pages) VALUES (?, ?, ?, ?, ?)"
+        )
+        -- KOReader resolves a book by (title, authors, md5), so creating the row with the
+        -- foreign device's exact values lets KOReader reuse it (not duplicate) if this
+        -- device later opens the file. `pages` seeds KOReader's page rescaling until then.
+        local book_insert_stmt = conn:prepare(
+            "INSERT OR IGNORE INTO book (title, authors, md5, pages, notes, highlights, last_open, total_read_time, total_read_pages) VALUES (?, ?, ?, ?, 0, 0, ?, 0, 0)"
+        )
+        local touched = {}
+        local created_books = 0
+        for _idx, event in ipairs(page_stats) do
+            local md5_key = tostring(event.md5 or "")
+            local id_book = books_by_md5[md5_key]
+            local page = tonumber(event.page)
+            local start_time = tonumber(event.start_time)
+            local duration = tonumber(event.duration)
+            local total_pages = tonumber(event.total_pages)
+
+            -- Book never opened on this device: create its row from the merged metadata.
+            if not id_book and md5_key ~= "" and books_meta_by_md5[md5_key] then
+                local meta = books_meta_by_md5[md5_key]
+                local book_pages = (meta.pages > 0 and meta.pages)
+                    or (total_pages and total_pages > 0 and total_pages)
+                    or 0
+                local last_open = math.floor(start_time or os.time())
+                book_insert_stmt:reset()
+                book_insert_stmt:bind(meta.title, meta.authors, md5_key, book_pages, last_open)
+                book_insert_stmt:step()
+                local new_id = tonumber(conn:exec("SELECT last_insert_rowid()")[1][1])
+                if new_id and new_id > 0 then
+                    id_book = new_id
+                    books_by_md5[md5_key] = new_id
+                    created_books = created_books + 1
+                end
+            end
+
+            if id_book and page and start_time and duration and total_pages and total_pages > 0 then
+                insert_stmt:reset()
+                insert_stmt:bind(id_book, page, start_time, duration, total_pages)
+                insert_stmt:step()
+                touched[id_book] = true
+            end
+        end
+        insert_stmt:close()
+        book_insert_stmt:close()
+
+        local changes_after = tonumber(conn:exec("SELECT total_changes()")[1][1]) or 0
+        -- Subtract the book-row inserts so result.merged counts merged page-stat rows only.
+        result.merged = math.max(changes_after - changes_before - created_books, 0)
+
+        if result.merged > 0 then
+            local update_stmt = conn:prepare([[
+                UPDATE book SET
+                    total_read_time = (SELECT coalesce(sum(duration), 0) FROM page_stat WHERE id_book = book.id),
+                    total_read_pages = (SELECT count(DISTINCT page) FROM page_stat WHERE id_book = book.id)
+                WHERE id = ?
+            ]])
+            for id_book in pairs(touched) do
+                update_stmt:reset()
+                update_stmt:bind(id_book)
+                update_stmt:step()
+            end
+            update_stmt:close()
+        end
+        conn:exec("COMMIT")
+    end)
+
+    if not ok_merge then
+        pcall(function() conn:exec("ROLLBACK") end)
+    end
+    pcall(function() conn:close() end)
+
+    if not ok_merge then
+        result.err = tostring(merge_err or "Failed to merge statistics")
+        result.merged = 0
+        return result
+    end
+
+    result.watermark = tonumber(response.watermark)
+    return result
+end
+
 function BridgeSync:_runStatisticsSync()
     local payload, payload_err = self:_collectStatisticsPayload()
     if not payload then
         error(payload_err or "Failed to build statistics payload")
     end
 
-    if #payload.page_stats == 0 then
-        return {
-            skipped = true,
-            device_key = payload.device_key,
-            watermark = payload.watermark,
-            accepted_books = 0,
-            accepted_page_stats = 0,
-            duplicate_page_stats = 0,
-        }
-    end
-
-    self:logInfo(
-        "Uploading",
-        #payload.page_stats,
-        "reading stat rows and",
-        #payload.books,
-        "book metadata rows"
-    )
-
-    local ok, code, body = self.api:uploadStatistics({
-        device = payload.device,
-        device_id = payload.device_id,
-        books = payload.books,
-        page_stats = payload.page_stats,
-    })
-    if not ok then
-        error(body or ("HTTP " .. tostring(code or "unknown")))
-    end
-
-    local parsed = {}
-    if body and body ~= "" then
-        local ok_json, decoded = pcall(json.decode, body)
-        if ok_json and type(decoded) == "table" then
-            parsed = decoded
-        end
-    end
-
-    return {
-        skipped = false,
+    local result = {
+        skipped = #payload.page_stats == 0,
         device_key = payload.device_key,
         watermark = payload.watermark,
-        accepted_books = tonumber(parsed.accepted_books) or #payload.books,
-        accepted_page_stats = tonumber(parsed.accepted_page_stats) or #payload.page_stats,
-        duplicate_page_stats = tonumber(parsed.duplicate_page_stats) or 0,
+        accepted_books = 0,
+        accepted_page_stats = 0,
+        duplicate_page_stats = 0,
+        merged_page_stats = 0,
+        merge_watermark = nil,
+        merge_error = nil,
     }
+
+    if not result.skipped then
+        self:logInfo(
+            "Uploading",
+            #payload.page_stats,
+            "reading stat rows and",
+            #payload.books,
+            "book metadata rows"
+        )
+
+        local ok, code, body = self.api:uploadStatistics({
+            device = payload.device,
+            device_id = payload.device_id,
+            books = payload.books,
+            page_stats = payload.page_stats,
+        })
+        if not ok then
+            error(body or ("HTTP " .. tostring(code or "unknown")))
+        end
+
+        local parsed = {}
+        if body and body ~= "" then
+            local ok_json, decoded = pcall(json.decode, body)
+            if ok_json and type(decoded) == "table" then
+                parsed = decoded
+            end
+        end
+
+        result.accepted_books = tonumber(parsed.accepted_books) or #payload.books
+        result.accepted_page_stats = tonumber(parsed.accepted_page_stats) or #payload.page_stats
+        result.duplicate_page_stats = tonumber(parsed.duplicate_page_stats) or 0
+    end
+
+    local merge = self:_mergeForeignStatistics(payload)
+    result.merged_page_stats = merge.merged or 0
+    result.merge_watermark = merge.watermark
+    result.merge_error = merge.err
+    result.merge_backfill_pending = merge.backfill_pending
+    if merge.err then
+        self:logWarn("Cross-device stats merge failed:", merge.err)
+    elseif result.merged_page_stats > 0 then
+        self:logInfo("Merged", result.merged_page_stats, "reading stat rows from other devices")
+    end
+
+    return result
 end
 
 function BridgeSync:syncReadingStats(silent)
@@ -1576,17 +1784,24 @@ function BridgeSync:syncReadingStats(silent)
     if result.watermark and tonumber(result.watermark) then
         self.state:saveSetting("stats_last_uploaded_start_time", tonumber(result.watermark))
     end
+    if result.merge_watermark and tonumber(result.merge_watermark) then
+        self.state:saveSetting("stats_last_merged_watermark", tonumber(result.merge_watermark))
+    end
+    if result.merge_backfill_pending and not result.merge_error then
+        self.state:saveSetting("stats_merge_backfill_done", true)
+    end
     self.state:flush()
 
     local message
-    if result.skipped then
+    if result.skipped and (result.merged_page_stats or 0) == 0 then
         message = _("Reading stats are already up to date.")
     else
         message = T(
-            _("Reading stats synced.\nAccepted rows: %1\nDuplicates: %2\nBooks: %3"),
+            _("Reading stats synced.\nAccepted rows: %1\nDuplicates: %2\nBooks: %3\nMerged from other devices: %4"),
             result.accepted_page_stats or 0,
             result.duplicate_page_stats or 0,
-            result.accepted_books or 0
+            result.accepted_books or 0,
+            result.merged_page_stats or 0
         )
     end
 
@@ -1610,6 +1825,20 @@ end
 function BridgeSync:onSuspend()
     self:endSession({ silent = true, force_queue = true })
     return false
+end
+
+function BridgeSync:onBridgeSyncSyncBooks()
+    Trapper:wrap(function()
+        self:syncFromBridge(false)
+    end)
+    return true
+end
+
+function BridgeSync:onBridgeSyncSyncStats()
+    Trapper:wrap(function()
+        self:syncReadingStats(false)
+    end)
+    return true
 end
 
 function BridgeSync:checkForPluginUpdate()

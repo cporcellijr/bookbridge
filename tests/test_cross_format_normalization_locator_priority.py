@@ -425,6 +425,44 @@ def test_single_non_abs_delta_must_be_ahead_on_normalized_timeline():
     assert leader_pct == config["ABS"].current["pct"]
 
 
+def test_single_kosync_delta_behind_abs_does_not_lead():
+    manager = SyncManager.__new__(SyncManager)
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {
+        "ABS": _Client(),
+        "KoSync": _Client(),
+        "Hardcover": _Client(),
+    }
+    manager.cross_format_deadband_seconds = 2.0
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 15310.7, "KoSync": 7812.8, "Hardcover": 14600.0}
+    )
+
+    book = SimpleNamespace(duration=21175.4, transcript_file="DB_MANAGED", audio_source="ABS")
+    config = {
+        "ABS": _state({"pct": 0.7230, "ts": 15310.7}),
+        "KoSync": _state(
+            {
+                "pct": 0.3913,
+                "xpath": "/body/DocFragment[7]/body/div/p[706]/text()[1].0",
+                "_normalization_source": "xpath",
+            }
+        ),
+        "Hardcover": _state({"pct": 0.7344}),
+    }
+    config["KoSync"].previous_pct = 0.7360
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-heart", "Heart the Lover")
+
+    assert leader == "ABS"
+    assert leader_pct == config["ABS"].current["pct"]
+
+
 def test_single_storyteller_delta_with_href_progression_is_not_demoted():
     manager = SyncManager.__new__(SyncManager)
 
@@ -485,6 +523,28 @@ def test_parse_cfi_components_supports_range_cfi():
     assert len(element_steps) > 0
 
 
+def test_parse_cfi_components_supports_spine_step_six():
+    parser = EbookParser.__new__(EbookParser)
+
+    spine_step, element_steps, char_offset = parser._parse_cfi_components(
+        "epubcfi(/6/6!/4/232/2/2/2:0)"
+    )
+
+    assert spine_step == 6
+    assert len(element_steps) > 0
+    assert char_offset == 0
+
+
+def test_parse_cfi_components_supports_minimal_cfi_with_spine_step_six():
+    parser = EbookParser.__new__(EbookParser)
+
+    spine_step, element_steps, char_offset = parser._parse_cfi_components("epubcfi(/6/6!/:0)")
+
+    assert spine_step == 6
+    assert element_steps == []
+    assert char_offset == 0
+
+
 def test_generate_cfi_never_emits_empty_element_path():
     parser = EbookParser.__new__(EbookParser)
 
@@ -543,6 +603,118 @@ def test_deadband_allows_switch_when_delta_exceeds_threshold():
 
     assert leader == "KoSync"
     assert leader_pct == config["KoSync"].current["pct"]
+
+
+def test_recent_external_kosync_percent_fallback_can_lead():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {"ABS": _Client(), "KoSync": _Client()}
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 28667.3, "KoSync": 30400.0}
+    )
+
+    config = {
+        "ABS": _state({"pct": 0.415762, "ts": 28667.3}),
+        "KoSync": _state(
+            {
+                "pct": 0.441,
+                "_normalization_source": "percent_fallback",
+                "_kosync_recent_external_put": True,
+                "_kosync_last_put_device": "Kobo_monza",
+                "_kosync_last_put_age_seconds": 247.0,
+            }
+        ),
+    }
+    book = SimpleNamespace(duration=68940, transcript_file="DB_MANAGED")
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-1", "Leviathan Wakes")
+
+    assert leader == "KoSync"
+    assert leader_pct == config["KoSync"].current["pct"]
+
+
+def _percent_fallback_manager():
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {"ABS": _Client(), "KoSync": _Client()}
+    return manager
+
+
+def test_forward_kosync_percent_fallback_ahead_of_stationary_abs_is_preserved():
+    # Bug fix (Fix A): a lone KoSync percent_fallback mover that moved forward and maps
+    # ahead of a stationary ABS on the normalized timeline must keep the lead, instead of
+    # being demoted and rolled back to ABS's old position.
+    manager = _percent_fallback_manager()
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 28667.3, "KoSync": 30400.0}
+    )
+
+    config = {
+        "ABS": _state({"pct": 0.415762, "ts": 28667.3}),
+        "KoSync": _state({"pct": 0.441, "_normalization_source": "percent_fallback"}),
+    }
+    config["KoSync"].previous_pct = 0.4130
+    book = SimpleNamespace(duration=68940, transcript_file="DB_MANAGED")
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-1", "Leviathan Wakes")
+
+    assert leader == "KoSync"
+    assert leader_pct == config["KoSync"].current["pct"]
+
+
+def test_kosync_percent_fallback_behind_stationary_abs_is_demoted():
+    # The stale-percent protection is preserved for the behind/ambiguous case: a mover
+    # whose percent maps *behind* the stationary peer must still demote to ABS.
+    manager = _percent_fallback_manager()
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 30400.0, "KoSync": 28667.3}
+    )
+
+    config = {
+        "ABS": _state({"pct": 0.441, "ts": 30400.0}),
+        "KoSync": _state({"pct": 0.415762, "_normalization_source": "percent_fallback"}),
+    }
+    config["KoSync"].previous_pct = 0.4130
+    book = SimpleNamespace(duration=68940, transcript_file="DB_MANAGED")
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-1", "Leviathan Wakes")
+
+    assert leader == "ABS"
+    assert leader_pct == config["ABS"].current["pct"]
+
+
+def test_kosync_percent_fallback_within_deadband_of_stationary_abs_is_demoted():
+    # Ahead, but not by more than the deadband: not a confident forward move, so it demotes.
+    manager = _percent_fallback_manager()
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, cfg, book: name == "KoSync")
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"ABS": 28667.3, "KoSync": 28668.3}  # +1.0s, under the 2.0s deadband
+    )
+
+    config = {
+        "ABS": _state({"pct": 0.415762, "ts": 28667.3}),
+        "KoSync": _state({"pct": 0.4162, "_normalization_source": "percent_fallback"}),
+    }
+    config["KoSync"].previous_pct = 0.4130
+    book = SimpleNamespace(duration=68940, transcript_file="DB_MANAGED")
+
+    leader, leader_pct = manager._determine_leader(config, book, "abs-1", "Leviathan Wakes")
+
+    assert leader == "ABS"
+    assert leader_pct == config["ABS"].current["pct"]
 
 
 def test_deadband_rollback_guard_skips_high_conf_locator_client():
@@ -606,6 +778,7 @@ def test_sync_cycle_skips_deadband_rollback_to_high_conf_kosync():
     manager.delta_chars_thresh = 2000
     manager._sync_cycle_ebook_cache = {}
     manager._sync_cycle_local_epub_cache = {}
+    manager._storyteller_epub_ensure_attempted = set()
     manager._last_library_sync = 0
     manager.library_service = None
     manager.booklore_client = None

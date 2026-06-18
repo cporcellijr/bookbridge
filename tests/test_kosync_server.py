@@ -185,6 +185,28 @@ class TestKosyncEndpoints(unittest.TestCase):
         with kosync_server._kosync_debounce_lock:
             kosync_server._kosync_debounce.clear()
 
+    def test_admin_plugin_version_returns_version_without_auth(self):
+        """Settings-page version endpoint returns the plugin version, no KOSync auth."""
+        response = self.client.get('/api/kosync-plugin/version')
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data.get('name'), 'bridgesync')
+        self.assertTrue(data.get('version'))
+
+    def test_admin_plugin_download_serves_zip_attachment(self):
+        """Settings-page download endpoint serves the plugin as a zip attachment."""
+        import io as _io
+        import zipfile as _zipfile
+        response = self.client.get('/api/kosync-plugin/download')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, 'application/zip')
+        disposition = response.headers.get('Content-Disposition', '')
+        self.assertIn('attachment', disposition)
+        self.assertIn('bridgesync-', disposition)
+        with _zipfile.ZipFile(_io.BytesIO(response.data)) as zf:
+            names = zf.namelist()
+        self.assertIn('bridgesync.koplugin/_meta.lua', names)
+
     def test_put_progress_creates_document(self):
         """Test that PUT creates a new document."""
         # Case 1: Standard device (should return String timestamp)
@@ -381,6 +403,142 @@ class TestKosyncEndpoints(unittest.TestCase):
             response.headers.get("Content-Disposition", ""),
         )
         self.assertEqual(response.data, b"epub")
+
+    def _clear_koreader_stats_tables(self):
+        from src import web_server
+        from src.db.models import KOReaderBookStat, KOReaderPageStat
+        with web_server.database_service.get_session() as session:
+            session.query(KOReaderPageStat).delete()
+            session.query(KOReaderBookStat).delete()
+
+    def test_statistics_upload_stores_total_pages_and_reports_echoes(self):
+        self._clear_koreader_stats_tables()
+
+        response = self.client.post(
+            '/koreader/device-sync/statistics',
+            headers=self.auth_headers,
+            json={
+                'device': 'Kobo',
+                'device_id': 'device-a',
+                'books': [],
+                'page_stats': [
+                    {'md5': 'm' * 32, 'page': 3, 'start_time': 1700000000, 'duration': 55, 'total_pages': 120},
+                ],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data['accepted_page_stats'], 1)
+        self.assertEqual(data['echoed_page_stats'], 0)
+
+        # Same event re-uploaded from another device is an echo of a merged row.
+        response_echo = self.client.post(
+            '/koreader/device-sync/statistics',
+            headers=self.auth_headers,
+            json={
+                'device': 'Kindle',
+                'device_id': 'device-b',
+                'books': [],
+                'page_stats': [
+                    {'md5': 'm' * 32, 'page': 7, 'start_time': 1700000000, 'duration': 55, 'total_pages': 300},
+                ],
+            },
+        )
+        self.assertEqual(response_echo.status_code, 200)
+        data_echo = response_echo.get_json()
+        self.assertEqual(data_echo['accepted_page_stats'], 0)
+        self.assertEqual(data_echo['echoed_page_stats'], 1)
+
+    def test_merged_statistics_requires_auth(self):
+        response = self.client.get('/koreader/device-sync/statistics/merged?device_id=device-b')
+        self.assertEqual(response.status_code, 401)
+
+    def test_merged_statistics_returns_foreign_events(self):
+        self._clear_koreader_stats_tables()
+        from src import web_server
+
+        web_server.database_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'a' * 32, 'page': 10, 'start_time': 1700000100, 'duration': 60, 'total_pages': 200},
+            ],
+        )
+
+        response = self.client.get(
+            '/koreader/device-sync/statistics/merged?device=Kindle&device_id=device-b',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['enabled'])
+        self.assertEqual(len(data['page_stats']), 1)
+        self.assertEqual(data['page_stats'][0]['md5'], 'a' * 32)
+        self.assertEqual(data['page_stats'][0]['total_pages'], 200)
+        self.assertIsNotNone(data['watermark'])
+
+        # The uploading device gets nothing back (its own events are excluded).
+        response_own = self.client.get(
+            '/koreader/device-sync/statistics/merged?device=Kobo&device_id=device-a',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response_own.status_code, 200)
+        self.assertEqual(response_own.get_json()['page_stats'], [])
+
+    def test_merged_statistics_includes_book_metadata(self):
+        """Foreign books' metadata rides along so a device that never opened them can
+        create the local `book` row before merging the page events."""
+        self._clear_koreader_stats_tables()
+        from src import web_server
+
+        web_server.database_service.upsert_koreader_book_stats(
+            device='Kobo', device_id='device-a',
+            books=[{'md5': 'a' * 32, 'title': 'Dune', 'authors': 'Herbert', 'pages': 412}],
+        )
+        web_server.database_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'a' * 32, 'page': 10, 'start_time': 1700000100, 'duration': 60, 'total_pages': 412},
+            ],
+        )
+
+        response = self.client.get(
+            '/koreader/device-sync/statistics/merged?device=Kindle&device_id=device-b',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(len(data['page_stats']), 1)
+        self.assertEqual(len(data['books']), 1)
+        book = data['books'][0]
+        self.assertEqual(book['md5'], 'a' * 32)
+        self.assertEqual(book['title'], 'Dune')
+        self.assertEqual(book['authors'], 'Herbert')
+        self.assertEqual(book['pages'], 412)
+
+    def test_merged_statistics_disabled_by_setting(self):
+        original = os.environ.get('KOREADER_COMBINE_DEVICE_STATS')
+        os.environ['KOREADER_COMBINE_DEVICE_STATS'] = 'false'
+        try:
+            response = self.client.get(
+                '/koreader/device-sync/statistics/merged?device_id=device-b',
+                headers=self.auth_headers,
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertFalse(data['enabled'])
+            self.assertEqual(data['page_stats'], [])
+        finally:
+            if original is None:
+                os.environ.pop('KOREADER_COMBINE_DEVICE_STATS', None)
+            else:
+                os.environ['KOREADER_COMBINE_DEVICE_STATS'] = original
+
+    def test_merged_statistics_requires_device_identity(self):
+        response = self.client.get(
+            '/koreader/device-sync/statistics/merged',
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_furthest_wins_rejects_backwards(self):
         """Test that backwards progress is rejected when KOSYNC_FURTHEST_WINS=true."""
@@ -1138,6 +1296,148 @@ class TestKosyncEstimatedSessions(unittest.TestCase):
         self.assertEqual(kwargs['duration_seconds'], 68)
         self.assertAlmostEqual(kwargs['start_progress'], 0.4904)
         self.assertAlmostEqual(kwargs['end_progress'], 0.4930)
+
+
+class TestAutoMapSelection(unittest.TestCase):
+    """The auto-map gate: identifier tier, strict fuzzy + Ollama agreement, safety rails."""
+
+    def _candidate(self, **overrides):
+        base = {
+            "abs_id": "ab1", "title": "Sublimation", "author": "Isabel J. Kim",
+            "isbn": "", "asin": "", "duration": 3600, "progress_pct": 0,
+            "title_sim": 0.97, "author_sim": 0.95,
+        }
+        base.update(overrides)
+        return base
+
+    def test_identifier_tier_matches_without_ollama(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = False
+        # Weak fuzzy, but the ASIN matches -> authoritative auto-map, no LLM needed.
+        candidate = self._candidate(asin="B0CTXDLTKC", title_sim=0.40, author_sim=0.10)
+        with patch.object(kosync_server, '_container', container):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim", "isbn": "", "asin": "b0ctxdltkc"},
+                [candidate],
+            )
+        self.assertEqual(reason, "identifier")
+        self.assertEqual(chosen["abs_id"], "ab1")
+
+    def test_fuzzy_agreement_with_judge(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+            )
+        self.assertEqual(reason, "agreement")
+        self.assertEqual(chosen["abs_id"], "ab1")
+
+    def test_judge_rejection_blocks_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=None):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+            )
+        self.assertIsNone(chosen)
+        self.assertIsNone(reason)
+
+    def test_judge_arbitrates_close_strong_candidates(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        # Two near-equal strong matches (same work) -> the judge confidently picks one.
+        candidates = [
+            self._candidate(abs_id="a", title_sim=0.96),
+            self._candidate(abs_id="b", title_sim=0.94),
+        ]
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0) as judge:
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+            )
+        # The judge saw both strong candidates and picked the first.
+        self.assertEqual(len(judge.call_args.args[3]), 2)
+        self.assertEqual(reason, "agreement")
+        self.assertEqual(chosen["abs_id"], "a")
+
+    def test_too_many_strong_candidates_block_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        # More than 3 strong rivals -> too ambiguous, leave for manual review.
+        candidates = [self._candidate(abs_id=f"a{i}") for i in range(4)]
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0) as judge:
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+            )
+        self.assertIsNone(chosen)
+        judge.assert_not_called()
+
+    def test_volume_mismatch_blocks_auto_map(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        # Judge confidently picks the sequel, but the EPUB is volume 1 -> volume guard blocks.
+        candidate = self._candidate(title="Heretic Spellblade 2", author_sim=0.95, title_sim=0.93)
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Heretic Spellblade", "author": "K.D. Robertson"}, [candidate]
+            )
+        self.assertIsNone(chosen)
+
+    def test_no_ollama_blocks_fuzzy_path(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = False
+        with patch.object(kosync_server, '_container', container):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+            )
+        self.assertIsNone(chosen)   # strong fuzzy but no LLM and no ID -> suggest instead
+
+    def test_already_listened_candidate_excluded(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.ollama_client.return_value.is_configured.return_value = True
+        with patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, 'judge_best_candidate', return_value=0):
+            chosen, reason = kosync_server._select_auto_map_candidate(
+                {"title": "Sublimation", "author": "Isabel J. Kim"},
+                [self._candidate(progress_pct=90)],
+            )
+        self.assertIsNone(chosen)
+
+
+class TestResolveLibraryEbookSource(unittest.TestCase):
+    """Auto-map resolves a filesystem EPUB to its BookOrbit/Grimmory identity."""
+
+    def test_resolves_bookorbit_by_filename(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.bookorbit_client.return_value.is_configured.return_value = True
+        container.bookorbit_client.return_value.find_book_by_filename.return_value = {
+            "id": 3530, "fileName": "Blister (2016).epub",
+        }
+        with patch.object(kosync_server, '_container', container):
+            source, source_id = kosync_server._resolve_library_ebook_source("Blister (2016).epub")
+        self.assertEqual((source, source_id), ("BookOrbit", "3530"))
+
+    def test_none_when_no_library_configured(self):
+        from src.api import kosync_server
+        container = MagicMock()
+        container.bookorbit_client.return_value.is_configured.return_value = False
+        container.booklore_client.return_value.is_configured.return_value = False
+        with patch.object(kosync_server, '_container', container):
+            self.assertEqual(kosync_server._resolve_library_ebook_source("x.epub"), (None, None))
 
 
 if __name__ == '__main__':

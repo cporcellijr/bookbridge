@@ -86,6 +86,50 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertIsNotNone(retrieved_book)
         self.assertEqual(retrieved_book.abs_id, test_abs_id)
 
+    def _seed_alignment(self, abs_id, title, points, method=None):
+        from src.db.models import BookAlignment
+        self.db_service.save_book(self.Book(abs_id=abs_id, abs_title=title, status='active'))
+        amap = [{'char': i, 'ts': float(i)} for i in range(points)]
+        with self.db_service.get_session() as session:
+            session.add(BookAlignment(
+                abs_id=abs_id, alignment_map_json=json.dumps(amap), align_method=method
+            ))
+
+    def test_backfill_alignment_methods_classifies_by_shape(self):
+        # A 2-point map = linear fallback; a many-point map = lexical success.
+        self._seed_alignment('lin-1', 'Linear Book', points=2)
+        self._seed_alignment('lex-1', 'Lexical Book', points=500)
+
+        updated = self.db_service.backfill_alignment_methods()
+        self.assertEqual(updated, 2)
+
+        prov = self.db_service.get_alignment_provenance()
+        self.assertEqual(prov['summary'].get('linear'), 1)
+        self.assertEqual(prov['summary'].get('lexical'), 1)
+        # Only the linear map is flagged for re-alignment.
+        self.assertEqual(prov['needs_realign'], 1)
+        flagged = {b['abs_id']: b['needs_realign'] for b in prov['books']}
+        self.assertTrue(flagged['lin-1'])
+        self.assertFalse(flagged['lex-1'])
+        # Re-running is a no-op (nothing left NULL).
+        self.assertEqual(self.db_service.backfill_alignment_methods(), 0)
+
+    def test_get_books_needing_llm_realign_targets_only_linear(self):
+        self._seed_alignment('lin-2', 'Linear', points=2)
+        self._seed_alignment('lex-2', 'Lexical', points=300)
+        self._seed_alignment('llm-2', 'Rescued', points=40, method='llm_anchor')
+        self.db_service.backfill_alignment_methods()
+
+        needing = self.db_service.get_books_needing_llm_realign()
+        self.assertIn('lin-2', needing)
+        self.assertNotIn('lex-2', needing)     # clean lexical map — no value re-aligning
+        self.assertNotIn('llm-2', needing)     # already LLM-built
+
+    def test_set_book_status(self):
+        self.db_service.save_book(self.Book(abs_id='st-1', abs_title='S', status='active'))
+        self.assertTrue(self.db_service.set_book_status('st-1', 'pending'))
+        self.assertEqual(self.db_service.get_book('st-1').status, 'pending')
+
     def test_delete_book(self):
         """Test deleting a book record with cascading deletes for states and hardcover details."""
         test_abs_id = 'test-book-delete'
@@ -314,6 +358,187 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertEqual(len(recent_sessions), 2)
         self.assertTrue(any(session['bookKey'] == 'abs:abs-linked' and session['isLinked'] for session in recent_sessions))
         self.assertTrue(any(session['bookKey'] == 'koreader:md5-unlinked' and session['isLinked'] is False for session in recent_sessions))
+
+    def test_koreader_pages_and_new_stats_methods(self):
+        """Pages should match KOReader's total_read_pages; new stat methods derive from page events."""
+        base = datetime.now(ZoneInfo("UTC")).replace(hour=21, minute=0, second=0, microsecond=0)
+        year = base.year
+
+        book_a = self.Book(
+            abs_id='abs-a', abs_title='Book A', ebook_filename='a.epub',
+            kosync_doc_id='md5-a', status='active', duration=3600.0,
+        )
+        self.db_service.save_book(book_a)
+
+        self.db_service.upsert_koreader_book_stats(
+            device='KOReader', device_id='d1',
+            books=[
+                {'md5': 'md5-a', 'title': 'Book A KO', 'authors': 'Auth A', 'pages': 200, 'total_read_pages': 100},
+                {'md5': 'md5-fin', 'title': 'Finished Book', 'authors': 'Auth F', 'pages': 300, 'total_read_pages': 300},
+            ],
+        )
+        # md5-a has a re-read of page 5 (events=4, distinct pages=3) but device total_read_pages=100.
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='KOReader', device_id='d1',
+            page_stats=[
+                {'md5': 'md5-a', 'page': 5, 'start_time': (base - timedelta(minutes=40)).timestamp(), 'duration': 60},
+                {'md5': 'md5-a', 'page': 5, 'start_time': (base - timedelta(minutes=39)).timestamp(), 'duration': 30},
+                {'md5': 'md5-a', 'page': 6, 'start_time': (base - timedelta(minutes=38)).timestamp(), 'duration': 90},
+                {'md5': 'md5-a', 'page': 7, 'start_time': (base - timedelta(minutes=37)).timestamp(), 'duration': 120},
+                {'md5': 'md5-fin', 'page': 299, 'start_time': (base - timedelta(minutes=10)).timestamp(), 'duration': 45},
+            ],
+        )
+
+        summary = self.db_service.get_koreader_dashboard_summary('UTC')
+        # Device-matching pages = 100 + 300 = 400 (NOT events=5, NOT distinct=4).
+        self.assertEqual(summary['pagesRead'], 400)
+        self.assertEqual(summary['totalSeconds'], 345)
+        self.assertGreater(summary['pagesPerHour'], 0)
+        self.assertGreaterEqual(summary['secondsPerPage'], 0)
+
+        histogram = self.db_service.get_koreader_hour_histogram('UTC')
+        self.assertEqual(len(histogram), 24)
+        self.assertEqual(sum(bucket['seconds'] for bucket in histogram), 345)
+
+        books = {b['bookKey']: b for b in self.db_service.get_koreader_book_list('UTC')}
+        self.assertEqual(books['abs:abs-a']['pagesRead'], 100)   # device, not event count
+        self.assertEqual(books['abs:abs-a']['percentComplete'], 50.0)
+
+        detail = self.db_service.get_koreader_book_detail('abs:abs-a', 'UTC')
+        self.assertEqual(detail['pagesRead'], 100)
+        self.assertGreaterEqual(detail['sessionCount'], 1)
+        self.assertTrue(detail['sessions'])
+        self.assertTrue(detail['heatmap'])
+
+        recap = self.db_service.get_koreader_yearly_recap(year, 'UTC')
+        self.assertEqual(len(recap['months']), 12)
+        self.assertEqual(recap['totalPages'], 4)   # distinct (md5,page) in the year
+        self.assertIn(year, recap['availableYears'])
+        finished_keys = {b['bookKey'] for b in recap['finishedBooks']}
+        self.assertEqual(recap['booksFinished'], 1)
+        self.assertIn('koreader:md5-fin', finished_keys)   # 300/300 = 100% complete
+        self.assertNotIn('abs:abs-a', finished_keys)       # 100/200 = 50%, not finished
+
+    def test_koreader_page_stats_store_total_pages_and_suppress_echoes(self):
+        """total_pages is persisted; re-uploads of another device's merged events are dropped."""
+        from src.db.models import KOReaderPageStat
+
+        base = datetime.now(ZoneInfo("UTC")).replace(hour=10, minute=0, second=0, microsecond=0)
+        event_time = (base - timedelta(minutes=30)).timestamp()
+
+        result_a = self.db_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 10, 'start_time': event_time, 'duration': 60, 'total_pages': 200},
+            ],
+        )
+        self.assertEqual(result_a['accepted'], 1)
+        self.assertEqual(result_a['echoes'], 0)
+
+        with self.db_service.get_session() as session:
+            row = session.query(KOReaderPageStat).filter_by(device_key='device-a').one()
+            self.assertEqual(row.total_pages, 200)
+
+        # Device B injected device A's event into its local stats DB, then re-uploads it
+        # under its own key (different page number after rescale, same start/duration).
+        result_b = self.db_service.bulk_insert_koreader_page_stats(
+            device='Kindle', device_id='device-b',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 14, 'start_time': event_time, 'duration': 60, 'total_pages': 280},
+                {'md5': 'md5-x', 'page': 15, 'start_time': event_time + 60, 'duration': 45, 'total_pages': 280},
+            ],
+        )
+        self.assertEqual(result_b['echoes'], 1)
+        self.assertEqual(result_b['accepted'], 1)
+
+        with self.db_service.get_session() as session:
+            b_rows = session.query(KOReaderPageStat).filter_by(device_key='device-b').all()
+            self.assertEqual(len(b_rows), 1)
+            self.assertEqual(b_rows[0].page, 15)
+
+    def test_get_merged_koreader_page_stats(self):
+        """Merged feed excludes the requesting device, backfills total_pages, honors since."""
+        base = datetime.now(ZoneInfo("UTC")).replace(hour=10, minute=0, second=0, microsecond=0)
+        t0 = (base - timedelta(hours=2)).timestamp()
+
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='Kobo', device_id='device-a',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 10, 'start_time': t0, 'duration': 60, 'total_pages': 200},
+                {'md5': 'md5-y', 'page': 5, 'start_time': t0 + 100, 'duration': 30},  # no total_pages
+                {'md5': 'md5-z', 'page': 1, 'start_time': t0 + 200, 'duration': 20},  # no fallback either
+            ],
+        )
+        self.db_service.upsert_koreader_book_stats(
+            device='Kobo', device_id='device-a',
+            books=[{'md5': 'md5-y', 'title': 'Y', 'pages': 150}],
+        )
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='Kindle', device_id='device-b',
+            page_stats=[
+                {'md5': 'md5-x', 'page': 14, 'start_time': t0 + 300, 'duration': 90, 'total_pages': 280},
+            ],
+        )
+
+        merged_for_b = self.db_service.get_merged_koreader_page_stats(exclude_device_key='device-b')
+        stats = merged_for_b['page_stats']
+        # device-a's md5-x event (explicit total_pages) and md5-y event (book-stats fallback);
+        # md5-z is dropped because no usable total_pages exists.
+        self.assertEqual(len(stats), 2)
+        by_md5 = {entry['md5']: entry for entry in stats}
+        self.assertEqual(by_md5['md5-x']['total_pages'], 200)
+        self.assertEqual(by_md5['md5-y']['total_pages'], 150)
+        self.assertIsNotNone(merged_for_b['watermark'])
+
+        merged_for_a = self.db_service.get_merged_koreader_page_stats(exclude_device_key='device-a')
+        self.assertEqual(len(merged_for_a['page_stats']), 1)
+        self.assertEqual(merged_for_a['page_stats'][0]['md5'], 'md5-x')
+        self.assertEqual(merged_for_a['page_stats'][0]['page'], 14)
+
+        # 'since' filters on bridge-side uploaded_at: a watermark in the future returns nothing.
+        future = datetime.now(ZoneInfo("UTC")).timestamp() + 3600
+        merged_later = self.db_service.get_merged_koreader_page_stats(
+            exclude_device_key='device-b', since=future
+        )
+        self.assertEqual(merged_later['page_stats'], [])
+        self.assertEqual(merged_later['watermark'], future)
+
+    def test_get_merged_koreader_book_meta(self):
+        """Canonical book metadata for given md5s: excludes the requesting device and
+        picks the row with the most pages so KOReader's rescaling stays sane."""
+        self.db_service.upsert_koreader_book_stats(
+            device='Kobo', device_id='device-a',
+            books=[
+                {'md5': 'md5-x', 'title': 'Dune', 'authors': 'Herbert', 'pages': 412},
+                {'md5': 'md5-y', 'title': 'Hobbit', 'authors': 'Tolkien', 'pages': 300},
+            ],
+        )
+        # Same book on another device with a larger page count -> should win.
+        self.db_service.upsert_koreader_book_stats(
+            device='Kindle', device_id='device-c',
+            books=[{'md5': 'md5-x', 'title': 'Dune', 'authors': 'Herbert', 'pages': 500}],
+        )
+
+        meta = self.db_service.get_merged_koreader_book_meta(
+            exclude_device_key='device-b', md5s={'md5-x', 'md5-y'}
+        )
+        by_md5 = {row['md5']: row for row in meta}
+        self.assertEqual(set(by_md5), {'md5-x', 'md5-y'})
+        self.assertEqual(by_md5['md5-x']['pages'], 500)
+        self.assertEqual(by_md5['md5-x']['title'], 'Dune')
+        self.assertEqual(by_md5['md5-x']['authors'], 'Herbert')
+        self.assertEqual(by_md5['md5-y']['pages'], 300)
+
+        # The requesting device's own metadata is excluded.
+        self.db_service.upsert_koreader_book_stats(
+            device='Solo', device_id='device-b',
+            books=[{'md5': 'md5-solo', 'title': 'Solo', 'authors': 'Me', 'pages': 100}],
+        )
+        self.assertEqual(
+            self.db_service.get_merged_koreader_book_meta('device-b', {'md5-solo'}), []
+        )
+        # No md5s requested -> empty.
+        self.assertEqual(self.db_service.get_merged_koreader_book_meta('device-b', set()), [])
 
     def test_create_states(self):
         """Test creating state records for multiple clients."""

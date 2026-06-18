@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import glob
+import posixpath
 import threading
 import rapidfuzz
 import zipfile
@@ -64,13 +65,23 @@ class EbookParser:
         "li", "header", "footer", "aside",
         "td", "th", "dt", "dd", "figcaption", "pre"
     }
+    # Direct-child tags whose presence inside a <p> splits its direct text nodes
+    # so that /p[M]/text().0 resolves to only the first fragment. Union of
+    # CRENGINE_FRAGILE_INLINE_TAGS and the extra tags rejected by
+    # kosync_sync_client._FRAGILE_INLINE_SEGMENT_RE — keeps the generator
+    # and the downstream sanitizer in agreement on what counts as fragile.
+    KOREADER_FRAGMENTING_P_CHILD_TAGS = CRENGINE_FRAGILE_INLINE_TAGS | {
+        "mark", "abbr", "cite", "code", "q", "time", "s", "del", "ins"
+    }
 
-    def __init__(self, books_dir, epub_cache_dir=None):
+    def __init__(self, books_dir, epub_cache_dir=None, ollama_client=None):
         self.books_dir = Path(books_dir)
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir else Path("/data/epub_cache")
+        self.ollama_client = ollama_client
 
         cache_size = int(os.getenv("EBOOK_CACHE_SIZE", 3))
         self.cache = LRUCache(capacity=cache_size)
+        self._media_overlay_ids_cache = LRUCache(capacity=cache_size)
         self.fuzzy_threshold = int(os.getenv("FUZZY_MATCH_THRESHOLD", 80))
         self.hash_method = os.getenv("KOSYNC_HASH_METHOD", "content").lower()
         self.useXpathSegmentFallback = os.getenv("XPATH_FALLBACK_TO_PREVIOUS_SEGMENT", "false").lower() == "true"
@@ -95,6 +106,51 @@ class EbookParser:
                 return cached_path
 
         raise FileNotFoundError(f"Could not locate {filename}")
+
+    def get_book_metadata(self, filename: str) -> dict:
+        """Extract {title, author, isbn, asin} from an ebook's embedded metadata.
+
+        Resolves `filename` under books_dir and reads the EPUB's Dublin Core fields.
+        Used to match ABS-less (ebook-only) books to trackers. Returns empty strings
+        for anything missing and never raises.
+        """
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
+        if not filename:
+            return result
+        try:
+            path = self.resolve_book_path(filename)
+        except FileNotFoundError:
+            return result
+        try:
+            book = epub.read_epub(str(path))
+        except Exception as e:
+            logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}")
+            return result
+
+        titles = book.get_metadata("DC", "title")
+        if titles and titles[0][0]:
+            result["title"] = titles[0][0].strip()
+
+        creators = book.get_metadata("DC", "creator")
+        if creators and creators[0][0]:
+            result["author"] = creators[0][0].strip()
+
+        for value, attrs in book.get_metadata("DC", "identifier"):
+            raw = (value or "").strip()
+            if not raw:
+                continue
+            scheme = ""
+            for k, v in (attrs or {}).items():
+                if str(k).endswith("scheme"):
+                    scheme = (v or "").upper()
+                    break
+            low = raw.lower()
+            if not result["isbn"] and (scheme == "ISBN" or low.startswith("urn:isbn:")):
+                result["isbn"] = re.sub(r"^urn:isbn:", "", low).replace("-", "").strip()
+            elif not result["asin"] and (scheme == "AMAZON" or low.startswith("urn:amazon:")):
+                result["asin"] = re.sub(r"^urn:amazon:", "", raw, flags=re.IGNORECASE).strip()
+
+        return result
 
     def get_kosync_id(self, filepath):
         filepath = Path(filepath)
@@ -185,6 +241,43 @@ class EbookParser:
             logger.error(f"❌ Error extracting cover from '{filepath}': {e}")
             return False
 
+    def _build_href_resolver(self, str_path):
+        """Return a fn mapping an ebooklib OPF-relative href to its full archive
+        path.
+
+        ebooklib's `item.get_name()` is relative to the OPF file. When the OPF
+        lives in a subdirectory (e.g. `OEBPS/package.opf`), the name omits that
+        prefix (`xhtml/chapter3.xhtml`), but Readium/Storyteller key their
+        reading-order and stored positions on the full archive path
+        (`OEBPS/xhtml/chapter3.xhtml`). Pushing the bare name leaves the
+        position unresolvable, so the reader opens at the cover. Resolve against
+        the OPF directory (verified against the zip entries) so our hrefs match.
+        """
+        opf_dir = ""
+        zip_names = set()
+        try:
+            with zipfile.ZipFile(str_path) as zf:
+                zip_names = set(zf.namelist())
+                container = zf.read("META-INF/container.xml").decode("utf-8", "replace")
+                match = re.search(r'full-path="([^"]+)"', container)
+                if match:
+                    opf_dir = posixpath.dirname(match.group(1))
+        except Exception as e:
+            logger.debug(f"href resolver: could not read container for '{str_path}': {e}")
+
+        def resolve(name):
+            if not name:
+                return name
+            if name in zip_names:
+                return name
+            if opf_dir:
+                candidate = posixpath.normpath(posixpath.join(opf_dir, name))
+                if not zip_names or candidate in zip_names:
+                    return candidate
+            return name
+
+        return resolve
+
     def extract_text_and_map(self, filepath, progress_callback=None):
         """
         Used for fuzzy matching and general content extraction.
@@ -204,6 +297,7 @@ class EbookParser:
 
         try:
             book = epub.read_epub(str_path)
+            href_resolver = self._build_href_resolver(str_path)
             full_text_parts = []
             spine_map = []
             current_idx = 0
@@ -228,7 +322,7 @@ class EbookParser:
                         "end": end,
                         "char_len": length,
                         "spine_index": i + 1,
-                        "href": item.get_name(),
+                        "href": href_resolver(item.get_name()),
                         "content": item.get_content()
                     })
 
@@ -455,6 +549,67 @@ class EbookParser:
             found_anchor = False
         return xpath, target_tag, found_anchor
 
+    _SEMANTIC_WINDOW_CHARS = 1500
+    _SEMANTIC_MAX_WINDOWS = 40
+    _SEMANTIC_EMBED_MAX_CHARS = 4000  # keep embedded text under the model's token limit
+
+    def _semantic_text_fallback(self, search_phrase: str, full_text: str,
+                                hint_percentage: Optional[float]) -> int:
+        """Embedding-based position rescue when fuzzy matching fails.
+
+        Slices the hint neighborhood (or the whole book) into windows, embeds them
+        alongside the search phrase, and returns a char index inside the most
+        similar window — or -1 when disabled, unavailable, or below threshold.
+        """
+        client = self.ollama_client
+        if not client or not client.is_configured():
+            return -1
+        if os.getenv("OLLAMA_EBOOK_TEXT_FALLBACK", "false").lower() != "true":
+            return -1
+        clean_search = " ".join((search_phrase or "").split())
+        if not clean_search or not full_text:
+            return -1
+
+        try:
+            threshold = float(os.getenv("OLLAMA_ALIGN_SIM_THRESHOLD", 0.72))
+        except (TypeError, ValueError):
+            threshold = 0.72
+
+        total_len = len(full_text)
+        region_start = 0
+        region = full_text
+        if hint_percentage is not None:
+            region_start = int(max(0.0, hint_percentage - 0.10) * total_len)
+            region_end = int(min(1.0, hint_percentage + 0.10) * total_len)
+            if full_text[region_start:region_end].strip():
+                region = full_text[region_start:region_end]
+            else:
+                region_start = 0
+
+        size = max(self._SEMANTIC_WINDOW_CHARS, -(-len(region) // self._SEMANTIC_MAX_WINDOWS))
+        windows = []
+        for start in range(0, len(region), size):
+            text = region[start:start + size]
+            if text.strip():
+                windows.append((region_start + start, text))
+        if not windows:
+            return -1
+
+        from src.services.llm_matching import best_semantic_window
+
+        embed_texts = [t[:self._SEMANTIC_EMBED_MAX_CHARS] for _, t in windows]
+        best = best_semantic_window(client, clean_search, embed_texts, threshold)
+        if best is None:
+            return -1
+        win_start, win_text = windows[best[0]]
+        # Refine inside the winning window; fall back to its start.
+        alignment = rapidfuzz.fuzz.partial_ratio_alignment(clean_search, win_text, score_cutoff=50)
+        offset = alignment.dest_start if alignment else 0
+        logger.info(
+            f"🧠 Semantic position rescue: window at char {win_start} (cosine {best[1]:.2f})"
+        )
+        return win_start + offset
+
     def find_text_location(self, filename, search_phrase, hint_percentage=None) -> Optional[LocatorResult]:
         """
         Uses BS4 Engine. Good for fuzzy matching phrases from external apps.
@@ -525,6 +680,10 @@ class EbookParser:
                     )
                     if alignment: match_index = alignment.dest_start
 
+            # 4. Semantic fallback (optional, Ollama-gated)
+            if match_index == -1:
+                match_index = self._semantic_text_fallback(search_phrase, full_text, hint_percentage)
+
             if match_index != -1:
                 percentage = match_index / total_len
                 for item in spine_map:
@@ -557,7 +716,8 @@ class EbookParser:
 
                         perfect_ko = self.get_perfect_ko_xpath(filename, match_index)
 
-                        fragment_id = self.get_fragment_for_tag(target_tag)
+                        overlay_ids = self.get_media_overlay_fragment_ids(book_path)
+                        fragment_id = self.get_fragment_for_tag(target_tag, valid_ids=overlay_ids)
 
                         return LocatorResult(
                             percentage=percentage,
@@ -576,18 +736,51 @@ class EbookParser:
             logger.error(f"❌ Error finding text in '{filename}': {e}")
             return None
 
-    def get_fragment_for_tag(self, tag):
+    def get_media_overlay_fragment_ids(self, book_path) -> set:
+        """
+        Collect every text fragment id referenced by the EPUB's media-overlay
+        SMIL files. Storyteller's readalong can only seek audio for these ids;
+        anchoring a locator to any other id makes playback fall back to the
+        start of the chapter. Returns an empty set for books without overlays.
+        """
+        str_path = str(book_path)
+        cached = self._media_overlay_ids_cache.get(str_path)
+        if cached is not None:
+            return cached
+
+        ids: set = set()
+        try:
+            with zipfile.ZipFile(str_path) as zf:
+                for name in zf.namelist():
+                    if not name.lower().endswith('.smil'):
+                        continue
+                    content = zf.read(name).decode('utf-8', 'replace')
+                    ids.update(re.findall(r'<text[^>]+src="[^"#]*#([^"]+)"', content))
+        except Exception as e:
+            logger.debug(f"Media overlay scan failed for '{str_path}': {e}")
+
+        self._media_overlay_ids_cache.put(str_path, ids)
+        return ids
+
+    def get_fragment_for_tag(self, tag, valid_ids: Optional[set] = None):
         """
         Walks backwards from the given tag to find the nearest element with an id.
         Returns the id of the element if found, otherwise None.
         This id is used by the Storyteller to sync progress.
+
+        When valid_ids is provided (media-overlay fragment ids), the nearest
+        ancestor id in that set wins so Storyteller readalong can map the
+        fragment to an audio clip; the innermost id is kept as a fallback.
         """
         fragment_id = None
         curr_tag = tag
         while curr_tag and curr_tag.name not in ['[document]', 'html', 'body']:
             if curr_tag.has_attr('id') and curr_tag['id']:
-                fragment_id = curr_tag['id']
-                break
+                candidate = curr_tag['id']
+                if not valid_ids or candidate in valid_ids:
+                    return candidate
+                if fragment_id is None:
+                    fragment_id = candidate
             curr_tag = curr_tag.parent
         return fragment_id
 
@@ -684,6 +877,66 @@ class EbookParser:
             current = self._get_parent_node(current)
         return node
 
+    def _p_has_fragmenting_inline_children(self, p_element) -> bool:
+        if p_element is None:
+            return False
+        iterchildren = getattr(p_element, "iterchildren", None)
+        if callable(iterchildren):
+            children = iterchildren()
+        else:
+            children = getattr(p_element, "children", [])
+        for child in children:
+            if self._local_tag_name(child) in self.KOREADER_FRAGMENTING_P_CHILD_TAGS:
+                return True
+        return False
+
+    def _iter_siblings(self, element, forward: bool):
+        if element is None:
+            return
+        itersiblings = getattr(element, "itersiblings", None)
+        if callable(itersiblings):
+            for sib in itersiblings(preceding=not forward):
+                yield sib
+            return
+        attr = "next_sibling" if forward else "previous_sibling"
+        sib = getattr(element, attr, None)
+        while sib is not None:
+            yield sib
+            sib = getattr(sib, attr, None)
+
+    def _element_text_length(self, element) -> int:
+        if element is None:
+            return 0
+        text_content = getattr(element, "text_content", None)
+        if callable(text_content):
+            try:
+                return len((text_content() or "").strip())
+            except Exception:
+                return 0
+        get_text = getattr(element, "get_text", None)
+        if callable(get_text):
+            try:
+                return len(get_text(strip=True) or "")
+            except Exception:
+                return 0
+        return 0
+
+    def _is_clean_p_substitute(self, element) -> bool:
+        if self._local_tag_name(element) != "p":
+            return False
+        if self._p_has_fragmenting_inline_children(element):
+            return False
+        return self._element_text_length(element) > 10
+
+    def _find_clean_p_substitute(self, p_element):
+        for sib in self._iter_siblings(p_element, forward=False):
+            if self._is_clean_p_substitute(sib):
+                return sib
+        for sib in self._iter_siblings(p_element, forward=True):
+            if self._is_clean_p_substitute(sib):
+                return sib
+        return None
+
     def _first_non_empty_direct_text_suffix(self, element) -> Optional[str]:
         if element is None:
             return None
@@ -726,6 +979,16 @@ class EbookParser:
     def _build_crengine_safe_text_xpath(self, element, spine_index, html_content) -> str:
         el_tag = self._local_tag_name(element)
         anchor = self._nearest_crengine_anchor(element)
+
+        if self._local_tag_name(anchor) == "p" and self._p_has_fragmenting_inline_children(anchor):
+            substitute = self._find_clean_p_substitute(anchor)
+            if substitute is not None:
+                logger.debug(
+                    f"KOReader XPath: <p> in DocFragment[{spine_index}] has fragmenting "
+                    f"inline children; substituting nearest clean <p> sibling"
+                )
+                anchor = substitute
+
         suffix = self._first_non_empty_direct_text_suffix(anchor)
 
         if not suffix:
@@ -921,6 +1184,22 @@ class EbookParser:
 
             logger.warning(f"⚠️ Hybrid Anchor mapping failed for '{search_text}'. Falling back to BS4 structural path.")
 
+            ancestor_p = target_tag
+            while ancestor_p is not None and getattr(ancestor_p, "name", None) not in ("p", "body", "[document]", None):
+                ancestor_p = getattr(ancestor_p, "parent", None)
+            if (
+                ancestor_p is not None
+                and getattr(ancestor_p, "name", None) == "p"
+                and self._p_has_fragmenting_inline_children(ancestor_p)
+            ):
+                substitute = self._find_clean_p_substitute(ancestor_p)
+                if substitute is not None:
+                    logger.debug(
+                        f"KOReader XPath (BS4 fallback): <p> in DocFragment[{target_item['spine_index']}] "
+                        f"has fragmenting inline children; substituting nearest clean <p> sibling"
+                    )
+                    target_tag = substitute
+
             # Build KOReader-compatible strictly positional XPath using BS4 (Fallback)
             path_segments = []
             curr = target_tag
@@ -1035,6 +1314,21 @@ class EbookParser:
             if next_item is not None:
                 yield next_item
 
+    @staticmethod
+    def _split_xpath_char_offset(relative_path: str):
+        """Split a KOReader relative xpath into (clean_xpath, char_offset).
+
+        KOReader appends the trailing character offset as ".NNN". It may sit on a
+        text node ("/text().5", "/text()[2].5") OR directly on an element when the
+        position is at an element boundary ("p[167].0"). All forms must be stripped
+        before the path is handed to an XPath engine, otherwise lxml rejects the
+        leftover ".0" as an "Invalid expression".
+        """
+        offset_match = re.search(r'(?:/text\(\)(?:\[\d+\])?)?\.(\d+)$', relative_path)
+        offset = int(offset_match.group(1)) if offset_match else 0
+        clean_xpath = re.sub(r'(?:/text\(\)(?:\[\d+\])?)?\.\d+$', '', relative_path)
+        return clean_xpath, offset
+
     def _resolve_xpath_target_node(self, filename, spine_map, reported_spine_index, clean_xpath):
         """
         Resolve the XPath against the reported DocFragment first, then against
@@ -1118,9 +1412,7 @@ class EbookParser:
             # "/text()[N].MMM" (Nth text node when inline children split a
             # paragraph's text into multiple nodes). Both must be recognised.
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
-            offset_match = re.search(r'/text\(\)(?:\[\d+\])?\.(\d+)$', relative_path)
-            target_offset = int(offset_match.group(1)) if offset_match else 0
-            clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+            clean_xpath, target_offset = self._split_xpath_char_offset(relative_path)
 
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
@@ -1238,9 +1530,7 @@ class EbookParser:
             full_text, spine_map = self.extract_text_and_map(book_path)
 
             relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
-            offset_match = re.search(r'/text\(\)(?:\[\d+\])?\.(\d+)$', relative_path)
-            target_offset = int(offset_match.group(1)) if offset_match else 0
-            clean_xpath = re.sub(r'/text\(\)(?:\[\d+\])?\.\d+$', '', relative_path)
+            clean_xpath, target_offset = self._split_xpath_char_offset(relative_path)
 
             if clean_xpath.startswith('/'):
                 clean_xpath = '.' + clean_xpath
@@ -1461,20 +1751,22 @@ class EbookParser:
 
             if redirect_idx is not None:
                 package_steps = [step for step in combined_steps[:redirect_idx] if hasattr(step, "index")]
-                for step in reversed(package_steps):
-                    if step.index != 6:
-                        spine_step = int(step.index)
-                        break
+                # The package marker is the leading `/6` (spine container); the spine item
+                # is the last package step before the redirect. Identify it positionally so
+                # CFIs whose spine step is literally 6 (e.g. `/6/6!/...`) parse correctly.
+                if package_steps:
+                    spine_step = int(package_steps[-1].index)
                 element_steps = [step for step in combined_steps[redirect_idx + 1:] if hasattr(step, "index")]
             else:
                 indexed_steps = [step for step in combined_steps if hasattr(step, "index")]
-                for step in indexed_steps:
-                    if spine_step is None:
-                        if step.index == 6:
-                            continue
-                        spine_step = int(step.index)
-                    else:
-                        element_steps.append(step)
+                # No redirect: skip a single leading `/6` package marker (by position, not
+                # value-loop) so a spine item that is itself 6 is not discarded.
+                if indexed_steps and indexed_steps[0].index == 6 and len(indexed_steps) >= 2:
+                    spine_step = int(indexed_steps[1].index)
+                    element_steps = list(indexed_steps[2:])
+                elif indexed_steps:
+                    spine_step = int(indexed_steps[0].index)
+                    element_steps = list(indexed_steps[1:])
 
             char_offset = int(parsed_offset or 0)
             return spine_step, element_steps, char_offset

@@ -221,8 +221,35 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertEqual(len(manifest["books"]), 1)
         self.assertEqual(manifest["books"][0]["content_hash"], "hash-remote")
 
+        # The drifted stored hash should be reconciled to the served file's hash,
+        # so the mismatch does not recur on every poll cycle.
+        self.assertEqual(self.db.get_book("abs-1").kosync_doc_id, "hash-remote")
+
         resolved = self.service.resolve_download("abs-1")
         self.assertIsNotNone(resolved)
         self.assertEqual(Path(resolved["path"]), self.cache_dir / "remote.epub")
         self.assertEqual(resolved["content_hash"], "hash-remote")
+
+    def test_matching_stored_hash_is_not_rewritten(self):
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Already Correct",
+                original_ebook_filename="kavita_187.epub",
+                kosync_doc_id="hash-kavita_187",
+                status="active",
+            )
+        )
+
+        original_update = self.db.update_book_kosync_doc_id
+        calls = []
+        self.db.update_book_kosync_doc_id = lambda *a, **k: (calls.append(a) or original_update(*a, **k))
+        try:
+            self.service.build_manifest()
+        finally:
+            self.db.update_book_kosync_doc_id = original_update
+
+        self.assertEqual(calls, [])
+        self.assertEqual(self.db.get_book("abs-1").kosync_doc_id, "hash-kavita_187")
 

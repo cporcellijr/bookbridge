@@ -34,13 +34,16 @@ class BookloreSyncClient(SyncClient):
         if not epub:
             return False
 
-        # If the selected ebook source is explicitly Grimmory, always include
-        # the Grimmory ebook client even when the audio source is also Grimmory.
-        if getattr(book, "ebook_source", None) == "BookLore":
-            return True
+        # An explicit ebook source is authoritative. Match Grimmory regardless of
+        # the tag variant it was saved under ('BookLore'/'Booklore'/'Grimmory');
+        # never hijack a book explicitly owned by another ebook source (e.g.
+        # BookOrbit), even if Grimmory hosts the same file.
+        src = (getattr(book, "ebook_source", None) or "").strip().lower()
+        if src:
+            return src in ("booklore", "grimmory")
 
-        # Otherwise only participate when the ebook can actually be resolved
-        # against the Grimmory library cache.
+        # Otherwise (legacy/unsourced) only participate when the ebook can actually
+        # be resolved against the Grimmory library cache.
         target = self.booklore_client.find_book_by_filename(epub, allow_refresh=False)
         return bool(target)
 

@@ -21,9 +21,36 @@ from src.utils.logging_utils import time_execution
 logger = logging.getLogger(__name__)
 
 class AlignmentService:
-    def __init__(self, database_service, polisher: Polisher):
+    # Max chars of a window sent to the embedder (~1000 tokens, safely under
+    # nomic-embed-text's 2048-token context).
+    _EMBED_WINDOW_MAX_CHARS = 4000
+
+    def __init__(self, database_service, polisher: Polisher, ollama_client=None):
         self.database_service = database_service
         self.polisher = polisher
+        self.ollama_client = ollama_client
+
+    def _ollama_ready(self) -> bool:
+        client = self.ollama_client
+        return bool(client and client.is_configured())
+
+    @staticmethod
+    def _env_true(key: str, default: str = "true") -> bool:
+        return os.environ.get(key, default).lower() == "true"
+
+    @staticmethod
+    def _env_float(key: str, default: float) -> float:
+        try:
+            return float(os.environ.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _env_int(key: str, default: int) -> int:
+        try:
+            return int(float(os.environ.get(key, default)))
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _point_char(point: Dict) -> int:
@@ -65,15 +92,20 @@ class AlignmentService:
         rebuilt_segments = self.polisher.rebuild_fragmented_sentences(raw_segments, ebook_text)
         logger.info(f"   Rebuilt segments: {len(raw_segments)} -> {len(rebuilt_segments)}")
 
+        # 2b. Content-match guard — refuse to persist a map when the audio and ebook are
+        # clearly different content (wrong edition / abridged / translation / mis-match).
+        if not self._verify_content_match(rebuilt_segments, ebook_text, abs_id=abs_id):
+            return False
+
         # 3. Anchored Alignment
-        alignment_map = self._generate_alignment_map(rebuilt_segments, ebook_text)
-        
+        alignment_map, align_method = self._generate_alignment_map_with_method(rebuilt_segments, ebook_text)
+
         if not alignment_map:
             logger.error("   ❌ Failed to generate alignment map.")
             return False
 
         # 4. Store to Database
-        self._save_alignment(abs_id, alignment_map)
+        self._save_alignment(abs_id, alignment_map, align_method)
         return True
 
     @time_execution
@@ -149,9 +181,9 @@ class AlignmentService:
                     
             if segments:
                 rebuilt_segments = self.polisher.rebuild_fragmented_sentences(segments, ebook_text)
-                alignment_map = self._generate_alignment_map(rebuilt_segments, ebook_text)
+                alignment_map, align_method = self._generate_alignment_map_with_method(rebuilt_segments, ebook_text)
                 if alignment_map:
-                    self._save_alignment(abs_id, alignment_map)
+                    self._save_alignment(abs_id, alignment_map, align_method)
                     logger.info(f"AlignmentService: Anchored Storyteller map stored for {abs_id} ({len(alignment_map)} points)")
                     return True
             
@@ -163,7 +195,7 @@ class AlignmentService:
                 {"char": 0, "ts": 0.0},
                 {"char": len(ebook_text), "ts": storyteller_transcript.get_duration()},
             ]
-            self._save_alignment(abs_id, clean_map)
+            self._save_alignment(abs_id, clean_map, "storyteller_linear")
             logger.info(f"AlignmentService: Linear fallback map stored for {abs_id} ({len(clean_map)} points)")
             return True
 
@@ -180,7 +212,7 @@ class AlignmentService:
                 "ts": pt.get("ts", 0.0)
             })
 
-        self._save_alignment(abs_id, clean_map)
+        self._save_alignment(abs_id, clean_map, "storyteller")
         logger.info(f"AlignmentService: Unanchored Storyteller map stored for {abs_id} ({len(clean_map)} points)")
         return True
 
@@ -255,23 +287,28 @@ class AlignmentService:
         """
         Reverse lookup: Find character offset for a given timestamp.
         """
-        # 1. Fetch Alignment Map
         alignment = self._get_alignment(abs_id)
         if not alignment:
             return None
-        
-        map_points = alignment
+        return self._interpolate_char_for_time(alignment, timestamp)
+
+    @classmethod
+    def _interpolate_char_for_time(cls, map_points: List[Dict], timestamp: float) -> Optional[int]:
+        """Interpolate the character offset for a timestamp within a loaded map."""
+        if not map_points:
+            return None
+
         target_ts = timestamp
-        
-        # 2. Binary search for interval
+
+        # Binary search for interval
         left = 0
         right = len(map_points) - 1
-        
+
         if target_ts <= map_points[0]['ts']:
-            return self._point_char(map_points[0])
+            return cls._point_char(map_points[0])
         if target_ts >= map_points[-1]['ts']:
-            return self._point_char(map_points[-1])
-            
+            return cls._point_char(map_points[-1])
+
         floor_idx = 0
         while left <= right:
             mid = (left + right) // 2
@@ -280,25 +317,51 @@ class AlignmentService:
                 left = mid + 1
             else:
                 right = mid - 1
-        
+
         p1 = map_points[floor_idx]
         if floor_idx + 1 < len(map_points):
             p2 = map_points[floor_idx + 1]
         else:
-            return self._point_char(p1)
-            
-        # 3. Interpolate
+            return cls._point_char(p1)
+
+        # Interpolate
         time_span = p2['ts'] - p1['ts']
-        p1_char = self._point_char(p1)
-        p2_char = self._point_char(p2)
+        p1_char = cls._point_char(p1)
+        p2_char = cls._point_char(p2)
         char_span = p2_char - p1_char
 
-        if time_span == 0: return p1_char
+        if time_span == 0:
+            return p1_char
 
         ratio = (target_ts - p1['ts']) / time_span
         estimated_char = p1_char + (char_span * ratio)
 
         return int(estimated_char)
+
+    def get_progress_for_time(self, abs_id: str, timestamp: float) -> Optional[float]:
+        """
+        Convert an audio timestamp into an ebook text-progress fraction (0..1)
+        via the stored alignment map.
+
+        Audio clients (ABS, etc.) report progress on the time axis
+        (elapsed seconds / duration) while ebook clients report it on the text
+        axis (characters / total characters). The two are not linearly related,
+        so they can only be compared after mapping one onto the other. Returns
+        None when no alignment exists for the book.
+        """
+        alignment = self._get_alignment(abs_id)
+        if not alignment:
+            return None
+
+        max_char = self._point_char(alignment[-1])
+        if max_char <= 0:
+            return None
+
+        char = self._interpolate_char_for_time(alignment, timestamp)
+        if char is None:
+            return None
+
+        return max(0.0, min(char / max_char, 1.0))
 
     @staticmethod
     def _filter_monotonic_lis(anchors: List[Dict]) -> List[Dict]:
@@ -335,10 +398,16 @@ class AlignmentService:
         return [anchors[i] for i in result_indices]
 
     def _generate_alignment_map(self, segments: List[Dict], full_text: str) -> List[Dict]:
+        """Thin wrapper preserving the list-returning contract for callers/tests."""
+        alignment_map, _method = self._generate_alignment_map_with_method(segments, full_text)
+        return alignment_map
+
+    def _generate_alignment_map_with_method(self, segments: List[Dict], full_text: str) -> Tuple[List[Dict], str]:
         """
-        Core Anchored Alignment Algorithm (Two-Pass).
+        Core Anchored Alignment Algorithm (Two-Pass), returning (map, method).
         Pass 1: High confidence (N=12) global search.
         Pass 2: Backfill start gap (N=6) if first anchor is late.
+        method: 'lexical' (n-gram anchors), 'llm_anchor' (embedding rescue), or 'linear'.
         """
         def _build_linear_fallback_map(reason: str) -> List[Dict]:
             end_ts = 0.0
@@ -358,6 +427,13 @@ class AlignmentService:
                 {"char": 0, "ts": 0.0},
                 {"char": len(full_text), "ts": max(0.0, end_ts)},
             ]
+
+        def _fallback(reason: str) -> Tuple[List[Dict], str]:
+            # Embedding anchor rescue fires only here — when lexical anchoring fails.
+            rescue = self._embedding_anchor_rescue(segments, full_text)
+            if rescue:
+                return rescue, "llm_anchor"
+            return _build_linear_fallback_map(reason), "linear"
 
         # 1. Tokenize Transcript
         transcript_words = []
@@ -390,7 +466,7 @@ class AlignmentService:
             })
 
         if not transcript_words or not book_words:
-            return _build_linear_fallback_map("insufficient normalized tokens")
+            return _fallback("insufficient normalized tokens")
 
         # --- Helper for N-Gram Logic ---
         def _find_anchors(t_tokens, b_tokens, n_size):
@@ -467,7 +543,7 @@ class AlignmentService:
         # 5. Build Final Map
         final_map = []
         if not valid_anchors:
-            return _build_linear_fallback_map("no unique anchors found with N=12/N=6")
+            return _fallback("no unique anchors found with N=12/N=6")
 
         # Force 0,0 if still missing (Linear Interpolation fallback)
         if valid_anchors[0]['char'] > 0:
@@ -484,20 +560,186 @@ class AlignmentService:
 
         logger.info(f"   ⚓ Anchored Alignment: Found {len(valid_anchors)} anchors (Total).")
 
+        return final_map, "lexical"
+
+    # --- Embedding-assisted alignment (optional, gated; fires only when lexical fails) ---
+
+    @staticmethod
+    def _chunk_segments_to_windows(segments: List[Dict], max_windows: int) -> List[Dict]:
+        """Group transcript segments into <= max_windows windows of {ts, text}."""
+        usable = [s for s in segments if (s.get('text') or '').strip()]
+        if not usable:
+            return []
+        group = max(1, -(-len(usable) // max_windows))  # ceil division
+        windows = []
+        for i in range(0, len(usable), group):
+            chunk = usable[i:i + group]
+            text = " ".join((s.get('text') or '').strip() for s in chunk).strip()
+            if not text:
+                continue
+            try:
+                ts = float(chunk[0].get('start', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            windows.append({"ts": ts, "text": text})
+        return windows
+
+    @staticmethod
+    def _chunk_text_to_windows(full_text: str, max_windows: int) -> List[Dict]:
+        """Slice the book text into <= max_windows windows of {char, text}."""
+        n = len(full_text)
+        if n <= 0:
+            return []
+        size = max(1, -(-n // max_windows))  # ceil division
+        windows = []
+        for start in range(0, n, size):
+            text = full_text[start:start + size].strip()
+            if text:
+                windows.append({"char": start, "text": text})
+        return windows
+
+    def _embedding_anchor_rescue(self, segments: List[Dict], full_text: str) -> Optional[List[Dict]]:
+        """Semantic anchor rescue: when lexical n-gram anchoring fails, embed transcript
+        and book windows and place anchors at the best-matching pairs. Returns a map
+        (>=2 anchors) or None to keep the linear fallback."""
+        if not self._env_true("OLLAMA_ALIGN_ANCHOR_RESCUE") or not self._ollama_ready():
+            return None
+        if not segments or not full_text:
+            return None
+
+        max_windows = self._env_int("OLLAMA_ALIGN_MAX_WINDOWS", 80)
+        threshold = self._env_float("OLLAMA_ALIGN_SIM_THRESHOLD", 0.72)
+
+        t_windows = self._chunk_segments_to_windows(segments, max_windows)
+        b_windows = self._chunk_text_to_windows(full_text, max_windows)
+        if len(t_windows) < 2 or len(b_windows) < 2:
+            return None
+
+        # Embedding models silently truncate long inputs (nomic-embed-text caps at
+        # ~2048 tokens); embed a bounded prefix so the cutoff point is known. The
+        # window offsets are untouched — both sides compare co-located prefixes.
+        cap = self._EMBED_WINDOW_MAX_CHARS
+        t_texts = [w["text"][:cap] for w in t_windows]
+        b_texts = [w["text"][:cap] for w in b_windows]
+        vectors = self.ollama_client.embed(t_texts + b_texts)
+        if not vectors or len(vectors) != len(t_texts) + len(b_texts):
+            logger.info("   🧠 Anchor rescue skipped (embedding unavailable)")
+            return None
+
+        from src.api.ollama_client import cosine_similarity
+
+        t_vecs = vectors[:len(t_texts)]
+        b_vecs = vectors[len(t_texts):]
+
+        anchors = []
+        for t_win, t_vec in zip(t_windows, t_vecs):
+            best_char = None
+            best_cos = 0.0
+            for b_win, b_vec in zip(b_windows, b_vecs):
+                cos = cosine_similarity(t_vec, b_vec)
+                if cos > best_cos:
+                    best_cos = cos
+                    best_char = b_win["char"]
+            if best_char is not None and best_cos >= threshold:
+                anchors.append({"char": best_char, "ts": t_win["ts"]})
+
+        if len(anchors) < 2:
+            return None
+
+        anchors.sort(key=lambda a: a["char"])
+        valid = self._filter_monotonic_lis(anchors)
+        if len(valid) < 2:
+            return None
+
+        final_map = []
+        if valid[0]["char"] > 0:
+            final_map.append({"char": 0, "ts": 0.0})
+        final_map.extend(valid)
+        last = valid[-1]
+        if last["char"] < len(full_text):
+            try:
+                end_ts = float(segments[-1].get("end", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                end_ts = last["ts"]
+            final_map.append({"char": len(full_text), "ts": max(end_ts, last["ts"])})
+
+        logger.info(f"   🧠 Embedding anchor rescue: recovered {len(valid)} anchors.")
         return final_map
 
-    def _save_alignment(self, abs_id: str, alignment_map: List[Dict]):
+    @staticmethod
+    def _sample_passages(text: str, count: int = 3, window: int = 400) -> List[str]:
+        """Sample `count` passages spread across `text` (avoids opening boilerplate)."""
+        n = len(text)
+        if n <= 0:
+            return []
+        if n <= window:
+            return [text.strip()] if text.strip() else []
+        fractions = [0.1, 0.5, 0.9][:count]
+        samples = []
+        for f in fractions:
+            start = min(max(0, int(n * f) - window // 2), n - window)
+            chunk = text[start:start + window].strip()
+            if chunk:
+                samples.append(chunk)
+        return samples
+
+    def _verify_content_match(self, segments: List[Dict], full_text: str, abs_id: str = None) -> bool:
+        """Content-match guard: refuse to store a map when audio and ebook are clearly
+        different content. Returns True (proceed) unless the embeddings show strong
+        divergence. No-op (True) when disabled, no client, or embeddings unavailable."""
+        if not self._env_true("OLLAMA_ALIGN_CONTENT_GUARD") or not self._ollama_ready():
+            return True
+        if not segments or not full_text:
+            return True
+
+        min_sim = self._env_float("OLLAMA_ALIGN_CONTENT_MIN_SIM", 0.45)
+        transcript_text = " ".join((s.get("text") or "").strip() for s in segments).strip()
+        t_samples = self._sample_passages(transcript_text)
+        b_samples = self._sample_passages(full_text)
+        if len(t_samples) < 1 or len(b_samples) < 1:
+            return True
+
+        vectors = self.ollama_client.embed(t_samples + b_samples)
+        if not vectors or len(vectors) != len(t_samples) + len(b_samples):
+            return True  # infra failure must not block alignment
+
+        from src.api.ollama_client import cosine_similarity
+
+        t_vecs = vectors[:len(t_samples)]
+        b_vecs = vectors[len(t_samples):]
+        # Most-optimistic similarity: best book passage for the best transcript passage.
+        best_overall = 0.0
+        for t_vec in t_vecs:
+            for b_vec in b_vecs:
+                cos = cosine_similarity(t_vec, b_vec)
+                if cos > best_overall:
+                    best_overall = cos
+
+        if best_overall < min_sim:
+            logger.warning(
+                "🚫 Content-match guard: audio/ebook content diverges for %s "
+                "(best passage similarity %.2f < %.2f) — likely wrong edition / abridged / "
+                "translation / mis-match. Refusing to store a misleading alignment.",
+                abs_id or "?",
+                best_overall,
+                min_sim,
+            )
+            return False
+        return True
+
+    def _save_alignment(self, abs_id: str, alignment_map: List[Dict], align_method: str = None):
         """Upsert alignment to SQLite."""
         with self.database_service.get_session() as session:
             json_blob = json.dumps(alignment_map)
-            
+
             # Check exist
             existing = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if existing:
                 existing.alignment_map_json = json_blob
+                existing.align_method = align_method
                 existing.last_updated = datetime.utcnow()
             else:
-                new_align = BookAlignment(abs_id=abs_id, alignment_map_json=json_blob)
+                new_align = BookAlignment(abs_id=abs_id, alignment_map_json=json_blob, align_method=align_method)
                 session.add(new_align)
             
             # Context manager handles commit

@@ -5,8 +5,9 @@ Direct model-based interface without dictionary conversions.
 
 import json
 import logging
+import os
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 from contextlib import contextmanager
@@ -26,6 +27,9 @@ from .models import (
     ReadingSession,
     KOReaderBookStat,
     KOReaderPageStat,
+    ShelfWatchScan,
+    EmbeddingCache,
+    BookAlignment,
     Base,
 )
 
@@ -224,6 +228,99 @@ class DatabaseService:
             if book:
                 session.expunge(book)
             return book
+
+    def update_book_kosync_doc_id(self, abs_id: str, kosync_doc_id: str) -> bool:
+        """Update only a book's kosync_doc_id column.
+
+        Used to reconcile the stored hash with the hash of the ebook actually served
+        to KOReader, without rewriting the rest of the book row.
+        """
+        with self.get_session() as session:
+            updated = session.query(Book).filter(Book.abs_id == abs_id).update(
+                {Book.kosync_doc_id: kosync_doc_id}, synchronize_session=False
+            )
+            return bool(updated)
+
+    def set_book_status(self, abs_id: str, status: str) -> bool:
+        """Set a book's status column (e.g. 'pending' to queue re-processing)."""
+        with self.get_session() as session:
+            updated = session.query(Book).filter(Book.abs_id == abs_id).update(
+                {Book.status: status}, synchronize_session=False
+            )
+            return bool(updated)
+
+    def get_alignment_provenance(self) -> dict:
+        """Report how each stored alignment map was built.
+
+        Returns {'summary': {method: count, ...}, 'books': [{abs_id, title,
+        align_method, llm_used, last_updated}, ...]}. NULL align_method (maps built
+        before provenance tracking) is reported as 'pre_llm'.
+        """
+        with self.get_session() as session:
+            rows = (
+                session.query(BookAlignment, Book.abs_title)
+                .outerjoin(Book, Book.abs_id == BookAlignment.abs_id)
+                .all()
+            )
+            # A map is worth re-aligning only if it's a flat linear fallback (lexical
+            # anchoring failed) or pre-provenance/unknown — a clean lexical or llm_anchor
+            # map gains nothing from a re-run.
+            realign_methods = {None, "linear", "storyteller_linear"}
+            books = []
+            summary: dict = {}
+            for alignment, title in rows:
+                method = alignment.align_method or "pre_llm"
+                summary[method] = summary.get(method, 0) + 1
+                books.append({
+                    "abs_id": alignment.abs_id,
+                    "title": title or alignment.abs_id,
+                    "align_method": alignment.align_method,
+                    "llm_used": alignment.align_method == "llm_anchor",
+                    "needs_realign": alignment.align_method in realign_methods,
+                    "last_updated": alignment.last_updated.isoformat() if alignment.last_updated else None,
+                })
+            books.sort(key=lambda b: (b["llm_used"], (b["align_method"] or "")))
+            needs_realign = sum(1 for b in books if b["needs_realign"])
+            return {"summary": summary, "total": len(books), "needs_realign": needs_realign, "books": books}
+
+    def backfill_alignment_methods(self) -> int:
+        """Classify legacy NULL-method maps without re-transcribing, by inspecting the
+        stored map: a <=2-point map is a flat linear fallback (lexical anchoring failed →
+        an LLM re-align could help); more points means lexical anchoring already succeeded
+        (re-aligning adds nothing). Returns how many rows were updated."""
+        import json as _json
+        updated = 0
+        with self.get_session() as session:
+            rows = session.query(BookAlignment).filter(BookAlignment.align_method.is_(None)).all()
+            for alignment in rows:
+                try:
+                    points = len(_json.loads(alignment.alignment_map_json))
+                except Exception:
+                    continue
+                alignment.align_method = "linear" if points <= 2 else "lexical"
+                updated += 1
+        return updated
+
+    def get_books_needing_llm_realign(self) -> List[str]:
+        """abs_ids whose alignment is pre-LLM (NULL) or a flat linear fallback — i.e. the
+        maps that re-running under the LLM-enabled pipeline could actually improve.
+
+        A clean 'lexical' map is already accurate (the embedding rescue only fires when
+        lexical anchoring fails), so it is intentionally excluded.
+        """
+        from sqlalchemy import or_
+        with self.get_session() as session:
+            rows = (
+                session.query(BookAlignment.abs_id)
+                .filter(
+                    or_(
+                        BookAlignment.align_method.is_(None),
+                        BookAlignment.align_method.in_(["linear", "storyteller_linear"]),
+                    )
+                )
+                .all()
+            )
+            return [r[0] for r in rows]
 
     def get_all_books(self) -> List[Book]:
         """Get all books as model objects."""
@@ -703,6 +800,19 @@ class DatabaseService:
                 session.expunge(book)
             return book
 
+    def get_book_by_ebook_source(self, ebook_source: str, ebook_source_id: str) -> Optional['Book']:
+        """Find a book by its ebook source + source id (e.g. BookLore/<grimmory_id>)."""
+        if not ebook_source or not ebook_source_id:
+            return None
+        with self.get_session() as session:
+            book = session.query(Book).filter(
+                Book.ebook_source == ebook_source,
+                Book.ebook_source_id == str(ebook_source_id),
+            ).first()
+            if book:
+                session.expunge(book)
+            return book
+
     def get_kosync_doc_by_filename(self, filename: str) -> Optional[KosyncDocument]:
         """Find a KOSync document by its associated filename."""
         with self.get_session() as session:
@@ -751,7 +861,8 @@ class DatabaseService:
             ).first()
 
             if existing:
-                for attr in ['source', 'title', 'author', 'cover_url', 'matches_json', 'status']:
+                for attr in ['source', 'title', 'author', 'cover_url', 'matches_json',
+                             'status', 'origin', 'origin_metadata_json']:
                     if hasattr(suggestion, attr):
                         setattr(existing, attr, getattr(suggestion, attr))
                 session.flush()
@@ -815,6 +926,48 @@ class DatabaseService:
                 suggestion.status = 'ignored'
                 return True
             return False
+
+    # ShelfWatchScan operations (Grimmory "Up Next" throttle table)
+    def get_shelf_watch_scan(self, grimmory_book_id: str) -> Optional[ShelfWatchScan]:
+        """Look up the most recent shelf-watch scan record for a Grimmory book."""
+        with self.get_session() as session:
+            row = session.query(ShelfWatchScan).filter(
+                ShelfWatchScan.grimmory_book_id == str(grimmory_book_id)
+            ).first()
+            if row:
+                session.expunge(row)
+            return row
+
+    def upsert_shelf_watch_scan(self, grimmory_book_id: str, grimmory_filename: str,
+                                top_score: Optional[float], status: str) -> ShelfWatchScan:
+        """Insert or update the throttle row for a Grimmory book. Sets last_scan_at = utcnow."""
+        gid = str(grimmory_book_id)
+        with self.get_session() as session:
+            existing = session.query(ShelfWatchScan).filter(
+                ShelfWatchScan.grimmory_book_id == gid
+            ).first()
+            now = datetime.utcnow()
+            if existing:
+                existing.grimmory_filename = grimmory_filename
+                existing.last_scan_at = now
+                existing.last_top_score = top_score
+                existing.last_status = status
+                session.flush()
+                session.refresh(existing)
+                session.expunge(existing)
+                return existing
+            row = ShelfWatchScan(
+                grimmory_book_id=gid,
+                grimmory_filename=grimmory_filename,
+                last_scan_at=now,
+                last_top_score=top_score,
+                last_status=status,
+            )
+            session.add(row)
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return row
 
     def clear_stale_suggestions(self) -> int:
         """
@@ -899,6 +1052,55 @@ class DatabaseService:
             return False
 
 
+    # --- Persistent Ollama embedding cache ---
+
+    def get_cached_embeddings(self, model: str, text_hashes: List[str]) -> dict:
+        """Return {text_hash: vector} for cached embeddings of `model`."""
+        if not model or not text_hashes:
+            return {}
+        result = {}
+        with self.get_session() as session:
+            rows = session.query(EmbeddingCache).filter(
+                EmbeddingCache.model == model,
+                EmbeddingCache.text_hash.in_(text_hashes),
+            ).all()
+            for row in rows:
+                try:
+                    vector = json.loads(row.vector_json)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if isinstance(vector, list):
+                    result[row.text_hash] = vector
+        return result
+
+    def save_cached_embeddings(self, model: str, vectors_by_hash: dict) -> None:
+        """Insert embeddings for `model`, ignoring hashes that already exist."""
+        if not model or not vectors_by_hash:
+            return
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        rows = [
+            {"model": model, "text_hash": h, "vector_json": json.dumps(v), "created_at": datetime.utcnow()}
+            for h, v in vectors_by_hash.items()
+            if h and isinstance(v, list)
+        ]
+        if not rows:
+            return
+        with self.get_session() as session:
+            stmt = sqlite_insert(EmbeddingCache.__table__).values(rows)
+            session.execute(stmt.on_conflict_do_nothing(index_elements=["model", "text_hash"]))
+
+    def prune_embedding_cache(self, keep_model: str, max_age_days: int = 90) -> int:
+        """Drop rows for other models and rows older than `max_age_days`. Returns count."""
+        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        with self.get_session() as session:
+            query = session.query(EmbeddingCache).filter(
+                (EmbeddingCache.model != keep_model) | (EmbeddingCache.created_at < cutoff)
+            )
+            count = query.delete(synchronize_session=False)
+        if count:
+            logger.info(f"Pruned {count} stale embedding cache rows")
+        return count
+
     @staticmethod
     def _normalize_koreader_device_key(device: str = None, device_id: str = None) -> str:
         return str(device_id or device or "").strip()
@@ -955,12 +1157,12 @@ class DatabaseService:
         return len(rows)
 
     def bulk_insert_koreader_page_stats(self, device: str, device_id: str, page_stats: list[dict]) -> dict:
-        """Bulk insert KOReader page stats with replay-safe dedupe."""
+        """Bulk insert KOReader page stats with replay-safe dedupe and cross-device echo suppression."""
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         device_key = self._normalize_koreader_device_key(device=device, device_id=device_id)
         if not device_key:
-            return {"accepted": 0, "duplicates": 0}
+            return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
         rows = []
         now = datetime.utcnow()
@@ -979,6 +1181,13 @@ class DatabaseService:
             if page < 0 or start_time <= 0:
                 continue
 
+            try:
+                total_pages = int(entry.get("total_pages")) if entry.get("total_pages") is not None else None
+            except (TypeError, ValueError):
+                total_pages = None
+            if total_pages is not None and total_pages <= 0:
+                total_pages = None
+
             rows.append({
                 "md5": md5,
                 "device": str(device or "").strip() or None,
@@ -987,24 +1196,156 @@ class DatabaseService:
                 "page": page,
                 "start_time": start_time,
                 "duration": duration,
+                "total_pages": total_pages,
                 "uploaded_at": now,
             })
 
         if not rows:
-            return {"accepted": 0, "duplicates": 0}
+            return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
         with self.get_session() as session:
-            stmt = sqlite_insert(KOReaderPageStat).values(rows)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["md5", "device_key", "page", "start_time"]
+            # Echo suppression: an event whose (md5, start_time, duration) already exists
+            # under another device_key is a merged copy injected into this device's
+            # statistics.sqlite by the plugin, not new reading on this device.
+            batch_md5s = {row["md5"] for row in rows}
+            foreign = (
+                session.query(KOReaderPageStat.md5, KOReaderPageStat.start_time, KOReaderPageStat.duration)
+                .filter(
+                    KOReaderPageStat.md5.in_(batch_md5s),
+                    KOReaderPageStat.device_key != device_key,
+                )
+                .all()
             )
-            result = session.execute(stmt)
-            inserted = max(int(result.rowcount or 0), 0)
+            foreign_fingerprints = {
+                (item.md5, float(item.start_time), float(item.duration)) for item in foreign
+            }
+            fresh_rows = [
+                row for row in rows
+                if (row["md5"], row["start_time"], row["duration"]) not in foreign_fingerprints
+            ]
+            echoes = len(rows) - len(fresh_rows)
+
+            inserted = 0
+            if fresh_rows:
+                stmt = sqlite_insert(KOReaderPageStat).values(fresh_rows)
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["md5", "device_key", "page", "start_time"]
+                )
+                result = session.execute(stmt)
+                inserted = max(int(result.rowcount or 0), 0)
 
         return {
             "accepted": inserted,
-            "duplicates": max(len(rows) - inserted, 0),
+            "duplicates": max(len(fresh_rows) - inserted, 0),
+            "echoes": echoes,
         }
+
+    def get_merged_koreader_page_stats(
+        self,
+        exclude_device_key: str,
+        md5s: Optional[set[str]] = None,
+        since: Optional[float] = None,
+    ) -> dict:
+        """Page-stat events from all devices except the requesting one, for cross-device merging.
+
+        ``since`` filters on the bridge-side ``uploaded_at`` timestamp (epoch seconds) so
+        late uploads of old reading events are never missed; the returned ``watermark``
+        is the max ``uploaded_at`` seen and should be passed back as the next ``since``.
+        Rows missing ``total_pages`` fall back to the uploading device's book-stats page
+        count; rows with no usable total are skipped (KOReader's rescaling view divides
+        by total_pages).
+        """
+        exclude_device_key = str(exclude_device_key or "").strip()
+        if not exclude_device_key:
+            return {"page_stats": [], "watermark": since}
+
+        with self.get_session() as session:
+            query = session.query(KOReaderPageStat).filter(
+                KOReaderPageStat.device_key != exclude_device_key
+            )
+            if md5s:
+                query = query.filter(KOReaderPageStat.md5.in_(md5s))
+            if since is not None:
+                query = query.filter(
+                    KOReaderPageStat.uploaded_at >= datetime.utcfromtimestamp(float(since))
+                )
+            rows = query.order_by(KOReaderPageStat.start_time.asc()).all()
+            if not rows:
+                return {"page_stats": [], "watermark": since}
+
+            fallback_keys = {(row.md5, row.device_key) for row in rows if not row.total_pages}
+            fallback_pages: dict[tuple[str, str], int] = {}
+            if fallback_keys:
+                meta_rows = (
+                    session.query(KOReaderBookStat.md5, KOReaderBookStat.device_key, KOReaderBookStat.pages)
+                    .filter(KOReaderBookStat.md5.in_({md5 for md5, _ in fallback_keys}))
+                    .all()
+                )
+                for meta in meta_rows:
+                    if meta.pages and int(meta.pages) > 0:
+                        fallback_pages[(meta.md5, meta.device_key)] = int(meta.pages)
+
+            watermark = since
+            results = []
+            for row in rows:
+                if row.uploaded_at is not None:
+                    uploaded_epoch = row.uploaded_at.replace(tzinfo=timezone.utc).timestamp()
+                    if watermark is None or uploaded_epoch > watermark:
+                        watermark = uploaded_epoch
+                total_pages = int(row.total_pages) if row.total_pages else fallback_pages.get((row.md5, row.device_key))
+                if not total_pages or total_pages <= 0:
+                    continue
+                results.append({
+                    "md5": row.md5,
+                    "page": int(row.page),
+                    "start_time": float(row.start_time),
+                    "duration": float(row.duration or 0),
+                    "total_pages": total_pages,
+                })
+            return {"page_stats": results, "watermark": watermark}
+
+    def get_merged_koreader_book_meta(self, exclude_device_key: str, md5s: set[str]) -> list[dict]:
+        """Canonical book metadata (md5, title, authors, pages) for the given md5s.
+
+        Drawn from other devices' uploaded book stats so a device that never opened a
+        book can create its local ``book`` row before merging foreign page events. One row
+        per md5, preferring the largest ``pages`` (then most recent ``last_updated``) so
+        KOReader's page-stat rescaling stays sane. md5s with no usable metadata row are
+        omitted — the plugin can't build a meaningful entry from them.
+        """
+        exclude_device_key = str(exclude_device_key or "").strip()
+        md5s = {str(m).strip() for m in (md5s or set()) if str(m).strip()}
+        if not md5s:
+            return []
+
+        with self.get_session() as session:
+            query = session.query(KOReaderBookStat).filter(KOReaderBookStat.md5.in_(md5s))
+            if exclude_device_key:
+                query = query.filter(KOReaderBookStat.device_key != exclude_device_key)
+            rows = query.all()
+
+            best: dict[str, KOReaderBookStat] = {}
+            for row in rows:
+                current = best.get(row.md5)
+                if current is None or self._koreader_book_meta_rank(row) > self._koreader_book_meta_rank(current):
+                    best[row.md5] = row
+
+            return [
+                {
+                    "md5": row.md5,
+                    "title": row.title or "",
+                    "authors": row.authors or "",
+                    "pages": int(row.pages) if row.pages else 0,
+                }
+                for row in best.values()
+            ]
+
+    @staticmethod
+    def _koreader_book_meta_rank(row) -> tuple[int, float]:
+        """Sort key for picking the canonical book-stats row: most pages, then most recent."""
+        pages = int(row.pages) if row.pages else 0
+        last_updated = row.last_updated.timestamp() if row.last_updated else 0.0
+        return (pages, last_updated)
 
     @staticmethod
     def _local_date_from_epoch(timestamp: float, tz_name: str) -> str:
@@ -1172,12 +1513,7 @@ class DatabaseService:
                 .scalar()
                 or 0
             )
-            pages_read = int(
-                session.query(func.count(KOReaderPageStat.id))
-                .filter(KOReaderPageStat.md5.in_(md5s))
-                .scalar()
-                or 0
-            )
+            pages_read = self._koreader_pages_read(session, md5s)
             books_tracked = int(
                 session.query(KOReaderPageStat.md5)
                 .filter(KOReaderPageStat.md5.in_(md5s))
@@ -1220,6 +1556,8 @@ class DatabaseService:
                 "daysRead": len(activity_dates),
                 "totalSeconds": total_seconds,
                 "pagesRead": pages_read,
+                "pagesPerHour": round(pages_read / (total_seconds / 3600), 1) if total_seconds > 0 else 0,
+                "secondsPerPage": int(total_seconds / pages_read) if pages_read > 0 else 0,
                 "trackedBookIds": linked_book_ids,
                 "trackedBookKeys": tracked_book_keys,
                 "weekTotalSeconds": week_total,
@@ -1310,7 +1648,7 @@ class DatabaseService:
                 }
 
             grouped = {}
-            session_gap_seconds = 1800
+            session_gap_seconds = self._session_gap_seconds()
 
             for row in rows:
                 context = contexts.get(row.md5)
@@ -1457,7 +1795,7 @@ class DatabaseService:
                 grouped_rows[(context["bookKey"], row.device_key)].append(row)
 
             sessions = []
-            session_gap_seconds = 1800
+            session_gap_seconds = self._session_gap_seconds()
             for (book_key, device_key), grouped in grouped_rows.items():
                 current = None
                 for row in grouped:
@@ -1519,6 +1857,308 @@ class DatabaseService:
                 })
 
             return normalized
+
+    def _session_gap_seconds(self) -> int:
+        """Idle gap (seconds) that splits KOReader page events into sessions."""
+        try:
+            minutes = float(os.environ.get("KOREADER_SESSION_GAP_MINUTES", "30"))
+        except (TypeError, ValueError):
+            minutes = 30.0
+        return int(max(minutes, 1) * 60)
+
+    @staticmethod
+    def _reconstruct_sessions(rows, gap_seconds: int) -> list[dict]:
+        """Cluster ordered page-stat rows into sessions, split per device on idle gaps.
+
+        Returns sessions newest-first as {startTime, endTime, durationSeconds, pagesRead}.
+        """
+        by_device = defaultdict(list)
+        for row in rows:
+            by_device[row.device_key].append(row)
+
+        sessions = []
+        for grouped in by_device.values():
+            grouped.sort(key=lambda r: r.start_time)
+            current = None
+            for row in grouped:
+                duration = int(max(row.duration or 0, 0))
+                event_end = float(row.start_time + max(row.duration or 0, 0))
+                if current is None:
+                    current = {"startTime": float(row.start_time), "endTime": event_end,
+                               "durationSeconds": duration, "pagesRead": 1}
+                elif (float(row.start_time) - float(current["endTime"])) > gap_seconds:
+                    sessions.append(current)
+                    current = {"startTime": float(row.start_time), "endTime": event_end,
+                               "durationSeconds": duration, "pagesRead": 1}
+                else:
+                    current["endTime"] = max(float(current["endTime"]), event_end)
+                    current["durationSeconds"] += duration
+                    current["pagesRead"] += 1
+            if current is not None:
+                sessions.append(current)
+
+        sessions.sort(key=lambda s: s["endTime"], reverse=True)
+        for s in sessions:
+            s["startTime"] = int(s["startTime"])
+            s["endTime"] = int(s["endTime"])
+        return sessions
+
+    @staticmethod
+    def _distinct_pages_count(session, md5s, start_epoch=None, end_epoch=None) -> int:
+        """Count distinct (md5, page) screen-pages in an optional time window."""
+        if not md5s:
+            return 0
+        query = session.query(KOReaderPageStat.md5, KOReaderPageStat.page).filter(
+            KOReaderPageStat.md5.in_(md5s)
+        )
+        if start_epoch is not None:
+            query = query.filter(KOReaderPageStat.start_time >= start_epoch)
+        if end_epoch is not None:
+            query = query.filter(KOReaderPageStat.start_time < end_epoch)
+        return query.distinct().count()
+
+    def _koreader_pages_read(self, session, md5s, metadata: dict = None) -> int:
+        """All-time 'pages read' matching KOReader's own number.
+
+        Uses KOReader's per-book ``total_read_pages`` (which applies its read-time
+        threshold, so it matches the device), falling back to distinct screen-pages
+        for any md5 that has page stats but no uploaded book-stats row.
+        """
+        if not md5s:
+            return 0
+        if metadata is None:
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+        total = 0
+        missing = set()
+        for md5 in md5s:
+            meta = metadata.get(md5)
+            if meta and meta.total_read_pages:
+                total += int(meta.total_read_pages)
+            else:
+                missing.add(md5)
+        if missing:
+            total += self._distinct_pages_count(session, missing)
+        return total
+
+    def _percent_complete_for_md5s(self, metadata: dict, md5s) -> Optional[float]:
+        """Best-effort % complete from KOReader book metadata across a book's md5s."""
+        best_read = 0
+        total_pages = 0
+        for md5 in md5s:
+            meta = metadata.get(md5)
+            if meta and meta.pages and (meta.total_read_pages or 0) >= best_read:
+                best_read = meta.total_read_pages or 0
+                total_pages = meta.pages or 0
+        if total_pages > 0:
+            return round(min(best_read / total_pages, 1.0) * 100, 1)
+        return None
+
+    def get_koreader_hour_histogram(self, tz_name: str) -> list[dict]:
+        """Reading activity bucketed by local hour-of-day (0-23)."""
+        buckets = [{"hour": h, "seconds": 0, "pages": 0} for h in range(24)]
+        with self.get_session() as session:
+            md5s = self._get_all_koreader_active_md5s(session)
+            if not md5s:
+                return buckets
+            tz = ZoneInfo(tz_name)
+            rows = (
+                session.query(KOReaderPageStat.start_time, KOReaderPageStat.duration)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .all()
+            )
+            for row in rows:
+                hour = datetime.fromtimestamp(float(row.start_time), tz).hour
+                buckets[hour]["seconds"] += int(max(row.duration or 0, 0))
+                buckets[hour]["pages"] += 1
+        return buckets
+
+    def get_koreader_book_list(self, tz_name: str) -> list[dict]:
+        """Per-book reading rollup for the books list (newest activity first)."""
+        with self.get_session() as session:
+            md5s = self._get_all_koreader_active_md5s(session)
+            if not md5s:
+                return []
+            contexts = self._build_koreader_book_contexts(session, md5s)
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+            keys_md5 = defaultdict(set)
+            for md5, ctx in contexts.items():
+                keys_md5[ctx["bookKey"]].add(md5)
+
+            rows = (
+                session.query(KOReaderPageStat.md5, KOReaderPageStat.start_time, KOReaderPageStat.duration)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .all()
+            )
+            agg = {}
+            for row in rows:
+                ctx = contexts.get(row.md5)
+                if not ctx:
+                    continue
+                entry = agg.setdefault(ctx["bookKey"], {
+                    "bookKey": ctx["bookKey"], "absId": ctx["absId"], "isLinked": ctx["isLinked"],
+                    "title": ctx["title"], "author": ctx["author"],
+                    "totalSeconds": 0, "lastReadAt": 0,
+                })
+                entry["totalSeconds"] += int(max(row.duration or 0, 0))
+                entry["lastReadAt"] = max(entry["lastReadAt"], int(float(row.start_time + max(row.duration or 0, 0))))
+
+            result = []
+            for key, entry in agg.items():
+                total = entry["totalSeconds"]
+                pages = self._koreader_pages_read(session, keys_md5.get(key, set()), metadata)
+                result.append({
+                    **entry,
+                    "pagesRead": pages,
+                    "lastReadAt": entry["lastReadAt"] or None,
+                    "pagesPerHour": round(pages / (total / 3600), 1) if total > 0 else 0,
+                    "secondsPerPage": int(total / pages) if pages > 0 else 0,
+                    "percentComplete": self._percent_complete_for_md5s(metadata, keys_md5.get(key, set())),
+                })
+            result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+            return result
+
+    def get_koreader_book_detail(self, book_key: str, tz_name: str) -> Optional[dict]:
+        """Full per-book reading detail: pace, sessions, daily heatmap, completion."""
+        with self.get_session() as session:
+            all_md5s = self._get_all_koreader_active_md5s(session)
+            if not all_md5s:
+                return None
+            contexts = self._build_koreader_book_contexts(session, all_md5s)
+            md5s = {md5 for md5, ctx in contexts.items() if ctx["bookKey"] == book_key}
+            if not md5s:
+                return None
+            ctx = contexts[next(iter(md5s))]
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+
+            rows = (
+                session.query(KOReaderPageStat)
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .order_by(KOReaderPageStat.start_time.asc())
+                .all()
+            )
+            if not rows:
+                return None
+
+            sessions = self._reconstruct_sessions(rows, self._session_gap_seconds())
+            total_seconds = sum(int(max(r.duration or 0, 0)) for r in rows)
+            pages_read = self._koreader_pages_read(session, md5s, metadata)
+            session_count = len(sessions)
+
+            daily_seconds = defaultdict(int)
+            daily_pages = defaultdict(set)
+            for row in rows:
+                date_key = self._local_date_from_epoch(row.start_time, tz_name)
+                daily_seconds[date_key] += int(max(row.duration or 0, 0))
+                daily_pages[date_key].add((row.md5, row.page))
+            heatmap = [
+                {"date": key, "seconds": daily_seconds[key], "pages": len(daily_pages[key])}
+                for key in sorted(daily_seconds)
+            ]
+
+            return {
+                "bookKey": book_key, "absId": ctx["absId"], "isLinked": ctx["isLinked"],
+                "title": ctx["title"], "author": ctx["author"],
+                "totalSeconds": total_seconds, "pagesRead": pages_read,
+                "sessionCount": session_count,
+                "avgSessionSeconds": int(total_seconds / session_count) if session_count else 0,
+                "pagesPerHour": round(pages_read / (total_seconds / 3600), 1) if total_seconds > 0 else 0,
+                "secondsPerPage": int(total_seconds / pages_read) if pages_read > 0 else 0,
+                "firstReadAt": int(rows[0].start_time),
+                "lastReadAt": int(float(rows[-1].start_time + max(rows[-1].duration or 0, 0))),
+                "percentComplete": self._percent_complete_for_md5s(metadata, md5s),
+                "heatmap": heatmap,
+                "sessions": sessions[:50],
+            }
+
+    def _koreader_available_years(self, session, md5s, tz_name: str) -> list[int]:
+        from sqlalchemy import func
+        bounds = (
+            session.query(func.min(KOReaderPageStat.start_time), func.max(KOReaderPageStat.start_time))
+            .filter(KOReaderPageStat.md5.in_(md5s))
+            .first()
+        )
+        if not bounds or bounds[0] is None:
+            return []
+        tz = ZoneInfo(tz_name)
+        first_year = datetime.fromtimestamp(float(bounds[0]), tz).year
+        last_year = datetime.fromtimestamp(float(bounds[1]), tz).year
+        return list(range(first_year, last_year + 1))
+
+    def get_koreader_yearly_recap(self, year: int, tz_name: str) -> dict:
+        """Year-in-review for reading: monthly totals + books finished that year."""
+        empty_months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+        with self.get_session() as session:
+            md5s = self._get_all_koreader_active_md5s(session)
+            if not md5s:
+                return {"year": year, "months": empty_months, "totalSeconds": 0,
+                        "totalPages": 0, "booksFinished": 0, "finishedBooks": [], "availableYears": []}
+
+            contexts = self._build_koreader_book_contexts(session, md5s)
+            metadata = self._get_latest_koreader_book_metadata(session, md5s)
+            keys_md5 = defaultdict(set)
+            for md5, ctx in contexts.items():
+                keys_md5[ctx["bookKey"]].add(md5)
+
+            tz = ZoneInfo(tz_name)
+            start_epoch = datetime(year, 1, 1, tzinfo=tz).timestamp()
+            end_epoch = datetime(year + 1, 1, 1, tzinfo=tz).timestamp()
+            rows = (
+                session.query(
+                    KOReaderPageStat.md5, KOReaderPageStat.page,
+                    KOReaderPageStat.start_time, KOReaderPageStat.duration,
+                )
+                .filter(KOReaderPageStat.md5.in_(md5s))
+                .filter(KOReaderPageStat.start_time >= start_epoch)
+                .filter(KOReaderPageStat.start_time < end_epoch)
+                .all()
+            )
+
+            months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+            month_pages = [set() for _ in range(12)]
+            year_pages = set()
+            last_event_by_key = {}
+            for row in rows:
+                ctx = contexts.get(row.md5)
+                if not ctx:
+                    continue
+                local_dt = datetime.fromtimestamp(float(row.start_time), tz)
+                bucket = months[local_dt.month - 1]
+                bucket["seconds"] += int(max(row.duration or 0, 0))
+                month_pages[local_dt.month - 1].add((row.md5, row.page))
+                year_pages.add((row.md5, row.page))
+                event_end = float(row.start_time + max(row.duration or 0, 0))
+                last_event_by_key[ctx["bookKey"]] = max(last_event_by_key.get(ctx["bookKey"], 0), event_end)
+
+            for index, bucket in enumerate(months):
+                bucket["pages"] = len(month_pages[index])
+
+            # KOReader's true read-status lives in .sdr sidecars (not ingested), so we
+            # approximate "finished" from pages read. KOReader's read-time threshold makes
+            # total_read_pages undercount, so 95% is treated as effectively complete.
+            finished_books = []
+            for book_key, last_end in last_event_by_key.items():
+                pct = self._percent_complete_for_md5s(metadata, keys_md5.get(book_key, set()))
+                if pct is None or pct < 95:
+                    continue
+                ctx = contexts[next(iter(keys_md5[book_key]))]
+                finished_dt = datetime.fromtimestamp(last_end, tz)
+                finished_books.append({
+                    "bookKey": book_key, "absId": ctx["absId"],
+                    "title": ctx["title"], "author": ctx["author"],
+                    "finishedAt": int(last_end), "month": finished_dt.month,
+                })
+                months[finished_dt.month - 1]["finished"] += 1
+            finished_books.sort(key=lambda item: item["finishedAt"], reverse=True)
+
+            return {
+                "year": year,
+                "months": months,
+                "totalSeconds": sum(m["seconds"] for m in months),
+                "totalPages": len(year_pages),
+                "booksFinished": len(finished_books),
+                "finishedBooks": finished_books,
+                "availableYears": self._koreader_available_years(session, md5s, tz_name),
+            }
 
     # Reading session operations
     def record_reading_session(self, abs_id: str, session_type: str, start_time: float,

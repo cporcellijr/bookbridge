@@ -48,6 +48,20 @@ class StorytellerSyncClient(SyncClient):
             except Exception:
                 pass
 
+            # The processed ReadAloud EPUB carries the media-overlay (SMIL) fragment
+            # ids needed for valid Storyteller locators. It is absent when
+            # STORYTELLER_NO_EPUB_CACHE (a Forge-only setting) is on, so materialize
+            # a slim audio-stripped copy on demand rather than falling back to the
+            # original EPUB (whose anchor ids snap the readalong back to chapter start).
+            try:
+                cache_dir = getattr(self.ebook_parser, "epub_cache_dir", None)
+                if cache_dir and self.storyteller_client.ensure_readaloud_epub_cached(
+                    storyteller_uuid, cache_dir
+                ):
+                    return candidate
+            except Exception as e:
+                logger.debug(f"Storyteller slim EPUB ensure failed for '{storyteller_uuid}': {e}")
+
         return current
 
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:

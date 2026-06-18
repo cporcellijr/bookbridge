@@ -2,11 +2,16 @@
 SQLAlchemy ORM models for abs-kosync-bridge database.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric
+import logging
+import os
+
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Numeric, Index
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -304,10 +309,12 @@ class PendingSuggestion(Base):
     matches_json = Column(Text)
     status = Column(String(20), default='pending')
     created_at = Column(DateTime, default=datetime.utcnow)
+    origin = Column(String(50), nullable=True, index=True)
+    origin_metadata_json = Column(Text, nullable=True)
 
     def __init__(self, source_id: str, title: str, author: str = None,
                  cover_url: str = None, matches_json: str = "[]", status: str = 'pending',
-                 source: str = None):
+                 source: str = None, origin: str = None, origin_metadata_json: str = None):
         self.source = source or 'abs'
         self.source_id = source_id
         self.title = title
@@ -316,6 +323,8 @@ class PendingSuggestion(Base):
         self.matches_json = matches_json
         self.status = status
         self.created_at = datetime.utcnow()
+        self.origin = origin
+        self.origin_metadata_json = origin_metadata_json
 
     @property
     def matches(self):
@@ -324,7 +333,15 @@ class PendingSuggestion(Base):
             return json.loads(self.matches_json) if self.matches_json else []
         except json.JSONDecodeError:
             return []
-    
+
+    @property
+    def origin_metadata(self):
+        import json
+        try:
+            return json.loads(self.origin_metadata_json) if self.origin_metadata_json else {}
+        except json.JSONDecodeError:
+            return {}
+
     @property
     def audiobook_count(self):
         """Count only audiobook matches, excluding ebook entries."""
@@ -332,6 +349,32 @@ class PendingSuggestion(Base):
 
     def __repr__(self):
         return f"<PendingSuggestion(id={self.id}, title='{self.title}', status='{self.status}')>"
+
+
+class ShelfWatchScan(Base):
+    """
+    Throttle / history row for the Grimmory "Up Next" shelf watcher.
+    One row per Grimmory book that has been considered for auto-matching.
+    """
+    __tablename__ = 'shelf_watch_scans'
+
+    grimmory_book_id = Column(String(255), primary_key=True)
+    grimmory_filename = Column(String(500), nullable=False)
+    last_scan_at = Column(DateTime, nullable=False, index=True)
+    last_top_score = Column(Float, nullable=True)
+    last_status = Column(String(50), nullable=True)
+
+    def __init__(self, grimmory_book_id: str, grimmory_filename: str,
+                 last_scan_at: datetime = None, last_top_score: float = None,
+                 last_status: str = None):
+        self.grimmory_book_id = grimmory_book_id
+        self.grimmory_filename = grimmory_filename
+        self.last_scan_at = last_scan_at or datetime.utcnow()
+        self.last_top_score = last_top_score
+        self.last_status = last_status
+
+    def __repr__(self):
+        return f"<ShelfWatchScan(book_id='{self.grimmory_book_id}', status='{self.last_status}')>"
 
 
 class Setting(Base):
@@ -361,13 +404,17 @@ class BookAlignment(Base):
     abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
     alignment_map_json = Column(Text, nullable=False)  # JSON-encoded list of dicts or optimized structure
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # How the map was built: 'lexical', 'llm_anchor', 'linear', 'storyteller',
+    # 'storyteller_linear'. NULL = pre-provenance (built before LLM alignment shipped).
+    align_method = Column(String(32), nullable=True)
 
     # Relationship
     book = relationship("Book", back_populates="alignment")
 
-    def __init__(self, abs_id: str, alignment_map_json: str):
+    def __init__(self, abs_id: str, alignment_map_json: str, align_method: str = None):
         self.abs_id = abs_id
         self.alignment_map_json = alignment_map_json
+        self.align_method = align_method
 
 
 class ReadingSession(Base):
@@ -462,6 +509,7 @@ class KOReaderPageStat(Base):
     page = Column(Integer, nullable=False)
     start_time = Column(Float, nullable=False, index=True)
     duration = Column(Float, nullable=False)
+    total_pages = Column(Integer, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     def __init__(
@@ -473,6 +521,7 @@ class KOReaderPageStat(Base):
         duration: float,
         device: str = None,
         device_id: str = None,
+        total_pages: int = None,
     ):
         self.md5 = md5
         self.device = device
@@ -481,6 +530,7 @@ class KOReaderPageStat(Base):
         self.page = page
         self.start_time = start_time
         self.duration = duration
+        self.total_pages = total_pages
         self.uploaded_at = datetime.utcnow()
 
 
@@ -512,28 +562,63 @@ class BookloreBook(Base):
         self.raw_metadata = raw_metadata
 
 
+class EmbeddingCache(Base):
+    """
+    Persistent cache of Ollama embeddings, keyed by (model, sha256 of the text).
+    Lets suggestion scans skip re-embedding unchanged library titles.
+    """
+    __tablename__ = 'embedding_cache'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model = Column(String(255), nullable=False)
+    text_hash = Column(String(64), nullable=False)
+    vector_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('ix_embedding_cache_model_hash', 'model', 'text_hash', unique=True),
+    )
+
+    def __init__(self, model: str, text_hash: str, vector_json: str):
+        self.model = model
+        self.text_hash = text_hash
+        self.vector_json = vector_json
+
+
 # Database configuration
 class DatabaseManager:
     """
     Database manager handling SQLAlchemy engine and session management.
     """
 
+    # WAL mode needs a shared-memory index (mmap) and proper byte-range locking.
+    # Network / passthrough filesystems don't provide them, and on those WAL
+    # silently breaks durability: the -wal/-shm sidecars never reach the backing
+    # store and the main db file is only updated by a checkpoint that never
+    # lands. Use a rollback journal there so each commit writes straight to the
+    # db file. 9p is the Docker Desktop (Windows/macOS) bind-mount filesystem.
+    _WAL_UNSAFE_FILESYSTEMS = {
+        "9p", "v9fs", "nfs", "nfs4", "cifs", "smb3", "smbfs",
+        "fuse", "fuseblk", "vboxsf", "drvfs", "msdos", "vfat", "exfat",
+    }
+
     def __init__(self, db_path: str):
-        import os
         self.db_path = os.path.abspath(db_path)
-        # Increase timeout to reduce lock errors, enable WAL mode for concurrency, allow multi-thread access
+        # Increase timeout to reduce lock errors, allow multi-thread access.
         # Using 4 slashes guarantees an absolute path in SQLAlchemy
         self.engine = create_engine(
-            f'sqlite:///{self.db_path}', 
-            echo=False, 
+            f'sqlite:///{self.db_path}',
+            echo=False,
             connect_args={'timeout': 30, 'check_same_thread': False}
         )
-        
+
+        journal_mode = self._resolve_journal_mode()
+
         from sqlalchemy import event
         @event.listens_for(self.engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA journal_mode={journal_mode}")
             cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.close()
 
@@ -541,6 +626,50 @@ class DatabaseManager:
 
         # Note: Schema creation is handled by Alembic migrations
         # No longer calling Base.metadata.create_all() here
+
+    def _resolve_journal_mode(self) -> str:
+        """Pick a SQLite journal mode safe for the db's filesystem.
+
+        Honors a `DB_JOURNAL_MODE` env override; otherwise uses WAL on local
+        filesystems and a DELETE rollback journal on filesystems that can't
+        support WAL (see `_WAL_UNSAFE_FILESYSTEMS`)."""
+        override = os.environ.get("DB_JOURNAL_MODE", "").strip().upper()
+        if override:
+            return override
+
+        fstype = self._filesystem_type_for_path(self.db_path)
+        if fstype and fstype.lower() in self._WAL_UNSAFE_FILESYSTEMS:
+            logger.warning(
+                "⚠️ Database '%s' is on a '%s' filesystem that does not support "
+                "SQLite WAL; using DELETE journal mode so writes persist.",
+                self.db_path, fstype,
+            )
+            return "DELETE"
+        return "WAL"
+
+    @staticmethod
+    def _filesystem_type_for_path(path: str) -> Optional[str]:
+        """Best-effort fstype of the mount containing `path` (Linux/proc)."""
+        try:
+            # `path` is already absolute (DatabaseManager stores an abspath);
+            # avoid re-running abspath so the matching is OS-independent.
+            target = path
+            best_mount = ""
+            best_fstype = None
+            with open("/proc/mounts", "r") as handle:
+                for line in handle:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    mount_point = parts[1].replace("\\040", " ")
+                    fstype = parts[2]
+                    if (target == mount_point or target.startswith(mount_point.rstrip("/") + "/")) \
+                            and len(mount_point) >= len(best_mount):
+                        best_mount = mount_point
+                        best_fstype = fstype
+            return best_fstype
+        except Exception:
+            return None
 
     def get_session(self):
         """Get a new database session."""

@@ -22,7 +22,7 @@ import schedule
 from dependency_injector import providers
 from flask import Flask, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response
 
-from src.utils.config_loader import ConfigLoader
+from src.utils.config_loader import ConfigLoader, env_truthy
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
@@ -295,6 +295,16 @@ def setup_dependencies(app, test_container=None):
 
     # Initialize manager and services
     manager = container.sync_manager()
+
+    # Wire the SuggestionsService factory into the shelf-watch singleton.
+    # web_server.py is the `__main__` entry point; if shelf_watch_service tried
+    # `from src.web_server import ...` it would create a second, uninitialized
+    # module instance (with container=None), so we inject the factory here.
+    try:
+        for _sw in container.shelf_watch_services():
+            _sw.set_suggestions_service_factory(_get_suggestions_service)
+    except Exception as e:
+        logger.warning(f"Could not wire shelf_watch_service suggestions factory: {e}")
 
     # Get data directories (now using updated env vars)
     DATA_DIR = container.data_dir()
@@ -648,15 +658,112 @@ def _is_storyteller_artifact_filename(filename):
     return bool(filename and re.match(r"^storyteller_[0-9a-fA-F-]+\.epub$", filename))
 
 
-def _download_storyteller_artifact(storyteller_uuid, abs_title=None):
-    """Download Storyteller artifact to epub cache; fall back to local library when available."""
+def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=None):
+    """Add a newly matched ebook to the Kobo shelf and clear it from the
+    shelf-watch "Up Next" shelf, on whichever library hosts the ebook.
+
+    Auto-matching moves a book Up Next -> Kobo, but approving a suggestion (or a
+    manual match) historically only added to Kobo and left the book sitting on Up
+    Next. Once the book is stored as a match it no longer belongs in the to-read
+    queue, so mirror the auto-match behaviour here. The Up Next removal is gated on
+    the shelf-watch feature being enabled to avoid touching shelves for users who
+    don't use it.
+    """
+    if not shelf_filename:
+        return
+
+    is_bookorbit = (ebook_source or "").strip().lower() == "bookorbit"
+    if is_bookorbit:
+        client = container.bookorbit_client()
+        kobo_shelf = (os.environ.get("BOOKORBIT_SHELF_NAME") or "Kobo").strip()
+        watch_enabled = str(os.environ.get("BOOKORBIT_SHELF_WATCH_ENABLED", "false")).strip().lower() in (
+            "true", "1", "yes", "on"
+        )
+        watch_shelf = (os.environ.get("BOOKORBIT_SHELF_WATCH_NAME") or "Up Next").strip()
+    else:
+        client = container.booklore_client()
+        kobo_shelf = BOOKLORE_SHELF_NAME
+        watch_enabled = str(os.environ.get("BOOKLORE_SHELF_WATCH_ENABLED", "false")).strip().lower() in (
+            "true", "1", "yes", "on"
+        )
+        watch_shelf = (os.environ.get("BOOKLORE_SHELF_WATCH_NAME") or "Up Next").strip()
+
+    if not client.is_configured():
+        return
+
+    # Prefer the known BookOrbit book id (filenames like "Title - Author.epub"
+    # don't reliably resolve via BookOrbit's title-based search).
+    use_id = is_bookorbit and ebook_source_id and hasattr(client, "add_book_id_to_shelf")
+    try:
+        if use_id:
+            client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
+        else:
+            client.add_to_shelf(shelf_filename, kobo_shelf)
+    except Exception as e:
+        logger.warning(
+            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}"
+        )
+
+    if watch_enabled and watch_shelf and watch_shelf != kobo_shelf:
+        try:
+            if use_id:
+                client.remove_book_id_from_shelf(ebook_source_id, watch_shelf)
+            else:
+                client.remove_from_shelf(shelf_filename, watch_shelf)
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Failed to remove '{sanitize_log_data(shelf_filename)}' from watch shelf '{watch_shelf}': {e}"
+            )
+
+
+def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original_ebook_filename=None):
+    """Resolve a Storyteller artifact path.
+
+    When ``STORYTELLER_NO_EPUB_CACHE`` is enabled and an original EPUB can be
+    located via ``EbookParser.resolve_book_path``, skip the API download and
+    return ``(original_name, original_path)``. Otherwise, download the
+    Storyteller ReadAloud EPUB into the epub cache as before, falling back to
+    a local ``STORYTELLER_LIBRARY_DIR`` copy on failure.
+
+    Returns ``(filename, Path)`` on success, ``(None, None)`` on failure.
+    """
     epub_cache = container.epub_cache_dir()
     epub_cache.mkdir(parents=True, exist_ok=True)
 
     artifact_filename = f"storyteller_{storyteller_uuid}.epub"
     target_path = epub_cache / artifact_filename
-    downloaded = False
 
+    no_epub_cache = env_truthy("STORYTELLER_NO_EPUB_CACHE")
+    if no_epub_cache and original_ebook_filename:
+        original_name = Path(str(original_ebook_filename)).name
+        nocache_candidates = [epub_cache / original_name]
+        try:
+            nocache_candidates.append(container.ebook_parser().resolve_book_path(original_name))
+        except Exception:
+            pass
+
+        resolved = None
+        for candidate in nocache_candidates:
+            try:
+                if candidate and Path(candidate).exists():
+                    resolved = Path(candidate)
+                    break
+            except Exception:
+                continue
+
+        if resolved:
+            logger.info(
+                "📦 Storyteller download: STORYTELLER_NO_EPUB_CACHE=true; using original EPUB '%s'",
+                resolved.name,
+            )
+            return resolved.name, resolved
+        logger.warning(
+            "📦 Storyteller download: STORYTELLER_NO_EPUB_CACHE=true but no original EPUB found "
+            "for '%s'; falling back to Storyteller ReadAloud download",
+            original_name,
+        )
+
+    downloaded = False
     try:
         downloaded = container.storyteller_client().download_book(storyteller_uuid, target_path)
     except Exception as dl_err:
@@ -739,7 +846,11 @@ def _upsert_storyteller_mapping(
     resolved_ebook_filename = selected_ebook_filename or (target_book.ebook_filename if target_book else None)
 
     if selected_storyteller_uuid:
-        artifact_filename, _artifact_path = _download_storyteller_artifact(selected_storyteller_uuid, abs_title)
+        artifact_filename, _artifact_path = _download_storyteller_artifact(
+            selected_storyteller_uuid,
+            abs_title,
+            original_ebook_filename=original_ebook_filename,
+        )
         if not artifact_filename:
             return None, "Failed to download Storyteller artifact", 500
         resolved_ebook_filename = artifact_filename
@@ -1001,13 +1112,16 @@ def get_searchable_audiobooks(search_term):
     adapters = container.audio_source_adapters() if hasattr(container, "audio_source_adapters") else {}
     results = []
     seen = set()
+    per_adapter_counts = {}
 
     for source_name, adapter in adapters.items():
         try:
             provider_results = adapter.search(search_term)
         except Exception as e:
             logger.warning(f"⚠️ Audiobook search failed for {source_name}: {e}")
+            per_adapter_counts[source_name] = f"error:{type(e).__name__}"
             continue
+        per_adapter_counts[source_name] = len(provider_results) if provider_results else 0
 
         for result in provider_results or []:
             if not isinstance(result, AudioResult):
@@ -1019,7 +1133,78 @@ def get_searchable_audiobooks(search_term):
             results.append(result)
 
     results.sort(key=lambda item: (item.title or item.display_name or "").lower())
+    logger.debug(
+        "get_searchable_audiobooks(query=%r): adapters=%s, deduped_total=%d",
+        search_term, per_adapter_counts, len(results),
+    )
     return results
+
+
+def _audiobook_search_variants(term):
+    """Progressive query relaxations for a (possibly filename-derived) term.
+
+    Yields the raw term, then with the file extension and a trailing "(year)"
+    removed, then just the title before " - <author>". ABS title search is strict,
+    so reviewing a suggestion whose title is a filename stem
+    ("Title - Author (2026)") needs the bare title to match.
+    """
+    term = (term or "").strip()
+    variants = []
+
+    def _add(value):
+        value = (value or "").strip()
+        if value and value not in variants:
+            variants.append(value)
+
+    _add(term)
+    no_ext = re.sub(r'\.(epub|pdf|mobi|azw3?|cbz|cbr|m4b|mp3)$', '', term, flags=re.IGNORECASE)
+    no_year = re.sub(r'\s*\((?:19|20)\d{2}\)\s*$', '', no_ext).strip()
+    _add(no_year)
+    if ' - ' in no_year:
+        _add(no_year.split(' - ')[0])
+    return variants
+
+
+def _search_audiobooks_with_fallback(term):
+    """Search audiobooks, relaxing a filename-style term until something matches."""
+    results = []
+    for index, variant in enumerate(_audiobook_search_variants(term)):
+        results = get_searchable_audiobooks(variant)
+        if results:
+            if index > 0:
+                logger.debug("Audiobook search matched on relaxed term %r (from %r)", variant, term)
+            break
+    return results
+
+
+def _ebook_is_provider(ebook):
+    """True for a library-backed ebook (BookOrbit/Grimmory/ABS/CWA), not a bare file."""
+    return bool(getattr(ebook, "source", None) and getattr(ebook, "source", None) != "Local File")
+
+
+def _search_ebooks_with_fallback(term):
+    """Search ebooks across the raw + relaxed terms and merge.
+
+    The library providers (BookOrbit/Grimmory) use strict title search, so a
+    filename-stem term ("Title - Author (2026)") only matches the local file. The
+    relaxed title lets the provider match; results are deduped by filename with the
+    provider entry preferred over the bare local file so the picker offers the
+    library copy (whose progress actually syncs).
+    """
+    by_name = {}
+    order = []
+    for variant in _audiobook_search_variants(term):
+        for ebook in get_searchable_ebooks(variant):
+            key = (getattr(ebook, "name", "") or "").lower()
+            if not key:
+                continue
+            existing = by_name.get(key)
+            if existing is None:
+                by_name[key] = ebook
+                order.append(key)
+            elif _ebook_is_provider(ebook) and not _ebook_is_provider(existing):
+                by_name[key] = ebook  # upgrade a local-file hit to the library copy
+    return [by_name[key] for key in order]
 
 
 def get_suggestion_audiobooks():
@@ -1062,8 +1247,34 @@ def get_suggestion_audiobooks():
     return records
 
 
+def _ebook_title_key(value):
+    """Normalize a title/filename-stem to an alphanumeric key for joining."""
+    return re.sub(r'[\W_]+', '', (value or '').lower())
+
+
+def _build_local_ebook_title_index():
+    """Map normalized title -> filename for every epub on the local /books disk.
+
+    BookBridge and BookOrbit share the same files, so this lets us pair
+    BookOrbit's clean metadata (title/author, no filename) with real filenames
+    without a per-book BookOrbit detail call. Indexes both the full stem and the
+    'Title' portion before ' - ' (filenames are 'Title - Author (year).epub')."""
+    index = {}
+    try:
+        if EBOOK_DIR.exists():
+            for eb in EBOOK_DIR.glob("**/*.epub"):
+                stem = eb.stem
+                title_part = stem.split(" - ", 1)[0]
+                for key in (_ebook_title_key(title_part), _ebook_title_key(stem)):
+                    if key:
+                        index.setdefault(key, eb.name)
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to build local ebook title index: {e}")
+    return index
+
+
 def get_searchable_ebooks(search_term):
-    """Get ebooks from Grimmory API, filesystem, ABS, and CWA.
+    """Get ebooks from Grimmory API, BookOrbit, filesystem, ABS, and CWA.
     Returns list of EbookResult objects for consistent interface."""
 
     results = []
@@ -1095,6 +1306,39 @@ def get_searchable_ebooks(search_term):
                         ))
         except Exception as e:
             logger.warning(f"⚠️ Grimmory search failed: {e}")
+
+    # 1b. BookOrbit
+    if container.bookorbit_client().is_configured():
+        try:
+            if search_term:
+                # Targeted search returns real filenames (bounded result set).
+                bo_books = container.bookorbit_client().search_ebooks(search_term)
+                local_index = None
+            else:
+                # Full scan: light candidates (clean title/author, no filename).
+                # Pair each with a real filename from the shared /books disk so we
+                # avoid a throttled detail call per book.
+                bo_books = container.bookorbit_client().get_all_ebooks()
+                local_index = _build_local_ebook_title_index()
+            for b in bo_books or []:
+                fname = b.get('fileName') or ''
+                if not fname and local_index is not None:
+                    fname = local_index.get(_ebook_title_key(b.get('title'))) or ''
+                if not fname.lower().endswith('.epub'):
+                    continue
+                if fname.lower() in found_filenames:
+                    continue
+                found_filenames.add(fname.lower())
+                found_stems.add(Path(fname).stem.lower())
+                results.append(EbookResult(
+                    name=fname,
+                    title=b.get('title'),
+                    authors=b.get('authors'),
+                    source='BookOrbit',
+                    source_id=b.get('id'),
+                ))
+        except Exception as e:
+            logger.warning(f"⚠️ BookOrbit search failed: {e}")
 
     # 2. ABS ebook libraries
     if search_term:
@@ -1238,6 +1482,7 @@ def _normalize_text_source_type(raw_source):
     source_map = {
         "booklore": "Booklore",
         "grimmory": "Booklore",
+        "bookorbit": "BookOrbit",
         "abs": "ABS",
         "cwa": "CWA",
         "local file": "Local File",
@@ -1254,8 +1499,10 @@ def _build_forge_text_item(source_type, source_id, source_path, original_filenam
         "source": normalized_source,
         "path": normalized_source_path,
         "booklore_id": normalized_source_id,
+        "bookorbit_id": normalized_source_id,
         "cwa_id": normalized_source_id,
         "abs_id": normalized_source_id,
+        "source_id": normalized_source_id,
         "filename": original_filename,
     }
 
@@ -1263,6 +1510,8 @@ def _build_forge_text_item(source_type, source_id, source_path, original_filenam
         text_item["abs_id"] = normalized_source_id
     if normalized_source == "Booklore":
         text_item["booklore_id"] = normalized_source_id
+    if normalized_source == "BookOrbit":
+        text_item["bookorbit_id"] = normalized_source_id
     if normalized_source == "CWA":
         text_item["cwa_id"] = normalized_source_id
         if normalized_source_path:
@@ -1307,7 +1556,11 @@ def _create_or_update_booklore_audio_mapping(
         original_ebook_filename = existing_book.original_ebook_filename
 
     if storyteller_uuid:
-        artifact_filename, _artifact_path = _download_storyteller_artifact(storyteller_uuid, audio_title)
+        artifact_filename, _artifact_path = _download_storyteller_artifact(
+            storyteller_uuid,
+            audio_title,
+            original_ebook_filename=original_ebook_filename,
+        )
         if not artifact_filename:
             return None, "Failed to download Storyteller artifact", 500
         resolved_ebook_filename = artifact_filename
@@ -1451,6 +1704,7 @@ def settings():
     if request.method == 'POST':
         bool_keys = [
             'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
+            'KOSYNC_AUTO_MAP_ON_AGREEMENT',
             'SYNC_ABS_EBOOK',
             'XPATH_FALLBACK_TO_PREVIOUS_SEGMENT',
             'KOSYNC_ENABLED',
@@ -1466,7 +1720,25 @@ def settings():
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
+            'STORYTELLER_POLL_WAIT_FOR_SETTLE',
+            'STORYTELLER_LISTENING_SESSIONS',
+            'STORYTELLER_NO_EPUB_CACHE',
+            'BOOKLORE_SHELF_WATCH_ENABLED',
+            'BOOKORBIT_ENABLED',
+            'BOOKORBIT_READING_SESSIONS',
+            'BOOKORBIT_SHELF_WATCH_ENABLED',
+            'CALIBRE_USE_ABS_IDENTIFIER',
             'SHELFMARK_ENABLED',
+            'OLLAMA_ENABLED',
+            'OLLAMA_RERANK_SUGGESTIONS',
+            'OLLAMA_JUDGE_SUGGESTIONS',
+            'OLLAMA_ALIGN_FALLBACK',
+            'OLLAMA_ALIGN_ANCHOR_RESCUE',
+            'OLLAMA_ALIGN_CONTENT_GUARD',
+            'OLLAMA_SUGGEST_JUDGE_GATE',
+            'OLLAMA_TRACKER_MATCH',
+            'OLLAMA_LIBRARY_MATCH',
+            'OLLAMA_EBOOK_TEXT_FALLBACK',
         ]
 
         # Current settings in DB
@@ -1984,6 +2256,9 @@ def _get_dashboard_sync_warning_clients(mapping, integrations):
     if integrations.get('bookloreaudio') and mapping.get('audio_source') == 'BookLore':
         client_names.append('bookloreaudio')
 
+    if integrations.get('bookorbitaudio') and mapping.get('audio_source') == 'BookOrbit':
+        client_names.append('bookorbitaudio')
+
     if integrations.get('kosync'):
         client_names.append('kosync')
 
@@ -2000,7 +2275,56 @@ def _get_dashboard_sync_warning_clients(mapping, integrations):
     ):
         client_names.append('booklore')
 
+    if integrations.get('bookorbit') and (
+        mapping.get('ebook_source') == 'BookOrbit'
+        or 'bookorbit' in mapping.get('states', {})
+    ):
+        client_names.append('bookorbit')
+
     return client_names
+
+
+# Clients that report progress on the audio-time axis (elapsed seconds /
+# duration) rather than the ebook-text axis (characters / total). Their raw
+# percentage is not directly comparable to ebook clients, so it is mapped onto
+# the text axis via the alignment map before the drift comparison.
+_AUDIO_AXIS_SYNC_CLIENTS = {'abs', 'bookloreaudio', 'bookorbitaudio'}
+
+
+def _dashboard_text_axis_pct(client_name, state, mapping):
+    """Return a client's progress as an ebook text-axis percentage (0-100).
+
+    Ebook clients already report on the text axis. Audio clients report on the
+    time axis; convert their timestamp to a text fraction via the book's
+    alignment map so the two are comparable. Falls back to the raw percentage
+    when no alignment map is available (e.g. audio-only books)."""
+    percentage = state.get('percentage')
+    if percentage is None:
+        return None
+
+    if client_name not in _AUDIO_AXIS_SYNC_CLIENTS:
+        return float(percentage)
+
+    alignment_service = getattr(manager, "alignment_service", None) if manager else None
+    if not alignment_service:
+        return float(percentage)
+
+    timestamp = state.get('timestamp') or 0
+    if timestamp <= 0:
+        duration = mapping.get('duration') or 0
+        if duration > 0:
+            timestamp = (float(percentage) / 100.0) * duration
+    if timestamp <= 0:
+        return float(percentage)
+
+    try:
+        text_fraction = alignment_service.get_progress_for_time(mapping.get('abs_id'), float(timestamp))
+    except Exception:
+        text_fraction = None
+
+    if not isinstance(text_fraction, (int, float)) or isinstance(text_fraction, bool):
+        return float(percentage)
+    return text_fraction * 100.0
 
 
 def _compute_dashboard_sync_warning_pct(mapping, integrations):
@@ -2011,15 +2335,35 @@ def _compute_dashboard_sync_warning_pct(mapping, integrations):
         state = states.get(client_name)
         if not state:
             continue
-        percentage = state.get('percentage')
-        if percentage is None or percentage <= 0:
+        raw = state.get('percentage')
+        if raw is None or raw <= 0:
             continue
-        progress_values.append(float(percentage))
+        value = _dashboard_text_axis_pct(client_name, state, mapping)
+        if value is None:
+            continue
+        progress_values.append(value)
 
     if len(progress_values) < 2:
         return 0.0
 
     return round(max(progress_values) - min(progress_values), 1)
+
+
+def _shelf_watch_clients_for(meta: dict):
+    """Resolve (library_client, watch_shelf, kobo_shelf) for a shelf-watch
+    suggestion based on its origin source (Grimmory vs BookOrbit)."""
+    source = (meta or {}).get('source_name') or 'BookLore'
+    if source == 'BookOrbit':
+        return (
+            container.bookorbit_client(),
+            os.environ.get('BOOKORBIT_SHELF_WATCH_NAME', 'Up Next'),
+            os.environ.get('BOOKORBIT_SHELF_NAME', 'Kobo'),
+        )
+    return (
+        container.booklore_client(),
+        os.environ.get('BOOKLORE_SHELF_WATCH_NAME', 'Up Next'),
+        os.environ.get('BOOKLORE_SHELF_NAME', 'Kobo'),
+    )
 
 
 def _format_dashboard_last_sync(latest_update_time):
@@ -2092,6 +2436,8 @@ def _build_dashboard_mapping(
         "audio_duration": getattr(book, "audio_duration", None) or book.duration or 0,
         "audio_cover_url": getattr(book, "audio_cover_url", None),
         "ebook_filename": book.ebook_filename,
+        "ebook_source": getattr(book, "ebook_source", None),
+        "ebook_source_id": getattr(book, "ebook_source_id", None),
         "kosync_doc_id": book.kosync_doc_id,
         "transcript_file": book.transcript_file,
         "status": book.status,
@@ -2203,6 +2549,17 @@ def _build_dashboard_mapping(
         mapping["booklore_url"] = f"{manager.booklore_client.base_url}/book/{mapping['booklore_id']}?tab=view"
     else:
         mapping["booklore_url"] = None
+
+    # BookOrbit deep links — frontend book route is /book/:bookId.
+    _bo_base = (os.environ.get("BOOKORBIT_SERVER") or "").rstrip("/")
+    if _bo_base and mapping.get("ebook_source") == "BookOrbit" and mapping.get("ebook_source_id"):
+        mapping["bookorbit_url"] = f"{_bo_base}/book/{mapping['ebook_source_id']}"
+    else:
+        mapping["bookorbit_url"] = None
+    if _bo_base and mapping.get("audio_source") == "BookOrbit" and mapping.get("audio_source_id"):
+        mapping["bookorbit_audio_url"] = f"{_bo_base}/book/{mapping['audio_source_id']}"
+    else:
+        mapping["bookorbit_audio_url"] = None
 
     mapping.update({
         "goodreads_rating": None,
@@ -2494,7 +2851,33 @@ def forge_search_text():
         except Exception as e:
             logger.warning(f"⚠️ Forge: Grimmory search failed: {e}")
 
-    # 2. ABS Ebooks
+    # 2. BookOrbit
+    try:
+        bookorbit_client = container.bookorbit_client()
+        if bookorbit_client and bookorbit_client.is_configured():
+            bo_books = bookorbit_client.search_ebooks(query)
+            if bo_books:
+                for b in bo_books:
+                    fname = b.get('fileName') or ''
+                    ext = (b.get('primaryFormat') or Path(fname).suffix.lstrip('.') or 'epub').lower()
+                    if ext != 'epub' and fname and not fname.lower().endswith('.epub'):
+                        continue
+                    key = f"bookorbit_{b.get('id', fname)}"
+                    if key not in found_ids:
+                        found_ids.add(key)
+                        results.append({
+                            "id": key,
+                            "title": b.get('title', fname or 'Unknown'),
+                            "author": _coerce_author_display(b.get('authors')),
+                            "source": "BookOrbit",
+                            "filename": fname,
+                            "bookorbit_id": b.get('id'),
+                            "source_id": b.get('id'),
+                        })
+    except Exception as e:
+        logger.warning(f"⚠️ Forge: BookOrbit search failed: {e}")
+
+    # 3. ABS Ebooks
     try:
         abs_client = container.abs_client()
         if abs_client:
@@ -2518,7 +2901,7 @@ def forge_search_text():
     except Exception as e:
         logger.warning(f"⚠️ Forge: ABS ebook search failed: {e}")
 
-    # 3. CWA
+    # 4. CWA
     try:
         library_service = container.library_service()
         if library_service and library_service.cwa_client and library_service.cwa_client.is_configured():
@@ -2540,7 +2923,7 @@ def forge_search_text():
     except Exception as e:
         logger.warning(f"⚠️ Forge: CWA search failed: {e}")
 
-    # 4. Local files from BOOKS_DIR
+    # 5. Local files from BOOKS_DIR
     try:
         local_books_dir = Path(os.environ.get("BOOKS_DIR", "/books"))
         if local_books_dir.exists():
@@ -2652,6 +3035,48 @@ def forge_process():
         "title": title,
         "author": author,
     }), 202
+
+
+def alignments_llm_status():
+    """API: Report how each stored alignment map was built (which used the LLM)."""
+    try:
+        # Self-heal legacy maps: classify NULL provenance by map shape (no re-transcription)
+        # so the report and the re-align target list are accurate.
+        database_service.backfill_alignment_methods()
+        return jsonify(database_service.get_alignment_provenance())
+    except Exception as e:
+        logger.error(f"❌ Failed to read alignment provenance: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+def alignments_realign():
+    """API: Queue alignment maps for re-processing under the LLM-enabled pipeline.
+
+    Body: {"abs_id": "..."} for one book, or {"scope": "all_non_llm"} to queue every
+    pre-LLM/linear map. Sets the books' status to 'pending' so the forge pipeline
+    rebuilds them on the next cycle.
+    """
+    data = request.get_json(silent=True) or {}
+    abs_id = (data.get("abs_id") or "").strip()
+    scope = (data.get("scope") or "").strip()
+
+    try:
+        if abs_id:
+            targets = [abs_id]
+        elif scope == "all_non_llm":
+            targets = database_service.get_books_needing_llm_realign()
+        else:
+            return jsonify({"error": "Provide 'abs_id' or scope 'all_non_llm'"}), 400
+
+        queued = 0
+        for target in targets:
+            if database_service.set_book_status(target, "pending"):
+                queued += 1
+        logger.info(f"🔁 Re-align queued {queued} book(s) (scope='{scope or 'single'}')")
+        return jsonify({"queued": queued})
+    except Exception as e:
+        logger.error(f"❌ Failed to queue re-align: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 def match():
@@ -2779,6 +3204,8 @@ def match():
                     audio_title=forge_title,
                     audio_cover_url=audio_cover_url,
                     audio_duration=audio_duration,
+                    ebook_source=normalized_source_type or None,
+                    ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
 
@@ -2802,7 +3229,9 @@ def match():
                     original_ebook_filename=original_filename,
                     kosync_doc_id=kosync_doc_id or f"forging_{abs_id}",
                     status="forging",
-                    duration=manager.get_duration(selected_ab)
+                    duration=manager.get_duration(selected_ab),
+                    ebook_source=normalized_source_type or None,
+                    ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
 
@@ -2838,7 +3267,11 @@ def match():
             # If Storyteller UUID is selected, we prioritize it
             try:
                 logger.info(f"🔍 Using Storyteller Artifact: '{storyteller_uuid}'")
-                target_filename, _target_path = _download_storyteller_artifact(storyteller_uuid, abs_title)
+                target_filename, _target_path = _download_storyteller_artifact(
+                    storyteller_uuid,
+                    abs_title,
+                    original_ebook_filename=selected_filename,
+                )
                 if not target_filename:
                     return "Failed to download Storyteller artifact", 500
 
@@ -2976,11 +3409,11 @@ def match():
 
         if not str(abs_id).startswith('booklore:'):
             container.abs_client().add_to_collection(abs_id, ABS_COLLECTION_NAME)
-        if container.booklore_client().is_configured():
-            # Use original filename for shelf if we switched to storyteller
-            shelf_filename = original_ebook_filename or ebook_filename
-            if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
-                container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+        # Use original filename for shelf if we switched to storyteller
+        shelf_filename = original_ebook_filename or ebook_filename
+        if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
+            _shelve_matched_ebook(shelf_filename, getattr(book, "ebook_source", None),
+                                  getattr(book, "ebook_source_id", None))
         if container.storyteller_client().is_configured():
             if book.storyteller_uuid:
                 container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
@@ -3004,10 +3437,10 @@ def match():
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
     if search:
-        audiobooks = get_searchable_audiobooks(search)
+        audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
-        ebooks = get_searchable_ebooks(search)
+        ebooks = _search_ebooks_with_fallback(search)
         ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
 
         # Search Storyteller
@@ -3127,20 +3560,18 @@ def batch_match():
                     kosync_doc_id = None
 
                     try:
-                        epub_cache = container.epub_cache_dir()
-                        if not epub_cache.exists():
-                            epub_cache.mkdir(parents=True, exist_ok=True)
-
-                        target_filename = f"storyteller_{storyteller_uuid}.epub"
-                        target_path = epub_cache / target_filename
-
                         logger.info(
                             "Batch Forge: Using Storyteller Artifact '%s' for '%s'",
                             sanitize_log_data(storyteller_uuid),
                             sanitize_log_data(item.get('abs_title')),
                         )
 
-                        if container.storyteller_client().download_book(storyteller_uuid, target_path):
+                        target_filename, _target_path = _download_storyteller_artifact(
+                            storyteller_uuid,
+                            item.get('abs_title'),
+                            original_ebook_filename=ebook_filename,
+                        )
+                        if target_filename:
                             original_ebook_filename = ebook_filename
                             ebook_filename = target_filename
 
@@ -3151,7 +3582,7 @@ def batch_match():
                             )
                         else:
                             logger.warning(
-                                "Batch Forge: Failed to download Storyteller artifact '%s' for '%s', skipping",
+                                "Batch Forge: Failed to obtain Storyteller artifact '%s' for '%s', skipping",
                                 sanitize_log_data(storyteller_uuid),
                                 sanitize_log_data(item.get('abs_title')),
                             )
@@ -3219,7 +3650,7 @@ def batch_match():
                         container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
                     if container.booklore_client().is_configured():
                         shelf_filename = original_ebook_filename or ebook_filename
-                        container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+                        _shelve_matched_ebook(shelf_filename)
                     if container.storyteller_client().is_configured() and book.storyteller_uuid:
                         container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
 
@@ -3255,7 +3686,7 @@ def batch_match():
                     resolved_path = find_ebook_file(original_filename)
                     source_path = str(resolved_path) if resolved_path else ''
 
-                if source_type in ('ABS', 'Booklore', 'CWA') and not source_id:
+                if source_type in ('ABS', 'Booklore', 'BookOrbit', 'CWA') and not source_id:
                     logger.warning(
                         "Batch Forge skipped '%s': missing source id for source type '%s'",
                         sanitize_log_data(item.get('audio_title') or item.get('abs_title') or item.get('abs_id')),
@@ -3405,17 +3836,16 @@ def batch_match():
                 if storyteller_uuid:
                     # Storyteller Tri-Link Logic (mirrors match POST handler)
                     try:
-                        epub_cache = container.epub_cache_dir()
-                        if not epub_cache.exists(): epub_cache.mkdir(parents=True, exist_ok=True)
-
-                        target_filename = f"storyteller_{storyteller_uuid}.epub"
-                        target_path = epub_cache / target_filename
-
                         logger.info(f"🔍 Batch Match: Using Storyteller Artifact '{storyteller_uuid}' for '{item['abs_title']}'")
 
-                        if container.storyteller_client().download_book(storyteller_uuid, target_path):
+                        target_filename, _target_path = _download_storyteller_artifact(
+                            storyteller_uuid,
+                            item.get('abs_title'),
+                            original_ebook_filename=ebook_filename,
+                        )
+                        if target_filename:
                             original_ebook_filename = ebook_filename  # Preserve original (may be empty for storyteller-only)
-                            ebook_filename = target_filename  # Override filename to cached artifact
+                            ebook_filename = target_filename  # Override filename (artifact or original under NO_EPUB_CACHE)
 
                             kosync_doc_id = _compute_storyteller_trilink_kosync_id(
                                 original_ebook_filename,
@@ -3423,7 +3853,7 @@ def batch_match():
                                 "Batch Match Tri-Link",
                             )
                         else:
-                            logger.warning(f"⚠️ Failed to download Storyteller artifact '{storyteller_uuid}' for '{item['abs_title']}', skipping")
+                            logger.warning(f"⚠️ Failed to obtain Storyteller artifact '{storyteller_uuid}' for '{item['abs_title']}', skipping")
                             continue
                     except Exception as e:
                         logger.error(f"❌ Storyteller Tri-Link failed for '{item['abs_title']}': {e}")
@@ -3493,9 +3923,10 @@ def batch_match():
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
-                if container.booklore_client().is_configured():
-                    shelf_filename = original_ebook_filename or ebook_filename
-                    container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
+                shelf_filename = original_ebook_filename or ebook_filename
+                if shelf_filename:
+                    _shelve_matched_ebook(shelf_filename, item.get('ebook_source'),
+                                          item.get('ebook_source_id'))
                 if container.storyteller_client().is_configured():
                     if book.storyteller_uuid:
                         container.storyteller_client().add_to_collection_by_uuid(book.storyteller_uuid)
@@ -3518,10 +3949,10 @@ def batch_match():
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
     if search:
-        audiobooks = get_searchable_audiobooks(search)
+        audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
-        ebooks = get_searchable_ebooks(search)
+        ebooks = _search_ebooks_with_fallback(search)
         ebooks.sort(key=lambda x: x.name.lower())
         ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
 
@@ -3544,6 +3975,11 @@ def _get_suggestions_service():
     except Exception:
         calibre_resolver = None
 
+    try:
+        ollama_client = container.ollama_client()
+    except Exception:
+        ollama_client = None
+
     return SuggestionsService(
         database_service=database_service,
         container=container,
@@ -3554,6 +3990,7 @@ def _get_suggestions_service():
         get_abs_author=get_abs_author,
         logger=logger,
         calibre_identifier_resolver=calibre_resolver,
+        ollama_client=ollama_client,
     )
 
 
@@ -4008,6 +4445,26 @@ def suggestions_page():
                             sanitize_log_data(item.get('audio_title') or item.get('audio_source_id')),
                             err_msg,
                         )
+                    elif saved_book:
+                        # Approving a shelf-watch suggestion needs the Up Next
+                        # leg of the shelf move; _create_or_update_booklore_audio_mapping
+                        # only adds to Kobo, it does not remove from Up Next.
+                        try:
+                            sw_pending = database_service.get_pending_suggestion(item.get('audio_source_id') or saved_book.abs_id)
+                        except Exception:
+                            sw_pending = None
+                        if (
+                            sw_pending
+                            and getattr(sw_pending, 'origin', None) == 'shelf_watch'
+                        ):
+                            try:
+                                meta = sw_pending.origin_metadata or {}
+                                lib_client, watch_shelf, _kobo = _shelf_watch_clients_for(meta)
+                                grimmory_filename = meta.get('grimmory_filename')
+                                if grimmory_filename and lib_client and lib_client.is_configured():
+                                    lib_client.remove_from_shelf(grimmory_filename, watch_shelf)
+                            except Exception as bl_err:
+                                logger.warning(f"Shelf-watch approval Up Next removal failed: {bl_err}")
                     continue
 
                 ebook_filename = item['ebook_filename']
@@ -4020,16 +4477,14 @@ def suggestions_page():
                 if storyteller_uuid:
                     # Storyteller Tri-Link Logic (mirrors match POST handler)
                     try:
-                        epub_cache = container.epub_cache_dir()
-                        if not epub_cache.exists():
-                            epub_cache.mkdir(parents=True, exist_ok=True)
-
-                        target_filename = f"storyteller_{storyteller_uuid}.epub"
-                        target_path = epub_cache / target_filename
-
                         logger.info(f"Batch Match: Using Storyteller Artifact '{storyteller_uuid}' for '{item['abs_title']}'")
 
-                        if container.storyteller_client().download_book(storyteller_uuid, target_path):
+                        target_filename, _target_path = _download_storyteller_artifact(
+                            storyteller_uuid,
+                            item.get('abs_title'),
+                            original_ebook_filename=ebook_filename,
+                        )
+                        if target_filename:
                             original_ebook_filename = ebook_filename
                             ebook_filename = target_filename
 
@@ -4039,7 +4494,7 @@ def suggestions_page():
                                 "Batch Match Tri-Link",
                             )
                         else:
-                            logger.warning(f"Failed to download Storyteller artifact '{storyteller_uuid}' for '{item['abs_title']}', skipping")
+                            logger.warning(f"Failed to obtain Storyteller artifact '{storyteller_uuid}' for '{item['abs_title']}', skipping")
                             continue
                     except Exception as e:
                         logger.error(f"Storyteller Tri-Link failed for '{item['abs_title']}': {e}")
@@ -4103,7 +4558,32 @@ def suggestions_page():
 
                 if not str(item['abs_id']).startswith('booklore:'):
                     container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
-                if container.booklore_client().is_configured():
+
+                # If this suggestion originated from the shelf-watch flow, do a full
+                # shelf MOVE (Up Next -> Kobo) rather than just an add. The origin
+                # metadata carries the Grimmory filename which is the canonical key
+                # for shelf operations even if the user picked a different ebook
+                # source during approval.
+                shelf_watch_pending = None
+                try:
+                    shelf_watch_pending = database_service.get_pending_suggestion(item['abs_id'])
+                except Exception:
+                    shelf_watch_pending = None
+                if (
+                    shelf_watch_pending
+                    and getattr(shelf_watch_pending, 'origin', None) == 'shelf_watch'
+                ):
+                    try:
+                        meta = shelf_watch_pending.origin_metadata or {}
+                        lib_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
+                        grimmory_filename = meta.get('grimmory_filename')
+                        if grimmory_filename and lib_client and lib_client.is_configured():
+                            lib_client.move_between_shelves(
+                                grimmory_filename, watch_shelf, kobo_shelf,
+                            )
+                    except Exception as bl_err:
+                        logger.warning(f"Shelf-watch approval move failed: {bl_err}")
+                elif container.booklore_client().is_configured():
                     shelf_filename = original_ebook_filename or ebook_filename
                     container.booklore_client().add_to_shelf(shelf_filename, BOOKLORE_SHELF_NAME)
                 if container.storyteller_client().is_configured():
@@ -4412,13 +4892,26 @@ def cleanup_mapping_resources(book):
         except Exception as e:
             logger.warning(f"Failed to remove from Storyteller collection: {e}")
 
-    if book.ebook_filename and container.booklore_client().is_configured():
-        shelf_name = os.environ.get('BOOKLORE_SHELF_NAME', 'Kobo')
+    if book.ebook_filename:
+        shelf_filename = book.original_ebook_filename or book.ebook_filename
+        is_bookorbit = (getattr(book, 'ebook_source', None) or '').strip().lower() == 'bookorbit'
         try:
-            shelf_filename = book.original_ebook_filename or book.ebook_filename
-            container.booklore_client().remove_from_shelf(shelf_filename, shelf_name)
+            if is_bookorbit:
+                client = container.bookorbit_client()
+                if client.is_configured():
+                    shelf_name = (os.environ.get('BOOKORBIT_SHELF_NAME') or 'Kobo').strip()
+                    ebook_source_id = getattr(book, 'ebook_source_id', None)
+                    if ebook_source_id and hasattr(client, 'remove_book_id_from_shelf'):
+                        client.remove_book_id_from_shelf(ebook_source_id, shelf_name)
+                    else:
+                        client.remove_from_shelf(shelf_filename, shelf_name)
+            else:
+                client = container.booklore_client()
+                if client.is_configured():
+                    shelf_name = os.environ.get('BOOKLORE_SHELF_NAME', 'Kobo')
+                    client.remove_from_shelf(shelf_filename, shelf_name)
         except Exception as e:
-            logger.warning(f"⚠️ Failed to remove from Grimmory shelf: {e}")
+            logger.warning(f"⚠️ Failed to remove from {'BookOrbit' if is_bookorbit else 'Grimmory'} shelf: {e}")
 
 
 def delete_mapping(abs_id):
@@ -4801,6 +5294,74 @@ def _normalize_listening_session(session_data):
     }
 
 
+def _years_from_days(all_days):
+    years = set()
+    for key in (all_days or {}):
+        try:
+            years.add(int(str(key).split("-")[0]))
+        except (IndexError, ValueError):
+            pass
+    return sorted(years)
+
+
+def _build_listening_yearly_recap(all_days, year, items_finished):
+    """Year-in-review for listening: monthly hours from the ABS daily map.
+
+    Per-month 'finished' is not available at daily granularity (would need an extra
+    ABS media-progress call), so finishedBooks stays empty and booksFinished reflects
+    the all-time items count for context only.
+    """
+    months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+    total_seconds = 0
+    for key, value in (all_days or {}).items():
+        date_str = str(key)
+        if not date_str.startswith(f"{year}-"):
+            continue
+        try:
+            month_index = int(date_str.split("-")[1]) - 1
+        except (IndexError, ValueError):
+            continue
+        seconds = int(round(float(value or 0)))
+        months[month_index]["seconds"] += seconds
+        total_seconds += seconds
+    return {
+        "year": year,
+        "months": months,
+        "totalSeconds": total_seconds,
+        "totalPages": 0,
+        "booksFinished": int(items_finished or 0),
+        "finishedBooks": [],
+        "availableYears": _years_from_days(all_days),
+    }
+
+
+def _build_listening_book_list():
+    """Per-audiobook rollup from the bridge's own AUDIOBOOK reading sessions."""
+    stats_by_id = database_service.get_all_reading_stats()
+    if not stats_by_id:
+        return []
+    books = {book.abs_id: book for book in database_service.get_all_books()}
+    result = []
+    for abs_id, stats in stats_by_id.items():
+        listen_seconds = int(stats.get("listen_seconds") or 0)
+        if listen_seconds <= 0:
+            continue
+        book = books.get(abs_id)
+        result.append({
+            "bookKey": f"abs:{abs_id}",
+            "absId": abs_id,
+            "isLinked": True,
+            "title": getattr(book, "abs_title", None) or "Unknown book",
+            "author": None,
+            "totalSeconds": listen_seconds,
+            "sessionCount": int(stats.get("session_count") or 0),
+            "avgSessionSeconds": int(stats.get("avg_session_seconds") or 0),
+            "lastReadAt": int(stats["last_session_time"]) if stats.get("last_session_time") else None,
+        })
+    result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+    return result
+
+
 def _build_listening_stats_payload(tz):
     try:
         abs_client = container.abs_client()
@@ -4837,6 +5398,10 @@ def _build_listening_stats_payload(tz):
     summary["itemsFinished"] = len(raw_stats.get("items") or {})
     summary["daysListened"] = len(all_activity_dates)
 
+    session_durations = [int(s.get("durationSeconds") or 0) for s in normalized_sessions if s.get("durationSeconds")]
+    summary["avgSessionSeconds"] = int(sum(session_durations) / len(session_durations)) if session_durations else 0
+    summary["hoursPerDay"] = round(summary.get("dailyAverageSeconds", 0) / 3600, 2)
+
     return {
         "available": True,
         "stats": summary,
@@ -4847,6 +5412,8 @@ def _build_listening_stats_payload(tz):
         "trackedBookIds": sorted({
             session.get("absId") for session in normalized_sessions if session.get("absId")
         }),
+        "books": _build_listening_book_list(),
+        "yearlyRecap": _build_listening_yearly_recap(all_days, datetime.now(tz).year, summary["itemsFinished"]),
     }
 
 
@@ -4857,6 +5424,9 @@ def _build_reading_stats_payload(tz):
     heatmap = database_service.get_koreader_heatmap(datetime.now(tz).year, tz_name)
     recent_sessions = database_service.get_koreader_recent_sessions(10, tz_name)
     activity_dates = database_service.get_koreader_activity_dates(tz_name)
+    hour_histogram = database_service.get_koreader_hour_histogram(tz_name)
+    books = database_service.get_koreader_book_list(tz_name)
+    yearly_recap = database_service.get_koreader_yearly_recap(datetime.now(tz).year, tz_name)
 
     if not summary and not any(int(row.get("seconds") or 0) > 0 for row in daily):
         return {
@@ -4868,6 +5438,9 @@ def _build_reading_stats_payload(tz):
             "activityDates": [],
             "trackedBookIds": [],
             "trackedBookKeys": [],
+            "hourHistogram": hour_histogram,
+            "books": [],
+            "yearlyRecap": yearly_recap,
         }
 
     stats = summary or {}
@@ -4896,6 +5469,9 @@ def _build_reading_stats_payload(tz):
         "activityDates": activity_dates,
         "trackedBookIds": stats.get("trackedBookIds") or [],
         "trackedBookKeys": stats.get("trackedBookKeys") or [],
+        "hourHistogram": hour_histogram,
+        "books": books,
+        "yearlyRecap": yearly_recap,
     }
 
 
@@ -4941,6 +5517,75 @@ def _merge_recent_sessions(listening_sessions, reading_sessions, limit=10):
     merged = list(listening_sessions or []) + list(reading_sessions or [])
     merged.sort(key=lambda row: int(row.get("endedAt") or 0), reverse=True)
     return merged[: max(int(limit or 10), 1)]
+
+
+def _merge_book_lists(reading_books, listening_books):
+    """Union reading + listening per-book rows by bookKey (linked books merge)."""
+    merged = {}
+    for source, items in (("reading", reading_books), ("listening", listening_books)):
+        for item in items or []:
+            key = item.get("bookKey")
+            if not key:
+                continue
+            entry = merged.setdefault(key, {
+                "bookKey": key, "absId": item.get("absId"),
+                "isLinked": bool(item.get("isLinked")),
+                "title": item.get("title"), "author": item.get("author"),
+                "readingSeconds": 0, "listeningSeconds": 0, "totalSeconds": 0,
+                "pagesRead": 0, "lastReadAt": 0, "percentComplete": None,
+            })
+            seconds = int(item.get("totalSeconds") or 0)
+            if source == "reading":
+                entry["readingSeconds"] += seconds
+                entry["pagesRead"] = item.get("pagesRead") or entry["pagesRead"]
+                if item.get("percentComplete") is not None:
+                    entry["percentComplete"] = item.get("percentComplete")
+            else:
+                entry["listeningSeconds"] += seconds
+            entry["totalSeconds"] = entry["readingSeconds"] + entry["listeningSeconds"]
+            entry["lastReadAt"] = max(int(entry["lastReadAt"] or 0), int(item.get("lastReadAt") or 0))
+            if not entry.get("title") and item.get("title"):
+                entry["title"] = item.get("title")
+
+    result = list(merged.values())
+    for entry in result:
+        entry["lastReadAt"] = entry["lastReadAt"] or None
+    result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+    return result
+
+
+def _build_combined_yearly_recap(reading_recap, listening_recap):
+    """Merge reading + listening monthly hours; finished timeline comes from reading."""
+    reading_months = (reading_recap or {}).get("months") or []
+    listening_months = (listening_recap or {}).get("months") or []
+    months = []
+    for index in range(12):
+        rm = reading_months[index] if index < len(reading_months) else {}
+        lm = listening_months[index] if index < len(listening_months) else {}
+        read_secs = int(rm.get("seconds") or 0)
+        listen_secs = int(lm.get("seconds") or 0)
+        months.append({
+            "month": index + 1,
+            "seconds": read_secs + listen_secs,
+            "readingSeconds": read_secs,
+            "listeningSeconds": listen_secs,
+            "pages": int(rm.get("pages") or 0),
+            "finished": int(rm.get("finished") or 0) + int(lm.get("finished") or 0),
+        })
+    finished_books = list((reading_recap or {}).get("finishedBooks") or [])
+    available_years = sorted(
+        set((reading_recap or {}).get("availableYears") or [])
+        | set((listening_recap or {}).get("availableYears") or [])
+    )
+    return {
+        "year": (reading_recap or listening_recap or {}).get("year"),
+        "months": months,
+        "totalSeconds": sum(month["seconds"] for month in months),
+        "totalPages": (reading_recap or {}).get("totalPages") or 0,
+        "booksFinished": len(finished_books),
+        "finishedBooks": finished_books,
+        "availableYears": available_years,
+    }
 
 
 def _build_combined_stats_payload(listening, reading, tz):
@@ -4995,6 +5640,12 @@ def _build_combined_stats_payload(listening, reading, tz):
         "daily": combined_daily,
         "heatmap": combined_heatmap,
         "recentSessions": combined_sessions,
+        "hourHistogram": (reading or {}).get("hourHistogram") or [],
+        "books": _merge_book_lists((reading or {}).get("books"), (listening or {}).get("books")),
+        "yearlyRecap": _build_combined_yearly_recap(
+            (reading or {}).get("yearlyRecap"),
+            (listening or {}).get("yearlyRecap"),
+        ),
     }
 
 
@@ -5048,6 +5699,9 @@ def api_stats():
             "recentSessions": reading.get("recentSessions"),
             "trackedBookIds": reading.get("trackedBookIds"),
             "trackedBookKeys": reading.get("trackedBookKeys"),
+            "hourHistogram": reading.get("hourHistogram") or [],
+            "books": reading.get("books") or [],
+            "yearlyRecap": reading.get("yearlyRecap"),
         } if reading else {
             "available": False,
             "stats": None,
@@ -5056,6 +5710,9 @@ def api_stats():
             "recentSessions": [],
             "trackedBookIds": [],
             "trackedBookKeys": [],
+            "hourHistogram": [],
+            "books": [],
+            "yearlyRecap": None,
         },
         "combined": combined,
     }
@@ -5107,6 +5764,84 @@ def api_stats_reading_calendar():
         return jsonify({"error": "Failed to load reading calendar"}), 500
 
     return jsonify(payload)
+
+
+def api_stats_book_detail():
+    key = str(request.args.get("key") or "").strip()
+    if not key:
+        return jsonify({"error": "Missing key"}), 400
+
+    try:
+        tz = _get_stats_timezone()
+        tz_name = getattr(tz, "key", str(tz))
+        reading = database_service.get_koreader_book_detail(key, tz_name)
+
+        abs_id = None
+        if key.startswith("abs:"):
+            abs_id = key.split("abs:", 1)[1]
+        elif reading and reading.get("absId"):
+            abs_id = reading.get("absId")
+
+        listening = None
+        if abs_id:
+            row = database_service.get_reading_stats(abs_id)
+            if row and int(row.get("listen_seconds") or 0) > 0:
+                book = database_service.get_book(abs_id)
+                listening = {
+                    "absId": abs_id,
+                    "title": getattr(book, "abs_title", None),
+                    "totalSeconds": int(row.get("listen_seconds") or 0),
+                    "sessionCount": int(row.get("session_count") or 0),
+                    "avgSessionSeconds": int(row.get("avg_session_seconds") or 0),
+                    "lastReadAt": int(row["last_session_time"]) if row.get("last_session_time") else None,
+                }
+
+        if not reading and not listening:
+            return jsonify({"error": "No detail for this book"}), 404
+
+        title = (reading or {}).get("title") or (listening or {}).get("title") or "Unknown book"
+        return jsonify({
+            "bookKey": key, "absId": abs_id, "title": title,
+            "reading": reading, "listening": listening,
+        })
+    except Exception as e:
+        logger.warning("Stats API: book detail failed for %s: %s", key, e)
+        return jsonify({"error": "Failed to load book detail"}), 500
+
+
+def api_stats_yearly_recap():
+    scope = str(request.args.get("scope") or "combined").strip().lower()
+    year_str = str(request.args.get("year") or "").strip()
+
+    tz = _get_stats_timezone()
+    tz_name = getattr(tz, "key", str(tz))
+    try:
+        year = int(year_str) if year_str else datetime.now(tz).year
+    except ValueError:
+        return jsonify({"error": "Invalid year"}), 400
+
+    try:
+        reading_recap = database_service.get_koreader_yearly_recap(year, tz_name)
+
+        listening_recap = None
+        try:
+            abs_client = container.abs_client()
+            raw_stats = abs_client.get_listening_stats() if abs_client else None
+        except Exception:
+            raw_stats = None
+        if raw_stats:
+            listening_recap = _build_listening_yearly_recap(
+                raw_stats.get("days") or {}, year, len(raw_stats.get("items") or {})
+            )
+
+        if scope == "reading":
+            return jsonify(reading_recap)
+        if scope == "listening":
+            return jsonify(listening_recap or _build_listening_yearly_recap({}, year, 0))
+        return jsonify(_build_combined_yearly_recap(reading_recap, listening_recap))
+    except Exception as e:
+        logger.warning("Stats API: yearly recap failed for %s/%s: %s", scope, year, e)
+        return jsonify({"error": "Failed to load yearly recap"}), 500
 
 
 def api_status():
@@ -5856,6 +6591,12 @@ def test_connection(service: str):
             _coerce_test_str(data.get('BOOKLORE_USER')),
             _coerce_test_str(data.get('BOOKLORE_PASSWORD')),
         ),
+        'bookorbit': lambda data: _test_bookorbit(
+            _coerce_test_bool(data.get('BOOKORBIT_ENABLED')),
+            _normalize_test_url(data.get('BOOKORBIT_SERVER')),
+            _coerce_test_str(data.get('BOOKORBIT_USER')),
+            _coerce_test_str(data.get('BOOKORBIT_PASSWORD')),
+        ),
         'cwa': lambda data: _test_cwa(
             _coerce_test_bool(data.get('CWA_ENABLED')),
             _normalize_test_url(data.get('CWA_SERVER')),
@@ -5876,6 +6617,12 @@ def test_connection(service: str):
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
             _coerce_test_str(data.get('TELEGRAM_BOT_TOKEN')),
         ),
+        'ollama': lambda data: _test_ollama(
+            _coerce_test_bool(data.get('OLLAMA_ENABLED')),
+            _normalize_test_url(data.get('OLLAMA_URL')),
+            _coerce_test_str(data.get('OLLAMA_EMBED_MODEL')),
+            _coerce_test_str(data.get('OLLAMA_CHAT_MODEL')),
+        ),
     }
     tester = testers.get(service)
     if not tester:
@@ -5884,6 +6631,81 @@ def test_connection(service: str):
         return jsonify(tester(payload))
     except Exception as e:
         return jsonify({"ok": False, "message": _test_conn_error(e)})
+
+
+def _test_ollama(enabled: bool, url: str, embed_model: str, chat_model: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "Ollama is disabled"}
+    if not url:
+        return {"ok": False, "message": "Missing Ollama server URL"}
+
+    embed_model = embed_model or "nomic-embed-text"
+    chat_model = chat_model or "qwen2.5:14b"
+
+    r = requests.get(f"{url}/api/tags", timeout=10)
+    if r.status_code != 200:
+        return {"ok": False, "message": f"Ollama returned HTTP {r.status_code}"}
+
+    models = [m.get("name", "") for m in (r.json() or {}).get("models", []) if m.get("name")]
+
+    def _present(name: str) -> bool:
+        # Ollama tags include the tag suffix (e.g. "qwen2.5:14b"); match exact or base name.
+        base = name.split(":", 1)[0]
+        return any(m == name or m.split(":", 1)[0] == base for m in models)
+
+    # Label each model by the features it powers so the operator knows what breaks.
+    roles = {
+        embed_model: "embeddings — suggestion re-ranking & alignment fallback",
+        chat_model: "judge — match disambiguation & tracker matching",
+    }
+    missing = [m for m in (embed_model, chat_model) if not _present(m)]
+    if missing:
+        details = "; ".join(f"{m} ({roles[m]})" for m in missing)
+        pulls = " && ".join(f"ollama pull {m}" for m in missing)
+        return {
+            "ok": False,
+            "message": (
+                f"Connected, but missing model(s): {details}. "
+                f"Those features will silently fall back until you run: {pulls}"
+            ),
+        }
+    embed_info = _ollama_show_info(url, embed_model)
+    chat_info = _ollama_show_info(url, chat_model)
+
+    def _annotate(name: str, info: dict) -> str:
+        parts = []
+        if info.get("context_length"):
+            parts.append(f"ctx {info['context_length']}")
+        if info.get("capabilities"):
+            parts.append(", ".join(info["capabilities"]))
+        return f"{name} ✓ ({'; '.join(parts)})" if parts else f"{name} ✓"
+
+    message = f"Connected. {_annotate(embed_model, embed_info)}, {_annotate(chat_model, chat_info)}"
+    embed_caps = embed_info.get("capabilities") or []
+    if embed_caps and "embedding" not in embed_caps:
+        message += f". Warning: {embed_model} does not report embedding capability"
+    return {"ok": True, "message": message}
+
+
+def _ollama_show_info(url: str, model: str) -> dict:
+    """Best-effort /api/show probe: {'context_length': int|None, 'capabilities': list}."""
+    info = {"context_length": None, "capabilities": []}
+    try:
+        r = requests.post(f"{url}/api/show", json={"model": model}, timeout=10)
+        if r.status_code != 200:
+            return info
+        data = r.json() or {}
+        model_info = data.get("model_info") or {}
+        for key, value in model_info.items():
+            if key.endswith(".context_length") and isinstance(value, int):
+                info["context_length"] = value
+                break
+        caps = data.get("capabilities")
+        if isinstance(caps, list):
+            info["capabilities"] = [c for c in caps if isinstance(c, str)]
+    except Exception:
+        pass
+    return info
 
 
 def _test_abs(url: str, token: str) -> dict:
@@ -6015,6 +6837,25 @@ def _test_booklore(enabled: bool, url: str, user: str, pwd: str) -> dict:
         return {"ok": True, "message": "Authenticated successfully"}
     if r.status_code in (401, 403):
         return {"ok": False, "message": "Invalid username or password"}
+    return {"ok": False, "message": f"Login returned {r.status_code}"}
+
+
+def _test_bookorbit(enabled: bool, url: str, user: str, pwd: str) -> dict:
+    if not enabled:
+        return {"ok": False, "message": "BookOrbit is disabled"}
+    if not url or not user or not pwd:
+        return {"ok": False, "message": "Missing URL, username, or password"}
+    r = requests.post(
+        f"{url}/api/v1/auth/login",
+        json={"username": user, "password": pwd},
+        timeout=10,
+    )
+    if r.status_code == 200:
+        return {"ok": True, "message": "Authenticated successfully"}
+    if r.status_code in (401, 403):
+        return {"ok": False, "message": "Invalid username or password"}
+    if r.status_code == 429:
+        return {"ok": False, "message": "Login throttled (429) — wait a minute and try again"}
     return {"ok": False, "message": f"Login returned {r.status_code}"}
 
 
@@ -6201,6 +7042,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/stats', 'api_stats', api_stats)
     app.add_url_rule('/api/stats/reading-day', 'api_stats_reading_day', api_stats_reading_day)
     app.add_url_rule('/api/stats/reading-calendar', 'api_stats_reading_calendar', api_stats_reading_calendar)
+    app.add_url_rule('/api/stats/book-detail', 'api_stats_book_detail', api_stats_book_detail)
+    app.add_url_rule('/api/stats/yearly-recap', 'api_stats_yearly_recap', api_stats_yearly_recap)
     app.add_url_rule('/logs', 'logs_view', logs_view)
     app.add_url_rule('/api/logs', 'api_logs', api_logs)
     app.add_url_rule('/api/logs/live', 'api_logs_live', api_logs_live)
@@ -6233,7 +7076,9 @@ def create_app(test_container=None):
     app.add_url_rule('/api/forge/search_audio', 'forge_search_audio', forge_search_audio, methods=['GET'])
     app.add_url_rule('/api/forge/search_text', 'forge_search_text', forge_search_text, methods=['GET'])
     app.add_url_rule('/api/forge/process', 'forge_process', forge_process, methods=['POST'])
-    
+    app.add_url_rule('/api/alignments/llm-status', 'alignments_llm_status', alignments_llm_status, methods=['GET'])
+    app.add_url_rule('/api/alignments/realign', 'alignments_realign', alignments_realign, methods=['POST'])
+
     @app.route('/api/forge/active', methods=['GET'])
     def forge_active_tasks():
         return jsonify(list(container.forge_service().active_tasks))
@@ -6294,6 +7139,7 @@ if __name__ == '__main__':
         database_service=database_service,
         sync_manager=manager,
         sync_clients_dict=container.sync_clients(),
+        shelf_watch_services=container.shelf_watch_services_by_client(),
     )
     poller_thread = threading.Thread(target=client_poller.start, daemon=True)
     poller_thread.start()

@@ -100,6 +100,30 @@ class TestABSLeadsSync(BaseSyncCycleTestCase):
         self.assertIsNone(result.updated_state.get('xpath'))
         kosync_api.update_progress.assert_not_called()
 
+    def test_kosync_state_includes_recent_external_put_metadata(self):
+        kosync_api = Mock()
+        kosync_api.get_progress_with_metadata.return_value = (
+            0.441,
+            "/body/DocFragment[31]/body/div[1].0",
+            {
+                "_bridge_recent_external_put": True,
+                "_bridge_recent_external_put_device": "Kobo_monza",
+                "_bridge_recent_external_put_device_id": "device-id",
+                "_bridge_recent_external_put_age_seconds": 247.0,
+            },
+        )
+        kosync_api.is_configured.return_value = True
+        ebook_parser = Mock()
+        client = KoSyncSyncClient(kosync_api, ebook_parser)
+
+        book = SimpleNamespace(kosync_doc_id='test-kosync-doc')
+        state = client.get_service_state(book, prev_state=None, title_snip="Test Audiobook")
+
+        self.assertTrue(state.current["_kosync_recent_external_put"])
+        self.assertEqual(state.current["_kosync_last_put_device"], "Kobo_monza")
+        self.assertEqual(state.current["_kosync_last_put_device_id"], "device-id")
+        self.assertEqual(state.current["_kosync_last_put_age_seconds"], 247.0)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -33,6 +33,7 @@ class MockContainer:
         self.mock_sync_manager = Mock()
         self.mock_abs_client = Mock()
         self.mock_booklore_client = Mock()
+        self.mock_bookorbit_client = Mock()
         self.mock_storygraph_client = Mock()
         self.mock_storyteller_client = Mock()
         self.mock_database_service = Mock()
@@ -58,6 +59,9 @@ class MockContainer:
 
     def booklore_client(self):
         return self.mock_booklore_client
+
+    def bookorbit_client(self):
+        return self.mock_bookorbit_client
 
     def storyteller_client(self):
         return self.mock_storyteller_client
@@ -130,6 +134,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_manager = self.mock_container.mock_sync_manager
         self.mock_abs_client = self.mock_container.mock_abs_client
         self.mock_booklore_client = self.mock_container.mock_booklore_client
+        self.mock_bookorbit_client = self.mock_container.mock_bookorbit_client
         self.mock_storyteller_client = self.mock_container.mock_storyteller_client
         self.mock_storygraph_client = self.mock_container.mock_storygraph_client
         self.mock_database_service = self.mock_container.mock_database_service
@@ -145,6 +150,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_abs_client.get_all_audiobooks.return_value = []
         self.mock_abs_client.get_all_progress_raw.return_value = {}
         self.mock_booklore_client.is_configured.return_value = False
+        self.mock_bookorbit_client.is_configured.return_value = False
         self.mock_storygraph_client.is_configured.return_value = False
         self.mock_storyteller_client.is_configured.return_value = False
 
@@ -727,6 +733,32 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         )
         self.mock_database_service.delete_book.assert_called_once_with('delete-st-2')
 
+    def test_delete_mapping_removes_bookorbit_shelf_by_id(self):
+        """Deleting a BookOrbit-sourced mapping should remove it from the BookOrbit Kobo collection."""
+        from src.db.models import Book
+
+        test_book = Book(
+            abs_id='delete-bo-1',
+            abs_title='Delete BookOrbit Book',
+            ebook_filename='Title - Author.epub',
+            original_ebook_filename='Title - Author.epub',
+            ebook_source='bookorbit',
+            ebook_source_id='42',
+            status='active',
+        )
+        self.mock_database_service.get_book.return_value = test_book
+        self.mock_bookorbit_client.is_configured.return_value = True
+        self.mock_booklore_client.is_configured.return_value = False
+        self.mock_manager.epub_cache_dir = None
+
+        with patch.dict(os.environ, {'BOOKORBIT_SHELF_NAME': 'Kobo'}):
+            response = self.client.post('/delete/delete-bo-1')
+
+        self.assertEqual(response.status_code, 302)
+        self.mock_bookorbit_client.remove_book_id_from_shelf.assert_called_once_with('42', 'Kobo')
+        self.mock_booklore_client.remove_from_shelf.assert_not_called()
+        self.mock_database_service.delete_book.assert_called_once_with('delete-bo-1')
+
     @patch('src.web_server.ingest_storyteller_transcripts', return_value=None)
     def test_api_storyteller_link_preserves_storyteller_source_when_ingest_missing(self, _mock_ingest):
         from src.db.models import Book
@@ -755,6 +787,41 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(saved_book.transcript_source, 'storyteller')
         self.assertIsNone(saved_book.transcript_file)
         self.mock_database_service.dismiss_suggestion.assert_called_once_with('story-link-1')
+
+    @patch('src.web_server.ingest_storyteller_transcripts', return_value=None)
+    def test_api_storyteller_link_works_for_audiobook_mode_books(self, mock_ingest):
+        """Cards with an audio↔ebook match can link Storyteller just like ebook-only ones."""
+        from src.db.models import Book
+
+        test_book = Book(
+            abs_id='story-link-audio',
+            abs_title='Audio Match Book',
+            ebook_filename='original.epub',
+            original_ebook_filename='original.epub',
+            sync_mode='audiobook',
+            storyteller_uuid=None,
+            status='active'
+        )
+        self.mock_database_service.get_book.return_value = test_book
+        self.mock_storyteller_client.download_book.return_value = True
+        self.mock_abs_client.get_item_details.return_value = {
+            'media': {'chapters': [{'start': 0.0, 'end': 10.0}]}
+        }
+
+        response = self.client.post('/api/storyteller/link/story-link-audio', json={'uuid': 'uuid-audio'})
+
+        self.assertEqual(response.status_code, 200)
+        saved_book = self.mock_database_service.save_book.call_args[0][0]
+        self.assertEqual(saved_book.storyteller_uuid, 'uuid-audio')
+        self.assertEqual(saved_book.sync_mode, 'audiobook')
+        self.assertEqual(saved_book.transcript_source, 'storyteller')
+        # The original ebook stays recorded while the artifact becomes the active file.
+        self.assertEqual(saved_book.original_ebook_filename, 'original.epub')
+        self.assertNotEqual(saved_book.ebook_filename, 'original.epub')
+        self.assertEqual(saved_book.status, 'pending')
+        # Audiobook-mode ingest receives the ABS chapters (not chapterless).
+        chapters_arg = mock_ingest.call_args[0][2]
+        self.assertTrue(chapters_arg)
 
     def test_api_storyteller_link_real_ingest_persists_manifest(self):
         from src.db.models import Book
@@ -1034,6 +1101,79 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         html = self._render_index_template_source()
         self.assertNotIn('Out of sync by 54.0%', html)
         self.assertNotIn('class="book-card out-of-sync"', html)
+
+    def test_index_sync_warning_maps_audio_axis_through_alignment(self):
+        """A sentence-aligned book whose ABS time-axis % differs from the ebook
+        text-axis % must not be flagged out of sync: the audio position is
+        mapped onto the text axis via the alignment map before comparing."""
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='axis-book-1',
+            abs_title='Neverwhere',
+            ebook_filename='storyteller_uuid-axis.epub',
+            storyteller_uuid='uuid-axis-1',
+            sync_mode='audiobook',
+            status='active',
+            duration=49728,
+        )
+        # ABS at 49.6% of the audio TIME axis (ts 24684s); ebook clients at
+        # 56.3% of the TEXT axis. Raw gap = 6.7%, but it is the same sentence.
+        mock_states = [
+            State(abs_id='axis-book-1', client_name='abs', percentage=0.496, timestamp=24684, last_updated=1642291400),
+            State(abs_id='axis-book-1', client_name='kosync', percentage=0.563, xpath='/body/DocFragment[12]/body/p[76]/text().0', last_updated=1642291400),
+            State(abs_id='axis-book-1', client_name='storyteller', percentage=0.563, cfi='epubcfi(/6/28!/4/152/12/2:0)', last_updated=1642291400),
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = []
+        self._set_dashboard_integrations(storyteller=True)
+
+        # Alignment maps ABS ts 24684s -> 56.3% of the ebook text.
+        self.mock_manager.alignment_service.get_progress_for_time.return_value = 0.563
+
+        mapping = self._capture_index_mapping()
+
+        self.mock_manager.alignment_service.get_progress_for_time.assert_called_once_with('axis-book-1', 24684.0)
+        self.assertEqual(mapping['sync_warning_pct'], 0.0)
+        self.assertFalse(mapping['is_out_of_sync'])
+
+    def test_index_sync_warning_without_alignment_falls_back_to_raw(self):
+        """With no alignment map the audio client falls back to its raw
+        percentage so genuine drift is still surfaced."""
+        from src.db.models import Book, State
+
+        test_book = Book(
+            abs_id='axis-book-2',
+            abs_title='Neverwhere',
+            ebook_filename='storyteller_uuid-axis2.epub',
+            storyteller_uuid='uuid-axis-2',
+            sync_mode='audiobook',
+            status='active',
+            duration=49728,
+        )
+        mock_states = [
+            State(abs_id='axis-book-2', client_name='abs', percentage=0.496, timestamp=24684, last_updated=1642291400),
+            State(abs_id='axis-book-2', client_name='kosync', percentage=0.563, xpath='/body/DocFragment[12]/body/p[76]/text().0', last_updated=1642291400),
+            State(abs_id='axis-book-2', client_name='storyteller', percentage=0.563, cfi='epubcfi(/6/28!/4/152/12/2:0)', last_updated=1642291400),
+        ]
+
+        self.mock_database_service.get_all_books.return_value = [test_book]
+        self.mock_database_service.get_all_states.return_value = mock_states
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = []
+        self._set_dashboard_integrations(storyteller=True)
+
+        # No alignment available -> None -> fall back to raw percentages.
+        self.mock_manager.alignment_service.get_progress_for_time.return_value = None
+
+        mapping = self._capture_index_mapping()
+        self.assertEqual(mapping['sync_warning_pct'], 6.7)
+        self.assertTrue(mapping['is_out_of_sync'])
 
     def test_index_template_keeps_filename_searchable_but_not_as_author(self):
         from src.db.models import Book, BookloreBook
@@ -1721,6 +1861,47 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(data['message'], 'StoryGraph is disabled')
         mock_get.assert_not_called()
 
+    def test_storyteller_link_affordance_renders_for_audiobook_mode(self):
+        """Audiobook↔ebook matched cards without a Storyteller UUID offer the Link action."""
+        from src.db.models import Book
+
+        self._set_dashboard_integrations(storyteller=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(
+                abs_id='abs-audio-1',
+                abs_title='Audio Match Book',
+                ebook_filename='audio-match.epub',
+                sync_mode='audiobook',
+                storyteller_uuid=None,
+            )
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+
+        html = self._render_index_template_source()
+
+        self.assertIn('title="Link Storyteller"', html)
+        self.assertIn('openStorytellerModal("abs-audio-1"', html)
+
+    def test_storyteller_linked_card_shows_no_link_affordance(self):
+        from src.db.models import Book
+
+        self._set_dashboard_integrations(storyteller=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(
+                abs_id='abs-audio-2',
+                abs_title='Linked Book',
+                ebook_filename='linked.epub',
+                sync_mode='audiobook',
+                storyteller_uuid='uuid-linked',
+            )
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+
+        html = self._render_index_template_source()
+
+        self.assertNotIn('title="Link Storyteller"', html)
+        self.assertIn('Linked via UUID', html)
+
     def test_storygraph_card_renders_on_dashboard(self):
         from src.db.models import Book, State, StorygraphDetails
 
@@ -1981,6 +2162,14 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             },
         ]
         self.mock_database_service.get_koreader_activity_dates.return_value = [today]
+        self.mock_database_service.get_koreader_hour_histogram.return_value = [
+            {'hour': h, 'seconds': 0, 'pages': 0} for h in range(24)
+        ]
+        self.mock_database_service.get_koreader_book_list.return_value = []
+        self.mock_database_service.get_koreader_yearly_recap.return_value = {
+            'year': 2026, 'months': [{'month': m, 'seconds': 0, 'pages': 0, 'finished': 0} for m in range(1, 13)],
+            'totalSeconds': 0, 'totalPages': 0, 'booksFinished': 0, 'finishedBooks': [], 'availableYears': [],
+        }
 
         response = self.client.get('/api/stats')
 
@@ -2036,6 +2225,139 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data['totalBooks'], 2)
         self.assertTrue(any(book['isLinked'] is False and book['absId'] is None for book in data['books']))
+
+
+class TestStorytellerNoCacheFlag(CleanFlaskIntegrationTest):
+    """Cover STORYTELLER_NO_EPUB_CACHE handling in _download_storyteller_artifact."""
+
+    def setUp(self):
+        super().setUp()
+        self.epub_cache_dir = Path(self.temp_dir) / "epub_cache"
+        self.epub_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.books_dir = Path(self.temp_dir) / "books"
+        self.books_dir.mkdir(parents=True, exist_ok=True)
+        self.mock_container.epub_cache_dir = lambda: self.epub_cache_dir
+
+    def tearDown(self):
+        os.environ.pop("STORYTELLER_NO_EPUB_CACHE", None)
+        super().tearDown()
+
+    def test_uses_original_when_flag_enabled_and_original_resolves(self):
+        from src.web_server import _download_storyteller_artifact
+
+        original_path = self.books_dir / "original.epub"
+        original_path.write_bytes(b"epub bytes")
+        self.mock_container.mock_ebook_parser.resolve_book_path.return_value = original_path
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "true"
+
+        filename, path = _download_storyteller_artifact(
+            "uuid-abc",
+            "Some Title",
+            original_ebook_filename="original.epub",
+        )
+
+        self.assertEqual(filename, "original.epub")
+        self.assertEqual(Path(path), original_path)
+        self.mock_storyteller_client.download_book.assert_not_called()
+
+    def test_uses_original_when_flag_value_is_on(self):
+        # The settings toggle (and legacy DBs) store "on", not "true".
+        from src.web_server import _download_storyteller_artifact
+
+        original_path = self.books_dir / "original.epub"
+        original_path.write_bytes(b"epub bytes")
+        self.mock_container.mock_ebook_parser.resolve_book_path.return_value = original_path
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "on"
+
+        filename, path = _download_storyteller_artifact(
+            "uuid-abc",
+            "Some Title",
+            original_ebook_filename="original.epub",
+        )
+
+        self.assertEqual(filename, "original.epub")
+        self.assertEqual(Path(path), original_path)
+        self.mock_storyteller_client.download_book.assert_not_called()
+
+    def test_falls_back_to_download_when_original_missing(self):
+        from src.web_server import _download_storyteller_artifact
+
+        self.mock_container.mock_ebook_parser.resolve_book_path.side_effect = FileNotFoundError()
+        self.mock_storyteller_client.download_book.return_value = True
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "true"
+
+        filename, path = _download_storyteller_artifact(
+            "uuid-abc",
+            "Some Title",
+            original_ebook_filename="original.epub",
+        )
+
+        self.assertEqual(filename, "storyteller_uuid-abc.epub")
+        self.assertEqual(Path(path), self.epub_cache_dir / "storyteller_uuid-abc.epub")
+        self.mock_storyteller_client.download_book.assert_called_once()
+
+    def test_flag_ignored_when_original_filename_not_provided(self):
+        from src.web_server import _download_storyteller_artifact
+
+        self.mock_storyteller_client.download_book.return_value = True
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "true"
+
+        filename, _path = _download_storyteller_artifact("uuid-abc", "Some Title")
+
+        self.assertEqual(filename, "storyteller_uuid-abc.epub")
+        self.mock_storyteller_client.download_book.assert_called_once()
+        self.mock_container.mock_ebook_parser.resolve_book_path.assert_not_called()
+
+    def test_flag_disabled_still_downloads(self):
+        from src.web_server import _download_storyteller_artifact
+
+        self.mock_storyteller_client.download_book.return_value = True
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "false"
+
+        filename, _path = _download_storyteller_artifact(
+            "uuid-abc",
+            "Some Title",
+            original_ebook_filename="original.epub",
+        )
+
+        self.assertEqual(filename, "storyteller_uuid-abc.epub")
+        self.mock_storyteller_client.download_book.assert_called_once()
+        self.mock_container.mock_ebook_parser.resolve_book_path.assert_not_called()
+
+    def test_api_storyteller_link_no_cache_stores_original_filename(self):
+        from src.db.models import Book
+
+        original_path = self.books_dir / "original.epub"
+        original_path.write_bytes(b"epub bytes")
+        self.mock_container.mock_ebook_parser.resolve_book_path.return_value = original_path
+        os.environ["STORYTELLER_NO_EPUB_CACHE"] = "true"
+
+        test_book = Book(
+            abs_id="story-link-nocache",
+            abs_title="Story Link",
+            ebook_filename="original.epub",
+            storyteller_uuid=None,
+            transcript_source=None,
+            transcript_file=None,
+            status="active",
+        )
+        self.mock_database_service.get_book.return_value = test_book
+        self.mock_abs_client.get_item_details.return_value = {
+            "media": {"chapters": [{"start": 0.0, "end": 10.0}]}
+        }
+
+        with patch("src.web_server.ingest_storyteller_transcripts", return_value=None):
+            response = self.client.post(
+                "/api/storyteller/link/story-link-nocache",
+                json={"uuid": "uuid-no-cache"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.mock_storyteller_client.download_book.assert_not_called()
+        self.mock_database_service.save_book.assert_called_once()
+        saved_book = self.mock_database_service.save_book.call_args[0][0]
+        self.assertEqual(saved_book.ebook_filename, "original.epub")
+        self.assertEqual(saved_book.storyteller_uuid, "uuid-no-cache")
 
 
 class FindEbookFileTest(unittest.TestCase):
@@ -2113,6 +2435,84 @@ class FindEbookFileTest(unittest.TestCase):
         result = find_ebook_file(filename)
         self.assertIsNotNone(result)
         self.assertEqual(result.name, filename)
+
+
+class TestAudiobookSearchVariants(unittest.TestCase):
+    """Filename-style suggestion titles relax to the bare title so ABS can match."""
+
+    def test_filename_stem_relaxes_to_title(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("sublimation - isabel j. kim (2026)"),
+            ["sublimation - isabel j. kim (2026)", "sublimation - isabel j. kim", "sublimation"],
+        )
+
+    def test_extension_and_year_stripped(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(_audiobook_search_variants("Blister (2016).epub"), ["Blister (2016).epub", "Blister"])
+
+    def test_clean_query_is_unchanged(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(_audiobook_search_variants("Sublimation"), ["Sublimation"])
+
+    def test_title_with_author_suffix(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("The Lord of the Rings - J.R.R. Tolkien"),
+            ["The Lord of the Rings - J.R.R. Tolkien", "The Lord of the Rings"],
+        )
+
+
+class TestEbookSearchProviderPreference(unittest.TestCase):
+    """Relaxed ebook search should surface the library copy and prefer it over the local file."""
+
+    def test_provider_upgrades_local_file(self):
+        import src.web_server as ws
+        from types import SimpleNamespace
+        fname = "Sublimation - Isabel J. Kim (2026).epub"
+
+        def fake_search(term):
+            # Only the bare title matches BookOrbit; the filename-stem term hits only the local file.
+            if term == "sublimation":
+                return [SimpleNamespace(name=fname, source="BookOrbit", source_id="42")]
+            return [SimpleNamespace(name=fname, source="Local File", source_id=None)]
+
+        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+            out = ws._search_ebooks_with_fallback("sublimation - isabel j. kim (2026)")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].source, "BookOrbit")
+
+    def test_local_file_kept_when_no_provider(self):
+        import src.web_server as ws
+        from types import SimpleNamespace
+
+        def fake_search(term):
+            return [SimpleNamespace(name="OnlyLocal.epub", source="Local File", source_id=None)]
+
+        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+            out = ws._search_ebooks_with_fallback("only local (2020).epub")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].source, "Local File")
+
+
+class TestForgeTextItemBuilder(unittest.TestCase):
+    def test_bookorbit_source_preserves_bookorbit_id(self):
+        from src.web_server import _build_forge_text_item
+
+        item = _build_forge_text_item(
+            source_type="BookOrbit",
+            source_id="42",
+            source_path="",
+            original_filename="Book.epub",
+        )
+
+        self.assertEqual(item["source"], "BookOrbit")
+        self.assertEqual(item["bookorbit_id"], "42")
+        self.assertEqual(item["source_id"], "42")
+        self.assertEqual(item["filename"], "Book.epub")
+
 
 if __name__ == '__main__':
     print("TEST Clean Flask Integration Testing with Dependency Injection")

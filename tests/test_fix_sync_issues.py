@@ -66,6 +66,72 @@ class TestFixSyncIssues(unittest.TestCase):
             self.assertEqual(len(result), expected_len)
             print(f"\n✅ Test Passed: Recovered {len(result)} chars from DB after file check failed.")
 
+    def test_abs_progress_push_sends_zero_time_listened(self):
+        """Bridge pushes are reading-driven and must not accrue ABS listening time."""
+        self.mock_abs_client.update_progress.return_value = {"success": True}
+
+        result, adjusted_ts = self.client._update_abs_progress_with_offset(
+            "abs-1", 500.0, prev_abs_ts=200.0
+        )
+
+        self.assertEqual(adjusted_ts, 500.0)
+        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 500.0, 0)
+
+    def test_abs_progress_push_credits_listening_delta(self):
+        """When an audio-companion leader advances the position, the forward audio
+        delta is credited as listening time instead of zero."""
+        self.mock_abs_client.update_progress.return_value = {"success": True}
+
+        result, adjusted_ts = self.client._update_abs_progress_with_offset(
+            "abs-1", 500.0, prev_abs_ts=200.0, time_listened=300.0
+        )
+
+        self.assertEqual(adjusted_ts, 500.0)
+        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 500.0, 300.0)
+
+    def test_update_progress_credit_listening_uses_audio_delta(self):
+        """update_progress(credit_listening=True) credits ts_for_text - current ABS ts."""
+        from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
+
+        book = Book(abs_id="abs-1", ebook_filename="test.epub")
+        book.transcript_file = "DB_MANAGED"
+        book.duration = 1000.0
+
+        self.mock_alignment_service.get_time_for_text.return_value = 200.0
+        self.mock_abs_client.get_progress.return_value = {"currentTime": 100.0}
+        self.mock_abs_client.update_progress.return_value = {"success": True}
+
+        request = UpdateProgressRequest(
+            LocatorResult(percentage=0.2, match_index=500),
+            txt="anchor text",
+            credit_listening=True,
+        )
+        self.client.update_progress(book, request)
+
+        # delta = 200.0 (new) - 100.0 (current ABS) = 100.0 listening seconds
+        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 200.0, 100.0)
+
+    def test_update_progress_without_credit_listening_sends_zero(self):
+        """Default (reading-driven) push still sends zero listening time."""
+        from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
+
+        book = Book(abs_id="abs-1", ebook_filename="test.epub")
+        book.transcript_file = "DB_MANAGED"
+        book.duration = 1000.0
+
+        self.mock_alignment_service.get_time_for_text.return_value = 200.0
+        self.mock_abs_client.get_progress.return_value = {"currentTime": 100.0}
+        self.mock_abs_client.update_progress.return_value = {"success": True}
+
+        request = UpdateProgressRequest(
+            LocatorResult(percentage=0.2, match_index=500),
+            txt="anchor text",
+            credit_listening=False,
+        )
+        self.client.update_progress(book, request)
+
+        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 200.0, 0)
+
     def test_legacy_file_used_if_exists(self):
         """
         Test that if file EXISTS, we use legacy transcriber method and do NOT call DB.
