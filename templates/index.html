@@ -289,11 +289,17 @@
                 </div>
                 {% endif %}
 
-                {% if integrations.cwa and mapping.states.cwa is defined %}
+                {% if integrations.cwa and (mapping.states.cwa is defined or mapping.ebook_source == 'CWA') %}
                 <div class="service-item" title="CWA Kobo Sync">
                     <span class="service-icon-emoji">📖</span>
                     <span class="service-name">CWA</span>
-                    <span class="service-value">{{ '%.1f' | format(mapping.states.cwa.percentage|default(0)) }}%</span>
+                    <span class="service-value">
+                        {% if mapping.states.cwa is defined %}
+                        {{ '%.1f' | format(mapping.states.cwa.percentage|default(0)) }}%
+                        {% else %}
+                        0.0%
+                        {% endif %}
+                    </span>
                 </div>
                 {% endif %}
             </div>
@@ -1987,14 +1993,23 @@
         <div class="nav-actions">
             <a href="https://cporcellijr.github.io/abs-kosync-bridge/" class="btn" target="_blank"
                 rel="noopener noreferrer">📚 Docs</a>
+            {% set is_admin = current_user and current_user.is_admin %}
+            {% if is_admin %}
             <a href="/settings" class="btn">⚙️ Settings</a>
             <a href="/stats" class="btn">📊 Stats</a>
             <a href="/logs" class="btn">📊 Logs</a>
+            {% endif %}
             <a href="/forge" class="btn">⚡ Forge</a>
 
             <a href="/match" class="btn btn-primary">➕ Add Book</a>
+            {% if is_admin %}
             <a href="/batch-match" class="btn">📋 Batch</a>
             <a href="/suggestions" class="btn">💡 Suggestions</a>
+            {% endif %}
+            {% if current_user %}
+            <a href="/account" class="btn" title="Account: {{ current_user.username }}">👤 {{ current_user.username }}</a>
+            <a href="/logout" class="btn">🚪 Logout</a>
+            {% endif %}
         </div>
     </div>
 

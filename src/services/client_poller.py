@@ -29,10 +29,14 @@ class ClientPoller:
     ]
 
     def __init__(self, database_service, sync_manager, sync_clients_dict: dict,
-                 shelf_watch_service=None, shelf_watch_services: dict = None):
+                 shelf_watch_service=None, shelf_watch_services: dict = None,
+                 user_client_registry=None):
         self._db = database_service
         self._sync_manager = sync_manager
         self._sync_clients = sync_clients_dict
+        # Multi-user: when present, poll each user's own clients and trigger
+        # their sync_cycle. When absent, fall back to the global client dict.
+        self._registry = user_client_registry
         self._shelf_watch_service = shelf_watch_service
         # Map poll-client name -> shelf-watch service so each source's watch shelf
         # fires on that source's custom poll tick. Falls back to the legacy single
@@ -102,7 +106,8 @@ class ClientPoller:
         return str(raw).strip().lower() in ('true', '1', 'yes', 'on')
 
     def _trigger_or_defer_sync(self, client_name: str, book, last_pct: float, current_pct: float,
-                               wait_for_settle: bool, during_suppression: bool = False) -> None:
+                               wait_for_settle: bool, during_suppression: bool = False,
+                               user_id=None) -> None:
         """Run the sync cycle for a detected change, or hold it until the
         position stops moving when settle-wait is enabled for this client."""
         jump_note = (
@@ -110,7 +115,7 @@ class ClientPoller:
             if during_suppression else ""
         )
         if wait_for_settle:
-            self._pending_sync[(client_name, book.abs_id)] = current_pct
+            self._pending_sync[(user_id, client_name, book.abs_id)] = current_pct
             logger.info(
                 f"📡 {client_name} poll: '{book.abs_title}' moved "
                 f"{last_pct:.1%} → {current_pct:.1%}{jump_note}; waiting for position to settle"
@@ -123,9 +128,37 @@ class ClientPoller:
         )
         threading.Thread(
             target=self._sync_manager.sync_cycle,
-            kwargs={'target_abs_id': book.abs_id},
+            kwargs={'target_abs_id': book.abs_id, 'user_id': user_id},
             daemon=True,
         ).start()
+
+    def _poll_targets(self, client_name: str):
+        """Return [(user_id, sync_client)] to poll for this client.
+
+        Multi-user: each active user's own configured client. Falls back to the
+        global client (user_id=None) when no registry/users are available."""
+        registry = self._registry
+        if registry is None or not hasattr(self._db, 'list_users'):
+            client = self._sync_clients.get(client_name)
+            return [(None, client)] if client else []
+        try:
+            users = [u for u in self._db.list_users() if getattr(u, 'active', 1)]
+        except Exception as e:
+            logger.debug(f"ClientPoller: could not list users: {e}")
+            users = []
+        if not users:
+            client = self._sync_clients.get(client_name)
+            return [(None, client)] if client else []
+        targets = []
+        for user in users:
+            try:
+                bundle = registry.get_clients(user.id)
+                client = bundle.sync_clients.get(client_name)
+                if client and client.is_configured():
+                    targets.append((user.id, client))
+            except Exception as e:
+                logger.debug(f"ClientPoller: user {getattr(user,'id',None)} bundle failed: {e}")
+        return targets
 
     def _poll_cycle(self) -> None:
         """Check each configured client if it is due for a poll."""
@@ -153,11 +186,10 @@ class ClientPoller:
             self._poll_client(client_name)
 
     def _poll_client(self, client_name: str) -> None:
-        """Fetch current position for each active book and trigger sync on change."""
-        from src.services.write_tracker import get_recent_write, is_own_write
-
-        sync_client = self._sync_clients.get(client_name)
-        if not sync_client or not sync_client.is_configured():
+        """Poll this client for every target user (or globally) and trigger
+        per-user sync on change."""
+        targets = self._poll_targets(client_name)
+        if not targets:
             return
 
         try:
@@ -167,6 +199,24 @@ class ClientPoller:
             return
 
         wait_for_settle = self._is_settle_wait_enabled(client_name)
+
+        total_checked = 0
+        for user_id, sync_client in targets:
+            total_checked += self._poll_client_for_user(
+                client_name, sync_client, user_id, active_books, wait_for_settle
+            )
+
+        logger.debug(
+            f"📡 {client_name} poll: checked {total_checked} across {len(targets)} target(s)"
+        )
+
+    def _poll_client_for_user(self, client_name, sync_client, user_id, active_books, wait_for_settle) -> int:
+        """Fetch current position for each active book for one user and trigger
+        sync on change. Returns the number of books checked."""
+        from src.services.write_tracker import get_recent_write, is_own_write
+
+        if not sync_client or not sync_client.is_configured():
+            return 0
 
         checked = 0
         for book in active_books:
@@ -182,7 +232,7 @@ class ClientPoller:
                     continue
 
                 checked += 1
-                cache_key = (client_name, book.abs_id)
+                cache_key = (user_id, client_name, book.abs_id)
                 last_pct = self._last_known.get(cache_key)
 
                 if last_pct is None:
@@ -191,8 +241,8 @@ class ClientPoller:
                     )
                 elif abs(current_pct - last_pct) > 0.001:
                     # Check write-suppression before acting
-                    if is_own_write(client_name, book.abs_id):
-                        recent = get_recent_write(client_name, book.abs_id)
+                    if is_own_write(client_name, book.abs_id, user_id=user_id):
+                        recent = get_recent_write(client_name, book.abs_id, user_id=user_id)
                         recent_pct = recent.get("pct") if recent else None
                         if (
                             recent_pct is not None
@@ -200,7 +250,7 @@ class ClientPoller:
                         ):
                             self._trigger_or_defer_sync(
                                 client_name, book, last_pct, current_pct,
-                                wait_for_settle, during_suppression=True,
+                                wait_for_settle, during_suppression=True, user_id=user_id,
                             )
                         else:
                             logger.debug(
@@ -208,9 +258,9 @@ class ClientPoller:
                             )
                     else:
                         self._trigger_or_defer_sync(
-                            client_name, book, last_pct, current_pct, wait_for_settle
+                            client_name, book, last_pct, current_pct, wait_for_settle, user_id=user_id
                         )
-                elif self._pending_sync.pop(cache_key, None) is not None:
+                elif self._pending_sync.pop((user_id, client_name, book.abs_id), None) is not None:
                     # A change was deferred and the position has now settled.
                     logger.info(
                         f"📡 {client_name} poll: '{book.abs_title}' position settled at "
@@ -218,7 +268,7 @@ class ClientPoller:
                     )
                     threading.Thread(
                         target=self._sync_manager.sync_cycle,
-                        kwargs={'target_abs_id': book.abs_id},
+                        kwargs={'target_abs_id': book.abs_id, 'user_id': user_id},
                         daemon=True,
                     ).start()
 
@@ -227,4 +277,4 @@ class ClientPoller:
             except Exception as e:
                 logger.debug(f"ClientPoller: poll check failed for {client_name}/{getattr(book, 'abs_title', '?')}: {e}")
 
-        logger.debug(f"📡 {client_name} poll: checked {checked}/{len(active_books)} active books")
+        return checked

@@ -1,5 +1,6 @@
 import unittest
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, ANY
 import json
 import os
@@ -88,6 +89,35 @@ class TestForgeService(unittest.TestCase):
                 daemon=True
             )
             mock_thread_instance.start.assert_called_once()
+
+    def test_start_manual_forge_uses_client_bundle_worker(self):
+        user_abs = MagicMock()
+        user_booklore = MagicMock()
+        user_storyteller = MagicMock()
+        bundle = SimpleNamespace(
+            abs_client=user_abs,
+            booklore_client=user_booklore,
+            storyteller_client=user_storyteller,
+            library_service=self.mock_library,
+            bookorbit_client=self.mock_bookorbit,
+            sync_clients={"ABS": MagicMock()},
+        )
+
+        with patch('threading.Thread') as mock_thread_cls:
+            self.service.start_manual_forge(
+                abs_id="abs456",
+                text_item={"path": "other.epub"},
+                title="Test Book 2",
+                author="Test Author 2",
+                client_bundle=bundle,
+            )
+
+        target = mock_thread_cls.call_args.kwargs["target"]
+        worker = target.__self__
+        self.assertIs(worker.abs_client, user_abs)
+        self.assertIs(worker.booklore_client, user_booklore)
+        self.assertIs(worker.storyteller_client, user_storyteller)
+        self.assertIs(worker.active_tasks, self.service.active_tasks)
 
     def test_start_manual_forge_booklore_audio_passes_audio_kwargs(self):
         with patch('threading.Thread') as mock_thread_cls:
@@ -1153,9 +1183,11 @@ class TestShelveForgedEbook(unittest.TestCase):
         self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
 
     def test_shelves_on_grimmory_when_configured(self):
+        # Shelf name is resolved by the per-user client from its own creds now,
+        # so the worker calls add_to_shelf with just the filename.
         self.mock_booklore.is_configured.return_value = True
         self.service._shelve_forged_ebook(self._book(ebook_source="Booklore"), "book.epub")
-        self.mock_booklore.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.mock_booklore.add_to_shelf.assert_called_once_with("book.epub")
         self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
 
     def test_bookorbit_source_uses_bookorbit_by_id(self):
@@ -1163,13 +1195,13 @@ class TestShelveForgedEbook(unittest.TestCase):
         self.service._shelve_forged_ebook(
             self._book(ebook_source="BookOrbit", ebook_source_id="42"), "book.epub"
         )
-        self.mock_bookorbit.add_book_id_to_shelf.assert_called_once_with("42", "Kobo")
+        self.mock_bookorbit.add_book_id_to_shelf.assert_called_once_with("42")
         self.mock_booklore.add_to_shelf.assert_not_called()
 
     def test_bookorbit_source_falls_back_to_filename(self):
         self.mock_bookorbit.is_configured.return_value = True
         self.service._shelve_forged_ebook(self._book(ebook_source="BookOrbit"), "book.epub")
-        self.mock_bookorbit.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.mock_bookorbit.add_to_shelf.assert_called_once_with("book.epub")
         self.mock_booklore.add_to_shelf.assert_not_called()
 
     def test_bookorbit_source_skipped_when_not_configured(self):

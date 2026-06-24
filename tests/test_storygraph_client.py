@@ -54,6 +54,26 @@ class TestStorygraphClient(unittest.TestCase):
         self.assertIn("remember_user_token=fresh-remember", cookie)
         self.assertNotIn("_story_graph_session", cookie)
 
+    def test_is_configured_uses_per_user_enabled_flag(self):
+        with patch.dict(os.environ, {"PROGRESS_TRACKER_PROVIDER": "hardcover"}, clear=False):
+            client = StorygraphClient(credentials={
+                "STORYGRAPH_ENABLED": "true",
+                "STORYGRAPH_SESSION_COOKIE": "user-session",
+                "STORYGRAPH_REMEMBER_USER_TOKEN": "user-remember",
+                "__allow_global_fallback__": False,
+            })
+            self.assertTrue(client.is_configured())
+
+    def test_is_configured_honors_per_user_disabled_flag(self):
+        with patch.dict(os.environ, {"PROGRESS_TRACKER_PROVIDER": "storygraph"}, clear=False):
+            client = StorygraphClient(credentials={
+                "STORYGRAPH_ENABLED": "false",
+                "STORYGRAPH_SESSION_COOKIE": "user-session",
+                "STORYGRAPH_REMEMBER_USER_TOKEN": "user-remember",
+                "__allow_global_fallback__": False,
+            })
+            self.assertFalse(client.is_configured())
+
     def test_parse_community_reviews_rating_confirmed_shape(self):
         html = """
         <h3>Community Reviews</h3>

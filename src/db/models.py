@@ -34,7 +34,11 @@ class KosyncDocument(Base):
     linked_abs_id = Column(String(255), ForeignKey('books.abs_id'), nullable=True, index=True)
     first_seen = Column(DateTime, default=datetime.utcnow)
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    # Multi-user: device-progress cache is per-user (the hash->book link stays
+    # shared; authoritative per-user KoSync progress lives in State). Nullable
+    # during rollout; backfilled in Phase 3.
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+
     # Hash cache replacement fields
     filename = Column(String(500), nullable=True)
     source = Column(String(50), nullable=True)
@@ -47,7 +51,7 @@ class KosyncDocument(Base):
     def __init__(self, document_hash: str, progress: str = None, percentage: float = 0,
                  device: str = None, device_id: str = None, timestamp: datetime = None,
                  linked_abs_id: str = None, filename: str = None, source: str = None,
-                 booklore_id: str = None, mtime: float = None):
+                 booklore_id: str = None, mtime: float = None, user_id: int = None):
         self.document_hash = document_hash
         self.progress = progress
         self.percentage = percentage
@@ -59,6 +63,7 @@ class KosyncDocument(Base):
         self.source = source
         self.booklore_id = booklore_id
         self.mtime = mtime
+        self.user_id = user_id
         self.first_seen = datetime.utcnow()
         self.last_updated = datetime.utcnow()
 
@@ -95,6 +100,10 @@ class Book(Base):
     abs_ebook_item_id = Column(String(255), nullable=True)  # New ID to track ebook item separately
     series_name = Column(String(500), nullable=True, index=True)
     series_sequence = Column(Float, nullable=True)
+    # Multi-user: the user who created this match. The catalog row is shared at
+    # the schema level, but visibility/serving is scoped to the owner. NULL = the
+    # default (admin) user (backfilled at migration time).
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
 
     # Relationships
     states = relationship("State", back_populates="book", cascade="all, delete-orphan")
@@ -115,7 +124,8 @@ class Book(Base):
                  status: str = 'active', duration: float = None, sync_mode: str = 'audiobook',
                  transcript_source: str = None,
                  storyteller_uuid: str = None, abs_ebook_item_id: str = None,
-                 series_name: str = None, series_sequence: float = None):
+                 series_name: str = None, series_sequence: float = None,
+                 user_id: int = None):
         self.abs_id = abs_id
         self.abs_title = abs_title
         self.audio_source = audio_source
@@ -139,6 +149,7 @@ class Book(Base):
         self.abs_ebook_item_id = abs_ebook_item_id
         self.series_name = series_name
         self.series_sequence = series_sequence
+        self.user_id = user_id
 
     def __repr__(self):
         return f"<Book(abs_id='{self.abs_id}', title='{self.abs_title}')>"
@@ -240,6 +251,9 @@ class State(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     abs_id = Column(String(255), ForeignKey('books.abs_id'), nullable=False)
     client_name = Column(String(50), nullable=False)
+    # Multi-user: progress is per-user. Nullable during rollout (Phase 1/2);
+    # scoped + backfilled to a real user in Phase 3.
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     last_updated = Column(Float)
     percentage = Column(Float)
     timestamp = Column(Float)
@@ -251,9 +265,10 @@ class State(Base):
 
     def __init__(self, abs_id: str, client_name: str, last_updated: float = None,
                  percentage: float = None, timestamp: float = None,
-                 xpath: str = None, cfi: str = None):
+                 xpath: str = None, cfi: str = None, user_id: int = None):
         self.abs_id = abs_id
         self.client_name = client_name
+        self.user_id = user_id
         self.last_updated = last_updated
         self.percentage = percentage
         self.timestamp = timestamp
@@ -433,12 +448,14 @@ class ReadingSession(Base):
     start_progress = Column(Float, nullable=True)        # 0-1 fraction
     end_progress = Column(Float, nullable=True)          # 0-1 fraction
     leader_client = Column(String(50), nullable=True)    # e.g. 'ABS', 'BookLoreAudio', 'KoSync', 'BookLore'
+    # Multi-user: stats are per-user. Nullable during rollout; backfilled in Phase 3.
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
 
     book = relationship("Book", back_populates="reading_sessions")
 
     def __init__(self, abs_id: str, session_type: str, start_time: float, end_time: float,
                  duration_seconds: int, start_progress: float = None, end_progress: float = None,
-                 leader_client: str = None):
+                 leader_client: str = None, user_id: int = None):
         self.abs_id = abs_id
         self.session_type = session_type
         self.start_time = start_time
@@ -447,6 +464,7 @@ class ReadingSession(Base):
         self.start_progress = start_progress
         self.end_progress = end_progress
         self.leader_client = leader_client
+        self.user_id = user_id
 
 
 class KOReaderBookStat(Base):
@@ -461,6 +479,7 @@ class KOReaderBookStat(Base):
     device = Column(String(128), nullable=True)
     device_id = Column(String(128), nullable=True)
     device_key = Column(String(128), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)  # Multi-user (Phase 3 backfill)
     ko_book_id = Column(Integer, nullable=True)
     title = Column(String(500), nullable=True)
     authors = Column(String(500), nullable=True)
@@ -481,11 +500,13 @@ class KOReaderBookStat(Base):
         pages: int = None,
         total_read_pages: int = None,
         total_read_time: int = None,
+        user_id: int = None,
     ):
         self.md5 = md5
         self.device = device
         self.device_id = device_id
         self.device_key = device_key
+        self.user_id = user_id
         self.ko_book_id = ko_book_id
         self.title = title
         self.authors = authors
@@ -506,6 +527,7 @@ class KOReaderPageStat(Base):
     device = Column(String(128), nullable=True)
     device_id = Column(String(128), nullable=True)
     device_key = Column(String(128), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)  # Multi-user (Phase 3 backfill)
     page = Column(Integer, nullable=False)
     start_time = Column(Float, nullable=False, index=True)
     duration = Column(Float, nullable=False)
@@ -522,11 +544,13 @@ class KOReaderPageStat(Base):
         device: str = None,
         device_id: str = None,
         total_pages: int = None,
+        user_id: int = None,
     ):
         self.md5 = md5
         self.device = device
         self.device_id = device_id
         self.device_key = device_key
+        self.user_id = user_id
         self.page = page
         self.start_time = start_time
         self.duration = duration
@@ -583,6 +607,95 @@ class EmbeddingCache(Base):
         self.model = model
         self.text_hash = text_hash
         self.vector_json = vector_json
+
+
+class User(Base):
+    """
+    A BookBridge account. Multi-user support: each user logs in and owns their
+    own per-service credentials and progress (states/stats). The book catalog
+    and alignments are shared across users.
+    """
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, unique=True, index=True)
+    password_hash = Column(String(255), nullable=True)
+    role = Column(String(20), nullable=False, default='user')  # 'admin' | 'user'
+    active = Column(Integer, nullable=False, default=1)  # 1=active, 0=disabled
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+
+    credentials = relationship("UserCredential", back_populates="user", cascade="all, delete-orphan")
+
+    def __init__(self, username: str, password_hash: str = None, role: str = 'user',
+                 active: int = 1):
+        self.username = username
+        self.password_hash = password_hash
+        self.role = role
+        self.active = active
+        self.created_at = datetime.utcnow()
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == 'admin'
+
+    def __repr__(self):
+        return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
+
+
+class UserCredential(Base):
+    """
+    Per-user, per-service setting/credential (a user-scoped mirror of `settings`).
+    Holds the values that differ per user — ABS/Storyteller/CWA/KOReader/BookOrbit
+    credentials and per-service toggles. Global engine settings stay in `settings`.
+    """
+    __tablename__ = 'user_credentials'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    key = Column(String(255), nullable=False)
+    value = Column(Text, nullable=True)
+
+    user = relationship("User", back_populates="credentials")
+
+    __table_args__ = (
+        Index('ix_user_credentials_user_key', 'user_id', 'key', unique=True),
+    )
+
+    def __init__(self, user_id: int, key: str, value: str = None):
+        self.user_id = user_id
+        self.key = key
+        self.value = value
+
+    def __repr__(self):
+        return f"<UserCredential(user_id={self.user_id}, key='{self.key}')>"
+
+
+class UserBook(Base):
+    """Membership link: a user has matched/claimed a book.
+
+    The `Book` catalog row (and its alignment/transcript/jobs) is shared, while
+    visibility and the koplugin manifest are scoped per user. A book can be
+    claimed by several users (same shared ABS item, or each user matching their
+    own library copy) — one row per (user, book)."""
+    __tablename__ = 'user_books'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index('ix_user_books_user_abs', 'user_id', 'abs_id', unique=True),
+    )
+
+    def __init__(self, user_id: int, abs_id: str):
+        self.user_id = user_id
+        self.abs_id = abs_id
+        self.created_at = datetime.utcnow()
+
+    def __repr__(self):
+        return f"<UserBook(user_id={self.user_id}, abs_id='{self.abs_id}')>"
 
 
 # Database configuration

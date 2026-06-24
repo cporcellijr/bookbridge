@@ -1,7 +1,7 @@
 # Hardcover Routes - Flask Blueprint for Hardcover API endpoints
 import logging
 
-from flask import Blueprint, jsonify, request, redirect, url_for, flash
+from flask import Blueprint, jsonify, request, redirect, url_for, flash, g
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,42 @@ def _get_dependencies():
     return _database_service, _container, None
 
 
+def _active_user_clients(container):
+    user = getattr(g, "current_user", None)
+    if user is not None:
+        try:
+            return container.user_client_registry().get_clients(user.id)
+        except Exception as exc:
+            logger.debug("Falling back to global Hardcover route clients: %s", exc)
+    return None
+
+
+def _hardcover_client(container):
+    clients = _active_user_clients(container)
+    return clients.hardcover_client if clients is not None else container.hardcover_client()
+
+
+def _abs_client(container):
+    clients = _active_user_clients(container)
+    return clients.abs_client if clients is not None else container.abs_client()
+
+
+def _user_may_modify_book(database_service, abs_id: str) -> bool:
+    user = getattr(g, "current_user", None)
+    if user is None:
+        return True
+    if getattr(user, "is_admin", False):
+        return True
+    try:
+        return database_service.is_user_linked(user.id, abs_id)
+    except Exception:
+        return False
+
+
+def _forbidden_book_response():
+    return jsonify({"found": False, "error": "Forbidden: you have not claimed this book"}), 403
+
+
 @hardcover_bp.route("/api/hardcover/resolve", methods=["GET"])
 def api_hardcover_resolve():
     """
@@ -53,8 +89,10 @@ def api_hardcover_resolve():
 
     if not abs_id:
         return jsonify({"found": False, "message": "Missing abs_id parameter"}), 400
+    if not _user_may_modify_book(database_service, abs_id):
+        return _forbidden_book_response()
 
-    hardcover_client = container.hardcover_client()
+    hardcover_client = _hardcover_client(container)
     if not hardcover_client.is_configured():
         return jsonify({"found": False, "message": "Hardcover not configured"}), 400
 
@@ -80,7 +118,7 @@ def api_hardcover_resolve():
                 return jsonify({"found": False, "message": "Book not found"}), 404
 
             # Get metadata from ABS
-            item = container.abs_client().get_item_details(abs_id)
+            item = _abs_client(container).get_item_details(abs_id)
             if not item:
                 return jsonify(
                     {
@@ -152,6 +190,10 @@ def link_hardcover(abs_id):
     database_service, container, error_response = _get_dependencies()
     if error_response:
         return error_response
+    if not _user_may_modify_book(database_service, abs_id):
+        if request.is_json:
+            return jsonify({"success": False, "error": "Forbidden: you have not claimed this book"}), 403
+        return "Forbidden: you have not claimed this book", 403
 
     # Check if JSON request (new flow) or form data (legacy flow)
     if request.is_json:
@@ -186,7 +228,7 @@ def link_hardcover(abs_id):
 
             # Force status to 'Want to Read' (1)
             try:
-                container.hardcover_client().update_status(
+                _hardcover_client(container).update_status(
                     int(book_id), 1, int(edition_id) if edition_id else None
                 )
             except Exception as e:
@@ -203,7 +245,8 @@ def link_hardcover(abs_id):
         return redirect(url_for("index"))
 
     # Resolve book
-    book_data = container.hardcover_client().resolve_book_from_input(url)
+    hardcover_client = _hardcover_client(container)
+    book_data = hardcover_client.resolve_book_from_input(url)
     if not book_data:
         flash(f"Could not find book for: {url}", "error")
         return redirect(url_for("index"))
@@ -222,7 +265,7 @@ def link_hardcover(abs_id):
 
         # Force status to 'Want to Read' (1)
         try:
-            container.hardcover_client().update_status(
+            hardcover_client.update_status(
                 book_data["book_id"], 1, book_data.get("edition_id")
             )
         except Exception as e:

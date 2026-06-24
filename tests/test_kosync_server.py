@@ -96,6 +96,70 @@ class TestKosyncDocument(unittest.TestCase):
         self.assertAlmostEqual(float(retrieved.percentage), 0.9)
         self.assertEqual(retrieved.progress, '/body/div[99]')
 
+    def test_save_kosync_document_uses_current_user_context(self):
+        """New KoSync rows should inherit the authenticated user's scope."""
+        from src.utils.user_context import reset_current_user_id, set_current_user_id
+
+        user = self.db_service.create_user(f"cwa-user-{time.time_ns()}", "secret")
+        token = set_current_user_id(user.id)
+        try:
+            saved = self.db_service.save_kosync_document(
+                KosyncDocument(document_hash='1' * 32, percentage=0.1)
+            )
+        finally:
+            reset_current_user_id(token)
+
+        self.assertEqual(saved.user_id, user.id)
+
+    def test_try_find_epub_by_hash_handles_cached_filename_hash_collision(self):
+        """A stale filename cache must not overwrite an existing document hash row."""
+        from src.api import kosync_server
+
+        epub_dir = Path(TEST_DIR) / 'epub_collision'
+        shutil.rmtree(epub_dir, ignore_errors=True)
+        epub_dir.mkdir(parents=True, exist_ok=True)
+        filename = 'Dungeon Crawler Carl.epub'
+        epub_path = epub_dir / filename
+        epub_path.write_bytes(b'epub-content')
+
+        old_hash = '6' * 32
+        target_hash = 'b' * 32
+        self.db_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=old_hash,
+                filename=filename,
+                source='filesystem',
+                mtime=0.0,
+                percentage=0.12,
+            )
+        )
+        self.db_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=target_hash,
+                linked_abs_id='dcc-book',
+                percentage=0.34,
+            )
+        )
+
+        ebook_parser = MagicMock()
+        ebook_parser.get_kosync_id.return_value = target_hash
+        container = MagicMock()
+        container.ebook_parser.return_value = ebook_parser
+        container.booklore_client.return_value.is_configured.return_value = False
+
+        with patch.object(kosync_server, '_database_service', self.db_service), \
+             patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, '_ebook_dir', epub_dir):
+            result = kosync_server._try_find_epub_by_hash(target_hash)
+
+        self.assertEqual(result, filename)
+        target_doc = self.db_service.get_kosync_document(target_hash)
+        self.assertEqual(target_doc.filename, filename)
+        self.assertAlmostEqual(float(target_doc.percentage), 0.34)
+        stale_doc = self.db_service.get_kosync_document(old_hash)
+        self.assertIsNone(stale_doc.filename)
+        self.assertAlmostEqual(float(stale_doc.percentage), 0.12)
+
     def test_link_kosync_document(self):
         """Test linking a document to an ABS book."""
         # Create doc
@@ -179,6 +243,8 @@ class TestKosyncEndpoints(unittest.TestCase):
              session.query(Setting).delete()
              session.query(State).delete()
              session.query(Book).delete()
+        if web_server.database_service.count_users() == 0:
+            web_server.database_service.create_user("admin", "secret", role="admin")
         kosync_server._kosync_device_session_registry = None
         with kosync_server._kosync_open_sessions_lock:
             kosync_server._kosync_open_sessions.clear()
@@ -290,6 +356,78 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(data['device_id'], 'KINDLE456')
         self.assertIn('timestamp', data)
 
+    def test_same_library_same_hash_two_users_keep_separate_progress(self):
+        """Two users reading the same EPUB hash should not share progress."""
+        from src import web_server
+        import hashlib
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        suffix = str(int(time.time() * 1000000))
+        kosync_user = f"reader-b-{suffix}"
+        reader_b = svc.create_user(f"same_hash_reader_b_{suffix}", "pw", role="user")
+        svc.set_user_credential(reader_b.id, "KOSYNC_USER", kosync_user)
+        svc.set_user_credential(reader_b.id, "KOSYNC_KEY", "reader-b-pass")
+
+        doc_hash = "m" * 32
+        svc.save_book(Book(
+            abs_id="shared-same-hash",
+            abs_title="Shared Same Hash",
+            ebook_filename="same.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        svc.link_user_book(reader_b.id, "shared-same-hash")
+
+        reader_b_headers = {
+            "x-auth-user": kosync_user,
+            "x-auth-key": hashlib.md5(b"reader-b-pass").hexdigest(),
+            "Content-Type": "application/json",
+        }
+
+        admin_put = self.client.put(
+            "/syncs/progress",
+            headers=self.auth_headers,
+            json={
+                "document": doc_hash,
+                "progress": "/body/admin",
+                "percentage": 0.80,
+                "device": "KoboA",
+                "device_id": "A",
+            },
+        )
+        self.assertEqual(admin_put.status_code, 200)
+
+        reader_b_put = self.client.put(
+            "/syncs/progress",
+            headers=reader_b_headers,
+            json={
+                "document": doc_hash,
+                "progress": "/body/reader-b",
+                "percentage": 0.20,
+                "device": "KoboB",
+                "device_id": "B",
+            },
+        )
+        self.assertEqual(reader_b_put.status_code, 200)
+
+        admin_state = svc.get_state("shared-same-hash", "kosync", user_id=admin_id)
+        reader_b_state = svc.get_state("shared-same-hash", "kosync", user_id=reader_b.id)
+        self.assertAlmostEqual(float(admin_state.percentage), 0.80)
+        self.assertEqual(admin_state.xpath, "/body/admin")
+        self.assertAlmostEqual(float(reader_b_state.percentage), 0.20)
+        self.assertEqual(reader_b_state.xpath, "/body/reader-b")
+
+        admin_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        reader_b_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=reader_b_headers)
+        self.assertEqual(admin_get.status_code, 200)
+        self.assertEqual(reader_b_get.status_code, 200)
+        self.assertAlmostEqual(admin_get.get_json()["percentage"], 0.80)
+        self.assertEqual(admin_get.get_json()["progress"], "/body/admin")
+        self.assertAlmostEqual(reader_b_get.get_json()["percentage"], 0.20)
+        self.assertEqual(reader_b_get.get_json()["progress"], "/body/reader-b")
+
     def test_get_progress_returns_502_when_direct_hash_has_pct_but_empty_progress(self):
         self.client.put(
             '/syncs/progress',
@@ -346,6 +484,17 @@ class TestKosyncEndpoints(unittest.TestCase):
 
     def test_device_sync_manifest_returns_service_payload(self):
         from src.api import kosync_server
+        from src import web_server
+
+        # The manifest is scoped to the authenticated device user's owned matches;
+        # give that user (the default admin the kosync creds resolve to) an active
+        # 'abs-1' match so it survives the per-user filter.
+        web_server.database_service.save_book(Book(
+            abs_id="abs-1",
+            abs_title="Dragon's Justice",
+            ebook_filename="Dragon's Justice.epub",
+            status="active",
+        ))
 
         service = MagicMock()
         service.build_manifest.return_value = {
@@ -376,6 +525,14 @@ class TestKosyncEndpoints(unittest.TestCase):
 
     def test_device_sync_download_returns_file_attachment(self):
         from src.api import kosync_server
+        from src import web_server
+
+        # The download gate now requires the device user to have claimed the book;
+        # give the authenticated user (the default admin) a claim on abs-1.
+        svc = web_server.database_service
+        svc.save_book(Book(abs_id="abs-1", abs_title="Dragon's Justice",
+                           ebook_filename="d.epub", status="active",
+                           user_id=svc._default_user_id()))
 
         download_path = Path(TEST_DIR) / "dragon.epub"
         download_path.write_bytes(b"epub")
@@ -403,6 +560,64 @@ class TestKosyncEndpoints(unittest.TestCase):
             response.headers.get("Content-Disposition", ""),
         )
         self.assertEqual(response.data, b"epub")
+
+    def test_device_sync_manifest_scopes_to_owning_user(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        other = svc.create_user("manifest_other_user", "pw", role="user")
+        svc.save_book(Book(abs_id="mine", abs_title="Mine", ebook_filename="m.epub",
+                           status="active", user_id=admin_id))
+        svc.save_book(Book(abs_id="theirs", abs_title="Theirs", ebook_filename="t.epub",
+                           status="active", user_id=other.id))
+
+        service = MagicMock()
+        service.build_manifest.return_value = {
+            "generated_at": 1,
+            "revision": "abc",
+            "delete_mode": "mirror",
+            "books": [
+                {"abs_id": "mine", "title": "Mine", "filename": "m.epub",
+                 "content_hash": "h1", "download_path": "/x", "size": 1},
+                {"abs_id": "theirs", "title": "Theirs", "filename": "t.epub",
+                 "content_hash": "h2", "download_path": "/y", "size": 1},
+            ],
+        }
+        container = MagicMock()
+        container.koreader_device_sync_service.return_value = service
+
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
+        with patch.object(kosync_server, '_container', container):
+            response = self.client.get('/koreader/device-sync/manifest', headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 200)
+        ids = [b["abs_id"] for b in response.get_json()["books"]]
+        self.assertEqual(ids, ["mine"])
+
+    def test_device_sync_download_blocks_another_users_book(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        other = svc.create_user("download_other_user", "pw", role="user")
+        svc.save_book(Book(abs_id="theirs-dl", abs_title="Theirs", ebook_filename="t.epub",
+                           status="active", user_id=other.id))
+
+        service = MagicMock()
+        container = MagicMock()
+        container.koreader_device_sync_service.return_value = service
+
+        with patch.object(kosync_server, '_container', container):
+            response = self.client.get(
+                '/koreader/device-sync/books/theirs-dl/download',
+                headers=self.auth_headers,
+            )
+
+        self.assertEqual(response.status_code, 404)
+        service.resolve_download.assert_not_called()
 
     def _clear_koreader_stats_tables(self):
         from src import web_server

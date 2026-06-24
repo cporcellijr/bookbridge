@@ -119,21 +119,51 @@ class ForgeService:
     def _should_cleanup_staged_sources(self, stage_mode: str) -> bool:
         return self._normalize_stage_mode(stage_mode) == DEFAULT_STAGE_MODE
 
+    def _for_client_bundle(self, client_bundle=None):
+        """Return a worker service using the supplied per-user clients.
+
+        Forge work runs in background threads. Rather than mutating this global
+        singleton for each request, create a lightweight service that shares the
+        durable collaborators and active task set while using the request user's
+        API/sync clients.
+        """
+        if client_bundle is None:
+            return self
+
+        worker = ForgeService(
+            database_service=self.database_service,
+            abs_client=getattr(client_bundle, "abs_client", self.abs_client),
+            booklore_client=getattr(client_bundle, "booklore_client", self.booklore_client),
+            storyteller_client=getattr(client_bundle, "storyteller_client", self.storyteller_client),
+            library_service=getattr(client_bundle, "library_service", self.library_service) or self.library_service,
+            ebook_parser=self.ebook_parser,
+            transcriber=self.transcriber,
+            alignment_service=self.alignment_service,
+            bookorbit_client=getattr(client_bundle, "bookorbit_client", self.bookorbit_client),
+            sync_clients=getattr(client_bundle, "sync_clients", self.sync_clients),
+        )
+        worker.active_tasks = self.active_tasks
+        worker.lock = self.lock
+        worker.ABS_API_TOKEN = getattr(worker.abs_client, "token", self.ABS_API_TOKEN)
+        worker.ABS_API_URL = getattr(worker.abs_client, "base_url", self.ABS_API_URL)
+        return worker
+
     def _shelve_forged_ebook(self, book, shelf_filename: str) -> None:
         """Add the forged book's ebook to the Kobo shelf on whichever library
         hosts it (BookOrbit or Grimmory), skipping unconfigured clients."""
         ebook_source = (getattr(book, 'ebook_source', None) or '').strip().lower() if book else ''
+        # The shelf name resolves per-user from each client's own credentials (the
+        # forge worker holds the matching user's bundle), so the book lands on that
+        # user's destination shelf rather than the global one.
         if ebook_source == 'bookorbit':
             if self.bookorbit_client and self.bookorbit_client.is_configured():
-                bookorbit_shelf_name = (os.environ.get("BOOKORBIT_SHELF_NAME") or "Kobo").strip()
                 ebook_source_id = getattr(book, 'ebook_source_id', None)
                 if ebook_source_id and hasattr(self.bookorbit_client, 'add_book_id_to_shelf'):
-                    self.bookorbit_client.add_book_id_to_shelf(ebook_source_id, bookorbit_shelf_name)
+                    self.bookorbit_client.add_book_id_to_shelf(ebook_source_id)
                 else:
-                    self.bookorbit_client.add_to_shelf(shelf_filename, bookorbit_shelf_name)
+                    self.bookorbit_client.add_to_shelf(shelf_filename)
         elif self.booklore_client and self.booklore_client.is_configured():
-            booklore_shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "Kobo")
-            self.booklore_client.add_to_shelf(shelf_filename, booklore_shelf_name)
+            self.booklore_client.add_to_shelf(shelf_filename)
 
     def _automatch_progress_trackers(self, book) -> None:
         """Run Hardcover/StoryGraph auto-match after a successful forge,
@@ -424,13 +454,9 @@ class ForgeService:
 
     def _copy_audio_files(self, abs_id: str, dest_folder: Path, stage_mode: str = DEFAULT_STAGE_MODE):
         """Copy audiobook files from ABS - Book Linker version"""
-        headers = {"Authorization": f"Bearer {self.ABS_API_TOKEN}"}
-        url = urljoin(self.ABS_API_URL, f"/api/items/{abs_id}")
         normalized_stage_mode = self._normalize_stage_mode(stage_mode)
         try:
-            r = requests.get(url, headers=headers, timeout=15)
-            r.raise_for_status()
-            item = r.json()
+            item = self.abs_client.get_item_details(abs_id) or {}
             audio_files = item.get("media", {}).get("audioFiles", [])
             if not audio_files:
                 logger.warning(f"⚠️ No audio files found for ABS '{abs_id}'")
@@ -477,7 +503,10 @@ class ForgeService:
                 else:
                     # 4. API Download Fallback
                     logger.info(f"⚡ Local file not found, downloading via API: '{filename}'")
-                    stream_url = f"{self.ABS_API_URL.rstrip('/')}/api/items/{abs_id}/file/{f.get('ino')}?token={self.ABS_API_TOKEN}"
+                    stream_url = (
+                        f"{self.abs_client.base_url}/api/items/{abs_id}/file/{f.get('ino')}"
+                        f"?token={self.abs_client.token}"
+                    )
                     dest_path = dest_folder / filename
                     # Use the ABS Client
                     if self.abs_client.download_file(stream_url, dest_path):
@@ -842,6 +871,7 @@ class ForgeService:
         audio_source: str = None,
         audio_source_id: str = None,
         stage_mode: str = DEFAULT_STAGE_MODE,
+        client_bundle=None,
     ):
         """
         Start manual forge process in background thread.
@@ -857,8 +887,9 @@ class ForgeService:
             thread_options["stage_mode"] = normalized_stage_mode
         if thread_options:
             thread_kwargs["kwargs"] = thread_options
+        worker = self._for_client_bundle(client_bundle)
         thread = threading.Thread(
-            target=self._forge_background_task,
+            target=worker._forge_background_task,
             args=(abs_id, text_item, title, author),
             daemon=True,
             **thread_kwargs
@@ -1085,7 +1116,7 @@ class ForgeService:
 
     def start_auto_forge_match(self, abs_id, text_item, title, author, original_filename, original_hash,
                                audio_source: str = None, audio_source_id: str = None,
-                               stage_mode: str = DEFAULT_STAGE_MODE):
+                               stage_mode: str = DEFAULT_STAGE_MODE, client_bundle=None):
         """
         Start Auto-Forge & Match pipeline in background thread.
         Links forged artifact to DB after completion.
@@ -1094,8 +1125,9 @@ class ForgeService:
         thread_kwargs = {}
         if normalized_stage_mode != DEFAULT_STAGE_MODE:
             thread_kwargs["kwargs"] = {"stage_mode": normalized_stage_mode}
+        worker = self._for_client_bundle(client_bundle)
         thread = threading.Thread(
-            target=self._auto_forge_background_task,
+            target=worker._auto_forge_background_task,
             args=(abs_id, text_item, title, author, original_filename, original_hash,
                   audio_source, audio_source_id),
             daemon=True,

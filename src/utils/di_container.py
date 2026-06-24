@@ -34,6 +34,7 @@ from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAu
 from src.services.calibre_identifier_resolver import CalibreIdentifierResolver
 from src.services.book_mapping_service import BookMappingService
 from src.services.shelf_watch_service import ShelfWatchService
+from src.services.user_client_registry import UserClientRegistry
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.sync_clients.kosync_sync_client import KoSyncSyncClient
 from src.sync_clients.storyteller_sync_client import StorytellerSyncClient
@@ -363,6 +364,20 @@ class Container(containers.DeclarativeContainer):
         BookOrbit=shelf_watch_service_bookorbit,
     )
 
+    # Per-user client registry (multi-user). Builds per-user API + sync clients
+    # from each user's stored credentials, reusing the shared catalog services.
+    # The global Singletons above remain for the existing single-user paths;
+    # per-user sync (Phase 3+) goes through this registry.
+    user_client_registry = providers.Singleton(
+        UserClientRegistry,
+        database_service=database_service,
+        ebook_parser=ebook_parser,
+        alignment_service=alignment_service,
+        transcriber=transcriber,
+        ollama_client=ollama_client,
+        epub_cache_dir=epub_cache_dir,
+    )
+
     # Sync Manager
     sync_manager = providers.Singleton(
         SyncManager,
@@ -386,7 +401,8 @@ class Container(containers.DeclarativeContainer):
 
         epub_cache_dir=epub_cache_dir,
         data_dir=data_dir,
-        books_dir=books_dir
+        books_dir=books_dir,
+        user_client_registry=user_client_registry,
     )
 
 

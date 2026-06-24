@@ -29,6 +29,7 @@ from urllib.parse import quote
 import requests
 
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,9 @@ _AUDIO_FORMATS = {"m4b", "mp3", "m4a", "opus", "ogg", "flac", "aax", "aac"}
 
 
 class BookOrbitClient:
-    def __init__(self, ollama_client=None):
+    def __init__(self, ollama_client=None, credentials: dict = None):
         self.ollama_client = ollama_client
+        self._creds = credentials  # multi-user: per-user BOOKORBIT_* overrides
         self._token: Optional[str] = None
         self._token_timestamp: float = 0
         self._token_lock = threading.Lock()
@@ -68,19 +70,19 @@ class BookOrbitClient:
     # ------------------------------------------------------------------
 
     def _get_base_url(self) -> str:
-        raw = os.environ.get("BOOKORBIT_SERVER", "").rstrip("/")
+        raw = resolve_setting(self._creds, "BOOKORBIT_SERVER", "").rstrip("/")
         if raw and not raw.lower().startswith(("http://", "https://")):
             raw = f"http://{raw}"
         return raw
 
     def _get_username(self) -> str:
-        return os.environ.get("BOOKORBIT_USER", "")
+        return resolve_setting(self._creds, "BOOKORBIT_USER", "")
 
     def _get_password(self) -> str:
-        return os.environ.get("BOOKORBIT_PASSWORD", "")
+        return resolve_setting(self._creds, "BOOKORBIT_PASSWORD", "")
 
     def is_configured(self) -> bool:
-        if os.environ.get("BOOKORBIT_ENABLED", "").lower() == "false":
+        if str(resolve_setting(self._creds, "BOOKORBIT_ENABLED", "")).lower() == "false":
             return False
         return bool(self._get_base_url() and self._get_username() and self._get_password())
 
@@ -898,10 +900,11 @@ class BookOrbitClient:
         info = self.find_book_by_filename(filename)
         return info.get("id") if info else None
 
-    def add_book_id_to_shelf(self, book_id, shelf_name: str) -> bool:
+    def add_book_id_to_shelf(self, book_id, shelf_name: str = None) -> bool:
         """Add a known BookOrbit book id to a collection (no filename lookup)."""
         if book_id is None:
             return False
+        shelf_name = shelf_name or resolve_setting(self._creds, "BOOKORBIT_SHELF_NAME", "Kobo")
         cid = self.ensure_shelf_exists(shelf_name)
         if cid is None:
             return False
@@ -910,9 +913,10 @@ class BookOrbitClient:
         )
         return bool(resp and resp.status_code in (200, 201, 204))
 
-    def remove_book_id_from_shelf(self, book_id, shelf_name: str) -> bool:
+    def remove_book_id_from_shelf(self, book_id, shelf_name: str = None) -> bool:
         if book_id is None:
             return False
+        shelf_name = shelf_name or resolve_setting(self._creds, "BOOKORBIT_SHELF_NAME", "Kobo")
         cid = self._get_collection_id(shelf_name)
         if cid is None:
             return False
@@ -921,11 +925,12 @@ class BookOrbitClient:
         )
         return bool(resp and resp.status_code in (200, 201, 204))
 
-    def add_to_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
+    def add_to_shelf(self, ebook_filename: str, shelf_name: str = None) -> bool:
         book_id = self._resolve_book_id_for_filename(ebook_filename)
         return self.add_book_id_to_shelf(book_id, shelf_name)
 
-    def remove_from_shelf(self, ebook_filename: str, shelf_name: str) -> bool:
+    def remove_from_shelf(self, ebook_filename: str, shelf_name: str = None) -> bool:
+        shelf_name = shelf_name or resolve_setting(self._creds, "BOOKORBIT_SHELF_NAME", "Kobo")
         cid = self._get_collection_id(shelf_name)
         book_id = self._resolve_book_id_for_filename(ebook_filename)
         if cid is None or book_id is None:

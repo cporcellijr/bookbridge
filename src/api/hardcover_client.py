@@ -21,6 +21,7 @@ from datetime import date
 import requests
 
 from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,10 @@ class HardcoverRateLimitError(Exception):
 
 
 class HardcoverClient:
-    def __init__(self):
+    def __init__(self, credentials: dict = None):
+        self._creds = credentials  # multi-user: per-user HARDCOVER_TOKEN
         self.api_url = "https://api.hardcover.app/v1/graphql"
-        self.token = os.environ.get("HARDCOVER_TOKEN")
+        self.token = resolve_setting(credentials, "HARDCOVER_TOKEN")
         self.user_id = None
 
         if self.token:
@@ -80,9 +82,13 @@ class HardcoverClient:
 
     def is_configured(self):
         provider = (os.environ.get("PROGRESS_TRACKER_PROVIDER") or "").strip().lower()
-        if provider and provider != "hardcover":
+        explicit_user_enable = (
+            self._creds is not None
+            and str(self._creds.get("HARDCOVER_ENABLED", "")).strip().lower() == "true"
+        )
+        if provider and provider != "hardcover" and not explicit_user_enable:
             return False
-        enabled_val = os.environ.get("HARDCOVER_ENABLED", "").lower()
+        enabled_val = str(resolve_setting(self._creds, "HARDCOVER_ENABLED", "")).strip().lower()
         if enabled_val == "false":
             return False
         return bool(self.token)

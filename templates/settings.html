@@ -419,6 +419,195 @@
                 color: rgba(255, 255, 255, 0.5) !important;
             }
         }
+
+        /* ---- Settings tabbed layout (left sidebar) ---- */
+        .settings-layout {
+            display: flex;
+            gap: 24px;
+            align-items: flex-start;
+        }
+
+        .settings-sidebar {
+            flex: 0 0 220px;
+            position: sticky;
+            top: 96px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            background: rgba(20, 20, 20, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 14px;
+            padding: 10px;
+        }
+
+        .settings-tab {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            text-align: left;
+            padding: 11px 14px;
+            background: transparent;
+            border: none;
+            border-radius: 10px;
+            color: #b8b8b8;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s, color .15s;
+        }
+
+        .settings-tab:hover {
+            background: rgba(255, 255, 255, 0.04);
+            color: #fff;
+        }
+
+        .settings-tab.active {
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.18), rgba(118, 75, 162, 0.18));
+            color: #fff;
+            box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.35);
+        }
+
+        .settings-main {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
+        }
+
+        @media (max-width: 760px) {
+            .settings-layout {
+                flex-direction: column;
+            }
+
+            .settings-sidebar {
+                position: static;
+                flex-direction: row;
+                flex-wrap: wrap;
+                width: 100%;
+            }
+
+            .settings-tab {
+                width: auto;
+            }
+        }
+
+        /* ---- Users tab ---- */
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .users-table th,
+        .users-table td {
+            text-align: left;
+            padding: 10px 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+            font-size: 13px;
+        }
+
+        .users-table th {
+            color: #888;
+            font-weight: 600;
+        }
+
+        .users-table .row-actions form {
+            display: inline;
+            margin-right: 6px;
+        }
+
+        .u-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .u-badge.admin {
+            background: rgba(102, 126, 234, .2);
+            color: #aab4f5;
+        }
+
+        .u-badge.user {
+            background: #222;
+            color: #aaa;
+        }
+
+        .u-badge.on {
+            background: rgba(76, 175, 80, .15);
+            color: #a5d6a7;
+        }
+
+        .u-badge.off {
+            background: rgba(244, 67, 54, .15);
+            color: #ff8a80;
+        }
+
+        .u-input {
+            padding: 8px 10px;
+            background: #0e0e0e;
+            border: 1px solid #2c2c2c;
+            border-radius: 7px;
+            color: #fff;
+            font-size: 13px;
+        }
+
+        .u-btn {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 7px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .u-btn-sm {
+            background: #222;
+            color: #ddd;
+        }
+
+        .u-btn-danger {
+            background: rgba(244, 67, 54, .2);
+            color: #ff8a80;
+        }
+
+        .u-btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+        }
+
+        .u-create {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .u-msg {
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 14px;
+        }
+
+        .u-msg.ok {
+            background: rgba(76, 175, 80, .12);
+            border: 1px solid rgba(76, 175, 80, .4);
+            color: #a5d6a7;
+        }
+
+        .u-msg.err {
+            background: rgba(244, 67, 54, .12);
+            border: 1px solid rgba(244, 67, 54, .4);
+            color: #ff8a80;
+        }
     </style>
 </head>
 
@@ -486,7 +675,21 @@
             <h2>⚙️ Application Settings</h2>
         </div>
 
+        <div class="settings-layout">
+            <aside class="settings-sidebar">
+                <button type="button" class="settings-tab active" data-tab="general" onclick="showSettingsTab('general')">⚙️ General</button>
+                <button type="button" class="settings-tab" data-tab="reading_apps" onclick="showSettingsTab('reading_apps')">📚 Reading Apps</button>
+                <button type="button" class="settings-tab" data-tab="trackers" onclick="showSettingsTab('trackers')">📈 Trackers</button>
+                <button type="button" class="settings-tab" data-tab="tools" onclick="showSettingsTab('tools')">🔔 Notifications &amp; Tools</button>
+                <button type="button" class="settings-tab" data-tab="ai" onclick="showSettingsTab('ai')">🤖 AI</button>
+                <button type="button" class="settings-tab" data-tab="system" onclick="showSettingsTab('system')">🛠️ Sync &amp; System</button>
+                <button type="button" class="settings-tab" data-tab="users" onclick="showSettingsTab('users')">👥 Users</button>
+            </aside>
+            <div class="settings-main">
+
         <form method="POST" action="/settings" class="settings-form" id="settingsForm">
+
+            <div class="tab-panel active" data-panel="general">
 
             <div class="settings-section">
                 <div class="section-header">
@@ -528,25 +731,11 @@
                         <div class="help-text">Enter <code>disabled</code> to skip Audiobookshelf</div>
                     </div>
                     <div class="form-group full-width">
-                        <label>API Token</label>
-                        <input type="password" name="ABS_KEY" value="{{ get_val('ABS_KEY') }}">
-                        <div class="help-text">Enter <code>disabled</code> to skip Audiobookshelf</div>
-                    </div>
-
-                    <!-- Wrapper for Library ID -->
-                    <div id="abs_library_id_group" class="form-group">
-                        <label>Library ID</label>
-                        <div style="display: flex; gap: 10px;">
-                            <input type="text" name="ABS_LIBRARY_ID" value="{{ get_val('ABS_LIBRARY_ID') }}"
-                                placeholder="e.g. lib_123" style="flex: 1;">
-                            <button class="btn" type="button" onclick="checkAbsLibs()">🔍 Find IDs</button>
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user account.</strong> Each user's Audiobookshelf API token &amp; Library ID are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The server URL and engine settings here stay global.
                         </div>
-                        <select id="abs_library_picker" style="display:none; margin-top:10px;"
-                            onchange="applyLibraryPickerSelection('ABS_LIBRARY_ID', 'abs_library_picker')">
-                            <option value="">Select a library ID...</option>
-                        </select>
-                        <div id="abs_library_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
-                        <div class="help-text">Use when restricting ABS search to a specific library.</div>
                     </div>
 
                     <div class="form-group">
@@ -562,6 +751,10 @@
                     <!-- Old Checkbox location removed -->
                 </div>
             </div>
+
+            </div><!-- /general panel -->
+
+            <div class="tab-panel" data-panel="reading_apps">
 
             <!-- KOSync Server (Optional) -->
             <div class="settings-section section-highlight" style="border-color: rgba(102, 126, 234, 0.3);">
@@ -621,17 +814,12 @@
 
                     <!-- Separator -->
                     <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
-                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">User Credentials
-                    </h4>
-
-                    <div class="form-group">
-                        <label>Username</label>
-                        <input type="text" name="KOSYNC_USER" value="{{ get_val('KOSYNC_USER') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" name="KOSYNC_KEY" value="{{ get_val('KOSYNC_KEY') }}">
-                        <div class="help-text">This will be your KOSync password in KOReader.</div>
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user login.</strong> Each user's KoSync username &amp; password are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The server URL above stays global.
+                        </div>
                     </div>
                     <div class="form-group full-width">
                         <label>Hash Method</label>
@@ -702,14 +890,12 @@
                         <label>API URL</label>
                         <input type="text" name="STORYTELLER_API_URL" value="{{ get_val('STORYTELLER_API_URL') }}">
                     </div>
-                    <div class="form-group">
-                        <label>Username</label>
-                        <input type="text" name="STORYTELLER_USER" value="{{ get_val('STORYTELLER_USER') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" name="STORYTELLER_PASSWORD"
-                            value="{{ get_val('STORYTELLER_PASSWORD') }}">
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user login.</strong> Each user's Storyteller username &amp; password are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The API URL above stays global.
+                        </div>
                     </div>
                     <div class="form-group" style="align-items: center;">
                         <label>Skip ReadAloud EPUB Cache</label>
@@ -755,31 +941,11 @@
                         <label>Server URL</label>
                         <input type="text" name="BOOKLORE_SERVER" value="{{ get_val('BOOKLORE_SERVER') }}">
                     </div>
-                    <div class="form-group">
-                        <label>Username</label>
-                        <input type="text" name="BOOKLORE_USER" value="{{ get_val('BOOKLORE_USER') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" name="BOOKLORE_PASSWORD" value="{{ get_val('BOOKLORE_PASSWORD') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Shelf Name</label>
-                        <input type="text" name="BOOKLORE_SHELF_NAME" value="{{ get_val('BOOKLORE_SHELF_NAME') }}">
-                    </div>
                     <div class="form-group full-width">
-                        <label>Grimmory Library ID (Optional)</label>
-                        <div style="display: flex; gap: 10px;">
-                            <input type="text" name="BOOKLORE_LIBRARY_ID" value="{{ get_val('BOOKLORE_LIBRARY_ID') }}"
-                                placeholder="e.g. 1" style="flex: 1;">
-                            <button class="btn" type="button" onclick="checkBookloreLibs()">🔍 Find IDs</button>
-                        </div>
-                        <select id="booklore_library_picker" style="display:none; margin-top:10px;"
-                            onchange="applyLibraryPickerSelection('BOOKLORE_LIBRARY_ID', 'booklore_library_picker')">
-                            <option value="">Select a library ID...</option>
-                        </select>
-                        <div id="booklore_library_picker_status" class="help-text" style="display:none; margin-top:6px;"></div>
-                        <div class="help-text">Restricts sync to a specific library (e.g., 1). Leave empty to sync all.
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user account.</strong> Each user's Grimmory login, Shelf name &amp; Library ID are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The server URL, shelf-watch and device-sync settings here stay global.
                         </div>
                     </div>
                     <div class="checkbox-wrapper full-width">
@@ -881,18 +1047,12 @@
                         <label>Server URL</label>
                         <input type="text" name="BOOKORBIT_SERVER" value="{{ get_val('BOOKORBIT_SERVER') }}">
                     </div>
-                    <div class="form-group">
-                        <label>Username</label>
-                        <input type="text" name="BOOKORBIT_USER" value="{{ get_val('BOOKORBIT_USER') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" name="BOOKORBIT_PASSWORD" value="{{ get_val('BOOKORBIT_PASSWORD') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Collection Name</label>
-                        <input type="text" name="BOOKORBIT_SHELF_NAME" value="{{ get_val('BOOKORBIT_SHELF_NAME') }}">
-                        <div class="help-text">BookOrbit "collection" auto-matched books are moved to on success.</div>
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user account.</strong> Each user's BookOrbit login &amp; Collection name are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The server URL and engine settings here stay global.
+                        </div>
                     </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="bookorbit_sessions" name="BOOKORBIT_READING_SESSIONS"
@@ -963,13 +1123,12 @@
                     <!-- OPDS Library -->
                     <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
                     <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">OPDS Library</h4>
-                    <div class="form-group">
-                        <label>Username</label>
-                        <input type="text" name="CWA_USERNAME" value="{{ get_val('CWA_USERNAME') }}">
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" name="CWA_PASSWORD" value="{{ get_val('CWA_PASSWORD') }}">
+                    <div class="form-group full-width">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user account.</strong> Each user's CWA login &amp; Kobo sync token are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The server URL and engine settings here stay global.
+                        </div>
                     </div>
 
                     <!-- Reading Progress Sync -->
@@ -980,11 +1139,6 @@
                             {% if get_bool('CWA_SYNC_ENABLED') %}checked{% endif %}>
                         <label for="cwa_sync_toggle">Enable Sync</label>
                         <div class="help-text">Sync reading progress via CWA's Kobo sync protocol. Works with stock Kobo and KOReader.</div>
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Kobo Auth Token</label>
-                        <input type="password" name="CWA_SYNC_TOKEN" value="{{ get_val('CWA_SYNC_TOKEN') }}">
-                        <div class="help-text">From CWA → User Settings → Kobo Sync Token.</div>
                     </div>
 
                     <!-- Authoritative Identifier Mapping -->
@@ -1010,6 +1164,10 @@
                     </div>
                 </div>
             </div>
+
+            </div><!-- /reading_apps panel -->
+
+            <div class="tab-panel" data-panel="trackers">
 
             <!-- Progress Tracker Provider (Either/Or) -->
             <div class="settings-section">
@@ -1050,8 +1208,11 @@
                 </div>
                 <div id="hardcover_body" class="section-body {% if not hardcover_enabled %}collapsed{% endif %}">
                     <div class="form-group full-width">
-                        <label>API Token</label>
-                        <input type="password" name="HARDCOVER_TOKEN" value="{{ get_val('HARDCOVER_TOKEN') }}">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user token.</strong> Each user's Hardcover API token is set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The cooldown below stays global.
+                        </div>
                     </div>
                     <div class="form-group full-width">
                         <label>Update Cooldown (minutes)</label>
@@ -1081,12 +1242,11 @@
                 </div>
                 <div id="storygraph_body" class="section-body {% if not storygraph_enabled %}collapsed{% endif %}">
                     <div class="form-group full-width">
-                        <label>Session Cookie (_storygraph_session)</label>
-                        <input type="password" name="STORYGRAPH_SESSION_COOKIE" value="{{ get_val('STORYGRAPH_SESSION_COOKIE') }}">
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Remember User Token</label>
-                        <input type="password" name="STORYGRAPH_REMEMBER_USER_TOKEN" value="{{ get_val('STORYGRAPH_REMEMBER_USER_TOKEN') }}">
+                        <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
+                            🔒 <strong>Per-user cookies.</strong> Each user's StoryGraph session cookie &amp; remember-user token are set per user in
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
+                            (including your own). The cooldown below stays global.
+                        </div>
                     </div>
                     <div class="form-group full-width">
                         <label>Update Cooldown (minutes)</label>
@@ -1095,6 +1255,10 @@
                     </div>
                 </div>
             </div>
+
+            </div><!-- /trackers panel -->
+
+            <div class="tab-panel" data-panel="tools">
 
             <!-- Telegram (Optional) -->
             <div class="settings-section">
@@ -1190,6 +1354,10 @@
                     </div>
                 </div>
             </div>
+
+            </div><!-- /tools panel -->
+
+            <div class="tab-panel" data-panel="ai">
 
             <!-- Ollama (Local LLM) -->
             <div class="settings-section">
@@ -1348,6 +1516,10 @@
                     </div>
                 </div>
             </div>
+
+            </div><!-- /ai panel -->
+
+            <div class="tab-panel" data-panel="system">
 
             <div class="settings-section">
                 <div class="section-header">
@@ -1509,6 +1681,13 @@
                     <div class="form-group">
                         <label>Books Directory</label>
                         <input type="text" name="BOOKS_DIR" value="{{ get_val('BOOKS_DIR') }}">
+                    </div>
+                    <div class="form-group">
+                        <label>Extra Ebook Libraries (Optional)</label>
+                        <input type="text" name="EXTRA_EBOOK_DIRS"
+                            value="{{ get_val('EXTRA_EBOOK_DIRS') }}"
+                            placeholder="/calibre_library, /another_library">
+                        <div class="help-text">Additional mounted library folders to hash-scan for KoSync auto-discovery, beyond the Books Directory. Use this when a user's library (e.g. a separate Calibre library) lives outside <code>/books</code>. Comma- or newline-separated container paths; each must be mounted into the container.</div>
                     </div>
                     <div class="form-group">
                         <label>Storyteller Library Path</label>
@@ -1760,87 +1939,89 @@
                 </div>
             </div>
 
+            </div><!-- /system panel -->
+
             <div class="submit-bar">
                 <span class="restart-warn">⚠️ Application will restart instantly</span>
                 <button type="submit" class="btn btn-primary">💾 Save Settings</button>
             </div>
         </form>
+
+        <!-- Users tab (own forms — posts to /settings, not the application form above) -->
+        <div class="tab-panel" data-panel="users">
+            {% if user_message %}<div class="u-msg ok">{{ user_message }}</div>{% endif %}
+            {% if user_error %}<div class="u-msg err">{{ user_error }}</div>{% endif %}
+
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>👥 Users</h3>
+                </div>
+                <div class="section-body">
+                    <table class="users-table">
+                        <tr>
+                            <th>User</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Last login</th>
+                            <th>Actions</th>
+                        </tr>
+                        {% for u in users %}
+                        <tr>
+                            <td>{{ u.username }}{% if u.id == current_user_id %} <span style="color:#666">(you)</span>{% endif %}</td>
+                            <td><span class="u-badge {{ u.role }}">{{ u.role }}</span></td>
+                            <td>{% if u.active %}<span class="u-badge on">active</span>{% else %}<span class="u-badge off">disabled</span>{% endif %}</td>
+                            <td style="color:#888">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
+                            <td class="row-actions">
+                                <a href="{{ url_for('admin_user_integrations', user_id=u.id) }}" class="u-btn u-btn-sm">Integrations</a>
+                                <form method="POST" action="/settings">
+                                    <input type="hidden" name="action" value="reset_password">
+                                    <input type="hidden" name="user_id" value="{{ u.id }}">
+                                    <input class="u-input" type="password" name="password" placeholder="new password" autocomplete="off" style="width:130px">
+                                    <button type="submit" class="u-btn u-btn-sm">Reset</button>
+                                </form>
+                                <form method="POST" action="/settings">
+                                    <input type="hidden" name="action" value="toggle_active">
+                                    <input type="hidden" name="user_id" value="{{ u.id }}">
+                                    <button type="submit" class="u-btn u-btn-sm">{{ 'Disable' if u.active else 'Enable' }}</button>
+                                </form>
+                                {% if u.id != current_user_id %}
+                                <form method="POST" action="/settings" onsubmit="return confirm('Delete {{ u.username }}? Their progress/credentials are removed.');">
+                                    <input type="hidden" name="action" value="delete">
+                                    <input type="hidden" name="user_id" value="{{ u.id }}">
+                                    <button type="submit" class="u-btn u-btn-danger">Delete</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>Create user</h3>
+                </div>
+                <div class="section-body">
+                    <form method="POST" action="/settings" class="u-create">
+                        <input type="hidden" name="action" value="create">
+                        <input class="u-input" type="text" name="username" placeholder="username" autocomplete="off" required>
+                        <input class="u-input" type="password" name="password" placeholder="password" autocomplete="new-password" required>
+                        <select class="u-input" name="role">
+                            <option value="user">user</option>
+                            <option value="admin">admin</option>
+                        </select>
+                        <button type="submit" class="u-btn u-btn-primary">Create</button>
+                    </form>
+                </div>
+            </div>
+        </div><!-- /users panel -->
+
+            </div><!-- /.settings-main -->
+        </div><!-- /.settings-layout -->
     </div>
 
     <script>
-        function checkBookloreLibs() {
-            const btn = event.target;
-            const originalText = btn.innerHTML;
-            btn.innerHTML = '⌛ Scanning...';
-            btn.disabled = true;
-
-            fetch('/api/booklore/libraries')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        alert('Error: ' + data.error);
-                        return;
-                    }
-                    if (data.length === 0) {
-                        alert('No libraries found. Check connection or try syncing first.');
-                        return;
-                    }
-
-                    let msg = "Found Libraries:\n\n";
-                    data.forEach(lib => {
-                        msg += `🆔 ID: ${lib.id}\n📁 Name: ${lib.name}\n------------------\n`;
-                    });
-                    alert(msg);
-                })
-                .catch(err => alert('Failed to fetch libraries: ' + err))
-                .finally(() => {
-                    btn.innerHTML = originalText;
-                    btn.disabled = false;
-                });
-        }
-
-        function checkAbsLibs() {
-            const btn = event.target;
-            const originalText = btn.innerHTML;
-            btn.innerHTML = '⌛ Scanning...';
-            btn.disabled = true;
-
-            fetch('/api/abs/libraries')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        alert('Error: ' + data.error);
-                        return;
-                    }
-                    if (data.length === 0) {
-                        alert('No libraries found. Check connection and library access.');
-                        return;
-                    }
-
-                    let msg = "Found ABS Libraries:\n\n";
-                    data.forEach(lib => {
-                        msg += `ID: ${lib.id}\nName: ${lib.name}\n`;
-                        if (lib.mediaType) {
-                            msg += `Type: ${lib.mediaType}\n`;
-                        }
-                        msg += '------------------\n';
-                    });
-                    alert(msg);
-                })
-                .catch(err => alert('Failed to fetch ABS libraries: ' + err))
-                .finally(() => {
-                    btn.innerHTML = originalText;
-                    btn.disabled = false;
-                });
-        }
-
-        function applyLibraryPickerSelection(inputName, selectId) {
-            const input = document.querySelector(`input[name="${inputName}"]`);
-            const select = document.getElementById(selectId);
-            if (!input || !select) return;
-            input.value = select.value || '';
-        }
-
         function populateLibraryPicker({ endpoint, button, inputName, selectId, statusId, emptyMessage, labelBuilder }) {
             const originalText = button.innerHTML;
             const input = document.querySelector(`input[name="${inputName}"]`);
@@ -1897,18 +2078,6 @@
                 });
         }
 
-        function checkBookloreLibs() {
-            populateLibraryPicker({
-                endpoint: '/api/booklore/libraries',
-                button: event.target,
-                inputName: 'BOOKLORE_LIBRARY_ID',
-                selectId: 'booklore_library_picker',
-                statusId: 'booklore_library_picker_status',
-                emptyMessage: 'No libraries found. Check connection or try syncing first.',
-                labelBuilder: (lib) => `${lib.name} (${lib.id})`,
-            });
-        }
-
         function applyShelfPickerSelection(inputName, selectId, singleSelect) {
             const input = document.querySelector(`input[name="${inputName}"]`);
             const select = document.getElementById(selectId);
@@ -1953,18 +2122,6 @@
                 statusId: 'booklore_watch_shelf_picker_status',
                 emptyMessage: 'No shelves found. Create one in Grimmory first, then click Find again.',
                 labelBuilder: (shelf) => `${shelf.name} (${shelf.count} books)`,
-            });
-        }
-
-        function checkAbsLibs() {
-            populateLibraryPicker({
-                endpoint: '/api/abs/libraries',
-                button: event.target,
-                inputName: 'ABS_LIBRARY_ID',
-                selectId: 'abs_library_picker',
-                statusId: 'abs_library_picker_status',
-                emptyMessage: 'No libraries found. Check connection and library access.',
-                labelBuilder: (lib) => lib.mediaType ? `${lib.name} (${lib.id}) - ${lib.mediaType}` : `${lib.name} (${lib.id})`,
             });
         }
 
@@ -2365,7 +2522,9 @@
         }
 
         function setupDirtyCheck() {
-            const inputs = document.querySelectorAll('input, select, textarea');
+            // Only the application settings form is "dirty-tracked" — the Users tab
+            // has its own forms that navigate immediately on submit.
+            const inputs = document.querySelectorAll('#settingsForm input, #settingsForm select, #settingsForm textarea');
             inputs.forEach(input => {
                 input.addEventListener('change', markDirty);
                 input.addEventListener('input', markDirty);
@@ -2381,17 +2540,44 @@
                 }
             });
 
-            // Clear dirty flag on valid submit
-            const form = document.querySelector('form');
-            if (form) {
+            // Clear dirty flag on any form submit (settings save or user-admin action).
+            document.querySelectorAll('form').forEach(function (form) {
                 form.addEventListener('submit', function () {
                     isFormDirty = false;
                 });
-            }
+            });
         }
 
         // Initialize dirty check after DOM is ready
         document.addEventListener('DOMContentLoaded', setupDirtyCheck);
+    </script>
+    <script>
+        // --- Settings sidebar tabs ---
+        const SETTINGS_TABS = ['general', 'reading_apps', 'trackers', 'tools', 'ai', 'system', 'users'];
+
+        function showSettingsTab(name) {
+            if (SETTINGS_TABS.indexOf(name) === -1) name = 'general';
+            document.querySelectorAll('.settings-tab').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.tab === name);
+            });
+            document.querySelectorAll('.tab-panel').forEach(function (p) {
+                p.classList.toggle('active', p.dataset.panel === name);
+            });
+            // The Users panel lives outside the application form; hide the form
+            // (and its Save bar) while it's showing.
+            const form = document.getElementById('settingsForm');
+            if (form) form.style.display = (name === 'users') ? 'none' : '';
+            if (history.replaceState) {
+                history.replaceState(null, '', '#' + name);
+            } else {
+                location.hash = name;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const fromHash = (location.hash || '').replace('#', '');
+            showSettingsTab(SETTINGS_TABS.indexOf(fromHash) !== -1 ? fromHash : 'general');
+        });
     </script>
 </body>
 

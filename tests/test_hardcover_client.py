@@ -91,6 +91,28 @@ class TestHardcoverClient(unittest.TestCase):
             client = HardcoverClient()
             self.assertFalse(client.is_configured())
 
+    def test_is_configured_uses_per_user_enabled_flag(self):
+        with patch.dict(
+            os.environ,
+            {"HARDCOVER_ENABLED": "false", "PROGRESS_TRACKER_PROVIDER": "storygraph"},
+            clear=False,
+        ):
+            client = HardcoverClient(credentials={
+                "HARDCOVER_TOKEN": "user-token",
+                "HARDCOVER_ENABLED": "true",
+                "__allow_global_fallback__": False,
+            })
+            self.assertTrue(client.is_configured())
+
+    def test_is_configured_honors_per_user_disabled_flag(self):
+        with patch.dict(os.environ, {"HARDCOVER_ENABLED": "true"}, clear=False):
+            client = HardcoverClient(credentials={
+                "HARDCOVER_TOKEN": "user-token",
+                "HARDCOVER_ENABLED": "false",
+                "__allow_global_fallback__": False,
+            })
+            self.assertFalse(client.is_configured())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

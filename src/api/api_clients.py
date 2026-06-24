@@ -6,6 +6,7 @@ import time
 
 from src.utils.kosync_headers import hash_kosync_key, kosync_auth_headers
 from src.utils.logging_utils import sanitize_log_data
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -16,15 +17,21 @@ def is_abs_disabled_value(value) -> bool:
     return str(value or "").strip().lower() == ABS_DISABLED_SENTINEL
 
 class ABSClient:
-    def __init__(self):
-        # Configuration is now dynamic via properties (no caching)
+    def __init__(self, credentials: dict = None):
+        # Configuration is dynamic via properties (no caching). `credentials`
+        # (multi-user) overrides per-user keys; everything else falls back to
+        # os.environ. None => global/admin client (original behavior).
+        self._creds = credentials
         self.session = requests.Session()
         self.timeout = 30
 
+    def _cfg(self, key, default=None):
+        return resolve_setting(self._creds, key, default)
+
     @property
     def base_url(self):
-        """Dynamic base_url from environment (no caching)."""
-        raw_url = os.environ.get("ABS_SERVER", "")
+        """Dynamic base_url (ABS_SERVER is global; falls back to os.environ)."""
+        raw_url = self._cfg("ABS_SERVER", "")
         if is_abs_disabled_value(raw_url):
             return ""
 
@@ -36,11 +43,14 @@ class ABSClient:
 
     @property
     def token(self):
-        """Dynamic token from environment (no caching)."""
-        raw_token = os.environ.get("ABS_KEY", "")
+        """Dynamic token (ABS_KEY is per-user when credentials are provided)."""
+        raw_token = self._cfg("ABS_KEY", "")
         if is_abs_disabled_value(raw_token):
             return ""
-        return str(raw_token).strip()
+        token = str(raw_token).strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        return token
 
     @property
     def headers(self):
@@ -53,14 +63,14 @@ class ABSClient:
 
     def is_configured(self):
         """Check if ABS is configured with URL and token."""
-        if is_abs_disabled_value(os.environ.get("ABS_SERVER")) or is_abs_disabled_value(os.environ.get("ABS_KEY")):
+        if is_abs_disabled_value(self._cfg("ABS_SERVER")) or is_abs_disabled_value(self._cfg("ABS_KEY")):
             return False
         return bool(self.base_url and self.token)
 
     def check_connection(self):
         # Verify configuration first
         if not self.is_configured():
-            if is_abs_disabled_value(os.environ.get("ABS_SERVER")) or is_abs_disabled_value(os.environ.get("ABS_KEY")):
+            if is_abs_disabled_value(self._cfg("ABS_SERVER")) or is_abs_disabled_value(self._cfg("ABS_KEY")):
                 logger.info("Audiobookshelf intentionally disabled")
                 return False
             logger.warning("⚠️ Audiobookshelf not configured (skipping)")
@@ -724,34 +734,39 @@ class ABSClient:
             return False
 
 class KoSyncClient:
-    def __init__(self):
-        # Configuration is now dynamic via properties
+    def __init__(self, credentials: dict = None):
+        # Configuration is dynamic via properties; `credentials` (multi-user)
+        # overrides per-user keys, else falls back to os.environ.
+        self._creds = credentials
         self.session = requests.Session()
+
+    def _cfg(self, key, default=None):
+        return resolve_setting(self._creds, key, default)
 
     @property
     def base_url(self):
-        url = os.environ.get("KOSYNC_SERVER", "").rstrip('/')
-        
+        url = self._cfg("KOSYNC_SERVER", "").rstrip('/')
+
         # Ensure scheme is present (case-insensitive check)
         if url and not url.lower().startswith(('http://', 'https://')):
             logger.warning(f"⚠️ KOSYNC_SERVER missing scheme, auto-correcting: {url}")
             url = f"http://{url}"
-            
+
         return url
 
     @property
     def user(self):
-        return os.environ.get("KOSYNC_USER")
+        return self._cfg("KOSYNC_USER")
 
     @property
     def auth_token(self):
-        key = os.environ.get("KOSYNC_KEY", "")
+        key = self._cfg("KOSYNC_KEY", "")
         if not key:
             return ""
         return hash_kosync_key(key)
 
     def is_configured(self):
-        enabled_val = os.environ.get("KOSYNC_ENABLED", "").lower()
+        enabled_val = str(self._cfg("KOSYNC_ENABLED", "")).lower()
         if enabled_val == 'false':
             return False
         return bool(self.base_url and self.user)

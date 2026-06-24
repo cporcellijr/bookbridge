@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ target_user.username }} - Integrations - BookBridge admin</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            background: #0a0a0a; color: #fff; margin: 0; padding: 40px 16px;
+        }
+        .card {
+            background: #151515; border: 1px solid #262626; border-radius: 14px;
+            padding: 32px; max-width: 560px; margin: 0 auto 20px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+        }
+        h1 { font-size: 20px; margin: 0 0 4px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+        .sub { color: #888; font-size: 13px; margin: 0 0 20px; }
+        .group { border-top: 1px solid #262626; padding-top: 16px; margin-top: 16px; }
+        .group:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+        .group h2 { font-size: 14px; color: #cfcfcf; margin: 0 0 12px; }
+        label { display: block; font-size: 13px; color: #bbb; margin: 0 0 6px; }
+        input[type=text], input[type=password] {
+            width: 100%; padding: 10px 12px; margin-bottom: 14px;
+            background: #0e0e0e; border: 1px solid #2c2c2c; border-radius: 8px; color: #fff; font-size: 14px;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .toggle-row input { width: 16px; height: 16px; }
+        .toggle-row label { margin: 0; color: #ddd; }
+        .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+        .group-head h2 { margin: 0; }
+        button {
+            width: 100%; padding: 11px; margin-top: 6px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;
+        }
+        button:hover { opacity: .92; }
+        .test-btn {
+            width: auto; min-width: 72px; padding: 7px 10px; margin-top: 0;
+            font-size: 12px; background: #222; border: 1px solid #343434;
+        }
+        .test-btn.ok { background: rgba(76,175,80,.18); border-color: rgba(76,175,80,.45); color: #b8e6ba; }
+        .test-btn.fail { background: rgba(244,67,54,.16); border-color: rgba(244,67,54,.45); color: #ffc2bc; }
+        .test-btn:disabled { cursor: wait; opacity: .75; }
+        .msg { padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;
+            background: rgba(76,175,80,.12); border: 1px solid rgba(76,175,80,.4); color: #a5d6a7; }
+        .nav { max-width: 560px; margin: 0 auto 16px; }
+        .nav a { color: #667eea; text-decoration: none; font-size: 13px; margin-right: 16px; }
+        .note { color: #888; font-size: 12px; background: #0e0e0e; border: 1px solid #222; border-radius: 8px; padding: 10px 12px; margin-bottom: 18px; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <a href="{{ url_for('settings') }}#users">← Users</a>
+        <a href="{{ url_for('index') }}">Dashboard</a>
+    </div>
+    <div class="card">
+        <h1>Integrations - {{ target_user.username }}</h1>
+        <p class="sub">{% if target_user.role == 'admin' %}Admin{% else %}User{% endif %} - set this user's own accounts/library here.</p>
+
+        {% if allow_master_fallback %}
+        <div class="note">Blank fields inherit the master Settings value for this admin account.</div>
+        {% else %}
+        <div class="note">Regular users need explicit account credentials here. Blank account fields stay unavailable
+            instead of inheriting the admin/master library.</div>
+        {% endif %}
+
+        {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+
+        <form method="POST" action="{{ url_for('admin_user_integrations', user_id=target_user.id) }}">
+            {% for group, fields in groups %}
+            <div class="group">
+                <div class="group-head">
+                    <h2>{{ group }}</h2>
+                    {% if user_test_services.get(group) %}
+                    <button type="button" class="test-btn" data-service="{{ user_test_services.get(group) }}"
+                        onclick="testUserIntegration(this)">Test</button>
+                    {% endif %}
+                </div>
+                {% for key, label, ftype in fields %}
+                    {% if ftype == 'bool' %}
+                    <div class="toggle-row">
+                        <input type="checkbox" id="{{ key }}" name="{{ key }}"
+                            {% if creds.get(key, '')|lower in ['true','1','yes','on'] %}checked{% endif %}>
+                        <label for="{{ key }}">{{ label }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">(master: {{ master.get(key) }})</span>{% endif %}</label>
+                    </div>
+                    {% elif ftype == 'secret' %}
+                    <label for="{{ key }}">{{ label }}</label>
+                    <input type="password" id="{{ key }}" name="{{ key }}" autocomplete="off"
+                        placeholder="{% if creds.get(key) %}set - leave blank to keep{% elif allow_master_fallback and master.get(key) %}inherits master (set){% else %}not set{% endif %}">
+                    {% elif key in ['ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'] %}
+                    <label for="{{ key }}">{{ label }}</label>
+                    <div style="display:flex; gap:8px; margin-bottom:14px;">
+                        <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
+                            style="margin-bottom:0; flex:1;"
+                            placeholder="{% if allow_master_fallback and master.get(key) %}inherits master: {{ master.get(key) }}{% else %}not set{% endif %}">
+                        <button type="button" class="test-btn" style="white-space:nowrap;"
+                            onclick="findLibraries(this, '{{ 'abs' if key == 'ABS_LIBRARY_ID' else 'booklore' }}', '{{ key }}')">🔍 Find IDs</button>
+                    </div>
+                    <select id="{{ key }}_picker"
+                        style="display:none; width:100%; margin-bottom:14px; padding:10px 12px; background:#0e0e0e; border:1px solid #2c2c2c; border-radius:8px; color:#fff; font-size:14px;"
+                        onchange="if(this.value){document.getElementById('{{ key }}').value=this.value;}">
+                        <option value="">Select a library…</option>
+                    </select>
+                    {% else %}
+                    <label for="{{ key }}">{{ label }}</label>
+                    <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
+                        placeholder="{% if allow_master_fallback and master.get(key) %}inherits master: {{ master.get(key) }}{% else %}not set{% endif %}">
+                    {% endif %}
+                {% endfor %}
+            </div>
+            {% endfor %}
+            <button type="submit">Save integrations</button>
+        </form>
+    </div>
+    <script>
+        const TEST_URL_BASE = {{ url_for('admin_user_test_connection', user_id=target_user.id, service='__service__')|tojson }};
+        const ABS_LIB_URL = {{ url_for('admin_user_abs_libraries', user_id=target_user.id)|tojson }};
+        const BOOKLORE_LIB_URL = {{ url_for('admin_user_booklore_libraries', user_id=target_user.id)|tojson }};
+
+        function findLibraries(btn, service, fieldKey) {
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '⌛';
+            const url = service === 'abs' ? ABS_LIB_URL : BOOKLORE_LIB_URL;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then((r) => r.json())
+                .then((data) => {
+                    if (data && data.error) { alert('Error: ' + data.error); return; }
+                    const picker = document.getElementById(fieldKey + '_picker');
+                    picker.innerHTML = '<option value="">Select a library…</option>';
+                    (data || []).forEach((lib) => {
+                        const opt = document.createElement('option');
+                        opt.value = lib.id;
+                        opt.textContent = (lib.name || lib.id) + ' (' + lib.id + ')'
+                            + (lib.mediaType ? ' — ' + lib.mediaType : '');
+                        picker.appendChild(opt);
+                    });
+                    if (!data || !data.length) {
+                        alert('No libraries found. Check the account fields above (no save needed).');
+                        return;
+                    }
+                    picker.style.display = 'block';
+                })
+                .catch((e) => alert('Lookup failed: ' + e))
+                .finally(() => { btn.disabled = false; btn.textContent = original; });
+        }
+
+        function collectIntegrationPayload() {
+            const payload = {};
+            document.querySelectorAll('input[name]').forEach((field) => {
+                if (field.type === 'checkbox') {
+                    payload[field.name] = field.checked;
+                } else {
+                    payload[field.name] = field.value;
+                }
+            });
+            return payload;
+        }
+
+        function testUserIntegration(btn) {
+            const original = btn.textContent;
+            const service = btn.dataset.service;
+            btn.disabled = true;
+            btn.classList.remove('ok', 'fail');
+            btn.textContent = 'Testing...';
+
+            fetch(TEST_URL_BASE.replace('__service__', encodeURIComponent(service)), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then((response) => response.json())
+                .then((data) => {
+                    btn.classList.add(data.ok ? 'ok' : 'fail');
+                    btn.textContent = data.ok ? 'Connected' : 'Failed';
+                    alert((data.ok ? 'Connected: ' : 'Failed: ') + data.message);
+                    window.setTimeout(() => {
+                        btn.classList.remove('ok', 'fail');
+                        btn.textContent = original;
+                    }, 3000);
+                })
+                .catch((err) => {
+                    btn.classList.add('fail');
+                    btn.textContent = 'Error';
+                    alert('Test failed: ' + err);
+                    window.setTimeout(() => {
+                        btn.classList.remove('fail');
+                        btn.textContent = original;
+                    }, 3000);
+                })
+                .finally(() => {
+                    btn.disabled = false;
+                });
+        }
+    </script>
+</body>
+</html>

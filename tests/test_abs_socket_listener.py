@@ -83,7 +83,7 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
 
         # Give the daemon thread a moment
         time.sleep(0.1)
-        self.mock_sync.sync_cycle.assert_called_once_with(target_abs_id="book-3")
+        self.mock_sync.sync_cycle.assert_called_once_with(target_abs_id="book-3", user_id=None)
 
     def test_no_double_fire(self):
         """Same event should not trigger sync twice."""
@@ -160,6 +160,28 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
                 sync_manager=MagicMock(),
             )
         self.assertEqual(listener._server_url, "http://abs.local:13378")
+
+    def test_per_user_listener_fires_scoped_sync_cycle(self):
+        """A listener bound to a user_id triggers that user's scoped sync cycle."""
+        with patch("src.services.abs_socket_listener.socketio.Client"):
+            listener = ABSSocketListener(
+                abs_server_url="http://abs.local:13378",
+                abs_api_token="caitlin-token",
+                database_service=self.mock_db,
+                sync_manager=self.mock_sync,
+                user_id=7,
+            )
+        listener._debounce_window = 1
+        book = self._make_active_book("crawler-carl", "Dungeon Crawler Carl")
+        self.mock_db.get_book.return_value = book
+
+        listener._pending["crawler-carl"] = time.time() - 2
+        listener._check_and_fire()
+
+        time.sleep(0.1)
+        self.mock_sync.sync_cycle.assert_called_once_with(
+            target_abs_id="crawler-carl", user_id=7
+        )
 
 
 class TestKosyncPutInstantSync(unittest.TestCase):

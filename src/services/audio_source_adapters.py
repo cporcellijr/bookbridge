@@ -59,14 +59,15 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
         - ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID=<library_id>
         - ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID=true + ABS_LIBRARY_ID=<library_id>
         """
-        raw = (os.environ.get("ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID") or "").strip()
+        from src.utils.user_config import user_setting
+        raw = (user_setting("ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID") or "").strip()
         if not raw:
             return None
         lowered = raw.lower()
         if lowered in {"false", "0", "off", "no", "none"}:
             return None
         if lowered in {"true", "1", "on", "yes"}:
-            lib_id = (os.environ.get("ABS_LIBRARY_ID") or "").strip()
+            lib_id = (user_setting("ABS_LIBRARY_ID") or "").strip()
             return lib_id or None
         return raw
 

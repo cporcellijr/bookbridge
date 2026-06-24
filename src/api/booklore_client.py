@@ -12,6 +12,7 @@ from pathlib import Path
 
 from src.utils.logging_utils import sanitize_log_data
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +24,16 @@ MAX_DETAIL_FETCHES_PER_REFRESH_CYCLE = int(
 MAX_DETAIL_FETCHES_PER_SEARCH = 20
 
 class BookloreClient:
-    def __init__(self, database_service=None, ollama_client=None):
-        raw_url = os.environ.get("BOOKLORE_SERVER", "").rstrip('/')
+    def __init__(self, database_service=None, ollama_client=None, credentials: dict = None):
+        # `credentials` (multi-user) overrides per-user BOOKLORE_* keys; server
+        # URL stays global. None => global client (original behavior).
+        self._creds = credentials
+        raw_url = resolve_setting(credentials, "BOOKLORE_SERVER", "").rstrip('/')
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
         self.base_url = raw_url
-        self.username = os.environ.get("BOOKLORE_USER")
-        self.password = os.environ.get("BOOKLORE_PASSWORD")
+        self.username = resolve_setting(credentials, "BOOKLORE_USER")
+        self.password = resolve_setting(credentials, "BOOKLORE_PASSWORD")
         self.db = database_service
         self.ollama_client = ollama_client
 
@@ -81,7 +85,7 @@ class BookloreClient:
         self.legacy_cache_file = Path(os.environ.get("DATA_DIR", "/data")) / "booklore_cache.json"
 
         # Load cache from DB (and migrate if needed)
-        self.target_library_id = os.environ.get("BOOKLORE_LIBRARY_ID")
+        self.target_library_id = resolve_setting(credentials, "BOOKLORE_LIBRARY_ID")
         self._server_side_filter_supported = None
         self._load_cache()
 
@@ -290,7 +294,7 @@ class BookloreClient:
 
     def is_configured(self):
         """Return True if Grimmory is configured, False otherwise."""
-        enabled_val = os.environ.get("BOOKLORE_ENABLED", "").lower()
+        enabled_val = str(resolve_setting(self._creds, "BOOKLORE_ENABLED", "")).lower()
         if enabled_val == 'false':
             return False
         return bool(self.base_url and self.username and self.password)
@@ -2611,7 +2615,7 @@ class BookloreClient:
     def add_to_shelf(self, ebook_filename, shelf_name=None):
         """Add a book to a shelf, creating the shelf if it doesn't exist."""
         if not shelf_name:
-             shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "abs-kosync")
+             shelf_name = resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "Kobo")
 
         try:
             # Find the book
@@ -2652,7 +2656,7 @@ class BookloreClient:
     def remove_from_shelf(self, ebook_filename, shelf_name=None):
         """Remove a book from a shelf."""
         if not shelf_name:
-             shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "abs-kosync")
+             shelf_name = resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "Kobo")
 
         try:
             # Find the book

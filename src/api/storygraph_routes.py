@@ -1,7 +1,7 @@
 import logging
 import time
 
-from flask import Blueprint, flash, jsonify, redirect, request, url_for
+from flask import Blueprint, flash, g, jsonify, redirect, request, url_for
 
 from src.db.models import StorygraphDetails
 
@@ -33,12 +33,48 @@ def _get_dependencies():
     return _database_service, _container, None
 
 
+def _active_user_clients(container):
+    user = getattr(g, "current_user", None)
+    if user is not None:
+        try:
+            return container.user_client_registry().get_clients(user.id)
+        except Exception as exc:
+            logger.debug("Falling back to global StoryGraph route clients: %s", exc)
+    return None
+
+
+def _storygraph_client(container):
+    clients = _active_user_clients(container)
+    return clients.storygraph_client if clients is not None else container.storygraph_client()
+
+
+def _abs_client(container):
+    clients = _active_user_clients(container)
+    return clients.abs_client if clients is not None else container.abs_client()
+
+
+def _user_may_modify_book(database_service, abs_id: str) -> bool:
+    user = getattr(g, "current_user", None)
+    if user is None:
+        return True
+    if getattr(user, "is_admin", False):
+        return True
+    try:
+        return database_service.is_user_linked(user.id, abs_id)
+    except Exception:
+        return False
+
+
+def _forbidden_book_response():
+    return jsonify({"found": False, "error": "Forbidden: you have not claimed this book"}), 403
+
+
 def _get_abs_metadata(abs_id: str, database_service, container):
     book = database_service.get_book(abs_id)
     if not book:
         return None, None
 
-    item = container.abs_client().get_item_details(abs_id)
+    item = _abs_client(container).get_item_details(abs_id)
     if item:
         return book, item.get("media", {}).get("metadata", {}) or {}
 
@@ -100,8 +136,10 @@ def api_storygraph_resolve():
 
     if not abs_id:
         return jsonify({"found": False, "message": "Missing abs_id parameter"}), 400
+    if not _user_may_modify_book(database_service, abs_id):
+        return _forbidden_book_response()
 
-    storygraph_client = container.storygraph_client()
+    storygraph_client = _storygraph_client(container)
     if not storygraph_client.is_configured():
         return jsonify({"found": False, "message": "StoryGraph not configured"}), 400
 
@@ -180,8 +218,12 @@ def link_storygraph(abs_id):
     database_service, container, error_response = _get_dependencies()
     if error_response:
         return error_response
+    if not _user_may_modify_book(database_service, abs_id):
+        if request.is_json:
+            return jsonify({"success": False, "error": "Forbidden: you have not claimed this book"}), 403
+        return "Forbidden: you have not claimed this book", 403
 
-    storygraph_client = container.storygraph_client()
+    storygraph_client = _storygraph_client(container)
     if not storygraph_client.is_configured():
         if request.is_json:
             return jsonify({"error": "StoryGraph not configured"}), 400

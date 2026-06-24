@@ -78,6 +78,10 @@ class EbookParser:
         self.books_dir = Path(books_dir)
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir else Path("/data/epub_cache")
         self.ollama_client = ollama_client
+        # Additional library folders to search for ebook files (multi-library
+        # setups where a user's library is not under BOOKS_DIR). Comma- or
+        # newline-separated container paths from EXTRA_EBOOK_DIRS.
+        self.extra_book_dirs = self._parse_extra_book_dirs(os.getenv("EXTRA_EBOOK_DIRS", ""))
 
         cache_size = int(os.getenv("EBOOK_CACHE_SIZE", 3))
         self.cache = LRUCache(capacity=cache_size)
@@ -87,14 +91,31 @@ class EbookParser:
         self.useXpathSegmentFallback = os.getenv("XPATH_FALLBACK_TO_PREVIOUS_SEGMENT", "false").lower() == "true"
         self.locator_roundtrip_tolerance = int(os.getenv("LOCATOR_ROUNDTRIP_TOLERANCE_CHARS", 2))
 
-        logger.info(f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, xpath_fallback={self.useXpathSegmentFallback})")
+        logger.info(
+            f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, "
+            f"xpath_fallback={self.useXpathSegmentFallback}, extra_dirs={len(self.extra_book_dirs)})"
+        )
+
+    @staticmethod
+    def _parse_extra_book_dirs(raw: str) -> list:
+        """Parse EXTRA_EBOOK_DIRS into a list of Paths (comma/newline separated)."""
+        if not raw:
+            return []
+        parts = re.split(r"[,\n]", raw)
+        return [Path(p.strip()) for p in parts if p.strip()]
+
+    def search_dirs(self) -> list:
+        """All directories to search for ebook files: BOOKS_DIR + extra libraries."""
+        return [self.books_dir, *self.extra_book_dirs]
 
     def resolve_book_path(self, filename):
-        try:
-            safe_name = glob.escape(filename)
-            return next(self.books_dir.glob(f"**/{safe_name}"))
-        except StopIteration:
-            pass
+        safe_name = glob.escape(filename)
+        for d in self.search_dirs():
+            try:
+                if d.exists():
+                    return next(d.glob(f"**/{safe_name}"))
+            except StopIteration:
+                continue
 
         for f in self.books_dir.rglob("*"):
             if f.name == filename:
@@ -106,6 +127,47 @@ class EbookParser:
                 return cached_path
 
         raise FileNotFoundError(f"Could not locate {filename}")
+
+    def get_book_identifiers(self, filepath) -> set:
+        """Return the set of normalized DC identifiers embedded in an EPUB.
+
+        Used to link a hash-discovered library file to an existing mapping when
+        filenames differ (e.g. a raw Calibre file vs the re-stamped CWA copy that
+        share the same Calibre/ISBN identifier). Never raises.
+        """
+        path = Path(filepath)
+        if not path.is_absolute():
+            try:
+                path = self.resolve_book_path(str(path))
+            except FileNotFoundError:
+                return set()
+        try:
+            book = epub.read_epub(str(path))
+        except Exception as e:
+            logger.debug(f"Could not read identifiers for '{path}': {e}")
+            return set()
+        ids = set()
+        for value, _attrs in book.get_metadata("DC", "identifier"):
+            norm = self._normalize_identifier(value)
+            if norm:
+                ids.add(norm)
+        return ids
+
+    @staticmethod
+    def _normalize_identifier(raw) -> str:
+        """Normalize an EPUB identifier for cross-file comparison.
+
+        Strips common scheme prefixes (urn:uuid:, urn:isbn:, calibre:, isbn:) and
+        lowercases, so the same work matches across library copies.
+        """
+        if not raw:
+            return ""
+        val = str(raw).strip().lower()
+        for prefix in ("urn:uuid:", "urn:isbn:", "uuid:", "isbn:", "calibre:"):
+            if val.startswith(prefix):
+                val = val[len(prefix):]
+                break
+        return val.strip()
 
     def get_book_metadata(self, filename: str) -> dict:
         """Extract {title, author, isbn, asin} from an ebook's embedded metadata.

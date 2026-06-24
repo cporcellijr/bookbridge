@@ -9,6 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.user_config import resolve_setting
 
 _AUDIO_FORMAT_MAP = (
     ("digital audiobook", "Digital Audiobook"),
@@ -85,29 +86,34 @@ logger = logging.getLogger(__name__)
 class StorygraphClient:
     """StoryGraph client using unofficial web endpoints + session cookies."""
 
-    def __init__(self):
+    def __init__(self, credentials: dict = None):
+        # `credentials` (multi-user) overrides per-user StoryGraph cookies/token
+        # and ENABLED; base URL stays global. None => global client.
+        self._creds = credentials
         self.base_url = os.environ.get("STORYGRAPH_BASE_URL", "https://app.thestorygraph.com").rstrip("/")
         self.timeout = 12
         self.user_id = "storygraph_user"
 
-    @staticmethod
-    def _session_cookie() -> str:
-        return (os.environ.get("STORYGRAPH_SESSION_COOKIE") or "").strip()
+    def _session_cookie(self) -> str:
+        return (resolve_setting(self._creds, "STORYGRAPH_SESSION_COOKIE") or "").strip()
 
-    @staticmethod
-    def _remember_user_token() -> str:
-        return (os.environ.get("STORYGRAPH_REMEMBER_USER_TOKEN") or "").strip()
+    def _remember_user_token(self) -> str:
+        return (resolve_setting(self._creds, "STORYGRAPH_REMEMBER_USER_TOKEN") or "").strip()
 
     def _provider_enabled(self) -> bool:
         provider = (os.environ.get("PROGRESS_TRACKER_PROVIDER") or "").strip().lower()
+        explicit_user_enable = (
+            self._creds is not None
+            and str(self._creds.get("STORYGRAPH_ENABLED", "")).strip().lower() == "true"
+        )
         if provider:
-            return provider == "storygraph"
-        return os.environ.get("STORYGRAPH_ENABLED", "false").strip().lower() == "true"
+            return provider == "storygraph" or explicit_user_enable
+        return str(resolve_setting(self._creds, "STORYGRAPH_ENABLED", "false")).strip().lower() == "true"
 
     def is_configured(self) -> bool:
         if not self._provider_enabled():
             return False
-        enabled_val = os.environ.get("STORYGRAPH_ENABLED", "").strip().lower()
+        enabled_val = str(resolve_setting(self._creds, "STORYGRAPH_ENABLED", "")).strip().lower()
         if enabled_val == "false":
             return False
         return bool(self._session_cookie() and self._remember_user_token())
