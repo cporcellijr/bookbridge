@@ -1691,6 +1691,27 @@ def _upsert_storyteller_mapping(
     if getattr(saved_book, "sync_mode", "audiobook") == "ebook_only":
         logger.info("Skipping ABS collection side effects for ebook-only mapping '%s'", saved_book.abs_id)
 
+    # Auto-match progress trackers at creation. Idempotent (each client early-returns if
+    # already linked); this closes the gap where ebook-only creates only matched on a
+    # later sync cycle, so a freshly linked BookOrbit/KOReader book gets Hardcover/
+    # StoryGraph right away.
+    try:
+        tracker_clients = uc().sync_clients or {}
+    except Exception:
+        tracker_clients = {}
+    hardcover_sync_client = tracker_clients.get('Hardcover')
+    if hardcover_sync_client and hardcover_sync_client.is_configured():
+        try:
+            hardcover_sync_client._automatch_hardcover(saved_book)
+        except Exception as hc_err:
+            logger.warning("Match: Hardcover automatch failed for '%s': %s", saved_book.abs_id, hc_err)
+    storygraph_sync_client = tracker_clients.get('StoryGraph')
+    if storygraph_sync_client and storygraph_sync_client.is_configured():
+        try:
+            storygraph_sync_client._automatch_storygraph(saved_book)
+        except Exception as sg_err:
+            logger.warning("Match: StoryGraph automatch failed for '%s': %s", saved_book.abs_id, sg_err)
+
     database_service.dismiss_suggestion(saved_book.abs_id)
     if isinstance(saved_book.kosync_doc_id, str) and saved_book.kosync_doc_id.strip():
         database_service.dismiss_suggestion(saved_book.kosync_doc_id)

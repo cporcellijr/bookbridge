@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
 from src.utils.user_config import resolve_setting
 
 _AUDIO_FORMAT_MAP = (
@@ -551,15 +551,30 @@ class StorygraphClient:
         clean_title = clean_book_title(title or "")
         best = None
         best_score = -1
+        best_author_score = 0.0
         for item in candidates:
             score = calculate_similarity(clean_title, clean_book_title(item.get("title", "")))
+            author_score = 0.0
             if author and item.get("author"):
-                score = (score + calculate_similarity(author.lower(), item.get("author", "").lower())) / 2
+                author_score = calculate_similarity(author.lower(), item.get("author", "").lower())
+                score = (score + author_score) / 2
             if score > best_score:
                 best_score = score
                 best = item
+                best_author_score = author_score
 
         if not best:
+            return None
+
+        # Author gate: when an author was supplied and the chosen candidate carries an
+        # author that clearly disagrees, refuse the match rather than returning a
+        # same-title/different-author book. StoryGraph search results almost always
+        # include an author, so a missing one is treated as inconclusive (allowed).
+        if author and best.get("author") and best_author_score < author_match_floor():
+            logger.info(
+                "Rejected StoryGraph match '%s' for '%s' by '%s': author mismatch (%.2f)",
+                best.get("title"), title, author, best_author_score,
+            )
             return None
 
         resolved = dict(best)

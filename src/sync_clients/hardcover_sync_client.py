@@ -6,7 +6,7 @@ from src.api.hardcover_client import HardcoverClient, HardcoverRateLimitError
 from src.db.models import Book, State, HardcoverDetails
 from src.services.llm_matching import craft_search_terms, judge_best_candidate, tracker_match_enabled
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
-from src.utils.ebook_utils import EbookParser
+from src.utils.ebook_utils import EbookParser, resolve_ebook_identifiers
 from src.utils.logging_utils import sanitize_log_data
 
 logger = logging.getLogger(__name__)
@@ -18,12 +18,16 @@ class HardcoverSyncClient(SyncClient):
     This integrates Hardcover as a proper sync client in the sync cycle.
     """
 
-    def __init__(self, hardcover_client: HardcoverClient, ebook_parser: EbookParser, abs_client=None, database_service=None, ollama_client=None):
+    def __init__(self, hardcover_client: HardcoverClient, ebook_parser: EbookParser, abs_client=None, database_service=None, ollama_client=None, booklore_client=None, bookorbit_client=None):
         super().__init__(ebook_parser)
         self.hardcover_client = hardcover_client
         self.abs_client = abs_client  # For fetching book metadata
         self.database_service = database_service
         self.ollama_client = ollama_client
+        # Library clients let us read a library-hosted EPUB's embedded ISBN/author
+        # when the file isn't on local disk (BookOrbit/Grimmory ebook-only + ABS-linked).
+        self.booklore_client = booklore_client
+        self.bookorbit_client = bookorbit_client
 
     def is_configured(self) -> bool:
         """Check if Hardcover is configured."""
@@ -65,6 +69,36 @@ class HardcoverSyncClient(SyncClient):
 
         return match, None  # Return valid match, no rejected match
 
+    def _gather_match_metadata(self, book):
+        """Resolve (title, author, isbn, asin) for matching, from ABS + the EPUB.
+
+        ABS metadata is the primary source for linked audiobooks; the ebook's embedded
+        identifiers supplement it (and are the only source for ebook-only mappings). The
+        EPUB's real ISBN is preferred when ABS has none — ABS's ASIN is usually an Audible
+        id that doesn't resolve a Hardcover edition, so the embedded ISBN is what nails
+        niche titles that share a name with a more popular book.
+        """
+        title = author = isbn = asin = ""
+        item = self.abs_client.get_item_details(book.abs_id) if self.abs_client else None
+        if item:
+            meta = item.get('media', {}).get('metadata', {}) or {}
+            title = meta.get('title') or book.abs_title or ""
+            author = meta.get('authorName') or ""
+            isbn = meta.get('isbn') or ""
+            asin = meta.get('asin') or ""
+
+        # Supplement from the EPUB when there's no ABS item, or ABS lacks a usable ISBN.
+        if not item or not isbn:
+            ebook_meta = resolve_ebook_identifiers(
+                self.ebook_parser, book, self.booklore_client, self.bookorbit_client
+            )
+            title = title or ebook_meta.get('title') or book.abs_title or ""
+            author = author or ebook_meta.get('author') or ""
+            isbn = isbn or ebook_meta.get('isbn') or ""
+            asin = asin or ebook_meta.get('asin') or ""
+
+        return title, author, isbn, asin
+
     def _automatch_hardcover(self, book):
         """
         Match a book with Hardcover using various search strategies.
@@ -78,21 +112,8 @@ class HardcoverSyncClient(SyncClient):
         if existing_details:
             return  # Already matched
 
-        item = self.abs_client.get_item_details(book.abs_id) if self.abs_client else None
-        if item:
-            meta = item.get('media', {}).get('metadata', {})
-            isbn = meta.get('isbn')
-            asin = meta.get('asin')
-            title = meta.get('title')
-            author = meta.get('authorName')
-        else:
-            # Ebook-only book (no ABS item): source identifiers from the EPUB itself.
-            ebook_meta = self.ebook_parser.get_book_metadata(book.ebook_filename) if self.ebook_parser else {}
-            title = ebook_meta.get('title') or book.abs_title
-            author = ebook_meta.get('author')
-            isbn = ebook_meta.get('isbn')
-            asin = ebook_meta.get('asin')
-            meta = {'title': title}  # keep log statements below working without an ABS item
+        title, author, isbn, asin = self._gather_match_metadata(book)
+        meta = {'title': title}  # keep log statements below working without an ABS item
 
         if not title:
             return
@@ -103,9 +124,10 @@ class HardcoverSyncClient(SyncClient):
         first_rejected = None
         first_rejected_by = None
 
-        # LLM tracker matching is a last-resort rescue only: the normal ISBN/ASIN and
-        # title searches below always run first, so the LLM can add matches it would
-        # otherwise miss but can never suppress a match the plain search already found.
+        # When the LLM judge is on, it OWNS title matching: only the precise ISBN/ASIN
+        # searches run as plain strategies, and everything title-based is routed through
+        # craft + judge below. This stops the fuzzy title search from committing a
+        # same-title/wrong-author book (and short-circuiting the judge) before it runs.
         use_llm = (
             tracker_match_enabled()
             and self.ollama_client is not None
@@ -116,11 +138,13 @@ class HardcoverSyncClient(SyncClient):
         search_strategies = [
             (lambda: self.hardcover_client.search_by_isbn(isbn) if isbn else None, 'isbn', isbn),
             (lambda: self.hardcover_client.search_by_isbn(asin) if asin else None, 'asin', asin),
-            (lambda: self.hardcover_client.search_by_title_author(title, author) if (title and author) else None, 'title_author', title and author),
         ]
-        # Blind title-only fuzzy matching grabs the wrong book when many share a title;
-        # with the LLM on we route title-only candidates through the judge below instead.
+        # Judge off: fall back to the author-gated fuzzy title search (title+author first,
+        # then blind title-only as a last resort).
         if not use_llm:
+            search_strategies.append(
+                (lambda: self.hardcover_client.search_by_title_author(title, author) if (title and author) else None, 'title_author', title and author)
+            )
             search_strategies.append(
                 (lambda: self.hardcover_client.search_by_title_author(title, "") if title else None, 'title', title)
             )

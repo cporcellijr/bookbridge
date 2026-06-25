@@ -138,8 +138,8 @@ class UserClientRegistry:
             "BookOrbit": BookOrbitSyncClient(bookorbit_client, ep),
             "BookOrbitAudio": BookOrbitAudioSyncClient(bookorbit_client, ep, alignment_service=align),
             "CWA": CWASyncClient(cwa_sync_api, cwa_client, ep),
-            "Hardcover": HardcoverSyncClient(hardcover_client, ep, abs_client, db, ollama_client=self.ollama_client),
-            "StoryGraph": StorygraphSyncClient(storygraph_client, ep, abs_client, db, ollama_client=self.ollama_client),
+            "Hardcover": HardcoverSyncClient(hardcover_client, ep, abs_client, db, ollama_client=self.ollama_client, booklore_client=booklore_client, bookorbit_client=bookorbit_client),
+            "StoryGraph": StorygraphSyncClient(storygraph_client, ep, abs_client, db, ollama_client=self.ollama_client, booklore_client=booklore_client, bookorbit_client=bookorbit_client),
         }
 
         return UserClients(

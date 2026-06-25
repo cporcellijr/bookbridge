@@ -4,6 +4,7 @@ import time
 from flask import Blueprint, flash, g, jsonify, redirect, request, url_for
 
 from src.db.models import StorygraphDetails
+from src.utils.ebook_utils import resolve_ebook_identifiers
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,16 @@ def _abs_client(container):
     return clients.abs_client if clients is not None else container.abs_client()
 
 
+def _booklore_client(container):
+    clients = _active_user_clients(container)
+    return clients.booklore_client if clients is not None else container.booklore_client()
+
+
+def _bookorbit_client(container):
+    clients = _active_user_clients(container)
+    return clients.bookorbit_client if clients is not None else container.bookorbit_client()
+
+
 def _user_may_modify_book(database_service, abs_id: str) -> bool:
     user = getattr(g, "current_user", None)
     if user is None:
@@ -78,10 +89,14 @@ def _get_abs_metadata(abs_id: str, database_service, container):
     if item:
         return book, item.get("media", {}).get("metadata", {}) or {}
 
-    # Ebook-only book (no ABS item): fall back to the EPUB's embedded metadata,
-    # normalized to the ABS metadata shape the caller expects.
+    # Ebook-only book (no ABS item): fall back to the EPUB's embedded metadata
+    # (downloaded from the hosting library when not on local disk), normalized to
+    # the ABS metadata shape the caller expects.
     try:
-        ebook_meta = container.ebook_parser().get_book_metadata(book.ebook_filename)
+        ebook_meta = resolve_ebook_identifiers(
+            container.ebook_parser(), book,
+            _booklore_client(container), _bookorbit_client(container),
+        )
     except Exception as exc:
         logger.warning("Failed to read EPUB metadata for %s: %s", abs_id, exc)
         ebook_meta = {}

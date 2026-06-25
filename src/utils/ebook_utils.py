@@ -169,25 +169,10 @@ class EbookParser:
                 break
         return val.strip()
 
-    def get_book_metadata(self, filename: str) -> dict:
-        """Extract {title, author, isbn, asin} from an ebook's embedded metadata.
-
-        Resolves `filename` under books_dir and reads the EPUB's Dublin Core fields.
-        Used to match ABS-less (ebook-only) books to trackers. Returns empty strings
-        for anything missing and never raises.
-        """
+    @staticmethod
+    def _extract_epub_metadata(book) -> dict:
+        """Pull {title, author, isbn, asin} out of an opened EPUB's Dublin Core fields."""
         result = {"title": "", "author": "", "isbn": "", "asin": ""}
-        if not filename:
-            return result
-        try:
-            path = self.resolve_book_path(filename)
-        except FileNotFoundError:
-            return result
-        try:
-            book = epub.read_epub(str(path))
-        except Exception as e:
-            logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}")
-            return result
 
         titles = book.get_metadata("DC", "title")
         if titles and titles[0][0]:
@@ -213,6 +198,57 @@ class EbookParser:
                 result["asin"] = re.sub(r"^urn:amazon:", "", raw, flags=re.IGNORECASE).strip()
 
         return result
+
+    def get_book_metadata(self, filename: str) -> dict:
+        """Extract {title, author, isbn, asin} from an ebook's embedded metadata.
+
+        Resolves `filename` under books_dir and reads the EPUB's Dublin Core fields.
+        Used to match ABS-less (ebook-only) books to trackers. Returns empty strings
+        for anything missing and never raises.
+        """
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
+        if not filename:
+            return result
+        try:
+            path = self.resolve_book_path(filename)
+        except FileNotFoundError:
+            return result
+        try:
+            book = epub.read_epub(str(path))
+        except Exception as e:
+            logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}")
+            return result
+
+        return self._extract_epub_metadata(book)
+
+    def get_book_metadata_from_bytes(self, filename: str, content: bytes) -> dict:
+        """Extract {title, author, isbn, asin} from raw EPUB bytes.
+
+        For library-hosted (BookOrbit/Grimmory) ebooks that aren't on the local
+        filesystem: the caller downloads the bytes from the source and we read the
+        embedded Dublin Core fields via a short-lived temp file (ebooklib needs a
+        path). Returns empty strings for anything missing and never raises.
+        """
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
+        if not content:
+            return result
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            book = epub.read_epub(tmp_path)
+        except Exception as e:
+            logger.warning(f"⚠️ Could not read EPUB metadata from bytes for '{filename}': {e}")
+            return result
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        return self._extract_epub_metadata(book)
 
     def get_kosync_id(self, filepath):
         filepath = Path(filepath)
@@ -2049,3 +2085,64 @@ class EbookParser:
         except Exception as e:
             logger.error(f"Error resolving CFI->index '{cfi}': {e}")
             return None
+
+
+def resolve_ebook_identifiers(ebook_parser, book, booklore_client=None, bookorbit_client=None) -> dict:
+    """Best-effort {title, author, isbn, asin} for a mapping's ebook.
+
+    Reads the local EPUB first; when no usable identifier or author is found and
+    the ebook is library-hosted (BookOrbit/Grimmory), downloads the bytes from the
+    source and reads the embedded Dublin Core fields. This lets tracker auto-match
+    use the book's real ISBN/author even when the file isn't on the bridge's disk
+    (the common case for BookOrbit/KOReader ebook-only and ABS-linked mappings).
+    Never raises.
+    """
+    meta = {"title": "", "author": "", "isbn": "", "asin": ""}
+    if ebook_parser is None:
+        return meta
+
+    filename = getattr(book, "ebook_filename", None)
+    if filename:
+        try:
+            meta = ebook_parser.get_book_metadata(filename) or meta
+        except Exception as exc:
+            logger.warning("Local EPUB metadata read failed for '%s': %s", filename, exc)
+
+    # A local read that already has a precise id or an author is enough; skip the
+    # network round-trip (auto-match only runs once per book, but downloads aren't free).
+    if meta.get("isbn") or meta.get("asin") or meta.get("author"):
+        return meta
+
+    source = (getattr(book, "ebook_source", None) or "").strip().lower()
+    source_id = getattr(book, "ebook_source_id", None)
+    if source == "bookorbit":
+        client = bookorbit_client
+    elif source == "booklore":
+        client = booklore_client
+    else:
+        client = None
+
+    if not client or not source_id or not hasattr(client, "download_book"):
+        return meta
+    if hasattr(client, "is_configured") and not client.is_configured():
+        return meta
+
+    try:
+        content = client.download_book(source_id)
+    except Exception as exc:
+        logger.warning("Library download for ebook metadata failed (%s/%s): %s", source, source_id, exc)
+        return meta
+    if not content:
+        return meta
+
+    try:
+        byte_meta = ebook_parser.get_book_metadata_from_bytes(filename or "", content)
+    except Exception as exc:
+        logger.warning("EPUB metadata-from-bytes failed for '%s': %s", filename, exc)
+        return meta
+
+    # Prefer the byte-derived fields, but keep any local title the bytes lacked.
+    for key in ("title", "author", "isbn", "asin"):
+        if byte_meta.get(key):
+            meta[key] = byte_meta[key]
+    return meta

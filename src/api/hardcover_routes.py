@@ -3,6 +3,8 @@ import logging
 
 from flask import Blueprint, jsonify, request, redirect, url_for, flash, g
 
+from src.utils.ebook_utils import resolve_ebook_identifiers
+
 logger = logging.getLogger(__name__)
 
 # Create Blueprint for Hardcover endpoints
@@ -54,6 +56,16 @@ def _hardcover_client(container):
 def _abs_client(container):
     clients = _active_user_clients(container)
     return clients.abs_client if clients is not None else container.abs_client()
+
+
+def _booklore_client(container):
+    clients = _active_user_clients(container)
+    return clients.booklore_client if clients is not None else container.booklore_client()
+
+
+def _bookorbit_client(container):
+    clients = _active_user_clients(container)
+    return clients.bookorbit_client if clients is not None else container.bookorbit_client()
 
 
 def _user_may_modify_book(database_service, abs_id: str) -> bool:
@@ -112,26 +124,38 @@ def api_hardcover_resolve():
             )
 
         if not book_data:
-            # No existing link (or fetch failed) - fall back to auto-match from ABS metadata
+            # No existing link (or fetch failed) - fall back to auto-match from metadata
             book = database_service.get_book(abs_id)
             if not book:
                 return jsonify({"found": False, "message": "Book not found"}), 404
 
-            # Get metadata from ABS
+            # Get metadata from ABS; for ebook-only books (no ABS item), fall back to the
+            # EPUB's embedded identifiers (downloaded from the hosting library if needed).
             item = _abs_client(container).get_item_details(abs_id)
-            if not item:
+            isbn = asin = title = author = None
+            if item:
+                meta = item.get("media", {}).get("metadata", {})
+                isbn = meta.get("isbn")
+                asin = meta.get("asin")
+                title = meta.get("title")
+                author = meta.get("authorName")
+            if not isbn:
+                ebook_meta = resolve_ebook_identifiers(
+                    container.ebook_parser(), book,
+                    _booklore_client(container), _bookorbit_client(container),
+                )
+                title = title or ebook_meta.get("title") or book.abs_title
+                author = author or ebook_meta.get("author")
+                isbn = isbn or ebook_meta.get("isbn")
+                asin = asin or ebook_meta.get("asin")
+
+            if not title:
                 return jsonify(
                     {
                         "found": False,
-                        "message": "Could not fetch book metadata from ABS",
+                        "message": "Could not fetch book metadata",
                     }
                 ), 502
-
-            meta = item.get("media", {}).get("metadata", {})
-            isbn = meta.get("isbn")
-            asin = meta.get("asin")
-            title = meta.get("title")
-            author = meta.get("authorName")
 
             # Try match cascade: ISBN -> ASIN -> title+author -> title only
             if isbn:

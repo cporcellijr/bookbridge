@@ -256,7 +256,9 @@ class Container(containers.DeclarativeContainer):
         ebook_parser,
         abs_client,
         database_service,
-        ollama_client=ollama_client
+        ollama_client=ollama_client,
+        booklore_client=booklore_client,
+        bookorbit_client=bookorbit_client,
     )
 
     storygraph_sync_client = providers.Singleton(
@@ -265,7 +267,9 @@ class Container(containers.DeclarativeContainer):
         ebook_parser,
         abs_client,
         database_service,
-        ollama_client=ollama_client
+        ollama_client=ollama_client,
+        booklore_client=booklore_client,
+        bookorbit_client=bookorbit_client,
     )
 
     abs_audio_source_adapter = providers.Singleton(
