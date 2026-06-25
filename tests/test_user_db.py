@@ -145,6 +145,35 @@ class TestUserDb(unittest.TestCase):
         admins = [u for u in self.svc.list_users() if u.role == "admin"]
         self.assertEqual(len(admins), 1)
 
+    def test_prefill_seeds_global_into_admin_creds(self):
+        admin = self.svc.create_user("admin", "pw", role="admin")
+        self.svc.set_setting("ABS_COLLECTION_NAME", "My Shelf")
+        bootstrap_admin_user(self.svc)
+        self.assertEqual(self.svc.get_user_credential(admin.id, "ABS_COLLECTION_NAME"), "My Shelf")
+
+    def test_prefill_seeds_newly_promoted_key_on_existing_install(self):
+        # Install already ran the one-time prefill (legacy flag) for earlier keys; a
+        # newly-promoted per-user key must still seed without re-seeding existing ones.
+        admin = self.svc.create_user("admin", "pw", role="admin")
+        self.svc.set_user_credential(admin.id, "ABS_KEY", "existing-token")
+        self.svc.set_setting("admin_integrations_prefilled", "true")  # legacy one-time flag
+        self.svc.set_setting("ABS_COLLECTION_NAME", "My Shelf")
+
+        bootstrap_admin_user(self.svc)
+
+        self.assertEqual(self.svc.get_user_credential(admin.id, "ABS_COLLECTION_NAME"), "My Shelf")
+        self.assertEqual(self.svc.get_user_credential(admin.id, "ABS_KEY"), "existing-token")
+
+    def test_prefill_does_not_reseed_a_cleared_key(self):
+        admin = self.svc.create_user("admin", "pw", role="admin")
+        self.svc.set_setting("ABS_COLLECTION_NAME", "My Shelf")
+        bootstrap_admin_user(self.svc)
+        self.assertEqual(self.svc.get_user_credential(admin.id, "ABS_COLLECTION_NAME"), "My Shelf")
+        # Admin clears it -> a later startup must NOT re-seed from global.
+        self.svc.delete_user_credential(admin.id, "ABS_COLLECTION_NAME")
+        bootstrap_admin_user(self.svc)
+        self.assertIsNone(self.svc.get_user_credential(admin.id, "ABS_COLLECTION_NAME"))
+
     # --- user-scoped state ---
     def test_state_is_scoped_per_user(self):
         self.svc.save_book(Book(abs_id="b1", abs_title="T"))

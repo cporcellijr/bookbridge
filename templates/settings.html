@@ -756,16 +756,13 @@
                     </div>
                     <div class="form-group full-width">
                         <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
-                            🔒 <strong>Per-user account.</strong> Each user's Audiobookshelf API token &amp; Library ID are set per user in
+                            🔒 <strong>Per-user account.</strong> Each user's Audiobookshelf API token, Library ID &amp;
+                            auto-add Collection name are set per user in
                             <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>
                             (including your own). The server URL and engine settings here stay global.
                         </div>
                     </div>
 
-                    <div class="form-group">
-                        <label>Collection Name (Auto-Add)</label>
-                        <input type="text" name="ABS_COLLECTION_NAME" value="{{ get_val('ABS_COLLECTION_NAME') }}">
-                    </div>
                     <div class="form-group">
                         <label>Progress Offset (Seconds)</label>
                         <input type="number" name="ABS_PROGRESS_OFFSET_SECONDS"

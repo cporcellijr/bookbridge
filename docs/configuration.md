@@ -33,8 +33,8 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | --- | --- | --- | --- |
 | Server URL | `ABS_SERVER` | empty | Required. |
 | API Token | `ABS_KEY` | empty | Required. |
-| Library ID | `ABS_LIBRARY_ID` | empty | Used by the matcher and search scoping. |
-| Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Collection used for matched audiobooks. |
+| Library ID | `ABS_LIBRARY_ID` | empty | Per-user (set in user Integrations). Used by the matcher and search scoping. |
+| Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
 

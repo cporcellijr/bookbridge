@@ -1566,7 +1566,8 @@ class ForgeService:
 
             # --- ADD TO COLLECTIONS/SHELVES ---
             try:
-                abs_collection_name = os.environ.get("ABS_COLLECTION_NAME", "Synced with KOReader")
+                from src.utils.user_config import user_setting
+                abs_collection_name = user_setting("ABS_COLLECTION_NAME", "Synced with KOReader")
                 if not str(abs_id).startswith('booklore:'):
                     self.abs_client.add_to_collection(abs_id, abs_collection_name)
 

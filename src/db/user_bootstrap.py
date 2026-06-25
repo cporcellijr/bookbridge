@@ -23,33 +23,50 @@ def _backfill_orphans_to_admin(database_service, admin) -> dict:
 
 
 def _prefill_admin_integrations_from_global(database_service, admin) -> int:
-    """One-time: seed the admin's per-user integration credentials from the
-    existing global settings so an install upgrading to multi-user doesn't have
-    to re-enter everything. Fills blank fields only; gated by a flag so it runs
-    once. Returns the number of values copied."""
+    """Seed the admin's per-user integration credentials from the existing global
+    settings so an install upgrading to multi-user doesn't have to re-enter
+    everything. Fills blank fields only, and considers each per-user key exactly
+    once (tracked in `admin_integrations_prefilled_keys`) — so newly-promoted keys
+    (e.g. ABS_COLLECTION_NAME) seed on the next startup without re-seeding or
+    clobbering anything the admin already set or intentionally cleared. Returns the
+    number of values copied."""
     try:
         settings = database_service.get_all_settings()
     except Exception:
         return 0
-    if settings.get("admin_integrations_prefilled") == "true":
-        return 0
 
     from src.utils.user_config import PER_USER_CREDENTIAL_KEYS
 
+    raw = settings.get("admin_integrations_prefilled_keys") or ""
+    already = {k for k in raw.split(",") if k}
+    # Back-compat: the old one-time boolean meant every per-user key known at that
+    # time had been seeded. Seed `already` from the admin's current credentials so
+    # we don't re-seed keys they already have (or set), while still picking up keys
+    # newly promoted to per-user since then.
+    if not already and settings.get("admin_integrations_prefilled") == "true":
+        for key in PER_USER_CREDENTIAL_KEYS:
+            try:
+                if database_service.get_user_credential(admin.id, key):
+                    already.add(key)
+            except Exception:
+                continue
+
     copied = 0
     for key in PER_USER_CREDENTIAL_KEYS:
-        if key.startswith("__"):
+        if key.startswith("__") or key in already:
             continue
         gval = (settings.get(key) or "").strip()
-        if not gval:
-            continue
-        try:
-            if not database_service.get_user_credential(admin.id, key):
-                database_service.set_user_credential(admin.id, key, gval)
-                copied += 1
-        except Exception:
-            continue
+        if gval:
+            try:
+                if not database_service.get_user_credential(admin.id, key):
+                    database_service.set_user_credential(admin.id, key, gval)
+                    copied += 1
+            except Exception:
+                continue
+        already.add(key)  # considered once — don't reconsider on future startups
+
     try:
+        database_service.set_setting("admin_integrations_prefilled_keys", ",".join(sorted(already)))
         database_service.set_setting("admin_integrations_prefilled", "true")
     except Exception:
         pass

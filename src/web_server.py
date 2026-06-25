@@ -29,6 +29,7 @@ from src.utils.user_context import (
     set_current_user_credentials, reset_current_user_credentials,
     get_current_user_credentials, get_current_user_id,
 )
+from src.utils.user_config import user_setting
 
 from src.utils.config_loader import ConfigLoader, env_truthy
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
@@ -4302,7 +4303,7 @@ def match():
         _enqueue_tracker_automatch(clients.sync_clients, book)
 
         if not str(abs_id).startswith('booklore:'):
-            clients.abs_client.add_to_collection(abs_id, ABS_COLLECTION_NAME)
+            clients.abs_client.add_to_collection(abs_id, user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
         # Use original filename for shelf if we switched to storyteller
         shelf_filename = original_ebook_filename or ebook_filename
         if shelf_filename and not _is_storyteller_artifact_filename(shelf_filename):
@@ -4472,7 +4473,7 @@ def _process_batch_queue(queue_items):
         _enqueue_tracker_automatch(clients.sync_clients, book)
 
         if not str(item['abs_id']).startswith('booklore:'):
-            clients.abs_client.add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
+            clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
         shelf_filename = original_ebook_filename or ebook_filename
         if shelf_filename:
             _shelve_matched_ebook(shelf_filename, item.get('ebook_source'),
@@ -4618,7 +4619,7 @@ def _process_forge_match_queue(queue_items):
             _enqueue_tracker_automatch(clients.sync_clients, book)
 
             if not str(item['abs_id']).startswith('booklore:'):
-                clients.abs_client.add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
+                clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
             if clients.booklore_client.is_configured():
                 shelf_filename = original_ebook_filename or ebook_filename
                 _shelve_matched_ebook(shelf_filename)
@@ -5466,7 +5467,7 @@ def suggestions_page():
                 _enqueue_tracker_automatch(container.sync_clients(), book)
 
                 if not str(item['abs_id']).startswith('booklore:'):
-                    container.abs_client().add_to_collection(item['abs_id'], ABS_COLLECTION_NAME)
+                    container.abs_client().add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
 
                 # If this suggestion originated from the shelf-watch flow, do a full
                 # shelf MOVE (Up Next -> Kobo) rather than just an add. The origin
@@ -5773,7 +5774,7 @@ def cleanup_mapping_resources(book):
         and not str(book.abs_id).startswith('booklore:')
     )
     if is_abs_backed:
-        collection_name = os.environ.get('ABS_COLLECTION_NAME', 'Synced with KOReader')
+        collection_name = user_setting('ABS_COLLECTION_NAME', 'Synced with KOReader')
         try:
             container.abs_client().remove_from_collection(book.abs_id, collection_name)
         except Exception as e:

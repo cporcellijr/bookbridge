@@ -17,8 +17,8 @@ _ALLOW_GLOBAL_FALLBACK_KEY = "__allow_global_fallback__"
 # Keys stored per-user (credentials/accounts + per-service enable toggles).
 # Server URLs, library IDs, and engine/catalog settings stay global.
 PER_USER_CREDENTIAL_KEYS = frozenset({
-    # Audiobookshelf (server URL stays global; API token + library are per-user)
-    "ABS_KEY", "ABS_LIBRARY_ID",
+    # Audiobookshelf (server URL stays global; API token + library + collection are per-user)
+    "ABS_KEY", "ABS_LIBRARY_ID", "ABS_COLLECTION_NAME",
     # KOReader / KoSync (server URL global; account is per-user)
     "KOSYNC_USER", "KOSYNC_KEY", "KOSYNC_ENABLED",
     # Storyteller
@@ -44,6 +44,7 @@ PER_USER_FIELD_GROUPS = [
     ("Audiobookshelf", [
         ("ABS_KEY", "API token", "secret"),
         ("ABS_LIBRARY_ID", "Library ID (optional, for a separate library)", "text"),
+        ("ABS_COLLECTION_NAME", "Collection name (synced books moved here)", "text"),
     ]),
     ("KOReader / KoSync", [
         ("KOSYNC_ENABLED", "Enabled", "bool"),
