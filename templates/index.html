@@ -1961,7 +1961,9 @@
                 </a>
                 {% endif %}
 
-                {% if booklore_server and (get_bool('BOOKLORE_ENABLED') or get_val('BOOKLORE_ENABLED') == '') %}
+                {# Ebook/reading-app links reflect THIS user's enabled integration:
+                   admin -> BookOrbit/Grimmory, another user -> their CWA, etc. #}
+                {% if booklore_server and get_user_bool('BOOKLORE_ENABLED') %}
                 <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
                     title="Ebook Library">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
@@ -1972,9 +1974,20 @@
                 </a>
                 {% endif %}
 
-                {% if get_val('BOOKORBIT_SERVER') and get_bool('BOOKORBIT_ENABLED') %}
+                {% if get_val('BOOKORBIT_SERVER') and get_user_bool('BOOKORBIT_ENABLED') %}
                 <a href="{{ get_val('BOOKORBIT_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
                     title="BookOrbit Library">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                </a>
+                {% endif %}
+
+                {% if get_val('CWA_SERVER') and get_user_bool('CWA_ENABLED') %}
+                <a href="{{ get_val('CWA_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
+                    title="Calibre-Web Library">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
                         stroke-linejoin="round">
                         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>

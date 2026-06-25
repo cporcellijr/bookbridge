@@ -1195,12 +1195,25 @@ def inject_global_vars():
         val = os.environ.get(key, 'false')
         return val.lower() in ('true', '1', 'yes', 'on')
 
+    def get_user_val(key, default_val=''):
+        """Per-user setting (the logged-in user's value, else global). Use for
+        anything that should reflect THIS user's config, e.g. their reading app."""
+        from src.utils.user_config import user_setting
+        val = user_setting(key, None)
+        return val if val not in (None, '') else default_val
+
+    def get_user_bool(key):
+        from src.utils.user_config import user_setting
+        return str(user_setting(key, 'false')).lower() in ('true', '1', 'yes', 'on')
+
     return dict(
         shelfmark_url=os.environ.get("SHELFMARK_URL", ""),
         abs_server=_display_abs_server(),
         booklore_server=os.environ.get("BOOKLORE_SERVER", ""),
         get_val=get_val,
         get_bool=get_bool,
+        get_user_val=get_user_val,
+        get_user_bool=get_user_bool,
         current_user=current_user(),
     )
 
