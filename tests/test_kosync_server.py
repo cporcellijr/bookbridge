@@ -5,6 +5,7 @@ Verifies compatibility with kosync-dotnet behavior.
 import unittest
 import time
 from datetime import datetime, timedelta
+from src.utils.time_utils import utcnow
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import os
@@ -981,7 +982,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             percentage=0.60,
             device='Sibling',
             device_id='S1',
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
             linked_abs_id='test-step2-book'
         )
         web_server.database_service.save_kosync_document(sibling_doc)
@@ -1024,7 +1025,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             percentage=0.50,
             device='DeviceA',
             device_id='DA',
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
             filename='shared_name.epub',
             linked_abs_id='test-filename-book'
         )
@@ -1121,7 +1122,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.20,
                 device=device,
                 device_id=device_id,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1196,7 +1197,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.40,
                 device=external_device,
                 device_id=external_device_id,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1279,7 +1280,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.15,
                 device=device,
                 device_id=device_id,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1337,7 +1338,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.20,
                 device='abs-sync-bot',
                 device_id='BOT1',
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1566,7 +1567,7 @@ class TestKosyncEstimatedSessions(unittest.TestCase):
                 mode='plugin',
                 source='plugin_session_auto',
                 last_document_hash='p' * 32,
-                seen_time=datetime.utcnow(),
+                seen_time=utcnow(),
             )
             self.ks._update_grouped_kosync_session(book, 'p' * 32, 'Kobo_monza', 'RID3', 0.30, start)
             self.ks._update_grouped_kosync_session(book, 'p' * 32, 'Kobo_monza', 'RID3', 0.36, start + 120)

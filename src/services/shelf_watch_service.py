@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from src.db.models import PendingSuggestion
+from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ class ShelfWatchService:
 
         threshold = self._threshold()
         rescan_window = timedelta(hours=self._rescan_hours())
-        now = datetime.utcnow()
+        now = utcnow()
 
         candidate_pool = None  # Lazy-built on first non-skipped book
 

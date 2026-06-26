@@ -35,6 +35,7 @@ from .models import (
     UserBook,
     Base,
 )
+from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +300,7 @@ class DatabaseService:
         with self.get_session() as session:
             user = session.query(User).filter(User.id == user_id).first()
             if user:
-                user.last_login = datetime.utcnow()
+                user.last_login = utcnow()
 
     def verify_user_credentials(self, username: str, password: str) -> Optional[User]:
         """Return the active User if username+password match, else None."""
@@ -1005,7 +1006,7 @@ class DatabaseService:
         if doc.user_id is None:
             doc.user_id = self._resolve_uid(None)
         with self.get_session() as session:
-            doc.last_updated = datetime.utcnow()
+            doc.last_updated = utcnow()
             merged = session.merge(doc)
             session.flush()
             session.refresh(merged)
@@ -1050,7 +1051,7 @@ class DatabaseService:
             ).first()
             if doc:
                 doc.linked_abs_id = abs_id
-                doc.last_updated = datetime.utcnow()
+                doc.last_updated = utcnow()
                 return True
             return False
 
@@ -1074,7 +1075,7 @@ class DatabaseService:
                 return True
             if doc.linked_abs_id != abs_id:
                 doc.linked_abs_id = abs_id
-                doc.last_updated = datetime.utcnow()
+                doc.last_updated = utcnow()
                 return True
             return False
 
@@ -1086,7 +1087,7 @@ class DatabaseService:
             ).first()
             if doc:
                 doc.linked_abs_id = None
-                doc.last_updated = datetime.utcnow()
+                doc.last_updated = utcnow()
                 return True
             return False
 
@@ -1281,7 +1282,7 @@ class DatabaseService:
             existing = session.query(ShelfWatchScan).filter(
                 ShelfWatchScan.grimmory_book_id == gid
             ).first()
-            now = datetime.utcnow()
+            now = utcnow()
             if existing:
                 existing.grimmory_filename = grimmory_filename
                 existing.last_scan_at = now
@@ -1414,7 +1415,7 @@ class DatabaseService:
             return
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
         rows = [
-            {"model": model, "text_hash": h, "vector_json": json.dumps(v), "created_at": datetime.utcnow()}
+            {"model": model, "text_hash": h, "vector_json": json.dumps(v), "created_at": utcnow()}
             for h, v in vectors_by_hash.items()
             if h and isinstance(v, list)
         ]
@@ -1426,7 +1427,7 @@ class DatabaseService:
 
     def prune_embedding_cache(self, keep_model: str, max_age_days: int = 90) -> int:
         """Drop rows for other models and rows older than `max_age_days`. Returns count."""
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff = utcnow() - timedelta(days=max_age_days)
         with self.get_session() as session:
             query = session.query(EmbeddingCache).filter(
                 (EmbeddingCache.model != keep_model) | (EmbeddingCache.created_at < cutoff)
@@ -1449,7 +1450,7 @@ class DatabaseService:
             return 0
 
         rows = []
-        now = datetime.utcnow()
+        now = utcnow()
         for book in books or []:
             md5 = str(book.get("md5") or book.get("book_md5") or "").strip()
             if not md5:
@@ -1500,7 +1501,7 @@ class DatabaseService:
             return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
         rows = []
-        now = datetime.utcnow()
+        now = utcnow()
         for entry in page_stats or []:
             md5 = str(entry.get("md5") or entry.get("book_md5") or "").strip()
             if not md5:

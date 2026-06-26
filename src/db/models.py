@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from typing import Optional
 
+from src.utils.time_utils import utcnow
+
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
@@ -32,8 +34,8 @@ class KosyncDocument(Base):
     
     # Bridge specific fields
     linked_abs_id = Column(String(255), ForeignKey('books.abs_id'), nullable=True, index=True)
-    first_seen = Column(DateTime, default=datetime.utcnow)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    first_seen = Column(DateTime, default=utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
     # Multi-user: device-progress cache is per-user (the hash->book link stays
     # shared; authoritative per-user KoSync progress lives in State). Nullable
     # during rollout; backfilled in Phase 3.
@@ -64,8 +66,8 @@ class KosyncDocument(Base):
         self.booklore_id = booklore_id
         self.mtime = mtime
         self.user_id = user_id
-        self.first_seen = datetime.utcnow()
-        self.last_updated = datetime.utcnow()
+        self.first_seen = utcnow()
+        self.last_updated = utcnow()
 
     def __repr__(self):
         return f"<KosyncDocument(hash='{self.document_hash}', pct={self.percentage})>"
@@ -323,7 +325,7 @@ class PendingSuggestion(Base):
     cover_url = Column(String(500))
     matches_json = Column(Text)
     status = Column(String(20), default='pending')
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     origin = Column(String(50), nullable=True, index=True)
     origin_metadata_json = Column(Text, nullable=True)
 
@@ -337,7 +339,7 @@ class PendingSuggestion(Base):
         self.cover_url = cover_url
         self.matches_json = matches_json
         self.status = status
-        self.created_at = datetime.utcnow()
+        self.created_at = utcnow()
         self.origin = origin
         self.origin_metadata_json = origin_metadata_json
 
@@ -384,7 +386,7 @@ class ShelfWatchScan(Base):
                  last_status: str = None):
         self.grimmory_book_id = grimmory_book_id
         self.grimmory_filename = grimmory_filename
-        self.last_scan_at = last_scan_at or datetime.utcnow()
+        self.last_scan_at = last_scan_at or utcnow()
         self.last_top_score = last_top_score
         self.last_status = last_status
 
@@ -418,7 +420,7 @@ class BookAlignment(Base):
 
     abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
     alignment_map_json = Column(Text, nullable=False)  # JSON-encoded list of dicts or optimized structure
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
     # How the map was built: 'lexical', 'llm_anchor', 'linear', 'storyteller',
     # 'storyteller_linear'. NULL = pre-provenance (built before LLM alignment shipped).
     align_method = Column(String(32), nullable=True)
@@ -486,7 +488,7 @@ class KOReaderBookStat(Base):
     pages = Column(Integer, nullable=True)
     total_read_pages = Column(Integer, nullable=True)
     total_read_time = Column(Integer, nullable=True)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow, index=True)
 
     def __init__(
         self,
@@ -513,7 +515,7 @@ class KOReaderBookStat(Base):
         self.pages = pages
         self.total_read_pages = total_read_pages
         self.total_read_time = total_read_time
-        self.last_updated = datetime.utcnow()
+        self.last_updated = utcnow()
 
 
 class KOReaderPageStat(Base):
@@ -532,7 +534,7 @@ class KOReaderPageStat(Base):
     start_time = Column(Float, nullable=False, index=True)
     duration = Column(Float, nullable=False)
     total_pages = Column(Integer, nullable=True)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=utcnow)
 
     def __init__(
         self,
@@ -555,7 +557,7 @@ class KOReaderPageStat(Base):
         self.start_time = start_time
         self.duration = duration
         self.total_pages = total_pages
-        self.uploaded_at = datetime.utcnow()
+        self.uploaded_at = utcnow()
 
 
 class BookloreBook(Base):
@@ -569,7 +571,7 @@ class BookloreBook(Base):
     title = Column(String(500))
     authors = Column(String(500))
     raw_metadata = Column(Text)  # JSON blob of full booklore response
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     @property
     def raw_metadata_dict(self):
@@ -597,7 +599,7 @@ class EmbeddingCache(Base):
     model = Column(String(255), nullable=False)
     text_hash = Column(String(64), nullable=False)
     vector_json = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     __table_args__ = (
         Index('ix_embedding_cache_model_hash', 'model', 'text_hash', unique=True),
@@ -622,7 +624,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=True)
     role = Column(String(20), nullable=False, default='user')  # 'admin' | 'user'
     active = Column(Integer, nullable=False, default=1)  # 1=active, 0=disabled
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     last_login = Column(DateTime, nullable=True)
 
     credentials = relationship("UserCredential", back_populates="user", cascade="all, delete-orphan")
@@ -633,7 +635,7 @@ class User(Base):
         self.password_hash = password_hash
         self.role = role
         self.active = active
-        self.created_at = datetime.utcnow()
+        self.created_at = utcnow()
 
     @property
     def is_admin(self) -> bool:
@@ -692,7 +694,7 @@ class UserBook(Base):
     def __init__(self, user_id: int, abs_id: str):
         self.user_id = user_id
         self.abs_id = abs_id
-        self.created_at = datetime.utcnow()
+        self.created_at = utcnow()
 
     def __repr__(self):
         return f"<UserBook(user_id={self.user_id}, abs_id='{self.abs_id}')>"

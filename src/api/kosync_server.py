@@ -19,6 +19,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, request, send_file, g
 
 from src.utils.kosync_headers import hash_kosync_key
+from src.utils.time_utils import utcnow
 from src.utils.user_context import set_current_user_id, reset_current_user_id
 from src.utils.string_utils import calculate_similarity, clean_book_title
 from src.services.llm_matching import judge_best_candidate
@@ -340,7 +341,7 @@ def _upsert_kosync_device_session_entry(
     if not device_key:
         return False
 
-    now_iso = (seen_time or datetime.utcnow()).isoformat() + "Z"
+    now_iso = (seen_time or utcnow()).isoformat() + "Z"
     registry = _load_kosync_device_session_registry()
     existing = registry.get(device_key) if isinstance(registry.get(device_key), dict) else {}
     first_seen = existing.get("first_seen") or now_iso
@@ -1143,7 +1144,7 @@ def kosync_put_progress():
     progress = data.get('progress', '')
     device = data.get('device', '')
     device_id = data.get('device_id', '')
-    now = datetime.utcnow()
+    now = utcnow()
     now_ts = time.time()
     _flush_stale_kosync_sessions(now_ts)
 
