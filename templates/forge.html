@@ -662,7 +662,7 @@
             <a href="/settings" class="btn">⚙️ Settings</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/suggestions" class="btn">💡 Suggestions</a>
-            <a href="/match" class="btn btn-primary">➕ Add Book</a>
+            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Book</a>
         </div>
     </div>
 
@@ -721,15 +721,6 @@
             <div id="forgeStatus" class="forge-status"></div>
         </div>
 
-        <!-- Alignment health: which maps used the LLM + one-click re-align -->
-        <div class="forge-action" id="alignmentHealth" style="margin-top:32px;border-top:1px solid rgba(255,255,255,0.08);padding-top:24px;">
-            <h2 style="font-size:18px;margin-bottom:8px;">🧠 Alignment Health</h2>
-            <div id="alignHealthSummary" style="opacity:0.8;font-size:14px;margin-bottom:12px;">Loading…</div>
-            <button class="forge-btn" id="realignAllBtn" onclick="realignAllNonLlm()" style="margin-bottom:16px;">
-                🔁 Re-align all pre-LLM / linear maps
-            </button>
-            <div id="alignHealthList" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto;"></div>
-        </div>
     </div>
 
     <div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
@@ -1024,84 +1015,7 @@
                 });
         }
 
-        function escapeHtml(text) {
-            if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        async function loadAlignmentHealth() {
-            const summaryEl = document.getElementById('alignHealthSummary');
-            const listEl = document.getElementById('alignHealthList');
-            if (!summaryEl) return;
-            try {
-                const res = await fetch('/api/alignments/llm-status');
-                const data = await res.json();
-                const needs = data.needs_realign || 0;
-                summaryEl.textContent = `${needs} of ${data.total || 0} maps could benefit from LLM re-alignment `
-                    + `(the rest are already good lexical/LLM maps).`;
-                const allBtn = document.getElementById('realignAllBtn');
-                if (allBtn) allBtn.disabled = needs === 0;
-                listEl.innerHTML = '';
-                // Only list books actually recommended for re-alignment (linear/pre-LLM fallbacks).
-                const recommended = (data.books || []).filter(b => b.needs_realign);
-                if (recommended.length === 0) {
-                    listEl.innerHTML = '<div style="opacity:0.6;font-size:13px;padding:8px 12px;">'
-                        + '✅ No maps need re-alignment — every map is already a good lexical or LLM-built map.</div>';
-                    return;
-                }
-                recommended.forEach(b => {
-                    const method = b.align_method || 'pre_llm';
-                    const row = document.createElement('div');
-                    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;'
-                        + 'padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;';
-                    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">`
-                        + `${escapeHtml(b.title)}</span>`
-                        + `<span style="color:#e53e3e;font-size:12px;min-width:120px;text-align:right;">${escapeHtml(method)}</span>`;
-                    const rb = document.createElement('button');
-                    rb.textContent = 'Re-align';
-                    rb.className = 'btn';
-                    rb.onclick = () => realignBook(b.abs_id, rb);
-                    row.appendChild(rb);
-                    listEl.appendChild(row);
-                });
-            } catch (e) {
-                summaryEl.textContent = 'Failed to load alignment health.';
-            }
-        }
-
-        async function realignBook(absId, btn) {
-            if (btn) { btn.disabled = true; btn.textContent = 'Queued'; }
-            try {
-                await fetch('/api/alignments/realign', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ abs_id: absId })
-                });
-            } catch (e) {
-                if (btn) { btn.disabled = false; btn.textContent = 'Re-align'; }
-            }
-        }
-
-        async function realignAllNonLlm() {
-            const btn = document.getElementById('realignAllBtn');
-            if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
-            try {
-                const res = await fetch('/api/alignments/realign', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ scope: 'all_non_llm' })
-                });
-                const data = await res.json();
-                if (btn) btn.textContent = `🔁 Queued ${data.queued || 0} — reprocessing in background`;
-            } catch (e) {
-                if (btn) { btn.disabled = false; btn.textContent = '🔁 Re-align all pre-LLM / linear maps'; }
-            }
-        }
-
         document.addEventListener('DOMContentLoaded', () => {
-            loadAlignmentHealth();
             const forgeStageModal = document.getElementById('forgeStageModal');
 
             forgeStageModal.addEventListener('click', (event) => {

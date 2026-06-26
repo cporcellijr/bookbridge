@@ -102,9 +102,6 @@ ALL_SETTINGS = [
     'WHISPER_DEVICE', 'WHISPER_COMPUTE_TYPE',
     'TRANSCRIPTION_PROVIDER', 'DEEPGRAM_API_KEY', 'DEEPGRAM_MODEL', 'WHISPER_CPP_URL',
     'SMIL_VALIDATION_THRESHOLD',
-
-    # User permissions (Phase II: progressively open admin-only tools to regular users)
-    'ALLOW_USER_BATCH_MATCH',
 ]
 
 # Default values
@@ -182,7 +179,6 @@ DEFAULT_CONFIG = {
     'CWA_SYNC_POLL_SECONDS': '300',
     'CALIBRE_USE_ABS_IDENTIFIER': 'false',
     'CALIBRE_LIBRARY_PATH': '',
-    'ALLOW_USER_BATCH_MATCH': 'false',
     'HARDCOVER_ENABLED': 'false',
     'HARDCOVER_UPDATE_COOLDOWN_MINS': '60',
     'STORYGRAPH_ENABLED': 'false',

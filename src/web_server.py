@@ -432,7 +432,6 @@ _AUTH_EXEMPT_ENDPOINTS = {
 # suggestions are admin-only ("admin sets things up, users just use").
 _ADMIN_ONLY_ENDPOINTS = {
     'settings',
-    'batch_match',
     'suggestions', 'get_suggestions', 'suggestions_scan_status',
     'dismiss_suggestion', 'ignore_suggestion', 'clear_stale_suggestions',
     'stats_view', 'api_stats', 'api_stats_reading_day', 'api_stats_reading_calendar',
@@ -453,7 +452,6 @@ _ADMIN_ONLY_ENDPOINTS = {
 # Endpoint stays admin-only unless its toggle is on. Default-off, so behavior is
 # unchanged until an admin opts in. Reuse the same pattern for future features.
 _USER_UNLOCKABLE_ENDPOINTS = {
-    'batch_match': 'ALLOW_USER_BATCH_MATCH',
 }
 
 
@@ -2566,7 +2564,6 @@ def settings():
             'OLLAMA_TRACKER_MATCH',
             'OLLAMA_LIBRARY_MATCH',
             'OLLAMA_EBOOK_TEXT_FALLBACK',
-            'ALLOW_USER_BATCH_MATCH',
         ]
 
         # Current settings in DB
@@ -3287,9 +3284,13 @@ def _build_dashboard_mapping(
         "states": {},
     }
 
-    if book.status == "processing":
+    if book.status in ("processing", "forging"):
         job = database_service.get_latest_job(book.abs_id)
-        mapping["job_progress"] = round((job.progress or 0.0) * 100, 1) if job else 0.0
+        if job:
+            mapping["job_progress"] = round((job.progress or 0.0) * 100, 1)
+            mapping["job_last_error"] = job.last_error
+        else:
+            mapping["job_progress"] = 0.0
 
     latest_update_time = 0
     max_progress = 0
@@ -3610,8 +3611,8 @@ def shelfmark():
 
 
 def forge():
-    """Storyteller Forge - 2-column UI for combining ABS audio with ebook text."""
-    return render_template('forge.html')
+    """Legacy Forge page entry point; the unified Add Book flow owns this UI."""
+    return redirect(url_for('add_book'), code=302)
 
 
 def forge_search_audio():
@@ -3973,6 +3974,10 @@ def alignments_realign():
 
 
 def match():
+    if request.method == 'GET':
+        search = request.args.get('search', '')
+        return redirect(url_for('add_book', search=search), code=302)
+
     if request.method == 'POST':
         abs_id = (request.form.get('audiobook_id') or '').strip()
         audio_source = (request.form.get('audio_source') or ('ABS' if abs_id else '')).strip() or None
@@ -4106,6 +4111,7 @@ def match():
                     ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
+                _record_forge_match_job(forge_id, progress=0.02, last_error="Queued Forge & Match")
 
                 container.forge_service().start_auto_forge_match(
                     abs_id=forge_id,
@@ -4133,6 +4139,7 @@ def match():
                     ebook_source_id=(source_id or '').strip() or None,
                 )
                 database_service.save_book(book)
+                _record_forge_match_job(abs_id, progress=0.02, last_error="Queued Forge & Match")
 
                 author = get_abs_author(selected_ab)
                 container.forge_service().start_auto_forge_match(
@@ -4348,6 +4355,133 @@ def match():
     return render_template('match.html', audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books, search=search)
 
 
+def _create_ebook_only_mapping_from_queue_item(item):
+    """Create an ebook-only / storyteller-only mapping (no audio) from a queue item.
+
+    Mirrors the match() ebook-only-create path. Used by the batch processors when a
+    queued Add Book item has no audio source (the matrix says: no audio → match only).
+    """
+    storyteller_uuid = (item.get('storyteller_uuid') or '').strip() or None
+    ebook_filename = (item.get('ebook_filename') or '').strip() or None
+    ebook_source = item.get('ebook_source')
+    ebook_source_id = item.get('ebook_source_id')
+    if not (storyteller_uuid or ebook_filename):
+        return
+    title = (
+        item.get('abs_title')
+        or (Path(ebook_filename).stem if ebook_filename else None)
+        or f"storyteller_{storyteller_uuid or 'book'}"
+    )
+    saved_book, err_msg, _err_code = _upsert_storyteller_mapping(
+        mode_hint="ebook_only_create",
+        abs_id=ebook_source_id if ebook_source == 'ABS' and ebook_source_id else None,
+        abs_title=title,
+        storyteller_uuid=storyteller_uuid,
+        ebook_filename=ebook_filename,
+        ebook_source=ebook_source,
+        ebook_source_id=ebook_source_id,
+        duration=0.0,
+    )
+    if err_msg:
+        logger.warning("⚠️ Add Book (ebook-only) skipped '%s': %s", sanitize_log_data(title), err_msg)
+    elif saved_book:
+        _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+
+
+def _record_forge_match_job(abs_id: str, progress: float = 0.0, last_error: str = None):
+    """Persist Forge & Match wait state so it survives refreshes and restarts."""
+    if not abs_id:
+        return None
+    from src.db.models import Job
+    try:
+        return database_service.save_job(
+            Job(
+                abs_id=abs_id,
+                last_attempt=time.time(),
+                retry_count=0,
+                last_error=last_error,
+                progress=progress,
+            )
+        )
+    except Exception as exc:
+        logger.warning("Forge & Match: failed to record job state for '%s': %s", sanitize_log_data(abs_id), exc)
+        return None
+
+
+def _process_forge_only_queue(queue_items, forge_stage_mode=None):
+    """Background processor for the Add Book 'Forge only' action.
+
+    Builds the Storyteller edition for each forge-eligible item (audio + a standard
+    ebook) without creating a sync mapping — the same work as forge_process(), driven
+    from queued items instead of a single JSON request.
+    """
+    clients = uc()
+    for item in queue_items:
+        audio_source = item.get('audio_source')
+        # Forge-only requires audio + a standard ebook (never a Storyteller edition).
+        if not audio_source or item.get('storyteller_uuid') or not item.get('ebook_filename'):
+            logger.info(
+                "Forge only: skipping non-forge-eligible item '%s'",
+                sanitize_log_data(item.get('abs_title') or item.get('abs_id')),
+            )
+            continue
+
+        original_filename = (item.get('ebook_filename') or '').strip()
+        source_type = _normalize_text_source_type(item.get('ebook_source'))
+        source_id = str(item.get('ebook_source_id') or '').strip()
+        source_path = str(item.get('ebook_source_path') or '').strip()
+        if not source_type:
+            source_type = 'Booklore' if source_id else 'Local File'
+        if source_type == 'Local File' and not source_path:
+            resolved_path = find_ebook_file(original_filename)
+            source_path = str(resolved_path) if resolved_path else ''
+        text_item = _build_forge_text_item(source_type, source_id, source_path, original_filename)
+
+        if audio_source == 'BookLore':
+            audio_source_id = (item.get('audio_source_id') or '').strip()
+            abs_id = _build_bridge_key('BookLore', audio_source_id)
+        else:
+            audio_source = 'ABS'
+            abs_id = item.get('abs_id')
+            audio_source_id = item.get('audio_source_id') or abs_id
+
+        # Best-effort title/author for Storyteller folder naming (mirrors forge_process).
+        title = item.get('audio_title') or 'Unknown'
+        author = 'Unknown'
+        try:
+            if audio_source == 'BookLore':
+                book_detail = clients.booklore_client.get_book_by_id(audio_source_id)
+                if book_detail:
+                    metadata = book_detail.get('metadata') or {}
+                    title = metadata.get('title') or book_detail.get('title') or title
+                    author = (
+                        _coerce_author_display(book_detail.get('authors'))
+                        or _coerce_author_display(metadata.get('authors'))
+                        or author
+                    )
+            else:
+                item_details = clients.abs_client.get_item_details(abs_id)
+                if item_details:
+                    metadata = item_details.get('media', {}).get('metadata', {})
+                    title = metadata.get('title') or title
+                    author = metadata.get('authorName', '') or get_abs_author(item_details) or author
+        except Exception as e:
+            logger.warning("Forge only: metadata lookup failed for '%s': %s", sanitize_log_data(abs_id), e)
+
+        forge_kwargs = {}
+        if audio_source == 'BookLore':
+            forge_kwargs['audio_source'] = 'BookLore'
+            forge_kwargs['audio_source_id'] = audio_source_id
+        if forge_stage_mode:
+            forge_kwargs['stage_mode'] = forge_stage_mode
+        try:
+            container.forge_service().start_manual_forge(
+                abs_id, text_item, title, author, **forge_kwargs, **_client_bundle_kwargs(clients)
+            )
+        except Exception as e:
+            logger.error("❌ Forge only failed for '%s': %s", sanitize_log_data(title), e)
+
+
 def _process_batch_queue(queue_items):
     """Background processor for the batch-match 'Process Queue' action.
 
@@ -4358,6 +4492,10 @@ def _process_batch_queue(queue_items):
     from src.db.models import Book
     clients = uc()
     for item in queue_items:
+        if not item.get('audio_source'):
+            # No audio: ebook-only / storyteller-only item — match only.
+            _create_ebook_only_mapping_from_queue_item(item)
+            continue
         audio_source = item.get('audio_source') or 'ABS'
         if audio_source == 'BookLore':
             saved_book, err_msg, _err_code = _create_or_update_booklore_audio_mapping(
@@ -4503,6 +4641,10 @@ def _process_forge_match_queue(queue_items):
     from src.db.models import Book
     clients = uc()
     for item in queue_items:
+        if not item.get('audio_source'):
+            # No audio: ebook-only / storyteller-only item — match only (nothing to forge).
+            _create_ebook_only_mapping_from_queue_item(item)
+            continue
         audio_source = item.get('audio_source') or 'ABS'
         storyteller_uuid = item.get('storyteller_uuid', '')
 
@@ -4716,6 +4858,7 @@ def _process_forge_match_queue(queue_items):
             )
             database_service.save_book(book)
             _claim_book_for_user_id(get_current_user_id(), book.abs_id)
+            _record_forge_match_job(forge_id, progress=0.02, last_error="Queued Forge & Match")
 
             container.forge_service().start_auto_forge_match(
                 abs_id=forge_id,
@@ -4758,6 +4901,7 @@ def _process_forge_match_queue(queue_items):
             )
             database_service.save_book(book)
             _claim_book_for_user_id(get_current_user_id(), book.abs_id)
+            _record_forge_match_job(forge_id, progress=0.02, last_error="Queued Forge & Match")
 
             container.forge_service().start_auto_forge_match(
                 abs_id=forge_id,
@@ -4775,7 +4919,13 @@ def _process_forge_match_queue(queue_items):
 
 
 
-def batch_match():
+def _add_book_view(template_name, self_endpoint):
+    """Shared queue-based Add Book / Batch Match view.
+
+    `batch_match()` (legacy `/batch-match`) and `add_book()` (`/add-book`, the unified
+    Add Book page) both delegate here; they differ only in which template renders and
+    which endpoint the in-page queue actions redirect back to.
+    """
     clients = uc()
     if request.method == 'POST':
         action = request.form.get('action')
@@ -4820,6 +4970,20 @@ def batch_match():
                     'audio_provider_book_id': audio_provider_book_id,
                     'audio_provider_file_id': audio_provider_file_id,
                 }
+            elif not audio_source and (ebook_filename or storyteller_uuid):
+                # No audio selected: ebook-only / storyteller-only item (match only).
+                _eb_key = (storyteller_uuid or ebook_filename or '').strip()
+                if _eb_key:
+                    selected_audio = {
+                        'bridge_key': f"ebook:{_eb_key}",
+                        'audio_source': None,
+                        'audio_source_id': None,
+                        'audio_title': ebook_display_name or (Path(ebook_filename).stem if ebook_filename else 'Ebook'),
+                        'audio_duration': None,
+                        'audio_cover_url': None,
+                        'audio_provider_book_id': None,
+                        'audio_provider_file_id': None,
+                    }
 
             if selected_audio and (ebook_filename or storyteller_uuid):
                 if not any(item['bridge_key'] == selected_audio['bridge_key'] for item in session['queue']):
@@ -4837,22 +5001,30 @@ def batch_match():
                         "cover_url": selected_audio['audio_cover_url'],
                     })
                     session.modified = True
-            return redirect(url_for('batch_match', search=request.form.get('search', '')))
+            return redirect(url_for(self_endpoint, search=request.form.get('search', '')))
         elif action == 'remove_from_queue':
             abs_id = request.form.get('abs_id')
             session['queue'] = [item for item in session.get('queue', []) if item['abs_id'] != abs_id]
             session.modified = True
-            return redirect(url_for('batch_match'))
+            return redirect(url_for(self_endpoint))
         elif action == 'clear_queue':
             session['queue'] = []
             session.modified = True
-            return redirect(url_for('batch_match'))
+            return redirect(url_for(self_endpoint))
         elif action == 'forge_and_match_queue':
             _queue_items = list(session.get('queue', []))
             session['queue'] = []
             session.modified = True
             _spawn_user_background(_process_forge_match_queue, _queue_items, label="batch-forge-match")
             flash(f"Forging + matching {len(_queue_items)} book(s) in the background…", "info")
+            return redirect(url_for('index'))
+        elif action == 'forge_only_queue':
+            _queue_items = list(session.get('queue', []))
+            session['queue'] = []
+            session.modified = True
+            forge_stage_mode = (request.form.get('forge_stage_mode') or '').strip() or None
+            _spawn_user_background(_process_forge_only_queue, _queue_items, forge_stage_mode, label="add-book-forge-only")
+            flash(f"Forging {len(_queue_items)} edition(s) in the background…", "info")
             return redirect(url_for('index'))
         elif action == 'process_queue':
             _queue_items = list(session.get('queue', []))
@@ -4879,8 +5051,21 @@ def batch_match():
             except Exception as e:
                 logger.warning(f"⚠️ Storyteller search failed in batch_match route: {e}")
 
-    return render_template('batch_match.html', audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books,
-                           queue=session.get('queue', []), search=search)
+    return render_template(template_name, audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books,
+                           queue=session.get('queue', []), search=search, self_endpoint=self_endpoint)
+
+
+def batch_match():
+    """Legacy `/batch-match` route; GET folds into the unified Add Book page."""
+    if request.method == 'GET':
+        search = request.args.get('search', '')
+        return redirect(url_for('add_book', search=search), code=302)
+    return _add_book_view('batch_match.html', 'batch_match')
+
+
+def add_book():
+    """Unified `/add-book` page — single, batch, forge, and match in one queue-based flow."""
+    return _add_book_view('add_book.html', 'add_book')
 
 
 def _get_suggestions_service():
@@ -8073,7 +8258,7 @@ def create_app(test_container=None):
     app.jinja_env.filters['format_time_ago'] = format_time_ago
 
     def _legacy_book_linker_redirect(dummy=None):
-        return redirect(url_for('forge'), code=301)
+        return redirect(url_for('add_book'), code=301)
 
     # Register all routes here
     app.add_url_rule('/setup', 'setup', setup, methods=['GET', 'POST'])
@@ -8091,6 +8276,7 @@ def create_app(test_container=None):
     app.add_url_rule('/book-linker', 'book_linker_legacy', _legacy_book_linker_redirect)
     app.add_url_rule('/book-linker/<path:dummy>', 'book_linker_legacy_path', _legacy_book_linker_redirect)
     app.add_url_rule('/match', 'match', match, methods=['GET', 'POST'])
+    app.add_url_rule('/add-book', 'add_book', add_book, methods=['GET', 'POST'])
     app.add_url_rule('/batch-match', 'batch_match', batch_match, methods=['GET', 'POST'])
     app.add_url_rule('/suggestions', 'suggestions', suggestions_page, methods=['GET', 'POST'])
     app.add_url_rule('/delete/<abs_id>', 'delete_mapping', delete_mapping, methods=['POST'])
@@ -8145,7 +8331,21 @@ def create_app(test_container=None):
 
     @app.route('/api/forge/active', methods=['GET'])
     def forge_active_tasks():
-        return jsonify(list(container.forge_service().active_tasks))
+        tasks = set()
+        try:
+            tasks.update(container.forge_service().active_tasks or set())
+        except Exception:
+            pass
+        try:
+            forging_books = database_service.get_books_by_status('forging')
+            if isinstance(forging_books, (list, tuple, set)):
+                for book in forging_books:
+                    title = getattr(book, 'abs_title', None) or getattr(book, 'audio_title', None) or getattr(book, 'abs_id', None)
+                    if title:
+                        tasks.add(title)
+        except Exception as exc:
+            logger.debug("Forge active task lookup failed: %s", exc)
+        return jsonify(sorted(tasks))
 
     # Return both app and container for external reference
     return app, container
@@ -8251,4 +8451,3 @@ if __name__ == '__main__':
         logger.info(f"🚀 Split-Port Mode Active: Sync-only server on port {sync_port}")
 
     app.run(host='0.0.0.0', port=5757, debug=False)
-

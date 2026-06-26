@@ -185,6 +185,44 @@ class ForgeService:
             except Exception as e:
                 logger.warning(f"Auto-Forge: StoryGraph automatch failed for '{book.abs_id}': {e}")
 
+    def _update_forge_match_job(self, abs_id: str, progress: float = None, last_error: str = None) -> None:
+        """Best-effort durable progress marker for Forge & Match waits."""
+        if not abs_id or not self.database_service:
+            return
+        updates = {"last_attempt": time.time()}
+        if progress is not None:
+            updates["progress"] = max(0.0, min(float(progress), 1.0))
+        if last_error is not None:
+            updates["last_error"] = last_error
+        try:
+            updated = self.database_service.update_latest_job(abs_id, **updates)
+            if not updated:
+                from src.db.models import Job
+                self.database_service.save_job(
+                    Job(
+                        abs_id=abs_id,
+                        last_attempt=updates["last_attempt"],
+                        retry_count=0,
+                        last_error=last_error,
+                        progress=updates.get("progress", 0.0),
+                    )
+                )
+        except Exception as exc:
+            logger.debug("Auto-Forge: failed to update job state for '%s': %s", abs_id, exc)
+
+    def _persist_forge_match_storyteller_uuid(self, abs_id: str, book_uuid: str) -> None:
+        """Persist Storyteller UUID once upload succeeds, before long processing waits."""
+        if not abs_id or not book_uuid or not self.database_service:
+            return
+        try:
+            book = self.database_service.get_book(abs_id)
+            if book:
+                book.storyteller_uuid = book_uuid
+                book.status = "forging"
+                self.database_service.save_book(book)
+        except Exception as exc:
+            logger.debug("Auto-Forge: failed to persist Storyteller UUID for '%s': %s", abs_id, exc)
+
     def _stage_local_file(self, src_path: Path, dest_path: Path, stage_mode: str, context: str) -> str:
         src_path = Path(src_path)
         dest_path = Path(dest_path)
@@ -1146,6 +1184,7 @@ class ForgeService:
 
         with self.lock:
             self.active_tasks.add(title)
+        self._update_forge_match_job(abs_id, progress=0.05, last_error="Starting Forge & Match")
 
         stage_mode = self._normalize_stage_mode(stage_mode)
         logger.info(f"Auto-Forge: Staging mode '{stage_mode}'")
@@ -1219,6 +1258,8 @@ class ForgeService:
                     raise Exception(f"Failed to upload audio file '{audio_file.name}' to Storyteller via TUS")
 
             logger.info(f"⚡ Auto-Forge: All files uploaded to Storyteller ({book_uuid})")
+            self._persist_forge_match_storyteller_uuid(abs_id, book_uuid)
+            self._update_forge_match_job(abs_id, progress=0.25, last_error="Uploaded to Storyteller")
 
             # Wait for readiness and trigger processing
             item_details = None
@@ -1250,6 +1291,7 @@ class ForgeService:
                 try:
                     st_client.trigger_processing(book_uuid)
                     processing_triggered = True
+                    self._update_forge_match_job(abs_id, progress=0.32, last_error="Storyteller processing started")
                 except Exception as trigger_err:
                     logger.warning(f"Auto-Forge: Failed to trigger processing for {book_uuid}: {trigger_err}")
             else:
@@ -1271,6 +1313,7 @@ class ForgeService:
             epub_cache = self.ebook_parser.epub_cache_dir
             if not epub_cache.exists():
                 epub_cache.mkdir(parents=True, exist_ok=True)
+            self._update_forge_match_job(abs_id, progress=0.35, last_error="Waiting for Storyteller alignment")
 
             while elapsed < MAX_WAIT:
                 time.sleep(POLL_INTERVAL)
@@ -1291,6 +1334,12 @@ class ForgeService:
                 last_readaloud_status = poll_result["readaloud_status"]
                 last_aligned_at = poll_result["aligned_at"]
                 storyteller_title = poll_result.get("storyteller_title") or storyteller_title
+                if poll_count % 4 == 0:
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error=f"Waiting for Storyteller ({last_readaloud_status or 'unknown'})",
+                    )
                 if poll_result["terminal_error"]:
                     logger.warning(
                         "Auto-Forge: aborting because Storyteller reported %s for %s "
@@ -1304,6 +1353,11 @@ class ForgeService:
                     if book:
                         book.status = "error"
                         self.database_service.save_book(book)
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error=f"Storyteller reported {last_readaloud_status or 'error'}",
+                    )
                     return
                 if completion_method:
                     break
@@ -1328,6 +1382,11 @@ class ForgeService:
                     f"Auto-Forge: entering extended recovery polling for {self.storyteller_recovery_max_wait_seconds}s "
                     f"(interval={self.storyteller_recovery_poll_interval_seconds}s)"
                 )
+                self._update_forge_match_job(
+                    abs_id,
+                    progress=0.35,
+                    last_error=f"Storyteller wait exceeded {elapsed}s; continuing recovery",
+                )
 
                 recovery_elapsed = 0
                 while recovery_elapsed < self.storyteller_recovery_max_wait_seconds and not completion_method:
@@ -1349,6 +1408,11 @@ class ForgeService:
                     last_readaloud_status = poll_result["readaloud_status"]
                     last_aligned_at = poll_result["aligned_at"]
                     storyteller_title = poll_result.get("storyteller_title") or storyteller_title
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error=f"Recovery wait for Storyteller ({last_readaloud_status or 'unknown'})",
+                    )
                     if poll_result["terminal_error"]:
                         logger.warning(
                             "Auto-Forge: aborting during recovery because Storyteller reported %s for %s "
@@ -1362,6 +1426,11 @@ class ForgeService:
                         if book:
                             book.status = "error"
                             self.database_service.save_book(book)
+                        self._update_forge_match_job(
+                            abs_id,
+                            progress=0.35,
+                            last_error=f"Storyteller reported {last_readaloud_status or 'error'} during recovery",
+                        )
                         return
 
                 if not completion_method:
@@ -1369,9 +1438,15 @@ class ForgeService:
                         f"Auto-Forge: extended recovery timed out for abs_id={abs_id} "
                         f"elapsed={recovery_elapsed}s; keeping status='forging'"
                     )
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error="Still waiting for Storyteller after recovery timeout",
+                    )
                     return
 
             logger.info("Auto-Forge: Completion confirmed via %s", completion_method)
+            self._update_forge_match_job(abs_id, progress=0.65, last_error="Storyteller complete; preparing artifact")
 
             # Grace wait before download to let Storyteller finish internal writes.
             if self.storyteller_cleanup_grace_seconds > 0:
@@ -1424,6 +1499,7 @@ class ForgeService:
 
             if not no_epub_cache:
                 logger.info("Auto-Forge: Processing complete. Downloading artifact...")
+                self._update_forge_match_job(abs_id, progress=0.75, last_error="Downloading Storyteller artifact")
                 try:
                     if not st_client.download_book(book_uuid, target_path):
                         raise Exception("API download returned False")
@@ -1465,6 +1541,7 @@ class ForgeService:
                         continue
 
             book_text, _ = self.ebook_parser.extract_text_and_map(text_source_path)
+            self._update_forge_match_job(abs_id, progress=0.82, last_error="Building alignment")
 
             # --- INGEST STORYTELLER TRANSCRIPT (PRIMARY) ---
             storyteller_manifest = ingest_storyteller_transcripts(
@@ -1559,6 +1636,7 @@ class ForgeService:
                         book.ebook_source = text_source
                         book.ebook_source_id = str(text_item.get(source_id_key))
                 self.database_service.save_book(book)
+                self._update_forge_match_job(abs_id, progress=1.0, last_error=None)
                 logger.info(f"✅ Auto-Forge: Book {abs_id} updated successfully!")
                 self._automatch_progress_trackers(book)
             else:
@@ -1590,6 +1668,7 @@ class ForgeService:
                 if book:
                     book.status = 'error'
                     self.database_service.save_book(book)
+                self._update_forge_match_job(abs_id, last_error=str(e))
             except: pass
 
         finally:

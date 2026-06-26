@@ -65,7 +65,7 @@
                         class="book-title-subtitle">: {{ mapping.display_subtitle }}</span>{% endif %}
                 </div>
                 <div class="status-badge status-{{ mapping.status }}">
-                    {% if mapping.status == 'processing' and mapping.job_progress is defined %}
+                    {% if mapping.status in ['processing', 'forging'] and mapping.job_progress is defined %}
                     {{ mapping.job_progress }}%
                     {% else %}
                     {{ mapping.status }}
@@ -2019,12 +2019,7 @@
             <a href="/stats" class="btn">📊 Stats</a>
             <a href="/logs" class="btn">📊 Logs</a>
             {% endif %}
-            <a href="/forge" class="btn">⚡ Forge</a>
-
-            <a href="/match" class="btn btn-primary">➕ Add Book</a>
-            {% if is_admin or get_bool('ALLOW_USER_BATCH_MATCH') %}
-            <a href="/batch-match" class="btn">📋 Batch</a>
-            {% endif %}
+            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Book</a>
             {% if is_admin %}
             <a href="/suggestions" class="btn">💡 Suggestions</a>
             {% endif %}
@@ -2134,7 +2129,7 @@
                                 </div>
 
                                 <div class="suggestion-actions" style="display: flex; gap: 8px;">
-                                    <a href="/match?search={{ suggestion.title|urlencode }}"
+                                    <a href="{{ url_for('add_book', search=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
                                         style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">Review</a>
                                     <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"
@@ -2326,7 +2321,7 @@
                     <div class="empty-state-icon">📚</div>
                     <h2>No books syncing yet</h2>
                     <p>Start by adding your first audiobook mapping</p>
-                    <a href="/match" class="btn btn-primary">➕ Add Your First Book</a>
+                    <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Your First Book</a>
                 </div>
                 {% endif %}
         </div>

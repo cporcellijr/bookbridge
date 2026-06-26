@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Batch Match - BookBridge</title>
+    <title>Add Book - BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * {
@@ -266,6 +266,16 @@
             border-color: #667eea;
             background: rgba(102, 126, 234, 0.15);
             box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+        }
+
+        .book-card.ghost-card {
+            border-style: dashed;
+            background: transparent;
+        }
+
+        .book-card.ghost-card .book-cover-placeholder {
+            background: rgba(255, 255, 255, 0.04);
+            color: rgba(255, 255, 255, 0.45);
         }
 
         .book-card.selected::after {
@@ -677,6 +687,115 @@
             margin-bottom: 0;
         }
 
+        .queue-action-note {
+            color: rgba(255, 255, 255, 0.52);
+            font-size: 12px;
+            line-height: 1.4;
+            margin: -4px 0 12px 0;
+        }
+
+        .queue-actions button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.72);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 24px;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .modal-card {
+            width: min(560px, 100%);
+            background: #141414;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .modal-card h3 {
+            font-size: 20px;
+            margin-bottom: 8px;
+        }
+
+        .modal-card p {
+            color: rgba(255, 255, 255, 0.64);
+            font-size: 14px;
+            line-height: 1.45;
+            margin-bottom: 18px;
+        }
+
+        .modal-options {
+            display: grid;
+            gap: 12px;
+        }
+
+        .modal-option {
+            width: 100%;
+            text-align: left;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.04);
+            color: #ffffff;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .modal-option:hover {
+            border-color: rgba(102, 126, 234, 0.45);
+            background: rgba(102, 126, 234, 0.12);
+            transform: translateY(-1px);
+        }
+
+        .modal-option strong {
+            display: block;
+            font-size: 15px;
+            margin-bottom: 6px;
+        }
+
+        .modal-option span {
+            display: block;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.62);
+            line-height: 1.45;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+
+        .modal-cancel {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.72);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .d-inline {
+            display: inline;
+        }
+
+        .w-100 {
+            width: 100%;
+        }
+
         /* Empty Queue */
         .empty-queue {
             text-align: center;
@@ -804,7 +923,7 @@
             <a href="/" class="btn">← Dashboard</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="{{ url_for('add_book') }}" class="btn">Add Book</a>
+            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Book</a>
             <a href="/suggestions" class="btn">💡 Suggestions</a>
         </div>
     </div>
@@ -812,20 +931,20 @@
     <!-- Main Container -->
     <div class="container">
         <div class="page-header">
-            <h2>Batch Match Queue System</h2>
-            <p class="subtitle">Select multiple audiobook/ebook pairs and process them all at once</p>
+            <h2>Add Book</h2>
+            <p class="subtitle">Pick text by itself, or pair audio with text and choose how the list should be processed</p>
         </div>
 
         <div class="layout">
             <!-- Selection Area -->
             <div class="selection-area">
-                <form method="GET" action="/batch-match">
+                <form method="GET" action="{{ url_for(self_endpoint) }}">
                     <input type="text" name="search" placeholder="🔍 Search by title, author, or filename..."
                         class="search-box" value="{{ search }}" autofocus>
                     <button type="submit" class="btn btn-primary">Search</button>
                 </form>
 
-                <form method="POST" action="/batch-match" id="addToQueueForm">
+                <form method="POST" action="{{ url_for(self_endpoint) }}" id="addToQueueForm">
                     <input type="hidden" name="action" value="add_to_queue">
                     <input type="hidden" name="search" value="{{ search }}">
                     <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
@@ -844,8 +963,24 @@
                     <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
 
                     {% set single_ab_match = audiobooks|length == 1 %}
-                    <h3 class="section-title"><span class="section-number">1</span>Select Audiobook</h3>
+                    <h3 class="section-title"><span class="section-number">1</span>Select Audiobook <span
+                            style="font-size:12px; color:#aaa; font-weight:normal;">(optional)</span></h3>
                     <div class="matching-grid">
+                        <div class="book-card ghost-card {% if not single_ab_match %}selected{% endif %}"
+                            data-value=""
+                            data-audio-source=""
+                            data-audio-source-id=""
+                            data-audio-title=""
+                            data-audio-duration=""
+                            data-audio-provider-book-id=""
+                            data-audio-provider-file-id=""
+                            data-audio-cover-url=""
+                            onclick="selectAudiobook(this)">
+                            <div class="book-cover-container">
+                                <div class="book-cover-placeholder">None</div>
+                            </div>
+                            <div class="book-title">No audio</div>
+                        </div>
                         {% for ab in audiobooks %}
                         <div class="book-card {% if single_ab_match %}selected{% endif %}"
                             data-value="{{ ab.source_id }}"
@@ -947,9 +1082,9 @@
                     <button type="submit" class="btn btn-success add-to-queue-btn" id="addToQueueBtn" disabled
                         data-primary-action="selection-actions"
                         data-working-label="Adding to queue..."
-                        data-working-message="Adding this match to the batch queue..."
+                        data-working-message="Adding this item to the queue..."
                         data-feedback-target="selectionFeedback">
-                        ➕ Add to Queue
+                        Add to Queue
                     </button>
                     <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
                 </form>
@@ -963,10 +1098,20 @@
                 </div>
 
                 {% if queue %}
+                {% set queue_ns = namespace(forge_eligible=0) %}
+                {% for item in queue %}
+                    {% if item.audio_source and item.ebook_filename and not item.storyteller_uuid %}
+                        {% set queue_ns.forge_eligible = queue_ns.forge_eligible + 1 %}
+                    {% endif %}
+                {% endfor %}
                 {% for item in queue %}
                 <div class="queue-item">
+                    {% if item.cover_url %}
                     <img src="{{ item.cover_url }}" alt="Cover" class="queue-item-cover"
                         onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 60%22%3E%3Crect fill=%22%23667eea%22 width=%2240%22 height=%2260%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2224%22 fill=%22white%22%3E📖%3C/text%3E%3C/svg%3E';">
+                    {% else %}
+                    <div class="queue-item-cover book-cover-placeholder" style="font-size:18px;">Text</div>
+                    {% endif %}
                     <div class="queue-item-info">
                         <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
                         {% if item.storyteller_uuid %}
@@ -982,7 +1127,7 @@
                         </p>
                         {% endif %}
                     </div>
-                    <form method="POST" action="/batch-match" class="d-inline">
+                    <form method="POST" action="{{ url_for(self_endpoint) }}" class="d-inline">
                         <input type="hidden" name="action" value="remove_from_queue">
                         <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
                         <button type="submit" class="queue-item-remove">×</button>
@@ -991,29 +1136,51 @@
                 {% endfor %}
 
                 <div class="queue-actions">
-                    <form method="POST" action="/batch-match">
+                    <form method="POST" action="{{ url_for(self_endpoint) }}">
                         <input type="hidden" name="action" value="process_queue">
                         <button type="submit" class="btn btn-success w-100"
                             data-primary-action="queue-actions"
                             data-working-label="Processing queue..."
                             data-working-message="Processing queued matches and returning to the dashboard..."
                             data-feedback-target="queueFeedback">
-                            ✅ Process All ({{ queue|length }})
+                            Match All ({{ queue|length }})
                         </button>
                     </form>
 
-                    <form method="POST" action="/batch-match">
+                    {% if queue_ns.forge_eligible > 0 %}
+                    <form method="POST" action="{{ url_for(self_endpoint) }}">
                         <input type="hidden" name="action" value="forge_and_match_queue">
                         <button type="submit" class="btn btn-primary w-100"
                             data-primary-action="queue-actions"
                             data-working-label="Forging + matching..."
                             data-working-message="Forging queued Storyteller editions and saving matches..."
                             data-feedback-target="queueFeedback">
-                            Forge + Match ({{ queue|length }})
+                            Forge & Match All ({{ queue|length }})
                         </button>
                     </form>
+                    <div class="queue-action-note">Forge applies to audio plus standard ebook items; Storyteller or text-only items are matched directly.</div>
+                    {% endif %}
 
-                    <form method="POST" action="/batch-match">
+                    {% if queue|length == 1 and queue_ns.forge_eligible == 1 %}
+                    <form method="POST" action="{{ url_for(self_endpoint) }}" id="forgeOnlyQueueForm">
+                        <input type="hidden" name="action" value="forge_only_queue">
+                        <input type="hidden" name="forge_stage_mode" id="forgeOnlyStageMode" value="">
+                        <button type="submit" class="btn btn-primary w-100" id="forgeOnlyQueueBtn"
+                            data-primary-action="queue-actions"
+                            data-working-label="Starting forge..."
+                            data-working-message="Starting the Storyteller forge and returning to the dashboard..."
+                            data-feedback-target="queueFeedback">
+                            Forge Only
+                        </button>
+                    </form>
+                    {% elif queue|length > 1 and queue_ns.forge_eligible > 0 %}
+                    <button type="button" class="btn btn-primary w-100" disabled title="Forge only is available for one queued book at a time.">
+                        Forge Only
+                    </button>
+                    <div class="queue-action-note">Forge only is disabled when more than one item is queued.</div>
+                    {% endif %}
+
+                    <form method="POST" action="{{ url_for(self_endpoint) }}">
                         <input type="hidden" name="action" value="clear_queue">
                         <button type="submit" class="btn btn-danger w-100"
                             onclick="return confirm('Clear entire queue?')">
@@ -1032,12 +1199,33 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">
+            <h3 id="forgeStageTitle">Forge staging mode</h3>
+            <p>Choose what happens to the staged source files after Storyteller finishes processing.</p>
+            <div class="modal-options">
+                <button type="button" class="modal-option" onclick="chooseForgeStageMode('cleanup')">
+                    <strong>Delete staged sources</strong>
+                    <span>Default. Copy files into Storyteller, then remove the staged audio and EPUB after processing completes.</span>
+                </button>
+                <button type="button" class="modal-option" onclick="chooseForgeStageMode('hardlink')">
+                    <strong>Keep staged files / hardlink local</strong>
+                    <span>Use hardlinks for local files when possible and skip staged-source cleanup. Remote downloads still fall back to copied files.</span>
+                </button>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn modal-cancel" onclick="closeForgeStageModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let selectedAudiobookId = null;
         let selectedAudioSource = null;
         let selectedEbookFilename = null;
         let selectedStorytellerUuid = null;
         let batchSubmitInFlight = false;
+        let pendingForgeOnlySubmit = false;
 
         function showBatchSubmitFeedback(targetId, message) {
             const feedback = document.getElementById(targetId);
@@ -1154,15 +1342,51 @@
 
         function updateAddButton() {
             const btn = document.getElementById('addToQueueBtn');
-            // Valid if: audiobook selected AND (ebook selected OR a real storyteller UUID selected)
-            if (selectedAudioSource && (selectedEbookFilename || selectedStorytellerUuid)) {
+            // Valid if a text source is selected; audio is optional.
+            if (selectedEbookFilename || selectedStorytellerUuid) {
                 btn.disabled = false;
             } else {
                 btn.disabled = true;
             }
         }
 
-        document.querySelectorAll('form[action="/batch-match"]').forEach((form) => {
+        function openForgeStageModal() {
+            document.getElementById('forgeStageModal').classList.add('open');
+        }
+
+        function closeForgeStageModal() {
+            pendingForgeOnlySubmit = false;
+            document.getElementById('forgeStageModal').classList.remove('open');
+        }
+
+        function chooseForgeStageMode(mode) {
+            const form = document.getElementById('forgeOnlyQueueForm');
+            const stageInput = document.getElementById('forgeOnlyStageMode');
+            const button = document.getElementById('forgeOnlyQueueBtn');
+            if (!form || !stageInput || !button) {
+                closeForgeStageModal();
+                return;
+            }
+            stageInput.value = mode;
+            pendingForgeOnlySubmit = true;
+            document.getElementById('forgeStageModal').classList.remove('open');
+            form.requestSubmit(button);
+        }
+
+        const forgeStageModal = document.getElementById('forgeStageModal');
+        forgeStageModal.addEventListener('click', (event) => {
+            if (event.target === forgeStageModal) {
+                closeForgeStageModal();
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && forgeStageModal.classList.contains('open')) {
+                closeForgeStageModal();
+            }
+        });
+
+        document.querySelectorAll('form').forEach((form) => {
             if (form.querySelector('input[name="action"][value="clear_queue"]')) {
                 return;
             }
@@ -1172,6 +1396,11 @@
 
             form.addEventListener('submit', (event) => {
                 const submitter = event.submitter || document.activeElement || getPrimarySubmitter(form);
+                if (form.id === 'forgeOnlyQueueForm' && !pendingForgeOnlySubmit) {
+                    event.preventDefault();
+                    openForgeStageModal();
+                    return;
+                }
                 if (!submitter || !submitter.dataset.primaryAction) {
                     return;
                 }

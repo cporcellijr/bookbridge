@@ -1041,6 +1041,27 @@ class TestForgeService(unittest.TestCase):
         self.mock_storyteller.upload_epub.assert_called_once()
         self.mock_storyteller.upload_audio_file.assert_called_once()
 
+    def test_auto_forge_persists_wait_state_and_storyteller_uuid(self):
+        """Forge & Match should leave durable wait state before the long Storyteller poll."""
+        db_book = self._run_auto_forge_pipeline(
+            text_item={"source": "Local File"},
+            ingest_manifest=None,
+            storyteller_alignment_ok=False,
+        )
+
+        book_uuid = self.mock_storyteller.upload_epub.call_args.args[1]
+        self.assertEqual(db_book.storyteller_uuid, book_uuid)
+        self.assertEqual(db_book.status, "active")
+
+        progress_values = [
+            call.kwargs.get("progress")
+            for call in self.mock_db.update_latest_job.call_args_list
+            if call.args and call.args[0] == "abs-1" and "progress" in call.kwargs
+        ]
+        self.assertIn(0.25, progress_values)
+        self.assertIn(0.35, progress_values)
+        self.assertIn(1.0, progress_values)
+
     def test_auto_forge_times_out_when_completion_never_confirmed(self):
         """Auto-forge should enter recovery and eventually time out if completion is never confirmed."""
         with patch.object(

@@ -168,8 +168,7 @@
             <a href="/" class="btn">← Dashboard</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="/match" class="btn">➕ Add Book</a>
-            <a href="/batch-match" class="btn">📋 Batch</a>
+            <a href="{{ url_for('add_book') }}" class="btn">Add Book</a>
             <a href="/suggestions" class="btn btn-primary">💡 Suggestions</a>
         </div>
     </div>
@@ -915,4 +914,3 @@
     </script>
 </body>
 </html>
-

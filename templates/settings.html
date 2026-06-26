@@ -666,7 +666,7 @@
                 rel="noopener noreferrer">📚 Docs</a>
             <a href="/" class="btn">← Dashboard</a>
             <a href="/logs" class="btn">📊 Logs</a>
-            <a href="/forge" class="btn">⚡ Forge</a>
+            <a href="{{ url_for('add_book') }}" class="btn">Add Book</a>
             <a href="/suggestions" class="btn">💡 Suggestions</a>
         </div>
     </div>
@@ -715,23 +715,6 @@
                                 }}</option>
                             {% endfor %}
                         </select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="settings-section">
-                <div class="section-header">
-                    <h3>User Permissions</h3>
-                </div>
-                <div class="section-body">
-                    <div class="checkbox-wrapper full-width">
-                        <input type="checkbox" id="allow_user_batch" name="ALLOW_USER_BATCH_MATCH" {% if
-                            get_bool('ALLOW_USER_BATCH_MATCH') %}checked{% endif %}>
-                        <label for="allow_user_batch">Allow non-admin users to use Batch Match</label>
-                    </div>
-                    <div class="help-text">
-                        When off, Batch Match is admin-only. When on, every logged-in user can batch-match;
-                        matches are claimed to that user and appear only on their dashboard.
                     </div>
                 </div>
             </div>
@@ -1740,6 +1723,27 @@
                 </div>
             </div>
 
+            <!-- Alignment Health -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>Alignment Health</h3>
+                </div>
+                <div class="section-body">
+                    <div class="form-group full-width">
+                        <label>Pre-LLM / Linear Alignment Maps</label>
+                        <div class="cleanup-group">
+                            <button type="button" class="btn btn-primary" id="realignAllBtn" onclick="realignAllNonLlm()">
+                                Re-align all pre-LLM / linear maps
+                            </button>
+                            <p class="help-text flex-1 m-0" id="alignHealthSummary">Loading alignment health...</p>
+                        </div>
+                    </div>
+                    <div class="form-group full-width">
+                        <div id="alignHealthList" style="display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto;width:100%;"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Advanced -->
             <div class="settings-section">
                 <div class="section-header">
@@ -2263,6 +2267,94 @@
             setTimeout(() => copyText.style.backgroundColor = originalBg, 200);
         }
 
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadAlignmentHealth() {
+            const summaryEl = document.getElementById('alignHealthSummary');
+            const listEl = document.getElementById('alignHealthList');
+            if (!summaryEl || !listEl) return;
+
+            try {
+                const res = await fetch('/api/alignments/llm-status');
+                const data = await res.json();
+                const needs = data.needs_realign || 0;
+                summaryEl.textContent = `${needs} of ${data.total || 0} maps could benefit from LLM re-alignment.`;
+
+                const allBtn = document.getElementById('realignAllBtn');
+                if (allBtn) allBtn.disabled = needs === 0;
+
+                const recommended = (data.books || []).filter((book) => book.needs_realign);
+                if (recommended.length === 0) {
+                    listEl.innerHTML = '<div style="opacity:0.65;font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;">No maps need re-alignment.</div>';
+                    return;
+                }
+
+                listEl.innerHTML = '';
+                recommended.forEach((book) => {
+                    const method = book.align_method || 'pre_llm';
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;';
+                    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(book.title)}</span>`
+                        + `<span style="color:#e57373;font-size:12px;min-width:120px;text-align:right;">${escapeHtml(method)}</span>`;
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.textContent = 'Re-align';
+                    button.className = 'btn';
+                    button.onclick = () => realignBook(book.abs_id, button);
+                    row.appendChild(button);
+                    listEl.appendChild(row);
+                });
+            } catch (err) {
+                summaryEl.textContent = 'Failed to load alignment health.';
+            }
+        }
+
+        async function realignBook(absId, btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Queued';
+            }
+            try {
+                await fetch('/api/alignments/realign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ abs_id: absId })
+                });
+            } catch (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Re-align';
+                }
+            }
+        }
+
+        async function realignAllNonLlm() {
+            const btn = document.getElementById('realignAllBtn');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Queuing...';
+            }
+            try {
+                const res = await fetch('/api/alignments/realign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scope: 'all_non_llm' })
+                });
+                const data = await res.json();
+                if (btn) btn.textContent = `Queued ${data.queued || 0} - reprocessing in background`;
+            } catch (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Re-align all pre-LLM / linear maps';
+                }
+            }
+        }
+
         async function clearStaleSuggestions() {
             if (!confirm("Are you sure you want to clear stale suggestions?\n\nThis will permanently delete all suggestions for books that are not currently matched in your bridge. Books you are already syncing will be preserved.")) {
                 return;
@@ -2388,6 +2480,8 @@
                 alert('An error occurred while running storyteller backfill. Check console for details.');
             }
         }
+
+        document.addEventListener('DOMContentLoaded', loadAlignmentHealth);
 
         // Auto-calculate public URL on load
         document.addEventListener('DOMContentLoaded', function () {

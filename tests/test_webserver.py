@@ -228,6 +228,47 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     def _read_template_source(self, template_name: str) -> str:
         return (Path(__file__).parent.parent / 'templates' / template_name).read_text(encoding='utf-8')
 
+    def test_forging_book_exposes_job_progress_on_dashboard(self):
+        from src.db.models import Book, Job
+
+        book = Book(
+            abs_id='forge-progress-1',
+            abs_title='Forge Progress',
+            ebook_filename='forge-progress.epub',
+            status='forging',
+            duration=3600,
+        )
+        self.mock_database_service.get_all_books.return_value = [book]
+        self.mock_database_service.get_latest_job.return_value = Job(
+            abs_id='forge-progress-1',
+            progress=0.35,
+            last_error='Waiting for Storyteller alignment',
+        )
+        self._set_dashboard_integrations(storyteller=False)
+
+        mapping = self._capture_index_mapping()
+
+        self.assertEqual(mapping['status'], 'forging')
+        self.assertEqual(mapping['job_progress'], 35.0)
+        self.assertEqual(mapping['job_last_error'], 'Waiting for Storyteller alignment')
+
+    def test_forge_active_tasks_includes_persisted_forging_books(self):
+        from src.db.models import Book
+
+        book = Book(
+            abs_id='forge-active-1',
+            abs_title='Persisted Forge',
+            ebook_filename='persisted.epub',
+            status='forging',
+        )
+        self.mock_container.mock_forge_service.active_tasks = {'Memory Forge'}
+        self.mock_database_service.get_books_by_status.return_value = [book]
+
+        response = self.client.get('/api/forge/active')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), ['Memory Forge', 'Persisted Forge'])
+
     def test_dependency_injection_works(self):
         """Verify that dependency injection is working properly."""
         from src.web_server import manager, database_service, container

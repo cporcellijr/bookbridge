@@ -213,28 +213,19 @@ class TestMultiUserAuth(unittest.TestCase):
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
         self.assertEqual(self.client.get(self._ipath(target.id), follow_redirects=False).status_code, 403)
 
-    def test_batch_match_admin_only_by_default(self):
-        # Default-off: regular users are forbidden, behaviour unchanged.
+    def test_batch_match_redirects_to_add_book_for_regular_users(self):
         self.svc.create_user('reg', 'pw', role='user')
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
-        self.assertEqual(self.client.get('/batch-match', follow_redirects=False).status_code, 403)
+        resp = self.client.get('/batch-match', follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/add-book', resp.headers.get('Location', ''))
+        self.assertEqual(self.client.get('/add-book', follow_redirects=False).status_code, 200)
 
-    def test_batch_match_unlocked_for_users_via_toggle(self):
-        self.svc.create_user('reg', 'pw', role='user')
-        self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
-        prev = os.environ.get('ALLOW_USER_BATCH_MATCH')
-        os.environ['ALLOW_USER_BATCH_MATCH'] = 'true'
-        try:
-            self.assertEqual(self.client.get('/batch-match', follow_redirects=False).status_code, 200)
-        finally:
-            if prev is None:
-                os.environ.pop('ALLOW_USER_BATCH_MATCH', None)
-            else:
-                os.environ['ALLOW_USER_BATCH_MATCH'] = prev
-
-    def test_batch_match_always_allowed_for_admin(self):
+    def test_batch_match_redirects_to_add_book_for_admin(self):
         self._login()  # admin
-        self.assertEqual(self.client.get('/batch-match', follow_redirects=False).status_code, 200)
+        resp = self.client.get('/batch-match', follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/add-book', resp.headers.get('Location', ''))
 
     def test_user_library_lookup_is_admin_only(self):
         self.svc.create_user('reg', 'pw', role='user')
@@ -365,11 +356,12 @@ class TestMultiUserAuth(unittest.TestCase):
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
-        for path in ('/settings', '/stats', '/logs', '/suggestions', '/batch-match'):
+        for path in ('/settings', '/stats', '/logs', '/suggestions'):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403,
                              f"{path} should be admin-only")
-        # but the home + match are reachable
+        # but the home + Add Book flow are reachable
         self.assertNotEqual(self.client.get('/', follow_redirects=False).status_code, 403)
+        self.assertNotEqual(self.client.get('/add-book', follow_redirects=False).status_code, 403)
 
     def test_regular_user_forbidden_from_global_maintenance_apis(self):
         self.svc.create_user("reg", "pw", role="user")
