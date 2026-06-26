@@ -1,5 +1,6 @@
 # [START FILE: abs-kosync-enhanced/web_server.py]
 import glob
+import hmac
 import html
 import logging
 import json
@@ -7,6 +8,7 @@ import contextvars
 import os
 import queue
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -688,6 +690,119 @@ def require_login_guard():
                 return jsonify({"error": "admin access required"}), 403
             return ("Forbidden: admin access required", 403)
     return None
+
+
+_CSRF_SESSION_KEY = '_csrf_token'
+_CSRF_HEADER = 'X-CSRF-Token'
+_CSRF_FORM_FIELD = 'csrf_token'
+_CSRF_SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS', 'TRACE'}
+
+# Injected into authenticated HTML pages so the existing templates need no
+# per-form changes: forwards the per-session CSRF token on same-origin fetch()
+# calls, form submits (including programmatic .submit()), and requestSubmit().
+_CSRF_BOOTSTRAP_TEMPLATE = """<script>(function(){
+  var t = "__CSRF_TOKEN__";
+  var safe = {GET:1, HEAD:1, OPTIONS:1, TRACE:1};
+  function sameOrigin(url){
+    try { return new URL(url, window.location.href).origin === window.location.origin; }
+    catch(e){ return true; }
+  }
+  var _fetch = window.fetch;
+  if (_fetch) {
+    window.fetch = function(input, init){
+      init = init || {};
+      var method = (init.method || (input && input.method) || 'GET').toUpperCase();
+      var url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if (!safe[method] && sameOrigin(url)) {
+        var src = init.headers || (typeof input !== 'string' && input ? input.headers : undefined) || {};
+        var h = new Headers(src);
+        if (!h.has('X-CSRF-Token')) h.set('X-CSRF-Token', t);
+        init.headers = h;
+      }
+      return _fetch.call(this, input, init);
+    };
+  }
+  function addField(form){
+    try {
+      var method = (form.getAttribute('method') || 'GET').toUpperCase();
+      if (safe[method]) return;
+      if (form.action && !sameOrigin(form.action)) return;
+      if (form.querySelector('input[name="csrf_token"]')) return;
+      var inp = document.createElement('input');
+      inp.type = 'hidden'; inp.name = 'csrf_token'; inp.value = t;
+      form.appendChild(inp);
+    } catch(e){}
+  }
+  document.addEventListener('submit', function(ev){
+    var form = ev.target;
+    if (form && form.tagName === 'FORM') addField(form);
+  }, true);
+  var _submit = HTMLFormElement.prototype.submit;
+  HTMLFormElement.prototype.submit = function(){ addField(this); return _submit.apply(this, arguments); };
+})();</script>"""
+
+
+def _ensure_csrf_token() -> str:
+    """Return the per-session CSRF token, generating one on first use."""
+    token = session.get(_CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[_CSRF_SESSION_KEY] = token
+    return token
+
+
+def csrf_protect_guard():
+    """before_request hook: reject cross-site state-changing requests that are
+    authenticated by the browser session cookie.
+
+    Only session-authenticated mutations are checked. API clients that
+    authenticate by a header key (KoSync devices, Hardcover) never carry a web
+    session, so they are naturally exempt — no per-route allowlist needed.
+    Disabled under the test harness (CSRF_ENABLED is set False alongside
+    LOGIN_DISABLED in create_app)."""
+    if not current_app.config.get('CSRF_ENABLED', True):
+        return None
+    if request.method in _CSRF_SAFE_METHODS:
+        return None
+    # Only browser-session requests are CSRF-eligible. No session user -> the
+    # request is either pre-login (login/setup) or header-authenticated (device
+    # APIs); neither relies on the ambient session cookie, so skip.
+    if session.get('user_id') is None:
+        return None
+    expected = session.get(_CSRF_SESSION_KEY)
+    submitted = request.headers.get(_CSRF_HEADER) or request.form.get(_CSRF_FORM_FIELD)
+    if not expected or not submitted or not hmac.compare_digest(str(expected), str(submitted)):
+        logger.warning(
+            f"⚠️ CSRF: rejected {request.method} {request.path} from "
+            f"'{request.remote_addr}' (user {session.get('user_id')})"
+        )
+        if _request_wants_json():
+            return jsonify({"error": "CSRF token missing or invalid"}), 403
+        return ("CSRF token missing or invalid", 403)
+    return None
+
+
+def inject_csrf_script(response):
+    """after_request hook: embed the CSRF bootstrap into authenticated HTML
+    pages so fetch()/form submits forward the per-session token automatically."""
+    try:
+        if not current_app.config.get('CSRF_ENABLED', True):
+            return response
+        if session.get('user_id') is None:
+            return response
+        if response.status_code != 200 or response.mimetype != 'text/html':
+            return response
+        if response.direct_passthrough:
+            return response
+        body = response.get_data(as_text=True)
+        idx = body.rfind('</body>')
+        if idx == -1:
+            return response
+        snippet = _CSRF_BOOTSTRAP_TEMPLATE.replace('__CSRF_TOKEN__', _ensure_csrf_token())
+        response.set_data(body[:idx] + snippet + body[idx:])
+    except Exception as e:  # never let CSRF wiring break a page render
+        logger.debug(f"CSRF inject skipped: {e}")
+    return response
 
 
 def _bind_request_user_context(user):
@@ -8211,9 +8326,12 @@ def create_app(test_container=None):
 
     # Tests inject a test_container and exercise routes without a session; honor
     # Flask's conventional LOGIN_DISABLED so the auth guard is a no-op there.
-    # Production (no test_container) always enforces auth.
+    # Production (no test_container) always enforces auth. CSRF protection is
+    # tied to the same switch so tests can POST to authed routes without tokens.
+    app.config['CSRF_ENABLED'] = True
     if test_container is not None:
         app.config['LOGIN_DISABLED'] = True
+        app.config['CSRF_ENABLED'] = False
 
     # Setup dependencies and inject into app context
     setup_dependencies(app, test_container=test_container)
@@ -8225,7 +8343,9 @@ def create_app(test_container=None):
     # Multi-user: require a web session for all UI routes (device KoSync sync
     # blueprint and auth/health endpoints are exempted inside the guard).
     app.before_request(require_login_guard)
+    app.before_request(csrf_protect_guard)
     app.teardown_request(_release_request_user_context)
+    app.after_request(inject_csrf_script)
 
     # Register context processors, jinja globals, etc.
     app.context_processor(inject_global_vars)

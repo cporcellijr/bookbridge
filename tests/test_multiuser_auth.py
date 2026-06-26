@@ -767,5 +767,88 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertNotIn('/login', resp.headers.get('Location', '') or '')
 
 
+class TestCsrfProtection(unittest.TestCase):
+    """CSRF guard: session-authenticated mutations require a token; header-authed
+    and unauthenticated requests are not in scope."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.environ['DATA_DIR'] = self.tmp
+        os.environ['BOOKS_DIR'] = self.tmp
+        self._orig_template_dir = os.environ.get('TEMPLATE_DIR')
+        os.environ['TEMPLATE_DIR'] = _TEMPLATES
+
+        self.svc = DatabaseService(os.path.join(self.tmp, "csrf.db"))
+        self.svc.create_user("admin", "secret", role="admin")
+        self.mock_container = MockContainer()
+        self.mock_container.mock_database_service = self.svc
+
+        import src.db.migration_utils
+        self._orig_init = src.db.migration_utils.initialize_database
+        src.db.migration_utils.initialize_database = lambda data_dir: self.svc
+
+        from src.web_server import create_app
+        self.app, _ = create_app(test_container=self.mock_container)
+        self.app.config['TESTING'] = True
+        self.app.config['LOGIN_DISABLED'] = False
+        self.app.config['CSRF_ENABLED'] = True  # the harness disables it by default
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        import src.db.migration_utils
+        src.db.migration_utils.initialize_database = self._orig_init
+        if self._orig_template_dir is None:
+            os.environ.pop('TEMPLATE_DIR', None)
+        else:
+            os.environ['TEMPLATE_DIR'] = self._orig_template_dir
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _login(self):
+        return self.client.post('/login', data={'username': 'admin', 'password': 'secret'})
+
+    def _token(self):
+        # GET an authed HTML page so the after_request injector seeds the token.
+        self.client.get('/account')
+        with self.client.session_transaction() as sess:
+            return sess.get('_csrf_token')
+
+    def _pw_change(self):
+        return {'current_password': 'secret', 'new_password': 'np123456', 'confirm_password': 'np123456'}
+
+    def test_authed_post_without_token_blocked(self):
+        self._login()
+        resp = self.client.post('/account', data=self._pw_change())
+        self.assertEqual(resp.status_code, 403)
+
+    def test_authed_post_with_header_token_allowed(self):
+        self._login()
+        token = self._token()
+        self.assertTrue(token)
+        resp = self.client.post('/account', data=self._pw_change(),
+                                headers={'X-CSRF-Token': token})
+        self.assertNotEqual(resp.status_code, 403)
+
+    def test_authed_post_with_form_token_allowed(self):
+        self._login()
+        token = self._token()
+        data = self._pw_change()
+        data['csrf_token'] = token
+        resp = self.client.post('/account', data=data)
+        self.assertNotEqual(resp.status_code, 403)
+
+    def test_bootstrap_injected_into_authed_html(self):
+        self._login()
+        resp = self.client.get('/account')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('X-CSRF-Token', resp.get_data(as_text=True))
+
+    def test_unauthenticated_post_not_csrf_blocked(self):
+        # No session -> the auth guard redirects to login; CSRF never fires (403).
+        resp = self.client.post('/account', data={'current_password': 'x'},
+                                follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers.get('Location', ''))
+
+
 if __name__ == "__main__":
     unittest.main()
