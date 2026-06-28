@@ -5,6 +5,11 @@ import requests
 import logging
 import time
 
+# GitHub repo used for commit-count and update checks. Overridable via APP_REPO.
+# Defaults to the current repo name (the cporcellijr/bookbridge rename is still
+# pending; pointing at a non-existent repo makes every update check 404).
+APP_REPO = os.environ.get("APP_REPO", "cporcellijr/abs-kosync-bridge")
+
 def _get_commit_count():
     """Resolve commit count from env, local git metadata, or GitHub branch history."""
     for key in ("APP_COMMIT_COUNT", "GIT_COMMIT_COUNT", "COMMIT_COUNT", "BUILD_NUMBER"):
@@ -28,7 +33,7 @@ def _get_commit_count():
         pass
 
     # Fallback for runtime environments without a mounted .git directory.
-    repo = os.environ.get("APP_REPO", "cporcellijr/bookbridge")
+    repo = APP_REPO
     branch = os.environ.get("APP_BRANCH", "dev")
     try:
         response = requests.get(
@@ -75,7 +80,7 @@ def get_update_status():
 
     try:
         r = requests.get(
-            "https://api.github.com/repos/cporcellijr/bookbridge/releases/latest",
+            f"https://api.github.com/repos/{APP_REPO}/releases/latest",
             timeout=5,
             headers={"Accept": "application/vnd.github+json"}
         )

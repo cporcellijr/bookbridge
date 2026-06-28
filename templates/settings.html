@@ -812,7 +812,7 @@
 
                         <div style="display: flex; gap: 10px;">
                             <input type="text" id="public_kosync_url" aria-label="Public KOSync URL" value=""
-                                onclick="this.select()"
+                                readonly onclick="this.select()"
                                 style="flex: 1; cursor: text; font-family: monospace; color: #667eea; font-weight: bold; background: rgba(0,0,0,0.2);">
                             <button type="button" class="btn" onclick="copyPublicUrl()"
                                 title="Copy to clipboard">📋</button>
@@ -856,6 +856,10 @@
                         <input type="checkbox" id="kosync_pct" name="KOSYNC_USE_PERCENTAGE_FROM_SERVER" {% if
                             get_bool('KOSYNC_USE_PERCENTAGE_FROM_SERVER') %}checked{% endif %}>
                         <label for="kosync_pct">Use Percentage from Server (Ignore Text Matching)</label>
+                        <div class="help-text">Syncs by raw percentage instead of text/sentence alignment for
+                            <em>already-linked</em> books. It does <strong>not</strong> bypass the document-hash →
+                            book lookup: a book whose KOReader hash isn't linked to a mapping still needs linking
+                            (Settings → KOSync Documents) before any sync — percentage or text — can happen.</div>
                     </div>
 
                     <!-- Separator -->
