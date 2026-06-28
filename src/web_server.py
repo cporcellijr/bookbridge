@@ -1381,10 +1381,11 @@ def find_ebook_file(filename):
     return matches[0] if matches else None
 
 
-def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=None):
+def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=None,
+                            bookorbit_id=None):
     """Get KOSync document ID for an ebook.
     Tries Grimmory API first (if configured and booklore_id provided),
-    falls back to filesystem if needed.
+    falls back to filesystem, then BookOrbit / ABS / CWA on-demand downloads.
     """
     # Try Grimmory API first
     clients = uc()
@@ -1417,6 +1418,27 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
          return container.ebook_parser().get_kosync_id(cached_path)
 
     # [NEW] On-Demand Fetching
+    # 0. BookOrbit On-Demand — the library hosts the file via API even when the
+    #    shared /books volume isn't mounted. Resolve the book id (passed by the
+    #    match flow, else by filename search) and hash the downloaded bytes.
+    bookorbit_client = clients.bookorbit_client
+    if bookorbit_client and bookorbit_client.is_configured():
+        try:
+            bo_id = bookorbit_id
+            if not bo_id:
+                bo_book = bookorbit_client.find_book_by_filename(ebook_filename)
+                bo_id = bo_book.get('id') if bo_book else None
+            if bo_id:
+                logger.info(f"📥 Attempting on-demand BookOrbit download for '{bo_id}'")
+                content = bookorbit_client.download_book(bo_id)
+                if content:
+                    kosync_id = container.ebook_parser().get_kosync_id_from_bytes(ebook_filename, content)
+                    if kosync_id:
+                        logger.debug(f"🔍 Computed KOSync ID from BookOrbit download: '{kosync_id}'")
+                        return kosync_id
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get KOSync ID from BookOrbit: {e}")
+
     # 1. ABS On-Demand
     if "_abs." in ebook_filename:
         try:
@@ -1496,12 +1518,14 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
             logger.error(f"   ❌ Failed CWA on-demand download: {e}")
 
     # Neither source available - log helpful warning
-    if not clients.booklore_client.is_configured() and not EBOOK_DIR.exists():
+    if (not clients.booklore_client.is_configured()
+            and not clients.bookorbit_client.is_configured()
+            and not EBOOK_DIR.exists()):
         logger.warning(
             f"⚠️ Cannot compute KOSync ID for '{ebook_filename}': "
-            "Neither Grimmory integration nor /books volume is configured. "
-            "Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
-            "or mount the ebooks directory to /books"
+            "No ebook source configured. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, "
+            "BOOKLORE_PASSWORD), enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, "
+            "BOOKORBIT_PASSWORD), or mount the ebooks directory to /books"
         )
     elif not booklore_id and not ebook_path:
         logger.warning(f"⚠️ Cannot compute KOSync ID for '{ebook_filename}': File not found in Grimmory, filesystem, or remote sources")
@@ -2357,10 +2381,13 @@ def get_searchable_ebooks(search_term):
             logger.warning(f"⚠️ Filesystem search failed: {e}")
 
     # Check if we have no sources at all
-    if not results and not EBOOK_DIR.exists() and not clients.booklore_client.is_configured():
+    if (not results and not EBOOK_DIR.exists()
+            and not clients.booklore_client.is_configured()
+            and not clients.bookorbit_client.is_configured()):
         logger.warning(
-            "⚠️ No ebooks available: Neither Grimmory integration nor /books volume is configured. "
-            "Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
+            "⚠️ No ebooks available: No ebook source configured. "
+            "Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD), "
+            "enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, BOOKORBIT_PASSWORD), "
             "or mount the ebooks directory to /books"
         )
 
@@ -4318,7 +4345,11 @@ def match():
                     booklore_id = book.get('id')
 
             # Compute KOSync ID (Grimmory API first, filesystem fallback)
-            kosync_doc_id = get_kosync_id_for_ebook(ebook_filename, booklore_id)
+            kosync_doc_id = get_kosync_id_for_ebook(
+                ebook_filename,
+                booklore_id,
+                bookorbit_id=ebook_source_id if ebook_source == 'BookOrbit' else None,
+            )
 
         if not kosync_doc_id:
             logger.warning(f"⚠️ Cannot compute KOSync ID for '{sanitize_log_data(ebook_filename)}': File not found in Grimmory or filesystem")
@@ -4675,7 +4706,12 @@ def _process_batch_queue(queue_items):
                     booklore_id = book.get('id')
 
             # Compute KOSync ID (Grimmory API first, filesystem fallback)
-            kosync_doc_id = get_kosync_id_for_ebook(ebook_filename, booklore_id)
+            _item_ebook_source = (item.get('ebook_source') or '').strip() or None
+            kosync_doc_id = get_kosync_id_for_ebook(
+                ebook_filename,
+                booklore_id,
+                bookorbit_id=item.get('ebook_source_id') if _item_ebook_source == 'BookOrbit' else None,
+            )
 
         if not kosync_doc_id:
             logger.warning(f"⚠️ Could not compute KOSync ID for {sanitize_log_data(ebook_filename)}, skipping")
@@ -8552,16 +8588,20 @@ if __name__ == '__main__':
 
     # Check ebook source configuration
     booklore_configured = container.booklore_client().is_configured()
+    bookorbit_configured = container.bookorbit_client().is_configured()
     books_volume_exists = container.books_dir().exists()
 
     if booklore_configured:
         logger.info(f"✅ Grimmory integration enabled - ebooks sourced from API")
+    elif bookorbit_configured:
+        logger.info(f"✅ BookOrbit integration enabled - ebooks sourced from API")
     elif books_volume_exists:
         logger.info(f"✅ Ebooks directory mounted at {container.books_dir()}")
     else:
         logger.info(
-            "⚠️  NO EBOOK SOURCE CONFIGURED: Neither Grimmory integration nor /books volume is available. "
-            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD) "
+            "⚠️  NO EBOOK SOURCE CONFIGURED: No ebook source available. "
+            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD), "
+            "enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, BOOKORBIT_PASSWORD), "
             "or mount the ebooks directory to /books."
         )
 

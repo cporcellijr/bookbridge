@@ -904,6 +904,27 @@ class SyncManager:
             if not filesystem_matches:
                 logger.error(f"❌ EPUB not found on filesystem and Grimmory not configured")
 
+        # Try to download from BookOrbit API (library-hosted; mirrors Grimmory).
+        # Lets a BookOrbit-sourced book hydrate when the shared /books volume
+        # isn't mounted. Resolve the book id by filename search.
+        bookorbit_client = self.active_bookorbit_client
+        if hasattr(bookorbit_client, 'is_configured') and bookorbit_client.is_configured():
+            try:
+                bo_book = bookorbit_client.find_book_by_filename(ebook_filename)
+                if bo_book:
+                    logger.info(f"⚡ Downloading EPUB from BookOrbit: {sanitize_log_data(ebook_filename)}")
+                    content = bookorbit_client.download_book(bo_book.get('id'))
+                    if content:
+                        with open(cached_path, 'wb') as f:
+                            f.write(content)
+                        logger.info(f"✅ Downloaded EPUB to cache: '{cached_path}'")
+                        return cached_path
+                    logger.error("❌ Failed to download EPUB content from BookOrbit")
+                else:
+                    logger.error(f"❌ EPUB not found in BookOrbit: {sanitize_log_data(ebook_filename)}")
+            except Exception as e:
+                logger.warning(f"⚠️ BookOrbit EPUB download failed: {e}")
+
         return None
 
     def _get_local_epub(self, ebook_filename):
