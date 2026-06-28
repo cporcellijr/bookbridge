@@ -2185,6 +2185,16 @@ def _respond_from_book_states(doc_id, book):
     # (set by kosync_auth_required), so states are already user-scoped.
     states = _database_service.get_states_for_book(book.abs_id)
 
+    # The bridge-synced KoSync position for this book — where ABS/Storyteller/etc.
+    # have placed it. A device's own reported position is only honored when it is
+    # AHEAD of this (see the furthest-wins gate below); otherwise the device is
+    # behind a cross-source sync and must be pulled forward.
+    kosync_state = (
+        next((s for s in states if s.client_name.lower() == 'kosync'), None)
+        if states else None
+    )
+    synced_pct = float(kosync_state.percentage) if kosync_state and kosync_state.percentage else 0.0
+
     # Also check this user's per-user progress across the book's hashes — so a
     # device position that advanced past the synced State (e.g. a different EPUB
     # build of the same title) is honored, without leaking another user's
@@ -2204,31 +2214,37 @@ def _respond_from_book_states(doc_id, book):
     ]
     if docs_with_progress:
         best_doc = max(docs_with_progress, key=lambda d: float(d.percentage))
-        logger.info(f"KOSync: Resolved {doc_id} to '{book.abs_title}' via sibling hash {best_doc.document_hash} ({float(best_doc.percentage):.2%})")
-        poison_pill = _suppress_empty_progress_response(doc_id, float(best_doc.percentage), best_doc.progress)
-        if poison_pill is not None:
-            return poison_pill
-        response_data = {
-            "device": "abs-kosync-bridge",
-            "device_id": "abs-kosync-bridge",
-            "document": doc_id,
-            "percentage": float(best_doc.percentage),
-            "progress": best_doc.progress or "",
-            "timestamp": int(best_doc.timestamp.timestamp()) if best_doc.timestamp else 0
-        }
-        response_data.update(
-            _recent_external_kosync_put_metadata(
-                best_doc.document_hash,
-                response_data["percentage"],
-                user_id,
+        # Furthest-wins: only hand back the device's own position when it is genuinely
+        # ahead of the bridge-synced position. The bridge's internal sync-push advances
+        # the synced State but not this per-user row, so a device that is *behind* (the
+        # book was just advanced from ABS/Storyteller/etc.) must be pulled forward —
+        # returning its stale spot here drags the reader back and starts a GET/PUT
+        # tug-of-war (e.g. a 40% audiobook position repeatedly snapping back to 9%).
+        if float(best_doc.percentage) > synced_pct + 0.0001:
+            logger.info(f"KOSync: Resolved {doc_id} to '{book.abs_title}' via sibling hash {best_doc.document_hash} ({float(best_doc.percentage):.2%})")
+            poison_pill = _suppress_empty_progress_response(doc_id, float(best_doc.percentage), best_doc.progress)
+            if poison_pill is not None:
+                return poison_pill
+            response_data = {
+                "device": "abs-kosync-bridge",
+                "device_id": "abs-kosync-bridge",
+                "document": doc_id,
+                "percentage": float(best_doc.percentage),
+                "progress": best_doc.progress or "",
+                "timestamp": int(best_doc.timestamp.timestamp()) if best_doc.timestamp else 0
+            }
+            response_data.update(
+                _recent_external_kosync_put_metadata(
+                    best_doc.document_hash,
+                    response_data["percentage"],
+                    user_id,
+                )
             )
-        )
-        return jsonify(response_data), 200
+            return jsonify(response_data), 200
 
     if not states:
         return jsonify({"message": "Document not found on server"}), 502
 
-    kosync_state = next((s for s in states if s.client_name.lower() == 'kosync'), None)
     latest_state = kosync_state or max(states, key=lambda s: s.last_updated if s.last_updated else 0)
     latest_progress = (latest_state.xpath or latest_state.cfi or "") if hasattr(latest_state, 'xpath') else ""
     latest_pct = float(latest_state.percentage) if latest_state.percentage else 0

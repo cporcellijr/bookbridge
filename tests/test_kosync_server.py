@@ -399,6 +399,87 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(data['device_id'], 'KINDLE456')
         self.assertIn('timestamp', data)
 
+    def test_linked_book_get_pulls_behind_device_forward_to_synced_state(self):
+        """A device that is BEHIND the bridge-synced position must be pulled forward.
+
+        Regression for 'The Minders': the bridge synced the audiobook position to 40%
+        (KoSync State), but the device's own per-user progress sat at 9%. The linked-book
+        GET returned the stale 9% (no furthest-wins gate), dragging the reader back and
+        starting a GET/PUT tug-of-war. GET must return the synced 40% State instead."""
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        doc_hash = "9" * 32
+        svc.save_book(Book(
+            abs_id="minders-regression",
+            abs_title="The Minders",
+            ebook_filename="minders.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+
+        # Device PUT at 9% — creates the per-user progress row + a kosync State at 9%.
+        self.assertEqual(self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": doc_hash, "progress": "/body/DocFragment[15]/body/div/h2.0",
+            "percentage": 0.0909, "device": "KindlePaperWhite5SE", "device_id": "DA1CE",
+        }).status_code, 200)
+
+        # The bridge then advances the synced KoSync State to 40% from the audiobook side.
+        svc.save_state(State(
+            abs_id="minders-regression", client_name="kosync",
+            percentage=0.4012, xpath="/body/DocFragment[42]/body/div/p[13].0",
+            timestamp=int(time.time()), last_updated=int(time.time()), user_id=admin_id,
+        ))
+
+        get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        self.assertEqual(get.status_code, 200)
+        data = get.get_json()
+        # Pulled forward to the synced 40% position, NOT snapped back to the device's 9%.
+        self.assertAlmostEqual(data["percentage"], 0.4012, places=4)
+        self.assertEqual(data["progress"], "/body/DocFragment[42]/body/div/p[13].0")
+
+    def test_linked_book_get_honors_device_ahead_of_synced_state(self):
+        """The furthest-wins gate still honors a device that read genuinely AHEAD of
+        the synced position (e.g. a different EPUB build of the same title).
+
+        Set up directly (not via a PUT, which would advance the kosync State too) so
+        the per-user progress (60%) sits strictly ahead of the synced State (40%)."""
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        doc_hash = "a" * 32
+        svc.save_book(Book(
+            abs_id="ahead-regression",
+            abs_title="Ahead Book",
+            ebook_filename="ahead.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        # Linked hash so the per-user progress JOINs back to this book.
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=doc_hash, linked_abs_id="ahead-regression", user_id=admin_id,
+        ))
+        # Synced State behind at 40%; the device's own per-user progress ahead at 60%.
+        svc.save_state(State(
+            abs_id="ahead-regression", client_name="kosync",
+            percentage=0.40, xpath="/body/synced.0",
+            timestamp=int(time.time()), last_updated=int(time.time()), user_id=admin_id,
+        ))
+        svc.upsert_user_kosync_progress(
+            doc_hash, 0.60, progress="/body/device-ahead.0",
+            device="KoboA", device_id="A", timestamp=utcnow(), user_id=admin_id,
+        )
+
+        get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        self.assertEqual(get.status_code, 200)
+        data = get.get_json()
+        self.assertAlmostEqual(data["percentage"], 0.60, places=4)
+        self.assertEqual(data["progress"], "/body/device-ahead.0")
+
     def test_same_library_same_hash_two_users_keep_separate_progress(self):
         """Two users reading the same EPUB hash should not share progress."""
         from src import web_server
