@@ -16,8 +16,7 @@
         data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ full_display_title }}"
         data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
         data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
-        data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}"
-        {% if mapping.display_filename %}title="{{ mapping.display_filename }}"{% endif %}>
+        data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}">
 
         {# Cover image section - prioritize ebook cover, fallback to ABS cover #}
         <div class="book-media-column">
@@ -315,11 +314,11 @@
                         title="Mark Complete">✅</button>
                     <form method="POST" action="/clear-progress/{{ mapping.abs_id }}">
                         <button type="submit" class="action-btn warning" aria-label="Clear Progress"
-                            onclick="return confirm('Clear all progress for this book?')">🔄</button>
+                            title="Clear progress" onclick="return confirm('Clear all progress for this book?')">🔄</button>
                     </form>
                     <form method="POST" action="/delete/{{ mapping.abs_id }}">
                         <button type="submit" class="action-btn danger" aria-label="Delete Mapping"
-                            onclick="return confirm('Delete this mapping?')">🗑️</button>
+                            title="Delete mapping" onclick="return confirm('Delete this mapping?')">🗑️</button>
                     </form>
                 </div>
             </div>
