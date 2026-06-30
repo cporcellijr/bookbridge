@@ -726,6 +726,60 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertIn("Queue is empty", clear_response.get_data(as_text=True))
         self.assertEqual(web_server._load_match_queue(), [])
 
+    def test_suggestions_add_many_to_queue_bulk(self):
+        # Bulk add posts suggestion keys; the server builds each queue item from its
+        # cached suggestion's top match (used by "Add all exact" / "Add selected").
+        with self.client.session_transaction() as session_data:
+            session_data["suggestions_state_id"] = "state-bulk"
+        with web_server.SUGGESTIONS_STATE_LOCK:
+            web_server.SUGGESTIONS_STATE_STORE["state-bulk"] = {
+                "scan_results": [],
+                "scan_cache_by_abs": {
+                    "ab-1": {
+                        "bridge_key": "ab-1", "abs_id": "ab-1",
+                        "audio_source": "ABS", "audio_source_id": "ab-1",
+                        "audio_title": "Exact Audio", "audio_duration": 3600,
+                        "audio_cover_url": "",
+                        "matches": [{
+                            "ebook_filename": "exact.epub", "display_name": "Exact Ebook",
+                            "source": "Grimmory", "source_id": "g-1",
+                            "source_path": "/books/x/exact.epub",
+                            "score": 100.0, "match_reason": "same_folder",
+                        }],
+                    },
+                    "ab-2": {
+                        "bridge_key": "ab-2", "abs_id": "ab-2",
+                        "audio_source": "ABS", "audio_source_id": "ab-2",
+                        "audio_title": "Fuzzy Audio", "audio_duration": 3600,
+                        "audio_cover_url": "",
+                        "matches": [{
+                            "ebook_filename": "fuzzy.epub", "display_name": "Fuzzy Ebook",
+                            "source": "Grimmory", "source_id": "g-2",
+                            "source_path": "", "score": 88.0,
+                        }],
+                    },
+                },
+                "scan_cache_no_match_abs_ids": [],
+                "scan_last_stats": {},
+                "scan_has_run": True,
+                "updated_at": time.time(),
+            }
+
+        response = self.client.post(
+            "/suggestions",
+            data={"action": "add_many_to_queue", "bridge_keys": ["ab-1", "ab-2"]},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        queue = web_server._load_match_queue()
+        self.assertEqual({item["bridge_key"] for item in queue}, {"ab-1", "ab-2"})
+        exact_item = next(i for i in queue if i["bridge_key"] == "ab-1")
+        self.assertEqual(exact_item["ebook_filename"], "exact.epub")
+        self.assertEqual(exact_item["ebook_source"], "Grimmory")
+        self.assertEqual(exact_item["ebook_source_path"], "/books/x/exact.epub")
+        self.assertEqual(exact_item["storyteller_uuid"], "")
+
     @patch("src.web_server._start_suggestions_scan_job", return_value="job-1")
     def test_suggestions_scan_ajax_and_status(self, _mock_start_job):
         scan_response = self.client.post(

@@ -53,6 +53,8 @@
         .suggestion-card { border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); border-radius: 10px; padding: 10px; cursor: pointer; }
         .suggestion-card:hover { border-color: rgba(102,126,234,0.5); }
         .suggestion-card.selected { border-color: rgba(102,126,234,0.85); background: rgba(102,126,234,0.14); }
+        .bulk-actions { display: flex; gap: 8px; margin: 8px 0 4px; flex-wrap: wrap; }
+        .suggestion-select { font-size: 12px; color: rgba(255,255,255,0.7); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
         .suggestion-card.is-queued { opacity: 0.5; border-color: rgba(76,175,80,0.5); }
         .suggestion-card.is-queued::before { content: '✓ Queued'; float: right; font-size: 11px; font-weight: 700; color: #81c784; }
         .suggestion-main { display: grid; grid-template-columns: 54px minmax(0,1fr); gap: 10px; align-items: center; }
@@ -218,6 +220,12 @@
                     <h3>Audiobooks</h3>
                     <span class="count" id="panelCount">{{ suggestions|length }} items</span>
                 </div>
+                {% if suggestions %}
+                <div class="bulk-actions" id="bulkActions">
+                    <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ Add all exact (<span id="exactCount">0</span>)</button>
+                    <button type="button" class="btn btn-small" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ Add selected (<span id="selectedCount">0</span>)</button>
+                </div>
+                {% endif %}
                 <div class="left-wrap">
                     <div class="scan-overlay {% if scan_in_progress %}show{% endif %}" id="scanOverlay">
                         <div class="spinner"></div>
@@ -247,6 +255,9 @@
                                 </div>
                             </div>
                             <div class="card-actions">
+                                <label class="suggestion-select" onclick="event.stopPropagation();">
+                                    <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> Select
+                                </label>
                                 <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">Dismiss</button>
                                 <form method="POST" action="/suggestions" class="inline-form" onsubmit="event.stopPropagation();">
                                     <input type="hidden" name="action" value="never">
@@ -807,6 +818,7 @@
             const count = document.querySelectorAll('.suggestion-card').length;
             document.getElementById('topCount').textContent = `Showing ${count} suggestions`;
             document.getElementById('panelCount').textContent = `${count} items`;
+            updateBulkCounts();
             if (count === 0 && !document.getElementById('emptyState')) {
                 const wrap = document.querySelector('.left-wrap');
                 const empty = document.createElement('div');
@@ -905,6 +917,69 @@
                 }
             });
         }
+
+        // --- Bulk add: per-card checkboxes ("Add selected") + "Add all exact" (top
+        // match == 100%, i.e. authoritative / same-folder / exact fuzzy). Each posts the
+        // suggestion keys to add_many_to_queue; the server builds the queue items from its
+        // cached suggestions and returns the refreshed queue panel fragment. ---
+        function getExactKeys() {
+            return Array.from(document.querySelectorAll('.suggestion-card:not(.is-queued)'))
+                .filter((card) => parseFloat(card.dataset.bestScore || '0') >= 100)
+                .map((card) => card.dataset.absId)
+                .filter(Boolean);
+        }
+
+        function getCheckedKeys() {
+            return Array.from(document.querySelectorAll('.suggestion-check:checked'))
+                .map((cb) => cb.dataset.absId)
+                .filter(Boolean);
+        }
+
+        function updateBulkCounts() {
+            const exactCount = getExactKeys().length;
+            const selectedCount = getCheckedKeys().length;
+            const exactCountEl = document.getElementById('exactCount');
+            const selectedCountEl = document.getElementById('selectedCount');
+            if (exactCountEl) exactCountEl.textContent = exactCount;
+            if (selectedCountEl) selectedCountEl.textContent = selectedCount;
+            const exactBtn = document.getElementById('addAllExactBtn');
+            const selectedBtn = document.getElementById('addSelectedBtn');
+            if (exactBtn) exactBtn.disabled = exactCount === 0;
+            if (selectedBtn) selectedBtn.disabled = selectedCount === 0;
+        }
+
+        async function addManyToQueue(keys) {
+            if (!keys.length) return;
+            const formData = new FormData();
+            formData.append('action', 'add_many_to_queue');
+            keys.forEach((key) => formData.append('bridge_keys', key));
+            try {
+                const response = await fetch('/suggestions', {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const html = await response.text();
+                const queueList = document.getElementById('queueList');
+                if (queueList) queueList.innerHTML = html;
+                renderQueueCount();
+                keys.forEach((key) => {
+                    markSuggestionQueued(key);
+                    const cb = document.querySelector(`.suggestion-check[data-abs-id="${CSS.escape(key)}"]`);
+                    if (cb) cb.checked = false;
+                });
+                updateBulkCounts();
+            } catch (err) {
+                console.error('Bulk queue add failed; reloading to resync.', err);
+                window.location.reload();
+            }
+        }
+
+        function addAllExact() { addManyToQueue(getExactKeys()); }
+        function addSelectedSuggestions() { addManyToQueue(getCheckedKeys()); }
+
+        updateBulkCounts();
 
         const sortModeSelect = document.getElementById('sortMode');
         if (sortModeSelect) {

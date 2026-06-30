@@ -5565,6 +5565,46 @@ def _match_queue_response():
     return redirect(url_for('suggestions'))
 
 
+def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
+    """Build a batch-match queue item from a scanned suggestion's top match (the ebook
+    BookBridge is most confident about). Used by bulk add ('add all exact' / 'add
+    selected'); mirrors the item shape produced by the single add_to_queue handler.
+    Storyteller tri-links stay a manual per-item choice, so storyteller_uuid is left blank."""
+    matches = (suggestion or {}).get('matches') or []
+    bridge_key = (suggestion or {}).get('bridge_key') or (suggestion or {}).get('abs_id')
+    if not matches or not bridge_key:
+        return None
+    top = matches[0]
+    ebook_filename = top.get('ebook_filename') or ''
+    if not ebook_filename:
+        return None
+    audio_title = suggestion.get('audio_title') or suggestion.get('abs_title') or ''
+    audio_duration = suggestion.get('audio_duration')
+    if audio_duration is None:
+        audio_duration = suggestion.get('duration')
+    audio_cover_url = suggestion.get('audio_cover_url') or suggestion.get('cover_url')
+    return {
+        'bridge_key': bridge_key,
+        'abs_id': bridge_key,
+        'audio_source': suggestion.get('audio_source'),
+        'audio_source_id': suggestion.get('audio_source_id'),
+        'audio_title': audio_title,
+        'abs_title': audio_title,
+        'audio_duration': audio_duration,
+        'duration': audio_duration,
+        'audio_cover_url': audio_cover_url,
+        'cover_url': audio_cover_url,
+        'audio_provider_book_id': suggestion.get('audio_provider_book_id'),
+        'audio_provider_file_id': suggestion.get('audio_provider_file_id'),
+        'ebook_filename': ebook_filename,
+        'ebook_display_name': top.get('display_name') or ebook_filename,
+        'ebook_source': top.get('source'),
+        'ebook_source_id': top.get('source_id'),
+        'ebook_source_path': top.get('source_path') or '',
+        'storyteller_uuid': '',
+    }
+
+
 def suggestions_page():
     _clear_legacy_suggestions_session_payload()
     state_id, suggestions_state = _get_suggestions_state(create=True)
@@ -5750,6 +5790,15 @@ def suggestions_page():
 
         elif action == 'clear_queue':
             _match_queue_clear()
+            return _match_queue_response()
+
+        elif action == 'add_many_to_queue':
+            keys = request.form.getlist('bridge_keys')
+            cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
+            for key in keys:
+                item = _queue_item_from_suggestion(cache_by_abs.get(key))
+                if item:
+                    _match_queue_add(item)
             return _match_queue_response()
 
         elif action == 'process_queue':
