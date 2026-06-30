@@ -116,6 +116,8 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         os.environ["DATA_DIR"] = self.temp_dir
         os.environ["BOOKS_DIR"] = self.temp_dir
+        # Point the app at the real templates dir so XHR fragment responses render.
+        os.environ["TEMPLATE_DIR"] = str(Path(__file__).parent.parent / "templates")
 
         self.mock_container = MockContainer()
 
@@ -693,6 +695,36 @@ class TestMatchPathsRegression(unittest.TestCase):
         queue = web_server._load_match_queue()
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["abs_id"], "ab-2")
+
+    def test_suggestions_queue_add_clear_xhr_returns_panel_fragment(self):
+        # An XHR add/clear returns the re-rendered queue panel fragment (200) instead of a
+        # redirect, so the page swaps it in place without reloading (preserving scroll).
+        add_response = self.client.post(
+            "/suggestions",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-1",
+                "ebook_filename": "suggested.epub",
+                "ebook_display_name": "Suggested Book",
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(add_response.status_code, 200)
+        body = add_response.get_data(as_text=True)
+        self.assertIn("Regression Book", body)
+        self.assertIn("Process All", body)
+        self.assertEqual(len(web_server._load_match_queue()), 1)
+
+        clear_response = self.client.post(
+            "/suggestions",
+            data={"action": "clear_queue"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(clear_response.status_code, 200)
+        self.assertIn("Queue is empty", clear_response.get_data(as_text=True))
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server._start_suggestions_scan_job", return_value="job-1")
     def test_suggestions_scan_ajax_and_status(self, _mock_start_job):

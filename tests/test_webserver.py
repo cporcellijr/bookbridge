@@ -1469,10 +1469,15 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         html = self._read_template_source('suggestions.html')
 
         self.assertIn('id="selectionFeedback"', html)
-        self.assertIn('id="queueFeedback"', html)
-        self.assertIn("addToQueueBtn.dataset.primaryAction = 'selection-actions';", html)
-        self.assertIn("processQueueBtn.dataset.primaryAction = 'queue-actions';", html)
+        self.assertIn('{% include "_match_queue_panel.html" %}', html)
+        # Queue add/remove/clear post via fetch and swap the panel fragment in place;
+        # process/forge still navigate away and show the working state.
+        self.assertIn('submitQueueMutation(', html)
+        self.assertIn("'X-Requested-With': 'XMLHttpRequest'", html)
         self.assertIn('startSuggestionSubmitState(submitter)', html)
+
+        panel = self._read_template_source('_match_queue_panel.html')
+        self.assertIn('id="queueFeedback"', panel)
 
     def test_forge_template_has_submit_feedback_hooks(self):
         html = self._read_template_source('forge.html')

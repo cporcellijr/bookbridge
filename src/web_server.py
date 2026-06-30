@@ -5557,6 +5557,14 @@ def _match_queue_drain() -> list:
         return items
 
 
+def _match_queue_response():
+    """Re-render the queue panel fragment for an XHR add/remove/clear (so the page
+    isn't reloaded and scroll position is preserved); otherwise redirect to /suggestions."""
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return render_template('_match_queue_panel.html', queue=_load_match_queue())
+    return redirect(url_for('suggestions'))
+
+
 def suggestions_page():
     _clear_legacy_suggestions_session_payload()
     state_id, suggestions_state = _get_suggestions_state(create=True)
@@ -5733,16 +5741,16 @@ def suggestions_page():
                     "duration": selected_audio['audio_duration'],
                     "cover_url": selected_audio['audio_cover_url'],
                 })
-            return redirect(url_for('suggestions'))
+            return _match_queue_response()
 
         elif action == 'remove_from_queue':
             abs_id = request.form.get('abs_id')
             _match_queue_remove(abs_id)
-            return redirect(url_for('suggestions'))
+            return _match_queue_response()
 
         elif action == 'clear_queue':
             _match_queue_clear()
-            return redirect(url_for('suggestions'))
+            return _match_queue_response()
 
         elif action == 'process_queue':
             from src.db.models import Book
