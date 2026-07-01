@@ -54,6 +54,26 @@ class TestStorygraphClient(unittest.TestCase):
         self.assertIn("remember_user_token=fresh-remember", cookie)
         self.assertNotIn("_story_graph_session", cookie)
 
+    def test_is_configured_uses_per_user_enabled_flag(self):
+        with patch.dict(os.environ, {"PROGRESS_TRACKER_PROVIDER": "hardcover"}, clear=False):
+            client = StorygraphClient(credentials={
+                "STORYGRAPH_ENABLED": "true",
+                "STORYGRAPH_SESSION_COOKIE": "user-session",
+                "STORYGRAPH_REMEMBER_USER_TOKEN": "user-remember",
+                "__allow_global_fallback__": False,
+            })
+            self.assertTrue(client.is_configured())
+
+    def test_is_configured_honors_per_user_disabled_flag(self):
+        with patch.dict(os.environ, {"PROGRESS_TRACKER_PROVIDER": "storygraph"}, clear=False):
+            client = StorygraphClient(credentials={
+                "STORYGRAPH_ENABLED": "false",
+                "STORYGRAPH_SESSION_COOKIE": "user-session",
+                "STORYGRAPH_REMEMBER_USER_TOKEN": "user-remember",
+                "__allow_global_fallback__": False,
+            })
+            self.assertFalse(client.is_configured())
+
     def test_parse_community_reviews_rating_confirmed_shape(self):
         html = """
         <h3>Community Reviews</h3>
@@ -276,6 +296,49 @@ class TestStorygraphClient(unittest.TestCase):
         self.assertEqual(editions[0]["format"], "Paperback")
         self.assertFalse(editions[0]["is_audio"])
         self.assertEqual(editions[0]["pages"], 328)
+
+
+class TestStorygraphAuthorGate(unittest.TestCase):
+    """resolve_book must not commit a same-title/wrong-author book."""
+
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            os.environ,
+            {
+                "PROGRESS_TRACKER_PROVIDER": "storygraph",
+                "STORYGRAPH_ENABLED": "true",
+                "STORYGRAPH_SESSION_COOKIE": "session",
+                "STORYGRAPH_REMEMBER_USER_TOKEN": "remember",
+            },
+            clear=False,
+        )
+        self.env_patcher.start()
+        self.addCleanup(self.env_patcher.stop)
+        self.client = StorygraphClient()
+        self.client.book_url = Mock(side_effect=lambda b: f"http://sg/books/{b}")
+
+    def test_rejects_exact_title_with_wrong_author(self):
+        self.client.search_books = Mock(return_value=[
+            {"book_id": "b1", "title": "Stuck On You", "author": "Portia MacIntosh"},
+        ])
+        self.assertIsNone(self.client.resolve_book(title="Stuck On You", author="Jasper Bark"))
+
+    def test_accepts_exact_title_with_right_author(self):
+        self.client.search_books = Mock(return_value=[
+            {"book_id": "b1", "title": "Stuck On You", "author": "Portia MacIntosh"},
+            {"book_id": "b2", "title": "Stuck On You", "author": "Jasper Bark"},
+        ])
+        result = self.client.resolve_book(title="Stuck On You", author="Jasper Bark")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["book_id"], "b2")
+
+    def test_title_only_search_unaffected_by_gate(self):
+        self.client.search_books = Mock(return_value=[
+            {"book_id": "b1", "title": "Stuck On You", "author": "Portia MacIntosh"},
+        ])
+        result = self.client.resolve_book(title="Stuck On You", author="")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["book_id"], "b1")
 
 
 if __name__ == "__main__":

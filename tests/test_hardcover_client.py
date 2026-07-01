@@ -86,10 +86,78 @@ class TestHardcoverClient(unittest.TestCase):
         mock_post.assert_called_once()
         mock_sleep.assert_not_called()
 
-    def test_is_configured_false_when_storygraph_provider_selected(self):
-        with patch.dict(os.environ, {"PROGRESS_TRACKER_PROVIDER": "storygraph"}, clear=False):
-            client = HardcoverClient()
+    def test_is_configured_uses_per_user_enabled_flag(self):
+        # A user with Hardcover enabled + token is configured regardless of global config.
+        with patch.dict(os.environ, {"HARDCOVER_ENABLED": "false"}, clear=False):
+            client = HardcoverClient(credentials={
+                "HARDCOVER_TOKEN": "user-token",
+                "HARDCOVER_ENABLED": "true",
+                "__allow_global_fallback__": False,
+            })
+            self.assertTrue(client.is_configured())
+
+    def test_is_configured_honors_per_user_disabled_flag(self):
+        with patch.dict(os.environ, {"HARDCOVER_ENABLED": "true"}, clear=False):
+            client = HardcoverClient(credentials={
+                "HARDCOVER_TOKEN": "user-token",
+                "HARDCOVER_ENABLED": "false",
+                "__allow_global_fallback__": False,
+            })
             self.assertFalse(client.is_configured())
+
+
+class TestHardcoverAuthorGate(unittest.TestCase):
+    """search_by_title_author must not commit a same-title/wrong-author book."""
+
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            os.environ,
+            {"HARDCOVER_TOKEN": "test-token", "HARDCOVER_ENABLED": "true"},
+            clear=False,
+        )
+        self.env_patcher.start()
+        self.addCleanup(self.env_patcher.stop)
+        self.client = HardcoverClient()
+
+    def _candidate(self, book_id, title, author):
+        return {
+            "id": book_id,
+            "title": title,
+            "slug": f"slug-{book_id}",
+            "cached_contributors": [{"name": author}] if author else [],
+        }
+
+    def test_rejects_exact_title_with_wrong_author(self):
+        # "Stuck On You" by Jasper Bark, but the only candidate is Portia MacIntosh's.
+        self.client._search_candidate_books = Mock(return_value=[
+            self._candidate(1, "Stuck On You", "Portia MacIntosh"),
+        ])
+        self.client.get_default_edition = Mock(return_value={"id": 9, "pages": 320})
+
+        result = self.client.search_by_title_author("Stuck On You", "Jasper Bark")
+        self.assertIsNone(result)
+
+    def test_accepts_exact_title_with_right_author(self):
+        self.client._search_candidate_books = Mock(return_value=[
+            self._candidate(1, "Stuck On You", "Portia MacIntosh"),
+            self._candidate(2, "Stuck On You", "Jasper Bark"),
+        ])
+        self.client.get_default_edition = Mock(return_value={"id": 9, "pages": 200})
+
+        result = self.client.search_by_title_author("Stuck On You", "Jasper Bark")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["book_id"], 2)
+
+    def test_title_only_search_unaffected_by_gate(self):
+        # No author supplied -> gate does not apply, top title match still returned.
+        self.client._search_candidate_books = Mock(return_value=[
+            self._candidate(1, "Stuck On You", "Portia MacIntosh"),
+        ])
+        self.client.get_default_edition = Mock(return_value={"id": 9, "pages": 320})
+
+        result = self.client.search_by_title_author("Stuck On You", "")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["book_id"], 1)
 
 
 if __name__ == "__main__":

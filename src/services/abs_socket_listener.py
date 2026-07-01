@@ -26,14 +26,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def record_abs_write(abs_id: str) -> None:
+def record_abs_write(abs_id: str, user_id=None) -> None:
     """Call after BookBridge successfully pushes progress to ABS."""
-    record_write('ABS', abs_id)
+    record_write('ABS', abs_id, user_id=user_id)
 
 
-def is_own_write(abs_id: str, suppression_window: int = 60) -> bool:
+def is_own_write(abs_id: str, suppression_window: int = 60, user_id=None) -> bool:
     """Return True if a recent ABS progress event was caused by our own write."""
-    return _tracker_is_own_write('ABS', abs_id, suppression_window)
+    return _tracker_is_own_write('ABS', abs_id, suppression_window, user_id=user_id)
 
 
 class ABSSocketListener:
@@ -45,12 +45,18 @@ class ABSSocketListener:
         abs_api_token: str,
         database_service,
         sync_manager,
+        user_id=None,
     ):
         self._server_url = abs_server_url.rstrip("/").replace("/api", "")
         self._api_token = abs_api_token
         self._socket_token: str | None = None
         self._db = database_service
         self._sync_manager = sync_manager
+        # Multi-user: when set, this listener is authenticated as a specific
+        # user's ABS account and triggers that user's scoped sync cycle. When
+        # None it is the global/admin listener (single-user behavior unchanged).
+        self._user_id = user_id
+        self._scope_suffix = f" [user {user_id}]" if user_id is not None else ""
 
         self._debounce_window = int(
             os.environ.get("ABS_SOCKET_DEBOUNCE_SECONDS", "30")
@@ -274,7 +280,7 @@ class ABSSocketListener:
             )
             threading.Thread(
                 target=self._sync_manager.queue_suggestion,
-                args=(library_item_id,),
+                kwargs={"abs_id": library_item_id, "user_id": self._user_id},
                 daemon=True,
             ).start()
             return
@@ -325,15 +331,52 @@ class ABSSocketListener:
         for abs_id in to_fire:
             book = self._db.get_book(abs_id)
             title = book.abs_title if book else abs_id[:12]
-            if is_own_write(abs_id):
-                logger.debug(f"ABS Socket.IO: Ignoring self-triggered event for '{title}'")
-                continue
-            logger.info(f"⚡ Socket.IO: ABS progress changed for '{title}' — triggering sync")
-            threading.Thread(
-                target=self._sync_manager.sync_cycle,
-                kwargs={"target_abs_id": abs_id},
-                daemon=True,
-            ).start()
+            # Resolve the user(s) this event belongs to. A per-user listener
+            # already knows its user. The global listener (user_id=None) must fan
+            # out to EVERY user who claimed the book — a book shared by several
+            # users on the global ABS token would otherwise instant-sync only the
+            # single owner column, leaving the other claimants on the slow poll.
+            # Each push records write-suppression under that user's namespace (the
+            # same one the per-user poller reads) so our own ebook pushes don't
+            # echo back as "external" changes (a feedback loop). A legacy/admin
+            # book with no ownership rows stays [None] — unchanged.
+            if self._user_id is not None:
+                target_user_ids = [self._user_id]
+            else:
+                target_user_ids = self._resolve_claimant_user_ids(book)
+
+            for target_user_id in target_user_ids:
+                if is_own_write(abs_id, user_id=target_user_id):
+                    logger.debug(f"ABS Socket.IO: Ignoring self-triggered event for '{title}'{self._scope_suffix}")
+                    continue
+                logger.info(f"⚡ Socket.IO: ABS progress changed for '{title}'{self._scope_suffix} — triggering sync")
+                threading.Thread(
+                    target=self._sync_manager.sync_cycle,
+                    kwargs={"target_abs_id": abs_id, "user_id": target_user_id},
+                    daemon=True,
+                ).start()
+
+    def _resolve_claimant_user_ids(self, book) -> list:
+        """User ids to instant-sync for a global-listener event.
+
+        Returns every user that claimed the book (the ``user_books`` link table,
+        which is also the isolation gate the sync cycle enforces, so firing for a
+        non-claimant is a harmless no-op). Falls back to the book's owner column,
+        then to ``[None]`` for a legacy/admin book with no ownership rows —
+        preserving single-user/global behavior.
+        """
+        abs_id = getattr(book, "abs_id", None) if book is not None else None
+        ids = []
+        if abs_id and hasattr(self._db, "get_book_user_ids"):
+            try:
+                ids = list(self._db.get_book_user_ids(abs_id) or [])
+            except Exception as exc:
+                logger.debug(f"ABS Socket.IO: claimant resolve failed for '{abs_id}': {exc}")
+                ids = []
+        if ids:
+            return ids
+        owner = getattr(book, "user_id", None) if book is not None else None
+        return [owner]
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -341,7 +384,7 @@ class ABSSocketListener:
 
     def start(self) -> None:
         """Connect and block. Call from a daemon thread."""
-        logger.info(f"🔌 ABS Socket.IO: Connecting to {self._server_url}")
+        logger.info(f"🔌 ABS Socket.IO: Connecting to {self._server_url}{self._scope_suffix}")
 
         strategies = self._build_token_strategies()
         if not strategies:

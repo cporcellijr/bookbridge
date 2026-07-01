@@ -23,14 +23,34 @@ def _cleanup_stale_locked(now: float, suppression_window: int) -> None:
         del _recent_writes[k]
 
 
-def record_write(client_name: str, abs_id: str, pct: float | None = None) -> None:
-    """Call after BookBridge successfully pushes progress to a client."""
-    key = f"{client_name}:{abs_id}"
+def _resolve_uid(user_id):
+    """Fall back to the ambient sync user (set by sync_cycle) so record and read
+    key on the same user even when a caller deep in a client doesn't thread
+    user_id through. Keeps one user's push from suppressing another's change."""
+    if user_id is not None:
+        return user_id
+    try:
+        from src.utils.user_context import get_current_user_id
+        return get_current_user_id()
+    except Exception:
+        return None
+
+
+def _key(client_name: str, abs_id: str, user_id=None) -> str:
+    return f"{user_id}:{client_name}:{abs_id}"
+
+
+def record_write(client_name: str, abs_id: str, pct: float | None = None, user_id=None) -> None:
+    """Call after BookBridge successfully pushes progress to a client.
+
+    Multi-user: suppression is per (user, client, book) so one user's push
+    never suppresses another user's genuine change on the same book."""
+    key = _key(client_name, abs_id, _resolve_uid(user_id))
     with _writes_lock:
         _recent_writes[key] = (time.time(), pct)
 
 
-def get_recent_write(client_name: str, abs_id: str, suppression_window: int = _DEFAULT_SUPPRESSION_WINDOW) -> dict | None:
+def get_recent_write(client_name: str, abs_id: str, suppression_window: int = _DEFAULT_SUPPRESSION_WINDOW, user_id=None) -> dict | None:
     """
     Return recent write metadata for client/book if still inside suppression window.
 
@@ -39,7 +59,7 @@ def get_recent_write(client_name: str, abs_id: str, suppression_window: int = _D
     - age: seconds since write
     - pct: written percentage if provided by caller
     """
-    key = f"{client_name}:{abs_id}"
+    key = _key(client_name, abs_id, _resolve_uid(user_id))
     with _writes_lock:
         now = time.time()
         entry = _recent_writes.get(key)
@@ -56,6 +76,6 @@ def get_recent_write(client_name: str, abs_id: str, suppression_window: int = _D
         return None
 
 
-def is_own_write(client_name: str, abs_id: str, suppression_window: int = _DEFAULT_SUPPRESSION_WINDOW) -> bool:
+def is_own_write(client_name: str, abs_id: str, suppression_window: int = _DEFAULT_SUPPRESSION_WINDOW, user_id=None) -> bool:
     """Return True if a recent progress event for this client/book was caused by our own write."""
-    return get_recent_write(client_name, abs_id, suppression_window) is not None
+    return get_recent_write(client_name, abs_id, suppression_window, user_id=user_id) is not None

@@ -5,6 +5,7 @@ Verifies compatibility with kosync-dotnet behavior.
 import unittest
 import time
 from datetime import datetime, timedelta
+from src.utils.time_utils import utcnow
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import os
@@ -96,6 +97,70 @@ class TestKosyncDocument(unittest.TestCase):
         self.assertAlmostEqual(float(retrieved.percentage), 0.9)
         self.assertEqual(retrieved.progress, '/body/div[99]')
 
+    def test_save_kosync_document_uses_current_user_context(self):
+        """New KoSync rows should inherit the authenticated user's scope."""
+        from src.utils.user_context import reset_current_user_id, set_current_user_id
+
+        user = self.db_service.create_user(f"cwa-user-{time.time_ns()}", "secret")
+        token = set_current_user_id(user.id)
+        try:
+            saved = self.db_service.save_kosync_document(
+                KosyncDocument(document_hash='1' * 32, percentage=0.1)
+            )
+        finally:
+            reset_current_user_id(token)
+
+        self.assertEqual(saved.user_id, user.id)
+
+    def test_try_find_epub_by_hash_handles_cached_filename_hash_collision(self):
+        """A stale filename cache must not overwrite an existing document hash row."""
+        from src.api import kosync_server
+
+        epub_dir = Path(TEST_DIR) / 'epub_collision'
+        shutil.rmtree(epub_dir, ignore_errors=True)
+        epub_dir.mkdir(parents=True, exist_ok=True)
+        filename = 'Dungeon Crawler Carl.epub'
+        epub_path = epub_dir / filename
+        epub_path.write_bytes(b'epub-content')
+
+        old_hash = '6' * 32
+        target_hash = 'b' * 32
+        self.db_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=old_hash,
+                filename=filename,
+                source='filesystem',
+                mtime=0.0,
+                percentage=0.12,
+            )
+        )
+        self.db_service.save_kosync_document(
+            KosyncDocument(
+                document_hash=target_hash,
+                linked_abs_id='dcc-book',
+                percentage=0.34,
+            )
+        )
+
+        ebook_parser = MagicMock()
+        ebook_parser.get_kosync_id.return_value = target_hash
+        container = MagicMock()
+        container.ebook_parser.return_value = ebook_parser
+        container.booklore_client.return_value.is_configured.return_value = False
+
+        with patch.object(kosync_server, '_database_service', self.db_service), \
+             patch.object(kosync_server, '_container', container), \
+             patch.object(kosync_server, '_ebook_dir', epub_dir):
+            result = kosync_server._try_find_epub_by_hash(target_hash)
+
+        self.assertEqual(result, filename)
+        target_doc = self.db_service.get_kosync_document(target_hash)
+        self.assertEqual(target_doc.filename, filename)
+        self.assertAlmostEqual(float(target_doc.percentage), 0.34)
+        stale_doc = self.db_service.get_kosync_document(old_hash)
+        self.assertIsNone(stale_doc.filename)
+        self.assertAlmostEqual(float(stale_doc.percentage), 0.12)
+
     def test_link_kosync_document(self):
         """Test linking a document to an ABS book."""
         # Create doc
@@ -179,6 +244,8 @@ class TestKosyncEndpoints(unittest.TestCase):
              session.query(Setting).delete()
              session.query(State).delete()
              session.query(Book).delete()
+        if web_server.database_service.count_users() == 0:
+            web_server.database_service.create_user("admin", "secret", role="admin")
         kosync_server._kosync_device_session_registry = None
         with kosync_server._kosync_open_sessions_lock:
             kosync_server._kosync_open_sessions.clear()
@@ -246,6 +313,48 @@ class TestKosyncEndpoints(unittest.TestCase):
         data_bn = response_bn.get_json()
         self.assertIsInstance(data_bn['timestamp'], int)
 
+    def test_put_links_unmapped_hash_to_book_via_filename_sibling(self):
+        """A device hash unknown to the book but sharing the ebook filename should
+        link to the existing book on PUT instead of falling to auto-discovery."""
+        from src import web_server
+        db = web_server.database_service
+
+        primary_hash = 'a1' * 16
+        device_hash = 'b2' * 16
+
+        db.save_book(Book(
+            abs_id="abs-sib",
+            abs_title="Shared Title",
+            ebook_filename="sibling.epub",
+            kosync_doc_id=primary_hash,
+            status="active",
+        ))
+        # The device hash was seen by a prior scan/GET, so its filename is cached but
+        # it is not yet linked to any book.
+        db.save_kosync_document(KosyncDocument(
+            document_hash=device_hash,
+            filename="sibling.epub",
+        ))
+
+        response = self.client.put(
+            '/syncs/progress',
+            headers=self.auth_headers,
+            json={
+                'document': device_hash,
+                'progress': '/body/test',
+                'percentage': 0.42,
+                'device': 'go7',
+                'device_id': 'go7',
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        linked = db.get_kosync_document(device_hash)
+        self.assertIsNotNone(linked)
+        self.assertEqual(linked.linked_abs_id, "abs-sib")
+        # It linked to the existing book rather than auto-creating an ebook-only mapping.
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+
     def test_get_progress_returns_502_for_missing(self):
         """Test that GET returns 502 (not 404) for missing document."""
         response = self.client.get(
@@ -289,6 +398,231 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(data['device'], 'TestKindle')
         self.assertEqual(data['device_id'], 'KINDLE456')
         self.assertIn('timestamp', data)
+
+    def test_linked_book_get_pulls_behind_device_forward_to_synced_state(self):
+        """A device that is BEHIND the bridge-synced position must be pulled forward.
+
+        Regression for 'The Minders': the bridge synced the audiobook position to 40%
+        (KoSync State), but the device's own per-user progress sat at 9%. The linked-book
+        GET returned the stale 9% (no furthest-wins gate), dragging the reader back and
+        starting a GET/PUT tug-of-war. GET must return the synced 40% State instead."""
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        doc_hash = "9" * 32
+        svc.save_book(Book(
+            abs_id="minders-regression",
+            abs_title="The Minders",
+            ebook_filename="minders.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+
+        # Device PUT at 9% — creates the per-user progress row + a kosync State at 9%.
+        self.assertEqual(self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": doc_hash, "progress": "/body/DocFragment[15]/body/div/h2.0",
+            "percentage": 0.0909, "device": "KindlePaperWhite5SE", "device_id": "DA1CE",
+        }).status_code, 200)
+
+        # The bridge then advances the synced KoSync State to 40% from the audiobook side.
+        svc.save_state(State(
+            abs_id="minders-regression", client_name="kosync",
+            percentage=0.4012, xpath="/body/DocFragment[42]/body/div/p[13].0",
+            timestamp=int(time.time()), last_updated=int(time.time()), user_id=admin_id,
+        ))
+
+        get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        self.assertEqual(get.status_code, 200)
+        data = get.get_json()
+        # Pulled forward to the synced 40% position, NOT snapped back to the device's 9%.
+        self.assertAlmostEqual(data["percentage"], 0.4012, places=4)
+        self.assertEqual(data["progress"], "/body/DocFragment[42]/body/div/p[13].0")
+
+    def test_linked_book_get_honors_device_ahead_of_synced_state(self):
+        """The furthest-wins gate still honors a device that read genuinely AHEAD of
+        the synced position (e.g. a different EPUB build of the same title).
+
+        Set up directly (not via a PUT, which would advance the kosync State too) so
+        the per-user progress (60%) sits strictly ahead of the synced State (40%)."""
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        doc_hash = "a" * 32
+        svc.save_book(Book(
+            abs_id="ahead-regression",
+            abs_title="Ahead Book",
+            ebook_filename="ahead.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        # Linked hash so the per-user progress JOINs back to this book.
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=doc_hash, linked_abs_id="ahead-regression", user_id=admin_id,
+        ))
+        # Synced State behind at 40%; the device's own per-user progress ahead at 60%.
+        svc.save_state(State(
+            abs_id="ahead-regression", client_name="kosync",
+            percentage=0.40, xpath="/body/synced.0",
+            timestamp=int(time.time()), last_updated=int(time.time()), user_id=admin_id,
+        ))
+        svc.upsert_user_kosync_progress(
+            doc_hash, 0.60, progress="/body/device-ahead.0",
+            device="KoboA", device_id="A", timestamp=utcnow(), user_id=admin_id,
+        )
+
+        get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        self.assertEqual(get.status_code, 200)
+        data = get.get_json()
+        self.assertAlmostEqual(data["percentage"], 0.60, places=4)
+        self.assertEqual(data["progress"], "/body/device-ahead.0")
+
+    def test_same_library_same_hash_two_users_keep_separate_progress(self):
+        """Two users reading the same EPUB hash should not share progress."""
+        from src import web_server
+        import hashlib
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        suffix = str(int(time.time() * 1000000))
+        kosync_user = f"reader-b-{suffix}"
+        reader_b = svc.create_user(f"same_hash_reader_b_{suffix}", "pw", role="user")
+        svc.set_user_credential(reader_b.id, "KOSYNC_USER", kosync_user)
+        svc.set_user_credential(reader_b.id, "KOSYNC_KEY", "reader-b-pass")
+
+        doc_hash = "m" * 32
+        svc.save_book(Book(
+            abs_id="shared-same-hash",
+            abs_title="Shared Same Hash",
+            ebook_filename="same.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        svc.link_user_book(reader_b.id, "shared-same-hash")
+
+        reader_b_headers = {
+            "x-auth-user": kosync_user,
+            "x-auth-key": hashlib.md5(b"reader-b-pass").hexdigest(),
+            "Content-Type": "application/json",
+        }
+
+        admin_put = self.client.put(
+            "/syncs/progress",
+            headers=self.auth_headers,
+            json={
+                "document": doc_hash,
+                "progress": "/body/admin",
+                "percentage": 0.80,
+                "device": "KoboA",
+                "device_id": "A",
+            },
+        )
+        self.assertEqual(admin_put.status_code, 200)
+
+        reader_b_put = self.client.put(
+            "/syncs/progress",
+            headers=reader_b_headers,
+            json={
+                "document": doc_hash,
+                "progress": "/body/reader-b",
+                "percentage": 0.20,
+                "device": "KoboB",
+                "device_id": "B",
+            },
+        )
+        self.assertEqual(reader_b_put.status_code, 200)
+
+        admin_state = svc.get_state("shared-same-hash", "kosync", user_id=admin_id)
+        reader_b_state = svc.get_state("shared-same-hash", "kosync", user_id=reader_b.id)
+        self.assertAlmostEqual(float(admin_state.percentage), 0.80)
+        self.assertEqual(admin_state.xpath, "/body/admin")
+        self.assertAlmostEqual(float(reader_b_state.percentage), 0.20)
+        self.assertEqual(reader_b_state.xpath, "/body/reader-b")
+
+        admin_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        reader_b_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=reader_b_headers)
+        self.assertEqual(admin_get.status_code, 200)
+        self.assertEqual(reader_b_get.status_code, 200)
+        self.assertAlmostEqual(admin_get.get_json()["percentage"], 0.80)
+        self.assertEqual(admin_get.get_json()["progress"], "/body/admin")
+        self.assertAlmostEqual(reader_b_get.get_json()["percentage"], 0.20)
+        self.assertEqual(reader_b_get.get_json()["progress"], "/body/reader-b")
+
+    def _make_second_kosync_user(self, label):
+        """Create a second BookBridge user with their own KOSync creds + headers."""
+        from src import web_server
+        import hashlib
+        svc = web_server.database_service
+        suffix = str(int(time.time() * 1000000))
+        kosync_user = f"{label}-{suffix}"
+        user = svc.create_user(f"{label}_{suffix}", "pw", role="user")
+        svc.set_user_credential(user.id, "KOSYNC_USER", kosync_user)
+        svc.set_user_credential(user.id, "KOSYNC_KEY", f"{label}-pass")
+        headers = {
+            "x-auth-user": kosync_user,
+            "x-auth-key": hashlib.md5(f"{label}-pass".encode()).hexdigest(),
+            "Content-Type": "application/json",
+        }
+        return user, headers
+
+    def test_unlinked_same_hash_two_users_keep_separate_progress(self):
+        """Two users PUTting the same UNLINKED hash each read back their OWN
+        position — neither overwrites the other (per-user progress fix)."""
+        _reader_b, reader_b_headers = self._make_second_kosync_user("unlinked_reader_b")
+        doc_hash = "u" * 32  # never linked to a Book
+
+        self.assertEqual(self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": doc_hash, "progress": "/body/admin", "percentage": 0.80,
+            "device": "KoboA", "device_id": "A",
+        }).status_code, 200)
+        self.assertEqual(self.client.put("/syncs/progress", headers=reader_b_headers, json={
+            "document": doc_hash, "progress": "/body/reader-b", "percentage": 0.20,
+            "device": "KoboB", "device_id": "B",
+        }).status_code, 200)
+
+        admin_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+        reader_b_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=reader_b_headers)
+        self.assertEqual(admin_get.status_code, 200)
+        self.assertEqual(reader_b_get.status_code, 200)
+        # Each user reads their own position back, not the other's last write.
+        self.assertAlmostEqual(admin_get.get_json()["percentage"], 0.80)
+        self.assertEqual(admin_get.get_json()["progress"], "/body/admin")
+        self.assertAlmostEqual(reader_b_get.get_json()["percentage"], 0.20)
+        self.assertEqual(reader_b_get.get_json()["progress"], "/body/reader-b")
+
+    def test_unlinked_furthest_wins_is_per_user(self):
+        """Furthest-wins is judged against the SAME user's last position: user B's
+        lower PUT is accepted (A's 80% doesn't gate it), but A's own backward move
+        from a different device is still rejected."""
+        _reader_b, reader_b_headers = self._make_second_kosync_user("fw_reader_b")
+        doc_hash = "w" * 32
+
+        self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": doc_hash, "progress": "/body/a1", "percentage": 0.80,
+            "device": "KoboA", "device_id": "A1",
+        })
+        # B's lower PUT must NOT be gated by A's 80% (different user baseline).
+        self.client.put("/syncs/progress", headers=reader_b_headers, json={
+            "document": doc_hash, "progress": "/body/b1", "percentage": 0.20,
+            "device": "KoboB", "device_id": "B1",
+        })
+        self.assertAlmostEqual(
+            self.client.get(f"/syncs/progress/{doc_hash}", headers=reader_b_headers).get_json()["percentage"],
+            0.20,
+        )
+        # A's own backward move from a NEW device is rejected by furthest-wins.
+        self.client.put("/syncs/progress", headers=self.auth_headers, json={
+            "document": doc_hash, "progress": "/body/a2", "percentage": 0.50,
+            "device": "KoboA2", "device_id": "A2",
+        })
+        self.assertAlmostEqual(
+            self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers).get_json()["percentage"],
+            0.80,
+        )
 
     def test_get_progress_returns_502_when_direct_hash_has_pct_but_empty_progress(self):
         self.client.put(
@@ -346,6 +680,17 @@ class TestKosyncEndpoints(unittest.TestCase):
 
     def test_device_sync_manifest_returns_service_payload(self):
         from src.api import kosync_server
+        from src import web_server
+
+        # The manifest is scoped to the authenticated device user's owned matches;
+        # give that user (the default admin the kosync creds resolve to) an active
+        # 'abs-1' match so it survives the per-user filter.
+        web_server.database_service.save_book(Book(
+            abs_id="abs-1",
+            abs_title="Dragon's Justice",
+            ebook_filename="Dragon's Justice.epub",
+            status="active",
+        ))
 
         service = MagicMock()
         service.build_manifest.return_value = {
@@ -376,6 +721,14 @@ class TestKosyncEndpoints(unittest.TestCase):
 
     def test_device_sync_download_returns_file_attachment(self):
         from src.api import kosync_server
+        from src import web_server
+
+        # The download gate now requires the device user to have claimed the book;
+        # give the authenticated user (the default admin) a claim on abs-1.
+        svc = web_server.database_service
+        svc.save_book(Book(abs_id="abs-1", abs_title="Dragon's Justice",
+                           ebook_filename="d.epub", status="active",
+                           user_id=svc._default_user_id()))
 
         download_path = Path(TEST_DIR) / "dragon.epub"
         download_path.write_bytes(b"epub")
@@ -403,6 +756,64 @@ class TestKosyncEndpoints(unittest.TestCase):
             response.headers.get("Content-Disposition", ""),
         )
         self.assertEqual(response.data, b"epub")
+
+    def test_device_sync_manifest_scopes_to_owning_user(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        other = svc.create_user("manifest_other_user", "pw", role="user")
+        svc.save_book(Book(abs_id="mine", abs_title="Mine", ebook_filename="m.epub",
+                           status="active", user_id=admin_id))
+        svc.save_book(Book(abs_id="theirs", abs_title="Theirs", ebook_filename="t.epub",
+                           status="active", user_id=other.id))
+
+        service = MagicMock()
+        service.build_manifest.return_value = {
+            "generated_at": 1,
+            "revision": "abc",
+            "delete_mode": "mirror",
+            "books": [
+                {"abs_id": "mine", "title": "Mine", "filename": "m.epub",
+                 "content_hash": "h1", "download_path": "/x", "size": 1},
+                {"abs_id": "theirs", "title": "Theirs", "filename": "t.epub",
+                 "content_hash": "h2", "download_path": "/y", "size": 1},
+            ],
+        }
+        container = MagicMock()
+        container.koreader_device_sync_service.return_value = service
+
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
+        with patch.object(kosync_server, '_container', container):
+            response = self.client.get('/koreader/device-sync/manifest', headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 200)
+        ids = [b["abs_id"] for b in response.get_json()["books"]]
+        self.assertEqual(ids, ["mine"])
+
+    def test_device_sync_download_blocks_another_users_book(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        other = svc.create_user("download_other_user", "pw", role="user")
+        svc.save_book(Book(abs_id="theirs-dl", abs_title="Theirs", ebook_filename="t.epub",
+                           status="active", user_id=other.id))
+
+        service = MagicMock()
+        container = MagicMock()
+        container.koreader_device_sync_service.return_value = service
+
+        with patch.object(kosync_server, '_container', container):
+            response = self.client.get(
+                '/koreader/device-sync/books/theirs-dl/download',
+                headers=self.auth_headers,
+            )
+
+        self.assertEqual(response.status_code, 404)
+        service.resolve_download.assert_not_called()
 
     def _clear_koreader_stats_tables(self):
         from src import web_server
@@ -724,7 +1135,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             percentage=0.60,
             device='Sibling',
             device_id='S1',
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
             linked_abs_id='test-step2-book'
         )
         web_server.database_service.save_kosync_document(sibling_doc)
@@ -767,7 +1178,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             percentage=0.50,
             device='DeviceA',
             device_id='DA',
-            timestamp=datetime.utcnow(),
+            timestamp=utcnow(),
             filename='shared_name.epub',
             linked_abs_id='test-filename-book'
         )
@@ -864,7 +1275,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.20,
                 device=device,
                 device_id=device_id,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -939,7 +1350,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.40,
                 device=external_device,
                 device_id=external_device_id,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1022,7 +1433,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.15,
                 device=device,
                 device_id=device_id,
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1080,7 +1491,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                 percentage=0.20,
                 device='abs-sync-bot',
                 device_id='BOT1',
-                timestamp=datetime.utcnow(),
+                timestamp=utcnow(),
                 linked_abs_id=book.abs_id,
             )
         )
@@ -1116,6 +1527,58 @@ class TestKosyncEndpoints(unittest.TestCase):
             self.assertEqual(session.query(ReadingSession).count(), 0)
         with kosync_server._kosync_open_sessions_lock:
             self.assertFalse(kosync_server._kosync_open_sessions)
+
+
+class TestKosyncAuthStubs(unittest.TestCase):
+    """Security regression: the KOReader login/create stubs must not disclose
+    the configured KOSYNC_KEY or KOSYNC_USER to unauthenticated callers."""
+
+    @classmethod
+    def setUpClass(cls):
+        from src import web_server
+        web_server.database_service = DatabaseService(os.path.join(TEST_DIR, 'test.db'))
+        if not hasattr(web_server, 'app'):
+            web_server.app, _ = web_server.create_app()
+        cls.client = web_server.app.test_client()
+
+    def setUp(self):
+        import hashlib
+        from src import web_server
+        # A user must exist or require_login_guard redirects to first-run setup.
+        if web_server.database_service.count_users() == 0:
+            web_server.database_service.create_user("admin", "secret", role="admin")
+        # KOSYNC_USER/KOSYNC_KEY are set to testuser/testpass at module import.
+        self.valid_headers = {
+            'x-auth-user': 'testuser',
+            'x-auth-key': hashlib.md5(b'testpass').hexdigest(),
+        }
+
+    def test_login_does_not_leak_global_key(self):
+        resp = self.client.post('/users/login', headers=self.valid_headers)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json() or {}
+        self.assertNotIn('token', data)
+        self.assertNotIn('testpass', str(data))
+        self.assertEqual(data.get('username'), 'testuser')
+
+    def test_login_rejects_missing_credentials(self):
+        resp = self.client.post('/users/login')
+        self.assertEqual(resp.status_code, 401)
+
+    def test_login_rejects_bad_credentials(self):
+        resp = self.client.post(
+            '/users/login',
+            headers={'x-auth-user': 'testuser', 'x-auth-key': 'wrong'},
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_create_does_not_leak_configured_username(self):
+        resp = self.client.post('/users/create', json={'username': 'someoneelse'})
+        self.assertEqual(resp.status_code, 201)
+        data = resp.get_json() or {}
+        # echoes the requested name, never the server's configured KOSYNC_USER
+        self.assertEqual(data.get('username'), 'someoneelse')
+        self.assertNotIn('testuser', str(data))
 
 
 class TestKosyncEstimatedSessions(unittest.TestCase):
@@ -1257,7 +1720,7 @@ class TestKosyncEstimatedSessions(unittest.TestCase):
                 mode='plugin',
                 source='plugin_session_auto',
                 last_document_hash='p' * 32,
-                seen_time=datetime.utcnow(),
+                seen_time=utcnow(),
             )
             self.ks._update_grouped_kosync_session(book, 'p' * 32, 'Kobo_monza', 'RID3', 0.30, start)
             self.ks._update_grouped_kosync_session(book, 'p' * 32, 'Kobo_monza', 'RID3', 0.36, start + 120)

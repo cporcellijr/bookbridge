@@ -106,6 +106,7 @@ function BridgeSync:init()
     self.sync_in_progress = false
     self.last_auto_sync_time = 0
     self.last_stats_sync_time = 0
+    self.stats_sync_in_flight = false
     self.needs_wake_sync = false
     self.sync_scheduled = false
     self.log_path = DataStorage:getSettingsDir() .. "/bridge_sync.log"
@@ -176,7 +177,7 @@ function BridgeSync:_extractHost()
     return tostring(self.server_url or ""):match("^https?://([^/%:]+)")
 end
 
-function BridgeSync:_preflightNetwork()
+function BridgeSync:_preflightNetwork(allow_dns_retry)
     if not NetworkMgr:isConnected() then
         return false, _("WiFi is not connected")
     end
@@ -188,10 +189,15 @@ function BridgeSync:_preflightNetwork()
 
     local resolved_ip = socket.dns.toip(host)
     if not resolved_ip then
+        if allow_dns_retry then
+            -- Right after wake DNS can miss transiently; let the request proceed and rely on
+            -- the API client's connection-failure retries instead of aborting the whole sync.
+            self:logWarn(T(_("DNS lookup failed for %1; proceeding, will retry"), host))
+            return true
+        end
         return false, T(_("DNS lookup failed for %1"), host)
     end
 
-    self:logInfo("Resolved host", host, "to", resolved_ip)
     return true
 end
 
@@ -485,6 +491,54 @@ function BridgeSync:_isCooldownActive()
     return (os.time() - self.last_auto_sync_time) < 300
 end
 
+-- Whether a wake/network event has anything to do, so we don't schedule a WiFi-polling
+-- job (and its "waiting for WiFi" logging) when there's nothing to sync.
+function BridgeSync:_hasWakeWork()
+    if not self.is_enabled then
+        return false
+    end
+    if #self.pending_sessions > 0 then
+        return true
+    end
+    if self.session_tracking_enabled and self.auto_sync_stats
+        and (os.time() - (self.last_stats_sync_time or 0)) >= 300 then
+        return true
+    end
+    if not self.manual_only and not self:_isCooldownActive()
+        and (self.auto_sync_on_resume or self.auto_sync_on_network or self.needs_wake_sync) then
+        return true
+    end
+    return false
+end
+
+-- Runs once WiFi is confirmed connected (called by _scheduleSync's poll loop). Sessions and
+-- stats are flushed unconditionally (safe while reading); the manifest/book pull stays
+-- deferred while a document is open and respects the auto-sync toggles + cooldown.
+function BridgeSync:_runScheduledWork(silent)
+    self:_maybeUploadPendingSessions("wake")
+    self:_maybeAutoSyncStats("wake")
+
+    if self.manual_only then
+        return
+    end
+    if not (self.auto_sync_on_resume or self.auto_sync_on_network or self.needs_wake_sync) then
+        return
+    end
+    if self:_isCooldownActive() then
+        return
+    end
+    if self:_shouldAvoidAutoSyncWhileReading() then
+        self.needs_wake_sync = true
+        self:logInfo("Deferring book sync while a document is open")
+        return
+    end
+    self.needs_wake_sync = false
+    self.last_auto_sync_time = os.time()  -- cooldown only once we actually sync
+    Trapper:wrap(function()
+        self:syncFromBridge(silent == nil and true or silent)
+    end)
+end
+
 function BridgeSync:_scheduleSync(delay_seconds, silent, retries_left)
     if self.sync_scheduled then
         return
@@ -494,11 +548,6 @@ function BridgeSync:_scheduleSync(delay_seconds, silent, retries_left)
     UIManager:scheduleIn(delay_seconds or 10, function()
         self.sync_scheduled = false
         if not self.is_enabled then
-            return
-        end
-        if self:_shouldAvoidAutoSyncWhileReading() then
-            self.needs_wake_sync = true
-            self:logInfo("Deferring auto-sync while a document is open")
             return
         end
         if not NetworkMgr:isConnected() then
@@ -513,11 +562,7 @@ function BridgeSync:_scheduleSync(delay_seconds, silent, retries_left)
             end
             return  -- needs_wake_sync stays true as a backup for onNetworkConnected
         end
-        self.needs_wake_sync = false
-        self.last_auto_sync_time = os.time()  -- cooldown only once we actually sync
-        Trapper:wrap(function()
-            self:syncFromBridge(silent == nil and true or silent)
-        end)
+        self:_runScheduledWork(silent)
     end)
 end
 
@@ -543,18 +588,27 @@ function BridgeSync:_maybeAutoSyncStats(reason)
     if not self.is_enabled or not self.session_tracking_enabled or not self.auto_sync_stats then
         return false
     end
+    if self.stats_sync_in_flight then
+        return false
+    end
     if not NetworkMgr:isConnected() then
         return false
     end
     if (os.time() - (self.last_stats_sync_time or 0)) < 300 then
         return false
     end
-    self.last_stats_sync_time = os.time()
     if reason then
         self:logInfo("Auto-syncing reading stats after", reason)
     end
+    self.stats_sync_in_flight = true
     Trapper:wrap(function()
-        self:syncReadingStats(true)
+        local ok = self:syncReadingStats(true)
+        self.stats_sync_in_flight = false
+        -- Only start the 5-minute cooldown once a sync actually succeeds, so a failed attempt
+        -- right after wake doesn't block the next reconnect from retrying.
+        if ok then
+            self.last_stats_sync_time = os.time()
+        end
     end)
     return true
 end
@@ -569,24 +623,16 @@ function BridgeSync:onResume()
         self:startSession()
     end
 
-    -- Upload any queued sessions
-    if #self.pending_sessions > 0 then
-        self:_maybeUploadPendingSessions("resume")
+    -- A fresh wake's network route isn't usable for ~20-30s, so don't fire uploads now.
+    -- Funnel everything (pending sessions + stats + manifest) into one WiFi-polling job;
+    -- it runs sessions/stats regardless of the book-sync toggles, and the manifest portion
+    -- still respects manual_only / auto_sync_on_resume / cooldown / reading.
+    if self.auto_sync_on_resume and not self:_isCooldownActive() then
+        self.needs_wake_sync = true
     end
-
-    self:_maybeAutoSyncStats("resume")
-
-    if self.manual_only then
-        return false
+    if self:_hasWakeWork() then
+        self:_scheduleSync(self.wake_sync_delay_seconds, true)
     end
-    if not self.auto_sync_on_resume or self:_isCooldownActive() then
-        return false
-    end
-
-    self.needs_wake_sync = true
-    -- Schedule unconditionally; the job polls for WiFi itself rather than depending on it
-    -- being connected at this exact instant (it usually isn't right after wake).
-    self:_scheduleSync(self.wake_sync_delay_seconds, true)
     return false
 end
 
@@ -595,31 +641,12 @@ function BridgeSync:onNetworkConnected()
         return false
     end
 
-    if #self.pending_sessions > 0 then
-        self:_maybeUploadPendingSessions("network reconnect")
-    end
-
-    self:_maybeAutoSyncStats("network reconnect")
-
-    if self.manual_only then
-        return false
-    end
-
-    if self.needs_wake_sync and not self:_isCooldownActive() then
-        self.needs_wake_sync = false
-        if self:_shouldAvoidAutoSyncWhileReading() then
-            self.needs_wake_sync = true
-            return false
-        end
-        self:_scheduleSync(self.wake_sync_delay_seconds, true)
-        return false
-    end
-
     if self.auto_sync_on_network and not self:_isCooldownActive() then
-        if self:_shouldAvoidAutoSyncWhileReading() then
-            self.needs_wake_sync = true
-            return false
-        end
+        self.needs_wake_sync = true
+    end
+    -- Run the one connectivity-gated job after a short settle delay. The sync_scheduled guard
+    -- collapses a resume+connect pair into a single job, so onResume's wake delay still wins.
+    if self:_hasWakeWork() then
         self:_scheduleSync(10, true)
     end
     return false
@@ -1029,7 +1056,7 @@ function BridgeSync:syncFromBridge(silent)
         return false
     end
 
-    local network_ok, network_err = self:_preflightNetwork()
+    local network_ok, network_err = self:_preflightNetwork(silent)
     if not network_ok then
         self:logWarn(network_err)
         if not silent then
@@ -1731,7 +1758,7 @@ function BridgeSync:syncReadingStats(silent)
         return false
     end
 
-    local network_ok, network_err = self:_preflightNetwork()
+    local network_ok, network_err = self:_preflightNetwork(silent)
     if not network_ok then
         self:logWarn(network_err)
         if not silent then

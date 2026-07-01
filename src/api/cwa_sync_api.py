@@ -7,6 +7,8 @@ import os
 import logging
 import requests
 
+from src.utils.user_config import resolve_setting
+
 logger = logging.getLogger(__name__)
 
 # Kobo reading status constants (per Kobo API protocol)
@@ -16,17 +18,19 @@ STATUS_READY = "ReadyToRead"
 
 
 class CWASyncApi:
-    def __init__(self, cwa_client=None):
+    def __init__(self, cwa_client=None, credentials: dict = None):
         self._cwa_client = cwa_client
+        self._creds = credentials
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
         self._timeout = 15
 
-        # Snapshot config at init (matches CWAClient pattern)
+        # Snapshot config at init (matches CWAClient pattern). CWA_SYNC_TOKEN/
+        # ENABLED are per-user when credentials are provided; server is global.
         self._server = (cwa_client.base_url if cwa_client else
-                        os.environ.get("CWA_SERVER", "").rstrip("/"))
-        self._token = os.environ.get("CWA_SYNC_TOKEN", "").strip()
-        self._enabled = os.environ.get("CWA_SYNC_ENABLED", "").lower() == "true"
+                        resolve_setting(credentials, "CWA_SERVER", "").rstrip("/"))
+        self._token = (resolve_setting(credentials, "CWA_SYNC_TOKEN", "") or "").strip()
+        self._enabled = str(resolve_setting(credentials, "CWA_SYNC_ENABLED", "")).lower() == "true"
 
     @property
     def _base_url(self) -> str:

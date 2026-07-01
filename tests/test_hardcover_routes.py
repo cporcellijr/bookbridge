@@ -72,11 +72,16 @@ class MockContainer:
     def booklore_client(self):
         return Mock()
 
+    def bookorbit_client(self):
+        return Mock()
+
     def storyteller_client(self):
         return Mock()
 
     def ebook_parser(self):
-        return Mock()
+        parser = Mock()
+        parser.get_book_metadata.return_value = {"title": "", "author": "", "isbn": "", "asin": ""}
+        return parser
 
     def sync_clients(self):
         mock = Mock()

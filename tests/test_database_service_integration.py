@@ -62,6 +62,36 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertIsNotNone(self.db_service)
         self.assertTrue(Path(self.test_db_path).exists())
 
+    def test_kosync_user_progress_is_per_user(self):
+        """Per-user KoSync progress isolates two users on the same hash, upserts
+        in place, and the per-book join returns only the requested user's rows."""
+        u1 = self.db_service.create_user("kup_user_1", "pw", role="admin")
+        u2 = self.db_service.create_user("kup_user_2", "pw", role="user")
+        h = "h" * 32
+
+        self.db_service.upsert_user_kosync_progress(h, 0.80, progress="/a", device="A", device_id="A1", user_id=u1.id)
+        self.db_service.upsert_user_kosync_progress(h, 0.20, progress="/b", device="B", device_id="B1", user_id=u2.id)
+
+        r1 = self.db_service.get_user_kosync_progress(h, u1.id)
+        r2 = self.db_service.get_user_kosync_progress(h, u2.id)
+        self.assertAlmostEqual(float(r1.percentage), 0.80)
+        self.assertEqual(r1.progress, "/a")
+        self.assertAlmostEqual(float(r2.percentage), 0.20)
+        self.assertEqual(r2.progress, "/b")
+
+        # Upsert updates u1 in place; u2's row is untouched.
+        self.db_service.upsert_user_kosync_progress(h, 0.95, progress="/a2", device="A", device_id="A1", user_id=u1.id)
+        self.assertAlmostEqual(float(self.db_service.get_user_kosync_progress(h, u1.id).percentage), 0.95)
+        self.assertAlmostEqual(float(self.db_service.get_user_kosync_progress(h, u2.id).percentage), 0.20)
+
+        # Per-book join (shared link + per-user progress) returns only my rows.
+        self.db_service.save_book(self.Book(abs_id="kup-book", abs_title="KUP", status="active"))
+        self.db_service.ensure_linked_kosync_document(h, "kup-book")
+        rows1 = self.db_service.get_user_kosync_progress_for_book("kup-book", u1.id)
+        rows2 = self.db_service.get_user_kosync_progress_for_book("kup-book", u2.id)
+        self.assertEqual([float(r.percentage) for r in rows1], [0.95])
+        self.assertEqual([float(r.percentage) for r in rows2], [0.20])
+
     def test_create_book(self):
         """Test creating a book record."""
         test_abs_id = 'test-book-create'

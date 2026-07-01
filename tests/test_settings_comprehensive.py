@@ -197,21 +197,26 @@ class TestSettingsComprehensive(unittest.TestCase):
         self.assertIn('<option value="tiny"></option>', html)
         self.assertIn('<option value="large-v3"></option>', html)
 
-    def test_settings_get_renders_selectable_library_pickers(self):
+    def test_settings_get_moves_account_credentials_to_per_user(self):
         html = self._render_settings_template_source()
 
-        self.assertIn('name="ABS_LIBRARY_ID"', html)
-        self.assertIn('onclick="checkAbsLibs()"', html)
-        self.assertIn("fetch('/api/abs/libraries')", html)
-        self.assertIn('id="abs_library_picker"', html)
-        self.assertIn("applyLibraryPickerSelection('ABS_LIBRARY_ID', 'abs_library_picker')", html)
-        self.assertIn('Use when restricting ABS search to a specific library.', html)
-        self.assertIn('name="BOOKLORE_LIBRARY_ID"', html)
-        self.assertIn('onclick="checkBookloreLibs()"', html)
-        self.assertIn("fetch('/api/booklore/libraries')", html)
-        self.assertIn('id="booklore_library_picker"', html)
-        self.assertIn("applyLibraryPickerSelection('BOOKLORE_LIBRARY_ID', 'booklore_library_picker')", html)
-        self.assertIn('Select a library to fill the ID field.', html)
+        # ABS/Grimmory/BookOrbit/CWA account credentials, library IDs and shelves
+        # are per-user now (managed in Users -> Integrations), so the global page
+        # renders pointer notes instead of those inputs/pickers. A dangling
+        # querySelector('input[name="ABS_KEY"]') left in JS is harmless.
+        self.assertNotIn('<input type="password" name="ABS_KEY"', html)
+        self.assertNotIn('id="abs_library_picker"', html)
+        self.assertNotIn('<input type="text" name="BOOKLORE_LIBRARY_ID"', html)
+        self.assertNotIn('id="booklore_library_picker"', html)
+        self.assertNotIn('<input type="text" name="BOOKLORE_SHELF_NAME"', html)
+        self.assertNotIn('<input type="text" name="BOOKORBIT_SHELF_NAME"', html)
+        # Per-user pointer notes are present.
+        self.assertIn('Audiobookshelf API token', html)
+        self.assertIn('Grimmory login', html)
+        # Server URLs and engine settings stay global.
+        self.assertIn('name="ABS_SERVER"', html)
+        self.assertIn('name="BOOKLORE_SERVER"', html)
+        self.assertIn('name="BOOKLORE_SHELF_WATCH_NAME"', html)
 
     @patch('src.web_server.restart_server')
     def test_custom_whisper_model_is_saved_without_being_forced_to_builtin(self, mock_restart):

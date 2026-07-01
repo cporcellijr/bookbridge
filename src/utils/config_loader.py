@@ -57,8 +57,6 @@ ALL_SETTINGS = [
     'CALIBRE_USE_ABS_IDENTIFIER', 'CALIBRE_LIBRARY_PATH',
 
     # Progress Tracker
-    'PROGRESS_TRACKER_PROVIDER',
-
     # Hardcover
     'HARDCOVER_ENABLED', 'HARDCOVER_TOKEN', 'HARDCOVER_UPDATE_COOLDOWN_MINS',
     
@@ -95,7 +93,7 @@ ALL_SETTINGS = [
     'BOOKLORE_POLL_MODE', 'BOOKLORE_POLL_SECONDS',
     
     # System
-    'TZ', 'LOG_LEVEL', 'DATA_DIR', 'BOOKS_DIR', 
+    'TZ', 'LOG_LEVEL', 'DATA_DIR', 'BOOKS_DIR', 'EXTRA_EBOOK_DIRS',
     'AUDIOBOOKS_DIR', 'STORYTELLER_LIBRARY_DIR', 'STORYTELLER_ASSETS_DIR', 'STORYTELLER_UPLOAD_CHUNK_SIZE',
     'STORYTELLER_NO_EPUB_CACHE',
     'STORYTELLER_RECOVERY_MAX_WAIT_MINUTES', 'STORYTELLER_RECOVERY_POLL_INTERVAL_MINUTES',
@@ -112,6 +110,7 @@ DEFAULT_CONFIG = {
     'LOG_LEVEL': 'INFO',
     'DATA_DIR': '/data',
     'BOOKS_DIR': '/books',
+    'EXTRA_EBOOK_DIRS': '',
     'ABS_COLLECTION_NAME': 'Synced with KOReader',
     'BOOKLORE_SHELF_NAME': 'Kobo',
     'SYNC_PERIOD_MINS': '5',
@@ -180,7 +179,6 @@ DEFAULT_CONFIG = {
     'CWA_SYNC_POLL_SECONDS': '300',
     'CALIBRE_USE_ABS_IDENTIFIER': 'false',
     'CALIBRE_LIBRARY_PATH': '',
-    'PROGRESS_TRACKER_PROVIDER': 'none',
     'HARDCOVER_ENABLED': 'false',
     'HARDCOVER_UPDATE_COOLDOWN_MINS': '60',
     'STORYGRAPH_ENABLED': 'false',
@@ -249,7 +247,10 @@ class ConfigLoader:
                 # never overwrites a value the user has already set.
                 missing = [k for k in ALL_SETTINGS if k not in existing_settings]
                 for key in missing:
-                    db_service.set_setting(key, str(DEFAULT_CONFIG.get(key, "")))
+                    # Honor an env override for a newly-added key (same precedence as
+                    # the fresh-bootstrap path), so a compose-configured value isn't
+                    # silently replaced by the default and then loaded back as empty.
+                    db_service.set_setting(key, str(os.environ.get(key, DEFAULT_CONFIG.get(key, ""))))
                 if missing:
                     logger.info(f"➕ Added {len(missing)} new setting(s) to existing config: {missing}")
                 return

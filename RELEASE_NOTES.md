@@ -1,29 +1,22 @@
-# Release Notes — 6.8.0
+# Release Notes — 7.0.0
 
-The headline additions are a second ebook library manager (**BookOrbit**) and an optional local-LLM assistant (**Ollama**), alongside a batch of sync fixes. Existing setups upgrade in place — database migrations and new settings apply automatically.
+The headline change is **user accounts**: the bridge now supports more than one reader, each with their own sign-in, their own service logins, and their own reading progress. This is a bigger release than usual — existing setups upgrade in place, but there is a one-time sign-in step the first time you open the dashboard (see Upgrading below).
 
 ## Added
-- **BookOrbit** — a second ebook/audiobook library manager that works like Grimmory. Optional "Up Next" collection watch auto-matches books you drop onto a shelf. Includes a Grimmory→BookOrbit migration script (no rematching needed).
-- **Optional Ollama (local LLM)** — smarter match suggestions and audio↔text alignment rescue. Off by default; falls back to normal behavior if Ollama is unreachable, so it never blocks a sync.
-- **Link Storyteller from any dashboard card** — not just ebook-only mappings.
-- **Combined KOReader reading stats across devices.**
-- **Expanded stats page** with more reading-activity views.
+- **Multiple readers** — create separate accounts for different people, for example everyone in a household. Each person signs in to their own dashboard, sees only the books they are reading, and keeps their own progress, even when two people read the same book.
+- **Personal logins for each service** — every reader enters their own Audiobookshelf, KOSync, Grimmory or BookOrbit, Storyteller, and tracker logins, so each person syncs against their own accounts and their own shelves.
+- **A sign-in screen** — the dashboard is now protected by a login. The first person to open it sets up the main account and can add more readers from a new Users area in Settings.
+- **Same-folder matching** — audiobook and ebook files in the same library folder are recognized as likely pairs in Suggestions, treated as an exact match only when the titles also agree.
+- **Bulk suggestion review** — select multiple suggestions with checkboxes or add every exact (100%) match at once, queue them without the page reloading, and run Forge & Match All straight from the Suggestions page.
 
 ## Changed
-- Storyteller-led syncs now count as listening time in Audiobookshelf.
+- The shared engine settings — how often it syncs, library scans, and shelf watching — stay in one place for the main account to manage, while the per-person service logins move into each reader's own settings.
 
 ## Fixed
-- Safer SQLite journal mode on filesystems where WAL is unreliable (9p, some NFS, certain VM shares).
-- Storyteller read-along no longer snaps back in books that navigate by SMIL fragment IDs.
-- Fewer false rollbacks from stale or out-of-order KoSync updates.
-- More accurate dashboard "out of sync" warnings.
+- **CWA progress appears sooner** — books synced through Calibre-Web-Automated's Kobo sync now show their CWA row on the dashboard right away, instead of only after the first position comes in.
 
-## Cleaned up (for public release)
-- Removed a stale debug script, pinned dependencies, dropped a bogus `ffmpeg` pip dependency, fixed license/readme metadata, and neutralized localhost defaults.
-
-## Migration
-None required. Database migrations and new settings apply automatically on startup. Switching Grimmory→BookOrbit is optional and does not require rematching — run `scripts/migrate_grimmory_to_bookorbit.py` (dry-run by default; add `--apply`).
+## Upgrading
+Database migrations apply automatically on startup, so you only need to update and restart. The first time you open the dashboard after upgrading, you will be asked to create your main login — just pick a username and password. As soon as you do, your existing library, your matches, and every service login you had already entered are moved onto that account automatically, so there is nothing to set up again. Your KOReader devices keep syncing exactly as before. From there you can add accounts for other readers whenever you like.
 
 ## Known limitations
-- BookOrbit is newer than Grimmory and less battle-tested; the docs cover it lightly for now.
-- Ollama is advanced and opt-in: you supply your own server and models, and match quality depends on the model you choose.
+- The whole dashboard now requires a sign-in. If you previously left it open on your network without a login, you and anyone who used it will now need an account.

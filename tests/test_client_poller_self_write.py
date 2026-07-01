@@ -40,7 +40,7 @@ def test_storyteller_poller_ignores_nearby_self_echo(monkeypatch):
     sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.778})
 
     poller = ClientPoller(db, sync_manager, {"Storyteller": sync_client})
-    poller._last_known[("Storyteller", "abs-1")] = 0.776
+    poller._last_known[(None, "Storyteller", "abs-1")] =0.776
 
     write_tracker.record_write("Storyteller", "abs-1", 0.776)
     poller._poll_client("Storyteller")
@@ -62,12 +62,12 @@ def test_storyteller_poller_allows_large_jump_during_suppression(monkeypatch):
     sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.85})
 
     poller = ClientPoller(db, sync_manager, {"Storyteller": sync_client})
-    poller._last_known[("Storyteller", "abs-1")] = 0.776
+    poller._last_known[(None, "Storyteller", "abs-1")] =0.776
 
     write_tracker.record_write("Storyteller", "abs-1", 0.776)
     poller._poll_client("Storyteller")
 
-    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1")
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
 
 
 def _make_settle_poller(monkeypatch, initial_pct):
@@ -84,7 +84,7 @@ def _make_settle_poller(monkeypatch, initial_pct):
     sync_client.is_configured.return_value = True
 
     poller = ClientPoller(db, sync_manager, {"Storyteller": sync_client})
-    poller._last_known[("Storyteller", "abs-1")] = initial_pct
+    poller._last_known[(None, "Storyteller", "abs-1")] =initial_pct
     return poller, sync_manager, sync_client
 
 
@@ -98,7 +98,7 @@ def test_settle_wait_defers_sync_while_position_moves(monkeypatch):
     poller._poll_client("Storyteller")
 
     sync_manager.sync_cycle.assert_not_called()
-    assert ("Storyteller", "abs-1") in poller._pending_sync
+    assert (None, "Storyteller", "abs-1") in poller._pending_sync
 
 
 def test_settle_wait_triggers_sync_once_position_settles(monkeypatch):
@@ -110,12 +110,12 @@ def test_settle_wait_triggers_sync_once_position_settles(monkeypatch):
 
     # Same position on the next poll → settled → one sync cycle.
     poller._poll_client("Storyteller")
-    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1")
-    assert ("Storyteller", "abs-1") not in poller._pending_sync
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
+    assert (None, "Storyteller", "abs-1") not in poller._pending_sync
 
     # Further unchanged polls must not re-trigger.
     poller._poll_client("Storyteller")
-    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1")
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
 
 
 def test_settle_wait_disabled_keeps_immediate_trigger(monkeypatch):
@@ -125,8 +125,8 @@ def test_settle_wait_disabled_keeps_immediate_trigger(monkeypatch):
     sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.52})
     poller._poll_client("Storyteller")
 
-    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1")
-    assert ("Storyteller", "abs-1") not in poller._pending_sync
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
+    assert (None, "Storyteller", "abs-1") not in poller._pending_sync
 
 
 def test_settle_wait_defers_external_jump_during_suppression(monkeypatch):
@@ -137,11 +137,11 @@ def test_settle_wait_defers_external_jump_during_suppression(monkeypatch):
     poller._poll_client("Storyteller")
 
     sync_manager.sync_cycle.assert_not_called()
-    assert ("Storyteller", "abs-1") in poller._pending_sync
+    assert (None, "Storyteller", "abs-1") in poller._pending_sync
 
     # Position holds on the next poll → the jump syncs now.
     poller._poll_client("Storyteller")
-    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1")
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
 
 
 def test_settle_wait_ignores_self_echo_without_pending(monkeypatch):
@@ -153,4 +153,4 @@ def test_settle_wait_ignores_self_echo_without_pending(monkeypatch):
     poller._poll_client("Storyteller")
 
     sync_manager.sync_cycle.assert_not_called()
-    assert ("Storyteller", "abs-1") not in poller._pending_sync
+    assert (None, "Storyteller", "abs-1") not in poller._pending_sync

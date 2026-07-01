@@ -16,6 +16,7 @@ import pytest
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.services.shelf_watch_service import ShelfWatchService
+from src.utils.time_utils import utcnow
 
 
 # --------------------------------------------------------------------------
@@ -280,7 +281,7 @@ def test_already_mapped_book_skipped():
 def test_throttle_skips_recent_scan():
     """A scan record within the cooldown window prevents re-processing."""
     recent = MagicMock()
-    recent.last_scan_at = datetime.utcnow() - timedelta(hours=1)
+    recent.last_scan_at = utcnow() - timedelta(hours=1)
     svc, bl, db, bms, _ = _build_service(
         suggestions_result={"matches": [_make_audio_match(score=99.0)]},
         throttled_scan=recent,
@@ -300,7 +301,7 @@ def test_throttle_skips_recent_scan():
 def test_throttle_allows_stale_scan():
     """A scan record older than the cooldown window still triggers a re-scan."""
     stale = MagicMock()
-    stale.last_scan_at = datetime.utcnow() - timedelta(hours=48)
+    stale.last_scan_at = utcnow() - timedelta(hours=48)
     svc, bl, db, bms, _ = _build_service(
         suggestions_result={"matches": [_make_audio_match(score=99.0)]},
         throttled_scan=stale,

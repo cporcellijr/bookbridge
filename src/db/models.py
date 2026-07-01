@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from typing import Optional
 
+from src.utils.time_utils import utcnow
+
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
@@ -32,9 +34,13 @@ class KosyncDocument(Base):
     
     # Bridge specific fields
     linked_abs_id = Column(String(255), ForeignKey('books.abs_id'), nullable=True, index=True)
-    first_seen = Column(DateTime, default=datetime.utcnow)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    first_seen = Column(DateTime, default=utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
+    # Multi-user: device-progress cache is per-user (the hash->book link stays
+    # shared; authoritative per-user KoSync progress lives in State). Nullable
+    # during rollout; backfilled in Phase 3.
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+
     # Hash cache replacement fields
     filename = Column(String(500), nullable=True)
     source = Column(String(50), nullable=True)
@@ -47,7 +53,7 @@ class KosyncDocument(Base):
     def __init__(self, document_hash: str, progress: str = None, percentage: float = 0,
                  device: str = None, device_id: str = None, timestamp: datetime = None,
                  linked_abs_id: str = None, filename: str = None, source: str = None,
-                 booklore_id: str = None, mtime: float = None):
+                 booklore_id: str = None, mtime: float = None, user_id: int = None):
         self.document_hash = document_hash
         self.progress = progress
         self.percentage = percentage
@@ -59,11 +65,51 @@ class KosyncDocument(Base):
         self.source = source
         self.booklore_id = booklore_id
         self.mtime = mtime
-        self.first_seen = datetime.utcnow()
-        self.last_updated = datetime.utcnow()
+        self.user_id = user_id
+        self.first_seen = utcnow()
+        self.last_updated = utcnow()
 
     def __repr__(self):
         return f"<KosyncDocument(hash='{self.document_hash}', pct={self.percentage})>"
+
+
+class KosyncUserProgress(Base):
+    """Per-user KOReader device progress for a document hash.
+
+    ``KosyncDocument`` is keyed by ``document_hash`` alone and carries the SHARED
+    facts (filename/md5 cache + hash->book link). Device PROGRESS is per-user, so
+    it lives here keyed by ``(document_hash, user_id)``. For LINKED books the
+    authoritative per-user progress is in ``State``; this table is the per-user
+    progress store for UNLINKED documents synced device-to-device, and the
+    per-user source for furthest-wins and sibling-hash GET resolution — so two
+    users reading the same EPUB (identical md5) no longer overwrite each other.
+    """
+    __tablename__ = 'kosync_user_progress'
+
+    document_hash = Column(String(32), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    progress = Column(String(512), nullable=True)         # XPath / CFI
+    percentage = Column(Numeric(10, 6), default=0)        # Decimal precision
+    device = Column(String(128), nullable=True)
+    device_id = Column(String(64), nullable=True)
+    timestamp = Column(DateTime, nullable=True)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    def __init__(self, document_hash: str, user_id: int, progress: str = None,
+                 percentage: float = 0, device: str = None, device_id: str = None,
+                 timestamp: datetime = None):
+        self.document_hash = document_hash
+        self.user_id = user_id
+        self.progress = progress
+        self.percentage = percentage
+        self.device = device
+        self.device_id = device_id
+        self.timestamp = timestamp
+        self.last_updated = utcnow()
+
+    def __repr__(self):
+        return (f"<KosyncUserProgress(hash='{self.document_hash}', "
+                f"user_id={self.user_id}, pct={self.percentage})>")
 
 
 class Book(Base):
@@ -95,6 +141,10 @@ class Book(Base):
     abs_ebook_item_id = Column(String(255), nullable=True)  # New ID to track ebook item separately
     series_name = Column(String(500), nullable=True, index=True)
     series_sequence = Column(Float, nullable=True)
+    # Multi-user: the user who created this match. The catalog row is shared at
+    # the schema level, but visibility/serving is scoped to the owner. NULL = the
+    # default (admin) user (backfilled at migration time).
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
 
     # Relationships
     states = relationship("State", back_populates="book", cascade="all, delete-orphan")
@@ -115,7 +165,8 @@ class Book(Base):
                  status: str = 'active', duration: float = None, sync_mode: str = 'audiobook',
                  transcript_source: str = None,
                  storyteller_uuid: str = None, abs_ebook_item_id: str = None,
-                 series_name: str = None, series_sequence: float = None):
+                 series_name: str = None, series_sequence: float = None,
+                 user_id: int = None):
         self.abs_id = abs_id
         self.abs_title = abs_title
         self.audio_source = audio_source
@@ -139,6 +190,7 @@ class Book(Base):
         self.abs_ebook_item_id = abs_ebook_item_id
         self.series_name = series_name
         self.series_sequence = series_sequence
+        self.user_id = user_id
 
     def __repr__(self):
         return f"<Book(abs_id='{self.abs_id}', title='{self.abs_title}')>"
@@ -240,6 +292,9 @@ class State(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     abs_id = Column(String(255), ForeignKey('books.abs_id'), nullable=False)
     client_name = Column(String(50), nullable=False)
+    # Multi-user: progress is per-user. Nullable during rollout (Phase 1/2);
+    # scoped + backfilled to a real user in Phase 3.
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
     last_updated = Column(Float)
     percentage = Column(Float)
     timestamp = Column(Float)
@@ -251,9 +306,10 @@ class State(Base):
 
     def __init__(self, abs_id: str, client_name: str, last_updated: float = None,
                  percentage: float = None, timestamp: float = None,
-                 xpath: str = None, cfi: str = None):
+                 xpath: str = None, cfi: str = None, user_id: int = None):
         self.abs_id = abs_id
         self.client_name = client_name
+        self.user_id = user_id
         self.last_updated = last_updated
         self.percentage = percentage
         self.timestamp = timestamp
@@ -308,7 +364,7 @@ class PendingSuggestion(Base):
     cover_url = Column(String(500))
     matches_json = Column(Text)
     status = Column(String(20), default='pending')
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
     origin = Column(String(50), nullable=True, index=True)
     origin_metadata_json = Column(Text, nullable=True)
 
@@ -322,7 +378,7 @@ class PendingSuggestion(Base):
         self.cover_url = cover_url
         self.matches_json = matches_json
         self.status = status
-        self.created_at = datetime.utcnow()
+        self.created_at = utcnow()
         self.origin = origin
         self.origin_metadata_json = origin_metadata_json
 
@@ -369,7 +425,7 @@ class ShelfWatchScan(Base):
                  last_status: str = None):
         self.grimmory_book_id = grimmory_book_id
         self.grimmory_filename = grimmory_filename
-        self.last_scan_at = last_scan_at or datetime.utcnow()
+        self.last_scan_at = last_scan_at or utcnow()
         self.last_top_score = last_top_score
         self.last_status = last_status
 
@@ -403,7 +459,7 @@ class BookAlignment(Base):
 
     abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
     alignment_map_json = Column(Text, nullable=False)  # JSON-encoded list of dicts or optimized structure
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
     # How the map was built: 'lexical', 'llm_anchor', 'linear', 'storyteller',
     # 'storyteller_linear'. NULL = pre-provenance (built before LLM alignment shipped).
     align_method = Column(String(32), nullable=True)
@@ -433,12 +489,14 @@ class ReadingSession(Base):
     start_progress = Column(Float, nullable=True)        # 0-1 fraction
     end_progress = Column(Float, nullable=True)          # 0-1 fraction
     leader_client = Column(String(50), nullable=True)    # e.g. 'ABS', 'BookLoreAudio', 'KoSync', 'BookLore'
+    # Multi-user: stats are per-user. Nullable during rollout; backfilled in Phase 3.
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
 
     book = relationship("Book", back_populates="reading_sessions")
 
     def __init__(self, abs_id: str, session_type: str, start_time: float, end_time: float,
                  duration_seconds: int, start_progress: float = None, end_progress: float = None,
-                 leader_client: str = None):
+                 leader_client: str = None, user_id: int = None):
         self.abs_id = abs_id
         self.session_type = session_type
         self.start_time = start_time
@@ -447,6 +505,7 @@ class ReadingSession(Base):
         self.start_progress = start_progress
         self.end_progress = end_progress
         self.leader_client = leader_client
+        self.user_id = user_id
 
 
 class KOReaderBookStat(Base):
@@ -461,13 +520,14 @@ class KOReaderBookStat(Base):
     device = Column(String(128), nullable=True)
     device_id = Column(String(128), nullable=True)
     device_key = Column(String(128), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)  # Multi-user (Phase 3 backfill)
     ko_book_id = Column(Integer, nullable=True)
     title = Column(String(500), nullable=True)
     authors = Column(String(500), nullable=True)
     pages = Column(Integer, nullable=True)
     total_read_pages = Column(Integer, nullable=True)
     total_read_time = Column(Integer, nullable=True)
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow, index=True)
 
     def __init__(
         self,
@@ -481,18 +541,20 @@ class KOReaderBookStat(Base):
         pages: int = None,
         total_read_pages: int = None,
         total_read_time: int = None,
+        user_id: int = None,
     ):
         self.md5 = md5
         self.device = device
         self.device_id = device_id
         self.device_key = device_key
+        self.user_id = user_id
         self.ko_book_id = ko_book_id
         self.title = title
         self.authors = authors
         self.pages = pages
         self.total_read_pages = total_read_pages
         self.total_read_time = total_read_time
-        self.last_updated = datetime.utcnow()
+        self.last_updated = utcnow()
 
 
 class KOReaderPageStat(Base):
@@ -506,11 +568,12 @@ class KOReaderPageStat(Base):
     device = Column(String(128), nullable=True)
     device_id = Column(String(128), nullable=True)
     device_key = Column(String(128), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)  # Multi-user (Phase 3 backfill)
     page = Column(Integer, nullable=False)
     start_time = Column(Float, nullable=False, index=True)
     duration = Column(Float, nullable=False)
     total_pages = Column(Integer, nullable=True)
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=utcnow)
 
     def __init__(
         self,
@@ -522,16 +585,18 @@ class KOReaderPageStat(Base):
         device: str = None,
         device_id: str = None,
         total_pages: int = None,
+        user_id: int = None,
     ):
         self.md5 = md5
         self.device = device
         self.device_id = device_id
         self.device_key = device_key
+        self.user_id = user_id
         self.page = page
         self.start_time = start_time
         self.duration = duration
         self.total_pages = total_pages
-        self.uploaded_at = datetime.utcnow()
+        self.uploaded_at = utcnow()
 
 
 class BookloreBook(Base):
@@ -545,7 +610,7 @@ class BookloreBook(Base):
     title = Column(String(500))
     authors = Column(String(500))
     raw_metadata = Column(Text)  # JSON blob of full booklore response
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     @property
     def raw_metadata_dict(self):
@@ -573,7 +638,7 @@ class EmbeddingCache(Base):
     model = Column(String(255), nullable=False)
     text_hash = Column(String(64), nullable=False)
     vector_json = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     __table_args__ = (
         Index('ix_embedding_cache_model_hash', 'model', 'text_hash', unique=True),
@@ -583,6 +648,95 @@ class EmbeddingCache(Base):
         self.model = model
         self.text_hash = text_hash
         self.vector_json = vector_json
+
+
+class User(Base):
+    """
+    A BookBridge account. Multi-user support: each user logs in and owns their
+    own per-service credentials and progress (states/stats). The book catalog
+    and alignments are shared across users.
+    """
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), nullable=False, unique=True, index=True)
+    password_hash = Column(String(255), nullable=True)
+    role = Column(String(20), nullable=False, default='user')  # 'admin' | 'user'
+    active = Column(Integer, nullable=False, default=1)  # 1=active, 0=disabled
+    created_at = Column(DateTime, default=utcnow)
+    last_login = Column(DateTime, nullable=True)
+
+    credentials = relationship("UserCredential", back_populates="user", cascade="all, delete-orphan")
+
+    def __init__(self, username: str, password_hash: str = None, role: str = 'user',
+                 active: int = 1):
+        self.username = username
+        self.password_hash = password_hash
+        self.role = role
+        self.active = active
+        self.created_at = utcnow()
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == 'admin'
+
+    def __repr__(self):
+        return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
+
+
+class UserCredential(Base):
+    """
+    Per-user, per-service setting/credential (a user-scoped mirror of `settings`).
+    Holds the values that differ per user — ABS/Storyteller/CWA/KOReader/BookOrbit
+    credentials and per-service toggles. Global engine settings stay in `settings`.
+    """
+    __tablename__ = 'user_credentials'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    key = Column(String(255), nullable=False)
+    value = Column(Text, nullable=True)
+
+    user = relationship("User", back_populates="credentials")
+
+    __table_args__ = (
+        Index('ix_user_credentials_user_key', 'user_id', 'key', unique=True),
+    )
+
+    def __init__(self, user_id: int, key: str, value: str = None):
+        self.user_id = user_id
+        self.key = key
+        self.value = value
+
+    def __repr__(self):
+        return f"<UserCredential(user_id={self.user_id}, key='{self.key}')>"
+
+
+class UserBook(Base):
+    """Membership link: a user has matched/claimed a book.
+
+    The `Book` catalog row (and its alignment/transcript/jobs) is shared, while
+    visibility and the koplugin manifest are scoped per user. A book can be
+    claimed by several users (same shared ABS item, or each user matching their
+    own library copy) — one row per (user, book)."""
+    __tablename__ = 'user_books'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index('ix_user_books_user_abs', 'user_id', 'abs_id', unique=True),
+    )
+
+    def __init__(self, user_id: int, abs_id: str):
+        self.user_id = user_id
+        self.abs_id = abs_id
+        self.created_at = utcnow()
+
+    def __repr__(self):
+        return f"<UserBook(user_id={self.user_id}, abs_id='{self.abs_id}')>"
 
 
 # Database configuration
@@ -604,6 +758,9 @@ class DatabaseManager:
 
     def __init__(self, db_path: str):
         self.db_path = os.path.abspath(db_path)
+        self._filesystem_type = self._filesystem_type_for_path(self.db_path)
+        self._journal_mode_logged = False
+        self._journal_mode_warned = False
         # Increase timeout to reduce lock errors, allow multi-thread access.
         # Using 4 slashes guarantees an absolute path in SQLAlchemy
         self.engine = create_engine(
@@ -613,13 +770,43 @@ class DatabaseManager:
         )
 
         journal_mode = self._resolve_journal_mode()
+        unsafe_filesystem = (
+            self._filesystem_type
+            and self._filesystem_type.lower() in self._WAL_UNSAFE_FILESYSTEMS
+        )
 
         from sqlalchemy import event
         @event.listens_for(self.engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
             cursor.execute(f"PRAGMA journal_mode={journal_mode}")
+            actual_journal_mode = (cursor.fetchone() or [""])[0]
             cursor.execute("PRAGMA synchronous=NORMAL")
+            if not self._journal_mode_logged:
+                logger.info(
+                    "SQLite journal mode for '%s': requested=%s actual=%s filesystem=%s",
+                    self.db_path,
+                    journal_mode,
+                    actual_journal_mode,
+                    self._filesystem_type or "unknown",
+                )
+                self._journal_mode_logged = True
+            # On a WAL-unsafe filesystem (e.g. 9p) the DELETE journal must take, or writes
+            # can silently fail to persist. Log loudly rather than crash — a noisy DB beats
+            # a connection that raises on every attempt (which would take the app down).
+            if (
+                unsafe_filesystem
+                and journal_mode.upper() == "DELETE"
+                and str(actual_journal_mode).lower() != "delete"
+                and not self._journal_mode_warned
+            ):
+                logger.error(
+                    "⚠️ Database '%s' is on '%s', but SQLite reported journal_mode=%r after "
+                    "requesting DELETE. WAL is unsafe here — writes may not persist. "
+                    "Set DB_JOURNAL_MODE=DELETE or move the DB off this filesystem.",
+                    self.db_path, self._filesystem_type, actual_journal_mode,
+                )
+                self._journal_mode_warned = True
             cursor.close()
 
         self.SessionLocal = sessionmaker(bind=self.engine)

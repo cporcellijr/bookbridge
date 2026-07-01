@@ -1,5 +1,6 @@
 import unittest
 from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, ANY
 import json
 import os
@@ -88,6 +89,35 @@ class TestForgeService(unittest.TestCase):
                 daemon=True
             )
             mock_thread_instance.start.assert_called_once()
+
+    def test_start_manual_forge_uses_client_bundle_worker(self):
+        user_abs = MagicMock()
+        user_booklore = MagicMock()
+        user_storyteller = MagicMock()
+        bundle = SimpleNamespace(
+            abs_client=user_abs,
+            booklore_client=user_booklore,
+            storyteller_client=user_storyteller,
+            library_service=self.mock_library,
+            bookorbit_client=self.mock_bookorbit,
+            sync_clients={"ABS": MagicMock()},
+        )
+
+        with patch('threading.Thread') as mock_thread_cls:
+            self.service.start_manual_forge(
+                abs_id="abs456",
+                text_item={"path": "other.epub"},
+                title="Test Book 2",
+                author="Test Author 2",
+                client_bundle=bundle,
+            )
+
+        target = mock_thread_cls.call_args.kwargs["target"]
+        worker = target.__self__
+        self.assertIs(worker.abs_client, user_abs)
+        self.assertIs(worker.booklore_client, user_booklore)
+        self.assertIs(worker.storyteller_client, user_storyteller)
+        self.assertIs(worker.active_tasks, self.service.active_tasks)
 
     def test_start_manual_forge_booklore_audio_passes_audio_kwargs(self):
         with patch('threading.Thread') as mock_thread_cls:
@@ -1011,6 +1041,27 @@ class TestForgeService(unittest.TestCase):
         self.mock_storyteller.upload_epub.assert_called_once()
         self.mock_storyteller.upload_audio_file.assert_called_once()
 
+    def test_auto_forge_persists_wait_state_and_storyteller_uuid(self):
+        """Forge & Match should leave durable wait state before the long Storyteller poll."""
+        db_book = self._run_auto_forge_pipeline(
+            text_item={"source": "Local File"},
+            ingest_manifest=None,
+            storyteller_alignment_ok=False,
+        )
+
+        book_uuid = self.mock_storyteller.upload_epub.call_args.args[1]
+        self.assertEqual(db_book.storyteller_uuid, book_uuid)
+        self.assertEqual(db_book.status, "active")
+
+        progress_values = [
+            call.kwargs.get("progress")
+            for call in self.mock_db.update_latest_job.call_args_list
+            if call.args and call.args[0] == "abs-1" and "progress" in call.kwargs
+        ]
+        self.assertIn(0.25, progress_values)
+        self.assertIn(0.35, progress_values)
+        self.assertIn(1.0, progress_values)
+
     def test_auto_forge_times_out_when_completion_never_confirmed(self):
         """Auto-forge should enter recovery and eventually time out if completion is never confirmed."""
         with patch.object(
@@ -1153,9 +1204,11 @@ class TestShelveForgedEbook(unittest.TestCase):
         self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
 
     def test_shelves_on_grimmory_when_configured(self):
+        # Shelf name is resolved by the per-user client from its own creds now,
+        # so the worker calls add_to_shelf with just the filename.
         self.mock_booklore.is_configured.return_value = True
         self.service._shelve_forged_ebook(self._book(ebook_source="Booklore"), "book.epub")
-        self.mock_booklore.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.mock_booklore.add_to_shelf.assert_called_once_with("book.epub")
         self.mock_bookorbit.add_book_id_to_shelf.assert_not_called()
 
     def test_bookorbit_source_uses_bookorbit_by_id(self):
@@ -1163,13 +1216,13 @@ class TestShelveForgedEbook(unittest.TestCase):
         self.service._shelve_forged_ebook(
             self._book(ebook_source="BookOrbit", ebook_source_id="42"), "book.epub"
         )
-        self.mock_bookorbit.add_book_id_to_shelf.assert_called_once_with("42", "Kobo")
+        self.mock_bookorbit.add_book_id_to_shelf.assert_called_once_with("42")
         self.mock_booklore.add_to_shelf.assert_not_called()
 
     def test_bookorbit_source_falls_back_to_filename(self):
         self.mock_bookorbit.is_configured.return_value = True
         self.service._shelve_forged_ebook(self._book(ebook_source="BookOrbit"), "book.epub")
-        self.mock_bookorbit.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.mock_bookorbit.add_to_shelf.assert_called_once_with("book.epub")
         self.mock_booklore.add_to_shelf.assert_not_called()
 
     def test_bookorbit_source_skipped_when_not_configured(self):
@@ -1229,6 +1282,120 @@ class TestForgeAutomatchProgressTrackers(unittest.TestCase):
         book = MagicMock()
         service._automatch_progress_trackers(book)
         storygraph._automatch_storygraph.assert_called_once_with(book)
+
+
+class TestForgeResume(unittest.TestCase):
+    def setUp(self):
+        self.mock_db = MagicMock()
+        self.mock_abs = MagicMock()
+        self.mock_ebook_parser = MagicMock()
+        self.service = ForgeService(
+            database_service=self.mock_db,
+            abs_client=self.mock_abs,
+            booklore_client=MagicMock(),
+            storyteller_client=MagicMock(),
+            library_service=MagicMock(),
+            ebook_parser=self.mock_ebook_parser,
+            transcriber=MagicMock(),
+            alignment_service=MagicMock(),
+            bookorbit_client=MagicMock(),
+        )
+        self.logger_patch = patch('src.services.forge_service.logger')
+        self.logger_patch.start()
+
+    def tearDown(self):
+        patch.stopall()
+
+    def test_resume_spawns_completion_watcher_for_uuid_book(self):
+        book = SimpleNamespace(abs_id="abs-1", abs_title="Title", storyteller_uuid="uuid-1")
+        self.mock_db.get_books_by_status.return_value = [book]
+
+        with patch("src.services.forge_service.threading.Thread") as mock_thread:
+            count = self.service.resume_pending_forge_matches()
+
+        self.assertEqual(count, 1)
+        self.mock_db.get_books_by_status.assert_called_once_with('forging')
+        self.assertEqual(mock_thread.call_args.kwargs["target"], self.service._resume_forge_match_background_task)
+        self.assertEqual(mock_thread.call_args.kwargs["args"], ("abs-1", "uuid-1"))
+        mock_thread.return_value.start.assert_called_once()
+
+    def test_resume_full_reforges_book_without_uuid(self):
+        book = SimpleNamespace(
+            abs_id="abs-2", abs_title="T2", storyteller_uuid=None,
+            original_ebook_filename="orig.epub", ebook_filename="orig.epub",
+            kosync_doc_id="hash123", ebook_source="Booklore", ebook_source_id="55",
+            audio_source=None, audio_source_id=None,
+        )
+        self.mock_db.get_books_by_status.return_value = [book]
+
+        with patch("src.services.forge_service.threading.Thread") as mock_thread:
+            count = self.service.resume_pending_forge_matches()
+
+        self.assertEqual(count, 1)
+        self.assertEqual(mock_thread.call_args.kwargs["target"], self.service._auto_forge_background_task)
+        args = mock_thread.call_args.kwargs["args"]
+        # (abs_id, text_item, title, author, original_filename, original_hash)
+        self.assertEqual(args[0], "abs-2")
+        self.assertEqual(args[2], "T2")
+        self.assertIsNone(args[3])
+        self.assertEqual(args[4], "orig.epub")
+        self.assertEqual(args[5], "hash123")
+        self.assertEqual(args[1]["source"], "Booklore")
+        self.assertEqual(args[1]["booklore_id"], "55")
+
+    def test_resume_skips_active_and_idless_books(self):
+        self.service.active_tasks.add("Busy")
+        active_book = SimpleNamespace(abs_id="abs-3", abs_title="Busy", storyteller_uuid="u")
+        idless = SimpleNamespace(abs_id=None, abs_title="x", storyteller_uuid="u")
+        self.mock_db.get_books_by_status.return_value = [active_book, idless]
+
+        with patch("src.services.forge_service.threading.Thread") as mock_thread:
+            count = self.service.resume_pending_forge_matches()
+
+        self.assertEqual(count, 0)
+        mock_thread.assert_not_called()
+
+    def test_resume_completion_task_reconstructs_and_runs_completion(self):
+        book = SimpleNamespace(
+            abs_id="abs-4", abs_title="T4", storyteller_uuid="uuid-4",
+            original_ebook_filename="orig.epub", ebook_filename="orig.epub",
+            kosync_doc_id="forging_abs-4",  # placeholder -> original_hash discarded
+            ebook_source="BookOrbit", ebook_source_id="9",
+            audio_source=None, audio_source_id=None,
+        )
+        self.mock_db.get_book.return_value = book
+        self.mock_abs.get_item_details.return_value = {"media": {"chapters": [{"start": 0}]}}
+
+        with patch.object(self.service, "_run_forge_match_completion") as mock_complete:
+            self.service._resume_forge_match_background_task("abs-4", "uuid-4")
+
+        kw = mock_complete.call_args.kwargs
+        self.assertEqual(kw["abs_id"], "abs-4")
+        self.assertEqual(kw["book_uuid"], "uuid-4")
+        self.assertEqual(kw["title"], "T4")
+        self.assertIsNone(kw["temp_dir"])
+        self.assertTrue(kw["processing_triggered"])
+        self.assertIsNone(kw["original_hash"])
+        self.assertEqual(kw["chapters"], [{"start": 0}])
+        self.assertEqual(kw["text_item"]["source"], "BookOrbit")
+        self.assertEqual(kw["text_item"]["bookorbit_id"], "9")
+        self.assertNotIn("T4", self.service.active_tasks)
+
+    def test_resume_completion_task_noops_when_book_missing(self):
+        self.mock_db.get_book.return_value = None
+        with patch.object(self.service, "_run_forge_match_completion") as mock_complete:
+            self.service._resume_forge_match_background_task("gone", "uuid")
+        mock_complete.assert_not_called()
+
+    def test_reconstruct_text_item_local_file_resolves_path(self):
+        book = SimpleNamespace(
+            ebook_source=None, ebook_source_id=None,
+            original_ebook_filename="book.epub", ebook_filename="book.epub",
+        )
+        self.mock_ebook_parser.resolve_book_path.return_value = Path("/books/book.epub")
+        item = self.service._reconstruct_forge_text_item(book)
+        self.assertEqual(item["source"], "Local File")
+        self.assertEqual(item["path"], str(Path("/books/book.epub")))
 
 
 if __name__ == '__main__':

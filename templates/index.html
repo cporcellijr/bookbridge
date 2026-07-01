@@ -16,8 +16,7 @@
         data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ full_display_title }}"
         data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
         data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
-        data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}"
-        {% if mapping.display_filename %}title="{{ mapping.display_filename }}"{% endif %}>
+        data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}">
 
         {# Cover image section - prioritize ebook cover, fallback to ABS cover #}
         <div class="book-media-column">
@@ -65,7 +64,7 @@
                         class="book-title-subtitle">: {{ mapping.display_subtitle }}</span>{% endif %}
                 </div>
                 <div class="status-badge status-{{ mapping.status }}">
-                    {% if mapping.status == 'processing' and mapping.job_progress is defined %}
+                    {% if mapping.status in ['processing', 'forging'] and mapping.job_progress is defined %}
                     {{ mapping.job_progress }}%
                     {% else %}
                     {{ mapping.status }}
@@ -289,11 +288,17 @@
                 </div>
                 {% endif %}
 
-                {% if integrations.cwa and mapping.states.cwa is defined %}
+                {% if integrations.cwa and (mapping.states.cwa is defined or mapping.ebook_source == 'CWA') %}
                 <div class="service-item" title="CWA Kobo Sync">
                     <span class="service-icon-emoji">📖</span>
                     <span class="service-name">CWA</span>
-                    <span class="service-value">{{ '%.1f' | format(mapping.states.cwa.percentage|default(0)) }}%</span>
+                    <span class="service-value">
+                        {% if mapping.states.cwa is defined %}
+                        {{ '%.1f' | format(mapping.states.cwa.percentage|default(0)) }}%
+                        {% else %}
+                        0.0%
+                        {% endif %}
+                    </span>
                 </div>
                 {% endif %}
             </div>
@@ -309,11 +314,11 @@
                         title="Mark Complete">✅</button>
                     <form method="POST" action="/clear-progress/{{ mapping.abs_id }}">
                         <button type="submit" class="action-btn warning" aria-label="Clear Progress"
-                            onclick="return confirm('Clear all progress for this book?')">🔄</button>
+                            title="Clear progress" onclick="return confirm('Clear all progress for this book?')">🔄</button>
                     </form>
                     <form method="POST" action="/delete/{{ mapping.abs_id }}">
                         <button type="submit" class="action-btn danger" aria-label="Delete Mapping"
-                            onclick="return confirm('Delete this mapping?')">🗑️</button>
+                            title="Delete mapping" onclick="return confirm('Delete this mapping?')">🗑️</button>
                     </form>
                 </div>
             </div>
@@ -377,10 +382,10 @@
     </div>
     {% endmacro %}
 
-    <title>ABS-KoSync Bridge</title>
+    <title>BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" type="image/jpeg" href="/static/icon.jpg">
-    <link rel="apple-touch-icon" href="/static/icon.jpg">
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
     <style>
         * {
             box-sizing: border-box;
@@ -424,6 +429,14 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+        }
+
+        .app-icon {
+            display: block;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            object-fit: cover;
         }
 
         .library-links {
@@ -497,6 +510,62 @@
         .btn-primary:hover {
             background: rgba(102, 126, 234, 0.3);
             border-color: rgba(102, 126, 234, 0.6);
+        }
+
+        /* User menu (account + logout dropdown) */
+        .user-menu {
+            position: relative;
+            display: inline-flex;
+        }
+
+        .user-menu-caret {
+            font-size: 10px;
+            opacity: 0.7;
+            transition: transform 0.2s;
+        }
+
+        .user-menu.open .user-menu-caret {
+            transform: rotate(180deg);
+        }
+
+        .user-menu-dropdown {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            min-width: 180px;
+            background: rgba(28, 28, 30, 0.98);
+            -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            padding: 6px;
+            display: none;
+            flex-direction: column;
+            gap: 2px;
+            z-index: 200;
+        }
+
+        .user-menu.open .user-menu-dropdown {
+            display: flex;
+        }
+
+        .user-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            color: rgba(255, 255, 255, 0.85);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .user-menu-item:hover {
+            background: rgba(102, 126, 234, 0.2);
+            color: #ffffff;
         }
 
         /* Main Container */
@@ -1931,9 +2000,8 @@
     <div class="top-nav">
         <div class="logo-section">
             <a href="/" style="display: flex; align-items: center; gap: 12px; text-decoration: none;">
-                <img src="/static/icon.jpg" alt="ABS-KoSync" class="app-icon"
-                    style="height: 32px; width: 32px; border-radius: 6px;">
-                <h1 style="font-size: 22px; margin: 0;">ABS-KoSync</h1>
+                <img src="/static/icon.png" alt="BookBridge" class="app-icon">
+                <h1 style="font-size: 22px; margin: 0;">BookBridge</h1>
             </a>
 
             <div class="library-links">
@@ -1948,7 +2016,9 @@
                 </a>
                 {% endif %}
 
-                {% if booklore_server and (get_bool('BOOKLORE_ENABLED') or get_val('BOOKLORE_ENABLED') == '') %}
+                {# Ebook/reading-app links reflect THIS user's enabled integration:
+                   admin -> BookOrbit/Grimmory, another user -> their CWA, etc. #}
+                {% if booklore_server and get_user_bool('BOOKLORE_ENABLED') %}
                 <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
                     title="Ebook Library">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
@@ -1959,9 +2029,20 @@
                 </a>
                 {% endif %}
 
-                {% if get_val('BOOKORBIT_SERVER') and get_bool('BOOKORBIT_ENABLED') %}
+                {% if get_val('BOOKORBIT_SERVER') and get_user_bool('BOOKORBIT_ENABLED') %}
                 <a href="{{ get_val('BOOKORBIT_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
                     title="BookOrbit Library">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                    </svg>
+                </a>
+                {% endif %}
+
+                {% if get_val('CWA_SERVER') and get_user_bool('CWA_ENABLED') %}
+                <a href="{{ get_val('CWA_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
+                    title="Calibre-Web Library">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
                         stroke-linejoin="round">
                         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
@@ -1987,16 +2068,53 @@
         <div class="nav-actions">
             <a href="https://cporcellijr.github.io/abs-kosync-bridge/" class="btn" target="_blank"
                 rel="noopener noreferrer">📚 Docs</a>
+            {% set is_admin = current_user and current_user.is_admin %}
+            {% if is_admin %}
             <a href="/settings" class="btn">⚙️ Settings</a>
             <a href="/stats" class="btn">📊 Stats</a>
-            <a href="/logs" class="btn">📊 Logs</a>
-            <a href="/forge" class="btn">⚡ Forge</a>
-
-            <a href="/match" class="btn btn-primary">➕ Add Book</a>
-            <a href="/batch-match" class="btn">📋 Batch</a>
+            {% endif %}
+            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Book</a>
+            {% if is_admin %}
             <a href="/suggestions" class="btn">💡 Suggestions</a>
+            {% endif %}
+            {% if current_user %}
+            <div class="user-menu" id="user-menu">
+                <button type="button" class="btn user-menu-toggle" id="user-menu-toggle"
+                    aria-haspopup="true" aria-expanded="false" title="Account: {{ current_user.username }}">
+                    👤 {{ current_user.username }} <span class="user-menu-caret">▾</span>
+                </button>
+                <div class="user-menu-dropdown" role="menu">
+                    <a href="/account" class="user-menu-item" role="menuitem">👤 Account</a>
+                    <a href="/logout" class="user-menu-item" role="menuitem">🚪 Logout</a>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
+    <script>
+        (function () {
+            const menu = document.getElementById('user-menu');
+            if (!menu) return;
+            const toggle = document.getElementById('user-menu-toggle');
+            toggle.addEventListener('click', function (e) {
+                e.stopPropagation();
+                const open = menu.classList.toggle('open');
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+            document.addEventListener('click', function (e) {
+                if (!menu.contains(e.target)) {
+                    menu.classList.remove('open');
+                    toggle.setAttribute('aria-expanded', 'false');
+                }
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') {
+                    menu.classList.remove('open');
+                    toggle.setAttribute('aria-expanded', 'false');
+                }
+            });
+        })();
+    </script>
 
     <div class="container">
         <!-- Forge Status Banner -->
@@ -2097,7 +2215,7 @@
                                 </div>
 
                                 <div class="suggestion-actions" style="display: flex; gap: 8px;">
-                                    <a href="/match?search={{ suggestion.title|urlencode }}"
+                                    <a href="{{ url_for('add_book', search=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
                                         style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">Review</a>
                                     <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"
@@ -2289,7 +2407,7 @@
                     <div class="empty-state-icon">📚</div>
                     <h2>No books syncing yet</h2>
                     <p>Start by adding your first audiobook mapping</p>
-                    <a href="/match" class="btn btn-primary">➕ Add Your First Book</a>
+                    <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Your First Book</a>
                 </div>
                 {% endif %}
         </div>

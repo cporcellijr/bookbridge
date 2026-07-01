@@ -83,22 +83,23 @@ function APIClient:_request(method, path, sink, extra_headers, timeout_opts)
         local code, response_headers, status = socket.skip(1, http.request(request))
         socketutil:reset_timeout()
 
-        if code == socketutil.TIMEOUT_CODE or
-           code == socketutil.SSL_HANDSHAKE_CODE or
-           code == socketutil.SINK_TIMEOUT_CODE
-        then
-            self:_log("warn", "Request interrupted:", tostring(code))
+        local is_timeout = code == socketutil.TIMEOUT_CODE or
+            code == socketutil.SSL_HANDSHAKE_CODE or
+            code == socketutil.SINK_TIMEOUT_CODE
+        -- A connection failure (route not up yet right after wake, DNS blip, etc.) comes
+        -- back with no headers; retry it like a timeout instead of giving up immediately.
+        local is_conn_failure = (not is_timeout) and response_headers == nil
+
+        if is_timeout or is_conn_failure then
+            local reason = tostring(status or code or "Connection failed")
+            self:_log("warn", is_timeout and "Request interrupted:" or "Connection failed:", reason)
             if attempt < attempts then
                 self:_log("info", "Retrying request", tostring(attempt + 1), "of", tostring(attempts))
-                socket.sleep(attempt)
+                socket.sleep(math.min(attempt, 2))
             else
-                return false, nil, tostring(code)
+                return false, nil, reason
             end
         else
-            if response_headers == nil then
-                self:_log("warn", "No HTTP headers:", tostring(status or code or "Connection failed"))
-                return false, nil, tostring(status or code or "Connection failed")
-            end
             if type(code) ~= "number" then
                 self:_log("warn", "Non-numeric response code:", tostring(code))
                 return false, nil, tostring(code)
@@ -212,22 +213,23 @@ function APIClient:_requestJSON(method, path, json_body, timeout_opts)
         local code, response_headers, status = socket.skip(1, http.request(request))
         socketutil:reset_timeout()
 
-        if code == socketutil.TIMEOUT_CODE or
-           code == socketutil.SSL_HANDSHAKE_CODE or
-           code == socketutil.SINK_TIMEOUT_CODE
-        then
-            self:_log("warn", "Request interrupted:", tostring(code))
+        local is_timeout = code == socketutil.TIMEOUT_CODE or
+            code == socketutil.SSL_HANDSHAKE_CODE or
+            code == socketutil.SINK_TIMEOUT_CODE
+        -- A connection failure (route not up yet right after wake, DNS blip, etc.) comes
+        -- back with no headers; retry it like a timeout instead of giving up immediately.
+        local is_conn_failure = (not is_timeout) and response_headers == nil
+
+        if is_timeout or is_conn_failure then
+            local reason = tostring(status or code or "Connection failed")
+            self:_log("warn", is_timeout and "Request interrupted:" or "Connection failed:", reason)
             if attempt < attempts then
                 self:_log("info", "Retrying request", tostring(attempt + 1), "of", tostring(attempts))
-                socket.sleep(attempt)
+                socket.sleep(math.min(attempt, 2))
             else
-                return false, nil, tostring(code)
+                return false, nil, reason
             end
         else
-            if response_headers == nil then
-                self:_log("warn", "No HTTP headers:", tostring(status or code or "Connection failed"))
-                return false, nil, tostring(status or code or "Connection failed")
-            end
             if type(code) ~= "number" then
                 self:_log("warn", "Non-numeric response code:", tostring(code))
                 return false, nil, tostring(code)

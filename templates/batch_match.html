@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Batch Match - ABS-KoSync</title>
+    <title>Batch Match - BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * {
@@ -761,7 +761,7 @@
     <div class="top-nav">
         <div class="logo-section">
             <a href="/">
-                <h1>📚 ABS-KoSync</h1>
+                <h1>📚 BookBridge</h1>
             </a>
 
             <div class="library-links">
@@ -804,7 +804,7 @@
             <a href="/" class="btn">← Dashboard</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="/match" class="btn">➕ Add Book</a>
+            <a href="{{ url_for('add_book') }}" class="btn">Add Book</a>
             <a href="/suggestions" class="btn">💡 Suggestions</a>
         </div>
     </div>

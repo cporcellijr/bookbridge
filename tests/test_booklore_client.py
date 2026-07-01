@@ -643,10 +643,9 @@ def test_refresh_book_cache_skips_bulk_detail_fetch_for_large_library(booklore_c
         make_list_book(f"book-{idx}", title=f"Large Book {idx}")
         for idx in range(BULK_DETAIL_FETCH_LIMIT + 1)
     ]
-    # The flat /api/v1/books endpoint returns the entire library in a single response,
-    # so we provide one response containing all books (not paginated).
+    # A single Spring Page holding the whole (large) library: last=True ends the scan.
     booklore_client._make_request = MagicMock(
-        return_value=MockResponse({"content": books})
+        return_value=MockResponse({"content": books, "last": True})
     )
     booklore_client._get_fresh_token = MagicMock(return_value="token")
     booklore_client._fetch_book_detail = MagicMock()
@@ -1134,7 +1133,7 @@ def test_refresh_book_cache_falls_back_when_server_side_library_filter_is_ignore
     first_endpoint = client._make_request.call_args_list[0][0][1]
     second_endpoint = client._make_request.call_args_list[1][0][1]
     assert first_endpoint == "/api/v1/libraries/target-lib/book"
-    assert second_endpoint == "/api/v1/books"
+    assert second_endpoint == "/api/v1/books/page?page=0&size=200"
     assert client._server_side_filter_supported is False
     assert list(client._book_cache.keys()) == ["target-book.epub"]
 
@@ -1854,3 +1853,146 @@ class TestRefreshGuardedWhenDisabled:
 
         assert books == []
         mock_req.assert_not_called()
+
+
+class TestScanPageFetch:
+    def test_scan_uses_long_read_timeout_tuple(self, booklore_client):
+        ok = MockResponse([], status_code=200)
+        booklore_client._make_request = MagicMock(return_value=ok)
+
+        booklore_client._fetch_scan_page("/api/v1/books", page=0)
+
+        _, kwargs = booklore_client._make_request.call_args
+        assert kwargs["timeout"] == (
+            booklore_client._scan_connect_timeout,
+            booklore_client._scan_read_timeout,
+        )
+        # Scan read budget must comfortably exceed the per-call default.
+        assert booklore_client._scan_read_timeout > booklore_client._request_timeout
+
+    def test_scan_retries_on_timeout_then_succeeds(self, booklore_client):
+        ok = MockResponse([], status_code=200)
+        # First two attempts time out (None), third succeeds.
+        booklore_client._make_request = MagicMock(side_effect=[None, None, ok])
+
+        with patch("src.api.booklore_client.time.sleep") as mock_sleep:
+            result = booklore_client._fetch_scan_page("/api/v1/books", page=0)
+
+        assert result is ok
+        assert booklore_client._make_request.call_count == 3
+        # Linear backoff: 1st retry waits 1*backoff, 2nd waits 2*backoff.
+        assert mock_sleep.call_count == 2
+
+    def test_scan_gives_up_after_max_attempts(self, booklore_client):
+        booklore_client._make_request = MagicMock(return_value=None)
+
+        with patch("src.api.booklore_client.time.sleep"):
+            result = booklore_client._fetch_scan_page("/api/v1/books", page=0)
+
+        assert result is None
+        assert booklore_client._make_request.call_count == booklore_client._scan_max_attempts
+
+    def test_scan_does_not_retry_on_4xx(self, booklore_client):
+        not_found = MockResponse(None, status_code=404)
+        booklore_client._make_request = MagicMock(return_value=not_found)
+
+        with patch("src.api.booklore_client.time.sleep") as mock_sleep:
+            result = booklore_client._fetch_scan_page("/api/v1/books", page=0)
+
+        # 404 is definitive — return immediately so probe/fallback logic can react.
+        assert result is not_found
+        assert booklore_client._make_request.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_scan_retries_on_5xx(self, booklore_client):
+        server_err = MockResponse(None, status_code=503)
+        ok = MockResponse([], status_code=200)
+        booklore_client._make_request = MagicMock(side_effect=[server_err, ok])
+
+        with patch("src.api.booklore_client.time.sleep"):
+            result = booklore_client._fetch_scan_page("/api/v1/books", page=0)
+
+        assert result is ok
+        assert booklore_client._make_request.call_count == 2
+
+    def test_refresh_recovers_when_first_page_times_out_once(self, booklore_client):
+        ok = MockResponse([], status_code=200)
+        booklore_client._get_fresh_token = MagicMock(return_value="tok")
+        # Page 0 times out once, then returns an (empty) library on retry.
+        booklore_client._make_request = MagicMock(side_effect=[None, ok])
+
+        with patch("src.api.booklore_client.time.sleep"):
+            result = booklore_client._refresh_book_cache()
+
+        assert result is True
+        assert booklore_client._last_refresh_failed is False
+
+
+def test_build_books_endpoint_global_uses_paginated_path(booklore_client):
+    assert booklore_client._build_books_endpoint(0, 200, False) == "/api/v1/books/page?page=0&size=200"
+    assert booklore_client._build_books_endpoint(3, 100, False) == "/api/v1/books/page?page=3&size=100"
+    # Fall back to the flat endpoint once pagination is known to be unsupported.
+    booklore_client._paginated_scan_supported = False
+    assert booklore_client._build_books_endpoint(0, 200, False) == "/api/v1/books"
+
+
+def test_refresh_paginates_multi_page_global_scan(booklore_client):
+    books_p0 = [make_list_book(f"b-{i}") for i in range(200)]
+    books_p1 = [make_list_book(f"b-{200 + i}") for i in range(50)]
+    booklore_client._make_request = MagicMock(side_effect=[
+        MockResponse({"content": books_p0, "last": False}),
+        MockResponse({"content": books_p1, "last": True}),
+    ])
+    booklore_client._get_fresh_token = MagicMock(return_value="token")
+    booklore_client._fetch_book_detail = MagicMock(return_value=None)
+
+    assert booklore_client._refresh_book_cache(refresh_stale_details=False) is True
+
+    endpoints = [call.args[1] for call in booklore_client._make_request.call_args_list]
+    assert endpoints == [
+        "/api/v1/books/page?page=0&size=200",
+        "/api/v1/books/page?page=1&size=200",
+    ]
+    assert booklore_client._paginated_scan_supported is True
+
+
+def test_refresh_paginates_pagedmodel_shape(booklore_client):
+    # Spring Boot 3.3 PagedModel: pagination metadata nested under 'page', no
+    # top-level 'last' (this is what the live Grimmory instance returns).
+    books_p0 = [make_list_book(f"b-{i}") for i in range(200)]
+    books_p1 = [make_list_book(f"b-{200 + i}") for i in range(200)]  # full page, not last
+    books_p2 = [make_list_book(f"b-{400 + i}") for i in range(95)]
+    booklore_client._make_request = MagicMock(side_effect=[
+        MockResponse({"content": books_p0, "page": {"number": 0, "totalPages": 3, "totalElements": 495}}),
+        MockResponse({"content": books_p1, "page": {"number": 1, "totalPages": 3, "totalElements": 495}}),
+        MockResponse({"content": books_p2, "page": {"number": 2, "totalPages": 3, "totalElements": 495}}),
+    ])
+    booklore_client._get_fresh_token = MagicMock(return_value="token")
+    booklore_client._fetch_book_detail = MagicMock(return_value=None)
+
+    assert booklore_client._refresh_book_cache(refresh_stale_details=False) is True
+
+    endpoints = [call.args[1] for call in booklore_client._make_request.call_args_list]
+    # Stops after page 2 (number+1 == totalPages) even though page 1 was a full page.
+    assert endpoints == [
+        "/api/v1/books/page?page=0&size=200",
+        "/api/v1/books/page?page=1&size=200",
+        "/api/v1/books/page?page=2&size=200",
+    ]
+    assert booklore_client._paginated_scan_supported is True
+
+
+def test_refresh_falls_back_to_flat_books_when_page_endpoint_404s(booklore_client):
+    flat_books = [make_list_book("flat-1")]
+    booklore_client._make_request = MagicMock(side_effect=[
+        MockResponse(None, status_code=404),   # GET /api/v1/books/page -> not supported
+        MockResponse(flat_books),              # GET /api/v1/books -> flat list
+    ])
+    booklore_client._get_fresh_token = MagicMock(return_value="token")
+    booklore_client._fetch_book_detail = MagicMock(return_value=None)
+
+    assert booklore_client._refresh_book_cache(refresh_stale_details=False) is True
+
+    endpoints = [call.args[1] for call in booklore_client._make_request.call_args_list]
+    assert endpoints == ["/api/v1/books/page?page=0&size=200", "/api/v1/books"]
+    assert booklore_client._paginated_scan_supported is False

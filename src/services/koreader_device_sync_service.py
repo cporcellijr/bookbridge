@@ -188,18 +188,89 @@ class KOReaderDeviceSyncService:
             return None
 
         stored_hash = self._select_content_hash(book)
+        abs_id = str(getattr(book, "abs_id", "") or "").strip()
+
+        # Make the served file's hash resolvable as a linked sibling so a device that
+        # downloaded it via BridgeSync links to this book regardless of which hash the
+        # primary book.kosync_doc_id column currently points at.
+        if abs_id and content_hash:
+            self._link_sibling_hash(abs_id, content_hash)
+
         if stored_hash and stored_hash != content_hash:
             # The stored kosync_doc_id was computed at link time and no longer matches
-            # the hash of the ebook actually served to KOReader. Persist the served
-            # file's hash so the stored id converges with what devices report; this
-            # self-heals after one cycle and stops the repeated mismatch.
-            self._reconcile_stored_content_hash(book, stored_hash, content_hash)
+            # the hash of the ebook actually served to KOReader. Preserve it as a linked
+            # sibling first so a reader actively syncing against it (a Storyteller-forged
+            # or manually pinned EPUB) keeps resolving after any pointer change.
+            if abs_id:
+                self._link_sibling_hash(abs_id, stored_hash)
+
+            # Only repoint the primary pointer when no real (non-internal) device is
+            # actively using the stored hash. Otherwise leave it: both hashes are now
+            # linked siblings, so the periodic rebuild stops thrashing a working link
+            # (the bug behind a manually pinned hash "changing back" every cycle).
+            if not self._hash_actively_used_by_device(stored_hash):
+                self._reconcile_stored_content_hash(book, stored_hash, content_hash)
+            else:
+                logger.debug(
+                    "KOReader device-sync: keeping primary kosync_doc_id for '%s' "
+                    "(stored hash %s in active device use); served hash %s linked as sibling",
+                    sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
+                    sanitize_log_data(stored_hash),
+                    sanitize_log_data(content_hash),
+                )
 
         return {
             "path": source_path,
             "source_filename": source_filename,
             "content_hash": content_hash,
         }
+
+    def _link_sibling_hash(self, abs_id: str, doc_hash: str) -> None:
+        """Ensure ``doc_hash`` exists as a KosyncDocument linked to ``abs_id`` (best effort)."""
+        try:
+            self.database_service.ensure_linked_kosync_document(doc_hash, abs_id)
+        except Exception as e:
+            logger.debug(
+                "KOReader device-sync: could not link sibling hash %s -> %s: %s",
+                sanitize_log_data(doc_hash),
+                sanitize_log_data(abs_id),
+                e,
+            )
+
+    def _hash_actively_used_by_device(self, doc_hash: str) -> bool:
+        """True if a real (non-internal) device has reported progress under ``doc_hash``.
+
+        Protects a hash a reader is actively syncing against from being demoted as the
+        book's primary kosync_doc_id during the periodic served-file reconcile.
+        """
+        if not doc_hash:
+            return False
+        try:
+            doc = self.database_service.get_kosync_document(doc_hash)
+        except Exception:
+            return False
+        if not doc:
+            return False
+        device = str(getattr(doc, "device", "") or "").strip().lower()
+        device_id = str(getattr(doc, "device_id", "") or "").strip().lower()
+        if device in ("abs-sync-bot", "abs-kosync-bridge") or device_id in (
+            "abs-sync-bot",
+            "abs-kosync-bridge",
+        ):
+            return False
+        # A real (non-internal) device is attached to this hash — it is in active
+        # use even at exactly 0% (freshly opened at the start of the book). A bare
+        # `doc.percentage > 0` test treats that 0% device as idle and lets the
+        # reconcile repoint off a hash the device is actively syncing. Only fall
+        # back to a progress signal when no device was recorded (a bare stub row).
+        if device or device_id:
+            return True
+        try:
+            if doc.percentage is not None and float(doc.percentage) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+        return bool(str(getattr(doc, "progress", "") or "").strip())
 
     def _reconcile_stored_content_hash(self, book, stored_hash: str, content_hash: str) -> None:
         """Persist the served file's hash as the book's kosync_doc_id when it drifts.

@@ -13,6 +13,7 @@ from urllib.parse import unquote
 
 from src.utils.logging_utils import sanitize_log_data
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +26,16 @@ class StorytellerAPIClient:
         ".wav", ".flac", ".mp4", ".m4v",
     })
 
-    def __init__(self):
-        raw_url = os.environ.get("STORYTELLER_API_URL", "").rstrip('/')
+    def __init__(self, credentials: dict = None):
+        # `credentials` (multi-user) overrides per-user keys (STORYTELLER_USER/
+        # PASSWORD/ENABLED); the server URL stays global. None => global client.
+        self._creds = credentials
+        raw_url = resolve_setting(credentials, "STORYTELLER_API_URL", "").rstrip('/')
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
         self.base_url = raw_url
-        self.username = os.environ.get("STORYTELLER_USER")
-        self.password = os.environ.get("STORYTELLER_PASSWORD")
+        self.username = resolve_setting(credentials, "STORYTELLER_USER")
+        self.password = resolve_setting(credentials, "STORYTELLER_PASSWORD")
         self._book_cache: Dict[str, Dict] = {}
         self._cache_timestamp = 0
         self._token = None
@@ -46,10 +50,13 @@ class StorytellerAPIClient:
         self._book_cache = {}
 
     def is_configured(self):
-        enabled_val = os.environ.get("STORYTELLER_ENABLED", "").lower()
+        enabled_val = str(resolve_setting(self._creds, "STORYTELLER_ENABLED", "")).lower()
         if enabled_val == 'false':
             return False
-        return bool(self.username and self.password)
+        # A blank STORYTELLER_API_URL leaves base_url empty; without this guard the
+        # client reports configured and builds requests against an empty base URL
+        # instead of being cleanly skipped.
+        return bool(self.base_url and self.username and self.password)
 
     def _get_fresh_token(self) -> Optional[str]:
         if self._token and time.time() < self._token_expire_timestamp:
@@ -504,7 +511,9 @@ class StorytellerAPIClient:
 
         # 2. Create if missing
         if not target_col:
-            r_create = self._make_request("POST", "/api/v2/collections", {"name": collection_name})
+            # Create public (Storyteller collections default to public=0/private, which
+            # hides their books); a private sync collection would hide everything in it.
+            r_create = self._make_request("POST", "/api/v2/collections", {"name": collection_name, "public": True})
             if r_create and r_create.status_code in [200, 201]:
                 target_col = r_create.json()
             else: return False
@@ -536,7 +545,9 @@ class StorytellerAPIClient:
 
         # 2. Create if missing
         if not target_col:
-            r_create = self._make_request("POST", "/api/v2/collections", {"name": collection_name})
+            # Create public (Storyteller collections default to public=0/private, which
+            # hides their books); a private sync collection would hide everything in it.
+            r_create = self._make_request("POST", "/api/v2/collections", {"name": collection_name, "public": True})
             if r_create and r_create.status_code in [200, 201]:
                 target_col = r_create.json()
             else: return False

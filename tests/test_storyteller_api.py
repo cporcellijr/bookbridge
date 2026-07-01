@@ -240,5 +240,27 @@ class TestStorytellerSlimReadaloudEpub(unittest.TestCase):
             self.assertFalse((cache_dir / "storyteller_uuid-3.epub").exists())
 
 
+class TestStorytellerIsConfigured(unittest.TestCase):
+    def test_blank_base_url_reports_not_configured(self):
+        # A blank STORYTELLER_API_URL must skip the client cleanly even when user
+        # + password are set — otherwise it builds requests against an empty URL.
+        with patch.dict(os.environ, {}, clear=True):
+            client = StorytellerAPIClient(credentials={
+                "STORYTELLER_USER": "u",
+                "STORYTELLER_PASSWORD": "p",
+            })
+            self.assertEqual(client.base_url, "")
+            self.assertFalse(client.is_configured())
+
+    def test_url_user_password_reports_configured(self):
+        with patch.dict(os.environ, {}, clear=True):
+            client = StorytellerAPIClient(credentials={
+                "STORYTELLER_API_URL": "http://storyteller:8001",
+                "STORYTELLER_USER": "u",
+                "STORYTELLER_PASSWORD": "p",
+            })
+            self.assertTrue(client.is_configured())
+
+
 if __name__ == "__main__":
     unittest.main()

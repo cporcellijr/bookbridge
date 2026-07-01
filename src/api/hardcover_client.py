@@ -20,7 +20,8 @@ from datetime import date
 
 import requests
 
-from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,10 @@ class HardcoverRateLimitError(Exception):
 
 
 class HardcoverClient:
-    def __init__(self):
+    def __init__(self, credentials: dict = None):
+        self._creds = credentials  # multi-user: per-user HARDCOVER_TOKEN
         self.api_url = "https://api.hardcover.app/v1/graphql"
-        self.token = os.environ.get("HARDCOVER_TOKEN")
+        self.token = resolve_setting(credentials, "HARDCOVER_TOKEN")
         self.user_id = None
 
         if self.token:
@@ -79,10 +81,10 @@ class HardcoverClient:
         return float(2 ** (attempt - 1))
 
     def is_configured(self):
-        provider = (os.environ.get("PROGRESS_TRACKER_PROVIDER") or "").strip().lower()
-        if provider and provider != "hardcover":
-            return False
-        enabled_val = os.environ.get("HARDCOVER_ENABLED", "").lower()
+        # Hardcover and StoryGraph are independent now — each is gated solely by its
+        # own enable toggle (global, or per-user via the user's integrations), not by
+        # a global either-or provider selector.
+        enabled_val = str(resolve_setting(self._creds, "HARDCOVER_ENABLED", "")).strip().lower()
         if enabled_val == "false":
             return False
         return bool(self.token)
@@ -375,6 +377,8 @@ class HardcoverClient:
 
         best_match = None
         best_score = 0.0
+        best_author_score = 0.0
+        best_match_has_author = False
 
         for book in candidates:
             # Score match
@@ -383,12 +387,14 @@ class HardcoverClient:
 
             # Author Score
             author_score = 0.0
+            candidate_has_author = False
             if clean_input_author:
                 # Get all authors for this book from cached_contributors
                 authors = [
                     a.lower().strip()
                     for a in self._extract_authors_from_cached(book.get("cached_contributors"))
                 ]
+                candidate_has_author = bool(authors)
                 if authors:
                     # Find best similarity among all authors
                     author_score = max(
@@ -424,9 +430,25 @@ class HardcoverClient:
             if score > best_score:
                 best_score = score
                 best_match = book
+                best_author_score = author_score
+                best_match_has_author = candidate_has_author
 
         # Threshold check
         if best_match and best_score > 0.5:
+            # Author gate: when an author was supplied, refuse a strong-title match whose
+            # author clearly disagrees (e.g. "Stuck On You" by Jasper Bark vs Portia
+            # MacIntosh). Without this, a perfect title alone (0.6) clears the 0.5 gate and
+            # the author weight can never veto. Returning None here leaves the book for the
+            # LLM judge / manual link instead of committing a wrong match.
+            floor = author_match_floor()
+            if clean_input_author and best_match_has_author and best_author_score < floor:
+                logger.info(
+                    f"Rejected title match '{best_match['title']}' for '{title}' by "
+                    f"'{author}': author mismatch (author score {best_author_score:.2f} "
+                    f"< {floor:.2f})"
+                )
+                return None
+
             logger.info(
                 f"Selected best match: '{best_match['title']}' (Score: {best_score:.2f})"
             )

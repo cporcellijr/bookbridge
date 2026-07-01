@@ -33,8 +33,8 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | --- | --- | --- | --- |
 | Server URL | `ABS_SERVER` | empty | Required. |
 | API Token | `ABS_KEY` | empty | Required. |
-| Library ID | `ABS_LIBRARY_ID` | empty | Used by the matcher and search scoping. |
-| Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Collection used for matched audiobooks. |
+| Library ID | `ABS_LIBRARY_ID` | empty | Per-user (set in user Integrations). Used by the matcher and search scoping. |
+| Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
 
@@ -199,16 +199,11 @@ StoryGraph notes:
 - Supports **Edition Picking**: Select specific editions (Paperback, Kindle, etc.) to ensure accurate page counts.
 - **Switch Editions**: The bridge can automatically "switch" your tracked edition on StoryGraph to match your selection.
 
-#### Progress Tracker Provider
+#### Progress Trackers
 
-Since Hardcover and StoryGraph serve similar purposes, the bridge uses an "either-or" mode for active tracking.
-
-| Setting | Env Var | Default | Notes |
-| --- | --- | --- | --- |
-| Provider | `PROGRESS_TRACKER_PROVIDER` | `none` | `none`, `hardcover`, or `storygraph`. |
-
-- Selecting a provider in the UI automatically enables that service and disables the other.
-- If you want to use both simultaneously for different books, you must currently manage the "Enable" toggles manually in Settings (not recommended).
+Hardcover and StoryGraph are independent — enable either or both with their `*_ENABLED`
+toggles in Settings → Trackers. Each user then picks which they use, and supplies their own
+token/cookies, under Settings → Users → (user) → Integrations.
 
 #### Telegram Notifications
 
@@ -273,6 +268,9 @@ Suggestions notes:
 - A normal scan reuses cached results so repeat scans are faster.
 - **Full Refresh** rescans the whole unmatched library from scratch.
 - Suggestions can queue ABS-backed links, Grimmory-audio links, ebook-only links, and Storyteller-only links.
+- If your audio and ebook providers expose the same mounted `/books` tree,
+  sibling files in the same title folder are treated as same-folder matches
+  before fuzzy or Ollama scoring.
 
 ### Transcription Settings
 

@@ -3,10 +3,10 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Logs - ABS-KoSync</title>
+    <title>Logs - BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" type="image/jpeg" href="/static/icon.jpg">
-    <link rel="apple-touch-icon" href="/static/icon.jpg">
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
     <style>
         * {
             box-sizing: border-box;
@@ -54,6 +54,14 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
+        }
+
+        .app-icon {
+            display: block;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            object-fit: cover;
         }
 
         .library-links {
@@ -397,17 +405,36 @@
                 display: none !important;
             }
         }
+
+        /* Embedded mode (Settings → Logs tab): drop page chrome and fill the
+           iframe via the html→body→container height:100% chain (more reliable
+           inside an iframe than viewport units). The log box flexes to fill the
+           remainder and keeps its own internal scroll, which the Top/Bottom
+           buttons and the live-tail auto-scroll-to-bottom depend on. */
+        body.embed {
+            background: transparent;
+        }
+
+        body.embed .container {
+            max-width: 100%;
+            padding: 16px;
+        }
+
+        /* Keep the proven fixed-height log box (base .log-container is 600px) so the
+           list scrolls *inside* it — that internal scroll is what the Top/Bottom
+           buttons and live auto-tail depend on. The surrounding page scrolls
+           normally if the controls are tall. */
     </style>
 </head>
 
-<body>
+<body{% if embed %} class="embed"{% endif %}>
+    {% if not embed %}
     <!-- Top Navigation -->
     <div class="top-nav">
         <div class="logo-section">
             <a href="/" style="display: flex; align-items: center; gap: 12px; text-decoration: none;">
-                <img src="/static/icon.jpg" alt="ABS-KoSync" class="app-icon"
-                    style="height: 32px; width: 32px; border-radius: 6px;">
-                <h1 style="font-size: 22px; margin: 0;">ABS-KoSync</h1>
+                <img src="/static/icon.png" alt="BookBridge" class="app-icon">
+                <h1 style="font-size: 22px; margin: 0;">BookBridge</h1>
             </a>
 
             <div class="library-links">
@@ -450,18 +477,20 @@
             <a href="/" class="btn btn-secondary">← Dashboard</a>
             <a href="/stats" class="btn btn-secondary">📊 Stats</a>
             <a href="/settings" class="btn btn-secondary">⚙️ Settings</a>
-            <a href="/forge" class="btn btn-secondary">⚡ Forge</a>
             <a href="/suggestions" class="btn btn-secondary">💡 Suggestions</a>
 
-            <a href="/match" class="btn btn-primary">➕ Add Book</a>
+            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Book</a>
         </div>
     </div>
+    {% endif %}
 
     <div class="container">
+        {% if not embed %}
         <div class="page-header">
             <h1>Application Logs</h1>
             <p>View, filter, and monitor system logs in real-time</p>
         </div>
+        {% endif %}
 
         <!-- Log Controls -->
         <div class="controls">

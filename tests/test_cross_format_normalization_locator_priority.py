@@ -943,3 +943,58 @@ def test_repeated_time_to_locator_roundtrip_stays_within_tolerance():
         stable = manager._validate_and_stabilize_locator(book, 100, locator)
         assert stable.xpath is not None
         assert stable.cfi is not None
+
+
+# --- issue #290 follow-up: failed-locator 0% reset guard ---------------------
+
+
+def test_locator_collapsed_to_start_detects_failed_resolution():
+    # Leader genuinely at 53% but the resolved locator fell through to char 0 (0%).
+    # This is the data-loss scenario: a no-longer-resolving KoSync XPath / an
+    # out-of-range alignment timestamp mapping back to the start of the book.
+    locator = LocatorResult(percentage=0.0)
+    assert SyncManager._locator_collapsed_to_start(locator, 0.5314) is True
+
+
+def test_locator_collapsed_to_start_allows_genuine_reset():
+    # A real "reset to start": both leader and locator are at ~0% — must NOT be
+    # treated as a collapse, so clear-progress still propagates to ABS.
+    locator = LocatorResult(percentage=0.0)
+    assert SyncManager._locator_collapsed_to_start(locator, 0.0) is False
+
+
+def test_locator_collapsed_to_start_allows_near_start_leader():
+    # Leader genuinely near the very start (below the epsilon) — not a collapse.
+    locator = LocatorResult(percentage=0.0)
+    assert SyncManager._locator_collapsed_to_start(locator, 0.003) is False
+
+
+def test_locator_collapsed_to_start_allows_healthy_resolution():
+    # Locator resolved to the leader's real position — not a collapse.
+    locator = LocatorResult(percentage=0.5290)
+    assert SyncManager._locator_collapsed_to_start(locator, 0.5314) is False
+
+
+def test_locator_collapsed_to_start_handles_missing_values():
+    assert SyncManager._locator_collapsed_to_start(None, 0.5) is False
+    assert SyncManager._locator_collapsed_to_start(LocatorResult(percentage=None), 0.5) is False
+    assert SyncManager._locator_collapsed_to_start(LocatorResult(percentage=0.0), None) is False
+
+
+def test_persist_state_snapshot_records_leader_value_without_sync():
+    # On a collapse-skip we still record the leader's own (static) value so a
+    # stale sibling-hash resolution is not re-detected as a fresh change next cycle.
+    manager = SyncManager.__new__(SyncManager)
+    manager.database_service = MagicMock()
+    book = SimpleNamespace(abs_id="abs-1")
+
+    manager._persist_state_snapshot(
+        book, "KoSync", {"pct": 0.5314, "xpath": "/body/DocFragment[1]/body/p[1].0"}, 123.0
+    )
+
+    manager.database_service.save_state.assert_called_once()
+    saved = manager.database_service.save_state.call_args[0][0]
+    assert saved.abs_id == "abs-1"
+    assert saved.client_name == "kosync"
+    assert saved.percentage == 0.5314
+    assert saved.last_updated == 123.0

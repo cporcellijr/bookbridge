@@ -78,6 +78,10 @@ class EbookParser:
         self.books_dir = Path(books_dir)
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir else Path("/data/epub_cache")
         self.ollama_client = ollama_client
+        # Additional library folders to search for ebook files (multi-library
+        # setups where a user's library is not under BOOKS_DIR). Comma- or
+        # newline-separated container paths from EXTRA_EBOOK_DIRS.
+        self.extra_book_dirs = self._parse_extra_book_dirs(os.getenv("EXTRA_EBOOK_DIRS", ""))
 
         cache_size = int(os.getenv("EBOOK_CACHE_SIZE", 3))
         self.cache = LRUCache(capacity=cache_size)
@@ -87,18 +91,41 @@ class EbookParser:
         self.useXpathSegmentFallback = os.getenv("XPATH_FALLBACK_TO_PREVIOUS_SEGMENT", "false").lower() == "true"
         self.locator_roundtrip_tolerance = int(os.getenv("LOCATOR_ROUNDTRIP_TOLERANCE_CHARS", 2))
 
-        logger.info(f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, xpath_fallback={self.useXpathSegmentFallback})")
+        logger.info(
+            f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, "
+            f"xpath_fallback={self.useXpathSegmentFallback}, extra_dirs={len(self.extra_book_dirs)})"
+        )
+
+    @staticmethod
+    def _parse_extra_book_dirs(raw: str) -> list:
+        """Parse EXTRA_EBOOK_DIRS into a list of Paths (comma/newline separated)."""
+        if not raw:
+            return []
+        parts = re.split(r"[,\n]", raw)
+        return [Path(p.strip()) for p in parts if p.strip()]
+
+    def search_dirs(self) -> list:
+        """All directories to search for ebook files: BOOKS_DIR + extra libraries."""
+        return [self.books_dir, *self.extra_book_dirs]
 
     def resolve_book_path(self, filename):
-        try:
-            safe_name = glob.escape(filename)
-            return next(self.books_dir.glob(f"**/{safe_name}"))
-        except StopIteration:
-            pass
+        safe_name = glob.escape(filename)
+        for d in self.search_dirs():
+            try:
+                if d.exists():
+                    return next(d.glob(f"**/{safe_name}"))
+            except StopIteration:
+                continue
 
-        for f in self.books_dir.rglob("*"):
-            if f.name == filename:
-                return f
+        for d in self.search_dirs():
+            try:
+                if not d.exists():
+                    continue
+            except OSError:
+                continue
+            for f in d.rglob("*"):
+                if f.name == filename:
+                    return f
 
         if self.epub_cache_dir.exists():
             cached_path = self.epub_cache_dir / filename
@@ -107,25 +134,51 @@ class EbookParser:
 
         raise FileNotFoundError(f"Could not locate {filename}")
 
-    def get_book_metadata(self, filename: str) -> dict:
-        """Extract {title, author, isbn, asin} from an ebook's embedded metadata.
+    def get_book_identifiers(self, filepath) -> set:
+        """Return the set of normalized DC identifiers embedded in an EPUB.
 
-        Resolves `filename` under books_dir and reads the EPUB's Dublin Core fields.
-        Used to match ABS-less (ebook-only) books to trackers. Returns empty strings
-        for anything missing and never raises.
+        Used to link a hash-discovered library file to an existing mapping when
+        filenames differ (e.g. a raw Calibre file vs the re-stamped CWA copy that
+        share the same Calibre/ISBN identifier). Never raises.
         """
-        result = {"title": "", "author": "", "isbn": "", "asin": ""}
-        if not filename:
-            return result
-        try:
-            path = self.resolve_book_path(filename)
-        except FileNotFoundError:
-            return result
+        path = Path(filepath)
+        if not path.is_absolute():
+            try:
+                path = self.resolve_book_path(str(path))
+            except FileNotFoundError:
+                return set()
         try:
             book = epub.read_epub(str(path))
         except Exception as e:
-            logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}")
-            return result
+            logger.debug(f"Could not read identifiers for '{path}': {e}")
+            return set()
+        ids = set()
+        for value, _attrs in book.get_metadata("DC", "identifier"):
+            norm = self._normalize_identifier(value)
+            if norm:
+                ids.add(norm)
+        return ids
+
+    @staticmethod
+    def _normalize_identifier(raw) -> str:
+        """Normalize an EPUB identifier for cross-file comparison.
+
+        Strips common scheme prefixes (urn:uuid:, urn:isbn:, calibre:, isbn:) and
+        lowercases, so the same work matches across library copies.
+        """
+        if not raw:
+            return ""
+        val = str(raw).strip().lower()
+        for prefix in ("urn:uuid:", "urn:isbn:", "uuid:", "isbn:", "calibre:"):
+            if val.startswith(prefix):
+                val = val[len(prefix):]
+                break
+        return val.strip()
+
+    @staticmethod
+    def _extract_epub_metadata(book) -> dict:
+        """Pull {title, author, isbn, asin} out of an opened EPUB's Dublin Core fields."""
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
 
         titles = book.get_metadata("DC", "title")
         if titles and titles[0][0]:
@@ -151,6 +204,57 @@ class EbookParser:
                 result["asin"] = re.sub(r"^urn:amazon:", "", raw, flags=re.IGNORECASE).strip()
 
         return result
+
+    def get_book_metadata(self, filename: str) -> dict:
+        """Extract {title, author, isbn, asin} from an ebook's embedded metadata.
+
+        Resolves `filename` under books_dir and reads the EPUB's Dublin Core fields.
+        Used to match ABS-less (ebook-only) books to trackers. Returns empty strings
+        for anything missing and never raises.
+        """
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
+        if not filename:
+            return result
+        try:
+            path = self.resolve_book_path(filename)
+        except FileNotFoundError:
+            return result
+        try:
+            book = epub.read_epub(str(path))
+        except Exception as e:
+            logger.warning(f"⚠️ Could not read EPUB metadata for '{filename}': {e}")
+            return result
+
+        return self._extract_epub_metadata(book)
+
+    def get_book_metadata_from_bytes(self, filename: str, content: bytes) -> dict:
+        """Extract {title, author, isbn, asin} from raw EPUB bytes.
+
+        For library-hosted (BookOrbit/Grimmory) ebooks that aren't on the local
+        filesystem: the caller downloads the bytes from the source and we read the
+        embedded Dublin Core fields via a short-lived temp file (ebooklib needs a
+        path). Returns empty strings for anything missing and never raises.
+        """
+        result = {"title": "", "author": "", "isbn": "", "asin": ""}
+        if not content:
+            return result
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            book = epub.read_epub(tmp_path)
+        except Exception as e:
+            logger.warning(f"⚠️ Could not read EPUB metadata from bytes for '{filename}': {e}")
+            return result
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        return self._extract_epub_metadata(book)
 
     def get_kosync_id(self, filepath):
         filepath = Path(filepath)
@@ -1987,3 +2091,67 @@ class EbookParser:
         except Exception as e:
             logger.error(f"Error resolving CFI->index '{cfi}': {e}")
             return None
+
+
+def resolve_ebook_identifiers(ebook_parser, book, booklore_client=None, bookorbit_client=None) -> dict:
+    """Best-effort {title, author, isbn, asin} for a mapping's ebook.
+
+    Reads the local EPUB first; when no usable identifier or author is found and
+    the ebook is library-hosted (BookOrbit/Grimmory), downloads the bytes from the
+    source and reads the embedded Dublin Core fields. This lets tracker auto-match
+    use the book's real ISBN/author even when the file isn't on the bridge's disk
+    (the common case for BookOrbit/KOReader ebook-only and ABS-linked mappings).
+    Never raises.
+    """
+    meta = {"title": "", "author": "", "isbn": "", "asin": ""}
+    if ebook_parser is None:
+        return meta
+
+    filename = getattr(book, "ebook_filename", None)
+    if filename:
+        try:
+            meta = ebook_parser.get_book_metadata(filename) or meta
+        except Exception as exc:
+            logger.warning("Local EPUB metadata read failed for '%s': %s", filename, exc)
+
+    # A precise identifier (ISBN/ASIN) from the local read is enough — skip the
+    # network round-trip. An author alone is NOT precise: fall through to the
+    # library download to fetch the real ISBN, the exact precise-match path this
+    # resolver was built for. Auto-match runs once per book so the fetch is bounded,
+    # and non-library-hosted books still short-circuit at the source check below.
+    if meta.get("isbn") or meta.get("asin"):
+        return meta
+
+    source = (getattr(book, "ebook_source", None) or "").strip().lower()
+    source_id = getattr(book, "ebook_source_id", None)
+    if source == "bookorbit":
+        client = bookorbit_client
+    elif source == "booklore":
+        client = booklore_client
+    else:
+        client = None
+
+    if not client or not source_id or not hasattr(client, "download_book"):
+        return meta
+    if hasattr(client, "is_configured") and not client.is_configured():
+        return meta
+
+    try:
+        content = client.download_book(source_id)
+    except Exception as exc:
+        logger.warning("Library download for ebook metadata failed (%s/%s): %s", source, source_id, exc)
+        return meta
+    if not content:
+        return meta
+
+    try:
+        byte_meta = ebook_parser.get_book_metadata_from_bytes(filename or "", content)
+    except Exception as exc:
+        logger.warning("EPUB metadata-from-bytes failed for '%s': %s", filename, exc)
+        return meta
+
+    # Prefer the byte-derived fields, but keep any local title the bytes lacked.
+    for key in ("title", "author", "isbn", "asin"):
+        if byte_meta.get(key):
+            meta[key] = byte_meta[key]
+    return meta

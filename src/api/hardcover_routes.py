@@ -1,7 +1,9 @@
 # Hardcover Routes - Flask Blueprint for Hardcover API endpoints
 import logging
 
-from flask import Blueprint, jsonify, request, redirect, url_for, flash
+from flask import Blueprint, jsonify, request, redirect, url_for, flash, g
+
+from src.utils.ebook_utils import resolve_ebook_identifiers
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,63 @@ def _get_dependencies():
     return _database_service, _container, None
 
 
+def _active_user_clients(container):
+    user = getattr(g, "current_user", None)
+    if user is None:
+        return None
+    try:
+        return container.user_client_registry().get_clients(user.id)
+    except Exception as exc:
+        # A logged-in NON-admin whose per-user bundle can't be built must NOT
+        # silently fall through to the global (admin) client — that would land
+        # their Hardcover write on the admin's account. Admins share the global
+        # config, so for them the fallback is safe.
+        if getattr(user, "is_admin", False):
+            logger.debug("Falling back to global Hardcover route clients for admin: %s", exc)
+            return None
+        logger.error(
+            "Could not build per-user Hardcover clients for user %s: %s",
+            getattr(user, "id", "?"), exc,
+        )
+        raise
+
+
+def _hardcover_client(container):
+    clients = _active_user_clients(container)
+    return clients.hardcover_client if clients is not None else container.hardcover_client()
+
+
+def _abs_client(container):
+    clients = _active_user_clients(container)
+    return clients.abs_client if clients is not None else container.abs_client()
+
+
+def _booklore_client(container):
+    clients = _active_user_clients(container)
+    return clients.booklore_client if clients is not None else container.booklore_client()
+
+
+def _bookorbit_client(container):
+    clients = _active_user_clients(container)
+    return clients.bookorbit_client if clients is not None else container.bookorbit_client()
+
+
+def _user_may_modify_book(database_service, abs_id: str) -> bool:
+    user = getattr(g, "current_user", None)
+    if user is None:
+        return True
+    if getattr(user, "is_admin", False):
+        return True
+    try:
+        return database_service.is_user_linked(user.id, abs_id)
+    except Exception:
+        return False
+
+
+def _forbidden_book_response():
+    return jsonify({"found": False, "error": "Forbidden: you have not claimed this book"}), 403
+
+
 @hardcover_bp.route("/api/hardcover/resolve", methods=["GET"])
 def api_hardcover_resolve():
     """
@@ -53,8 +112,10 @@ def api_hardcover_resolve():
 
     if not abs_id:
         return jsonify({"found": False, "message": "Missing abs_id parameter"}), 400
+    if not _user_may_modify_book(database_service, abs_id):
+        return _forbidden_book_response()
 
-    hardcover_client = container.hardcover_client()
+    hardcover_client = _hardcover_client(container)
     if not hardcover_client.is_configured():
         return jsonify({"found": False, "message": "Hardcover not configured"}), 400
 
@@ -74,26 +135,38 @@ def api_hardcover_resolve():
             )
 
         if not book_data:
-            # No existing link (or fetch failed) - fall back to auto-match from ABS metadata
+            # No existing link (or fetch failed) - fall back to auto-match from metadata
             book = database_service.get_book(abs_id)
             if not book:
                 return jsonify({"found": False, "message": "Book not found"}), 404
 
-            # Get metadata from ABS
-            item = container.abs_client().get_item_details(abs_id)
-            if not item:
+            # Get metadata from ABS; for ebook-only books (no ABS item), fall back to the
+            # EPUB's embedded identifiers (downloaded from the hosting library if needed).
+            item = _abs_client(container).get_item_details(abs_id)
+            isbn = asin = title = author = None
+            if item:
+                meta = item.get("media", {}).get("metadata", {})
+                isbn = meta.get("isbn")
+                asin = meta.get("asin")
+                title = meta.get("title")
+                author = meta.get("authorName")
+            if not isbn:
+                ebook_meta = resolve_ebook_identifiers(
+                    container.ebook_parser(), book,
+                    _booklore_client(container), _bookorbit_client(container),
+                )
+                title = title or ebook_meta.get("title") or book.abs_title
+                author = author or ebook_meta.get("author")
+                isbn = isbn or ebook_meta.get("isbn")
+                asin = asin or ebook_meta.get("asin")
+
+            if not title:
                 return jsonify(
                     {
                         "found": False,
-                        "message": "Could not fetch book metadata from ABS",
+                        "message": "Could not fetch book metadata",
                     }
                 ), 502
-
-            meta = item.get("media", {}).get("metadata", {})
-            isbn = meta.get("isbn")
-            asin = meta.get("asin")
-            title = meta.get("title")
-            author = meta.get("authorName")
 
             # Try match cascade: ISBN -> ASIN -> title+author -> title only
             if isbn:
@@ -152,6 +225,10 @@ def link_hardcover(abs_id):
     database_service, container, error_response = _get_dependencies()
     if error_response:
         return error_response
+    if not _user_may_modify_book(database_service, abs_id):
+        if request.is_json:
+            return jsonify({"success": False, "error": "Forbidden: you have not claimed this book"}), 403
+        return "Forbidden: you have not claimed this book", 403
 
     # Check if JSON request (new flow) or form data (legacy flow)
     if request.is_json:
@@ -186,7 +263,7 @@ def link_hardcover(abs_id):
 
             # Force status to 'Want to Read' (1)
             try:
-                container.hardcover_client().update_status(
+                _hardcover_client(container).update_status(
                     int(book_id), 1, int(edition_id) if edition_id else None
                 )
             except Exception as e:
@@ -203,7 +280,8 @@ def link_hardcover(abs_id):
         return redirect(url_for("index"))
 
     # Resolve book
-    book_data = container.hardcover_client().resolve_book_from_input(url)
+    hardcover_client = _hardcover_client(container)
+    book_data = hardcover_client.resolve_book_from_input(url)
     if not book_data:
         flash(f"Could not find book for: {url}", "error")
         return redirect(url_for("index"))
@@ -222,7 +300,7 @@ def link_hardcover(abs_id):
 
         # Force status to 'Want to Read' (1)
         try:
-            container.hardcover_client().update_status(
+            hardcover_client.update_status(
                 book_data["book_id"], 1, book_data.get("edition_id")
             )
         except Exception as e:

@@ -245,7 +245,7 @@ def test_sync_cycle_queues_target_when_lock_is_busy(tmp_path):
 
     manager.sync_cycle("book-1")
 
-    manager._queue_pending_sync.assert_called_once_with("book-1")
+    manager._queue_pending_sync.assert_called_once_with("book-1", user_id=None)
     manager._sync_cycle_internal.assert_not_called()
 
 

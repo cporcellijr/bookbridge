@@ -59,6 +59,33 @@ def test_runs_in_global_cycle_uses_prefix():
         assert svc.runs_in_global_cycle() is True
 
 
+def test_display_name_uses_bookorbit():
+    assert _svc()._display_name() == "BookOrbit"
+
+
+def test_display_name_maps_booklore_to_grimmory():
+    svc = _svc(source_name='BookLore', env_prefix='BOOKLORE')
+    assert svc._display_name() == "Grimmory"
+
+
+def test_missing_shelf_warning_names_bookorbit(caplog):
+    """The 'shelf does not exist' warning must name BookOrbit, not Grimmory,
+    when the watcher is parameterized for BookOrbit (issue #288 follow-up)."""
+    svc = _svc()
+    svc.booklore_client.is_configured.return_value = True
+    svc.booklore_client.list_books_on_shelf.return_value = []
+    svc.booklore_client.get_all_shelves.return_value = [{"name": "Synced"}]
+    with patch.dict(os.environ, {
+        "BOOKORBIT_SHELF_WATCH_ENABLED": "true",
+        "BOOKORBIT_SHELF_WATCH_NAME": "Up Next",
+    }, clear=False):
+        with caplog.at_level("WARNING"):
+            svc.process_watch_shelf()
+    msgs = [r.message for r in caplog.records]
+    assert any("Up Next" in m and "BookOrbit UI" in m for m in msgs)
+    assert not any("Grimmory" in m for m in msgs)
+
+
 def test_pending_suggestion_carries_source_name():
     svc = _svc()
     captured = {}

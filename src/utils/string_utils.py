@@ -1,6 +1,18 @@
 
+import os
 import re
 import difflib
+
+
+def author_match_floor() -> float:
+    """Minimum author similarity (0-1) required to accept a fuzzy title match when an
+    author was supplied. Below this, a same-title/different-author candidate is rejected
+    rather than committed. Overridable via TRACKER_AUTHOR_MATCH_MIN."""
+    try:
+        return float(os.environ.get("TRACKER_AUTHOR_MATCH_MIN", 0.5))
+    except (TypeError, ValueError):
+        return 0.5
+
 
 def clean_book_title(title: str) -> str:
     """

@@ -119,21 +119,51 @@ class ForgeService:
     def _should_cleanup_staged_sources(self, stage_mode: str) -> bool:
         return self._normalize_stage_mode(stage_mode) == DEFAULT_STAGE_MODE
 
+    def _for_client_bundle(self, client_bundle=None):
+        """Return a worker service using the supplied per-user clients.
+
+        Forge work runs in background threads. Rather than mutating this global
+        singleton for each request, create a lightweight service that shares the
+        durable collaborators and active task set while using the request user's
+        API/sync clients.
+        """
+        if client_bundle is None:
+            return self
+
+        worker = ForgeService(
+            database_service=self.database_service,
+            abs_client=getattr(client_bundle, "abs_client", self.abs_client),
+            booklore_client=getattr(client_bundle, "booklore_client", self.booklore_client),
+            storyteller_client=getattr(client_bundle, "storyteller_client", self.storyteller_client),
+            library_service=getattr(client_bundle, "library_service", self.library_service) or self.library_service,
+            ebook_parser=self.ebook_parser,
+            transcriber=self.transcriber,
+            alignment_service=self.alignment_service,
+            bookorbit_client=getattr(client_bundle, "bookorbit_client", self.bookorbit_client),
+            sync_clients=getattr(client_bundle, "sync_clients", self.sync_clients),
+        )
+        worker.active_tasks = self.active_tasks
+        worker.lock = self.lock
+        worker.ABS_API_TOKEN = getattr(worker.abs_client, "token", self.ABS_API_TOKEN)
+        worker.ABS_API_URL = getattr(worker.abs_client, "base_url", self.ABS_API_URL)
+        return worker
+
     def _shelve_forged_ebook(self, book, shelf_filename: str) -> None:
         """Add the forged book's ebook to the Kobo shelf on whichever library
         hosts it (BookOrbit or Grimmory), skipping unconfigured clients."""
         ebook_source = (getattr(book, 'ebook_source', None) or '').strip().lower() if book else ''
+        # The shelf name resolves per-user from each client's own credentials (the
+        # forge worker holds the matching user's bundle), so the book lands on that
+        # user's destination shelf rather than the global one.
         if ebook_source == 'bookorbit':
             if self.bookorbit_client and self.bookorbit_client.is_configured():
-                bookorbit_shelf_name = (os.environ.get("BOOKORBIT_SHELF_NAME") or "Kobo").strip()
                 ebook_source_id = getattr(book, 'ebook_source_id', None)
                 if ebook_source_id and hasattr(self.bookorbit_client, 'add_book_id_to_shelf'):
-                    self.bookorbit_client.add_book_id_to_shelf(ebook_source_id, bookorbit_shelf_name)
+                    self.bookorbit_client.add_book_id_to_shelf(ebook_source_id)
                 else:
-                    self.bookorbit_client.add_to_shelf(shelf_filename, bookorbit_shelf_name)
+                    self.bookorbit_client.add_to_shelf(shelf_filename)
         elif self.booklore_client and self.booklore_client.is_configured():
-            booklore_shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "Kobo")
-            self.booklore_client.add_to_shelf(shelf_filename, booklore_shelf_name)
+            self.booklore_client.add_to_shelf(shelf_filename)
 
     def _automatch_progress_trackers(self, book) -> None:
         """Run Hardcover/StoryGraph auto-match after a successful forge,
@@ -154,6 +184,44 @@ class ForgeService:
                 storygraph._automatch_storygraph(book)
             except Exception as e:
                 logger.warning(f"Auto-Forge: StoryGraph automatch failed for '{book.abs_id}': {e}")
+
+    def _update_forge_match_job(self, abs_id: str, progress: float = None, last_error: str = None) -> None:
+        """Best-effort durable progress marker for Forge & Match waits."""
+        if not abs_id or not self.database_service:
+            return
+        updates = {"last_attempt": time.time()}
+        if progress is not None:
+            updates["progress"] = max(0.0, min(float(progress), 1.0))
+        if last_error is not None:
+            updates["last_error"] = last_error
+        try:
+            updated = self.database_service.update_latest_job(abs_id, **updates)
+            if not updated:
+                from src.db.models import Job
+                self.database_service.save_job(
+                    Job(
+                        abs_id=abs_id,
+                        last_attempt=updates["last_attempt"],
+                        retry_count=0,
+                        last_error=last_error,
+                        progress=updates.get("progress", 0.0),
+                    )
+                )
+        except Exception as exc:
+            logger.debug("Auto-Forge: failed to update job state for '%s': %s", abs_id, exc)
+
+    def _persist_forge_match_storyteller_uuid(self, abs_id: str, book_uuid: str) -> None:
+        """Persist Storyteller UUID once upload succeeds, before long processing waits."""
+        if not abs_id or not book_uuid or not self.database_service:
+            return
+        try:
+            book = self.database_service.get_book(abs_id)
+            if book:
+                book.storyteller_uuid = book_uuid
+                book.status = "forging"
+                self.database_service.save_book(book)
+        except Exception as exc:
+            logger.debug("Auto-Forge: failed to persist Storyteller UUID for '%s': %s", abs_id, exc)
 
     def _stage_local_file(self, src_path: Path, dest_path: Path, stage_mode: str, context: str) -> str:
         src_path = Path(src_path)
@@ -424,13 +492,9 @@ class ForgeService:
 
     def _copy_audio_files(self, abs_id: str, dest_folder: Path, stage_mode: str = DEFAULT_STAGE_MODE):
         """Copy audiobook files from ABS - Book Linker version"""
-        headers = {"Authorization": f"Bearer {self.ABS_API_TOKEN}"}
-        url = urljoin(self.ABS_API_URL, f"/api/items/{abs_id}")
         normalized_stage_mode = self._normalize_stage_mode(stage_mode)
         try:
-            r = requests.get(url, headers=headers, timeout=15)
-            r.raise_for_status()
-            item = r.json()
+            item = self.abs_client.get_item_details(abs_id) or {}
             audio_files = item.get("media", {}).get("audioFiles", [])
             if not audio_files:
                 logger.warning(f"⚠️ No audio files found for ABS '{abs_id}'")
@@ -477,7 +541,10 @@ class ForgeService:
                 else:
                     # 4. API Download Fallback
                     logger.info(f"⚡ Local file not found, downloading via API: '{filename}'")
-                    stream_url = f"{self.ABS_API_URL.rstrip('/')}/api/items/{abs_id}/file/{f.get('ino')}?token={self.ABS_API_TOKEN}"
+                    stream_url = (
+                        f"{self.abs_client.base_url}/api/items/{abs_id}/file/{f.get('ino')}"
+                        f"?token={self.abs_client.token}"
+                    )
                     dest_path = dest_folder / filename
                     # Use the ABS Client
                     if self.abs_client.download_file(stream_url, dest_path):
@@ -785,7 +852,9 @@ class ForgeService:
             return False
 
     @staticmethod
-    def _collect_audio_files(root_dir: Path) -> list[Path]:
+    def _collect_audio_files(root_dir) -> list[Path]:
+        if not root_dir:
+            return []
         root_dir = Path(root_dir)
         if not root_dir.exists():
             return []
@@ -842,6 +911,7 @@ class ForgeService:
         audio_source: str = None,
         audio_source_id: str = None,
         stage_mode: str = DEFAULT_STAGE_MODE,
+        client_bundle=None,
     ):
         """
         Start manual forge process in background thread.
@@ -857,8 +927,9 @@ class ForgeService:
             thread_options["stage_mode"] = normalized_stage_mode
         if thread_options:
             thread_kwargs["kwargs"] = thread_options
+        worker = self._for_client_bundle(client_bundle)
         thread = threading.Thread(
-            target=self._forge_background_task,
+            target=worker._forge_background_task,
             args=(abs_id, text_item, title, author),
             daemon=True,
             **thread_kwargs
@@ -1085,7 +1156,7 @@ class ForgeService:
 
     def start_auto_forge_match(self, abs_id, text_item, title, author, original_filename, original_hash,
                                audio_source: str = None, audio_source_id: str = None,
-                               stage_mode: str = DEFAULT_STAGE_MODE):
+                               stage_mode: str = DEFAULT_STAGE_MODE, client_bundle=None):
         """
         Start Auto-Forge & Match pipeline in background thread.
         Links forged artifact to DB after completion.
@@ -1094,8 +1165,9 @@ class ForgeService:
         thread_kwargs = {}
         if normalized_stage_mode != DEFAULT_STAGE_MODE:
             thread_kwargs["kwargs"] = {"stage_mode": normalized_stage_mode}
+        worker = self._for_client_bundle(client_bundle)
         thread = threading.Thread(
-            target=self._auto_forge_background_task,
+            target=worker._auto_forge_background_task,
             args=(abs_id, text_item, title, author, original_filename, original_hash,
                   audio_source, audio_source_id),
             daemon=True,
@@ -1114,6 +1186,7 @@ class ForgeService:
 
         with self.lock:
             self.active_tasks.add(title)
+        self._update_forge_match_job(abs_id, progress=0.05, last_error="Starting Forge & Match")
 
         stage_mode = self._normalize_stage_mode(stage_mode)
         logger.info(f"Auto-Forge: Staging mode '{stage_mode}'")
@@ -1187,6 +1260,8 @@ class ForgeService:
                     raise Exception(f"Failed to upload audio file '{audio_file.name}' to Storyteller via TUS")
 
             logger.info(f"⚡ Auto-Forge: All files uploaded to Storyteller ({book_uuid})")
+            self._persist_forge_match_storyteller_uuid(abs_id, book_uuid)
+            self._update_forge_match_job(abs_id, progress=0.25, last_error="Uploaded to Storyteller")
 
             # Wait for readiness and trigger processing
             item_details = None
@@ -1218,6 +1293,7 @@ class ForgeService:
                 try:
                     st_client.trigger_processing(book_uuid)
                     processing_triggered = True
+                    self._update_forge_match_job(abs_id, progress=0.32, last_error="Storyteller processing started")
                 except Exception as trigger_err:
                     logger.warning(f"Auto-Forge: Failed to trigger processing for {book_uuid}: {trigger_err}")
             else:
@@ -1226,6 +1302,70 @@ class ForgeService:
                     "continuing with recovery polling"
                 )
 
+            # Poll Storyteller to completion, download the artifact, build the
+            # alignment map, and finalize the DB row. Extracted so a restart can
+            # re-attach this watcher (the thread does not survive a process
+            # restart) — see resume_pending_forge_matches().
+            self._run_forge_match_completion(
+                abs_id=abs_id,
+                book_uuid=book_uuid,
+                title=title,
+                text_item=text_item,
+                item_details=item_details,
+                chapters=chapters,
+                original_filename=original_filename,
+                original_ebook_filename=original_ebook_filename,
+                original_hash=original_hash,
+                audio_source=audio_source,
+                audio_source_id=audio_source_id,
+                temp_dir=temp_dir,
+                processing_triggered=processing_triggered,
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Auto-Forge: Pipeline failed: {e}", exc_info=True)
+            try:
+                book = self.database_service.get_book(abs_id)
+                if book:
+                    book.status = 'error'
+                    self.database_service.save_book(book)
+                self._update_forge_match_job(abs_id, last_error=str(e))
+            except: pass
+
+        finally:
+            if temp_dir and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            with self.lock:
+                self.active_tasks.discard(title)
+
+
+    def _run_forge_match_completion(
+        self,
+        abs_id,
+        book_uuid,
+        title,
+        text_item,
+        item_details,
+        chapters,
+        original_filename,
+        original_ebook_filename,
+        original_hash,
+        audio_source: str = None,
+        audio_source_id: str = None,
+        temp_dir=None,
+        processing_triggered: bool = False,
+    ):
+        """Poll Storyteller for alignment completion, then download the
+        artifact, build the alignment map, finalize the DB row, and shelve.
+
+        Extracted from _auto_forge_background_task so the completion watcher
+        can be re-attached after a restart (the background thread does not
+        survive a process restart). On the resume path temp_dir is None (the
+        staged audio is gone; the Whisper fallback re-fetches from source) and
+        processing_triggered is True (Storyteller was already triggered, so an
+        in-flight/aligned book is never re-triggered)."""
+        st_client = self.storyteller_client
+        try:
             # --- WAIT FOR COMPLETION ---
             MAX_WAIT = 3600
             POLL_INTERVAL = 30
@@ -1239,6 +1379,7 @@ class ForgeService:
             epub_cache = self.ebook_parser.epub_cache_dir
             if not epub_cache.exists():
                 epub_cache.mkdir(parents=True, exist_ok=True)
+            self._update_forge_match_job(abs_id, progress=0.35, last_error="Waiting for Storyteller alignment")
 
             while elapsed < MAX_WAIT:
                 time.sleep(POLL_INTERVAL)
@@ -1259,6 +1400,12 @@ class ForgeService:
                 last_readaloud_status = poll_result["readaloud_status"]
                 last_aligned_at = poll_result["aligned_at"]
                 storyteller_title = poll_result.get("storyteller_title") or storyteller_title
+                if poll_count % 4 == 0:
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error=f"Waiting for Storyteller ({last_readaloud_status or 'unknown'})",
+                    )
                 if poll_result["terminal_error"]:
                     logger.warning(
                         "Auto-Forge: aborting because Storyteller reported %s for %s "
@@ -1272,6 +1419,11 @@ class ForgeService:
                     if book:
                         book.status = "error"
                         self.database_service.save_book(book)
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error=f"Storyteller reported {last_readaloud_status or 'error'}",
+                    )
                     return
                 if completion_method:
                     break
@@ -1296,6 +1448,11 @@ class ForgeService:
                     f"Auto-Forge: entering extended recovery polling for {self.storyteller_recovery_max_wait_seconds}s "
                     f"(interval={self.storyteller_recovery_poll_interval_seconds}s)"
                 )
+                self._update_forge_match_job(
+                    abs_id,
+                    progress=0.35,
+                    last_error=f"Storyteller wait exceeded {elapsed}s; continuing recovery",
+                )
 
                 recovery_elapsed = 0
                 while recovery_elapsed < self.storyteller_recovery_max_wait_seconds and not completion_method:
@@ -1317,6 +1474,11 @@ class ForgeService:
                     last_readaloud_status = poll_result["readaloud_status"]
                     last_aligned_at = poll_result["aligned_at"]
                     storyteller_title = poll_result.get("storyteller_title") or storyteller_title
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error=f"Recovery wait for Storyteller ({last_readaloud_status or 'unknown'})",
+                    )
                     if poll_result["terminal_error"]:
                         logger.warning(
                             "Auto-Forge: aborting during recovery because Storyteller reported %s for %s "
@@ -1330,6 +1492,11 @@ class ForgeService:
                         if book:
                             book.status = "error"
                             self.database_service.save_book(book)
+                        self._update_forge_match_job(
+                            abs_id,
+                            progress=0.35,
+                            last_error=f"Storyteller reported {last_readaloud_status or 'error'} during recovery",
+                        )
                         return
 
                 if not completion_method:
@@ -1337,9 +1504,15 @@ class ForgeService:
                         f"Auto-Forge: extended recovery timed out for abs_id={abs_id} "
                         f"elapsed={recovery_elapsed}s; keeping status='forging'"
                     )
+                    self._update_forge_match_job(
+                        abs_id,
+                        progress=0.35,
+                        last_error="Still waiting for Storyteller after recovery timeout",
+                    )
                     return
 
             logger.info("Auto-Forge: Completion confirmed via %s", completion_method)
+            self._update_forge_match_job(abs_id, progress=0.65, last_error="Storyteller complete; preparing artifact")
 
             # Grace wait before download to let Storyteller finish internal writes.
             if self.storyteller_cleanup_grace_seconds > 0:
@@ -1392,6 +1565,7 @@ class ForgeService:
 
             if not no_epub_cache:
                 logger.info("Auto-Forge: Processing complete. Downloading artifact...")
+                self._update_forge_match_job(abs_id, progress=0.75, last_error="Downloading Storyteller artifact")
                 try:
                     if not st_client.download_book(book_uuid, target_path):
                         raise Exception("API download returned False")
@@ -1433,6 +1607,7 @@ class ForgeService:
                         continue
 
             book_text, _ = self.ebook_parser.extract_text_and_map(text_source_path)
+            self._update_forge_match_job(abs_id, progress=0.82, last_error="Building alignment")
 
             # --- INGEST STORYTELLER TRANSCRIPT (PRIMARY) ---
             storyteller_manifest = ingest_storyteller_transcripts(
@@ -1527,6 +1702,7 @@ class ForgeService:
                         book.ebook_source = text_source
                         book.ebook_source_id = str(text_item.get(source_id_key))
                 self.database_service.save_book(book)
+                self._update_forge_match_job(abs_id, progress=1.0, last_error=None)
                 logger.info(f"✅ Auto-Forge: Book {abs_id} updated successfully!")
                 self._automatch_progress_trackers(book)
             else:
@@ -1534,7 +1710,8 @@ class ForgeService:
 
             # --- ADD TO COLLECTIONS/SHELVES ---
             try:
-                abs_collection_name = os.environ.get("ABS_COLLECTION_NAME", "Synced with KOReader")
+                from src.utils.user_config import user_setting
+                abs_collection_name = user_setting("ABS_COLLECTION_NAME", "Synced with KOReader")
                 if not str(abs_id).startswith('booklore:'):
                     self.abs_client.add_to_collection(abs_id, abs_collection_name)
 
@@ -1549,7 +1726,6 @@ class ForgeService:
 
             except Exception as e:
                 logger.warning(f"⚠️ Auto-Forge: Failed to add to collections/shelves: {e}")
-
         except Exception as e:
             logger.error(f"❌ Auto-Forge: Pipeline failed: {e}", exc_info=True)
             try:
@@ -1557,11 +1733,160 @@ class ForgeService:
                 if book:
                     book.status = 'error'
                     self.database_service.save_book(book)
-            except: pass
+                self._update_forge_match_job(abs_id, last_error=str(e))
+            except Exception:
+                pass
 
+    def _reconstruct_forge_text_item(self, book) -> dict:
+        """Rebuild a forge text_item from a persisted Book.
+
+        The original request payload is gone after a restart, so resume/
+        re-forge reconstructs it from the durable Book columns (mirrors
+        web_server._build_forge_text_item)."""
+        source = self._normalize_text_source(getattr(book, 'ebook_source', None) or '')
+        source_id = str(getattr(book, 'ebook_source_id', None) or '').strip()
+        original = getattr(book, 'original_ebook_filename', None) or getattr(book, 'ebook_filename', None)
+        text_item = {
+            'source': source or 'Local File',
+            'filename': original,
+            'original_ebook_filename': original,
+            'booklore_id': source_id,
+            'bookorbit_id': source_id,
+            'cwa_id': source_id,
+            'abs_id': source_id,
+            'source_id': source_id,
+        }
+        if not source or source == 'Local File':
+            text_item['source'] = 'Local File'
+            if original:
+                try:
+                    resolved = self.ebook_parser.resolve_book_path(original)
+                    if resolved:
+                        text_item['path'] = str(resolved)
+                except Exception:
+                    pass
+        return text_item
+
+    def resume_pending_forge_matches(self) -> int:
+        """Re-attach Forge & Match work left behind by a previous run.
+
+        The completion watcher lives only in a background thread, so a restart
+        orphans every book stuck at status='forging'. Books already uploaded
+        to Storyteller (storyteller_uuid set) get just the completion watcher
+        re-attached; books that never finished uploading are fully re-forged.
+        Resume uses the global client bundle (no request context at startup),
+        which matches the primary user's credentials."""
+        try:
+            forging = self.database_service.get_books_by_status('forging') or []
+        except Exception as exc:
+            logger.warning("Forge & Match resume: could not list forging books: %s", exc)
+            return 0
+
+        resumed = 0
+        re_forged = 0
+        for book in forging:
+            abs_id = getattr(book, 'abs_id', None)
+            if not abs_id:
+                continue
+            title = getattr(book, 'abs_title', None) or abs_id
+            if title in self.active_tasks:
+                # Already being worked (e.g. resume invoked twice) — don't double up.
+                continue
+            book_uuid = getattr(book, 'storyteller_uuid', None)
+            if book_uuid:
+                threading.Thread(
+                    target=self._resume_forge_match_background_task,
+                    args=(abs_id, book_uuid),
+                    daemon=True,
+                ).start()
+                resumed += 1
+            elif self._reforge_pending_book(book):
+                re_forged += 1
+
+        if resumed or re_forged:
+            logger.info(
+                "🔁 Forge & Match resume: re-attached %d completion watcher(s), re-started %d full forge(s)",
+                resumed,
+                re_forged,
+            )
+        return resumed + re_forged
+
+    def _reforge_pending_book(self, book) -> bool:
+        """Re-run the full forge for a book whose Storyteller upload never finished."""
+        abs_id = getattr(book, 'abs_id', None)
+        if not abs_id:
+            return False
+        title = getattr(book, 'abs_title', None) or abs_id
+        original_ebook_filename = getattr(book, 'original_ebook_filename', None)
+        original_filename = original_ebook_filename or getattr(book, 'ebook_filename', None)
+        raw_hash = getattr(book, 'kosync_doc_id', None)
+        original_hash = raw_hash if raw_hash and not str(raw_hash).startswith('forging_') else None
+        text_item = self._reconstruct_forge_text_item(book)
+        kwargs = {}
+        audio_source = getattr(book, 'audio_source', None)
+        audio_source_id = getattr(book, 'audio_source_id', None)
+        if audio_source:
+            kwargs['audio_source'] = audio_source
+        if audio_source_id:
+            kwargs['audio_source_id'] = audio_source_id
+        logger.info(
+            "🔁 Forge & Match resume: re-running full forge for '%s' (no Storyteller upload to resume)",
+            abs_id,
+        )
+        threading.Thread(
+            target=self._auto_forge_background_task,
+            args=(abs_id, text_item, title, None, original_filename, original_hash),
+            kwargs=kwargs,
+            daemon=True,
+        ).start()
+        return True
+
+    def _resume_forge_match_background_task(self, abs_id, book_uuid):
+        """Resume only the completion phase for a book already uploaded to
+        Storyteller, reconstructing the inputs from the persisted Book."""
+        book = self.database_service.get_book(abs_id)
+        if not book:
+            logger.warning("Forge & Match resume: book '%s' vanished before completion resume", abs_id)
+            return
+        title = getattr(book, 'abs_title', None) or abs_id
+        audio_source = getattr(book, 'audio_source', None)
+        audio_source_id = getattr(book, 'audio_source_id', None)
+        original_ebook_filename = getattr(book, 'original_ebook_filename', None)
+        original_filename = original_ebook_filename or getattr(book, 'ebook_filename', None)
+        raw_hash = getattr(book, 'kosync_doc_id', None)
+        original_hash = raw_hash if raw_hash and not str(raw_hash).startswith('forging_') else None
+        text_item = self._reconstruct_forge_text_item(book)
+
+        item_details = None
+        chapters = []
+        if audio_source != 'BookLore':
+            try:
+                item_details = self.abs_client.get_item_details(abs_id)
+            except Exception as exc:
+                logger.debug("Forge & Match resume: chapter fetch failed for '%s': %s", abs_id, exc)
+            if item_details:
+                chapters = item_details.get('media', {}).get('chapters', []) or []
+
+        with self.lock:
+            self.active_tasks.add(title)
+        self._update_forge_match_job(abs_id, progress=0.35, last_error="Resumed after restart; waiting for Storyteller")
+        logger.info("🔁 Forge & Match resume: re-attaching completion watcher for '%s' (uuid=%s)", abs_id, book_uuid)
+        try:
+            self._run_forge_match_completion(
+                abs_id=abs_id,
+                book_uuid=book_uuid,
+                title=title,
+                text_item=text_item,
+                item_details=item_details,
+                chapters=chapters,
+                original_filename=original_filename,
+                original_ebook_filename=original_ebook_filename,
+                original_hash=original_hash,
+                audio_source=audio_source,
+                audio_source_id=audio_source_id,
+                temp_dir=None,
+                processing_triggered=True,
+            )
         finally:
-            if temp_dir and temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
             with self.lock:
                 self.active_tasks.discard(title)
-

@@ -1,0 +1,37 @@
+{% if queue %}
+{% for item in queue %}
+<div class="queue-item">
+    <img src="{{ item.cover_url }}" alt="Cover" class="queue-item-cover" onerror="this.style.opacity='0.25';">
+    <div class="queue-item-info">
+        <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
+        {% if item.storyteller_uuid %}
+        <p class="queue-item-ebook"><span style="color:#a78bfa;">⚡ Storyteller</span>{% if item.ebook_display_name %} + {{ item.ebook_display_name }}{% endif %}</p>
+        {% else %}
+        <p class="queue-item-ebook" title="{{ item.ebook_filename }}">📖 {{ item.ebook_display_name or item.ebook_filename }}</p>
+        {% endif %}
+    </div>
+    <form method="POST" action="/suggestions" class="inline-form">
+        <input type="hidden" name="action" value="remove_from_queue">
+        <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
+        <button type="submit" class="queue-remove">×</button>
+    </form>
+</div>
+{% endfor %}
+<div class="queue-actions">
+    <form method="POST" action="/suggestions">
+        <input type="hidden" name="action" value="forge_and_match_queue">
+        <button type="submit" class="btn btn-success w-100">⚒️ Forge &amp; Match All ({{ queue|length }})</button>
+    </form>
+    <form method="POST" action="/suggestions">
+        <input type="hidden" name="action" value="process_queue">
+        <button type="submit" class="btn w-100">✅ Match All ({{ queue|length }})</button>
+    </form>
+    <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
+    <form method="POST" action="/suggestions">
+        <input type="hidden" name="action" value="clear_queue">
+        <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Clear entire queue?')">🗑️ Clear Queue</button>
+    </form>
+</div>
+{% else %}
+<div class="empty"><p>Queue is empty<br>Add items to get started</p></div>
+{% endif %}

@@ -6,12 +6,17 @@ import base64
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 
+from src.utils.user_config import resolve_setting
+
 logger = logging.getLogger(__name__)
 
 class CWAClient:
-    def __init__(self):
+    def __init__(self, credentials: dict = None):
+        # `credentials` (multi-user) overrides per-user keys (CWA_USERNAME/
+        # PASSWORD/ENABLED); server URL stays global. None => global client.
+        self._creds = credentials
         # Strip trailing slash and verify we don't duplicate /opds
-        raw_url = os.environ.get("CWA_SERVER", "").rstrip('/')
+        raw_url = resolve_setting(credentials, "CWA_SERVER", "").rstrip('/')
         if raw_url.endswith('/opds'):
             raw_url = raw_url[:-5]
 
@@ -21,11 +26,11 @@ class CWAClient:
 
         self.base_url = raw_url
         self._uuid_cache: dict[str, str] = {}
-        
+
         # Sanitize credentials (strip whitespace)
-        self.username = os.environ.get("CWA_USERNAME", "").strip()
-        self.password = os.environ.get("CWA_PASSWORD", "").strip()
-        self.enabled = os.environ.get("CWA_ENABLED", "").lower() == "true"
+        self.username = (resolve_setting(credentials, "CWA_USERNAME", "") or "").strip()
+        self.password = (resolve_setting(credentials, "CWA_PASSWORD", "") or "").strip()
+        self.enabled = str(resolve_setting(credentials, "CWA_ENABLED", "")).lower() == "true"
         
         if self.username:
             # Log masked username to confirm what we loaded
@@ -33,7 +38,7 @@ class CWAClient:
             masked = self.username[:2] + "***" if len(self.username) > 2 else "***"
             logger.debug(f"🔑 CWA Auth: Loaded credentials for user '{masked}'")
         else:
-            logger.warning("⚠️ CWA Auth: No username provided (Guest Mode?)")
+            logger.debug("CWA Auth: No username provided; using unauthenticated OPDS")
 
         self.session = requests.Session()
         

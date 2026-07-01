@@ -10,6 +10,8 @@ from unittest.mock import Mock, patch
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import src.web_server as web_server
+
 
 class MockContainer:
     """Mock container implementing the web dependency contract."""
@@ -114,6 +116,8 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         os.environ["DATA_DIR"] = self.temp_dir
         os.environ["BOOKS_DIR"] = self.temp_dir
+        # Point the app at the real templates dir so XHR fragment responses render.
+        os.environ["TEMPLATE_DIR"] = str(Path(__file__).parent.parent / "templates")
 
         self.mock_container = MockContainer()
 
@@ -137,6 +141,10 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.app, _ = create_app(test_container=self.mock_container)
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
+
+        # The batch-match queue is now a server-side file (DATA_DIR/match_queue.json),
+        # not the per-client session cookie — reset it so tests don't leak into each other.
+        web_server._match_queue_clear()
 
     def tearDown(self):
         import shutil
@@ -455,9 +463,9 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(len(session_data.get("queue", [])), 1)
-            self.assertEqual(session_data["queue"][0]["abs_id"], "ab-1")
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["abs_id"], "ab-1")
 
         process_response = self.client.post(
             "/batch-match",
@@ -472,8 +480,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(processed_book.ebook_filename, "batch.epub")
         self.assertEqual(processed_book.kosync_doc_id, "hash-batch-1")
 
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(session_data.get("queue", []), [])
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-forge-1")
     def test_batch_match_add_and_forge_queue_stages_without_storyteller(self, _mock_kosync):
@@ -491,10 +498,9 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        with self.client.session_transaction() as session_data:
-            queue = session_data.get("queue", [])
-            self.assertEqual(len(queue), 1)
-            self.assertIsNone(queue[0]["ebook_source_path"])
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertIsNone(queue[0]["ebook_source_path"])
 
         process_response = self.client.post(
             "/batch-match",
@@ -517,8 +523,7 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         self.mock_container.mock_abs_client.add_to_collection.assert_not_called()
 
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(session_data.get("queue", []), [])
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-forge-story")
@@ -618,8 +623,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(processed_book.transcript_source, "storyteller")
         self.assertIsNone(processed_book.transcript_file)
 
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(session_data.get("queue", []), [])
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-story-real")
     def test_batch_match_storyteller_uuid_real_ingest_persists_manifest(self, _mock_kosync):
@@ -677,11 +681,10 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(call_args[1], ("storyteller_story-uuid-batch-fallback.epub",))
 
     def test_batch_match_remove_from_queue(self):
-        with self.client.session_transaction() as session_data:
-            session_data["queue"] = [
-                {"abs_id": "ab-1"},
-                {"abs_id": "ab-2"},
-            ]
+        web_server._save_match_queue([
+            {"abs_id": "ab-1"},
+            {"abs_id": "ab-2"},
+        ])
 
         response = self.client.post(
             "/batch-match",
@@ -689,10 +692,118 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 302)
 
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["abs_id"], "ab-2")
+
+    def test_suggestions_queue_add_clear_xhr_returns_panel_fragment(self):
+        # An XHR add/clear returns the re-rendered queue panel fragment (200) instead of a
+        # redirect, so the page swaps it in place without reloading (preserving scroll).
+        add_response = self.client.post(
+            "/suggestions",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-1",
+                "ebook_filename": "suggested.epub",
+                "ebook_display_name": "Suggested Book",
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(add_response.status_code, 200)
+        body = add_response.get_data(as_text=True)
+        self.assertIn("Regression Book", body)
+        self.assertIn("Match All", body)
+        self.assertEqual(len(web_server._load_match_queue()), 1)
+
+        clear_response = self.client.post(
+            "/suggestions",
+            data={"action": "clear_queue"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(clear_response.status_code, 200)
+        self.assertIn("Queue is empty", clear_response.get_data(as_text=True))
+        self.assertEqual(web_server._load_match_queue(), [])
+
+    def test_suggestions_add_many_to_queue_bulk(self):
+        # Bulk add posts suggestion keys; the server builds each queue item from its
+        # cached suggestion's top match (used by "Add all exact" / "Add selected").
         with self.client.session_transaction() as session_data:
-            queue = session_data.get("queue", [])
-            self.assertEqual(len(queue), 1)
-            self.assertEqual(queue[0]["abs_id"], "ab-2")
+            session_data["suggestions_state_id"] = "state-bulk"
+        with web_server.SUGGESTIONS_STATE_LOCK:
+            web_server.SUGGESTIONS_STATE_STORE["state-bulk"] = {
+                "scan_results": [],
+                "scan_cache_by_abs": {
+                    "ab-1": {
+                        "bridge_key": "ab-1", "abs_id": "ab-1",
+                        "audio_source": "ABS", "audio_source_id": "ab-1",
+                        "audio_title": "Exact Audio", "audio_duration": 3600,
+                        "audio_cover_url": "",
+                        "matches": [{
+                            "ebook_filename": "exact.epub", "display_name": "Exact Ebook",
+                            "source": "Grimmory", "source_id": "g-1",
+                            "source_path": "/books/x/exact.epub",
+                            "score": 100.0, "match_reason": "same_folder",
+                        }],
+                    },
+                    "ab-2": {
+                        "bridge_key": "ab-2", "abs_id": "ab-2",
+                        "audio_source": "ABS", "audio_source_id": "ab-2",
+                        "audio_title": "Fuzzy Audio", "audio_duration": 3600,
+                        "audio_cover_url": "",
+                        "matches": [{
+                            "ebook_filename": "fuzzy.epub", "display_name": "Fuzzy Ebook",
+                            "source": "Grimmory", "source_id": "g-2",
+                            "source_path": "", "score": 88.0,
+                        }],
+                    },
+                },
+                "scan_cache_no_match_abs_ids": [],
+                "scan_last_stats": {},
+                "scan_has_run": True,
+                "updated_at": time.time(),
+            }
+
+        response = self.client.post(
+            "/suggestions",
+            data={"action": "add_many_to_queue", "bridge_keys": ["ab-1", "ab-2"]},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        queue = web_server._load_match_queue()
+        self.assertEqual({item["bridge_key"] for item in queue}, {"ab-1", "ab-2"})
+        exact_item = next(i for i in queue if i["bridge_key"] == "ab-1")
+        self.assertEqual(exact_item["ebook_filename"], "exact.epub")
+        self.assertEqual(exact_item["ebook_source"], "Grimmory")
+        self.assertEqual(exact_item["ebook_source_path"], "/books/x/exact.epub")
+        self.assertEqual(exact_item["storyteller_uuid"], "")
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-sugg-forge-1")
+    def test_suggestions_forge_and_match_queue(self, _mock_kosync):
+        # The Suggestions page can run the same forge/match-all path as Add Book, so the
+        # user no longer has to switch pages to process the queue.
+        self.client.post(
+            "/suggestions",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-1",
+                "ebook_filename": "sugg-forge.epub",
+                "ebook_display_name": "Sugg Forge",
+                "ebook_source": "Booklore",
+                "ebook_source_id": "55",
+            },
+        )
+        self.assertEqual(len(web_server._load_match_queue()), 1)
+
+        response = self.client.post("/suggestions", data={"action": "forge_and_match_queue"})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith("/"))
+        self.assertEqual(web_server._load_match_queue(), [])
+        self.mock_container.mock_forge_service.start_auto_forge_match.assert_called_once()
 
     @patch("src.web_server._start_suggestions_scan_job", return_value="job-1")
     def test_suggestions_scan_ajax_and_status(self, _mock_start_job):
@@ -874,9 +985,9 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(len(session_data.get("queue", [])), 1)
-            self.assertEqual(session_data["queue"][0]["abs_id"], "ab-1")
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["abs_id"], "ab-1")
 
         process_response = self.client.post(
             "/suggestions",
@@ -886,8 +997,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertTrue(process_response.location.endswith("/"))
 
         self.mock_container.mock_database_service.save_book.assert_called_once()
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(session_data.get("queue", []), [])
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server._create_or_update_booklore_audio_mapping", return_value=(Mock(abs_id="booklore:42"), None, None))
     def test_suggestions_queue_add_and_process_booklore_audio(self, _mock_booklore_mapping):
@@ -911,11 +1021,10 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        with self.client.session_transaction() as session_data:
-            queue = session_data.get("queue", [])
-            self.assertEqual(len(queue), 1)
-            self.assertEqual(queue[0]["abs_id"], "booklore:42")
-            self.assertEqual(queue[0]["audio_source"], "BookLore")
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["abs_id"], "booklore:42")
+        self.assertEqual(queue[0]["audio_source"], "BookLore")
 
         process_response = self.client.post("/suggestions", data={"action": "process_queue"})
         self.assertEqual(process_response.status_code, 302)
@@ -930,8 +1039,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(call_kwargs["ebook_source_id"], "6798")
 
         self.mock_container.mock_database_service.save_book.assert_not_called()
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(session_data.get("queue", []), [])
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-suggestions-story-1")
@@ -963,8 +1071,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(processed_book.transcript_source, "storyteller")
         self.assertIsNone(processed_book.transcript_file)
 
-        with self.client.session_transaction() as session_data:
-            self.assertEqual(session_data.get("queue", []), [])
+        self.assertEqual(web_server._load_match_queue(), [])
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-suggestions-story-real")
     def test_suggestions_queue_storyteller_uuid_real_ingest_persists_manifest(self, _mock_kosync):

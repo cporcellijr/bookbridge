@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Stats - ABS-KoSync</title>
+    <title>Stats - BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" type="image/jpeg" href="/static/icon.jpg">
-    <link rel="apple-touch-icon" href="/static/icon.jpg">
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
@@ -38,6 +38,9 @@
             font-size: 28px; font-weight: 700;
             background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .app-icon {
+            display: block; width: 32px; height: 32px; border-radius: 6px; object-fit: cover;
         }
         .library-links { padding-left: 20px; border-left: 1px solid rgba(255,255,255,.1); }
         .nav-icon-link {
@@ -251,8 +254,8 @@
     <div class="top-nav">
         <div class="logo-section">
             <a href="/" style="display: flex; align-items: center; gap: 12px; text-decoration: none;">
-                <img src="/static/icon.jpg" alt="ABS-KoSync" style="height: 32px; width: 32px; border-radius: 6px;">
-                <h1 style="font-size: 22px; margin: 0;">ABS-KoSync</h1>
+                <img src="/static/icon.png" alt="BookBridge" class="app-icon">
+                <h1 style="font-size: 22px; margin: 0;">BookBridge</h1>
             </a>
             <div class="library-links">
                 {% if abs_server %}
@@ -278,7 +281,7 @@
             <a href="/stats" class="btn btn-secondary is-active">📊 Stats</a>
             <a href="/settings" class="btn btn-secondary">⚙️ Settings</a>
             <a href="/logs" class="btn btn-secondary">🪵 Logs</a>
-            <a href="/match" class="btn btn-primary">➕ Add Book</a>
+            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Book</a>
         </div>
     </div>
     <main class="container">

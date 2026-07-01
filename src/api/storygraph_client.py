@@ -8,7 +8,8 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.string_utils import author_match_floor, calculate_similarity, clean_book_title
+from src.utils.user_config import resolve_setting
 
 _AUDIO_FORMAT_MAP = (
     ("digital audiobook", "Digital Audiobook"),
@@ -85,29 +86,25 @@ logger = logging.getLogger(__name__)
 class StorygraphClient:
     """StoryGraph client using unofficial web endpoints + session cookies."""
 
-    def __init__(self):
+    def __init__(self, credentials: dict = None):
+        # `credentials` (multi-user) overrides per-user StoryGraph cookies/token
+        # and ENABLED; base URL stays global. None => global client.
+        self._creds = credentials
         self.base_url = os.environ.get("STORYGRAPH_BASE_URL", "https://app.thestorygraph.com").rstrip("/")
         self.timeout = 12
         self.user_id = "storygraph_user"
 
-    @staticmethod
-    def _session_cookie() -> str:
-        return (os.environ.get("STORYGRAPH_SESSION_COOKIE") or "").strip()
+    def _session_cookie(self) -> str:
+        return (resolve_setting(self._creds, "STORYGRAPH_SESSION_COOKIE") or "").strip()
 
-    @staticmethod
-    def _remember_user_token() -> str:
-        return (os.environ.get("STORYGRAPH_REMEMBER_USER_TOKEN") or "").strip()
-
-    def _provider_enabled(self) -> bool:
-        provider = (os.environ.get("PROGRESS_TRACKER_PROVIDER") or "").strip().lower()
-        if provider:
-            return provider == "storygraph"
-        return os.environ.get("STORYGRAPH_ENABLED", "false").strip().lower() == "true"
+    def _remember_user_token(self) -> str:
+        return (resolve_setting(self._creds, "STORYGRAPH_REMEMBER_USER_TOKEN") or "").strip()
 
     def is_configured(self) -> bool:
-        if not self._provider_enabled():
-            return False
-        enabled_val = os.environ.get("STORYGRAPH_ENABLED", "").strip().lower()
+        # Hardcover and StoryGraph are independent now — each is gated solely by its
+        # own enable toggle (global, or per-user via the user's integrations), not by
+        # a global either-or provider selector.
+        enabled_val = str(resolve_setting(self._creds, "STORYGRAPH_ENABLED", "")).strip().lower()
         if enabled_val == "false":
             return False
         return bool(self._session_cookie() and self._remember_user_token())
@@ -545,15 +542,30 @@ class StorygraphClient:
         clean_title = clean_book_title(title or "")
         best = None
         best_score = -1
+        best_author_score = 0.0
         for item in candidates:
             score = calculate_similarity(clean_title, clean_book_title(item.get("title", "")))
+            author_score = 0.0
             if author and item.get("author"):
-                score = (score + calculate_similarity(author.lower(), item.get("author", "").lower())) / 2
+                author_score = calculate_similarity(author.lower(), item.get("author", "").lower())
+                score = (score + author_score) / 2
             if score > best_score:
                 best_score = score
                 best = item
+                best_author_score = author_score
 
         if not best:
+            return None
+
+        # Author gate: when an author was supplied and the chosen candidate carries an
+        # author that clearly disagrees, refuse the match rather than returning a
+        # same-title/different-author book. StoryGraph search results almost always
+        # include an author, so a missing one is treated as inconclusive (allowed).
+        if author and best.get("author") and best_author_score < author_match_floor():
+            logger.info(
+                "Rejected StoryGraph match '%s' for '%s' by '%s': author mismatch (%.2f)",
+                best.get("title"), title, author, best_author_score,
+            )
             return None
 
         resolved = dict(best)

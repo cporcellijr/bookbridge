@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Library Suggestions - ABS-KoSync</title>
+    <title>Library Suggestions - BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -53,6 +53,10 @@
         .suggestion-card { border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); border-radius: 10px; padding: 10px; cursor: pointer; }
         .suggestion-card:hover { border-color: rgba(102,126,234,0.5); }
         .suggestion-card.selected { border-color: rgba(102,126,234,0.85); background: rgba(102,126,234,0.14); }
+        .bulk-actions { display: flex; gap: 8px; margin: 8px 0 4px; flex-wrap: wrap; }
+        .suggestion-select { font-size: 12px; color: rgba(255,255,255,0.7); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
+        .suggestion-card.is-queued { opacity: 0.5; border-color: rgba(76,175,80,0.5); }
+        .suggestion-card.is-queued::before { content: '✓ Queued'; float: right; font-size: 11px; font-weight: 700; color: #81c784; }
         .suggestion-main { display: grid; grid-template-columns: 54px minmax(0,1fr); gap: 10px; align-items: center; }
         .cover { width: 54px; height: 54px; border-radius: 8px; object-fit: cover; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); }
         .title { font-size: 15px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; }
@@ -66,6 +70,7 @@
         .source-badge.localfile { background: rgba(156,39,176,0.2); color: #ce93d8; }
         .source-badge.unknown { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
         .source-badge.transcript { background: rgba(167,139,250,0.2); color: #a78bfa; }
+        .source-badge.samefolder { background: rgba(45,212,191,0.18); color: #5eead4; }
         .score { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
         .card-actions { margin-top: 8px; width: 100%; display: flex; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
         .card-actions .btn { opacity: 1; border-width: 1px; font-weight: 700; }
@@ -137,7 +142,7 @@
 <body>
     <div class="top-nav">
         <div class="logo-section">
-            <a href="/"><h1>ABS-KoSync Bridge</h1></a>
+            <a href="/"><h1>BookBridge</h1></a>
             <div class="library-links">
                 {% if abs_server %}
                 <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" title="Audiobookshelf">
@@ -168,8 +173,7 @@
             <a href="/" class="btn">← Dashboard</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="/match" class="btn">➕ Add Book</a>
-            <a href="/batch-match" class="btn">📋 Batch</a>
+            <a href="{{ url_for('add_book') }}" class="btn">Add Book</a>
             <a href="/suggestions" class="btn btn-primary">💡 Suggestions</a>
         </div>
     </div>
@@ -216,6 +220,12 @@
                     <h3>Audiobooks</h3>
                     <span class="count" id="panelCount">{{ suggestions|length }} items</span>
                 </div>
+                {% if suggestions %}
+                <div class="bulk-actions" id="bulkActions">
+                    <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ Add all exact (<span id="exactCount">0</span>)</button>
+                    <button type="button" class="btn btn-small" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ Add selected (<span id="selectedCount">0</span>)</button>
+                </div>
+                {% endif %}
                 <div class="left-wrap">
                     <div class="scan-overlay {% if scan_in_progress %}show{% endif %}" id="scanOverlay">
                         <div class="spinner"></div>
@@ -245,6 +255,9 @@
                                 </div>
                             </div>
                             <div class="card-actions">
+                                <label class="suggestion-select" onclick="event.stopPropagation();">
+                                    <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> Select
+                                </label>
                                 <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">Dismiss</button>
                                 <form method="POST" action="/suggestions" class="inline-form" onsubmit="event.stopPropagation();">
                                     <input type="hidden" name="action" value="never">
@@ -274,7 +287,7 @@
             <div class="panel queue-panel">
                 <div class="panel-head">
                     <h3>Batch Match Queue</h3>
-                    <span class="count">{{ queue|length }} items</span>
+                    <span class="count" id="queueCount">{{ queue|length }} items</span>
                 </div>
 
                 <div class="selection">
@@ -303,6 +316,7 @@
                             <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
                             <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
                             <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
+                            <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
                             <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
                             <label class="field-label" for="storytellerCardGrid">Storyteller (Preferred)</label>
                             <p class="field-hint">Optional. Choose this to create a tri-link.</p>
@@ -321,40 +335,8 @@
                     </div>
                 </div>
 
-                <div class="queue-list">
-                    {% if queue %}
-                    {% for item in queue %}
-                    <div class="queue-item">
-                        <img src="{{ item.cover_url }}" alt="Cover" class="queue-item-cover" onerror="this.style.opacity='0.25';">
-                        <div class="queue-item-info">
-                            <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
-                            {% if item.storyteller_uuid %}
-                            <p class="queue-item-ebook"><span style="color:#a78bfa;">⚡ Storyteller</span>{% if item.ebook_display_name %} + {{ item.ebook_display_name }}{% endif %}</p>
-                            {% else %}
-                            <p class="queue-item-ebook" title="{{ item.ebook_filename }}">📖 {{ item.ebook_display_name or item.ebook_filename }}</p>
-                            {% endif %}
-                        </div>
-                        <form method="POST" action="/suggestions" class="inline-form">
-                            <input type="hidden" name="action" value="remove_from_queue">
-                            <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
-                            <button type="submit" class="queue-remove">×</button>
-                        </form>
-                    </div>
-                    {% endfor %}
-                    <div class="queue-actions">
-                        <form method="POST" action="/suggestions">
-                            <input type="hidden" name="action" value="process_queue">
-                            <button type="submit" class="btn btn-success w-100">✅ Process All ({{ queue|length }})</button>
-                        </form>
-                        <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
-                        <form method="POST" action="/suggestions">
-                            <input type="hidden" name="action" value="clear_queue">
-                            <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Clear entire queue?')">🗑️ Clear Queue</button>
-                        </form>
-                    </div>
-                    {% else %}
-                    <div class="empty"><p>Queue is empty<br>Add items to get started</p></div>
-                    {% endif %}
+                <div class="queue-list" id="queueList">
+                    {% include "_match_queue_panel.html" %}
                 </div>
             </div>
         </div>
@@ -498,12 +480,13 @@
                 });
         }
 
-        function setSelectedEbook(filename, displayName, source = '', sourceId = '') {
+        function setSelectedEbook(filename, displayName, source = '', sourceId = '', sourcePath = '') {
             const hasSelection = !!filename;
             document.getElementById('selected_ebook_filename').value = hasSelection ? filename : '';
             document.getElementById('selected_ebook_display_name').value = hasSelection ? (displayName || filename) : '';
             document.getElementById('selected_ebook_source').value = hasSelection ? (source || '') : '';
             document.getElementById('selected_ebook_source_id').value = hasSelection ? (sourceId || '') : '';
+            document.getElementById('selected_ebook_source_path').value = hasSelection ? (sourcePath || '') : '';
             updateAddButton();
         }
 
@@ -511,10 +494,10 @@
             document.querySelectorAll('#ebookCardGrid .ebook-card').forEach((card) => card.classList.remove('selected'));
         }
 
-        function selectEbookCard(element, filename, displayName, source, sourceId) {
+        function selectEbookCard(element, filename, displayName, source, sourceId, sourcePath) {
             clearSelectedEbookCards();
             if (element) element.classList.add('selected');
-            setSelectedEbook(filename, displayName, source, sourceId);
+            setSelectedEbook(filename, displayName, source, sourceId, sourcePath);
         }
 
         function updateAddButton() {
@@ -750,6 +733,8 @@
                 const displayName = match.display_name || ebookFilename;
                 const source = match.source || inferSourceFromFilename(ebookFilename);
                 const sourceId = match.source_id || '';
+                const sourcePath = match.source_path || match.path || '';
+                const matchReason = match.match_reason || '';
                 const author = match.author || '';
                 const score = Math.round(match.score || 0);
 
@@ -759,7 +744,15 @@
                 card.dataset.displayName = displayName;
                 card.dataset.source = source || '';
                 card.dataset.sourceId = sourceId || '';
-                card.onclick = () => selectEbookCard(card, ebookFilename, displayName, source, sourceId);
+                card.dataset.sourcePath = sourcePath || '';
+                card.onclick = () => selectEbookCard(
+                    card,
+                    ebookFilename,
+                    displayName,
+                    source,
+                    sourceId,
+                    sourcePath
+                );
 
                 const icon = document.createElement('div');
                 icon.className = 'ebook-icon';
@@ -792,6 +785,13 @@
                     card.appendChild(badge);
                 }
 
+                if (matchReason === 'same_folder' || matchReason === 'same_folder_ambiguous') {
+                    const folderBadge = document.createElement('span');
+                    folderBadge.className = 'source-badge samefolder';
+                    folderBadge.textContent = matchReason === 'same_folder' ? 'Same folder' : 'Same folder?';
+                    card.appendChild(folderBadge);
+                }
+
                 grid.appendChild(card);
             });
 
@@ -805,6 +805,7 @@
                         firstCard.dataset.displayName || '',
                         firstCard.dataset.source || '',
                         firstCard.dataset.sourceId || '',
+                        firstCard.dataset.sourcePath || '',
                     );
                 }
             } else {
@@ -817,6 +818,7 @@
             const count = document.querySelectorAll('.suggestion-card').length;
             document.getElementById('topCount').textContent = `Showing ${count} suggestions`;
             document.getElementById('panelCount').textContent = `${count} items`;
+            updateBulkCounts();
             if (count === 0 && !document.getElementById('emptyState')) {
                 const wrap = document.querySelector('.left-wrap');
                 const empty = document.createElement('div');
@@ -849,49 +851,135 @@
         document.getElementById('scanForm').addEventListener('submit', handleScanSubmit);
         document.getElementById('scanFullForm').addEventListener('submit', handleScanSubmit);
 
-        const addToQueueBtn = document.getElementById('addToQueueBtn');
-        if (addToQueueBtn) {
-            addToQueueBtn.dataset.primaryAction = 'selection-actions';
-            addToQueueBtn.dataset.workingLabel = 'Adding to queue...';
-            addToQueueBtn.dataset.workingMessage = 'Adding this suggestion to the batch queue...';
-            addToQueueBtn.dataset.feedbackTarget = 'selectionFeedback';
+        // --- Batch-match queue: async add/remove/clear so the page never reloads and the
+        // scroll position is preserved. process_queue / forge actions navigate away, so
+        // they submit natively but still show the working state. Delegated on .queue-panel
+        // so the handlers survive the queue panel being re-rendered after each mutation.
+        function renderQueueCount() {
+            const count = document.querySelectorAll('#queueList .queue-item').length;
+            const countEl = document.getElementById('queueCount');
+            if (countEl) countEl.textContent = `${count} item${count === 1 ? '' : 's'}`;
         }
 
-        const processQueueAction = document.querySelector('form[action="/suggestions"] input[name="action"][value="process_queue"]');
-        const processQueueBtn = processQueueAction && processQueueAction.form
-            ? processQueueAction.form.querySelector('button[type="submit"]')
-            : null;
-        if (processQueueBtn) {
-            processQueueBtn.dataset.primaryAction = 'queue-actions';
-            processQueueBtn.dataset.workingLabel = 'Processing queue...';
-            processQueueBtn.dataset.workingMessage = 'Processing queued suggestion matches and returning to the dashboard...';
-            processQueueBtn.dataset.feedbackTarget = 'queueFeedback';
+        function markSuggestionQueued(suggestionKey) {
+            const card = suggestionKey ? document.getElementById(`suggestion-${suggestionKey}`) : null;
+            if (card) card.classList.add('is-queued');
         }
 
-        document.querySelectorAll('form[action="/suggestions"]').forEach((form) => {
-            if (form.id === 'scanForm' || form.id === 'scanFullForm') {
-                return;
-            }
-            if (form.querySelector('input[name="action"][value="clear_queue"]')) {
-                return;
-            }
-            if (form.querySelector('input[name="action"][value="remove_from_queue"]')) {
-                return;
-            }
-            if (form.querySelector('input[name="action"][value="reject_suggestion"]')) {
-                return;
-            }
-
-            form.addEventListener('submit', (event) => {
-                const submitter = event.submitter || document.activeElement || getSuggestionPrimarySubmitter(form);
-                if (!submitter || !submitter.dataset.primaryAction) {
-                    return;
+        async function submitQueueMutation(form, action, submitter) {
+            const queuedKey = action === 'add_to_queue' ? selectedSuggestionId : null;
+            if (submitter) submitter.disabled = true;
+            try {
+                const response = await fetch(form.getAttribute('action'), {
+                    method: 'POST',
+                    body: new FormData(form),
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const html = await response.text();
+                const queueList = document.getElementById('queueList');
+                if (queueList) queueList.innerHTML = html;
+                renderQueueCount();
+                if (action === 'add_to_queue') {
+                    markSuggestionQueued(queuedKey);
+                    clearSelection();
                 }
-                if (!startSuggestionSubmitState(submitter)) {
+            } catch (err) {
+                console.error('Queue update failed; reloading to resync.', err);
+                window.location.reload();
+            } finally {
+                if (submitter) submitter.disabled = false;
+            }
+        }
+
+        const queuePanel = document.querySelector('.queue-panel');
+        if (queuePanel) {
+            queuePanel.addEventListener('submit', (event) => {
+                const form = event.target;
+                const actionInput = form.querySelector('input[name="action"]');
+                const action = actionInput ? actionInput.value : '';
+                const submitter = event.submitter || form.querySelector('button[type="submit"]');
+
+                if (action === 'add_to_queue' || action === 'remove_from_queue' || action === 'clear_queue') {
                     event.preventDefault();
+                    submitQueueMutation(form, action, submitter);
+                } else if (action === 'process_queue' || action === 'forge_and_match_queue') {
+                    // Navigates to the dashboard; show the working state, then submit natively.
+                    if (submitter && !submitter.dataset.primaryAction) {
+                        submitter.dataset.primaryAction = 'queue-actions';
+                        submitter.dataset.workingLabel = 'Processing queue...';
+                        submitter.dataset.workingMessage = 'Processing queued matches and returning to the dashboard...';
+                        submitter.dataset.feedbackTarget = 'queueFeedback';
+                    }
+                    if (submitter && !startSuggestionSubmitState(submitter)) {
+                        event.preventDefault();
+                    }
                 }
             });
-        });
+        }
+
+        // --- Bulk add: per-card checkboxes ("Add selected") + "Add all exact" (top
+        // match == 100%, i.e. authoritative / same-folder / exact fuzzy). Each posts the
+        // suggestion keys to add_many_to_queue; the server builds the queue items from its
+        // cached suggestions and returns the refreshed queue panel fragment. ---
+        function getExactKeys() {
+            return Array.from(document.querySelectorAll('.suggestion-card:not(.is-queued)'))
+                .filter((card) => parseFloat(card.dataset.bestScore || '0') >= 100)
+                .map((card) => card.dataset.absId)
+                .filter(Boolean);
+        }
+
+        function getCheckedKeys() {
+            return Array.from(document.querySelectorAll('.suggestion-check:checked'))
+                .map((cb) => cb.dataset.absId)
+                .filter(Boolean);
+        }
+
+        function updateBulkCounts() {
+            const exactCount = getExactKeys().length;
+            const selectedCount = getCheckedKeys().length;
+            const exactCountEl = document.getElementById('exactCount');
+            const selectedCountEl = document.getElementById('selectedCount');
+            if (exactCountEl) exactCountEl.textContent = exactCount;
+            if (selectedCountEl) selectedCountEl.textContent = selectedCount;
+            const exactBtn = document.getElementById('addAllExactBtn');
+            const selectedBtn = document.getElementById('addSelectedBtn');
+            if (exactBtn) exactBtn.disabled = exactCount === 0;
+            if (selectedBtn) selectedBtn.disabled = selectedCount === 0;
+        }
+
+        async function addManyToQueue(keys) {
+            if (!keys.length) return;
+            const formData = new FormData();
+            formData.append('action', 'add_many_to_queue');
+            keys.forEach((key) => formData.append('bridge_keys', key));
+            try {
+                const response = await fetch('/suggestions', {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const html = await response.text();
+                const queueList = document.getElementById('queueList');
+                if (queueList) queueList.innerHTML = html;
+                renderQueueCount();
+                keys.forEach((key) => {
+                    markSuggestionQueued(key);
+                    const cb = document.querySelector(`.suggestion-check[data-abs-id="${CSS.escape(key)}"]`);
+                    if (cb) cb.checked = false;
+                });
+                updateBulkCounts();
+            } catch (err) {
+                console.error('Bulk queue add failed; reloading to resync.', err);
+                window.location.reload();
+            }
+        }
+
+        function addAllExact() { addManyToQueue(getExactKeys()); }
+        function addSelectedSuggestions() { addManyToQueue(getCheckedKeys()); }
+
+        updateBulkCounts();
 
         const sortModeSelect = document.getElementById('sortMode');
         if (sortModeSelect) {
@@ -915,4 +1003,3 @@
     </script>
 </body>
 </html>
-

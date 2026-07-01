@@ -165,7 +165,8 @@ class BookMappingService:
 
         if audio_source.lower() != 'booklore':
             try:
-                abs_collection = os.environ.get('ABS_COLLECTION_NAME', 'Synced with KOReader')
+                from src.utils.user_config import user_setting
+                abs_collection = user_setting('ABS_COLLECTION_NAME', 'Synced with KOReader')
                 self.abs_client.add_to_collection(saved_book.abs_id, abs_collection)
             except Exception as e:
                 logger.warning(f"Shelf-watch: failed to add '{saved_book.abs_id}' to ABS collection: {e}")

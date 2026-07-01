@@ -1,0 +1,59 @@
+# BookBridge project metadata and tool configuration.
+#
+# Runtime dependencies live in requirements.txt (the Docker build installs from
+# it) — they are intentionally NOT duplicated here to keep a single source of
+# truth. This file provides project metadata, dev/test tooling, and config for
+# pytest / ruff / coverage. BookBridge runs from PYTHONPATH (`src` is not an
+# installed package), so packaging is metadata-only.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bookbridge"
+version = "0.1.0"  # display/runtime version is derived in src/version.py
+description = "5-way reading-progress synchronization engine (Audiobookshelf, KOReader/KoSync, Storyteller, Grimmory, Hardcover)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+
+[project.optional-dependencies]
+# Install with: pip install -e ".[dev]"
+dev = [
+    "pytest>=8,<9",
+    "pytest-cov>=5,<6",
+    "ruff>=0.6,<1",
+    "bandit>=1.7,<2",
+    "pip-audit>=2.7,<3",
+]
+
+# `src` is a PYTHONPATH directory, not an installable package; install nothing
+# so `pip install .` resolves metadata/extras without flat-layout discovery.
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["data"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.ruff]
+target-version = "py311"
+line-length = 127
+extend-exclude = ["alembic/versions", "data"]
+
+[tool.ruff.lint]
+# Conservative starter set; expand over time. Not yet a CI gate.
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line length (handled by formatter; legacy lines exceed it)
+    "E741",  # ambiguous variable names (legacy)
+]

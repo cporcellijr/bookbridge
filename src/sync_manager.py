@@ -37,12 +37,18 @@ from src.api.storyteller_api import StorytellerAPIClient
 from src.db.models import Job
 from src.db.models import State, Book, PendingSuggestion
 from src.sync_clients.sync_client_interface import UpdateProgressRequest, LocatorResult, ServiceState, SyncResult, SyncClient
+from src.utils.user_context import (
+    get_current_user_id,
+    set_current_user_id, reset_current_user_id,
+    set_current_user_credentials, reset_current_user_credentials,
+)
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.logging_utils import sanitize_log_data
 
 # [NEW] Service Imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
+from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter
 from src.services.library_service import LibraryService
 from src.services.migration_service import MigrationService
 
@@ -58,6 +64,19 @@ if not hasattr(root_logger, '_configured') or not root_logger._configured:
         format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
     )
 logger = logging.getLogger(__name__)
+
+# Multi-user: per-cycle override of the active sync-client bundle. Set by
+# sync_cycle when running for a specific user; None => use the global clients.
+import contextvars as _contextvars
+_sync_clients_override: "_contextvars.ContextVar" = _contextvars.ContextVar(
+    "sync_clients_override", default=None
+)
+_client_bundle_override: "_contextvars.ContextVar" = _contextvars.ContextVar(
+    "client_bundle_override", default=None
+)
+_library_service_override: "_contextvars.ContextVar" = _contextvars.ContextVar(
+    "library_service_override", default=None
+)
 
 
 class SyncManager:
@@ -79,9 +98,12 @@ class SyncManager:
                  audio_source_adapters: dict | None = None,
                  epub_cache_dir=None,
                  data_dir=None,
-                 books_dir=None):
+                 books_dir=None,
+                 user_client_registry=None):
 
         logger.info("=== Sync Manager Starting ===")
+        # Multi-user: builds per-user client bundles for per-user sync cycles.
+        self.user_client_registry = user_client_registry
         # Use dependency injection
         self.abs_client = abs_client
         self.booklore_client = booklore_client
@@ -121,7 +143,7 @@ class SyncManager:
         self._job_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._pending_sync_lock = threading.Lock()
-        self._pending_sync_books: set[str] = set()
+        self._pending_sync_books: set[tuple[int | None, str]] = set()
         self._job_thread = None
         self._last_library_sync = 0
         self._suggestion_in_flight: set[str] = set()
@@ -255,7 +277,7 @@ class SyncManager:
         source = self._get_audio_source_name(book)
         if not source:
             return None
-        return self.audio_source_adapters.get(source)
+        return self.active_audio_source_adapters.get(source)
 
     def _build_text_anchors(self, full_text: str, char_offset: int):
         if not full_text:
@@ -388,11 +410,124 @@ class SyncManager:
         return safe_locator
 
 
+    @property
+    def sync_clients(self) -> dict:
+        """Active sync clients for the current operation.
+
+        Multi-user: a per-user cycle sets an override (its own configured client
+        bundle) via `_sync_clients_override`; everything else uses the global
+        clients built from the shared/admin config. Reading this property inside
+        a cycle thread therefore transparently yields the right user's clients.
+        """
+        override = _sync_clients_override.get()
+        return override if override is not None else self._global_sync_clients
+
+    @sync_clients.setter
+    def sync_clients(self, value):
+        # Direct assignment sets the global bundle (used by tests and any
+        # caller that swaps the client set); per-cycle overrides go through the
+        # contextvar, not this attribute.
+        self._global_sync_clients = value
+
+    @property
+    def active_client_bundle(self):
+        """Full per-user client bundle for the current operation, if any."""
+        return _client_bundle_override.get()
+
+    def _active_bundle_attr(self, attr_name: str, fallback_name: str = None):
+        bundle = self.active_client_bundle
+        if bundle is not None:
+            return getattr(bundle, attr_name, None)
+        return getattr(self, fallback_name or attr_name, None)
+
+    def _client_bundle_for_book_claimant(self, book):
+        """Return a claimant's per-user client bundle for catalog background work."""
+        if self.active_client_bundle is not None:
+            return self.active_client_bundle
+
+        registry = getattr(self, "user_client_registry", None)
+        db = getattr(self, "database_service", None)
+        abs_id = getattr(book, "abs_id", None)
+        if registry is None or db is None or not abs_id or not hasattr(db, "get_book_user_ids"):
+            return None
+
+        try:
+            user_ids = db.get_book_user_ids(abs_id)
+        except Exception as exc:
+            logger.warning("Could not resolve claimant for pending job '%s': %s", abs_id, exc)
+            return None
+
+        # Prefer the book's designated owner when it is among the claimants so a
+        # background job runs under a deterministic user's credentials instead of
+        # an arbitrary (DB-order) claimant's tokens.
+        ordered_ids = list(user_ids or [])
+        owner_id = getattr(book, "user_id", None)
+        if owner_id is not None and owner_id in ordered_ids:
+            ordered_ids = [owner_id] + [u for u in ordered_ids if u != owner_id]
+
+        for user_id in ordered_ids:
+            try:
+                return registry.get_clients(user_id)
+            except Exception as exc:
+                logger.warning(
+                    "Could not build claimant client bundle for pending job '%s' user_id=%s: %s",
+                    abs_id,
+                    user_id,
+                    exc,
+                )
+        return None
+
+    @property
+    def active_abs_client(self):
+        return self._active_bundle_attr("abs_client")
+
+    @property
+    def active_booklore_client(self):
+        return self._active_bundle_attr("booklore_client")
+
+    @property
+    def active_bookorbit_client(self):
+        return self._active_bundle_attr("bookorbit_client")
+
+    @property
+    def active_storyteller_client(self):
+        return self._active_bundle_attr("storyteller_client")
+
+    @property
+    def active_library_service(self):
+        """LibraryService for the current operation, scoped to the active user."""
+        override = _library_service_override.get()
+        if override is not None:
+            return override
+        bundle = self.active_client_bundle
+        if bundle is not None:
+            return getattr(bundle, "library_service", None)
+        return getattr(self, "library_service", None)
+
+    @property
+    def active_audio_source_adapters(self):
+        bundle = self.active_client_bundle
+        if bundle is None:
+            return getattr(self, "audio_source_adapters", {}) or {}
+
+        adapters = {}
+        abs_client = getattr(bundle, "abs_client", None)
+        if abs_client is not None:
+            adapters["ABS"] = ABSAudioSourceAdapter(abs_client)
+
+        booklore_client = getattr(bundle, "booklore_client", None)
+        if booklore_client is not None:
+            adapters["BookLore"] = BookLoreAudioSourceAdapter(
+                booklore_client,
+                self.data_dir or Path("/data"),
+            )
+        return adapters
+
     def _setup_sync_clients(self, clients: dict[str, SyncClient]):
-        self.sync_clients = {}
+        self._global_sync_clients = {}
         for name, client in clients.items():
             if client.is_configured():
-                self.sync_clients[name] = client
+                self._global_sync_clients[name] = client
                 logger.info(f"🚀 Sync client enabled: '{name}'")
             else:
                 logger.debug(f"Sync client disabled/unconfigured: '{name}'")
@@ -409,7 +544,16 @@ class SyncManager:
         # [NEW] Check CWA Integration Status
         if self.library_service and self.library_service.cwa_client:
             cwa = self.library_service.cwa_client
-            if cwa.is_configured():
+            if (
+                self.user_client_registry is not None
+                and not getattr(cwa, "username", None)
+                and not getattr(cwa, "password", None)
+            ):
+                logger.debug("CWA global startup check skipped; per-user credentials are available through registry")
+                cwa = None
+            if cwa is None:
+                pass
+            elif cwa.is_configured():
                 # check_connection() logs its own Success/Fail messages and verifies Authentication
                 if cwa.check_connection():
                     # If connected, ensure search template is cached
@@ -749,12 +893,13 @@ class SyncManager:
 
         # Try to download from Grimmory API
         # Note: We use hasattr to prevent crashes if BookloreClient wasn't updated with these methods yet
-        if hasattr(self.booklore_client, 'is_configured') and self.booklore_client.is_configured():
-            book = self.booklore_client.find_book_by_filename(ebook_filename)
+        booklore_client = self.active_booklore_client
+        if hasattr(booklore_client, 'is_configured') and booklore_client.is_configured():
+            book = booklore_client.find_book_by_filename(ebook_filename)
             if book:
                 logger.info(f"⚡ Downloading EPUB from Grimmory: {sanitize_log_data(ebook_filename)}")
-                if hasattr(self.booklore_client, 'download_book'):
-                    content = self.booklore_client.download_book(book['id'])
+                if hasattr(booklore_client, 'download_book'):
+                    content = booklore_client.download_book(book['id'])
                     if content:
                         with open(cached_path, 'wb') as f:
                             f.write(content)
@@ -766,6 +911,27 @@ class SyncManager:
                 logger.error(f"❌ EPUB not found in Grimmory: {sanitize_log_data(ebook_filename)}")
             if not filesystem_matches:
                 logger.error(f"❌ EPUB not found on filesystem and Grimmory not configured")
+
+        # Try to download from BookOrbit API (library-hosted; mirrors Grimmory).
+        # Lets a BookOrbit-sourced book hydrate when the shared /books volume
+        # isn't mounted. Resolve the book id by filename search.
+        bookorbit_client = self.active_bookorbit_client
+        if hasattr(bookorbit_client, 'is_configured') and bookorbit_client.is_configured():
+            try:
+                bo_book = bookorbit_client.find_book_by_filename(ebook_filename)
+                if bo_book:
+                    logger.info(f"⚡ Downloading EPUB from BookOrbit: {sanitize_log_data(ebook_filename)}")
+                    content = bookorbit_client.download_book(bo_book.get('id'))
+                    if content:
+                        with open(cached_path, 'wb') as f:
+                            f.write(content)
+                        logger.info(f"✅ Downloaded EPUB to cache: '{cached_path}'")
+                        return cached_path
+                    logger.error("❌ Failed to download EPUB content from BookOrbit")
+                else:
+                    logger.error(f"❌ EPUB not found in BookOrbit: {sanitize_log_data(ebook_filename)}")
+            except Exception as e:
+                logger.warning(f"⚠️ BookOrbit EPUB download failed: {e}")
 
         return None
 
@@ -831,11 +997,11 @@ class SyncManager:
 
         return True
 
-    def _queue_pending_sync(self, abs_id: str | None) -> None:
+    def _queue_pending_sync(self, abs_id: str | None, user_id=None) -> None:
         if not abs_id:
             return
         with self._pending_sync_lock:
-            self._pending_sync_books.add(abs_id)
+            self._pending_sync_books.add((user_id, abs_id))
 
     def register_post_cycle_callback(self, fn) -> None:
         """Register a callable to be invoked after every sync cycle completes."""
@@ -843,14 +1009,26 @@ class SyncManager:
 
     def _dispatch_pending_syncs(self) -> None:
         with self._pending_sync_lock:
-            pending = sorted(self._pending_sync_books)
+            # Sort by abs_id (always a str) first; user_id may be None (global
+            # cycle) or int (per-user instant sync), and sorting a mixed set of
+            # those directly raises TypeError — which, because .clear() is below,
+            # would strand the queue and stop every future replay.
+            pending = sorted(
+                self._pending_sync_books,
+                key=lambda t: (t[1], t[0] is not None),
+            )
             self._pending_sync_books.clear()
 
-        for abs_id in pending:
+        if pending:
+            logger.info(f"⚡ Replaying {len(pending)} queued instant sync(s) deferred during the busy cycle")
+        for user_id, abs_id in pending:
             logger.info(f"⚡ Replaying queued instant sync for '{abs_id}'")
+            kwargs = {'target_abs_id': abs_id}
+            if user_id is not None:
+                kwargs['user_id'] = user_id
             threading.Thread(
                 target=self.sync_cycle,
-                kwargs={'target_abs_id': abs_id},
+                kwargs=kwargs,
                 daemon=True,
             ).start()
 
@@ -939,43 +1117,65 @@ class SyncManager:
             return None, None
 
     # Suggestion Logic
-    def queue_suggestion(self, abs_id: str) -> None:
+    def queue_suggestion(self, abs_id: str, user_id=None) -> None:
         """Schedule ebook-discovery for an unmapped ABS book seen via Socket.IO.
 
         No-ops if suggestions are disabled, the book is already mapped, a
         suggestion already exists, or the book is >70% complete.
         Uses an in-flight set to prevent duplicate discovery threads.
         """
+        bundle_token = None
+        library_token = None
+        if user_id is not None and self.user_client_registry is not None:
+            try:
+                bundle = self.user_client_registry.get_clients(user_id)
+                bundle_token = _client_bundle_override.set(bundle)
+                library_token = _library_service_override.set(getattr(bundle, "library_service", None))
+            except Exception as exc:
+                logger.warning("Suggestion discovery could not scope clients for user %s: %s", user_id, exc)
+                return
+
         if os.environ.get("SUGGESTIONS_ENABLED", "true").lower() != "true":
+            if library_token is not None:
+                _library_service_override.reset(library_token)
+            if bundle_token is not None:
+                _client_bundle_override.reset(bundle_token)
             return
 
-        with self._suggestion_lock:
-            if abs_id in self._suggestion_in_flight:
-                return
-            if self.database_service.suggestion_exists(abs_id):
-                return
-            all_books = self.database_service.get_all_books()
-            if any(b.abs_id == abs_id for b in all_books):
-                return
-            self._suggestion_in_flight.add(abs_id)
-
         try:
-            # Skip books that are mostly finished
-            if self.abs_client:
-                progress_data = self.abs_client.get_progress(abs_id)
-                if progress_data:
-                    pct = progress_data.get('progress', 0)
-                    if pct > 0.70 or progress_data.get('isFinished'):
-                        logger.debug(f"Skipping suggestion for {abs_id}: progress {pct:.1%} > 70% or finished")
-                        return
-
-            logger.info(
-                f"ABS Socket.IO: Queuing suggestion discovery for unknown book '{abs_id[:12]}...'"
-            )
-            self._create_suggestion(abs_id, None)
-        finally:
             with self._suggestion_lock:
-                self._suggestion_in_flight.discard(abs_id)
+                if abs_id in self._suggestion_in_flight:
+                    return
+                if self.database_service.suggestion_exists(abs_id):
+                    return
+                all_books = self.database_service.get_all_books()
+                if any(b.abs_id == abs_id for b in all_books):
+                    return
+                self._suggestion_in_flight.add(abs_id)
+
+            try:
+                # Skip books that are mostly finished
+                abs_client = self.active_abs_client
+                if abs_client:
+                    progress_data = abs_client.get_progress(abs_id)
+                    if progress_data:
+                        pct = progress_data.get('progress', 0)
+                        if pct > 0.70 or progress_data.get('isFinished'):
+                            logger.debug(f"Skipping suggestion for {abs_id}: progress {pct:.1%} > 70% or finished")
+                            return
+
+                logger.info(
+                    f"ABS Socket.IO: Queuing suggestion discovery for unknown book '{abs_id[:12]}...'"
+                )
+                self._create_suggestion(abs_id, None)
+            finally:
+                with self._suggestion_lock:
+                    self._suggestion_in_flight.discard(abs_id)
+        finally:
+            if library_token is not None:
+                _library_service_override.reset(library_token)
+            if bundle_token is not None:
+                _client_bundle_override.reset(bundle_token)
 
     def check_for_suggestions(self, abs_progress_map, active_books):
         """Check for unmapped books with progress and create suggestions."""
@@ -1041,8 +1241,16 @@ class SyncManager:
         logger.info(f"🔍 Found potential new book for suggestion: '{abs_id}'")
         
         try:
+            abs_client = self.active_abs_client
+            booklore_client = self.active_booklore_client
+            library_service = self.active_library_service
+
             # 1. Get Details from ABS
-            item = self.abs_client.get_item_details(abs_id)
+            if not abs_client:
+                logger.debug(f"Suggestion failed: ABS client unavailable for {abs_id}")
+                return
+
+            item = abs_client.get_item_details(abs_id)
             if not item:
                 logger.debug(f"Suggestion failed: Could not get details for {abs_id}")
                 return
@@ -1069,9 +1277,9 @@ class SyncManager:
             found_filenames = set()
             
             # 2a. Search Grimmory
-            if self.booklore_client and self.booklore_client.is_configured():
+            if booklore_client and booklore_client.is_configured():
                 try:
-                    bl_results = self.booklore_client.search_books(search_title)
+                    bl_results = booklore_client.search_books(search_title)
                     logger.debug(f"Grimmory returned {len(bl_results)} results for '{search_title}'")
                     for b in bl_results:
                          # Filter for EPUBs
@@ -1110,9 +1318,9 @@ class SyncManager:
                     logger.warning(f"⚠️ Filesystem search failed during suggestion: {e}")
             
             # 2c. ABS Direct Match (check if audiobook item has ebook files)
-            if self.abs_client:
+            if abs_client:
                 try:
-                    ebook_files = self.abs_client.get_ebook_files(abs_id)
+                    ebook_files = abs_client.get_ebook_files(abs_id)
                     if ebook_files:
                         logger.debug(f"ABS Direct: Found {len(ebook_files)} ebook file(s) in audiobook item")
                         for ef in ebook_files:
@@ -1129,12 +1337,12 @@ class SyncManager:
                     logger.warning(f"⚠️ ABS Direct search failed during suggestion: {e}")
             
             # 2d. CWA Search (Calibre-Web Automated via OPDS)
-            if self.library_service and self.library_service.cwa_client and self.library_service.cwa_client.is_configured():
+            if library_service and library_service.cwa_client and library_service.cwa_client.is_configured():
                 try:
                     query = f"{search_title}"
                     if author:
                         query += f" {author}"
-                    cwa_results = self.library_service.cwa_client.search_ebooks(query)
+                    cwa_results = library_service.cwa_client.search_ebooks(query)
                     if cwa_results:
                         logger.debug(f"CWA: Found {len(cwa_results)} result(s) for '{search_title}'")
                         for cr in cwa_results:
@@ -1151,14 +1359,14 @@ class SyncManager:
                     logger.warning(f"⚠️ CWA search failed during suggestion: {e}")
 
             # 2e. ABS Search (search other libraries for matching ebook)
-            if self.abs_client:
+            if abs_client:
                 try:
-                    abs_results = self.abs_client.search_ebooks(search_title)
+                    abs_results = abs_client.search_ebooks(search_title)
                     if abs_results:
                         logger.debug(f"ABS Search: Found {len(abs_results)} result(s) for '{search_title}'")
                         for ar in abs_results:
                             # Check if this result has ebook files
-                            result_ebooks = self.abs_client.get_ebook_files(ar['id'])
+                            result_ebooks = abs_client.get_ebook_files(ar['id'])
                             if result_ebooks:
                                 ef = result_ebooks[0]
                                 matches.append({
@@ -1259,17 +1467,38 @@ class SyncManager:
         self.database_service.save_job(job)
 
         # 4. Launch the heavy work in a separate thread
+        client_bundle = self._client_bundle_for_book_claimant(target_book)
+        library_service = (
+            getattr(client_bundle, "library_service", None)
+            if client_bundle is not None
+            else self.active_library_service
+        )
         self._job_thread = threading.Thread(
             target=self._run_background_job,
-            args=(target_book, job_idx, total_jobs),
+            args=(target_book, job_idx, total_jobs, library_service, client_bundle),
             daemon=True
         )
         self._job_thread.start()
 
-    def _run_background_job(self, book: Book, job_idx=1, job_total=1):
+    def _run_background_job(self, book: Book, job_idx=1, job_total=1, library_service=None, client_bundle=None):
         """
         Threaded worker that handles transcription without blocking the main loop.
         """
+        bundle_token = None
+        library_token = None
+        user_token = None
+        creds_token = None
+        if client_bundle is not None:
+            bundle_token = _client_bundle_override.set(client_bundle)
+            bundle_user_id = getattr(client_bundle, "user_id", None)
+            if bundle_user_id is not None:
+                user_token = set_current_user_id(bundle_user_id)
+            bundle_credentials = getattr(client_bundle, "credentials", None)
+            if bundle_credentials is not None:
+                creds_token = set_current_user_credentials(bundle_credentials)
+        if library_service is not None:
+            library_token = _library_service_override.set(library_service)
+
         abs_id = book.abs_id
         abs_title = book.abs_title or 'Unknown'
         ebook_filename = book.ebook_filename
@@ -1285,6 +1514,7 @@ class SyncManager:
             audio_adapter = self._get_audio_source_adapter(book)
             audio_source = self._get_audio_source_name(book)
             audio_source_id = getattr(book, "audio_source_id", None) or abs_id
+            abs_client = self.active_abs_client
 
             def update_progress(local_pct, phase):
                 """
@@ -1310,8 +1540,8 @@ class SyncManager:
 
             # Fetch item details for acquisition context
             item_details = None
-            if not ebook_only_mode and audio_source == "ABS":
-                item_details = self.abs_client.get_item_details(abs_id)
+            if not ebook_only_mode and audio_source == "ABS" and abs_client:
+                item_details = abs_client.get_item_details(abs_id)
             elif not ebook_only_mode:
                 logger.info(
                     f"Background prep: skipping ABS item lookup for non-ABS audio source '{sanitize_log_data(audio_source or 'unknown')}'"
@@ -1333,9 +1563,10 @@ class SyncManager:
                     logger.debug(f"Could not backfill series metadata: {_se}")
 
             epub_path = None
-            if self.library_service and item_details:
+            library_service = library_service or self.active_library_service
+            if library_service and item_details:
                 # Try Priority Chain (ABS Direct -> Grimmory -> CWA -> ABS Search)
-                epub_path = self.library_service.acquire_ebook(item_details)
+                epub_path = library_service.acquire_ebook(item_details)
 
             # Fallback to legacy logic (Local Filesystem / Cache / Grimmory Classic)
             if not epub_path:
@@ -1418,7 +1649,9 @@ class SyncManager:
                         storyteller_title = None
                         if getattr(book, "storyteller_uuid", None):
                             try:
-                                storyteller_title = self.storyteller_client.get_book_title_by_uuid(book.storyteller_uuid)
+                                storyteller_client = self.active_storyteller_client
+                                if storyteller_client:
+                                    storyteller_title = storyteller_client.get_book_title_by_uuid(book.storyteller_uuid)
                             except Exception as storyteller_title_err:
                                 logger.debug(
                                     "Unable to resolve Storyteller title for '%s' (%s): %s",
@@ -1588,6 +1821,16 @@ class SyncManager:
                 book.status = 'failed_retry_later'
 
             self.database_service.save_book(book)
+
+        finally:
+            if library_token is not None:
+                _library_service_override.reset(library_token)
+            if creds_token is not None:
+                reset_current_user_credentials(creds_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+            if bundle_token is not None:
+                _client_bundle_override.reset(bundle_token)
 
     def _has_significant_delta(self, client_name, config, book):
         """
@@ -1992,44 +2235,242 @@ class SyncManager:
                 
         return leader, leader_pct
 
-    def sync_cycle(self, target_abs_id=None):
+    @staticmethod
+    def _locator_collapsed_to_start(locator, leader_pct, epsilon: float = 0.005) -> bool:
+        """True when a resolved locator points at the very start of the book (0%)
+        even though the leader is materially ahead — i.e. the locator/XPath
+        resolution failed and silently fell through to char 0 (a no-longer-resolving
+        KoSync XPath, or an out-of-range alignment timestamp mapping back to the
+        start). Pushing that 0% to the other clients would wipe real progress, so
+        the caller should skip the cross-client write. A genuine "reset to start"
+        keeps leader_pct near 0 and returns False."""
+        if locator is None or leader_pct is None:
+            return False
+        pct = locator.percentage
+        if pct is None:
+            return False
+        return pct <= epsilon < leader_pct
+
+    def _persist_state_snapshot(self, book, client_name: str, state_current: dict, current_time: float) -> None:
+        """Save a single client's current position to the DB without running a
+        cross-client sync. Used to record a leader's own (unchanged) value so a
+        static/stale source — e.g. a manual-link sibling-hash resolution that never
+        receives a new PUT — is not re-detected as a fresh change every cycle."""
+        try:
+            self.database_service.save_state(State(
+                abs_id=book.abs_id,
+                client_name=client_name.lower(),
+                last_updated=current_time,
+                percentage=state_current.get('pct'),
+                timestamp=state_current.get('ts'),
+                xpath=state_current.get('xpath'),
+                cfi=state_current.get('cfi'),
+            ))
+        except Exception as e:
+            logger.debug(f"Could not persist state snapshot for '{client_name}': {e}")
+
+    def sync_cycle(self, target_abs_id=None, user_id=None):
         """
         Run a sync cycle.
 
         Args:
             target_abs_id: If provided, only sync this specific book (Instant Sync trigger).
                            Otherwise, sync all active books using bulk-poll optimization.
+            user_id: Multi-user — run the cycle for this user, using their own
+                     client bundle and scoping state/progress to them. When None,
+                     runs as the default (single-user/admin) exactly as before.
         """
-        # Prevent race condition: If daemon is running, skip. If Instant Sync, wait.
-        acquired = False
-        if target_abs_id:
-             # Instant Sync: Block and wait for lock (up to 10s)
-             acquired = self._sync_lock.acquire(timeout=10)
-             if not acquired:
-                 self._queue_pending_sync(target_abs_id)
-                 logger.warning(f"⚠️ Sync lock timeout for '{target_abs_id}' - queued follow-up sync")
-                 return
-        else:
-             # Daemon: Non-blocking attempt
-             acquired = self._sync_lock.acquire(blocking=False)
-             if not acquired:
-                 logger.debug("Sync cycle skipped - another cycle is running")
-                 return
+        # Per-user context: only when an explicit user + a registry are present,
+        # so the default cycle is byte-for-byte unchanged.
+        clients_token = None
+        bundle_token = None
+        library_token = None
+        user_token = None
+        creds_token = None
+        if user_id is not None and self.user_client_registry is not None:
+            try:
+                bundle = self.user_client_registry.get_clients(user_id)
+                configured = {
+                    name: client for name, client in bundle.sync_clients.items()
+                    if client.is_configured()
+                }
+                clients_token = _sync_clients_override.set(configured)
+                bundle_token = _client_bundle_override.set(bundle)
+                library_token = _library_service_override.set(getattr(bundle, "library_service", None))
+                user_token = set_current_user_id(user_id)
+                creds_token = set_current_user_credentials(bundle.credentials)
+                logger.debug("🔄 Sync cycle scoped to user_id=%s (%d clients)", user_id, len(configured))
+            except Exception as e:
+                logger.error("Failed to set up per-user sync context for user %s: %s", user_id, e)
+                return
 
         try:
-            self._sync_cycle_internal(target_abs_id)
-        except Exception as e:
-            logger.error(f"❌ Sync cycle internal error: {e}")
-            # Log traceback for robust debugging
-            logger.error(traceback.format_exc())
+            # Prevent race condition: If daemon is running, skip. If Instant Sync, wait.
+            acquired = False
+            if target_abs_id:
+                 # Instant Sync: Block and wait for lock (up to 10s)
+                 lock_wait_t0 = time.monotonic()
+                 acquired = self._sync_lock.acquire(timeout=10)
+                 lock_wait = time.monotonic() - lock_wait_t0
+                 if not acquired:
+                     self._queue_pending_sync(target_abs_id, user_id=user_id)
+                     logger.warning(f"⚠️ Sync lock timeout for '{target_abs_id}' after {lock_wait:.1f}s - queued follow-up sync")
+                     return
+                 if lock_wait > 1.0:
+                     logger.info(f"⏳ Instant sync for '{target_abs_id}' waited {lock_wait:.1f}s for the sync lock")
+            else:
+                 # Daemon: Non-blocking attempt
+                 acquired = self._sync_lock.acquire(blocking=False)
+                 if not acquired:
+                     logger.debug("Sync cycle skipped - another cycle is running")
+                     return
+
+            try:
+                self._sync_cycle_internal(target_abs_id)
+            except Exception as e:
+                logger.error(f"❌ Sync cycle internal error: {e}")
+                # Log traceback for robust debugging
+                logger.error(traceback.format_exc())
+            finally:
+                self._sync_lock.release()
+                self._dispatch_pending_syncs()
+                for cb in self._post_cycle_callbacks:
+                    try:
+                        cb()
+                    except Exception as cb_err:
+                        logger.debug("Post-cycle callback error: %s", cb_err)
         finally:
-            self._sync_lock.release()
-            self._dispatch_pending_syncs()
-            for cb in self._post_cycle_callbacks:
-                try:
-                    cb()
-                except Exception as cb_err:
-                    logger.debug("Post-cycle callback error: %s", cb_err)
+            if clients_token is not None:
+                _sync_clients_override.reset(clients_token)
+            if bundle_token is not None:
+                _client_bundle_override.reset(bundle_token)
+            if library_token is not None:
+                _library_service_override.reset(library_token)
+            if user_token is not None:
+                reset_current_user_id(user_token)
+            if creds_token is not None:
+                reset_current_user_credentials(creds_token)
+
+    def _active_sync_users(self):
+        """Active users that have at least one configured client. Returns [] when
+        multi-user isn't wired (registry/db missing) so callers fall back to the
+        single default cycle."""
+        registry = self.user_client_registry
+        db = self.database_service
+        if registry is None or db is None or not hasattr(db, "list_users"):
+            return []
+        try:
+            users = [u for u in db.list_users() if getattr(u, "active", 1)]
+        except Exception as e:
+            logger.warning("Could not list users for multi-user sync: %s", e)
+            return []
+        eligible = []
+        for user in users:
+            try:
+                bundle = registry.get_clients(user.id)
+                if any(c.is_configured() for c in bundle.sync_clients.values()):
+                    eligible.append(user)
+            except Exception as e:
+                logger.warning("Skipping user %s (client build failed): %s", getattr(user, "id", None), e)
+        return eligible
+
+    def run_sync_for_all_users(self, target_abs_id=None):
+        """Run a sync cycle for every eligible user (shared catalog, per-user
+        progress/clients). Falls back to one default cycle when multi-user isn't
+        available, preserving single-user behavior."""
+        users = self._active_sync_users()
+        if not users:
+            self.sync_cycle(target_abs_id=target_abs_id)
+            return
+        for user in users:
+            try:
+                self.sync_cycle(target_abs_id=target_abs_id, user_id=user.id)
+            except Exception as e:
+                logger.error("Sync cycle failed for user %s: %s", getattr(user, "id", None), e)
+
+    def _filter_books_for_current_user(self, books, bulk_states_per_client=None):
+        """Limit a per-user cycle to the books this user has matched/claimed.
+
+        The catalog is shared and the admin's ABS token can SEE other users'
+        libraries, so ABS access alone is NOT isolation — the user↔book link is.
+        Requiring the link here is what stops one user's reading (or a state that
+        got mis-attributed to the wrong account, e.g. a device authenticating as
+        the admin) from being pushed to another user's ABS / StoryGraph /
+        Hardcover. A state row without a link is treated as mis-attribution and
+        skipped. ABS audiobooks are additionally checked against the user's token.
+        """
+        user_id = get_current_user_id()
+        if user_id is None:
+            return list(books or [])
+
+        abs_sync_client = (self.sync_clients or {}).get("ABS")
+        abs_client = getattr(abs_sync_client, "abs_client", None)
+        abs_configured = bool(
+            abs_client and getattr(abs_client, "is_configured", lambda: False)()
+        )
+        abs_bulk = (bulk_states_per_client or {}).get("ABS") or {}
+        abs_bulk_ids = set(abs_bulk.keys()) if isinstance(abs_bulk, dict) else set()
+
+        visible = []
+        for book in books or []:
+            abs_id = getattr(book, "abs_id", None)
+
+            # Primary ownership gate: only the books this user claimed (linked).
+            try:
+                linked = self.database_service.is_user_linked(user_id, abs_id)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping '%s' for user_id=%s: ownership check failed: %s",
+                    abs_id,
+                    user_id,
+                    exc,
+                )
+                linked = False
+            if not linked:
+                logger.debug(
+                    "Skipping '%s' for user_id=%s: not linked to this user", abs_id, user_id
+                )
+                continue
+
+            uses_abs_audio = (
+                getattr(book, "sync_mode", "audiobook") != "ebook_only"
+                and self._get_audio_source_name(book) == "ABS"
+            )
+            if not uses_abs_audio:
+                visible.append(book)
+                continue
+
+            if not abs_configured:
+                visible.append(book)
+                continue
+
+            if abs_id in abs_bulk_ids:
+                visible.append(book)
+                continue
+
+            try:
+                if abs_client.get_item_details(abs_id):
+                    visible.append(book)
+                else:
+                    logger.debug(
+                        "Skipping ABS item '%s' for user_id=%s: item is not accessible to this ABS token",
+                        abs_id,
+                        user_id,
+                    )
+            except Exception as exc:
+                # Transient ABS error (timeout/5xx) — the ownership link already
+                # passed, so keep the book rather than silently dropping a real
+                # update the user just made. Fail-open is isolation-safe here
+                # because the user↔book link, not the token check, is the gate.
+                logger.debug(
+                    "Keeping ABS item '%s' for user_id=%s despite access-check error: %s",
+                    abs_id,
+                    user_id,
+                    exc,
+                )
+                visible.append(book)
+
+        return visible
 
     def _sync_cycle_internal(self, target_abs_id=None):
         # Clear caches at start of cycle
@@ -2042,8 +2483,9 @@ class SyncManager:
                 storyteller_client.storyteller_client.clear_cache()
                 
         # Refresh Library Metadata (Grimmory) — throttle to once per 15 minutes
-        if self.library_service and (time.time() - self._last_library_sync > 900):
-            self.library_service.sync_library_books()
+        library_service = self.active_library_service
+        if library_service and (time.time() - self._last_library_sync > 900):
+            library_service.sync_library_books()
             self._last_library_sync = time.time()
 
         # "Up Next" shelf watch (Grimmory + BookOrbit) — runs only in global poll
@@ -2067,7 +2509,19 @@ class SyncManager:
                 except Exception as e:
                     logger.warning(f"Shelf-watch run failed: {e}")
 
-        # Get active books directly from database service
+        # Optimization: Pre-fetch bulk data from all clients that support it
+        # Only do this if we are in a full cycle (target_abs_id is None)
+        bulk_states_per_client = {}
+
+        if not target_abs_id:
+            for client_name, client in self.sync_clients.items():
+                bulk_data = client.fetch_bulk_state()
+                if bulk_data:
+                    bulk_states_per_client[client_name] = bulk_data
+                    logger.debug(f"📊 Pre-fetched bulk state for {client_name}")
+
+        # Get active books directly from database service, then apply the
+        # per-user access filter after bulk prefetch gives us cheap ABS hints.
         active_books = []
         if target_abs_id:
             logger.info(f"⚡ Instant Sync triggered for '{target_abs_id}'")
@@ -2077,27 +2531,23 @@ class SyncManager:
         else:
             active_books = self.database_service.get_books_by_status('active')
 
+        active_books = self._filter_books_for_current_user(active_books, bulk_states_per_client)
+
         if not active_books:
             return
 
-        # Optimization: Pre-fetch bulk data from all clients that support it
-        # Only do this if we are in a full cycle (target_abs_id is None)
-        bulk_states_per_client = {}
-
         if not target_abs_id:
             logger.debug(f"🔄 Sync cycle starting - {len(active_books)} active book(s)")
-            for client_name, client in self.sync_clients.items():
-                bulk_data = client.fetch_bulk_state()
-                if bulk_data:
-                    bulk_states_per_client[client_name] = bulk_data
-                    logger.debug(f"📊 Pre-fetched bulk state for {client_name}")
             
             # Check for suggestions
             if 'ABS' in bulk_states_per_client:
                 self.check_for_suggestions(bulk_states_per_client['ABS'], active_books)
                 
         # Main sync loop - process each active book
+        cycle_t0 = time.monotonic()
+        book_durations = []
         for book in active_books:
+            book_t0 = time.monotonic()
             abs_id = book.abs_id
             logger.info(f"🔄 '{abs_id}' Syncing '{sanitize_log_data(book.abs_title or 'Unknown')}'")
             title_snip = sanitize_log_data(book.abs_title or 'Unknown')
@@ -2232,13 +2682,23 @@ class SyncManager:
                 # Exception: if a client just appeared for the first time (no prior
                 #   saved state), its appearance IS the activity — e.g. Storyteller
                 #   book exists at 0% but was never in config before.
+                # Exception: a targeted instant sync was triggered BY a read event
+                #   (a KoSync PUT or ABS socket update). The KoSync PUT already
+                #   persists the new position into State before the debounced sync
+                #   runs, so the per-client delta is 0 — but the read genuinely
+                #   happened, so we must resolve the discrepancy instead of waiting
+                #   for a "new" read that will never look new.
                 new_client_in_config = any(
                     client_name.lower() not in prev_states_by_client
                     for client_name in config.keys()
                 )
-                if significant_diff and not any_significant_delta and not char_delta_triggered and not new_client_in_config:
+                is_instant_target = bool(target_abs_id)
+                if (significant_diff and not any_significant_delta and not char_delta_triggered
+                        and not new_client_in_config and not is_instant_target):
                     logger.debug(f"'{abs_id}' '{title_snip}' Discrepancy exists ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) but no recent client activity detected. Waiting for a new read event to determine true leader")
                     continue
+                if is_instant_target and significant_diff and not any_significant_delta and not char_delta_triggered and not new_client_in_config:
+                    logger.info(f"'{abs_id}' '{title_snip}' Instant-sync target: resolving discrepancy ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) — the triggering read already wrote State (delta=0)")
 
                 if significant_diff:
                     logger.debug(f"'{abs_id}' '{title_snip}' Proceeding due to client discrepancy")
@@ -2368,6 +2828,27 @@ class SyncManager:
                     f"original_epub='{sanitize_log_data(getattr(book, 'original_ebook_filename', None))}'"
                 )
 
+                # Guard: never write a start-of-book (0%) reset that came from a
+                # FAILED locator resolution. When the leader is materially ahead but
+                # the resolved locator collapsed to ~0% — e.g. a KoSync XPath that no
+                # longer resolves in this EPUB, or an out-of-range alignment timestamp
+                # mapping back to char 0 — pushing that 0% to ABS/the other clients
+                # silently wipes real progress (issue #290 follow-up). A genuine reset
+                # keeps leader_pct ~0 and is unaffected.
+                if self._locator_collapsed_to_start(locator, leader_pct):
+                    logger.warning(
+                        f"⚠️ '{abs_id}' '{title_snip}' Resolved locator collapsed to "
+                        f"start-of-book (0%) while leader '{leader}' is at "
+                        f"{leader_formatter(leader_pct)} (source={locator_source or 'unknown'}) "
+                        f"— treating as a failed locator resolution; skipping cross-client "
+                        f"write to preserve existing progress"
+                    )
+                    # Record the leader's own (static) value so this unchanged
+                    # position is not re-detected as a fresh change every cycle —
+                    # a stale sibling-hash resolution must not perpetually re-trigger.
+                    self._persist_state_snapshot(book, leader, leader_state.current, time.time())
+                    continue
+
                 # Update all other clients and store results.
                 # When an audiobook companion (Storyteller) is the leader, its forward
                 # advance is treated as listening, so the ABS push credits the audio
@@ -2448,10 +2929,11 @@ class SyncManager:
                         pass  # Non-blocking
 
                 # ── Grimmory Reading Session Recording ──
+                booklore_client = self.active_booklore_client
                 if (
                     os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
-                    and self.booklore_client
-                    and self.booklore_client.is_configured()
+                    and booklore_client
+                    and booklore_client.is_configured()
                     and leader_pct != leader_state.previous_pct
                     and leader.lower() != 'kosync'  # Plugin handles KOSync→Grimmory
                 ):
@@ -2463,10 +2945,11 @@ class SyncManager:
                         pass  # Non-blocking: never prevent sync
 
                 # ── BookOrbit Reading Session Recording ──
+                bookorbit_client = self.active_bookorbit_client
                 if (
                     os.environ.get("BOOKORBIT_READING_SESSIONS", "true").strip().lower() in ("true", "1", "yes", "on")
-                    and getattr(self, "bookorbit_client", None)
-                    and self.bookorbit_client.is_configured()
+                    and bookorbit_client
+                    and bookorbit_client.is_configured()
                     and getattr(book, "ebook_source", None) == "BookOrbit"
                     and leader_pct != leader_state.previous_pct
                     and leader.lower() != 'kosync'  # kosync_server handles KOSync->BookOrbit
@@ -2488,7 +2971,22 @@ class SyncManager:
             except Exception as e:
                 logger.error(traceback.format_exc())
                 logger.error(f"❌ Sync error: {e}")
+            finally:
+                book_durations.append((time.monotonic() - book_t0, title_snip))
 
+        cycle_elapsed = time.monotonic() - cycle_t0
+        n_books = len(book_durations)
+        if n_books:
+            slowest_dur, slowest_title = max(book_durations)
+            avg_ms = (cycle_elapsed / n_books) * 1000
+            summary = (
+                f"⏱️ Sync cycle finished: {n_books} book(s) in {cycle_elapsed:.1f}s "
+                f"(avg {avg_ms:.0f}ms/book, slowest {slowest_dur:.1f}s '{slowest_title}')"
+            )
+            if target_abs_id:
+                logger.debug(summary)
+            else:
+                logger.info(summary)
         logger.debug("End of sync cycle for active books")
 
     def _compute_session_duration(
@@ -2591,6 +3089,10 @@ class SyncManager:
         current_time: float,
     ) -> None:
         """Record a reading session to Grimmory when progress changes on a tracked book."""
+        booklore_client = self.active_booklore_client
+        if not booklore_client:
+            return
+
         leader_pct = leader_state.current.get('pct', 0)
         prev_pct = leader_state.previous_pct or 0.0
 
@@ -2619,7 +3121,7 @@ class SyncManager:
 
             if grimmory_id:
                 try:
-                    self.booklore_client.create_reading_session(
+                    booklore_client.create_reading_session(
                         book_id=int(grimmory_id),
                         start_time=start_time,
                         end_time=current_time,
@@ -2642,7 +3144,7 @@ class SyncManager:
 
                 cfi = leader_state.current.get('cfi')
                 try:
-                    self.booklore_client.create_reading_session(
+                    booklore_client.create_reading_session(
                         book_id=int(ebook_grimmory_id),
                         start_time=start_time,
                         end_time=current_time,
@@ -2665,6 +3167,10 @@ class SyncManager:
         """Record a reading session to BookOrbit when progress changes on a
         BookOrbit-hosted ebook. The session is logged against the BookOrbit book
         (ebook_source_id); audio-leader sessions fall back to the ebook file."""
+        bookorbit_client = self.active_bookorbit_client
+        if not bookorbit_client:
+            return
+
         book_id = getattr(book, "ebook_source_id", None)
         if not book_id:
             return
@@ -2695,7 +3201,7 @@ class SyncManager:
             end_location = leader_state.current.get('cfi')
 
         try:
-            self.bookorbit_client.create_reading_session(
+            bookorbit_client.create_reading_session(
                 book_id=int(book_id),
                 start_time=start_time,
                 end_time=current_time,
@@ -2721,7 +3227,11 @@ class SyncManager:
         if not epub:
             return None
 
-        bl_book = self.booklore_client.find_book_by_filename(epub, allow_refresh=False)
+        booklore_client = self.active_booklore_client
+        if not booklore_client:
+            return None
+
+        bl_book = booklore_client.find_book_by_filename(epub, allow_refresh=False)
         if bl_book and bl_book.get('id'):
             try:
                 return int(bl_book['id'])
@@ -2730,18 +3240,23 @@ class SyncManager:
 
         return None
 
-    def clear_progress(self, abs_id):
+    def clear_progress(self, abs_id, user_id=None, sync_clients=None):
         """
-        Clear progress data for a specific book and reset all sync clients to 0%.
+        Clear progress data for a specific book and reset sync clients to 0%.
 
         Args:
             abs_id: The book ID to clear progress for
+            user_id: When given, scope the state deletion to that user and leave
+                the shared KOSync document (which other users may share) intact.
+            sync_clients: When given, reset progress through this bundle (the
+                acting user's clients) instead of the global/admin clients.
 
         Returns:
             dict: Summary of cleared data
         """
         try:
             logger.info(f"🧹 Clearing progress for book {sanitize_log_data(abs_id)}...")
+            clients = sync_clients if sync_clients is not None else self.sync_clients
 
             # Acquire lock to prevent race conditions with active sync cycles
             with self._sync_lock:
@@ -2750,14 +3265,13 @@ class SyncManager:
                 if not book:
                     raise ValueError(f"Book not found: {abs_id}")
 
-                # Clear all states for this book from database
-                cleared_count = self.database_service.delete_states_for_book(abs_id)
+                # Clear states for this book (scoped to the user when given)
+                cleared_count = self.database_service.delete_states_for_book(abs_id, user_id=user_id)
                 logger.info(f"💾 Cleared {cleared_count} state records from database")
 
-                # Delete KOSync document record to bypass "furthest wins" protection
-                # Without this, the integrated KOSync server will reject the 0% update
-                # and the old progress will sync back on the next cycle
-                if book.kosync_doc_id:
+                # Delete the shared KOSync document only for an unscoped/global clear
+                # (a per-user clear must not wipe a document other users may share).
+                if book.kosync_doc_id and user_id is None:
                     deleted = self.database_service.delete_kosync_document(book.kosync_doc_id)
                     if deleted:
                         logger.info(f"🗑️ Deleted KOSync document record: {book.kosync_doc_id}")
@@ -2768,7 +3282,7 @@ class SyncManager:
                 request = UpdateProgressRequest(locator_result=locator, txt="", previous_location=None)
 
                 applicable_clients = {
-                    name: client for name, client in self.sync_clients.items()
+                    name: client for name, client in clients.items()
                     if (
                         ('ebook' if getattr(book, 'sync_mode', 'audiobook') == 'ebook_only' else 'audiobook') in client.get_supported_sync_types()
                         and client.supports_book(book)

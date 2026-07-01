@@ -180,6 +180,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         storyteller=False,
         booklore=False,
         bookloreaudio=False,
+        cwa=False,
         hardcover=False,
         storygraph=False,
     ):
@@ -189,6 +190,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             'Storyteller': Mock(is_configured=Mock(return_value=storyteller)),
             'BookLore': Mock(is_configured=Mock(return_value=booklore)),
             'BookLoreAudio': Mock(is_configured=Mock(return_value=bookloreaudio)),
+            'CWA': Mock(is_configured=Mock(return_value=cwa)),
             'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
             'StoryGraph': Mock(is_configured=Mock(return_value=storygraph)),
         }
@@ -225,6 +227,47 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
 
     def _read_template_source(self, template_name: str) -> str:
         return (Path(__file__).parent.parent / 'templates' / template_name).read_text(encoding='utf-8')
+
+    def test_forging_book_exposes_job_progress_on_dashboard(self):
+        from src.db.models import Book, Job
+
+        book = Book(
+            abs_id='forge-progress-1',
+            abs_title='Forge Progress',
+            ebook_filename='forge-progress.epub',
+            status='forging',
+            duration=3600,
+        )
+        self.mock_database_service.get_all_books.return_value = [book]
+        self.mock_database_service.get_latest_job.return_value = Job(
+            abs_id='forge-progress-1',
+            progress=0.35,
+            last_error='Waiting for Storyteller alignment',
+        )
+        self._set_dashboard_integrations(storyteller=False)
+
+        mapping = self._capture_index_mapping()
+
+        self.assertEqual(mapping['status'], 'forging')
+        self.assertEqual(mapping['job_progress'], 35.0)
+        self.assertEqual(mapping['job_last_error'], 'Waiting for Storyteller alignment')
+
+    def test_forge_active_tasks_includes_persisted_forging_books(self):
+        from src.db.models import Book
+
+        book = Book(
+            abs_id='forge-active-1',
+            abs_title='Persisted Forge',
+            ebook_filename='persisted.epub',
+            status='forging',
+        )
+        self.mock_container.mock_forge_service.active_tasks = {'Memory Forge'}
+        self.mock_database_service.get_books_by_status.return_value = [book]
+
+        response = self.client.get('/api/forge/active')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), ['Memory Forge', 'Persisted Forge'])
 
     def test_dependency_injection_works(self):
         """Verify that dependency injection is working properly."""
@@ -1426,10 +1469,15 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         html = self._read_template_source('suggestions.html')
 
         self.assertIn('id="selectionFeedback"', html)
-        self.assertIn('id="queueFeedback"', html)
-        self.assertIn("addToQueueBtn.dataset.primaryAction = 'selection-actions';", html)
-        self.assertIn("processQueueBtn.dataset.primaryAction = 'queue-actions';", html)
+        self.assertIn('{% include "_match_queue_panel.html" %}', html)
+        # Queue add/remove/clear post via fetch and swap the panel fragment in place;
+        # process/forge still navigate away and show the working state.
+        self.assertIn('submitQueueMutation(', html)
+        self.assertIn("'X-Requested-With': 'XMLHttpRequest'", html)
         self.assertIn('startSuggestionSubmitState(submitter)', html)
+
+        panel = self._read_template_source('_match_queue_panel.html')
+        self.assertIn('id="queueFeedback"', panel)
 
     def test_forge_template_has_submit_feedback_hooks(self):
         html = self._read_template_source('forge.html')
@@ -1460,8 +1508,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertTrue(response.location.endswith('/'))
 
-        # Verify clear_progress was called on manager
-        self.mock_manager.clear_progress.assert_called_once_with('clear-test-book')
+        # Verify clear_progress was called on manager, scoped to the acting user
+        # (user_id None / global clients here since auth is disabled in tests).
+        from unittest.mock import ANY
+        self.mock_manager.clear_progress.assert_called_once_with(
+            'clear-test-book', user_id=None, sync_clients=ANY)
 
         print("[OK] Clear progress endpoint test passed with clean DI")
 
@@ -1901,6 +1952,29 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
 
         self.assertNotIn('title="Link Storyteller"', html)
         self.assertIn('Linked via UUID', html)
+
+    def test_cwa_source_card_renders_before_progress_state(self):
+        from src.db.models import Book
+
+        self._set_dashboard_integrations(cwa=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(
+                abs_id='abs-cwa-1',
+                abs_title='First-Time Caller',
+                ebook_filename='cwa_First_Time_Caller.epub',
+                ebook_source='CWA',
+                ebook_source_id='First_Time_Caller',
+                status='active',
+                sync_mode='audiobook',
+            )
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+
+        html = self._render_index_template_source()
+
+        self.assertIn('title="CWA Kobo Sync"', html)
+        self.assertIn('<span class="service-name">CWA</span>', html)
+        self.assertIn('0.0%', html)
 
     def test_storygraph_card_renders_on_dashboard(self):
         from src.db.models import Book, State, StorygraphDetails
@@ -2451,6 +2525,18 @@ class TestAudiobookSearchVariants(unittest.TestCase):
         from src.web_server import _audiobook_search_variants
         self.assertEqual(_audiobook_search_variants("Blister (2016).epub"), ["Blister (2016).epub", "Blister"])
 
+    def test_unabridged_suffix_stripped(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("First-Time Caller (Unabridged).epub"),
+            [
+                "First-Time Caller (Unabridged).epub",
+                "First-Time Caller (Unabridged)",
+                "First-Time Caller",
+                "First Time Caller",
+            ],
+        )
+
     def test_clean_query_is_unchanged(self):
         from src.web_server import _audiobook_search_variants
         self.assertEqual(_audiobook_search_variants("Sublimation"), ["Sublimation"])
@@ -2460,6 +2546,20 @@ class TestAudiobookSearchVariants(unittest.TestCase):
         self.assertEqual(
             _audiobook_search_variants("The Lord of the Rings - J.R.R. Tolkien"),
             ["The Lord of the Rings - J.R.R. Tolkien", "The Lord of the Rings"],
+        )
+
+    def test_hyphenated_title_relaxes_to_spaced_title(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("first-time caller"),
+            ["first-time caller", "first time caller"],
+        )
+
+    def test_spaced_short_title_tries_adjacent_hyphen_forms(self):
+        from src.web_server import _audiobook_search_variants
+        self.assertEqual(
+            _audiobook_search_variants("first time caller"),
+            ["first time caller", "first-time caller", "first time-caller"],
         )
 
 
@@ -2495,6 +2595,36 @@ class TestEbookSearchProviderPreference(unittest.TestCase):
 
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].source, "Local File")
+
+    def test_hyphenated_query_finds_spaced_ebook_title(self):
+        import src.web_server as ws
+        from types import SimpleNamespace
+
+        def fake_search(term):
+            if term == "first time caller":
+                return [SimpleNamespace(name="First Time Caller.epub", source="BookOrbit", source_id="42")]
+            return []
+
+        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+            out = ws._search_ebooks_with_fallback("first-time caller")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].name, "First Time Caller.epub")
+
+    def test_edition_suffix_query_finds_clean_ebook_title(self):
+        import src.web_server as ws
+        from types import SimpleNamespace
+
+        def fake_search(term):
+            if term == "First Time Caller":
+                return [SimpleNamespace(name="First Time Caller.epub", source="BookOrbit", source_id="42")]
+            return []
+
+        with patch.object(ws, "get_searchable_ebooks", side_effect=fake_search):
+            out = ws._search_ebooks_with_fallback("First-Time Caller (Unabridged).epub")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].name, "First Time Caller.epub")
 
 
 class TestForgeTextItemBuilder(unittest.TestCase):

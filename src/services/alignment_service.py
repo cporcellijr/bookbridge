@@ -10,9 +10,10 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+
+from src.utils.time_utils import utcnow
 
 from src.db.models import BookAlignment
 from src.utils.polisher import Polisher
@@ -737,7 +738,7 @@ class AlignmentService:
             if existing:
                 existing.alignment_map_json = json_blob
                 existing.align_method = align_method
-                existing.last_updated = datetime.utcnow()
+                existing.last_updated = utcnow()
             else:
                 new_align = BookAlignment(abs_id=abs_id, alignment_map_json=json_blob, align_method=align_method)
                 session.add(new_align)

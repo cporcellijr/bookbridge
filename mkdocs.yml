@@ -1,10 +1,10 @@
-site_name: ABS-KoSync Enhanced
-site_url: https://cporcellijr.github.io/abs-kosync-bridge/
+site_name: BookBridge
+site_url: https://cporcellijr.github.io/bookbridge/
 site_author: cporcellijr
 site_description: The ultimate bridge for cross-platform reading and listening synchronization.
 
-repo_name: cporcellijr/abs-kosync-bridge
-repo_url: https://github.com/cporcellijr/abs-kosync-bridge
+repo_name: cporcellijr/bookbridge
+repo_url: https://github.com/cporcellijr/bookbridge
 
 theme:
   name: material

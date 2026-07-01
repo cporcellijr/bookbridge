@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from src.db.database_service import DatabaseService
-from src.db.models import Book
+from src.db.models import Book, KosyncDocument
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 
 
@@ -23,6 +23,7 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
     def setUp(self):
         with self.db.get_session() as session:
             session.query(Book).delete()
+            session.query(KosyncDocument).delete()
 
         self.books_dir = Path(TEST_DIR) / "books"
         self.cache_dir = Path(TEST_DIR) / "epub_cache"
@@ -252,4 +253,136 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
 
         self.assertEqual(calls, [])
         self.assertEqual(self.db.get_book("abs-1").kosync_doc_id, "hash-kavita_187")
+
+    def test_served_hash_linked_as_sibling_even_when_matching(self):
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Already Correct",
+                original_ebook_filename="kavita_187.epub",
+                kosync_doc_id="hash-kavita_187",
+                status="active",
+            )
+        )
+
+        self.service.build_manifest()
+
+        # The served file's hash is now durably linked, so a BridgeSync device that
+        # downloaded it resolves to the book via the document link (not just the column).
+        served_doc = self.db.get_kosync_document("hash-kavita_187")
+        self.assertIsNotNone(served_doc)
+        self.assertEqual(served_doc.linked_abs_id, "abs-1")
+
+    def test_drifted_hash_reconciled_but_displaced_hash_kept_as_sibling(self):
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Drifted",
+                original_ebook_filename="kavita_187.epub",
+                kosync_doc_id="stale-hash",
+                status="active",
+            )
+        )
+
+        self.service.build_manifest()
+
+        # No device was using the stale hash, so the primary pointer converges to the
+        # served file's hash...
+        self.assertEqual(self.db.get_book("abs-1").kosync_doc_id, "hash-kavita_187")
+        # ...but the displaced hash is preserved as a linked sibling rather than lost.
+        stale_doc = self.db.get_kosync_document("stale-hash")
+        self.assertIsNotNone(stale_doc)
+        self.assertEqual(stale_doc.linked_abs_id, "abs-1")
+
+    def test_active_device_hash_is_not_demoted_by_reconcile(self):
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Forged Book",
+                original_ebook_filename="kavita_187.epub",
+                kosync_doc_id="device-forged-hash",
+                status="active",
+            )
+        )
+        # A real reader (KOReader 'go7') is actively syncing against the forged-EPUB hash.
+        self.db.save_kosync_document(
+            KosyncDocument(
+                document_hash="device-forged-hash",
+                percentage=0.5,
+                device="go7",
+                device_id="go7",
+                linked_abs_id="abs-1",
+            )
+        )
+
+        self.service.build_manifest()
+
+        # The reconciler must NOT change the primary back to the served-file hash —
+        # that is the "manual hash keeps changing back every cycle" bug (#285).
+        self.assertEqual(self.db.get_book("abs-1").kosync_doc_id, "device-forged-hash")
+        # The served-file hash is still linked as a sibling for BridgeSync devices.
+        served_doc = self.db.get_kosync_document("hash-kavita_187")
+        self.assertIsNotNone(served_doc)
+        self.assertEqual(served_doc.linked_abs_id, "abs-1")
+
+    def test_internal_bot_progress_does_not_protect_stale_hash(self):
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Bot Only",
+                original_ebook_filename="kavita_187.epub",
+                kosync_doc_id="stale-hash",
+                status="active",
+            )
+        )
+        # Only the sync bot has written this hash — not a real device, so it must not
+        # block reconciliation.
+        self.db.save_kosync_document(
+            KosyncDocument(
+                document_hash="stale-hash",
+                percentage=0.5,
+                device="abs-sync-bot",
+                device_id="abs-sync-bot",
+                linked_abs_id="abs-1",
+            )
+        )
+
+        self.service.build_manifest()
+
+        self.assertEqual(self.db.get_book("abs-1").kosync_doc_id, "hash-kavita_187")
+
+    def test_zero_percent_device_counts_as_active(self):
+        # A real device freshly opened at exactly 0% is still actively syncing —
+        # it must protect its hash from being demoted (falsy-zero regression: a
+        # bare `percentage > 0` test treated the 0% device as idle).
+        self.db.save_kosync_document(
+            KosyncDocument(
+                document_hash="fresh-device-hash",
+                percentage=0.0,
+                device="kobo",
+                device_id="kobo-1",
+            )
+        )
+        self.assertTrue(self.service._hash_actively_used_by_device("fresh-device-hash"))
+
+    def test_bare_stub_without_device_not_active(self):
+        # A bare stub (no device, no progress) is not in active use.
+        self.db.save_kosync_document(KosyncDocument(document_hash="bare-stub-hash"))
+        self.assertFalse(self.service._hash_actively_used_by_device("bare-stub-hash"))
+
+    def test_ensure_linked_kosync_document_upserts_and_relinks(self):
+        # Creates a row when missing.
+        self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-1"))
+        doc = self.db.get_kosync_document("h1")
+        self.assertIsNotNone(doc)
+        self.assertEqual(doc.linked_abs_id, "abs-1")
+        # No-op when already linked to the same book.
+        self.assertFalse(self.db.ensure_linked_kosync_document("h1", "abs-1"))
+        # Relinks when pointing elsewhere.
+        self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-2"))
+        self.assertEqual(self.db.get_kosync_document("h1").linked_abs_id, "abs-2")
 

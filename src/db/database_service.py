@@ -22,6 +22,7 @@ from .models import (
     StorygraphDetails,
     Setting,
     KosyncDocument,
+    KosyncUserProgress,
     PendingSuggestion,
     BookloreBook,
     ReadingSession,
@@ -30,8 +31,12 @@ from .models import (
     ShelfWatchScan,
     EmbeddingCache,
     BookAlignment,
+    User,
+    UserCredential,
+    UserBook,
     Base,
 )
+from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,7 @@ class DatabaseService:
         self.db_path = Path(os.path.abspath(db_path))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_manager = DatabaseManager(str(self.db_path))
+        self._default_uid = None  # cached default (admin) user id for state scoping
 
         # Run Alembic migrations to ensure schema is up to date
         self._run_alembic_migrations()
@@ -199,6 +205,204 @@ class DatabaseService:
                 return True
             return False
 
+    # ------------------------------------------------------------------
+    # Users (multi-user)
+    # ------------------------------------------------------------------
+    def get_user(self, user_id: int) -> Optional[User]:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if user:
+                session.expunge(user)
+            return user
+
+    def get_user_by_username(self, username: str) -> Optional[User]:
+        if not username:
+            return None
+        from sqlalchemy import func
+        with self.get_session() as session:
+            user = session.query(User).filter(
+                func.lower(User.username) == username.strip().lower()
+            ).first()
+            if user:
+                session.expunge(user)
+            return user
+
+    def list_users(self) -> List[User]:
+        with self.get_session() as session:
+            users = session.query(User).order_by(User.id).all()
+            for user in users:
+                session.expunge(user)
+            return users
+
+    def count_users(self) -> int:
+        with self.get_session() as session:
+            return session.query(User).count()
+
+    def create_user(self, username: str, password: str = None, role: str = 'user',
+                    active: int = 1) -> User:
+        """Create a user with an optional plaintext password (hashed here).
+
+        Enforces case-insensitive username uniqueness. Every lookup (login,
+        KoSync auth, rename) compares via ``func.lower()``, but the DB unique
+        index is case-sensitive, so 'Admin' and 'admin' could otherwise coexist
+        and make those lookups resolve ambiguously. Raises ValueError on a clash.
+        """
+        from werkzeug.security import generate_password_hash
+        from sqlalchemy import func
+        username = (username or "").strip()
+        password_hash = generate_password_hash(password) if password else None
+        with self.get_session() as session:
+            existing = session.query(User).filter(
+                func.lower(User.username) == username.lower()
+            ).first()
+            if existing is not None:
+                raise ValueError(f"Username '{username}' already exists")
+            user = User(username=username, password_hash=password_hash,
+                        role=role, active=active)
+            session.add(user)
+            session.flush()
+            session.refresh(user)
+            session.expunge(user)
+            return user
+
+    def set_user_password(self, user_id: int, password: str) -> bool:
+        from werkzeug.security import generate_password_hash
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            user.password_hash = generate_password_hash(password) if password else None
+            return True
+
+    def set_user_active(self, user_id: int, active: bool) -> bool:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            user.active = 1 if active else 0
+            return True
+
+    def set_username(self, user_id: int, new_username: str) -> tuple:
+        """Rename a user. Returns (ok, error_message). Enforces uniqueness
+        (case-insensitive) and a non-empty name."""
+        from sqlalchemy import func
+        new_username = (new_username or "").strip()
+        if not new_username:
+            return False, "Username cannot be empty"
+        with self.get_session() as session:
+            clash = session.query(User).filter(
+                func.lower(User.username) == new_username.lower(),
+                User.id != user_id,
+            ).first()
+            if clash:
+                return False, "That username is already taken"
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False, "User not found"
+            user.username = new_username
+            return True, None
+
+    def delete_user(self, user_id: int) -> bool:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            session.delete(user)
+            # The default-user id (owner of un-scoped state) is cached for the
+            # process lifetime; deleting a user — especially the original admin —
+            # can make it stale, so recompute it on next access.
+            self._default_uid = None
+            return True
+
+    def touch_user_login(self, user_id: int) -> None:
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if user:
+                user.last_login = utcnow()
+
+    def verify_user_credentials(self, username: str, password: str) -> Optional[User]:
+        """Return the active User if username+password match, else None."""
+        from werkzeug.security import check_password_hash
+        user = self.get_user_by_username(username)
+        if not user or not user.active or not user.password_hash:
+            return None
+        if check_password_hash(user.password_hash, password or ""):
+            return user
+        return None
+
+    # ------------------------------------------------------------------
+    # Per-user credentials (user-scoped setting store)
+    # ------------------------------------------------------------------
+    def get_user_credential(self, user_id: int, key: str, default: str = None) -> Optional[str]:
+        with self.get_session() as session:
+            cred = session.query(UserCredential).filter(
+                UserCredential.user_id == user_id, UserCredential.key == key
+            ).first()
+            return cred.value if cred else default
+
+    def get_user_credentials(self, user_id: int) -> dict:
+        with self.get_session() as session:
+            creds = session.query(UserCredential).filter(
+                UserCredential.user_id == user_id
+            ).all()
+            return {c.key: c.value for c in creds}
+
+    def set_user_credential(self, user_id: int, key: str, value: str) -> UserCredential:
+        value_str = str(value) if value is not None else None
+        with self.get_session() as session:
+            existing = session.query(UserCredential).filter(
+                UserCredential.user_id == user_id, UserCredential.key == key
+            ).first()
+            if existing:
+                existing.value = value_str
+                session.flush()
+                session.refresh(existing)
+                session.expunge(existing)
+                return existing
+            cred = UserCredential(user_id=user_id, key=key, value=value_str)
+            session.add(cred)
+            session.flush()
+            session.refresh(cred)
+            session.expunge(cred)
+            return cred
+
+    def delete_user_credential(self, user_id: int, key: str) -> bool:
+        with self.get_session() as session:
+            cred = session.query(UserCredential).filter(
+                UserCredential.user_id == user_id, UserCredential.key == key
+            ).first()
+            if cred:
+                session.delete(cred)
+                return True
+            return False
+
+    def assign_orphan_rows_to_user(self, user_id: int) -> dict:
+        """Backfill NULL user_id rows on per-user tables to `user_id`.
+
+        Used once at multi-user bootstrap to hand the pre-existing single user's
+        progress/stats to the default admin. Returns per-table update counts."""
+        counts = {}
+        with self.get_session() as session:
+            for model in (Book, State, KosyncDocument, ReadingSession, KOReaderBookStat, KOReaderPageStat):
+                updated = session.query(model).filter(
+                    model.user_id.is_(None)
+                ).update({model.user_id: user_id}, synchronize_session=False)
+                counts[model.__tablename__] = updated
+
+            # Visibility (dashboard/sync/manifest) keys off user_books links, not
+            # Book.user_id. The d7f0a2c4e6b8 migration creates those links at schema
+            # time, but on a fresh upgrade the admin is created AFTER migrations run,
+            # so the books just assigned above would have NO link and the admin's
+            # dashboard would be empty. Only seed links when this user has none yet
+            # (the broken state) so established multi-user installs are untouched.
+            session.flush()
+            if session.query(UserBook).filter(UserBook.user_id == user_id).count() == 0:
+                owned_ids = [r[0] for r in session.query(Book.abs_id).filter(Book.user_id == user_id).all()]
+                for abs_id in owned_ids:
+                    session.add(UserBook(user_id=user_id, abs_id=abs_id))
+                counts['user_books'] = len(owned_ids)
+        return counts
+
     # Book operations
     def get_book(self, abs_id: str) -> Optional[Book]:
         """Get a book by its ABS ID."""
@@ -322,10 +526,16 @@ class DatabaseService:
             )
             return [r[0] for r in rows]
 
-    def get_all_books(self) -> List[Book]:
-        """Get all books as model objects."""
+    def get_all_books(self, user_id: int = None) -> List[Book]:
+        """Get all books as model objects. When user_id is given, scope to the
+        books that user has matched/claimed (shared catalog, per-user links)."""
         with self.get_session() as session:
-            books = session.query(Book).all()
+            query = session.query(Book)
+            if user_id is not None:
+                query = query.join(UserBook, UserBook.abs_id == Book.abs_id).filter(
+                    UserBook.user_id == user_id
+                )
+            books = query.all()
             for book in books:
                 session.expunge(book)
             return books
@@ -360,9 +570,21 @@ class DatabaseService:
                 session.expunge(existing)
                 return existing
             else:
-                # Create new book
+                # Create new book — stamp the creator from the ambient user context
+                # (the matching request, the kosync device user, or the running
+                # sync cycle), falling back to the default admin. user_id is the
+                # original creator (set on insert only); visibility is governed by
+                # the per-user `user_books` links, so also claim it for the creator.
+                creator_uid = book.user_id if getattr(book, "user_id", None) is not None else self._resolve_uid(None)
+                book.user_id = creator_uid
                 session.add(book)
                 session.flush()
+                if creator_uid is not None:
+                    exists = session.query(UserBook).filter(
+                        UserBook.user_id == creator_uid, UserBook.abs_id == book.abs_id
+                    ).first()
+                    if not exists:
+                        session.add(UserBook(user_id=creator_uid, abs_id=book.abs_id))
                 session.refresh(book)
                 session.expunge(book)
                 return book
@@ -379,6 +601,16 @@ class DatabaseService:
                 session.query(State).filter(State.abs_id == old_abs_id).update({State.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(Job).filter(Job.abs_id == old_abs_id).update({Job.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(KosyncDocument).filter(KosyncDocument.linked_abs_id == old_abs_id).update({KosyncDocument.linked_abs_id: new_abs_id}, synchronize_session=False)
+                # Carry per-user claims across, deduping against any link the user
+                # already has on the new id (the (user_id, abs_id) pair is unique).
+                existing_new = {
+                    r[0] for r in session.query(UserBook.user_id).filter(UserBook.abs_id == new_abs_id).all()
+                }
+                for link in session.query(UserBook).filter(UserBook.abs_id == old_abs_id).all():
+                    if link.user_id in existing_new:
+                        session.delete(link)
+                    else:
+                        link.abs_id = new_abs_id
                 
                 # Cleanup non-migratable data (Alignment/Hardcover/StoryGraph)
                 from .models import BookAlignment # Import here to avoid circulars if any, though likely safe at top
@@ -407,48 +639,141 @@ class DatabaseService:
                 return True
             return False
 
-    def get_books_by_status(self, status: str) -> List[Book]:
-        """Get books by status."""
+    def get_books_by_status(self, status: str, user_id: int = None) -> List[Book]:
+        """Get books by status. When user_id is given, scope to the books that
+        user has matched/claimed (shared catalog, per-user links)."""
         with self.get_session() as session:
-            books = session.query(Book).filter(Book.status == status).all()
+            query = session.query(Book).filter(Book.status == status)
+            if user_id is not None:
+                query = query.join(UserBook, UserBook.abs_id == Book.abs_id).filter(
+                    UserBook.user_id == user_id
+                )
+            books = query.all()
             for book in books:
                 session.expunge(book)
             return books
 
-    # State operations
-    def get_state(self, abs_id: str, client_name: str) -> Optional[State]:
-        """Get a specific state by book and client."""
+    # ---- per-user book membership (shared catalog, per-user visibility) ----
+    def link_user_book(self, user_id: int, abs_id: str) -> None:
+        """Claim a book for a user (idempotent). A book can be linked to many users."""
+        if user_id is None or not abs_id:
+            return
         with self.get_session() as session:
-            state = session.query(State).filter(
-                State.abs_id == abs_id,
-                State.client_name == client_name
+            exists = session.query(UserBook).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
             ).first()
+            if not exists:
+                session.add(UserBook(user_id=user_id, abs_id=abs_id))
+
+    def unlink_user_book(self, user_id: int, abs_id: str) -> int:
+        """Remove a user's claim on a book. Returns rows deleted."""
+        if user_id is None or not abs_id:
+            return 0
+        with self.get_session() as session:
+            return session.query(UserBook).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
+            ).delete(synchronize_session=False)
+
+    def is_user_linked(self, user_id: int, abs_id: str) -> bool:
+        """True if the user has claimed this book."""
+        if user_id is None or not abs_id:
+            return False
+        with self.get_session() as session:
+            return session.query(UserBook).filter(
+                UserBook.user_id == user_id, UserBook.abs_id == abs_id
+            ).first() is not None
+
+    def get_linked_abs_ids(self, user_id: int) -> set:
+        """All abs_ids the user has claimed."""
+        if user_id is None:
+            return set()
+        with self.get_session() as session:
+            rows = session.query(UserBook.abs_id).filter(UserBook.user_id == user_id).all()
+            return {r[0] for r in rows}
+
+    def get_book_user_ids(self, abs_id: str) -> List[int]:
+        """All user ids that have claimed this book."""
+        if not abs_id:
+            return []
+        with self.get_session() as session:
+            rows = session.query(UserBook.user_id).filter(UserBook.abs_id == abs_id).all()
+            return [r[0] for r in rows]
+
+    # State operations
+    #
+    # Multi-user: progress is per-user. `user_id` defaults to the default user
+    # (admin) so single-user callers and pre-migration data keep working; pass
+    # an explicit user_id for per-user sync. Progress is keyed by
+    # (abs_id, client_name, user_id).
+    def _resolve_uid(self, user_id):
+        if user_id is not None:
+            return user_id
+        # Fall back to the ambient sync user (set by sync_cycle for the user it
+        # is running), then to the default (admin) user.
+        from src.utils.user_context import get_current_user_id
+        ctx_uid = get_current_user_id()
+        if ctx_uid is not None:
+            return ctx_uid
+        return self._default_user_id()
+
+    def _default_user_id(self):
+        """The user that owns un-scoped state (first admin, else first user)."""
+        if self._default_uid is not None:
+            return self._default_uid
+        with self.get_session() as session:
+            user = (session.query(User).filter(User.role == 'admin').order_by(User.id).first()
+                    or session.query(User).order_by(User.id).first())
+            self._default_uid = user.id if user else None
+        return self._default_uid
+
+    def get_state(self, abs_id: str, client_name: str, user_id: int = None) -> Optional[State]:
+        """Get a specific state by book + client (+ user)."""
+        uid = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            query = session.query(State).filter(
+                State.abs_id == abs_id,
+                State.client_name == client_name,
+            )
+            if uid is not None:
+                query = query.filter(State.user_id == uid)
+            state = query.first()
             if state:
                 session.expunge(state)
             return state
 
-    def get_states_for_book(self, abs_id: str) -> List[State]:
-        """Get all states for a book."""
+    def get_states_for_book(self, abs_id: str, user_id: int = None) -> List[State]:
+        """Get all states for a book (scoped to a user)."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
-            states = session.query(State).filter(State.abs_id == abs_id).all()
+            query = session.query(State).filter(State.abs_id == abs_id)
+            if uid is not None:
+                query = query.filter(State.user_id == uid)
+            states = query.all()
             for state in states:
                 session.expunge(state)
             return states
 
-    def get_all_states(self) -> List[State]:
-        """Get all states."""
+    def get_all_states(self, user_id: int = None) -> List[State]:
+        """Get all states. When user_id is given, scope to that user; otherwise
+        return every row (dashboard, until per-user scoping in the UI)."""
         with self.get_session() as session:
-            states = session.query(State).all()
+            query = session.query(State)
+            if user_id is not None:
+                query = query.filter(State.user_id == user_id)
+            states = query.all()
             for state in states:
                 session.expunge(state)
             return states
 
     def save_state(self, state: State) -> State:
-        """Save or update a state model."""
+        """Save or update a state model, keyed by (abs_id, client_name, user_id)."""
+        if state.user_id is None:
+            state.user_id = self._resolve_uid(None)
         with self.get_session() as session:
             existing = session.query(State).filter(
                 State.abs_id == state.abs_id,
-                State.client_name == state.client_name
+                State.client_name == state.client_name,
+                State.user_id == state.user_id,
             ).first()
 
             if existing:
@@ -468,11 +793,14 @@ class DatabaseService:
                 session.expunge(state)
                 return state
 
-    def delete_states_for_book(self, abs_id: str) -> int:
-        """Delete all states for a book."""
+    def delete_states_for_book(self, abs_id: str, user_id: int = None) -> int:
+        """Delete states for a book. Scoped to a user when user_id is given."""
         with self.get_session() as session:
-            count = session.query(State).filter(State.abs_id == abs_id).count()
-            session.query(State).filter(State.abs_id == abs_id).delete()
+            query = session.query(State).filter(State.abs_id == abs_id)
+            if user_id is not None:
+                query = query.filter(State.user_id == user_id)
+            count = query.count()
+            query.delete()
             return count
 
     # Job operations
@@ -693,8 +1021,10 @@ class DatabaseService:
 
     def save_kosync_document(self, doc: KosyncDocument) -> KosyncDocument:
         """Save or update a KOSync document."""
+        if doc.user_id is None:
+            doc.user_id = self._resolve_uid(None)
         with self.get_session() as session:
-            doc.last_updated = datetime.utcnow()
+            doc.last_updated = utcnow()
             merged = session.merge(doc)
             session.flush()
             session.refresh(merged)
@@ -739,7 +1069,31 @@ class DatabaseService:
             ).first()
             if doc:
                 doc.linked_abs_id = abs_id
-                doc.last_updated = datetime.utcnow()
+                doc.last_updated = utcnow()
+                return True
+            return False
+
+    def ensure_linked_kosync_document(self, document_hash: str, abs_id: str) -> bool:
+        """Ensure a KosyncDocument row exists for ``document_hash`` and is linked to ``abs_id``.
+
+        Upsert variant of :meth:`link_kosync_document`: creates the row when it is
+        missing (instead of returning False), and (re)links it when it points
+        elsewhere. Lets a manually-pinned or device-sync-reconciled hash become a
+        durable, resolvable sibling so a later primary-pointer change can never
+        strand it. Returns True if a row was created or its link changed.
+        """
+        if not document_hash or not abs_id:
+            return False
+        with self.get_session() as session:
+            doc = session.query(KosyncDocument).filter(
+                KosyncDocument.document_hash == document_hash
+            ).first()
+            if doc is None:
+                session.add(KosyncDocument(document_hash=document_hash, linked_abs_id=abs_id))
+                return True
+            if doc.linked_abs_id != abs_id:
+                doc.linked_abs_id = abs_id
+                doc.last_updated = utcnow()
                 return True
             return False
 
@@ -751,7 +1105,7 @@ class DatabaseService:
             ).first()
             if doc:
                 doc.linked_abs_id = None
-                doc.last_updated = datetime.utcnow()
+                doc.last_updated = utcnow()
                 return True
             return False
 
@@ -832,6 +1186,89 @@ class DatabaseService:
             if doc:
                 session.expunge(doc)
             return doc
+
+    # ---- Per-user KoSync progress (kosync_user_progress) ----
+    # KosyncDocument holds the SHARED hash cache + hash->book link; device
+    # PROGRESS is per-user and lives here keyed by (document_hash, user_id).
+
+    def get_user_kosync_progress(self, document_hash: str, user_id: int = None) -> Optional[KosyncUserProgress]:
+        """Return the per-user device-progress row for a hash, or None.
+
+        ``user_id`` resolves through the ambient context / default user like the
+        rest of the state layer; returns None when no user can be resolved (a
+        single-user install with no accounts, which keeps using the shared row)."""
+        uid = self._resolve_uid(user_id)
+        if uid is None or not document_hash:
+            return None
+        with self.get_session() as session:
+            row = session.query(KosyncUserProgress).filter(
+                KosyncUserProgress.document_hash == document_hash,
+                KosyncUserProgress.user_id == uid,
+            ).first()
+            if row:
+                session.expunge(row)
+            return row
+
+    def upsert_user_kosync_progress(self, document_hash: str, percentage, progress=None,
+                                    device=None, device_id=None, timestamp=None,
+                                    user_id: int = None) -> Optional[KosyncUserProgress]:
+        """Create or update a user's device-progress row for a hash.
+
+        No-op (returns None) when no user resolves, so a single-user-no-accounts
+        install transparently falls back to the legacy shared KosyncDocument row."""
+        uid = self._resolve_uid(user_id)
+        if uid is None or not document_hash:
+            return None
+        with self.get_session() as session:
+            row = session.query(KosyncUserProgress).filter(
+                KosyncUserProgress.document_hash == document_hash,
+                KosyncUserProgress.user_id == uid,
+            ).first()
+            if row is None:
+                row = KosyncUserProgress(
+                    document_hash=document_hash,
+                    user_id=uid,
+                    progress=progress,
+                    percentage=percentage,
+                    device=device,
+                    device_id=device_id,
+                    timestamp=timestamp,
+                )
+                session.add(row)
+            else:
+                row.progress = progress
+                row.percentage = percentage
+                row.device = device
+                row.device_id = device_id
+                row.timestamp = timestamp
+                row.last_updated = utcnow()
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+
+    def get_user_kosync_progress_for_book(self, abs_id: str, user_id: int = None) -> List[KosyncUserProgress]:
+        """Return this user's progress rows across every hash linked to ``abs_id``.
+
+        Joins the shared hash->book link (KosyncDocument.linked_abs_id) to the
+        per-user progress so a linked-book GET can pick the furthest position this
+        user has reached on any of the book's EPUB builds."""
+        uid = self._resolve_uid(user_id)
+        if uid is None:
+            return []
+        with self.get_session() as session:
+            rows = (
+                session.query(KosyncUserProgress)
+                .join(KosyncDocument, KosyncDocument.document_hash == KosyncUserProgress.document_hash)
+                .filter(
+                    KosyncDocument.linked_abs_id == abs_id,
+                    KosyncUserProgress.user_id == uid,
+                )
+                .all()
+            )
+            for row in rows:
+                session.expunge(row)
+            return rows
 
 
     # PendingSuggestion operations
@@ -946,7 +1383,7 @@ class DatabaseService:
             existing = session.query(ShelfWatchScan).filter(
                 ShelfWatchScan.grimmory_book_id == gid
             ).first()
-            now = datetime.utcnow()
+            now = utcnow()
             if existing:
                 existing.grimmory_filename = grimmory_filename
                 existing.last_scan_at = now
@@ -1079,7 +1516,7 @@ class DatabaseService:
             return
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
         rows = [
-            {"model": model, "text_hash": h, "vector_json": json.dumps(v), "created_at": datetime.utcnow()}
+            {"model": model, "text_hash": h, "vector_json": json.dumps(v), "created_at": utcnow()}
             for h, v in vectors_by_hash.items()
             if h and isinstance(v, list)
         ]
@@ -1091,7 +1528,7 @@ class DatabaseService:
 
     def prune_embedding_cache(self, keep_model: str, max_age_days: int = 90) -> int:
         """Drop rows for other models and rows older than `max_age_days`. Returns count."""
-        cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+        cutoff = utcnow() - timedelta(days=max_age_days)
         with self.get_session() as session:
             query = session.query(EmbeddingCache).filter(
                 (EmbeddingCache.model != keep_model) | (EmbeddingCache.created_at < cutoff)
@@ -1114,7 +1551,7 @@ class DatabaseService:
             return 0
 
         rows = []
-        now = datetime.utcnow()
+        now = utcnow()
         for book in books or []:
             md5 = str(book.get("md5") or book.get("book_md5") or "").strip()
             if not md5:
@@ -1165,7 +1602,7 @@ class DatabaseService:
             return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
         rows = []
-        now = datetime.utcnow()
+        now = utcnow()
         for entry in page_stats or []:
             md5 = str(entry.get("md5") or entry.get("book_md5") or "").strip()
             if not md5:
@@ -2164,7 +2601,7 @@ class DatabaseService:
     def record_reading_session(self, abs_id: str, session_type: str, start_time: float,
                                end_time: float, duration_seconds: int,
                                start_progress: float = None, end_progress: float = None,
-                               leader_client: str = None) -> None:
+                               leader_client: str = None, user_id: int = None) -> None:
         """Record a local reading session for dashboard stats.
 
         Callers must pre-compute duration_seconds (exact telemetry or heuristic).
@@ -2175,6 +2612,7 @@ class DatabaseService:
                 return
             # Safety cap at 4 hours
             duration_seconds = min(duration_seconds, 14400)
+            uid = self._resolve_uid(user_id)
 
             session = ReadingSession(
                 abs_id=abs_id,
@@ -2185,18 +2623,19 @@ class DatabaseService:
                 start_progress=start_progress,
                 end_progress=end_progress,
                 leader_client=leader_client,
+                user_id=uid,
             )
             with self.get_session() as db_session:
                 db_session.add(session)
         except Exception as e:
             logger.debug(f"Failed to record reading session for '{abs_id}': {e}")
 
-    def get_reading_stats(self, abs_id: str) -> Optional[dict]:
+    def get_reading_stats(self, abs_id: str, user_id: int = None) -> Optional[dict]:
         """Get aggregated reading stats for one book."""
         from sqlalchemy import func, case
 
         with self.get_session() as session:
-            row = session.query(
+            query = session.query(
                 func.coalesce(func.sum(case(
                     (ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.duration_seconds),
                     else_=0
@@ -2208,7 +2647,11 @@ class DatabaseService:
                 func.count(ReadingSession.id).label('session_count'),
                 func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
                 func.max(ReadingSession.end_time).label('last_session_time'),
-            ).filter(ReadingSession.abs_id == abs_id).first()
+            ).filter(ReadingSession.abs_id == abs_id)
+            uid = self._resolve_uid(user_id)
+            if uid is not None:
+                query = query.filter(ReadingSession.user_id == uid)
+            row = query.first()
 
             if not row or row.session_count == 0:
                 return None
@@ -2221,12 +2664,12 @@ class DatabaseService:
                 'last_session_time': row.last_session_time,
             }
 
-    def get_all_reading_stats(self) -> dict:
+    def get_all_reading_stats(self, user_id: int = None) -> dict:
         """Bulk fetch reading stats for all books. Returns dict[abs_id, stats_dict]."""
         from sqlalchemy import func, case
 
         with self.get_session() as session:
-            rows = session.query(
+            query = session.query(
                 ReadingSession.abs_id,
                 func.coalesce(func.sum(case(
                     (ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.duration_seconds),
@@ -2239,7 +2682,11 @@ class DatabaseService:
                 func.count(ReadingSession.id).label('session_count'),
                 func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
                 func.max(ReadingSession.end_time).label('last_session_time'),
-            ).group_by(ReadingSession.abs_id).all()
+            )
+            uid = self._resolve_uid(user_id)
+            if uid is not None:
+                query = query.filter(ReadingSession.user_id == uid)
+            rows = query.group_by(ReadingSession.abs_id).all()
 
             result = {}
             for row in rows:

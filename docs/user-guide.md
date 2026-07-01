@@ -1,6 +1,6 @@
 # User Guide
 
-This guide covers the main workflows in the ABS-KoSync Enhanced web UI.
+This guide covers the main workflows in the BookBridge web UI.
 
 ## Dashboard
 

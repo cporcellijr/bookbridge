@@ -74,6 +74,8 @@ class SuggestionsService:
             candidate_author = self._candidate_author(candidate)
             candidate_source = (getattr(candidate, 'source', None) or '').strip()
             source_id = getattr(candidate, 'source_id', None) or getattr(candidate, 'booklore_id', None)
+            raw_path = getattr(candidate, 'path', None)
+            path = str(raw_path) if raw_path else None
 
             abs_identifier = getattr(candidate, 'abs_identifier', None)
             if not abs_identifier and resolver_enabled and candidate_source.upper() == 'CWA' and source_id:
@@ -91,6 +93,7 @@ class SuggestionsService:
                 "name": getattr(candidate, 'name', ''),
                 "display_name": getattr(candidate, 'display_name', None) or getattr(candidate, 'name', ''),
                 "abs_identifier": abs_identifier,
+                "path": path,
             })
 
         return prepared
@@ -173,6 +176,10 @@ class SuggestionsService:
         except (TypeError, ValueError):
             return None
 
+    def _audio_path(self, ab: dict) -> str:
+        raw_path = ab.get("audio_path") or ab.get("path") or ""
+        return str(raw_path).strip()
+
     def _audio_cover_url(self, ab: dict, audio_source: str, audio_source_id: str) -> str:
         cover_url = (ab.get("audio_cover_url") or ab.get("cover_url") or "").strip()
         if cover_url:
@@ -251,6 +258,7 @@ class SuggestionsService:
                     "author": candidate_info.get("author", ""),
                     "source": candidate_info.get("source", ""),
                     "source_id": candidate_info.get("source_id"),
+                    "source_path": candidate_info.get("path") or "",
                     "score": 100.0,
                 }
         return None
@@ -261,6 +269,13 @@ class SuggestionsService:
     # title alone survives even when the author string differs in format.
     _SUGGEST_FUZZY_FLOOR = 45.0
     _SUGGEST_TITLE_STRONG = 85.0
+
+    # A same-folder pair is auto-trusted (exact 100, pinned ahead of and skipping the
+    # Ollama judge) only when the titles ALSO loosely agree. Without this, a lone
+    # audiobook + ebook that merely share a *grouping* folder — e.g. a flat author
+    # folder holding two different books — would surface as a confident 100% match and
+    # bypass all fuzzy/Ollama verification. Below the floor the pair stays reviewable.
+    _SAME_FOLDER_TITLE_FLOOR = 45.0
 
     @staticmethod
     def _normalize_title_for_match(text: str) -> str:
@@ -295,8 +310,74 @@ class SuggestionsService:
             "author": candidate_info.get("author", ""),
             "source": candidate_info.get("source", ""),
             "source_id": candidate_info.get("source_id"),
+            "source_path": candidate_info.get("path") or "",
             "score": round(score, 1),
         }
+
+    _SAME_FOLDER_MEDIA_EXTENSIONS = frozenset({
+        ".epub", ".pdf", ".mobi", ".azw", ".azw3", ".cbz", ".cbr",
+        ".m4b", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac", ".wav",
+    })
+
+    @classmethod
+    def _parent_dir_key(cls, raw_path: Any) -> str:
+        """Return a normalized parent-directory key for local media paths."""
+        text = str(raw_path or "").strip()
+        if not text or "://" in text:
+            return ""
+
+        normalized = text.replace("\\", "/").strip().rstrip("/")
+        if not normalized:
+            return ""
+
+        parts = [part for part in normalized.split("/") if part and part != "."]
+        if not parts:
+            return ""
+
+        last = parts[-1]
+        suffix = ""
+        if "." in last:
+            suffix = f".{last.rsplit('.', 1)[-1].lower()}"
+        if suffix in cls._SAME_FOLDER_MEDIA_EXTENSIONS:
+            parts = parts[:-1]
+
+        if not parts:
+            return ""
+        return "/".join(part.lower() for part in parts)
+
+    @staticmethod
+    def _same_directory_key(left_key: str, right_key: str) -> bool:
+        if not left_key or not right_key:
+            return False
+        left_parts = left_key.split("/")
+        right_parts = right_key.split("/")
+        if left_key == right_key:
+            return min(len(left_parts), len(right_parts)) >= 2
+
+        shorter_len = min(len(left_parts), len(right_parts))
+        if shorter_len < 2:
+            return False
+        return left_parts[-shorter_len:] == right_parts[-shorter_len:]
+
+    @classmethod
+    def _paths_share_parent(cls, left_path: Any, right_path: Any) -> bool:
+        return cls._same_directory_key(
+            cls._parent_dir_key(left_path),
+            cls._parent_dir_key(right_path),
+        )
+
+    @classmethod
+    def _same_folder_tier(cls, same_folder_count: int, title_score: float) -> tuple[float, str]:
+        """Score/reason for a same-folder candidate.
+
+        Exact ('same_folder', 100) requires the folder to hold a single candidate AND the
+        titles to loosely agree, so a wrong pairing sharing a grouping folder can't be
+        auto-trusted past the judge. Everything else stays reviewable
+        ('same_folder_ambiguous', 94, surfaced with a 'Same folder?' badge).
+        """
+        if same_folder_count == 1 and title_score >= cls._SAME_FOLDER_TITLE_FLOOR:
+            return 100.0, "same_folder"
+        return 94.0, "same_folder_ambiguous"
 
     def _suggestion_shell(self, ab: dict, matches: List[dict]) -> dict:
         """Build the suggestion dict skeleton (audio metadata + matches)."""
@@ -315,6 +396,7 @@ class SuggestionsService:
             "audio_author": audio_author,
             "audio_duration": audio_duration,
             "audio_cover_url": audio_cover_url,
+            "audio_path": self._audio_path(ab),
             "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
             "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
             # Legacy aliases kept for template/session compatibility.
@@ -357,9 +439,22 @@ class SuggestionsService:
 
         norm_audio_title = self._normalize_title_for_match(audio_title)
         matches = []
+        audio_path = self._audio_path(ab)
+        same_folder_count = sum(
+            1 for candidate_info in per_book_pool
+            if self._paths_share_parent(audio_path, candidate_info.get("path"))
+        )
         for candidate_info in per_book_pool:
             candidate_author = candidate_info["author"]
             norm_candidate_title = self._normalize_title_for_match(candidate_info["title"])
+
+            if self._paths_share_parent(audio_path, candidate_info.get("path")):
+                title_score = float(fuzz.token_sort_ratio(norm_audio_title, norm_candidate_title))
+                score, match_reason = self._same_folder_tier(same_folder_count, title_score)
+                match = self._match_from_pool(candidate_info, score)
+                match["match_reason"] = match_reason
+                matches.append(match)
+                continue
 
             title_score = float(fuzz.token_sort_ratio(norm_audio_title, norm_candidate_title))
             if audio_author:
@@ -497,10 +592,27 @@ class SuggestionsService:
         """
         if not matches or not self._ollama_ready():
             return matches
+        matches = self._pin_exact_same_folder_match(matches)
+        if self._has_exact_same_folder_match(matches):
+            return matches
 
         matches = self._ollama_rerank_band(audio_title, audio_author, matches)
         matches = self._ollama_judge_and_resolve(audio_title, audio_author, matches)
         return matches
+
+    @staticmethod
+    def _has_exact_same_folder_match(matches: List[dict]) -> bool:
+        return bool(matches and matches[0].get("match_reason") == "same_folder")
+
+    @staticmethod
+    def _pin_exact_same_folder_match(matches: List[dict]) -> List[dict]:
+        """Keep the unique same-folder match ahead of optional LLM reranking."""
+        if not matches:
+            return matches
+        exact = next((m for m in matches if m.get("match_reason") == "same_folder"), None)
+        if exact is None:
+            return matches
+        return [exact] + [m for m in matches if m is not exact]
 
     def _apply_ollama_reranking_batch(self, suggestions: List[dict]) -> Set[str]:
         """Re-rank (embeddings) then judge-gate (chat) all fresh suggestions, batched by
@@ -522,8 +634,16 @@ class SuggestionsService:
         if not rerank_on and not judge_on:
             return suppressed
 
-        # Phase A — embedding re-rank (nomic loads once).
-        rerankable = [s for s in suggestions if len(s.get("matches") or []) >= 2]
+        for s in suggestions:
+            s["matches"] = self._pin_exact_same_folder_match(s.get("matches") or [])
+
+        # Phase A — embedding re-rank (nomic loads once). Exact same-folder matches
+        # are deterministic and must not be demoted by semantic title/author scoring.
+        rerankable = [
+            s for s in suggestions
+            if len(s.get("matches") or []) >= 2
+            and not self._has_exact_same_folder_match(s.get("matches") or [])
+        ]
         if rerank_on and rerankable:
             self._prewarm_rerank_embeddings(rerankable)
             for s in rerankable:
@@ -543,6 +663,8 @@ class SuggestionsService:
         for s in suggestions:
             matches = s.get("matches") or []
             if not matches:
+                continue
+            if self._has_exact_same_folder_match(matches):
                 continue
             # A strong fuzzy+semantic top match is almost certainly correct — trust it
             # and spend no chat call.
@@ -896,6 +1018,7 @@ class SuggestionsService:
                 "audio_author": audio_author,
                 "audio_duration": audio_duration,
                 "audio_cover_url": audio_cover_url,
+                "audio_path": self._audio_path(ab),
                 "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
                 "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
                 "search_text": f"{audio_title} {audio_author}".strip(),
@@ -922,11 +1045,18 @@ class SuggestionsService:
         grimmory_id = ebook.get("grimmory_id") or ebook.get("id") or ebook.get("book_id")
         if grimmory_id is not None:
             grimmory_id = str(grimmory_id).strip()
+        path = str(
+            ebook.get("path")
+            or ebook.get("filePath")
+            or ebook.get("filepath")
+            or ""
+        ).strip()
         return {
             "title": title,
             "author": author,
             "filename": filename,
             "grimmory_id": grimmory_id or "",
+            "path": path,
         }
 
     def _scan_single_ebook(self, ebook: dict, candidate_pool: List[dict]) -> Optional[dict]:
@@ -956,9 +1086,40 @@ class SuggestionsService:
 
         matches = []
         best_overall = None  # Track the highest-scoring candidate even if below the floor.
+        same_folder_count = sum(
+            1 for cand in candidate_pool
+            if self._paths_share_parent(
+                anchor.get("path"),
+                cand.get("audio_path") or cand.get("path"),
+            )
+        )
         for cand in candidate_pool:
             cand_title = cand.get("audio_title") or ""
             cand_author = cand.get("audio_author") or ""
+
+            same_folder = self._paths_share_parent(
+                anchor.get("path"),
+                cand.get("audio_path") or cand.get("path"),
+            )
+            if same_folder:
+                title_score = float(fuzz.token_sort_ratio(ebook_title, cand_title))
+                score, match_reason = self._same_folder_tier(same_folder_count, title_score)
+                matches.append({
+                    "audio_source": cand.get("audio_source", ""),
+                    "audio_source_id": cand.get("audio_source_id", ""),
+                    "bridge_key": cand.get("bridge_key", ""),
+                    "audio_title": cand_title,
+                    "audio_author": cand_author,
+                    "audio_duration": cand.get("audio_duration"),
+                    "audio_cover_url": cand.get("audio_cover_url", ""),
+                    "audio_provider_book_id": cand.get("audio_provider_book_id", ""),
+                    "audio_provider_file_id": cand.get("audio_provider_file_id", ""),
+                    "score": score,
+                    "match_reason": match_reason,
+                })
+                if best_overall is None or score > best_overall[0]:
+                    best_overall = (score, cand_title, cand_author)
+                continue
 
             title_score = float(fuzz.token_sort_ratio(ebook_title, cand_title))
             if ebook_author:

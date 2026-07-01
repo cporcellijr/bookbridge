@@ -12,6 +12,7 @@ from pathlib import Path
 
 from src.utils.logging_utils import sanitize_log_data
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +22,21 @@ MAX_DETAIL_FETCHES_PER_REFRESH_CYCLE = int(
     os.getenv("BOOKLORE_MAX_DETAIL_FETCHES_PER_REFRESH_CYCLE", "1200")
 )
 MAX_DETAIL_FETCHES_PER_SEARCH = 20
+# Safety bound on paginated scans so a server that never reports the last page
+# (or ignores the size param) can't loop forever. 10000 pages * 200 = 2M books.
+SCAN_MAX_PAGES = int(os.getenv("BOOKLORE_SCAN_MAX_PAGES", "10000"))
 
 class BookloreClient:
-    def __init__(self, database_service=None, ollama_client=None):
-        raw_url = os.environ.get("BOOKLORE_SERVER", "").rstrip('/')
+    def __init__(self, database_service=None, ollama_client=None, credentials: dict = None):
+        # `credentials` (multi-user) overrides per-user BOOKLORE_* keys; server
+        # URL stays global. None => global client (original behavior).
+        self._creds = credentials
+        raw_url = resolve_setting(credentials, "BOOKLORE_SERVER", "").rstrip('/')
         if raw_url and not raw_url.lower().startswith(('http://', 'https://')):
             raw_url = f"http://{raw_url}"
         self.base_url = raw_url
-        self.username = os.environ.get("BOOKLORE_USER")
-        self.password = os.environ.get("BOOKLORE_PASSWORD")
+        self.username = resolve_setting(credentials, "BOOKLORE_USER")
+        self.password = resolve_setting(credentials, "BOOKLORE_PASSWORD")
         self.db = database_service
         self.ollama_client = ollama_client
 
@@ -77,12 +84,26 @@ class BookloreClient:
         )
         self.session = requests.Session()
 
+        # Request timeouts. Quick endpoints (login, single book detail) use a
+        # short per-call timeout. The full library scan returns the whole library
+        # in one (non-paginated) response, so it uses a separate (connect, read)
+        # tuple with a much longer read budget and retries transient failures
+        # instead of aborting the whole refresh on the first slow response.
+        self._request_timeout = float(os.getenv("BOOKLORE_REQUEST_TIMEOUT", "10"))
+        self._scan_connect_timeout = float(os.getenv("BOOKLORE_SCAN_CONNECT_TIMEOUT", "5"))
+        self._scan_read_timeout = float(os.getenv("BOOKLORE_SCAN_READ_TIMEOUT", "90"))
+        self._scan_max_attempts = max(1, int(os.getenv("BOOKLORE_SCAN_MAX_ATTEMPTS", "3")))
+        self._scan_retry_backoff = float(os.getenv("BOOKLORE_SCAN_RETRY_BACKOFF_SECONDS", "2"))
+
         # Legacy Cache file path (for migration only)
         self.legacy_cache_file = Path(os.environ.get("DATA_DIR", "/data")) / "booklore_cache.json"
 
         # Load cache from DB (and migrate if needed)
-        self.target_library_id = os.environ.get("BOOKLORE_LIBRARY_ID")
+        self.target_library_id = resolve_setting(credentials, "BOOKLORE_LIBRARY_ID")
         self._server_side_filter_supported = None
+        # Whether the server exposes the paginated /api/v1/books/page endpoint.
+        # None = unprobed; True = paginate; False = fall back to flat /api/v1/books.
+        self._paginated_scan_supported = None
         self._load_cache()
 
     def _load_cache(self):
@@ -232,18 +253,19 @@ class BookloreClient:
                 logger.error(f"âŒ Grimmory login error: {e}")
         return None
 
-    def _make_request(self, method, endpoint, json_data=None):
+    def _make_request(self, method, endpoint, json_data=None, timeout=None):
         token = self._get_fresh_token()
         if not token:
             logger.warning(f"Grimmory: _make_request returning None (no token) for {method} {endpoint}")
             return None
+        request_timeout = timeout if timeout is not None else self._request_timeout
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         url = f"{self.base_url}{endpoint}"
         try:
             if method.upper() == "GET":
-                response = self.session.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=headers, timeout=request_timeout)
             elif method.upper() == "POST":
-                response = self.session.post(url, headers=headers, json=json_data, timeout=10)
+                response = self.session.post(url, headers=headers, json=json_data, timeout=request_timeout)
             else: return None
 
             if response.status_code == 401:
@@ -256,9 +278,9 @@ class BookloreClient:
                     return None
                 headers["Authorization"] = f"Bearer {token}"
                 if method.upper() == "GET":
-                    response = self.session.get(url, headers=headers, timeout=10)
+                    response = self.session.get(url, headers=headers, timeout=request_timeout)
                 else:
-                    response = self.session.post(url, headers=headers, json=json_data, timeout=10)
+                    response = self.session.post(url, headers=headers, json=json_data, timeout=request_timeout)
             return response
         except Exception as e:
             logger.error(f"âŒ Grimmory API request failed: {e}")
@@ -290,7 +312,7 @@ class BookloreClient:
 
     def is_configured(self):
         """Return True if Grimmory is configured, False otherwise."""
-        enabled_val = os.environ.get("BOOKLORE_ENABLED", "").lower()
+        enabled_val = str(resolve_setting(self._creds, "BOOKLORE_ENABLED", "")).lower()
         if enabled_val == 'false':
             return False
         return bool(self.base_url and self.username and self.password)
@@ -514,9 +536,16 @@ class BookloreClient:
 
     def _build_books_endpoint(self, page, batch_size, use_server_side_filter):
         if use_server_side_filter and self.target_library_id:
+            # Library-scoped endpoint returns the whole library as one plain list
+            # (List<Book>, not pageable).
             return f"/api/v1/libraries/{self.target_library_id}/book"
-        # Grimmory /api/v1/books returns all books as a flat list (no pagination).
-        return "/api/v1/books"
+        if self._paginated_scan_supported is False:
+            # Older Grimmory/BookLore without /books/page: flat (single) response.
+            return "/api/v1/books"
+        # Paginated global scan (Spring Pageable: 0-based page + size) so large
+        # libraries are fetched in chunks instead of one oversized response that
+        # blows the read timeout.
+        return f"/api/v1/books/page?page={page}&size={batch_size}"
 
     def _filter_books_by_library(self, books):
         if not self.target_library_id:
@@ -731,6 +760,41 @@ class BookloreClient:
         if stale_entries:
             logger.info(f"ðŸ“š Grimmory: Pruned {len(stale_entries)} books no longer in library")
 
+    def _fetch_scan_page(self, endpoint, page):
+        """Fetch one library-scan page, retrying transient failures.
+
+        Uses a longer (connect, read) timeout than ordinary calls because the
+        scan endpoint returns the whole library in a single response. A timeout
+        or 5xx no longer aborts the entire refresh on the first try; we retry
+        with linear backoff before giving up. Definitive client errors (4xx
+        other than 429) are returned immediately so the caller's server-side
+        filter probe/fallback logic can react to them.
+        """
+        scan_timeout = (self._scan_connect_timeout, self._scan_read_timeout)
+        response = None
+        for attempt in range(1, self._scan_max_attempts + 1):
+            response = self._make_request("GET", endpoint, timeout=scan_timeout)
+            if response is not None and response.status_code == 200:
+                return response
+
+            status = getattr(response, "status_code", None)
+            retryable = response is None or status == 429 or (status is not None and status >= 500)
+            if not retryable or attempt >= self._scan_max_attempts:
+                return response
+
+            delay = self._scan_retry_backoff * attempt
+            logger.warning(
+                "Grimmory: scan page %s fetch failed "
+                "(attempt %d/%d, status=%s); retrying in %.1fs",
+                page,
+                attempt,
+                self._scan_max_attempts,
+                status if status is not None else "timeout",
+                delay,
+            )
+            time.sleep(delay)
+        return response
+
     def _refresh_book_cache(self, refresh_stale_details=True):
         """
         Refresh the book cache using robust pagination.
@@ -760,7 +824,21 @@ class BookloreClient:
 
             while True:
                 endpoint = self._build_books_endpoint(page, batch_size, use_server_side_filter)
-                response = self._make_request("GET", endpoint)
+                response = self._fetch_scan_page(endpoint, page)
+
+                # The paginated /books/page endpoint may not exist on older servers;
+                # fall back to the flat /books scan once, then restart from page 0.
+                if (
+                    not use_server_side_filter
+                    and self._paginated_scan_supported is None
+                    and response is not None
+                    and response.status_code == 404
+                ):
+                    self._paginated_scan_supported = False
+                    logger.info("Grimmory: paginated /books/page unavailable; using flat /books scan")
+                    all_books_list = []
+                    page = 0
+                    continue
 
                 if not response or response.status_code != 200:
                     logger.error(f"âŒ Grimmory: Failed to fetch page {page}")
@@ -771,6 +849,12 @@ class BookloreClient:
                 if data is None:
                     self._last_refresh_failed = True
                     return False
+
+                # First successful global fetch: lock in whether pagination works.
+                # /books/page returns a Spring Page object ({'content': [...]}); a bare
+                # list means we hit the flat endpoint, so don't try to page it.
+                if not use_server_side_filter and self._paginated_scan_supported is None:
+                    self._paginated_scan_supported = isinstance(data, dict) and 'content' in data
 
                 current_batch = []
                 if isinstance(data, list):
@@ -813,14 +897,36 @@ class BookloreClient:
                 if use_server_side_filter and self.target_library_id:
                     break
 
-                if raw_batch_size != batch_size:
+                # Flat (non-paginated) global scan: one response holds everything.
+                if not self._paginated_scan_supported:
                     break
 
-                # Grimmory /api/v1/books returns a flat list; always stop after
-                # first fetch for non-library-scoped scans.
-                if not use_server_side_filter:
+                # Paginated global scan: stop on the last page. Handle both Spring
+                # serialization shapes — classic Page ({'last': bool}) and Boot 3.3
+                # PagedModel ({'page': {'number', 'totalPages', ...}}) — then fall back
+                # to a short/empty page.
+                if isinstance(data, dict):
+                    if data.get('last') is True:
+                        break
+                    page_meta = data.get('page')
+                    if isinstance(page_meta, dict):
+                        number = page_meta.get('number')
+                        total_pages = page_meta.get('totalPages')
+                        if (
+                            isinstance(number, int)
+                            and isinstance(total_pages, int)
+                            and number + 1 >= total_pages
+                        ):
+                            break
+                if raw_batch_size < batch_size:
                     break
 
+                if page + 1 >= SCAN_MAX_PAGES:
+                    logger.warning(
+                        "Grimmory: scan reached page cap (%d); stopping pagination early",
+                        SCAN_MAX_PAGES,
+                    )
+                    break
                 page += 1
 
             live_ids = {b.get('id') for b in all_books_list if b.get('id') is not None}
@@ -1374,6 +1480,7 @@ class BookloreClient:
             self._last_refresh_failed = False
             self._last_refresh_attempt = 0
             self._server_side_filter_supported = None
+            self._paginated_scan_supported = None
 
             if self.db:
                 if not self.db.clear_all_booklore_books():
@@ -2611,7 +2718,7 @@ class BookloreClient:
     def add_to_shelf(self, ebook_filename, shelf_name=None):
         """Add a book to a shelf, creating the shelf if it doesn't exist."""
         if not shelf_name:
-             shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "abs-kosync")
+             shelf_name = resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "Kobo")
 
         try:
             # Find the book
@@ -2652,7 +2759,7 @@ class BookloreClient:
     def remove_from_shelf(self, ebook_filename, shelf_name=None):
         """Remove a book from a shelf."""
         if not shelf_name:
-             shelf_name = os.environ.get("BOOKLORE_SHELF_NAME", "abs-kosync")
+             shelf_name = resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "Kobo")
 
         try:
             # Find the book

@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from src.db.models import PendingSuggestion
+from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,11 @@ class ShelfWatchService:
     def env_prefix(self) -> str:
         return self._env_prefix
 
+    def _display_name(self) -> str:
+        """User-facing label for this ebook source. 'BookLore' is the internal
+        key for the library displayed to users as 'Grimmory'."""
+        return 'Grimmory' if self._source_name == 'BookLore' else self._source_name
+
     def runs_in_global_cycle(self) -> bool:
         """True when this source polls in 'global' mode, so the full sync cycle
         (not ClientPoller) should drive the shelf-watch check."""
@@ -134,7 +140,7 @@ class ShelfWatchService:
         if not self._is_enabled():
             return stats
         if not self.booklore_client.is_configured():
-            logger.debug("Shelf-watch: Grimmory client not configured, skipping")
+            logger.debug("Shelf-watch: %s client not configured, skipping", self._display_name())
             return stats
 
         stats['enabled'] = True
@@ -152,21 +158,22 @@ class ShelfWatchService:
             stats['errors'] += 1
             return stats
 
-        # If the shelf doesn't exist in Grimmory, list_books_on_shelf returns [].
+        # If the shelf doesn't exist in the library, list_books_on_shelf returns [].
         # We log a one-time-per-run actionable warning so the user knows what to
-        # do; we don't try to auto-create because Grimmory's POST /api/v1/shelves
-        # endpoint has been unreliable across server versions, and the user can
-        # set the icon they want via the Grimmory UI directly.
+        # do; we don't try to auto-create because the POST /shelves endpoint has
+        # been unreliable across server versions, and the user can set the icon
+        # they want via the library UI directly.
         if not books:
             try:
                 shelves = self.booklore_client.get_all_shelves() or []
                 shelf_names = {s.get('name') for s in shelves if isinstance(s, dict)}
                 if shelf_name not in shelf_names:
+                    display = self._display_name()
                     logger.warning(
-                        "Shelf-watch: shelf '%s' does not exist in Grimmory yet. "
-                        "Create it in the Grimmory UI (and pick an icon) — the watcher "
+                        "Shelf-watch: shelf '%s' does not exist in %s yet. "
+                        "Create it in the %s UI (and pick an icon) — the watcher "
                         "will start scanning books placed on it on the next cycle.",
-                        shelf_name,
+                        shelf_name, display, display,
                     )
             except Exception:
                 pass
@@ -176,7 +183,7 @@ class ShelfWatchService:
 
         threshold = self._threshold()
         rescan_window = timedelta(hours=self._rescan_hours())
-        now = datetime.utcnow()
+        now = utcnow()
 
         candidate_pool = None  # Lazy-built on first non-skipped book
 
@@ -242,6 +249,7 @@ class ShelfWatchService:
             'title': (grimmory_book.get('title') or '').strip(),
             'authors': self._extract_author(grimmory_book),
             'grimmory_id': grimmory_id,
+            'path': grimmory_book.get('filePath') or grimmory_book.get('filepath') or grimmory_book.get('path') or '',
         }
 
         scan_result = self._get_suggestions_service()._scan_single_ebook(ebook_anchor, candidate_pool)

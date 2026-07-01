@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Add Book - ABS-KoSync</title>
+    <title>Add Book - BookBridge</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * {
@@ -741,7 +741,7 @@
     <div class="top-nav">
         <div class="logo-section">
             <a href="/">
-                <h1>📚 ABS-KoSync</h1>
+                <h1>📚 BookBridge</h1>
             </a>
 
             <div class="library-links">
@@ -779,12 +779,12 @@
         </div>
 
         <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/abs-kosync-bridge/" class="btn" target="_blank"
-                rel="noopener noreferrer">📚 Docs</a>
+            <a href="https://cporcellijr.github.io/bookbridge/" class="btn" target="_blank"
+                rel="noopener noreferrer">Docs</a>
             <a href="/" class="btn">← Dashboard</a>
             <a href="/logs" class="btn">📊 Logs</a>
             <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="/batch-match" class="btn">📋 Batch</a>
+            <a href="{{ url_for('add_book') }}" class="btn">Add Book</a>
             <a href="/suggestions" class="btn">💡 Suggestions</a>
         </div>
     </div>

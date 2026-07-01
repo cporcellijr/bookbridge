@@ -1,12 +1,12 @@
-# ABS-KoSync Enhanced - Example Docker Compose Configuration
+# BookBridge - Example Docker Compose Configuration
 #
 # Copy this file to docker-compose.yml and fill in your values.
 # See README.md for detailed configuration instructions.
 
 services:
   abs-kosync:
-    container_name: abs_kosync
-    image: ghcr.io/cporcellijr/abs-kosync-bridge:latest
+    container_name: bookbridge
+    image: ghcr.io/cporcellijr/bookbridge:latest
 
     # Optional: Build locally if you need specific modifications or GPU libraries included
     # build:
