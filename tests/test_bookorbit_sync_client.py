@@ -90,3 +90,85 @@ def test_audio_update_resolves_file_id_and_writes():
     _, kwargs = client.update_audiobook_progress.call_args
     assert kwargs["current_file_id"] == 11
     assert kwargs["position_seconds"] == pytest.approx(7200.0)
+
+
+# ---- multi-file (track-per-chapter) semantics ----
+# Verified against the BookOrbit player: positionSeconds is WITHIN the
+# currentFileId track, percentage is whole-book. Mirrors a real library book
+# ("A Children's Bible", 5 mp3 tracks).
+
+_MULTI_TRACK_INFO = {
+    "primary_file_id": 9378,
+    "duration_seconds": 20049,
+    "chapters": [],
+    "tracks": [
+        {"id": 9378, "filename": "t1.mp3", "format": "mp3", "duration_seconds": 3806},
+        {"id": 9379, "filename": "t2.mp3", "format": "mp3", "duration_seconds": 4287},
+        {"id": 9380, "filename": "t3.mp3", "format": "mp3", "duration_seconds": 4543},
+        {"id": 9381, "filename": "t4.mp3", "format": "mp3", "duration_seconds": 2929},
+        {"id": 9382, "filename": "t5.mp3", "format": "mp3", "duration_seconds": 4484},
+    ],
+}
+
+
+def _multi_track_book():
+    return _book(audio_source="BookOrbit", audio_source_id="4345", abs_id="bookorbit:4345",
+                 audio_provider_book_id=None, audio_duration=20049, duration=20049,
+                 transcript_file=None)
+
+
+def test_audio_read_reconstructs_absolute_ts_from_track():
+    client = MagicMock()
+    client.get_audiobook_info.return_value = dict(_MULTI_TRACK_INFO)
+    # 194s into track 2 (which starts at 3806s) => 4000s absolute
+    client.get_audiobook_progress.return_value = {
+        "pct": 0.1995, "position_seconds": 194.0, "current_file_id": 9379,
+    }
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+    state = sc.get_service_state(_multi_track_book(), prev_state=None)
+    assert state.current["ts"] == pytest.approx(4000.0)
+    assert state.current["pct"] == pytest.approx(0.1995)
+
+
+def test_audio_read_unknown_file_id_falls_back_to_percentage():
+    client = MagicMock()
+    client.get_audiobook_info.return_value = dict(_MULTI_TRACK_INFO)
+    client.get_audiobook_progress.return_value = {
+        "pct": 0.5, "position_seconds": 100.0, "current_file_id": 99999,
+    }
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+    state = sc.get_service_state(_multi_track_book(), prev_state=None)
+    # A within-track position on an unknown track is ambiguous — pct wins.
+    assert state.current["ts"] == pytest.approx(0.5 * 20049)
+
+
+def test_audio_write_targets_containing_track_not_primary():
+    client = MagicMock()
+    client.get_audiobook_info.return_value = dict(_MULTI_TRACK_INFO)
+    client.update_audiobook_progress.return_value = True
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+    # 50% of 20049s = 10024.5s absolute -> track 3 (starts 8093s, id 9380)
+    req = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5))
+    res = sc.update_progress(_multi_track_book(), req)
+    assert res.success is True
+    assert res.location == pytest.approx(10024.5)
+    _, kwargs = client.update_audiobook_progress.call_args
+    assert kwargs["current_file_id"] == 9380
+    assert kwargs["position_seconds"] == pytest.approx(10024.5 - 8093.0)
+
+
+def test_audio_write_past_end_clamps_to_last_track():
+    client = MagicMock()
+    client.get_audiobook_info.return_value = dict(_MULTI_TRACK_INFO)
+    client.update_audiobook_progress.return_value = True
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+    book = _multi_track_book()
+    book.audio_duration = 30000  # stale/oversized duration on the Book row
+    book.duration = 30000
+    req = UpdateProgressRequest(locator_result=LocatorResult(percentage=1.0))
+    res = sc.update_progress(book, req)
+    assert res.success is True
+    _, kwargs = client.update_audiobook_progress.call_args
+    assert kwargs["current_file_id"] == 9382
+    # clamped to the final track's duration
+    assert kwargs["position_seconds"] <= 4484.0

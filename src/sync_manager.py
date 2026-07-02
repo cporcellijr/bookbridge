@@ -48,7 +48,7 @@ from src.utils.logging_utils import sanitize_log_data
 
 # [NEW] Service Imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
-from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter
+from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import LibraryService
 from src.services.migration_service import MigrationService
 
@@ -269,6 +269,8 @@ class SyncManager:
         source = self._get_audio_source_name(book)
         if source == "BookLore":
             return "BookLoreAudio"
+        if source == "BookOrbit":
+            return "BookOrbitAudio"
         if source == "ABS":
             return "ABS"
         return None
@@ -519,6 +521,13 @@ class SyncManager:
         if booklore_client is not None:
             adapters["BookLore"] = BookLoreAudioSourceAdapter(
                 booklore_client,
+                self.data_dir or Path("/data"),
+            )
+
+        bookorbit_client = getattr(bundle, "bookorbit_client", None)
+        if bookorbit_client is not None:
+            adapters["BookOrbit"] = BookOrbitAudioSourceAdapter(
+                bookorbit_client,
                 self.data_dir or Path("/data"),
             )
         return adapters
@@ -2950,7 +2959,10 @@ class SyncManager:
                     os.environ.get("BOOKORBIT_READING_SESSIONS", "true").strip().lower() in ("true", "1", "yes", "on")
                     and bookorbit_client
                     and bookorbit_client.is_configured()
-                    and getattr(book, "ebook_source", None) == "BookOrbit"
+                    and (
+                        getattr(book, "ebook_source", None) == "BookOrbit"
+                        or getattr(book, "audio_source", None) == "BookOrbit"
+                    )
                     and leader_pct != leader_state.previous_pct
                     and leader.lower() != 'kosync'  # kosync_server handles KOSync->BookOrbit
                 ):
@@ -3165,14 +3177,11 @@ class SyncManager:
         current_time: float,
     ) -> None:
         """Record a reading session to BookOrbit when progress changes on a
-        BookOrbit-hosted ebook. The session is logged against the BookOrbit book
-        (ebook_source_id); audio-leader sessions fall back to the ebook file."""
+        BookOrbit-hosted ebook or audiobook. Audio-leader sessions are logged
+        against the BookOrbit audiobook when the audio is BookOrbit-hosted,
+        falling back to the ebook's BookOrbit id otherwise."""
         bookorbit_client = self.active_bookorbit_client
         if not bookorbit_client:
-            return
-
-        book_id = getattr(book, "ebook_source_id", None)
-        if not book_id:
             return
 
         leader_pct = leader_state.current.get('pct', 0)
@@ -3187,6 +3196,18 @@ class SyncManager:
 
         primary_audio_client = self._get_primary_audio_client_name(book)
         is_audio_leader = (leader == primary_audio_client)
+
+        book_id = None
+        if is_audio_leader and getattr(book, "audio_source", None) == "BookOrbit":
+            book_id = (
+                getattr(book, "audio_provider_book_id", None)
+                or getattr(book, "audio_source_id", None)
+            )
+        if not book_id and getattr(book, "ebook_source", None) == "BookOrbit":
+            book_id = getattr(book, "ebook_source_id", None)
+        if not book_id:
+            return
+
         end_location = None
         if is_audio_leader:
             book_type = "AUDIOBOOK"

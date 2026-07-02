@@ -13,9 +13,12 @@ logger = logging.getLogger(__name__)
 class BookOrbitAudioSyncClient(SyncClient):
     """Audiobook sync client for BookOrbit.
 
-    BookOrbit stores a single absolute `positionSeconds` per book (plus the
-    `currentFileId` of the primary audio file), so there is no track/ms
-    decomposition like Grimmory's folder-based audiobooks.
+    BookOrbit stores `positionSeconds` + `currentFileId` per book. Verified
+    against the player source: positionSeconds is the seek position WITHIN the
+    currentFileId track (the player does `goToFile(fileId, position)`), so a
+    multi-file (track-per-chapter) audiobook needs the same track decomposition
+    as Grimmory's folder-based audiobooks. Single-file books degenerate to
+    within-file == absolute.
     """
 
     def __init__(self, bookorbit_client: BookOrbitClient, ebook_parser: EbookParser, alignment_service=None):
@@ -51,6 +54,65 @@ class BookOrbitAudioSyncClient(SyncClient):
             or getattr(book, "audio_source_id", None)
         )
 
+    @staticmethod
+    def _get_track_ranges(info: Optional[dict]) -> list[dict]:
+        """Cumulative [start, end) ranges for each audio track, in play order."""
+        ranges = []
+        cursor = 0.0
+        for track in (info or {}).get("tracks") or []:
+            if not isinstance(track, dict):
+                continue
+            try:
+                duration = float(track.get("duration_seconds") or 0.0)
+            except (TypeError, ValueError):
+                duration = 0.0
+            ranges.append({
+                "id": track.get("id"),
+                "start": cursor,
+                "duration": duration,
+                "end": cursor + duration,
+            })
+            cursor += duration
+        return ranges
+
+    def _resolve_absolute_timestamp(
+        self, info: Optional[dict], current_file_id, position_seconds
+    ) -> Optional[float]:
+        """Within-track position + currentFileId → absolute book timestamp."""
+        if position_seconds is None:
+            return None
+        try:
+            position = max(0.0, float(position_seconds))
+        except (TypeError, ValueError):
+            return None
+        ranges = self._get_track_ranges(info)
+        if len(ranges) <= 1:
+            return position
+        for r in ranges:
+            if current_file_id is not None and r["id"] == current_file_id:
+                return r["start"] + position
+        # Multi-file book with an unknown/missing currentFileId — the within-track
+        # position alone is ambiguous; let the caller fall back to percentage.
+        return None
+
+    def _resolve_resume_fields(self, info: Optional[dict], target_ts: float) -> dict:
+        """Absolute book timestamp → {file_id, position_seconds} the player expects."""
+        ranges = self._get_track_ranges(info)
+        if not ranges:
+            return {"file_id": (info or {}).get("primary_file_id"), "position_seconds": max(0.0, target_ts)}
+        chosen = ranges[-1]
+        for r in ranges:
+            if target_ts < r["end"]:
+                chosen = r
+                break
+        position = max(0.0, target_ts - chosen["start"])
+        if chosen["duration"] > 0:
+            position = min(position, chosen["duration"])
+        return {
+            "file_id": chosen["id"] or (info or {}).get("primary_file_id"),
+            "position_seconds": position,
+        }
+
     def _get_duration_seconds(self, book: Book, info: Optional[dict] = None) -> Optional[float]:
         for attr in ("audio_duration", "duration"):
             value = getattr(book, attr, None)
@@ -84,8 +146,12 @@ class BookOrbitAudioSyncClient(SyncClient):
             return None
 
         current_pct = progress.get("pct")
-        current_ts = progress.get("position_seconds")
-        duration = self._get_duration_seconds(book)
+        # Detail is cached in the client, so this does not add a request per poll.
+        info = self.client.get_audiobook_info(book_id) or {}
+        duration = self._get_duration_seconds(book, info)
+        current_ts = self._resolve_absolute_timestamp(
+            info, progress.get("current_file_id"), progress.get("position_seconds")
+        )
 
         if current_pct is None and current_ts is not None and duration:
             current_pct = min(max(current_ts / duration, 0.0), 1.0)
@@ -141,12 +207,12 @@ class BookOrbitAudioSyncClient(SyncClient):
             return SyncResult(None, False)
 
         percentage = request.locator_result.percentage
-        current_file_id = info.get("primary_file_id")
+        resume = self._resolve_resume_fields(info, target_ts)
         success = self.client.update_audiobook_progress(
             book_id=book_id,
-            position_seconds=target_ts,
+            position_seconds=resume["position_seconds"],
             percentage=percentage,
-            current_file_id=current_file_id,
+            current_file_id=resume["file_id"],
         )
         if success:
             try:

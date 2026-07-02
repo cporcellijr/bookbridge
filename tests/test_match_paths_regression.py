@@ -999,7 +999,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.mock_container.mock_database_service.save_book.assert_called_once()
         self.assertEqual(web_server._load_match_queue(), [])
 
-    @patch("src.web_server._create_or_update_booklore_audio_mapping", return_value=(Mock(abs_id="booklore:42"), None, None))
+    @patch("src.web_server._create_or_update_library_audio_mapping", return_value=(Mock(abs_id="booklore:42"), None, None))
     def test_suggestions_queue_add_and_process_booklore_audio(self, _mock_booklore_mapping):
         add_response = self.client.post(
             "/suggestions",

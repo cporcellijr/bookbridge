@@ -837,7 +837,9 @@
                         const coverHtml = item.cover_url
                             ? `<div class="card-cover"><img src="${item.cover_url}" alt="" onerror="this.parentElement.innerHTML='🎧'"></div>`
                             : `<div class="card-cover">🎧</div>`;
-                        const badgeClass = ((item.audio_source || 'ABS').toLowerCase() === 'booklore') ? 'booklore' : 'abs';
+                        const sourceKey = (item.audio_source || 'ABS').toLowerCase();
+                        const badgeClass = (sourceKey === 'booklore' || sourceKey === 'bookorbit') ? sourceKey : 'abs';
+                        const sourceLabel = (item.audio_source === 'BookLore') ? 'Grimmory' : (item.audio_source || 'ABS');
 
                         card.innerHTML = `
                             ${coverHtml}
@@ -845,7 +847,7 @@
                                 <div class="card-title">${escapeHtml(item.title)}</div>
                                 <div class="card-author">${escapeHtml(item.author || '')}</div>
                                 <div class="card-meta">
-                                    <span class="source-badge ${badgeClass}">${escapeHtml(item.audio_source || 'ABS')}</span>
+                                    <span class="source-badge ${badgeClass}">${escapeHtml(sourceLabel)}</span>
                                     · ${item.num_files} file${item.num_files !== 1 ? 's' : ''}
                                     · ${item.file_size_mb} MB
                                 </div>

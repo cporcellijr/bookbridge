@@ -30,7 +30,7 @@ from src.services.library_service import LibraryService # [NEW]
 from src.services.migration_service import MigrationService # [NEW]
 from src.services.forge_service import ForgeService
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
-from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter
+from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.calibre_identifier_resolver import CalibreIdentifierResolver
 from src.services.book_mapping_service import BookMappingService
 from src.services.shelf_watch_service import ShelfWatchService
@@ -283,9 +283,16 @@ class Container(containers.DeclarativeContainer):
         data_dir=data_dir,
     )
 
+    bookorbit_audio_source_adapter = providers.Singleton(
+        BookOrbitAudioSourceAdapter,
+        bookorbit_client=bookorbit_client,
+        data_dir=data_dir,
+    )
+
     audio_source_adapters = providers.Dict(
         ABS=abs_audio_source_adapter,
         BookLore=booklore_audio_source_adapter,
+        BookOrbit=bookorbit_audio_source_adapter,
     )
 
     # Sync clients dictionary for reuse

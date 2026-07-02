@@ -851,6 +851,53 @@ class ForgeService:
             logger.error(f"Failed to copy Grimmory audio for book '{book_id}': {e}", exc_info=True)
             return False
 
+    def _copy_bookorbit_audio_files(self, book_id: str, dest_folder: Path, stage_mode: str = DEFAULT_STAGE_MODE) -> bool:
+        """Stage audiobook tracks from BookOrbit into dest_folder.
+
+        Each BookOrbit track is its own file with a per-file download endpoint,
+        so this is far simpler than the Grimmory stream-index dance: stage from
+        the shared /books mount when the file resolves locally, else download.
+        """
+        if not self.bookorbit_client:
+            return False
+        try:
+            normalized_stage_mode = self._normalize_stage_mode(stage_mode)
+            info = self.bookorbit_client.get_audiobook_info(book_id)
+            tracks = (info or {}).get("tracks") or []
+            if not tracks:
+                logger.warning(f"No audio tracks found for BookOrbit book '{book_id}'")
+                return False
+
+            dest_folder.mkdir(parents=True, exist_ok=True)
+            staged = 0
+            for idx, track in enumerate(tracks):
+                ext = str(track.get("format") or "mp3").strip().lstrip(".") or "mp3"
+                dest_path = dest_folder / f"track_{idx:03d}.{ext}"
+
+                local_candidate = str(track.get("absolute_path") or "").strip()
+                local_path = Path(local_candidate) if local_candidate else None
+                if local_path and local_path.is_file():
+                    self._stage_local_file(local_path, dest_path, normalized_stage_mode, "BookOrbit audio")
+                    staged += 1
+                    continue
+
+                logger.info(f"BookOrbit audio: downloading file {track.get('id')} -> '{dest_path.name}'")
+                if self.bookorbit_client.download_file_to_path(track.get("id"), dest_path):
+                    staged += 1
+                else:
+                    logger.error(
+                        f"Failed to download BookOrbit file {track.get('id')} for book '{book_id}'"
+                    )
+
+            if staged == len(tracks):
+                logger.info(f"BookOrbit audio: staged all {staged} track(s) for book '{book_id}'")
+                return True
+            logger.error(f"BookOrbit audio: expected {len(tracks)} tracks, staged {staged} — Aborting")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to copy BookOrbit audio for book '{book_id}': {e}", exc_info=True)
+            return False
+
     @staticmethod
     def _collect_audio_files(root_dir) -> list[Path]:
         if not root_dir:
@@ -886,16 +933,24 @@ class ForgeService:
             logger.info("Auto-Forge: Whisper fallback using staged source audio")
             return self._build_local_audio_inputs(staged_audio)
 
-        if audio_source == "BookLore" and audio_source_id:
-            cache_root = self.ebook_parser.epub_cache_dir / "whisper_source_audio" / str(audio_source_id)
+        if audio_source in ("BookLore", "BookOrbit") and audio_source_id:
+            source_label = "Grimmory" if audio_source == "BookLore" else "BookOrbit"
+            # BookOrbit cache keys are namespaced so they can't collide with a
+            # same-numbered Grimmory book; legacy Grimmory keys stay bare.
+            cache_key = str(audio_source_id) if audio_source == "BookLore" else f"bookorbit_{audio_source_id}"
+            cache_root = self.ebook_parser.epub_cache_dir / "whisper_source_audio" / cache_key
             cache_root.mkdir(parents=True, exist_ok=True)
             cached_audio = self._collect_audio_files(cache_root)
             if not cached_audio:
-                if not self._copy_booklore_audio_files(audio_source_id, cache_root, stage_mode=DEFAULT_STAGE_MODE):
+                if audio_source == "BookLore":
+                    copied = self._copy_booklore_audio_files(audio_source_id, cache_root, stage_mode=DEFAULT_STAGE_MODE)
+                else:
+                    copied = self._copy_bookorbit_audio_files(audio_source_id, cache_root, stage_mode=DEFAULT_STAGE_MODE)
+                if not copied:
                     return []
                 cached_audio = self._collect_audio_files(cache_root)
             if cached_audio:
-                logger.info("Auto-Forge: Whisper fallback using Grimmory audio source")
+                logger.info("Auto-Forge: Whisper fallback using %s audio source", source_label)
                 return self._build_local_audio_inputs(cached_audio)
             return []
 
@@ -965,6 +1020,8 @@ class ForgeService:
             # Step 1: Copy audio files to temp staging dir
             if audio_source == "BookLore" and audio_source_id:
                 audio_ok = self._copy_booklore_audio_files(audio_source_id, temp_dir, stage_mode=stage_mode)
+            elif audio_source == "BookOrbit" and audio_source_id:
+                audio_ok = self._copy_bookorbit_audio_files(audio_source_id, temp_dir, stage_mode=stage_mode)
             else:
                 audio_ok = self._copy_audio_files(abs_id, temp_dir, stage_mode=stage_mode)
             if not audio_ok:
@@ -1115,7 +1172,7 @@ class ForgeService:
                             try:
                                 logger.info("⚡ Forge: Extracting SMIL transcript from readaloud...")
                                 chapters = []
-                                if audio_source != "BookLore":
+                                if audio_source not in ("BookLore", "BookOrbit"):
                                     item_details = self.abs_client.get_item_details(abs_id)
                                     chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
                                 book_text, _ = self.ebook_parser.extract_text_and_map(completed_epub_path)
@@ -1204,6 +1261,9 @@ class ForgeService:
             if audio_source == 'BookLore' and audio_source_id:
                 if not self._copy_booklore_audio_files(audio_source_id, temp_dir, stage_mode=stage_mode):
                     raise Exception("Failed to copy Grimmory audio files")
+            elif audio_source == 'BookOrbit' and audio_source_id:
+                if not self._copy_bookorbit_audio_files(audio_source_id, temp_dir, stage_mode=stage_mode):
+                    raise Exception("Failed to copy BookOrbit audio files")
             else:
                 if not self._copy_audio_files(abs_id, temp_dir, stage_mode=stage_mode):
                     raise Exception("Failed to copy audio files")
@@ -1645,7 +1705,7 @@ class ForgeService:
                     logger.info("Auto-Forge: SMIL unavailable/rejected. Falling back to Whisper transcription...")
                     whisper_audio = self._get_whisper_audio_inputs(temp_dir, abs_id, audio_source, audio_source_id)
                     if not whisper_audio:
-                        source_name = "BookLore" if audio_source == "BookLore" and audio_source_id else "ABS"
+                        source_name = audio_source if audio_source in ("BookLore", "BookOrbit") and audio_source_id else "ABS"
                         raise Exception(
                             f"Auto-Forge: no audio files available for Whisper fallback (source={source_name})."
                         )
@@ -1859,7 +1919,7 @@ class ForgeService:
 
         item_details = None
         chapters = []
-        if audio_source != 'BookLore':
+        if audio_source not in ('BookLore', 'BookOrbit'):
             try:
                 item_details = self.abs_client.get_item_details(abs_id)
             except Exception as exc:

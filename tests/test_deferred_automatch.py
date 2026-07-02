@@ -70,7 +70,7 @@ class TestBatchClaimsForUser(unittest.TestCase):
         tok = ws.set_current_user_id(7)
         try:
             with patch.object(ws, "database_service", db), \
-                 patch.object(ws, "_create_or_update_booklore_audio_mapping",
+                 patch.object(ws, "_create_or_update_library_audio_mapping",
                               return_value=(fake_saved, None, None)):
                 ws._process_batch_queue([item])
         finally:
@@ -78,11 +78,47 @@ class TestBatchClaimsForUser(unittest.TestCase):
 
         db.link_user_book.assert_called_once_with(7, "booklore:99")
 
+    def test_process_batch_queue_routes_bookorbit_audio_to_library_mapping(self):
+        fake_saved = SimpleNamespace(abs_id="bookorbit:42")
+        db = MagicMock()
+        item = {"audio_source": "BookOrbit", "audio_source_id": "42", "audio_title": "T"}
+
+        tok = ws.set_current_user_id(7)
+        try:
+            with patch.object(ws, "database_service", db), \
+                 patch.object(ws, "_create_or_update_library_audio_mapping",
+                              return_value=(fake_saved, None, None)) as mapping_mock:
+                ws._process_batch_queue([item])
+        finally:
+            ws.reset_current_user_id(tok)
+
+        self.assertEqual(mapping_mock.call_args.kwargs["audio_source"], "BookOrbit")
+        db.link_user_book.assert_called_once_with(7, "bookorbit:42")
+
     def test_claim_is_noop_without_user(self):
         db = MagicMock()
         with patch.object(ws, "database_service", db):
             ws._claim_book_for_user_id(None, "abs-1")
         db.link_user_book.assert_not_called()
+
+
+class TestAudioBridgeKeys(unittest.TestCase):
+    """Bridge keys route non-ABS audio providers ('booklore:'/'bookorbit:')."""
+
+    def test_build_bridge_key_per_source(self):
+        self.assertEqual(ws._build_bridge_key("BookLore", "42"), "booklore:42")
+        self.assertEqual(ws._build_bridge_key("BookOrbit", "42"), "bookorbit:42")
+        self.assertEqual(ws._build_bridge_key("ABS", "li_abc"), "li_abc")
+
+    def test_build_bridge_key_normalizes_prefixed_ids(self):
+        self.assertEqual(ws._build_bridge_key(None, "bookorbit: 42"), "bookorbit:42")
+        self.assertEqual(ws._build_bridge_key(None, "booklore:42"), "booklore:42")
+
+    def test_audio_source_from_bridge_key(self):
+        self.assertEqual(ws._audio_source_from_bridge_key("booklore:42"), "BookLore")
+        self.assertEqual(ws._audio_source_from_bridge_key("bookorbit:42"), "BookOrbit")
+        self.assertEqual(ws._audio_source_from_bridge_key("li_abc"), "ABS")
+        self.assertEqual(ws._audio_source_from_bridge_key(""), "")
 
 
 class TestSpawnUserBackground(unittest.TestCase):

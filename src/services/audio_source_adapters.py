@@ -8,6 +8,7 @@ from typing import Optional
 
 from src.api.api_clients import ABSClient
 from src.api.booklore_client import BookloreClient
+from src.api.bookorbit_client import BookOrbitClient
 from src.utils.logging_utils import sanitize_log_data
 
 logger = logging.getLogger(__name__)
@@ -645,4 +646,146 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             source_id,
             float(total_duration),
         )
+        return [{"id": 0, "title": "Audiobook", "start": 0.0, "end": total_duration}]
+
+
+class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
+    source_name = "BookOrbit"
+
+    def __init__(self, bookorbit_client: BookOrbitClient, data_dir: Path):
+        self.bookorbit_client = bookorbit_client
+        self.data_dir = Path(data_dir)
+
+    def search(self, query: str) -> list[AudioResult]:
+        results: list[AudioResult] = []
+        for book in self.bookorbit_client.search_audiobooks(query):
+            book_id = book.get("id")
+            if book_id is None:
+                continue
+            title = book.get("title") or f"BookOrbit {book_id}"
+            duration = book.get("duration_seconds")
+            results.append(
+                AudioResult(
+                    source="BookOrbit",
+                    source_id=str(book_id),
+                    title=title,
+                    authors=book.get("authors") or "",
+                    cover_url=self.get_cover_url(str(book_id)) or "",
+                    duration=float(duration) if duration else None,
+                    display_name=title,
+                    provider_book_id=str(book_id),
+                )
+            )
+        return results
+
+    def get_metadata(self, source_id: str) -> Optional[dict]:
+        book_info = self.bookorbit_client.get_audiobook_info(source_id)
+        if not book_info:
+            return None
+        progress = self.bookorbit_client.get_audiobook_progress(source_id)
+        if progress:
+            book_info["audiobookProgress"] = progress
+        return book_info
+
+    def get_cover_url(self, source_id: str) -> Optional[str]:
+        return f"/api/bookorbit/audiobook-cover/{source_id}"
+
+    def get_audio_files(self, source_id: str, bridge_key: str | None = None) -> list[dict]:
+        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
+        tracks = info.get("tracks") or []
+        if not tracks:
+            logger.warning(
+                "BookOrbit audio files unavailable: source_id=%s info_keys=%s",
+                source_id,
+                sorted(info.keys()) if isinstance(info, dict) else [],
+            )
+            return []
+        logger.debug("BookOrbit audio files: source_id=%s count=%s", source_id, len(tracks))
+
+        # ':' in bridge keys ('bookorbit:42') is not a legal path char on Windows.
+        cache_key = str(bridge_key or f"bookorbit-{source_id}").replace(":", "_")
+        source_cache_dir = self.data_dir / "audio_cache" / cache_key / "source_tracks"
+        source_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        files = []
+        for idx, track in enumerate(tracks):
+            ext = (track.get("format") or "mp3").lower().lstrip(".")
+            local_path = source_cache_dir / f"track_{idx:03d}.{ext}"
+            if not local_path.exists() or local_path.stat().st_size == 0:
+                ok = self.bookorbit_client.download_file_to_path(track.get("id"), local_path)
+                if not ok:
+                    raise RuntimeError(
+                        f"BookOrbit track download failed for book_id={source_id} file_id={track.get('id')}"
+                    )
+            duration = track.get("duration_seconds")
+            files.append(
+                {
+                    "local_path": str(local_path),
+                    "ext": ext,
+                    "track_index": idx,
+                    "duration_ms": int(float(duration) * 1000) if duration else None,
+                }
+            )
+        return files
+
+    def get_chapters(self, source_id: str) -> list[dict]:
+        """BookOrbit chapters are clean ``{title, startMs}`` markers (absolute,
+        cumulative across tracks); ends are the next chapter's start. Falls back
+        to per-track synthetic chapters, then a single whole-book chapter."""
+        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
+        try:
+            total_duration = float(info.get("duration_seconds") or 0.0)
+        except (TypeError, ValueError):
+            total_duration = 0.0
+
+        chapters = info.get("chapters") or []
+        rows = []
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            try:
+                start = float(chapter.get("startMs") or 0.0) / 1000.0
+            except (TypeError, ValueError):
+                continue
+            rows.append({"title": chapter.get("title"), "start": start})
+        if rows:
+            normalized = []
+            for idx, row in enumerate(rows):
+                end = rows[idx + 1]["start"] if idx + 1 < len(rows) else max(total_duration, row["start"])
+                normalized.append(
+                    {
+                        "id": idx,
+                        "title": row["title"] or f"Chapter {idx + 1}",
+                        "start": row["start"],
+                        "end": float(end),
+                    }
+                )
+            valid = [c for c in normalized if c["end"] > c["start"]]
+            if valid:
+                logger.debug(
+                    "BookOrbit audio chapters: source_id=%s mode=markers count=%s end=%.1fs",
+                    source_id, len(valid), valid[-1]["end"],
+                )
+                return valid
+
+        tracks = info.get("tracks") or []
+        if tracks:
+            synthetic = []
+            cursor = 0.0
+            for idx, track in enumerate(tracks):
+                try:
+                    duration = max(0.0, float(track.get("duration_seconds") or 0.0))
+                except (TypeError, ValueError):
+                    duration = 0.0
+                title = Path(str(track.get("filename") or "")).stem or f"Track {idx + 1}"
+                synthetic.append({"id": idx, "title": title, "start": cursor, "end": cursor + duration})
+                cursor += duration
+            logger.debug(
+                "BookOrbit audio chapters: source_id=%s mode=tracks count=%s end=%.1fs",
+                source_id, len(synthetic), synthetic[-1]["end"] if synthetic else 0.0,
+            )
+            return [c for c in synthetic if c["end"] > c["start"]]
+
+        if total_duration <= 0:
+            return []
         return [{"id": 0, "title": "Audiobook", "start": 0.0, "end": total_duration}]
