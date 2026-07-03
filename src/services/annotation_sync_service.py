@@ -19,7 +19,8 @@ Per user with BookOrbit KOReader-sync credentials configured
   4. acks what landed.
 
 Documents BookOrbit reports as ``unmatched`` (hash unknown to it) are cached
-and skipped for the rest of the process lifetime.
+with a recheck TTL — a book added to BookOrbit later gets picked up on the
+next probe instead of staying skipped until a bridge restart.
 """
 
 import logging
@@ -35,13 +36,24 @@ SPOKE_KEY = "@bookorbit"
 _MAX_BOOKS_PER_CALL = 20
 _MAX_CHANGES_PER_BOOK = 50
 _MAX_PULL_ROUNDS = 5
+_UNMATCHED_RECHECK_SECONDS = 6 * 3600
 
 
 class AnnotationSyncService:
     def __init__(self, database_service):
         self.database_service = database_service
-        self._unmatched: set[tuple[int | None, str]] = set()
+        # {(user_id, md5): last_checked_epoch} — re-probed after the TTL.
+        self._unmatched: dict[tuple[int | None, str], float] = {}
         self._lock = threading.Lock()
+
+    def _is_unmatched(self, user_id, doc_md5: str) -> bool:
+        checked_at = self._unmatched.get((user_id, doc_md5))
+        if checked_at is None:
+            return False
+        if time.time() - checked_at >= _UNMATCHED_RECHECK_SECONDS:
+            del self._unmatched[(user_id, doc_md5)]
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Cycle driver
@@ -113,7 +125,7 @@ class AnnotationSyncService:
     def sync_user(self, user_id, client: BookOrbitClient, kosync_user: str, kosync_key: str) -> None:
         md5s = [
             m for m in self._candidate_md5s(user_id)
-            if (user_id, m) not in self._unmatched
+            if not self._is_unmatched(user_id, m)
         ]
         if not md5s:
             return
@@ -155,7 +167,7 @@ class AnnotationSyncService:
                 return
 
             for unmatched_hash in response.get("unmatched") or []:
-                self._unmatched.add((user_id, str(unmatched_hash).lower()))
+                self._unmatched[(user_id, str(unmatched_hash).lower())] = time.time()
 
             more = False
             ack_books = []

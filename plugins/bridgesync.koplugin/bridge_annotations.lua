@@ -115,6 +115,58 @@ local function bookHash(file, doc_settings)
     return nil
 end
 
+-- Resolve a book's KOSync hash (sidecar-stored or computed).
+function BridgeAnnotations.resolveBookHash(file, doc_settings)
+    if not doc_settings and DocSettings:hasSidecarFile(file) then
+        doc_settings = DocSettings:open(file)
+    end
+    return bookHash(file, doc_settings)
+end
+
+-- Snapshot the live annotation list into plain tables while the ReaderUI is
+-- still alive, so an upload after the document closes never touches reader
+-- objects and never races the sidecar flush. Mirrors the capture/run split
+-- convention: capture is synchronous, the upload runs later.
+function BridgeAnnotations.captureLiveBook(ui)
+    if not ui or not ui.document or type(ui.document.file) ~= "string" then
+        return nil
+    end
+    local raw = ui.annotation and ui.annotation.annotations
+    if type(raw) ~= "table" then
+        return nil
+    end
+
+    local hash = nil
+    if ui.doc_settings and ui.doc_settings.readSetting then
+        local stored = ui.doc_settings:readSetting("partial_md5_checksum")
+        if type(stored) == "string" and #stored == 32 then
+            hash = stored:lower()
+        end
+    end
+
+    local copies = {}
+    for _, a in ipairs(raw) do
+        if type(a) == "table" then
+            table.insert(copies, {
+                datetime = a.datetime,
+                datetime_updated = a.datetime_updated,
+                drawer = a.drawer,
+                color = a.color,
+                text = a.text,
+                note = a.note,
+                chapter = a.chapter,
+                pageno = a.pageno,
+                pos0 = a.pos0,
+                pos1 = a.pos1,
+            })
+        end
+    end
+
+    -- live=false: by the time the deferred upload runs the book is closed, so
+    -- server-side changes may be merged straight into the sidecar.
+    return { file = ui.document.file, hash = hash, annotations = copies, live = false }
+end
+
 -- Collect candidate books: recently-read files with sidecar annotations, plus
 -- books we have watermarks for (so deleting a book's last highlight still
 -- propagates). Returns a list of
@@ -271,14 +323,15 @@ end
 -- Sync driver
 -- ------------------------------------------------------------------
 
--- Runs one full exchange round against the bridge.
+-- Runs one exchange round against the bridge for the given books.
 -- `bridge` supplies: api (bridge_api_client), state (LuaSettings),
 -- logInfo/logWarn/logErr, and _currentDeviceIdentity().
-function BridgeAnnotations.run(bridge)
+-- `books` is a list of {file, hash, annotations (sidecar-shaped list), live}.
+-- Shared by the periodic sync, the on-close snapshot, and the full sweep.
+function BridgeAnnotations.exchangeBooks(bridge, books)
     local device, device_id = bridge:_currentDeviceIdentity()
     local watermarks = bridge.state:readSetting("annotation_watermarks") or {}
 
-    local books = BridgeAnnotations.collectBooks(watermarks)
     if #books == 0 then
         return { books = 0, uploaded = 0, applied = 0, deleted = 0 }
     end
@@ -369,6 +422,16 @@ function BridgeAnnotations.run(bridge)
         applied = applied_total,
         deleted = deleted_total,
     }
+end
+
+-- Periodic sync entry point: recent books + watermark-tracked books.
+function BridgeAnnotations.run(bridge)
+    local watermarks = bridge.state:readSetting("annotation_watermarks") or {}
+    local books = BridgeAnnotations.collectBooks(watermarks)
+    if #books == 0 then
+        return { books = 0, uploaded = 0, applied = 0, deleted = 0 }
+    end
+    return BridgeAnnotations.exchangeBooks(bridge, books)
 end
 
 return BridgeAnnotations

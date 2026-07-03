@@ -18,6 +18,7 @@ local socket = require("socket")
 local json = require("json")
 local APIClient = require("bridge_api_client")
 local BridgeAnnotations = require("bridge_annotations")
+local BridgeSweep = require("bridge_sweep")
 local SQ3
 do
     local ok, mod = pcall(require, "lua-ljsqlite3/init")
@@ -67,6 +68,12 @@ function BridgeSync:onDispatcherRegisterActions()
         category = "none",
         event = "BridgeSyncSyncAnnotations",
         title = _("Bridge Sync: Sync highlights"),
+        general = true,
+    })
+    Dispatcher:registerAction("bridgesync_sweep_annotations", {
+        category = "none",
+        event = "BridgeSyncSweepAnnotations",
+        title = _("Bridge Sync: Sweep all highlights"),
         general = true,
     })
 end
@@ -690,6 +697,59 @@ function BridgeSync:onBridgeSyncSyncAnnotations()
     Trapper:wrap(function()
         self:syncAnnotations(false)
     end)
+    return true
+end
+
+function BridgeSync:startAnnotationSweep()
+    if not self.is_enabled or not self.annotation_sync_enabled then
+        self:_showMessage(_("Highlight sync is disabled"), 3)
+        return
+    end
+    if not self.server_url or self.server_url == "" or
+       not self.username or self.username == "" or
+       not self.key or self.key == "" then
+        self:_showMessage(_("Bridge Sync is not configured"), 3)
+        return
+    end
+    if BridgeSweep.isRunning() then
+        self:_showMessage(_("Highlight sweep is already running"), 3)
+        return
+    end
+    if not NetworkMgr:isConnected() then
+        self:_showMessage(_("No network connection"), 3)
+        return
+    end
+
+    local started, err = BridgeSweep.start(
+        self,
+        function(index, total)
+            if index % 25 == 0 then
+                self:logInfo("Highlight sweep progress:", tostring(index), "of", tostring(total))
+            end
+        end,
+        function(totals, message)
+            local summary = T(
+                _("Highlight sweep %1.\nBooks: %2 (skipped %3)\nUploaded: %4\nApplied: %5\nDeleted: %6"),
+                message and _("stopped") or _("finished"),
+                totals.books or 0, totals.skipped or 0,
+                totals.uploaded or 0, totals.applied or 0, totals.deleted or 0
+            )
+            if message then
+                summary = summary .. "\n" .. tostring(message)
+            end
+            self:logInfo("Highlight sweep done:", tostring(message or "completed"))
+            self:_showMessage(summary, 8)
+        end
+    )
+    if started then
+        self:_showMessage(_("Highlight sweep started in the background."), 3)
+    else
+        self:_showMessage(T(_("Highlight sweep not started: %1"), tostring(err)), 4)
+    end
+end
+
+function BridgeSync:onBridgeSyncSweepAnnotations()
+    self:startAnnotationSweep()
     return true
 end
 
@@ -1926,7 +1986,50 @@ end
 
 function BridgeSync:onCloseDocument()
     self:endSession({ force_queue = false })
+    self:_captureAnnotationsOnClose()
     return false
+end
+
+function BridgeSync:_captureAnnotationsOnClose()
+    if not self.is_enabled or not self.annotation_sync_enabled then
+        return
+    end
+    -- Snapshot the live annotations NOW (plain copies, no reader references);
+    -- upload after the close path has finished so applying server-side changes
+    -- merges into the freshly flushed sidecar.
+    local ok, captured = pcall(BridgeAnnotations.captureLiveBook, self.ui)
+    if not ok or not captured then
+        return
+    end
+    UIManager:scheduleIn(2, function()
+        if self.annotation_close_sync_in_flight then
+            return
+        end
+        if not NetworkMgr:isConnected() then
+            return -- silent; the periodic sync catches up later
+        end
+        self.annotation_close_sync_in_flight = true
+        Trapper:wrap(function()
+            local run_ok, result, err = pcall(function()
+                if not captured.hash then
+                    captured.hash = BridgeAnnotations.resolveBookHash(captured.file)
+                end
+                if not captured.hash then
+                    return nil, "no hash"
+                end
+                return BridgeAnnotations.exchangeBooks(self, { captured })
+            end)
+            self.annotation_close_sync_in_flight = false
+            if run_ok and type(result) == "table" then
+                self:logInfo("Close-sync highlights:", tostring(result.uploaded), "uploaded,",
+                    tostring(result.applied), "applied,", tostring(result.deleted), "deleted")
+            elseif run_ok and err and err ~= "no hash" then
+                self:logWarn("Close-sync highlights failed:", tostring(err))
+            elseif not run_ok then
+                self:logWarn("Close-sync highlights crashed:", tostring(result))
+            end
+        end)
+    end)
 end
 
 function BridgeSync:onSuspend()
@@ -2021,6 +2124,11 @@ function BridgeSync:checkForPluginUpdate()
     })
 end
 
+-- Wraps a path in POSIX single quotes, escaping embedded single quotes.
+local function _shellQuote(path)
+    return "'" .. tostring(path):gsub("'", "'\\''") .. "'"
+end
+
 function BridgeSync:_downloadAndInstallPlugin(version)
     local temp_path = DataStorage:getSettingsDir() .. "/bridgesync-update.zip"
 
@@ -2049,14 +2157,85 @@ function BridgeSync:_downloadAndInstallPlugin(version)
         return
     end
 
-    -- Extract zip into the plugins directory (one level above self.path)
-    local plugins_dir = self.path:match("^(.+)/[^/]+$") or self.path
-    local cmd = "unzip -o '" .. temp_path .. "' -d '" .. plugins_dir .. "' 2>&1"
-    local handle = io.popen(cmd, "r")
-    if handle then handle:close() end
+    -- Atomic install: extract into a staging directory (a partial unpack never
+    -- touches the live plugin), back up the current plugin dir, rename the new
+    -- one into place, and restore the backup on any failure. Uses KOReader's
+    -- archive helper — platform `unzip` exit codes vary and some devices don't
+    -- ship unzip at all. Staging/backup live next to the plugin dir so the
+    -- renames stay on one filesystem.
+    local install_ok, install_err = self:_installPluginZip(temp_path)
     os.remove(temp_path)
 
+    if not install_ok then
+        self:logErr("Plugin update failed:", tostring(install_err))
+        self:_showMessage(T(_("Plugin update failed: %1"), tostring(install_err)), 6)
+        return
+    end
+
     self:_showMessage(T(_("Plugin updated to v%1. Please restart KOReader."), version), 8)
+end
+
+function BridgeSync:_installPluginZip(zip_path)
+    local plugin_dir = tostring(self.path):gsub("/+$", "")
+    local plugins_dir = plugin_dir:match("^(.+)/[^/]+$")
+    local plugin_name = plugin_dir:match("([^/]+)$")
+    if not plugins_dir or not plugin_name then
+        return nil, "cannot determine plugin directory layout"
+    end
+
+    local staging = plugins_dir .. "/" .. plugin_name .. ".update"
+    local backup = plugins_dir .. "/" .. plugin_name .. ".bak"
+
+    -- Clear any leftovers from a previously interrupted attempt.
+    os.execute("rm -rf " .. _shellQuote(staging))
+
+    if not lfs.mkdir(staging) and lfs.attributes(staging, "mode") ~= "directory" then
+        return nil, "could not create staging directory"
+    end
+
+    local Device = require("device")
+    local unpack_ok, unpack_err
+    if type(Device.unpackArchive) == "function" then
+        unpack_ok, unpack_err = Device:unpackArchive(zip_path, staging, true)
+    else
+        -- Very old KOReader without the helper: fall back to unzip, but still
+        -- into staging only.
+        local exit_code = os.execute(
+            "unzip -o " .. _shellQuote(zip_path) .. " -d " .. _shellQuote(staging) .. " >/dev/null 2>&1"
+        )
+        unpack_ok = (exit_code == 0 or exit_code == true)
+        unpack_err = unpack_ok and nil or "unzip failed"
+    end
+    if not unpack_ok then
+        os.execute("rm -rf " .. _shellQuote(staging))
+        return nil, tostring(unpack_err or "archive extraction failed")
+    end
+
+    -- The zip carries a bridgesync.koplugin/ top-level folder; sanity-check it.
+    local staged_plugin = staging .. "/" .. plugin_name
+    if lfs.attributes(staged_plugin .. "/_meta.lua", "mode") ~= "file" then
+        os.execute("rm -rf " .. _shellQuote(staging))
+        return nil, "downloaded archive is missing " .. plugin_name .. "/_meta.lua"
+    end
+
+    os.execute("rm -rf " .. _shellQuote(backup))
+    local renamed_away, rename_err = os.rename(plugin_dir, backup)
+    if not renamed_away then
+        os.execute("rm -rf " .. _shellQuote(staging))
+        return nil, "could not move current plugin aside: " .. tostring(rename_err)
+    end
+
+    local installed, install_err = os.rename(staged_plugin, plugin_dir)
+    if not installed then
+        -- Restore the original so the user always has a working plugin.
+        os.rename(backup, plugin_dir)
+        os.execute("rm -rf " .. _shellQuote(staging))
+        return nil, "could not install new plugin: " .. tostring(install_err)
+    end
+
+    os.execute("rm -rf " .. _shellQuote(staging))
+    os.execute("rm -rf " .. _shellQuote(backup))
+    return true
 end
 
 function BridgeSync:addToMainMenu(menu_items)
@@ -2102,6 +2281,23 @@ function BridgeSync:addToMainMenu(menu_items)
                     Trapper:wrap(function()
                         self:syncAnnotations(false)
                     end)
+                end,
+            },
+            {
+                text_func = function()
+                    return BridgeSweep.isRunning()
+                        and _("Cancel Highlight Sweep")
+                        or _("Sweep All Highlights")
+                end,
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
+                    if BridgeSweep.isRunning() then
+                        BridgeSweep.cancel()
+                        self:_showMessage(_("Cancelling highlight sweep…"), 2)
+                    else
+                        self:startAnnotationSweep()
+                    end
+                    self:_refreshMenu(touchmenu_instance)
                 end,
             },
             {

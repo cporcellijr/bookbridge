@@ -316,6 +316,24 @@ class TestAnnotationSyncService(unittest.TestCase):
         service.sync_user(1, client, "carl", "deadbeef" * 4)
         client.koreader_exchange_annotations.assert_not_called()
 
+    def test_unmatched_hash_is_reprobed_after_ttl(self):
+        """A book added to BookOrbit later must be picked up once the TTL lapses."""
+        import time as _time
+        from src.services import annotation_sync_service as mod
+        db = MagicMock()
+        db.get_annotation_spoke_state.return_value = {"keys": [], "changes": [], "pending_delete_acks": []}
+        client = MagicMock()
+        client.koreader_exchange_annotations.return_value = {"results": [], "unmatched": [DOC]}
+
+        service = self._service_with_db(db)
+        service._candidate_md5s = lambda user_id: [DOC]
+        service.sync_user(1, client, "carl", "deadbeef" * 4)
+        # Age the entry past the recheck TTL.
+        service._unmatched[(1, DOC)] = _time.time() - mod._UNMATCHED_RECHECK_SECONDS - 1
+        client.koreader_exchange_annotations.reset_mock()
+        service.sync_user(1, client, "carl", "deadbeef" * 4)
+        client.koreader_exchange_annotations.assert_called_once()
+
     def test_normalize_kosync_key(self):
         from src.api.bookorbit_client import BookOrbitClient
         hashed = "5b5b5bfa3a0b6794b518e9d531f47f8c"
