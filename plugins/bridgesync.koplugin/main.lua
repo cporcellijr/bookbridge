@@ -2211,11 +2211,28 @@ function BridgeSync:_installPluginZip(zip_path)
         return nil, tostring(unpack_err or "archive extraction failed")
     end
 
-    -- The zip carries a bridgesync.koplugin/ top-level folder; sanity-check it.
-    local staged_plugin = staging .. "/" .. plugin_name
-    if lfs.attributes(staged_plugin .. "/_meta.lua", "mode") ~= "file" then
+    -- Locate the extracted plugin root by finding _meta.lua, rather than
+    -- assuming a layout: KOReader's unpackArchive may strip the top folder
+    -- (files land directly in staging) or keep it (staging/<name>/…), and it
+    -- varies by version. This is version-proof either way.
+    local staged_plugin
+    if lfs.attributes(staging .. "/_meta.lua", "mode") == "file" then
+        staged_plugin = staging  -- top folder was stripped
+    else
+        for entry in lfs.dir(staging) do
+            if entry ~= "." and entry ~= ".." then
+                local candidate = staging .. "/" .. entry
+                if lfs.attributes(candidate, "mode") == "directory"
+                    and lfs.attributes(candidate .. "/_meta.lua", "mode") == "file" then
+                    staged_plugin = candidate
+                    break
+                end
+            end
+        end
+    end
+    if not staged_plugin then
         os.execute("rm -rf " .. _shellQuote(staging))
-        return nil, "downloaded archive is missing " .. plugin_name .. "/_meta.lua"
+        return nil, "downloaded archive has no _meta.lua"
     end
 
     os.execute("rm -rf " .. _shellQuote(backup))
