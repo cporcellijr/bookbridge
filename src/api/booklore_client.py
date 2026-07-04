@@ -1748,6 +1748,71 @@ class BookloreClient:
         )
         return False
 
+    # ------------------------------------------------------------------
+    # Reader notes (book_notes_v2) — the store Grimmory's OWN web reader
+    # writes its highlight-with-note flow to. Separate id space from
+    # /api/v1/annotations.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_book_note(raw_note):
+        if not isinstance(raw_note, dict):
+            return None
+        return {
+            "id": raw_note.get("id"),
+            "bookId": raw_note.get("bookId"),
+            "createdAt": raw_note.get("createdAt"),
+            "updatedAt": raw_note.get("updatedAt"),
+            "cfi": raw_note.get("cfi"),
+            "selectedText": raw_note.get("selectedText"),
+            "noteContent": raw_note.get("noteContent"),
+            "chapterTitle": raw_note.get("chapterTitle"),
+            "color": raw_note.get("color"),
+        }
+
+    def get_book_notes(self, book_id):
+        """Return Grimmory web-reader notes (book_notes_v2) for one book."""
+        response = self._make_request("GET", f"/api/v2/book-notes/book/{book_id}")
+        if response is None or response.status_code != 200:
+            logger.warning(
+                "Grimmory: book-note list failed for book %s status=%s body=%s",
+                book_id,
+                response.status_code if response is not None else "no-response",
+                self._response_text_preview(response, 300) if response is not None else "<unavailable>",
+            )
+            return None
+        data = self._parse_json_response(response, f"Grimmory book notes for book {book_id}")
+        if not isinstance(data, list):
+            return []
+        return [note for note in (self._normalize_book_note(item) for item in data) if note]
+
+    def update_book_note(self, note_id, note_content, color):
+        payload = {"noteContent": note_content, "color": color}
+        response = self._make_request("PUT", f"/api/v2/book-notes/{note_id}", payload)
+        if response is None or response.status_code not in (200, 204):
+            logger.warning(
+                "Grimmory: book-note update failed for id %s status=%s body=%s",
+                note_id,
+                response.status_code if response is not None else "no-response",
+                self._response_text_preview(response, 300) if response is not None else "<unavailable>",
+            )
+            return False
+        return True
+
+    def delete_book_note(self, note_id):
+        response = self._make_request("DELETE", f"/api/v2/book-notes/{note_id}")
+        if response is None:
+            return False
+        if response.status_code in (200, 204, 404):
+            return True
+        logger.warning(
+            "Grimmory: book-note delete failed for id %s status=%s body=%s",
+            note_id,
+            response.status_code,
+            self._response_text_preview(response, 300),
+        )
+        return False
+
     @staticmethod
     def _to_progress_fraction(raw_pct):
         """Convert Grimmory percentage (0-100) to fraction (0-1) safely."""

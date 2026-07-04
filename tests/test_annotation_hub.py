@@ -581,9 +581,13 @@ class TestGrimmoryAnnotationSyncService(unittest.TestCase):
             "pending_delete_acks": [],
             "pending_deletes": [],
         }
-        db.get_spoke_server_ids_for_book.return_value = [101]
+        db.get_spoke_server_ids_for_book.side_effect = (
+            lambda user_id, doc_md5, server_id_field="bookorbit_server_id":
+            [101] if server_id_field == "booklore_server_id" else []
+        )
         client = MagicMock()
         client.download_book.return_value = b"epub"
+        client.get_book_notes.return_value = []
         client.get_annotations.side_effect = [
             [],
             [{
@@ -633,8 +637,12 @@ class TestGrimmoryAnnotationSyncService(unittest.TestCase):
             "pending_delete_acks": [],
             "pending_deletes": [],
         }
-        db.get_spoke_server_ids_for_book.return_value = [101, 102]
+        db.get_spoke_server_ids_for_book.side_effect = (
+            lambda user_id, doc_md5, server_id_field="bookorbit_server_id":
+            [101, 102] if server_id_field == "booklore_server_id" else []
+        )
         client = MagicMock()
+        client.get_book_notes.return_value = []
         client.get_annotations.return_value = [{
             "id": 101,
             "createdAt": "2026-07-01T10:00:00Z",
@@ -660,6 +668,161 @@ class TestGrimmoryAnnotationSyncService(unittest.TestCase):
 
         deletes = db.apply_spoke_annotations.call_args.kwargs["deletes"]
         self.assertEqual(deletes, [{"serverId": 102}])
+
+
+class TestGrimmoryNotesSubSpoke(unittest.TestCase):
+    """book_notes_v2 sub-spoke: Grimmory's web reader saves its notes to a
+    second store with its own id space — pulled into the hub, device edits
+    written back, deletions propagated both ways, never re-exported into the
+    annotations store."""
+
+    def _service_with_db(self, db):
+        from src.services.annotation_sync_service import AnnotationSyncService
+        return AnnotationSyncService(db, ebook_parser=MagicMock(), epub_cache_dir=Path("test_data"))
+
+    @staticmethod
+    def _state(changes=None, pending_deletes=None):
+        return {
+            "keys": [],
+            "changes": changes or [],
+            "pending_delete_acks": [],
+            "pending_deletes": pending_deletes or [],
+        }
+
+    @staticmethod
+    def _note(note_id=7, **kw):
+        note = {
+            "id": note_id,
+            "bookId": 22,
+            "createdAt": "2026-07-04T09:05:41",
+            "updatedAt": "2026-07-04T09:05:41",
+            "cfi": "note-cfi",
+            "selectedText": "picked words",
+            "noteContent": "from web",
+            "chapterTitle": "Chapter I",
+            "color": "#FFC107",
+        }
+        note.update(kw)
+        return note
+
+    def _run(self, db, client):
+        resolver = MagicMock()
+        resolver.cfi_range_to_xpointers.return_value = ("xp0", "xp1")
+        service = self._service_with_db(db)
+        return service.sync_booklore_notes(7, client, DOC, "22", resolver)
+
+    def test_web_note_pull_applies_to_hub(self):
+        db = MagicMock()
+        db.get_annotation_spoke_state.return_value = self._state()
+        db.get_spoke_server_ids_for_book.return_value = []
+        client = MagicMock()
+        client.get_book_notes.return_value = [self._note()]
+
+        self.assertTrue(self._run(db, client))
+        kwargs = db.apply_spoke_annotations.call_args.kwargs
+        self.assertEqual(kwargs["server_id_field"], "booklore_note_id")
+        self.assertFalse(kwargs["trust_positions"])
+        add = kwargs["adds"][0]
+        self.assertEqual(add["serverId"], 7)
+        self.assertEqual(add["note"], "from web")
+        self.assertEqual(add["text"], "picked words")
+        self.assertEqual(add["pos0"], "xp0")
+        client.update_book_note.assert_not_called()
+        client.delete_book_note.assert_not_called()
+
+    def test_device_edit_writes_back_to_note(self):
+        db = MagicMock()
+        db.get_annotation_spoke_state.return_value = self._state(changes=[
+            dict(_entry(note="edited on device", color="yellow"),
+                 _id=9, _spoke_server_id=7, _spoke_version=None),
+        ])
+        db.get_spoke_server_ids_for_book.return_value = [7]
+        client = MagicMock()
+        client.get_book_notes.side_effect = [
+            [self._note()],
+            [self._note(noteContent="edited on device")],
+        ]
+        client.update_book_note.return_value = True
+
+        self.assertTrue(self._run(db, client))
+        client.update_book_note.assert_called_once_with(
+            7, note_content="edited on device", color="#FFC107")
+        marked = db.mark_spoke_annotations_uploaded.call_args.kwargs
+        self.assertEqual(marked["annotation_ids"], [9])
+        self.assertEqual(marked["server_id_field"], "booklore_note_id")
+        self.assertEqual(client.get_book_notes.call_count, 2)
+
+    def test_rows_not_owned_by_notes_are_never_pushed(self):
+        # A device-authored change without a note id belongs to the
+        # annotations store — the notes spoke must not touch it.
+        db = MagicMock()
+        db.get_annotation_spoke_state.return_value = self._state(changes=[
+            dict(_entry(), _id=9, _spoke_server_id=None, _spoke_version=None),
+        ])
+        db.get_spoke_server_ids_for_book.return_value = []
+        client = MagicMock()
+        client.get_book_notes.return_value = []
+
+        self._run(db, client)
+        client.update_book_note.assert_not_called()
+        db.mark_spoke_annotations_uploaded.assert_not_called()
+
+    def test_device_delete_deletes_remote_note(self):
+        db = MagicMock()
+        db.get_annotation_spoke_state.return_value = self._state(
+            pending_deletes=[{"_id": 9, "serverId": 7}])
+        db.get_spoke_server_ids_for_book.return_value = []
+        client = MagicMock()
+        client.get_book_notes.side_effect = [[self._note()], []]
+        client.delete_book_note.return_value = True
+
+        self.assertTrue(self._run(db, client))
+        client.delete_book_note.assert_called_once_with(7)
+        marked = db.mark_spoke_annotations_uploaded.call_args.kwargs
+        self.assertEqual(marked["tombstone_ids"], [9])
+        db.apply_spoke_annotations.assert_not_called()
+
+    def test_web_deleted_note_tombstones_hub(self):
+        db = MagicMock()
+        db.get_annotation_spoke_state.return_value = self._state()
+        db.get_spoke_server_ids_for_book.return_value = [7]
+        client = MagicMock()
+        client.get_book_notes.return_value = []
+
+        self.assertTrue(self._run(db, client))
+        kwargs = db.apply_spoke_annotations.call_args.kwargs
+        self.assertEqual(kwargs["deletes"], [{"serverId": 7}])
+        self.assertEqual(kwargs["server_id_field"], "booklore_note_id")
+
+
+class TestNotesExclusionDb(AnnotationHubBase):
+    def test_note_owned_rows_flow_to_devices_but_not_annotations_store(self):
+        # A web note lands in the hub under the notes sub-spoke...
+        self.db.apply_spoke_annotations(
+            None, DOC, "@booklore-notes",
+            adds=[dict(_entry(note="web note"), serverId=7, version=1)],
+            edits=[], deletes=[],
+            server_id_field="booklore_note_id",
+            version_field="booklore_version",
+            synced_at_field="booklore_synced_at",
+            trust_positions=False,
+        )
+        # ...devices receive it...
+        result = self.db.exchange_koreader_annotations(
+            user_id=None, device_key="kindle", books=[_book()])
+        adds = result["books"][0]["toApply"]["add"]
+        self.assertEqual(len(adds), 1)
+        self.assertEqual(adds[0]["note"], "web note")
+        # ...but the annotations-store push must skip it, or every web note
+        # would be duplicated into Grimmory's other store.
+        state = self.db.get_annotation_spoke_state(
+            None, DOC, "@booklore",
+            server_id_field="booklore_server_id",
+            version_field="booklore_version",
+            exclude_if_set="booklore_note_id",
+        )
+        self.assertEqual(state["changes"], [])
+        self.assertEqual(len(state["keys"]), 1)  # still counted as alive
 
 
 class TestGrimmoryCFIResolver(unittest.TestCase):

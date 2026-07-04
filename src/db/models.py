@@ -655,6 +655,9 @@ class KoreaderAnnotation(Base):
     booklore_server_id = Column(Integer, nullable=True, index=True)
     booklore_version = Column(Integer, nullable=True)
     booklore_synced_at = Column(DateTime, nullable=True)
+    # Grimmory reader-note (book_notes_v2) id — a separate remote store with its
+    # own id space; a row mirrors at most one of annotations/notes per field.
+    booklore_note_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, index=True)
 

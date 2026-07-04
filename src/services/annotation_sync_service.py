@@ -40,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 SPOKE_KEY = "@bookorbit"
 BOOKLORE_SPOKE_KEY = "@booklore"
+# Grimmory's web reader saves its highlight-with-note flow to a SECOND store
+# (book_notes_v2, /api/v2/book-notes) with its own id space — synced as its
+# own sub-spoke so web-reader notes reach devices too.
+BOOKLORE_NOTES_SPOKE_KEY = "@booklore-notes"
 _MAX_BOOKS_PER_CALL = 20
 _MAX_CHANGES_PER_BOOK = 50
 _MAX_PULL_ROUNDS = 5
@@ -427,6 +431,31 @@ class AnnotationSyncService:
             "note": change.get("note"),
         }
 
+    def _entry_from_booklore_note(self, resolver: GrimmoryCFIResolver, note: dict) -> dict | None:
+        """Hub entry for a Grimmory web-reader note (book_notes_v2 row)."""
+        try:
+            pos0, pos1 = resolver.cfi_range_to_xpointers(note.get("cfi"))
+        except Exception as e:
+            logger.warning("Grimmory note CFI conversion failed for id %s: %s", note.get("id"), e)
+            return None
+        created = self._ko_datetime_from_iso(note.get("createdAt"))
+        updated = self._ko_datetime_from_iso(note.get("updatedAt")) if note.get("updatedAt") else None
+        return {
+            "serverId": int(note["id"]),
+            "version": 1,
+            "datetime": created,
+            "datetimeUpdated": updated if updated != created else None,
+            "posFormat": "xpointer",
+            "pos0": pos0,
+            "pos1": pos1,
+            "drawer": DEFAULT_KOREADER_STYLE,
+            "color": self._koreader_color_from_booklore(note.get("color")),
+            "text": note.get("selectedText"),
+            "note": note.get("noteContent"),
+            "chapter": note.get("chapterTitle"),
+            "pageno": None,
+        }
+
     def _entry_from_booklore_annotation(self, resolver: GrimmoryCFIResolver, annotation: dict) -> dict | None:
         try:
             pos0, pos1 = resolver.cfi_range_to_xpointers(annotation.get("cfi"))
@@ -486,6 +515,10 @@ class AnnotationSyncService:
             BOOKLORE_SPOKE_KEY,
             server_id_field="booklore_server_id",
             version_field="booklore_version",
+            # Rows owned by a Grimmory web-reader note (book_notes_v2) are
+            # synced by the notes sub-spoke; exporting them here would
+            # duplicate every web note into the annotations store.
+            exclude_if_set="booklore_note_id",
         )
 
         tombstone_acks = []
@@ -593,6 +626,109 @@ class AnnotationSyncService:
                 synced_at_field="booklore_synced_at",
                 # Grimmory positions are CFI round-trips — never let a pull
                 # rewrite canonical identity (the ann_key cascade bug).
+                trust_positions=False,
+            )
+
+        notes_did_work = self.sync_booklore_notes(user_id, client, doc_md5, book_id, resolver)
+        return bool(uploaded_ids or tombstone_acks or adds or deletes or notes_did_work)
+
+    def sync_booklore_notes(self, user_id, client: BookloreClient, doc_md5: str,
+                            book_id: str, resolver: GrimmoryCFIResolver) -> bool:
+        """Sync Grimmory's web-reader notes (book_notes_v2) for one book.
+
+        This is the store Grimmory's own reader writes; it has its own id
+        space, tracked in ``booklore_note_id``. The bridge never CREATES
+        remote notes (device highlights go to the annotations store) — it
+        pulls web-authored notes into the hub, writes device edits of those
+        notes back, and propagates deletions both ways.
+        """
+        remote_notes = client.get_book_notes(book_id)
+        if remote_notes is None:
+            return False
+        remote_by_id = {
+            int(note["id"]): note
+            for note in remote_notes
+            if note.get("id") is not None
+        }
+
+        state = self.database_service.get_annotation_spoke_state(
+            user_id,
+            doc_md5,
+            BOOKLORE_NOTES_SPOKE_KEY,
+            server_id_field="booklore_note_id",
+            version_field="booklore_version",
+        )
+
+        # Device deletions of web notes -> delete remotely.
+        tombstone_acks = []
+        for pending in state.get("pending_deletes") or []:
+            remote_id = pending.get("serverId")
+            if remote_id is not None and client.delete_book_note(remote_id):
+                tombstone_acks.append(pending["_id"])
+                remote_by_id.pop(int(remote_id), None)
+
+        # Device edits of web-authored notes -> write back. Rows without a
+        # note id belong to devices/the annotations store — never pushed here.
+        uploaded_ids = []
+        for raw_change in (state.get("changes") or [])[:_MAX_CHANGES_PER_BOOK]:
+            change = dict(raw_change)
+            annotation_id = change.pop("_id", None)
+            remote_id = change.pop("_spoke_server_id", None)
+            change.pop("_spoke_version", None)
+            if not annotation_id or remote_id is None:
+                continue
+            if int(remote_id) not in remote_by_id:
+                continue  # deleted remotely; the pull below tombstones it
+            if client.update_book_note(
+                int(remote_id),
+                note_content=change.get("note") or "",
+                color=self._booklore_color_from_koreader(change.get("color")),
+            ):
+                uploaded_ids.append(annotation_id)
+
+        if uploaded_ids or tombstone_acks:
+            self.database_service.mark_spoke_annotations_uploaded(
+                user_id,
+                BOOKLORE_NOTES_SPOKE_KEY,
+                annotation_ids=uploaded_ids,
+                tombstone_ids=tombstone_acks,
+                server_id_field="booklore_note_id",
+                version_field="booklore_version",
+                synced_at_field="booklore_synced_at",
+            )
+            # Re-fetch so the merge below sees our just-written content.
+            remote_notes = client.get_book_notes(book_id)
+            if remote_notes is None:
+                return True
+
+        adds = []
+        remote_ids = set()
+        for note in remote_notes:
+            if note.get("id") is None:
+                continue
+            remote_ids.add(int(note["id"]))
+            entry = self._entry_from_booklore_note(resolver, note)
+            if entry:
+                adds.append(entry)
+
+        known_ids = set(self.database_service.get_spoke_server_ids_for_book(
+            user_id,
+            doc_md5,
+            server_id_field="booklore_note_id",
+        ))
+        deletes = [{"serverId": remote_id} for remote_id in sorted(known_ids - remote_ids)]
+
+        if adds or deletes:
+            self.database_service.apply_spoke_annotations(
+                user_id,
+                doc_md5,
+                BOOKLORE_NOTES_SPOKE_KEY,
+                adds=adds,
+                edits=[],
+                deletes=deletes,
+                server_id_field="booklore_note_id",
+                version_field="booklore_version",
+                synced_at_field="booklore_synced_at",
                 trust_positions=False,
             )
         return bool(uploaded_ids or tombstone_acks or adds or deletes)

@@ -2152,10 +2152,15 @@ class DatabaseService:
 
     def get_annotation_spoke_state(self, user_id, doc_md5: str, spoke_key: str,
                                    server_id_field: str = "bookorbit_server_id",
-                                   version_field: str = "bookorbit_version") -> dict:
+                                   version_field: str = "bookorbit_version",
+                                   exclude_if_set: str = None) -> dict:
         """Everything the spoke needs to build one exchange call for one book:
         alive keys, changed entries (version above the spoke's ack), and the
-        spoke's pending tombstone acks."""
+        spoke's pending tombstone acks.
+
+        ``exclude_if_set`` omits rows with that field non-null from ``changes``
+        (they still contribute keys) — used so rows owned by one Grimmory store
+        are never exported into the other."""
         doc_md5 = str(doc_md5 or "").strip().lower()
         with self.get_session() as session:
             rows = (
@@ -2181,6 +2186,8 @@ class DatabaseService:
                     continue
                 # BookOrbit hashes the raw pos0 it received; send its convention.
                 keys.append({"k": self._bookorbit_annotation_key(row.datetime, row.pos0), "dt": row.datetime})
+                if exclude_if_set is not None and getattr(row, exclude_if_set, None) is not None:
+                    continue
                 if acked < int(row.version or 1):
                     entry = self._annotation_response_entry(row)
                     entry["_id"] = row.id  # internal: for post-upload ack bookkeeping
