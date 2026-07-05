@@ -87,6 +87,21 @@
                     Storyteller → user permissions). Without them, forge fails at the upload (403 Forbidden) or
                     the processing-trigger step.</div>
                 {% endif %}
+                {% if group == 'KOReader / KoSync' %}
+                <div class="note">The account this user's KOReader <strong>devices</strong> sign in to
+                    <strong>BookBridge's own</strong> sync server with. Reading progress (and highlights, via the
+                    Bridge Sync plugin) come <strong>in</strong> this way. This is <em>not</em> the same as the
+                    "KOReader sync" fields under BookOrbit below.</div>
+                {% endif %}
+                {% if group == 'BookOrbit' %}
+                <div class="note"><strong>Two separate logins.</strong> <strong>Username / Password</strong> is the
+                    BookOrbit web account (reading progress, library, collections). The <strong>KOReader sync</strong>
+                    fields are a <em>different</em> credential — a KOReader-sync account on BookOrbit that the bridge
+                    uses <strong>only</strong> to relay highlights and notes <strong>out</strong> to BookOrbit's web
+                    reader. Leave them blank unless you want highlight sync. If that sync account's name differs from
+                    the BookOrbit username, set <strong>owner</strong> to the BookOrbit username so the bridge knows
+                    the account belongs to this user.</div>
+                {% endif %}
                 {% for key, label, ftype in fields %}
                     {% if ftype == 'bool' %}
                     <div class="toggle-row">
