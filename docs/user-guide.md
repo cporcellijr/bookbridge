@@ -11,8 +11,9 @@ It shows:
 - **Active Syncs** for every tracked mapping
 - **Unified Progress** across all connected clients
 - **Recent session stats** when session data is available for that mapping
-- **Source badges** so you can tell whether the audio side is coming from Audiobookshelf or Grimmory
-- **Direct links** into supported services, including Grimmory audio when a mapping uses it
+- **Source badges** so you can tell whether a mapping is using Audiobookshelf, Grimmory, BookOrbit, CWA, or another connected source
+- **Direct links** into supported services, including Grimmory and BookOrbit audio when a mapping uses them
+- Annotation sync status when the updated Bridge Sync KOReader plugin is in use
 - Quick access to **Add Book**, **Batch Match**, **Suggestions**, **Forge**, **Settings**, and **Logs**
 
 If a book is significantly out of sync, the card is highlighted so you can spot it quickly.
@@ -29,7 +30,7 @@ Each mapping runs in one of two modes.
 
 This is the normal mode when a mapping has an audiobook source.
 
-- The audio source can be **Audiobookshelf** or **Grimmory**.
+- The audio source can be **Audiobookshelf**, **Grimmory**, or **BookOrbit**.
 - The text side can include a standard ebook, a Storyteller artifact, or both.
 - The bridge prefers Storyteller transcript timing when available, then falls back to SMIL, then Whisper.
 
@@ -43,7 +44,7 @@ This mode tracks reading progress without attaching an audiobook source.
 - You can still link a standard ebook, a Storyteller title, or both.
 - Ebook-only links skip audiobook preparation work, so they activate faster.
 
-Use this when you only want reading sync between KOReader, Grimmory, Storyteller, and optional ABS ebook progress.
+Use this when you only want reading sync between KOReader, Grimmory, BookOrbit, Storyteller, optional ABS ebook progress, and CWA-sourced ebooks when Kobo sync is enabled.
 
 ---
 
@@ -58,12 +59,12 @@ The bridge still runs a normal background sync every 5 minutes by default, but i
 
 ### Per-client polling
 
-Storyteller and Grimmory can also use their own polling intervals:
+Storyteller, Grimmory, BookOrbit, and CWA/Kobo sync can also use their own polling intervals when those integrations are enabled:
 
 - **Global** uses the normal background cycle.
 - **Custom** lets that client be checked on its own schedule.
 
-This is useful when you often read directly in Storyteller or Grimmory and want the bridge to notice sooner.
+This is useful when you often read directly in Storyteller, Grimmory, BookOrbit, or a CWA/Kobo client and want the bridge to notice sooner.
 
 ---
 
@@ -82,6 +83,29 @@ If you use Whisper.cpp with a custom model name, you can type that model directl
 
 ---
 
+## Highlights and Notes
+
+BookBridge can sync KOReader highlights and notes between KOReader devices and supported web readers, but this is a Bridge Sync plugin feature.
+
+Requirements:
+
+- Install the **Bridge Sync** KOReader plugin from the current release or newer on each KOReader device that should sync annotations.
+- Configure the plugin with that reader's bridge server URL and KOSync username/key.
+- Leave **KOReader -> Highlight Sync** enabled in Settings. It is enabled by default on the bridge side.
+- For Grimmory web-reader highlights and notes, enable **Highlight Sync** in that reader's Grimmory / BookLore Integrations.
+- For BookOrbit web-reader highlights, fill in that reader's BookOrbit KOReader sync username/password fields. The owner must match the BookOrbit user, or be explicitly set in **KOReader sync owner**.
+
+What syncs:
+
+- Highlights created in KOReader
+- Notes attached to highlights
+- Edits and deletions
+- Existing annotations after using **Sweep All Highlights** in the Bridge Sync plugin
+
+Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing reading position, but they do not exchange highlights or notes.
+
+---
+
 ## Add Book
 
 **Add Book** is the main manual linking tool.
@@ -92,6 +116,7 @@ You can choose:
 
 - An **Audiobookshelf audiobook**
 - A **Grimmory audiobook**
+- A **BookOrbit audiobook**
 - **None / Skip** for an ebook-only link
 
 The source badge on each card tells you where the audiobook came from.
@@ -109,8 +134,9 @@ The bridge can pull ebook choices from:
 
 1. Audiobookshelf ebook files
 2. Grimmory
-3. CWA
-4. Local `/books` files
+3. BookOrbit
+4. CWA
+5. Local `/books` files
 
 ### Final actions
 
@@ -127,7 +153,7 @@ If you skip audio, **Create Mapping** makes an ebook-only link instead.
 
 Use it when you want to review multiple links and process them together.
 
-- Queue entries can use **Audiobookshelf** or **Grimmory** as the audio source.
+- Queue entries can use **Audiobookshelf**, **Grimmory**, or **BookOrbit** as the audio source.
 - You can attach a standard ebook, a Storyteller title, or both.
 - Queue items created from **Suggestions** land here too.
 
@@ -157,8 +183,7 @@ The **Suggestions** page is a review workspace for likely matches that are not l
 
 Suggestions can create:
 
-- Standard ABS-backed links
-- Grimmory-audio links
+- Audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit
 - Ebook-only links
 - Storyteller-only links when that is enough for the workflow you want
 
@@ -170,8 +195,8 @@ Suggestions can create:
 
 ### What Forge stages
 
-- Audio from **Audiobookshelf** or **Grimmory**
-- Text from **Grimmory**, **CWA**, **local files**, or **Audiobookshelf**
+- Audio from **Audiobookshelf**, **Grimmory**, or **BookOrbit**
+- Text from **Grimmory**, **BookOrbit**, **CWA**, **local files**, or **Audiobookshelf**
 
 ### Two ways to use it
 
@@ -202,11 +227,13 @@ This is useful after importing old Storyteller assets or fixing your Storyteller
 
 ---
 
-## Grimmory Audio
+## Ebook and Audio Sources
 
-Grimmory is no longer only an ebook target.
+BookBridge can mix different services for the audio side and text side of a mapping.
 
-You can now use **Grimmory audiobooks** in:
+For audio, you can use Audiobookshelf, Grimmory, or BookOrbit. For standard ebooks, you can use Audiobookshelf ebook files, Grimmory, BookOrbit, CWA, or local files.
+
+You can use **Grimmory or BookOrbit audiobooks**, and CWA-backed ebook selections, in:
 
 - **Add Book**
 - **Batch Match**
@@ -214,9 +241,9 @@ You can now use **Grimmory audiobooks** in:
 - **Forge**
 - The main **Dashboard**
 
-If **Record Reading Sessions** is enabled in Settings, Grimmory also receives session updates as you make progress.
+If **Record Reading Sessions** is enabled in Settings, Grimmory or BookOrbit also receives session updates as you make progress. If CWA Kobo sync is enabled, CWA-sourced ebook progress can participate through its Kobo sync endpoints.
 
-If Grimmory imports change and results look stale, open **Settings** and run **Refresh Grimmory Cache**.
+If Grimmory imports change and results look stale, open **Settings** and run **Refresh Grimmory Cache**. If BookOrbit or CWA imports look stale, confirm the service is enabled and reachable, then run the normal sync or matching flow again.
 
 ---
 
@@ -225,6 +252,8 @@ If Grimmory imports change and results look stale, open **Settings** and run **R
 This section only applies if you install the optional **Bridge Sync** KOReader plugin.
 
 If you use that plugin, the bridge can turn Grimmory shelves into KOReader collections for the books it sends to your device.
+
+The same plugin is also where highlight and note sync lives. Use **Sync Highlights** for an immediate annotation exchange, or **Sweep All Highlights** to back-fill annotations that already exist on the device.
 
 - **Collection Syncing** lets you choose whether Bridge Sync should use all shelves, only regular shelves, or only magic shelves.
 - **Excluded Shelves** lets you skip shelf names you do not want turned into KOReader collections.
@@ -266,7 +295,7 @@ If **Regenerate Missing Data on Reset** is enabled, the bridge can also rebuild 
 
 ### Logs
 
-Open **Logs** to inspect live application logs for matching, syncing, Storyteller ingest, Grimmory refreshes, and background jobs.
+Open **Logs** to inspect live application logs for matching, syncing, Storyteller ingest, library refreshes, and background jobs.
 
 ---
 

@@ -18,22 +18,22 @@
 
 ## 📖 What is it?
 
-**BookBridge** is a powerful synchronization engine that bridges the gap between **Audiobookshelf** and **KOReader**. It ensures your reading and listening progress is always perfectly aligned, whether you're on your e-reader or listening on the go.
+**BookBridge** is a powerful synchronization engine for **Audiobookshelf**, **KOReader**, **Storyteller**, **Grimmory**, **BookOrbit**, **Calibre-Web Automated**, and reading trackers. It keeps supported reading, listening, and annotation state aligned across your devices and web readers.
 
 ## ✨ Key Features
 
-- **Five-Way Sync**: Syncs Audiobookshelf, KOReader, Storyteller, Grimmory, and Hardcover.
+- **Multi-Service Sync**: Syncs supported progress paths across Audiobookshelf, KOReader, Storyteller, Grimmory, BookOrbit, CWA/Kobo sync, and reading trackers.
 - **Multiple Readers**: Give each person their own sign-in, their own service logins, and their own progress — everyone sees only the books they are reading, even on a shared book.
-- **Flexible Match Flows**: Link ABS or Grimmory audiobooks, or create ebook-only links when you only want text sync.
+- **Flexible Match Flows**: Link ABS, Grimmory, or BookOrbit audiobooks; use CWA as an ebook source; or create ebook-only links when you only want text sync.
 - **Flexible Setup**: You can intentionally turn Audiobookshelf off for ebook-only or maintenance-focused setups.
 - **Dashboard Session Details**: See recent reading or listening session summaries right on the dashboard cards.
 - **Smart Alignment Sources**: Uses Storyteller forced-alignment transcripts when available, then SMIL, then Whisper fallback.
-- **Web UI**: Full management dashboard for tracking syncs and matching books.
+- **Web UI**: Management dashboard for tracking syncs and matching books.
 - **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk.
 - **Same-Folder Matching**: Treat sibling audiobook and ebook files in the same
   title folder as high-confidence matches.
 - **Guided Settings Workflow**: Check your service settings from the UI and save everything in one place.
-- **Optional Bridge Sync Plugin Collections**: If you install the Bridge Sync KOReader plugin, Grimmory shelves can be used to shape KOReader collections.
+- **Bridge Sync Plugin Companion**: If you install the Bridge Sync KOReader plugin, it can manage bridge-provided books, sync reading stats, sync highlights/notes, and use Grimmory shelves to shape KOReader collections.
 - **Split-Port Security**: Expose only the sync API to the internet while keeping the dashboard on your LAN.
 - **Self-Hosted**: Runs entirely in Docker on your own server.
 
@@ -55,7 +55,7 @@ services:
       - TZ=America/New_York
       - LOG_LEVEL=INFO
       # - KOSYNC_PORT=5758  # Optional: enable split-port mode
-      # Configure ABS, KOSync, Grimmory, Storyteller, and other services in the Web UI.
+      # Configure ABS, KOSync, Grimmory, BookOrbit, CWA, Storyteller, and other services in the Web UI.
     volumes:
       - ./data:/data
       - /path/to/ebooks:/books

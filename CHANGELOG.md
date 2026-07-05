@@ -2,29 +2,43 @@
 
 <!-- markdownlint-disable MD024 -->
 
-All notable changes to ABS-KoSync Enhanced will be documented in this file.
+All notable changes to BookBridge will be documented in this file.
 
 ## [7.1.0]
 
-The headline is **highlights and notes**: what you highlight and annotate now follows you across your readers, the same way your reading position already does.
+The headline is **a fuller reading-state bridge**: BookBridge now moves highlights, notes, web-reader activity, audiobook progress, and richer freshness metadata together instead of treating sync as only "who has the latest percentage?"
+
+Highlight and note sync requires the **BridgeSync KOReader plugin from this release or newer**. Older BridgeSync builds and plain KOSync clients continue syncing reading position, but they do not have the annotation exchange, sweep, or close-capture support.
 
 ### What's New
 
-- **Highlights and notes sync across your devices.** Highlights and margin notes made in KOReader now travel between your devices — and to Grimmory and BookOrbit web readers — through the bridge. Each reader keeps their own annotations, so household members don't see each other's. A new **Sync Highlights** action pushes and pulls on demand, a **Sweep All Highlights** menu item back-fills everything a device already has, and closing a book quietly captures anything new.
+- **Highlights and notes now have their own sync hub.** KOReader highlights and margin notes can move between devices and the Grimmory and BookOrbit web readers through the updated BridgeSync plugin. Each reader's annotations stay scoped to their own account, deletions travel with the same care as additions, and stable xpointer keys keep one device from erasing another device's highlights just because the same passage was represented slightly differently.
 
-- **BookOrbit audiobooks now sync.** Listening progress on audiobooks hosted in BookOrbit is tracked and kept in step with the same book's ebook and audiobook positions everywhere else.
+- **BridgeSync grew into a real annotation companion.** The latest KOReader plugin now has explicit **Sync Highlights** and **Sweep All Highlights** actions, captures new annotations when a book closes, scrubs JSON-null note sentinels that could crash KOReader, and uses atomic self-updates so plugin upgrades are less fragile.
 
-- **Smarter about which position wins.** The bridge now records when each service itself last moved a position, and uses that to keep a stale or backwards position from overwriting a newer one — so a device that's been asleep no longer drags your progress back.
+- **BookOrbit-hosted audiobooks now participate in sync.** Listening progress for BookOrbit audiobooks is read, written, converted across multi-file tracks, and recorded as BookOrbit reading-session activity, so BookOrbit can act as either the ebook side, the audiobook side, or both.
+
+- **Combined audiobook+ebook entries cover ABS ebooks too.** Audiobookshelf ebook progress now participates when a book has both audio and ebook state, instead of being left out once the mapping also included an audiobook.
+
+- **Progress decisions use richer service metadata.** The bridge now persists service-native update timestamps, status, and locator metadata. Leader selection uses that data to suppress stale reappearing states and veto obvious rollback candidates while still allowing genuine rereads or forward movement.
 
 ### What Changed
 
+- **Annotation sync is source-aware and account-aware.** BookOrbit ownership is guarded before web-reader annotations are relayed, Grimmory web notes use their own sub-spoke so notes survive round trips, and lossy spoke pulls no longer rewrite identity keys.
+
 - **Add Book clears after queueing.** The search box now empties when you add a book to the queue, so you can go straight into your next search.
+
+- **Settings point users to the right place.** Grimmory highlight sync is configured in each reader's Integrations, matching the per-user credential model introduced in 7.0.0.
 
 ### Fixed
 
-- **Connection tests live where the credentials do.** The test buttons on the general settings gave inconsistent results because logins are now per-reader — they've been removed, and you test each connection from that reader's Integrations, where its credentials actually are.
+- **Audiobookshelf listeners recover on their own.** A dropped Audiobookshelf Socket.IO connection now revives itself instead of quietly going silent until the next restart.
 
-- **Audiobookshelf listeners recover on their own.** A dropped Audiobookshelf connection now revives itself instead of quietly going silent until the next restart.
+- **Same-folder suggestions are stricter.** Split-root libraries no longer create misleading same-folder suggestions when the folder context is not actually the same book.
+
+- **Connection tests live where the credentials do.** The test buttons on the general settings gave inconsistent results because logins are now per-reader; they have been removed, and each reader tests connections from their own Integrations page.
+
+- **BridgeSync self-updates find the plugin metadata reliably.** The updater now locates `_meta.lua` instead of assuming a specific zip layout.
 
 ## [7.0.0]
 

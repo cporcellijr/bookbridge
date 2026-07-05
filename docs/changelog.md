@@ -4,6 +4,41 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.1.0]
+
+The headline is **a fuller reading-state bridge**: BookBridge now syncs highlights, notes, richer progress metadata, and BookOrbit audiobook activity alongside ordinary reading positions.
+
+Highlight and note sync requires the **BridgeSync KOReader plugin from this release or newer**. Older BridgeSync builds and plain KOSync clients continue syncing reading position, but they do not have the annotation exchange, sweep, or close-capture support.
+
+### What's New
+
+- **Highlights and notes sync across devices and web readers.** KOReader annotations can move between devices and the Grimmory and BookOrbit web readers through the updated BridgeSync plugin. The bridge keeps them scoped to the right reader, carries deletions as well as additions, and uses stable identity keys so matching highlights do not overwrite each other accidentally.
+
+- **BridgeSync has annotation controls.** The latest KOReader plugin now includes explicit highlight sync and sweep actions, captures new annotations when a book closes, and has safer plugin update handling.
+
+- **BookOrbit audiobooks now sync.** BookOrbit can now be the audiobook source in a mapping, with progress read from and written back to the correct track position.
+
+- **ABS ebooks participate in combined entries.** Audiobookshelf ebook progress is included even when the same mapped book also has audiobook progress.
+
+- **Smarter progress arbitration.** BookBridge stores service-native update timestamps and locator metadata, then uses them to suppress stale states and prevent obvious rollback leaders.
+
+### What Changed
+
+- **Annotation sync is account-aware.** BookOrbit ownership checks and Grimmory note handling were tightened so web-reader annotations round-trip to the right reader.
+
+- **Add Book clears after queueing.** The search box empties after you add a book to the queue.
+
+- **Integration settings are more consistent.** Grimmory highlight sync now points users to each reader's Integrations page, where the per-user credentials live.
+
+### Fixed
+
+- **Audiobookshelf listeners recover automatically** after a dropped Socket.IO connection.
+- **Same-folder suggestions are stricter** for split-root library layouts.
+- **Connection tests live with per-reader credentials** instead of on the general settings page.
+- **BridgeSync self-updates are more reliable** across plugin zip layouts.
+
+---
+
 ## [7.0.0]
 
 The headline change is **user accounts**: the bridge now supports more than one reader, each with their own sign-in, their own progress, and their own view of the library. This is a bigger release than usual, so if you are upgrading from an earlier version, please read the short upgrade note below.
@@ -58,11 +93,11 @@ The headline change is **user accounts**: the bridge now supports more than one 
 
 ## [6.8.0]
 
-The headline additions are a second ebook library manager (BookOrbit) and an optional local-LLM assistant (Ollama), alongside a batch of sync fixes.
+The headline additions are BookOrbit support and an optional local-LLM assistant (Ollama), alongside a batch of sync fixes.
 
 ### What's New
 
-- **BookOrbit support.** BookOrbit is a newer ebook library manager (with audiobook support) that works just like Grimmory. You can use it instead of Grimmory or alongside it, and pick it as the ebook or audio source when you create a mapping. It also supports an optional "Up Next" collection watch that auto-matches books you drop onto a shelf. See [Configuration → BookOrbit](configuration.md#bookorbit). If you are moving over from Grimmory, a migration script re-points your existing links without rematching.
+- **BookOrbit support.** BookOrbit can be used as an ebook source, an audiobook source, or both when you create a mapping. It also supports an optional "Up Next" collection watch that auto-matches books you drop onto a shelf. See [Configuration → BookOrbit](configuration.md#bookorbit). If you are moving over from Grimmory, a migration script re-points your existing links without rematching.
 
 - **Optional local LLM (Ollama).** If you run a local Ollama server, the bridge can use it to make smarter match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything is off until you turn it on, and every feature falls back to the normal behavior if Ollama is unreachable, so it never blocks a sync. See [Configuration → Ollama](configuration.md#ollama-local-llm-optional).
 
@@ -122,7 +157,7 @@ The headline additions are a second ebook library manager (BookOrbit) and an opt
 
 ### What's New
 
-= **Add CWA reading progress sync via Kobo sync protocol**
+- **Add CWA reading progress sync via Kobo sync protocol.**
 Enables bidirectional reading progress sync between the bridge and
 Calibre-Web Automated using CWA's Kobo sync endpoints. This allows
 stock Kobo e-readers (and KOReader via CWA) to participate in the

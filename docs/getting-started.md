@@ -13,7 +13,7 @@ Before you begin, you should have:
 - Docker and Docker Compose
 - A working Audiobookshelf server if you want audiobook matching or ABS sync
 - An ebook folder on the Docker host
-- Optional: KOSync, Grimmory or BookOrbit, Storyteller, or Hardcover if you want those integrations
+- Optional: KOSync, Grimmory and/or BookOrbit, CWA, Storyteller, or Hardcover if you want those integrations
 
 ---
 
@@ -39,7 +39,8 @@ If you want searches scoped to one ABS library:
 If you plan to use them, also keep these handy:
 
 - KOSync URL, username, and password
-- Grimmory or BookOrbit URL, username, and password
+- Grimmory and/or BookOrbit URL, username, and password
+- CWA URL, username/password, and Kobo sync token if you use Calibre-Web Automated
 - Storyteller URL, username, and password
 
 ---
@@ -69,7 +70,7 @@ services:
       - TZ=America/New_York
       - LOG_LEVEL=INFO
       # - KOSYNC_PORT=5758  # Optional: enable split-port mode
-      # Configure ABS, KOSync, Grimmory, Storyteller, and other services in the Web UI.
+      # Configure ABS, KOSync, Grimmory, BookOrbit, CWA, Storyteller, and other services in the Web UI.
     volumes:
       - ./data:/data
       - /path/to/ebooks:/books
@@ -90,7 +91,7 @@ If you want to expose only the KOSync endpoint to the internet:
 !!! tip "Optional Integrations"
     It is usually easiest to start with the minimal compose file above and finish configuration in the Web UI.
 
-    If you enable Grimmory, the bridge can use it for both ebook matching and Grimmory audiobook sources.
+    If you enable Grimmory or BookOrbit, the bridge can use them for ebook matching and audiobook sources. If you enable CWA, the bridge can use it as an ebook source and, when Kobo sync is enabled, as a reading-progress participant.
 
     Forge uploads directly to Storyteller over the API, so a Storyteller library mount is not required for normal Forge imports.
 
@@ -120,7 +121,8 @@ docker compose logs -f
 3. Enter your **Audiobookshelf Server URL**, **API Token**, and **Library ID**.
 4. Add any optional services you want to use:
    - KOSync
-   - Grimmory or BookOrbit
+   - Grimmory and/or BookOrbit
+   - CWA
    - Storyteller
    - Hardcover
 5. Use the **Test** button on any service section if you want to check a service before saving.
@@ -152,7 +154,7 @@ same-folder matches.
 ### Add Book
 
 1. Open **Add Book**.
-2. Pick an ABS audiobook, a Grimmory audiobook, or leave audio on **None / Skip** for an ebook-only link.
+2. Pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on **None / Skip** for an ebook-only link.
 3. Optionally pick a Storyteller title.
 4. Pick the standard ebook.
 5. Click **Create Mapping**.
@@ -164,6 +166,10 @@ That is enough to get syncing started. The normal background cycle runs every 5 
 ## Optional: KOReader Plugin
 
 If you want KOReader to download and manage bridge-provided books for you, you can also install the optional **Bridge Sync** KOReader plugin from the project's GitHub Releases page.
+
+The plugin is also required for the newer highlight and note sync features. Normal KOReader/KOSync progress sync works without Bridge Sync, but highlights, notes, sweep, and close-capture only work with the Bridge Sync plugin from the current release or newer.
+
+After installing or updating the plugin, restart KOReader and open **Tools -> Bridge Sync** to set the server URL and the same KOSync username/key you configured for that reader.
 
 If you install it, you can later use the Grimmory settings to turn selected Grimmory shelves into KOReader collections for synced books.
 

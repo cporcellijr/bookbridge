@@ -1,22 +1,38 @@
-# Release Notes — 7.0.0
+# Release Notes - 7.1.0
 
-The headline change is **user accounts**: the bridge now supports more than one reader, each with their own sign-in, their own service logins, and their own reading progress. This is a bigger release than usual — existing setups upgrade in place, but there is a one-time sign-in step the first time you open the dashboard (see Upgrading below).
+The headline change is **a fuller reading-state bridge**. BookBridge now syncs more than reading position: highlights, notes, web-reader annotations, BookOrbit audiobook progress, and richer service metadata all participate in the same account-aware bridge. This release is less about chasing individual feature bugs and more about making the bridge a steadier place where every reader, source, and device can agree on what changed most recently.
+
+Highlight and note sync requires the **BridgeSync KOReader plugin from this release or newer**. Standard KOReader/KOSync progress sync continues to work without it, but the new annotation features only run through the updated BridgeSync plugin.
 
 ## Added
-- **Multiple readers** — create separate accounts for different people, for example everyone in a household. Each person signs in to their own dashboard, sees only the books they are reading, and keeps their own progress, even when two people read the same book.
-- **Personal logins for each service** — every reader enters their own Audiobookshelf, KOSync, Grimmory or BookOrbit, Storyteller, and tracker logins, so each person syncs against their own accounts and their own shelves.
-- **A sign-in screen** — the dashboard is now protected by a login. The first person to open it sets up the main account and can add more readers from a new Users area in Settings.
-- **Same-folder matching** — audiobook and ebook files in the same library folder are recognized as likely pairs in Suggestions, treated as an exact match only when the titles also agree.
-- **Bulk suggestion review** — select multiple suggestions with checkboxes or add every exact (100%) match at once, queue them without the page reloading, and run Forge & Match All straight from the Suggestions page.
+
+- **Highlights and notes sync** - KOReader annotations can now move between devices and the Grimmory and BookOrbit web readers when the updated BridgeSync plugin is installed. Each reader keeps their own annotation set, deletions travel intentionally, and stable identity keys reduce accidental cross-device highlight churn.
+- **BridgeSync annotation actions** - the KOReader plugin adds highlight sync and sweep controls, captures annotations when books close, and includes safer plugin self-updates.
+- **BookOrbit audiobook sync** - BookOrbit-hosted audiobooks can now act as the audio side of a mapping, including multi-file track position conversion and BookOrbit reading-session logging.
+- **ABS ebook participation in combined entries** - Audiobookshelf ebook progress now stays in the sync loop even when the same mapped book also has audiobook progress.
+- **Rich progress metadata** - service-native update timestamps, status, and locator metadata are persisted so the sync manager can tell stale resurfaced states apart from real reading movement.
 
 ## Changed
-- The shared engine settings — how often it syncs, library scans, and shelf watching — stay in one place for the main account to manage, while the per-person service logins move into each reader's own settings.
+
+- **Progress arbitration is more conservative about rollbacks** - stale service states are suppressed, and candidates that would clearly move a newer peer backward are vetoed while still allowing genuine rereads and forward movement.
+- **Annotation sync is source-aware and account-aware** - BookOrbit ownership checks, Grimmory note sub-spokes, and lossy-spoke handling keep web-reader annotations attached to the right reader and the right highlight identity.
+- **Settings match the per-user model** - Grimmory highlight sync is configured from each reader's Integrations page, where that reader's credentials live.
+- **Add Book search resets after queueing** - after adding a book to the queue, the search box clears for the next lookup.
 
 ## Fixed
-- **CWA progress appears sooner** — books synced through Calibre-Web-Automated's Kobo sync now show their CWA row on the dashboard right away, instead of only after the first position comes in.
+
+- **Audiobookshelf listener recovery** - dropped Socket.IO listeners now revive automatically instead of requiring a restart.
+- **Split-root same-folder suggestions** - same-folder matching no longer over-suggests when split-root paths only look related.
+- **Per-user connection test placement** - general settings no longer show stale global test buttons for credentials that now live per reader.
+- **BridgeSync update packaging** - plugin self-updates locate `_meta.lua` instead of depending on one zip layout.
+- **KOReader null-note handling** - BridgeSync strips JSON-null sentinels so empty notes do not crash KOReader.
 
 ## Upgrading
-Database migrations apply automatically on startup, so you only need to update and restart. The first time you open the dashboard after upgrading, you will be asked to create your main login — just pick a username and password. As soon as you do, your existing library, your matches, and every service login you had already entered are moved onto that account automatically, so there is nothing to set up again. Your KOReader devices keep syncing exactly as before. From there you can add accounts for other readers whenever you like.
+
+Database migrations apply automatically on startup. KOReader users must update the BridgeSync plugin to this release's version or newer to use highlight and note sync, sweep, close-capture, and the updater reliability improvements.
 
 ## Known limitations
-- The whole dashboard now requires a sign-in. If you previously left it open on your network without a login, you and anyone who used it will now need an account.
+
+- Web-reader annotation sync depends on the matching source credentials being configured for each reader.
+- Highlight and note sync is available through the updated BridgeSync KOReader plugin only; older plugin versions and plain KOSync progress clients will keep syncing position but will not sync annotations.
+- BookOrbit annotation relay requires ownership to be clear before BookBridge will write highlights into a BookOrbit account.
