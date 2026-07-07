@@ -1355,6 +1355,70 @@ class TestForgeResume(unittest.TestCase):
         self.assertEqual(count, 0)
         mock_thread.assert_not_called()
 
+    def test_resume_uses_owner_bundle_for_user_scoped_book(self):
+        book = SimpleNamespace(abs_id="abs-9", abs_title="Owned", storyteller_uuid="uuid-9", user_id=7)
+        self.mock_db.get_books_by_status.return_value = [book]
+
+        registry = MagicMock()
+        user_bundle = MagicMock()
+        registry.get_clients.return_value = user_bundle
+        worker = MagicMock()
+
+        with patch.object(self.service, "_for_client_bundle", return_value=worker) as mock_bundle, \
+                patch("src.services.forge_service.threading.Thread") as mock_thread:
+            count = self.service.resume_pending_forge_matches(user_client_registry=registry)
+
+        self.assertEqual(count, 1)
+        registry.get_clients.assert_called_once_with(7)
+        mock_bundle.assert_called_once_with(user_bundle)
+        self.assertEqual(mock_thread.call_args.kwargs["target"], worker._resume_forge_match_background_task)
+        self.assertEqual(mock_thread.call_args.kwargs["args"], ("abs-9", "uuid-9"))
+
+    def test_resume_uses_global_bundle_when_book_has_no_owner(self):
+        book = SimpleNamespace(abs_id="abs-10", abs_title="NoOwner", storyteller_uuid="uuid-10", user_id=None)
+        self.mock_db.get_books_by_status.return_value = [book]
+        registry = MagicMock()
+
+        with patch.object(self.service, "_for_client_bundle") as mock_bundle, \
+                patch("src.services.forge_service.threading.Thread") as mock_thread:
+            count = self.service.resume_pending_forge_matches(user_client_registry=registry)
+
+        self.assertEqual(count, 1)
+        registry.get_clients.assert_not_called()
+        mock_bundle.assert_not_called()
+        self.assertEqual(mock_thread.call_args.kwargs["target"], self.service._resume_forge_match_background_task)
+
+    def test_resume_falls_back_to_global_when_owner_bundle_unavailable(self):
+        book = SimpleNamespace(abs_id="abs-11", abs_title="OwnerErr", storyteller_uuid="uuid-11", user_id=3)
+        self.mock_db.get_books_by_status.return_value = [book]
+        registry = MagicMock()
+        registry.get_clients.side_effect = RuntimeError("no creds")
+
+        with patch.object(self.service, "_for_client_bundle") as mock_bundle, \
+                patch("src.services.forge_service.threading.Thread") as mock_thread:
+            count = self.service.resume_pending_forge_matches(user_client_registry=registry)
+
+        self.assertEqual(count, 1)
+        registry.get_clients.assert_called_once_with(3)
+        mock_bundle.assert_not_called()
+        self.assertEqual(mock_thread.call_args.kwargs["target"], self.service._resume_forge_match_background_task)
+
+    def test_resume_reforge_uses_owner_bundle(self):
+        book = SimpleNamespace(abs_id="abs-12", abs_title="ReforgeOwned", storyteller_uuid=None, user_id=4)
+        self.mock_db.get_books_by_status.return_value = [book]
+        registry = MagicMock()
+        user_bundle = MagicMock()
+        registry.get_clients.return_value = user_bundle
+        worker = MagicMock()
+        worker._reforge_pending_book.return_value = True
+
+        with patch.object(self.service, "_for_client_bundle", return_value=worker):
+            count = self.service.resume_pending_forge_matches(user_client_registry=registry)
+
+        self.assertEqual(count, 1)
+        registry.get_clients.assert_called_once_with(4)
+        worker._reforge_pending_book.assert_called_once_with(book)
+
     def test_resume_completion_task_reconstructs_and_runs_completion(self):
         book = SimpleNamespace(
             abs_id="abs-4", abs_title="T4", storyteller_uuid="uuid-4",

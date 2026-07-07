@@ -9144,9 +9144,12 @@ if __name__ == '__main__':
 
     # Re-attach Forge & Match completion watchers orphaned by a restart. The
     # banner/card survive in the DB (status='forging'), but the polling thread
-    # that finalizes the forge does not, so resume it here.
+    # that finalizes the forge does not, so resume it here. The registry lets
+    # each book resume on its owner's clients (multi-user), not just the admin's.
     try:
-        container.forge_service().resume_pending_forge_matches()
+        container.forge_service().resume_pending_forge_matches(
+            user_client_registry=container.user_client_registry()
+        )
     except Exception as exc:
         logger.warning("Forge & Match: resume on startup failed: %s", exc)
 

@@ -1827,15 +1827,41 @@ class ForgeService:
                     pass
         return text_item
 
-    def resume_pending_forge_matches(self) -> int:
+    def _resume_worker_for_book(self, book, user_client_registry):
+        """Resolve the ForgeService whose clients belong to this book's owner.
+
+        Forge uploads to the owner's Storyteller (and downloads/aligns through
+        the owner's clients), so the completion watcher / re-forge must run on
+        the SAME user's bundle — the global/admin clients can't see another
+        user's book on their Storyteller account. Books with no owner
+        (user_id NULL = default/admin) use the global bundle, unchanged."""
+        if user_client_registry is None:
+            return self
+        user_id = getattr(book, 'user_id', None)
+        if user_id is None:
+            return self
+        try:
+            bundle = user_client_registry.get_clients(user_id)
+        except Exception as exc:
+            logger.warning(
+                "Forge & Match resume: could not load clients for user %s (book %s); using global bundle: %s",
+                user_id, getattr(book, 'abs_id', '?'), exc,
+            )
+            return self
+        return self._for_client_bundle(bundle)
+
+    def resume_pending_forge_matches(self, user_client_registry=None) -> int:
         """Re-attach Forge & Match work left behind by a previous run.
 
         The completion watcher lives only in a background thread, so a restart
         orphans every book stuck at status='forging'. Books already uploaded
         to Storyteller (storyteller_uuid set) get just the completion watcher
         re-attached; books that never finished uploading are fully re-forged.
-        Resume uses the global client bundle (no request context at startup),
-        which matches the primary user's credentials."""
+
+        Each book resumes on its owner's client bundle (resolved from
+        ``book.user_id`` via ``user_client_registry``) so multi-user forges
+        poll/download through the account that started them; books with no
+        owner fall back to the global/admin bundle."""
         try:
             forging = self.database_service.get_books_by_status('forging') or []
         except Exception as exc:
@@ -1852,15 +1878,16 @@ class ForgeService:
             if title in self.active_tasks:
                 # Already being worked (e.g. resume invoked twice) — don't double up.
                 continue
+            worker = self._resume_worker_for_book(book, user_client_registry)
             book_uuid = getattr(book, 'storyteller_uuid', None)
             if book_uuid:
                 threading.Thread(
-                    target=self._resume_forge_match_background_task,
+                    target=worker._resume_forge_match_background_task,
                     args=(abs_id, book_uuid),
                     daemon=True,
                 ).start()
                 resumed += 1
-            elif self._reforge_pending_book(book):
+            elif worker._reforge_pending_book(book):
                 re_forged += 1
 
         if resumed or re_forged:
