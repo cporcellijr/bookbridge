@@ -1906,8 +1906,14 @@
                         <div class="form-group full-width">
                             <label>Whisper.cpp Server URL</label>
                             <input type="text" name="WHISPER_CPP_URL" value="{{ get_val('WHISPER_CPP_URL', '') }}"
-                                placeholder="http://192.168.178.132:11080/audio/transcriptions" />
-                            <div class="help-text">Example: http://HOST:11080/audio/transcriptions</div>
+                                placeholder="http://192.168.178.132:8080/v1/audio/transcriptions" />
+                            <div class="help-text">Full endpoint URL, including the path — e.g.
+                                <code>http://HOST:8080/v1/audio/transcriptions</code>. Works with whisper.cpp
+                                server and OpenAI-compatible proxies (e.g. llama-swap). Inside Docker, do not use
+                                <code>localhost</code> — use the host's LAN IP or the whisper container's service name.
+                                Set this here in the UI: dashboard settings are stored in the database and take
+                                precedence over <code>docker-compose</code> environment variables.
+                            </div>
                         </div>
                     </div>
 
@@ -1964,7 +1970,8 @@
                             </datalist>
                             <div class="help-text">Model name for Local Whisper and Whisper.cpp Server. Pick a common
                                 model from the suggestions or enter a custom whisper.cpp model name. Larger = better
-                                accuracy but slower.
+                                accuracy but slower. For the Whisper.cpp Server, this must match the model id the
+                                server (or llama-swap) exposes — a mismatched id makes the server reject the request.
                             </div>
                         </div>
                     </div>

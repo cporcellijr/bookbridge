@@ -3422,10 +3422,50 @@ class SyncManager:
                         }
                         logger.warning(f"⚠️ Error resetting '{client_name}': {e}")
 
+                reset_time = time.time()
+                reset_snapshots_saved = 0
+                for client_name, result_info in reset_results.items():
+                    if not result_info.get('success'):
+                        continue
+                    state_data = {'pct': 0.0, 'service_updated_at': reset_time}
+                    try:
+                        self.database_service.save_state(State(
+                            abs_id=book.abs_id,
+                            client_name=client_name.lower(),
+                            last_updated=reset_time,
+                            percentage=0.0,
+                            timestamp=0.0,
+                            xpath="",
+                            cfi="",
+                            user_id=user_id,
+                            **state_metadata_kwargs(state_data),
+                        ))
+                        reset_snapshots_saved += 1
+                    except Exception as e:
+                        logger.debug(f"Could not persist reset snapshot for '{client_name}': {e}")
+
+                kosync_progress_rows_reset = 0
+                reset_user_kosync_progress = getattr(
+                    self.database_service, "reset_user_kosync_progress_for_book", None
+                )
+                if callable(reset_user_kosync_progress):
+                    try:
+                        kosync_progress_rows_reset = reset_user_kosync_progress(abs_id, user_id=user_id)
+                        if not isinstance(kosync_progress_rows_reset, (int, float)):
+                            kosync_progress_rows_reset = 0
+                        if kosync_progress_rows_reset:
+                            logger.info(
+                                f"Reset {kosync_progress_rows_reset} user-scoped KoSync progress row(s)"
+                            )
+                    except Exception as e:
+                        logger.debug(f"Could not reset user-scoped KoSync progress rows: {e}")
+
                 summary = {
                     'book_id': abs_id,
                     'book_title': book.abs_title,
                     'database_states_cleared': cleared_count,
+                    'database_reset_snapshots_saved': reset_snapshots_saved,
+                    'kosync_progress_rows_reset': kosync_progress_rows_reset,
                     'client_reset_results': reset_results,
                     'successful_resets': sum(1 for r in reset_results.values() if r['success']),
                     'total_clients': len(reset_results)

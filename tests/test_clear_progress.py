@@ -41,6 +41,7 @@ class TestClearProgressMethod(unittest.TestCase):
 
         # Create database service
         self.db_service = DatabaseService(self.test_db_path)
+        self.test_user = self.db_service.create_user('reader', role='admin')
 
         # Create test book
         self.test_book = Book(
@@ -59,6 +60,14 @@ class TestClearProgressMethod(unittest.TestCase):
             percentage=0.45
         )
         self.db_service.save_kosync_document(self.test_doc)
+        self.db_service.upsert_user_kosync_progress(
+            'test-hash-123',
+            0.45,
+            progress='/html/body/div[2]/p[5]',
+            device='KOReader',
+            device_id='device-1',
+            user_id=self.test_user.id,
+        )
 
         # Create test states for different clients
         test_states = [
@@ -170,9 +179,19 @@ class TestClearProgressMethod(unittest.TestCase):
             self.assertTrue(result['client_reset_results'][client_name]['success'])
             self.assertEqual(result['client_reset_results'][client_name]['message'], 'Reset to 0%')
 
-        # Verify database states were cleared
+        # Verify database states were replaced by explicit 0% reset snapshots.
         remaining_states = self.db_service.get_states_for_book('test-book-123')
-        self.assertEqual(len(remaining_states), 0, "All state records should be cleared")
+        self.assertEqual(len(remaining_states), 3, "Successful resets should leave 0% state snapshots")
+        for state in remaining_states:
+            self.assertAlmostEqual(state.percentage, 0.0)
+            self.assertEqual(state.service_updated_at, state.last_updated)
+
+        # Verify user-scoped KoSync device progress was zeroed so sibling-hash
+        # furthest-wins cannot resurrect the old position on the next GET.
+        user_progress = self.db_service.get_user_kosync_progress('test-hash-123', self.test_user.id)
+        self.assertIsNotNone(user_progress)
+        self.assertAlmostEqual(float(user_progress.percentage), 0.0)
+        self.assertEqual(user_progress.progress, "")
 
         # Verify KoSync document was deleted
         self.assertIsNone(self.db_service.get_kosync_document('test-hash-123'), "KoSync document should be deleted")
@@ -217,7 +236,8 @@ class TestClearProgressMethod(unittest.TestCase):
         # Verify database was still cleared
         self.assertEqual(result['database_states_cleared'], 3)
         remaining_states = self.db_service.get_states_for_book('test-book-123')
-        self.assertEqual(len(remaining_states), 0)
+        self.assertEqual(len(remaining_states), 2)
+        self.assertEqual({s.client_name for s in remaining_states}, {'kosync', 'abs'})
 
         # Verify partial success
         self.assertEqual(result['successful_resets'], 2)  # kosync and abs succeeded
@@ -229,6 +249,18 @@ class TestClearProgressMethod(unittest.TestCase):
         self.assertFalse(client_results['storyteller']['success'])  # This one failed
         self.assertTrue(client_results['abs']['success'])
 
+    def test_scoped_clear_progress_resets_user_kosync_progress_without_deleting_document(self):
+        """Per-user resets must zero user hash progress while preserving the shared document link."""
+        result = self.sync_manager.clear_progress('test-book-123', user_id=self.test_user.id)
+
+        self.assertEqual(result['kosync_progress_rows_reset'], 1)
+        self.assertIsNotNone(self.db_service.get_kosync_document('test-hash-123'))
+
+        user_progress = self.db_service.get_user_kosync_progress('test-hash-123', self.test_user.id)
+        self.assertIsNotNone(user_progress)
+        self.assertAlmostEqual(float(user_progress.percentage), 0.0)
+        self.assertEqual(user_progress.progress, "")
+
     def test_clear_progress_with_client_exception(self):
         """Test clearing progress when a client raises an exception."""
         # Make kosync client raise an exception
@@ -237,8 +269,11 @@ class TestClearProgressMethod(unittest.TestCase):
         # Call clear_progress
         result = self.sync_manager.clear_progress('test-book-123')
 
-        # Verify database was still cleared
+        # Verify database was still reset for the clients that succeeded.
         self.assertEqual(result['database_states_cleared'], 3)
+        remaining_states = self.db_service.get_states_for_book('test-book-123')
+        self.assertEqual(len(remaining_states), 2)
+        self.assertEqual({s.client_name for s in remaining_states}, {'storyteller', 'abs'})
 
         # Verify partial success (2 out of 3 clients succeeded)
         self.assertEqual(result['successful_resets'], 2)
@@ -275,6 +310,7 @@ class TestClearProgressMethod(unittest.TestCase):
         configured.update_progress.assert_called_once()
         unconfigured.update_progress.assert_not_called()
         self.assertEqual(result['total_clients'], 1)
+        self.assertEqual(result['database_reset_snapshots_saved'], 1)
         self.assertIn('Configured', result['client_reset_results'])
         self.assertNotIn('Hardcover', result['client_reset_results'])
 

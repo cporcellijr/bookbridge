@@ -238,7 +238,19 @@ class WhisperCppServerProvider(TranscriptionProvider):
                 timeout=600
             )
 
-        response.raise_for_status()
+        if not response.ok:
+            # Surface the server's error body — whisper.cpp / llama-swap explains
+            # *why* here (e.g. unknown model id, failed to decode audio). Without
+            # this the caller only sees a bare "HTTP 400" and cannot diagnose it.
+            body = (response.text or "").strip()
+            if len(body) > 500:
+                body = body[:500] + "…"
+            logger.error(
+                f"❌ whisper.cpp server returned HTTP {response.status_code} from "
+                f"{self.server_url} (model={self.model}). Response: {body or '<empty body>'}"
+            )
+            response.raise_for_status()
+
         result = response.json()
 
         segments_out = []

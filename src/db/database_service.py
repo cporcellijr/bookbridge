@@ -1274,6 +1274,58 @@ class DatabaseService:
                 session.expunge(row)
             return rows
 
+    def reset_user_kosync_progress_for_book(self, abs_id: str, user_id: int = None) -> int:
+        """Set this user's KoSync device-progress rows for a linked book to 0%.
+
+        ``clear_progress`` must reset both the bridge ``State`` row and the
+        per-user hash cache. Otherwise a later KoSync GET can see an old
+        sibling-hash row as "ahead" of the freshly reset bridge state and pull
+        the book back to the pre-reset position.
+        """
+        uid = self._resolve_uid(user_id)
+        if uid is None or not abs_id:
+            return 0
+
+        now = utcnow()
+        with self.get_session() as session:
+            hashes = {
+                row[0]
+                for row in session.query(KosyncDocument.document_hash)
+                .filter(KosyncDocument.linked_abs_id == abs_id)
+                .all()
+                if row[0]
+            }
+            book = session.query(Book).filter(Book.abs_id == abs_id).first()
+            if book and book.kosync_doc_id:
+                hashes.add(book.kosync_doc_id)
+
+            count = 0
+            for document_hash in hashes:
+                row = session.query(KosyncUserProgress).filter(
+                    KosyncUserProgress.document_hash == document_hash,
+                    KosyncUserProgress.user_id == uid,
+                ).first()
+                if row is None:
+                    row = KosyncUserProgress(
+                        document_hash=document_hash,
+                        user_id=uid,
+                        progress="",
+                        percentage=0,
+                        device="abs-sync-bot",
+                        device_id="abs-sync-bot",
+                        timestamp=now,
+                    )
+                    session.add(row)
+                else:
+                    row.progress = ""
+                    row.percentage = 0
+                    row.device = "abs-sync-bot"
+                    row.device_id = "abs-sync-bot"
+                    row.timestamp = now
+                    row.last_updated = now
+                count += 1
+            return count
+
 
     # PendingSuggestion operations
     def get_pending_suggestion(self, source_id: str) -> Optional[PendingSuggestion]:
