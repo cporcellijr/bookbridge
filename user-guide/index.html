@@ -601,15 +601,26 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#add-book" class="md-nav__link">
+  <a href="#highlights-and-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Add Book
+        Highlights and Notes
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Add Book">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-update-book" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add / Update Book
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Add / Update Book">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -790,10 +801,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#grimmory-audio" class="md-nav__link">
+  <a href="#ebook-and-audio-sources" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grimmory Audio
+        Ebook and Audio Sources
       
     </span>
   </a>
@@ -1133,15 +1144,26 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#add-book" class="md-nav__link">
+  <a href="#highlights-and-notes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Add Book
+        Highlights and Notes
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Add Book">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-update-book" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add / Update Book
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Add / Update Book">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1322,10 +1344,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#grimmory-audio" class="md-nav__link">
+  <a href="#ebook-and-audio-sources" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grimmory Audio
+        Ebook and Audio Sources
       
     </span>
   </a>
@@ -1478,9 +1500,10 @@
 <li><strong>Active Syncs</strong> for every tracked mapping</li>
 <li><strong>Unified Progress</strong> across all connected clients</li>
 <li><strong>Recent session stats</strong> when session data is available for that mapping</li>
-<li><strong>Source badges</strong> so you can tell whether the audio side is coming from Audiobookshelf or Grimmory</li>
-<li><strong>Direct links</strong> into supported services, including Grimmory audio when a mapping uses it</li>
-<li>Quick access to <strong>Add Book</strong>, <strong>Batch Match</strong>, <strong>Suggestions</strong>, <strong>Forge</strong>, <strong>Settings</strong>, and <strong>Logs</strong></li>
+<li><strong>Source badges</strong> so you can tell whether a mapping is using Audiobookshelf, Grimmory, BookOrbit, CWA, or another connected source</li>
+<li><strong>Direct links</strong> into supported services, including Grimmory and BookOrbit audio when a mapping uses them</li>
+<li>Annotation sync status when the updated Bridge Sync KOReader plugin is in use</li>
+<li>Quick access to <strong>Add / Update Book</strong>, <strong>Batch Match</strong>, <strong>Suggestions</strong>, <strong>Forge</strong>, <strong>Settings</strong>, and <strong>Logs</strong></li>
 </ul>
 <p>If a book is significantly out of sync, the card is highlighted so you can spot it quickly.</p>
 <p>When you start actions like <strong>Create Mapping</strong>, <strong>Forge &amp; Match</strong>, <strong>Add to Queue</strong>, or <strong>Process All</strong>, the page now shows a working message right away so you know the action started.</p>
@@ -1490,7 +1513,7 @@
 <h3 id="1-audiobook-sync">1. Audiobook Sync</h3>
 <p>This is the normal mode when a mapping has an audiobook source.</p>
 <ul>
-<li>The audio source can be <strong>Audiobookshelf</strong> or <strong>Grimmory</strong>.</li>
+<li>The audio source can be <strong>Audiobookshelf</strong>, <strong>Grimmory</strong>, or <strong>BookOrbit</strong>.</li>
 <li>The text side can include a standard ebook, a Storyteller artifact, or both.</li>
 <li>The bridge prefers Storyteller transcript timing when available, then falls back to SMIL, then Whisper.</li>
 </ul>
@@ -1498,11 +1521,11 @@
 <h3 id="2-ebook-only-sync">2. Ebook-Only Sync</h3>
 <p>This mode tracks reading progress without attaching an audiobook source.</p>
 <ul>
-<li>Create it by leaving audio on <strong>None / Skip</strong> in <strong>Add Book</strong>.</li>
+<li>Create it by leaving audio on <strong>None / Skip</strong> in <strong>Add / Update Book</strong>.</li>
 <li>You can still link a standard ebook, a Storyteller title, or both.</li>
 <li>Ebook-only links skip audiobook preparation work, so they activate faster.</li>
 </ul>
-<p>Use this when you only want reading sync between KOReader, Grimmory, Storyteller, and optional ABS ebook progress.</p>
+<p>Use this when you only want reading sync between KOReader, Grimmory, BookOrbit, Storyteller, optional ABS ebook progress, and CWA-sourced ebooks when Kobo sync is enabled.</p>
 <hr />
 <h2 id="real-time-sync">Real-Time Sync</h2>
 <p>The bridge still runs a normal background sync every 5 minutes by default, but it can also react much faster when supported.</p>
@@ -1512,12 +1535,12 @@
 <li><strong>KOReader push</strong>: if you use KOSync, KOReader can send progress straight to the bridge.</li>
 </ol>
 <h3 id="per-client-polling">Per-client polling</h3>
-<p>Storyteller and Grimmory can also use their own polling intervals:</p>
+<p>Storyteller, Grimmory, BookOrbit, and CWA/Kobo sync can also use their own polling intervals when those integrations are enabled:</p>
 <ul>
 <li><strong>Global</strong> uses the normal background cycle.</li>
 <li><strong>Custom</strong> lets that client be checked on its own schedule.</li>
 </ul>
-<p>This is useful when you often read directly in Storyteller or Grimmory and want the bridge to notice sooner.</p>
+<p>This is useful when you often read directly in Storyteller, Grimmory, BookOrbit, or a CWA/Kobo client and want the bridge to notice sooner.</p>
 <hr />
 <h2 id="settings">Settings</h2>
 <p>The <strong>Settings</strong> page is where you connect your services and adjust how the bridge behaves.</p>
@@ -1531,13 +1554,33 @@
 </ul>
 <p>If you use Whisper.cpp with a custom model name, you can type that model directly into the <strong>Whisper Model</strong> field.</p>
 <hr />
-<h2 id="add-book">Add Book</h2>
-<p><strong>Add Book</strong> is the main manual linking tool.</p>
+<h2 id="highlights-and-notes">Highlights and Notes</h2>
+<p>BookBridge can sync KOReader highlights and notes between KOReader devices and supported web readers, but this is a Bridge Sync plugin feature.</p>
+<p>Requirements:</p>
+<ul>
+<li>Install the <strong>Bridge Sync</strong> KOReader plugin from your <strong>Account</strong> page, or from the current release or newer, on each KOReader device that should sync annotations.</li>
+<li>Configure the plugin with that reader's bridge server URL and KOSync username/key.</li>
+<li>Leave <strong>KOReader -&gt; Highlight Sync</strong> enabled in Settings. It is enabled by default on the bridge side.</li>
+<li>For Grimmory web-reader highlights and notes, enable <strong>Highlight Sync</strong> in that reader's Grimmory / BookLore Integrations.</li>
+<li>For BookOrbit web-reader highlights, fill in that reader's BookOrbit KOReader sync username/password fields. The owner must match the BookOrbit user, or be explicitly set in <strong>KOReader sync owner</strong>.</li>
+</ul>
+<p>What syncs:</p>
+<ul>
+<li>Highlights created in KOReader</li>
+<li>Notes attached to highlights</li>
+<li>Edits and deletions</li>
+<li>Existing annotations after using <strong>Sweep All Highlights</strong> in the Bridge Sync plugin</li>
+</ul>
+<p>Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing reading position, but they do not exchange highlights or notes.</p>
+<hr />
+<h2 id="add-update-book">Add / Update Book</h2>
+<p><strong>Add / Update Book</strong> is the main manual linking tool.</p>
 <h3 id="step-1-choose-audio">Step 1: Choose audio</h3>
 <p>You can choose:</p>
 <ul>
 <li>An <strong>Audiobookshelf audiobook</strong></li>
 <li>A <strong>Grimmory audiobook</strong></li>
+<li>A <strong>BookOrbit audiobook</strong></li>
 <li><strong>None / Skip</strong> for an ebook-only link</li>
 </ul>
 <p>The source badge on each card tells you where the audiobook came from.</p>
@@ -1552,6 +1595,7 @@
 <ol>
 <li>Audiobookshelf ebook files</li>
 <li>Grimmory</li>
+<li>BookOrbit</li>
 <li>CWA</li>
 <li>Local <code>/books</code> files</li>
 </ol>
@@ -1563,10 +1607,10 @@
 <p>If you skip audio, <strong>Create Mapping</strong> makes an ebook-only link instead.</p>
 <hr />
 <h2 id="batch-match">Batch Match</h2>
-<p><strong>Batch Match</strong> is the queue-based version of Add Book.</p>
+<p><strong>Batch Match</strong> is the queue-based version of Add / Update Book.</p>
 <p>Use it when you want to review multiple links and process them together.</p>
 <ul>
-<li>Queue entries can use <strong>Audiobookshelf</strong> or <strong>Grimmory</strong> as the audio source.</li>
+<li>Queue entries can use <strong>Audiobookshelf</strong>, <strong>Grimmory</strong>, or <strong>BookOrbit</strong> as the audio source.</li>
 <li>You can attach a standard ebook, a Storyteller title, or both.</li>
 <li>Queue items created from <strong>Suggestions</strong> land here too.</li>
 </ul>
@@ -1593,8 +1637,7 @@
 </ul>
 <p>Suggestions can create:</p>
 <ul>
-<li>Standard ABS-backed links</li>
-<li>Grimmory-audio links</li>
+<li>Audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit</li>
 <li>Ebook-only links</li>
 <li>Storyteller-only links when that is enough for the workflow you want</li>
 </ul>
@@ -1603,12 +1646,12 @@
 <p><strong>Forge</strong> prepares books for Storyteller read-along processing.</p>
 <h3 id="what-forge-stages">What Forge stages</h3>
 <ul>
-<li>Audio from <strong>Audiobookshelf</strong> or <strong>Grimmory</strong></li>
-<li>Text from <strong>Grimmory</strong>, <strong>CWA</strong>, <strong>local files</strong>, or <strong>Audiobookshelf</strong></li>
+<li>Audio from <strong>Audiobookshelf</strong>, <strong>Grimmory</strong>, or <strong>BookOrbit</strong></li>
+<li>Text from <strong>Grimmory</strong>, <strong>BookOrbit</strong>, <strong>CWA</strong>, <strong>local files</strong>, or <strong>Audiobookshelf</strong></li>
 </ul>
 <h3 id="two-ways-to-use-it">Two ways to use it</h3>
 <ol>
-<li><strong>Forge &amp; Match from Add Book</strong></li>
+<li><strong>Forge &amp; Match from Add / Update Book</strong></li>
 <li>Starts the Storyteller upload and processing workflow</li>
 <li>
 <p>Finishes the mapping when processing completes</p>
@@ -1631,22 +1674,24 @@
 </ul>
 <p>This is useful after importing old Storyteller assets or fixing your Storyteller assets mount.</p>
 <hr />
-<h2 id="grimmory-audio">Grimmory Audio</h2>
-<p>Grimmory is no longer only an ebook target.</p>
-<p>You can now use <strong>Grimmory audiobooks</strong> in:</p>
+<h2 id="ebook-and-audio-sources">Ebook and Audio Sources</h2>
+<p>BookBridge can mix different services for the audio side and text side of a mapping.</p>
+<p>For audio, you can use Audiobookshelf, Grimmory, or BookOrbit. For standard ebooks, you can use Audiobookshelf ebook files, Grimmory, BookOrbit, CWA, or local files.</p>
+<p>You can use <strong>Grimmory or BookOrbit audiobooks</strong>, and CWA-backed ebook selections, in:</p>
 <ul>
-<li><strong>Add Book</strong></li>
+<li><strong>Add / Update Book</strong></li>
 <li><strong>Batch Match</strong></li>
 <li><strong>Suggestions</strong></li>
 <li><strong>Forge</strong></li>
 <li>The main <strong>Dashboard</strong></li>
 </ul>
-<p>If <strong>Record Reading Sessions</strong> is enabled in Settings, Grimmory also receives session updates as you make progress.</p>
-<p>If Grimmory imports change and results look stale, open <strong>Settings</strong> and run <strong>Refresh Grimmory Cache</strong>.</p>
+<p>If <strong>Record Reading Sessions</strong> is enabled in Settings, Grimmory or BookOrbit also receives session updates as you make progress. If CWA Kobo sync is enabled, CWA-sourced ebook progress can participate through its Kobo sync endpoints.</p>
+<p>If Grimmory imports change and results look stale, open <strong>Settings</strong> and run <strong>Refresh Grimmory Cache</strong>. If BookOrbit or CWA imports look stale, confirm the service is enabled and reachable, then run the normal sync or matching flow again.</p>
 <hr />
 <h2 id="bridge-sync-plugin-collections">Bridge Sync Plugin Collections</h2>
 <p>This section only applies if you install the optional <strong>Bridge Sync</strong> KOReader plugin.</p>
 <p>If you use that plugin, the bridge can turn Grimmory shelves into KOReader collections for the books it sends to your device.</p>
+<p>The same plugin is also where highlight and note sync lives. Use <strong>Sync Highlights</strong> for an immediate annotation exchange, or <strong>Sweep All Highlights</strong> to back-fill annotations that already exist on the device.</p>
 <ul>
 <li><strong>Collection Syncing</strong> lets you choose whether Bridge Sync should use all shelves, only regular shelves, or only magic shelves.</li>
 <li><strong>Excluded Shelves</strong> lets you skip shelf names you do not want turned into KOReader collections.</li>
@@ -1674,7 +1719,7 @@
 <p>Clears the stored sync state for a mapping.</p>
 <p>If <strong>Regenerate Missing Data on Reset</strong> is enabled, the bridge can also rebuild missing alignment data when needed.</p>
 <h3 id="logs">Logs</h3>
-<p>Open <strong>Logs</strong> to inspect live application logs for matching, syncing, Storyteller ingest, Grimmory refreshes, and background jobs.</p>
+<p>Open <strong>Logs</strong> to inspect live application logs for matching, syncing, Storyteller ingest, library refreshes, and background jobs.</p>
 <hr />
 <h2 id="storygraph-authentication">StoryGraph Authentication</h2>
 <p>StoryGraph does not have an official public API for third-party apps, so the bridge uses browser cookies to authenticate.</p>

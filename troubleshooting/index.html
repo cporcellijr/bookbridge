@@ -589,10 +589,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#grimmory-audiobook-links-are-not-syncing" class="md-nav__link">
+  <a href="#cwa-progress-is-not-syncing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grimmory audiobook links are not syncing
+        CWA progress is not syncing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grimmory-or-bookorbit-audiobook-links-are-not-syncing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grimmory or BookOrbit audiobook links are not syncing
       
     </span>
   </a>
@@ -604,6 +615,17 @@
     <span class="md-ellipsis">
       
         BookOrbit books are not matching or syncing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#highlights-or-notes-are-not-syncing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Highlights or notes are not syncing
       
     </span>
   </a>
@@ -777,10 +799,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#grimmory-audiobook-links-are-not-syncing" class="md-nav__link">
+  <a href="#cwa-progress-is-not-syncing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grimmory audiobook links are not syncing
+        CWA progress is not syncing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grimmory-or-bookorbit-audiobook-links-are-not-syncing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grimmory or BookOrbit audiobook links are not syncing
       
     </span>
   </a>
@@ -792,6 +825,17 @@
     <span class="md-ellipsis">
       
         BookOrbit books are not matching or syncing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#highlights-or-notes-are-not-syncing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Highlights or notes are not syncing
       
     </span>
   </a>
@@ -896,24 +940,44 @@
 <li>Make sure your <code>/books</code> volume is mounted correctly in <code>docker-compose.yml</code>.</li>
 <li>Check file permissions for the user running the container.</li>
 <li>If the missing books should come from Grimmory, run <strong>Settings -&gt; Refresh Grimmory Cache</strong>.</li>
+<li>If the missing books should come from BookOrbit, confirm BookOrbit is enabled, test the connection, and retry the matching flow.</li>
+<li>If the missing books should come from CWA, confirm CWA is enabled, test the connection, and make sure the book is visible in Calibre-Web Automated.</li>
 </ul>
 <h3 id="suggestions-look-stale-or-new-imports-are-missing">Suggestions look stale or new imports are missing</h3>
 <ul>
 <li>A normal <strong>Scan Library</strong> run reuses cached results on purpose.</li>
 <li>Use <strong>Full Refresh</strong> after large imports, removals, or metadata cleanup.</li>
 <li>If Grimmory titles are missing from Suggestions, refresh the Grimmory cache first.</li>
+<li>If BookOrbit titles are missing, confirm BookOrbit is enabled and reachable, then retry the scan.</li>
+<li>If CWA titles are missing, confirm CWA is enabled and reachable, then retry the scan.</li>
 </ul>
-<h3 id="grimmory-audiobook-links-are-not-syncing">Grimmory audiobook links are not syncing</h3>
+<h3 id="cwa-progress-is-not-syncing">CWA progress is not syncing</h3>
 <ul>
-<li>Confirm <strong>Grimmory</strong> is enabled and the audiobook still exists in the selected Grimmory library.</li>
-<li>Run <strong>Refresh Grimmory Cache</strong> after moving, rescanning, or replacing Grimmory items.</li>
-<li>If the old Grimmory item was deleted and recreated with a new ID, rematch that book.</li>
+<li>Confirm <strong>CWA</strong> is enabled and the CWA server URL is reachable from the bridge.</li>
+<li>Enable <strong>Kobo Sync</strong> in the CWA integration and enter the correct Kobo sync token for that reader.</li>
+<li>If using custom polling, check the CWA sync poll interval and make sure it is not set higher than expected.</li>
+<li>Confirm the book is linked to a CWA ebook entry; CWA progress only appears for books the bridge can resolve through CWA.</li>
+</ul>
+<h3 id="grimmory-or-bookorbit-audiobook-links-are-not-syncing">Grimmory or BookOrbit audiobook links are not syncing</h3>
+<ul>
+<li>Confirm the source is enabled and the audiobook still exists in the selected Grimmory or BookOrbit library.</li>
+<li>For Grimmory, run <strong>Refresh Grimmory Cache</strong> after moving, rescanning, or replacing items.</li>
+<li>For BookOrbit, confirm the item is still visible in BookOrbit and retry the matching or sync flow.</li>
+<li>If the old source item was deleted and recreated with a new ID, rematch that book.</li>
 </ul>
 <h3 id="bookorbit-books-are-not-matching-or-syncing">BookOrbit books are not matching or syncing</h3>
 <ul>
 <li>Confirm <strong>BookOrbit</strong> is enabled and configured in Settings, and use the <strong>Test</strong> button to check the connection.</li>
-<li>BookOrbit behaves like Grimmory: if a book exists in BookOrbit but won't link, make sure its library has been scanned so filenames resolve.</li>
+<li>If a book exists in BookOrbit but will not link, make sure it is visible in BookOrbit and that the bridge can reach the BookOrbit server.</li>
 <li>If you switched from Grimmory to BookOrbit, you do not need to rematch — run <code>scripts/migrate_grimmory_to_bookorbit.py</code> (see the <a href="../configuration/#bookorbit">Configuration Guide</a>).</li>
+</ul>
+<h3 id="highlights-or-notes-are-not-syncing">Highlights or notes are not syncing</h3>
+<ul>
+<li>Update the <strong>Bridge Sync</strong> KOReader plugin to the current release or newer on every KOReader device that should sync annotations.</li>
+<li>Plain KOReader/KOSync progress sync does not sync annotations. In KOReader, use <strong>Tools -&gt; Bridge Sync -&gt; Sync Highlights</strong> or <strong>Sweep All Highlights</strong>.</li>
+<li>In Settings, make sure <strong>KOReader -&gt; Highlight Sync</strong> is enabled.</li>
+<li>For Grimmory web-reader annotations, enable <strong>Highlight Sync</strong> in that reader's Grimmory / BookLore Integrations.</li>
+<li>For BookOrbit web-reader highlights, fill in the BookOrbit KOReader sync username/password in that reader's Integrations and make sure the owner matches the BookOrbit user.</li>
 </ul>
 <h3 id="storyteller-transcripts-are-not-found">Storyteller transcripts are not found</h3>
 <ul>
@@ -951,7 +1015,7 @@
 <ul>
 <li>Match and Suggestions actions</li>
 <li>Storyteller transcript ingest</li>
-<li>Grimmory cache refreshes</li>
+<li>Library refreshes</li>
 <li>Background job failures</li>
 </ul>
 <hr />

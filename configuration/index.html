@@ -684,10 +684,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#ollama-local-llm-optional" class="md-nav__link">
+  <a href="#ai-llm-providers-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Ollama (Local LLM, Optional)
+        AI / LLM Providers (Optional)
       
     </span>
   </a>
@@ -1054,10 +1054,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#ollama-local-llm-optional" class="md-nav__link">
+  <a href="#ai-llm-providers-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Ollama (Local LLM, Optional)
+        AI / LLM Providers (Optional)
       
     </span>
   </a>
@@ -1220,7 +1220,7 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 </code></pre></div>
 <h3 id="integrations">Integrations</h3>
 <h4 id="audiobookshelf">Audiobookshelf</h4>
-<p>Audiobookshelf remains the default audiobook source when a mapping is not explicitly using Grimmory audio.</p>
+<p>Audiobookshelf remains the default audiobook source when a mapping is not explicitly using Grimmory or BookOrbit audio.</p>
 <table>
 <thead>
 <tr>
@@ -1323,6 +1323,12 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <td>Uses raw percentage instead of text matching.</td>
 </tr>
 <tr>
+<td>Highlight Sync</td>
+<td><code>KOREADER_ANNOTATION_SYNC</code></td>
+<td><code>true</code></td>
+<td>Enables bridge-side annotation exchange for the Bridge Sync KOReader plugin. Requires the current Bridge Sync plugin on each device.</td>
+</tr>
+<tr>
 <td>Split-Port Listener</td>
 <td><code>KOSYNC_PORT</code></td>
 <td>empty</td>
@@ -1333,6 +1339,7 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <p>KOSync notes:</p>
 <ul>
 <li>If you use the built-in KOSync bridge, the <strong>Test</strong> button checks the values currently typed into the form before you save them.</li>
+<li>Plain KOReader/KOSync progress sync does not need the Bridge Sync plugin. Highlight and note sync does.</li>
 </ul>
 <h4 id="storyteller">Storyteller</h4>
 <p>The bridge talks to Storyteller through the REST API only.</p>
@@ -1416,7 +1423,7 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <li><strong>Settings -&gt; Storyteller Backfill</strong> rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.</li>
 </ul>
 <h4 id="grimmory">Grimmory</h4>
-<p>Grimmory now supports both ebook sync and Grimmory audiobook-backed mappings.</p>
+<p>Grimmory is a supported ebook and audiobook source. You can use it for ebook sync, audiobook-backed mappings, web-reader annotation relay, and Bridge Sync collection shaping.</p>
 <table>
 <thead>
 <tr>
@@ -1470,6 +1477,18 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <td>Sends reading or listening session updates back to Grimmory.</td>
 </tr>
 <tr>
+<td>Highlight Sync</td>
+<td><code>BOOKLORE_ANNOTATION_SYNC</code></td>
+<td><code>false</code></td>
+<td>Enables Grimmory web-reader highlight/note relay for this reader. Requires the current Bridge Sync plugin for KOReader device annotations.</td>
+</tr>
+<tr>
+<td>Highlight Sync Interval</td>
+<td><code>BOOKLORE_ANNOTATION_SYNC_MINUTES</code></td>
+<td><code>15</code></td>
+<td>Minutes between background Grimmory annotation relay cycles.</td>
+</tr>
+<tr>
 <td>Collection Syncing</td>
 <td><code>DEVICE_SYNC_COLLECTIONS</code></td>
 <td><code>off</code></td>
@@ -1500,6 +1519,7 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <li>Match, Batch Match, Suggestions, and Forge can now use <strong>Grimmory audiobooks</strong> as the audio source.</li>
 <li>The dashboard shows <strong>BL Audio</strong> progress when a mapping is driven by Grimmory audio.</li>
 <li>When <strong>Record Reading Sessions</strong> is enabled, Grimmory gets session updates as you make progress.</li>
+<li>Enable <strong>Highlight Sync</strong> in each reader's Grimmory / BookLore Integrations if you want Grimmory web-reader highlights and notes to round-trip through the bridge.</li>
 <li><strong>Settings -&gt; Refresh Grimmory Cache</strong> forces a fresh cache rebuild after imports, removals, or large metadata changes.</li>
 <li>Use <strong>Find IDs</strong> next to <strong>Library ID</strong> in Settings to load your available Grimmory libraries and fill the field from a dropdown.</li>
 <li>The <strong>Device Sync Collections</strong> settings only matter if you use the optional <strong>Bridge Sync</strong> KOReader plugin.</li>
@@ -1552,7 +1572,7 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 </tbody>
 </table>
 <h4 id="bookorbit">BookOrbit</h4>
-<p>BookOrbit is a newer ebook library manager (with audiobook support, like Grimmory). The bridge treats it as an alternative to Grimmory — you can use either one or both at the same time.</p>
+<p>BookOrbit is a supported ebook and audiobook source. You can use it for ebook sync, audiobook-backed mappings, BookOrbit reading sessions, web-reader highlight relay, and watched-collection auto-matching.</p>
 <table>
 <thead>
 <tr>
@@ -1598,6 +1618,30 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <td><code>BOOKORBIT_READING_SESSIONS</code></td>
 <td><code>true</code></td>
 <td>Sends reading or listening session updates back to BookOrbit.</td>
+</tr>
+<tr>
+<td>KOReader Sync Username</td>
+<td><code>BOOKORBIT_KOSYNC_USER</code></td>
+<td>empty</td>
+<td>BookOrbit KOReader-sync username used for web-reader highlight relay.</td>
+</tr>
+<tr>
+<td>KOReader Sync Password</td>
+<td><code>BOOKORBIT_KOSYNC_KEY</code></td>
+<td>empty</td>
+<td>BookOrbit KOReader-sync password used for web-reader highlight relay.</td>
+</tr>
+<tr>
+<td>KOReader Sync Owner</td>
+<td><code>BOOKORBIT_KOSYNC_OWNER</code></td>
+<td>empty</td>
+<td>Optional owner assertion; when set, it must match the BookOrbit username.</td>
+</tr>
+<tr>
+<td>Highlight Sync Interval</td>
+<td><code>BOOKORBIT_ANNOTATION_SYNC_MINUTES</code></td>
+<td><code>15</code></td>
+<td>Minutes between background BookOrbit annotation relay cycles.</td>
 </tr>
 <tr>
 <td>Poll Mode</td>
@@ -1652,8 +1696,9 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 </table>
 <p>BookOrbit notes:</p>
 <ul>
-<li>BookOrbit works like Grimmory across Match, Batch Match, Suggestions, and the dashboard — pick it as the ebook (or audio) source when you create a mapping.</li>
+<li>BookOrbit is available across Match, Batch Match, Suggestions, Forge, and the dashboard. Pick it as the ebook source, the audio source, or both when you create a mapping.</li>
 <li>Use the <strong>Test</strong> button in Settings to check the connection before saving.</li>
+<li>To sync BookOrbit web-reader highlights through the bridge, fill in the BookOrbit KOReader sync username/password in each reader's Integrations. BookBridge only relays annotations when ownership is clear.</li>
 <li>
 <p><strong>Moving from Grimmory to BookOrbit?</strong> You do not need to rematch. A helper script, <code>scripts/migrate_grimmory_to_bookorbit.py</code>, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add <code>--apply</code> to commit):</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>abs_kosync<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>scripts.migrate_grimmory_to_bookorbit<span class="w"> </span>--apply
@@ -1661,6 +1706,7 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 </li>
 </ul>
 <h4 id="calibre-web-automated-cwa">Calibre-Web Automated (CWA)</h4>
+<p>CWA is a supported ebook source and optional Kobo-sync progress source. Use it to search/download ebooks from Calibre-Web Automated, and enable Kobo sync when you want stock Kobo readers or KOReader-via-CWA to participate in progress sync.</p>
 <table>
 <thead>
 <tr>
@@ -1695,8 +1741,51 @@ Environment variables are mainly for first boot or advanced overrides. Once a va
 <td>empty</td>
 <td>Optional password.</td>
 </tr>
+<tr>
+<td>Kobo Sync Enabled</td>
+<td><code>CWA_SYNC_ENABLED</code></td>
+<td><code>false</code></td>
+<td>Turns on reading-progress sync through CWA's Kobo sync protocol.</td>
+</tr>
+<tr>
+<td>Kobo Sync Token</td>
+<td><code>CWA_SYNC_TOKEN</code></td>
+<td>empty</td>
+<td>Token used for CWA Kobo sync requests.</td>
+</tr>
+<tr>
+<td>Kobo Sync Poll Mode</td>
+<td><code>CWA_SYNC_POLL_MODE</code></td>
+<td><code>global</code></td>
+<td><code>global</code> uses the main sync cycle. <code>custom</code> polls CWA separately.</td>
+</tr>
+<tr>
+<td>Kobo Sync Poll Interval</td>
+<td><code>CWA_SYNC_POLL_SECONDS</code></td>
+<td><code>300</code></td>
+<td>Used when Kobo Sync Poll Mode is <code>custom</code>.</td>
+</tr>
+<tr>
+<td>Use Calibre ABS Identifier</td>
+<td><code>CALIBRE_USE_ABS_IDENTIFIER</code></td>
+<td><code>false</code></td>
+<td>Uses Calibre's <code>audiobookshelf_id</code> identifier to make suggestion matching authoritative when available.</td>
+</tr>
+<tr>
+<td>Calibre Library Path</td>
+<td><code>CALIBRE_LIBRARY_PATH</code></td>
+<td>empty</td>
+<td>Optional path to the Calibre library containing <code>metadata.db</code> for identifier lookup.</td>
+</tr>
 </tbody>
 </table>
+<p>CWA notes:</p>
+<ul>
+<li>CWA appears as a standard ebook source in Add / Update Book, Batch Match, Suggestions, and Forge.</li>
+<li>Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.</li>
+<li>The CWA username/password and Kobo sync token are per-reader integration credentials.</li>
+<li>If you use the Audiobookshelf Calibre plugin, the bridge can read the <code>audiobookshelf_id</code> identifier from Calibre metadata or CWA as a fallback to avoid fuzzy matching already-linked books.</li>
+</ul>
 <h4 id="hardcoverapp">Hardcover.app</h4>
 <p>Hardcover provides modern reading tracking with a beautiful UI.</p>
 <table>
@@ -1826,7 +1915,8 @@ token/cookies, under Settings → Users → (user) → Integrations.</p>
 </tr>
 </tbody>
 </table>
-<h4 id="ollama-local-llm-optional">Ollama (Local LLM, Optional)</h4>
+<h4 id="ai-llm-providers-optional">AI / LLM Providers (Optional)</h4>
+<p>The bridge can use Ollama, OpenAI, or an OpenAI-compatible local endpoint such as llama-server or llama-swap. The local OpenAI-compatible option expects standard <code>/v1/models</code>, <code>/v1/embeddings</code>, and <code>/v1/chat/completions</code> endpoints.</p>
 <p>This is an advanced, opt-in feature. If you run a local <a href="https://ollama.com">Ollama</a> server, the bridge can use it to make smarter book-match suggestions and to rescue audio↔text alignments that plain text matching misses. Everything here is <strong>off until you enable it</strong>, and every feature falls back to the normal behavior if Ollama is unreachable — so it never blocks a sync.</p>
 <p>Connection:</p>
 <table>
@@ -1839,6 +1929,36 @@ token/cookies, under Settings → Users → (user) → Integrations.</p>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>Provider</td>
+<td><code>LLM_PROVIDER</code></td>
+<td><code>ollama</code></td>
+<td><code>ollama</code>, <code>openai</code>, or <code>openai_compatible</code>. llama-server and llama-swap use <code>openai_compatible</code>.</td>
+</tr>
+<tr>
+<td>OpenAI-compatible Base URL</td>
+<td><code>LLM_BASE_URL</code></td>
+<td><code>http://localhost:8080/v1</code></td>
+<td>Used by <code>openai_compatible</code>; include the <code>/v1</code> path.</td>
+</tr>
+<tr>
+<td>API Key</td>
+<td><code>LLM_API_KEY</code></td>
+<td>empty</td>
+<td>Optional for local OpenAI-compatible servers. OpenAI cloud uses <code>OPENAI_API_KEY</code> or this value.</td>
+</tr>
+<tr>
+<td>Generic Embedding Model</td>
+<td><code>LLM_EMBED_MODEL</code></td>
+<td>empty</td>
+<td>Overrides the legacy Ollama embedding model setting for all providers.</td>
+</tr>
+<tr>
+<td>Generic Chat / Judge Model</td>
+<td><code>LLM_CHAT_MODEL</code></td>
+<td>empty</td>
+<td>Overrides the legacy Ollama chat model setting for all providers.</td>
+</tr>
 <tr>
 <td>Enable</td>
 <td><code>OLLAMA_ENABLED</code></td>
@@ -1948,6 +2068,8 @@ token/cookies, under Settings → Users → (user) → Integrations.</p>
 <ul>
 <li>The model never runs on hot sync paths — only on linking, suggestion scans, and alignment work — so day-to-day syncing stays fast.</li>
 <li>Use the <strong>Test</strong> button to confirm the server is reachable. It reports each model's context length and capabilities, and warns if your embedding model can't actually embed.</li>
+<li>OpenAI-compatible providers are tested with <code>/v1/models</code>; embeddings and chat calls are still lazy so local servers can load models on first real use.</li>
+<li>Existing <code>OLLAMA_*</code> feature toggles remain supported. Generic <code>LLM_*</code> connection/model settings take precedence when present.</li>
 <li>Finer tuning knobs (score bands, judge margins, similarity thresholds) are available in the Settings UI if you want them, but the defaults are a sensible starting point.</li>
 </ul>
 <h3 id="suggestions">Suggestions</h3>
@@ -1974,7 +2096,7 @@ token/cookies, under Settings → Users → (user) → Integrations.</p>
 <ul>
 <li>A normal scan reuses cached results so repeat scans are faster.</li>
 <li><strong>Full Refresh</strong> rescans the whole unmatched library from scratch.</li>
-<li>Suggestions can queue ABS-backed links, Grimmory-audio links, ebook-only links, and Storyteller-only links.</li>
+<li>Suggestions can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.</li>
 <li>If your audio and ebook providers expose the same mounted <code>/books</code> tree,
   sibling files in the same title folder are treated as same-folder matches
   before fuzzy or Ollama scoring.</li>
