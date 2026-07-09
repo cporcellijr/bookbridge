@@ -921,40 +921,57 @@ class HardcoverClient:
     # Annotations via private_notes
     # ------------------------------------------------------------------
 
-    def get_user_book_id(self, hardcover_book_id: int) -> Optional[int]:
-        """Return the user_book.id for the current user + book, or None."""
+    def get_user_book_summary(self, hardcover_book_id: int) -> tuple[Optional[int], Optional[str]]:
+        """Return (user_book.id, private_notes) for the current user + book.
+
+        Returns (None, None) when the user has no library entry for the book.
+        Fetching the id and the current notes in one call lets the annotation
+        spoke splice its managed block into whatever the user already has there.
+        """
         uid = self.get_user_id()
         if not uid or not hardcover_book_id:
-            return None
+            return None, None
         result = self.query(
             """
             query GetUserBook($bookId: Int!, $userId: Int!) {
                 user_books(where: {book_id: {_eq: $bookId}, user_id: {_eq: $userId}}) {
                     id
+                    private_notes
                 }
             }
             """,
             {"bookId": hardcover_book_id, "userId": uid},
         )
         rows = (result or {}).get("user_books") or []
-        return int(rows[0]["id"]) if rows else None
+        if not rows:
+            return None, None
+        return int(rows[0]["id"]), rows[0].get("private_notes")
 
     def update_private_notes(self, user_book_id: int, notes_text: str) -> bool:
-        """Replace the private_notes field on a user_book with the given text block."""
+        """Replace the private_notes field on a user_book with the given text block.
+
+        Uses the real ``update_user_book(id, object)`` mutation — there is no
+        ``update_user_books_by_pk`` in the Hardcover schema (verified via live
+        introspection). ``private_notes`` is a member of ``UserBookUpdateInput``.
+        """
         result = self.query(
             """
             mutation UpdatePrivateNotes($id: Int!, $notes: String) {
-                update_user_books_by_pk(
-                    pk_columns: {id: $id},
-                    _set: {private_notes: $notes}
-                ) {
+                update_user_book(id: $id, object: {private_notes: $notes}) {
                     id
+                    error
                 }
             }
             """,
             {"id": user_book_id, "notes": notes_text},
         )
-        return bool((result or {}).get("update_user_books_by_pk"))
+        payload = (result or {}).get("update_user_book")
+        if not payload:
+            return False
+        if payload.get("error"):
+            logger.error("❌ Hardcover update_private_notes error: %s", payload["error"])
+            return False
+        return bool(payload.get("id"))
 
 
 # [END FILE]

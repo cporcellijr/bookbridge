@@ -22,7 +22,7 @@ os.environ.setdefault("BOOKS_DIR", "/tmp/readest_test")
 
 
 DOC_MD5 = "b" * 32  # kosync partial hash
-EPUB_HASH = "a" * 32  # full file MD5 (Readest's bookHash)
+EPUB_HASH = "a" * 32  # stand-in bookHash (KOReader partial MD5) used as a call arg
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,9 @@ class TestReadestClientHash(unittest.TestCase):
         expected = hashlib.md5(raw.encode()).hexdigest()[:7]
         self.assertEqual(nid, expected)
 
-    def test_compute_book_hash(self):
+    def test_compute_book_hash_small_file(self):
+        # A file smaller than one 1KB chunk hashes identically under the partial
+        # and full algorithms (a single chunk covers the whole file).
         from src.api.readest_client import ReadestClient
         with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as f:
             f.write(b"fake epub content")
@@ -53,6 +55,25 @@ class TestReadestClientHash(unittest.TestCase):
             result = ReadestClient.compute_book_hash(path)
             expected = hashlib.md5(b"fake epub content").hexdigest()
             self.assertEqual(result, expected)
+        finally:
+            os.unlink(path)
+
+    def test_compute_book_hash_is_koreader_partial(self):
+        # A >1KB file must hash to the KOReader *partial* MD5 (1KB chunks at
+        # offsets 1024*4**i), NOT the full-file MD5 — that is Readest's bookHash.
+        from src.api.readest_client import ReadestClient
+        data = bytes(i % 256 for i in range(20000))
+        with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as f:
+            f.write(data)
+            path = f.name
+        try:
+            result = ReadestClient.compute_book_hash(path)
+            m = hashlib.md5()
+            for offset in (0, 1024, 4096, 16384):
+                m.update(data[offset:offset + 1024])
+            partial = m.hexdigest()
+            self.assertEqual(result, partial)
+            self.assertNotEqual(result, hashlib.md5(data).hexdigest())
         finally:
             os.unlink(path)
 
@@ -279,6 +300,16 @@ class TestReadestDatetimeHelpers(unittest.TestCase):
         ms = self.sync._ko_datetime_to_ms(None)
         self.assertGreater(ms, 0)
 
+    def test_iso_to_ms_parses_snake_case_iso(self):
+        # 2023-11-14T22:13:20Z == 1_700_000_000_000 ms
+        self.assertEqual(self.sync._iso_to_ms("2023-11-14T22:13:20Z"), 1_700_000_000_000)
+        self.assertEqual(self.sync._iso_to_ms("2023-11-14T22:13:20+00:00"), 1_700_000_000_000)
+
+    def test_iso_to_ms_empty_or_bad_is_zero(self):
+        self.assertEqual(self.sync._iso_to_ms(None), 0)
+        self.assertEqual(self.sync._iso_to_ms(""), 0)
+        self.assertEqual(self.sync._iso_to_ms("not-a-date"), 0)
+
 
 # ---------------------------------------------------------------------------
 # ReadestAnnotationSync integration-style tests with mocked DB
@@ -412,6 +443,9 @@ class TestReadestAnnotationSyncPull(unittest.TestCase):
         book = _make_book()
 
         client = MagicMock()
+        # The /sync GET returns raw Postgres rows: snake_case ISO timestamps.
+        created = "2023-11-14T22:13:20+00:00"
+        updated = "2023-11-14T22:13:21+00:00"
         client.pull_notes.return_value = [
             {
                 "id": "abc1234",
@@ -423,15 +457,15 @@ class TestReadestAnnotationSyncPull(unittest.TestCase):
                 "text": "highlighted",
                 "note": None,
                 "page": 3,
-                "createdAt": 1_700_000_000_000,
-                "updatedAt": 1_700_000_001_000,
+                "created_at": created,
+                "updated_at": updated,
             }
         ]
 
         applied = sync._pull_for_book(1, client, book, EPUB_HASH)
         self.assertEqual(applied, 1)
-        # Watermark should now be 1_700_000_001_000
-        self.assertEqual(sync._get_watermark(EPUB_HASH), 1_700_000_001_000)
+        # Watermark should advance to the note's updated_at (parsed to epoch ms).
+        self.assertEqual(sync._get_watermark(1, EPUB_HASH), sync._iso_to_ms(updated))
 
     def test_pull_tombstone_marks_deleted(self):
         from src.services.readest_annotation_sync import ReadestAnnotationSync
@@ -457,9 +491,9 @@ class TestReadestAnnotationSyncPull(unittest.TestCase):
                 "id": "abc1234",
                 "xpointer0": "/body/p[1]/text().0",
                 "type": "bookmark",
-                "createdAt": 1_700_000_000_000,
-                "updatedAt": 1_700_000_001_000,
-                "deletedAt": 1_700_000_002_000,
+                "created_at": "2023-11-14T22:13:20+00:00",
+                "updated_at": "2023-11-14T22:13:21+00:00",
+                "deleted_at": "2023-11-14T22:13:22+00:00",
             }
         ]
 

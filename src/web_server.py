@@ -2753,6 +2753,8 @@ def settings():
             'CWA_ENABLED',
             'CWA_SYNC_ENABLED',
             'HARDCOVER_ENABLED',
+            'HARDCOVER_ANNOTATION_SYNC',
+            'READEST_ANNOTATION_SYNC',
             'STORYGRAPH_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
@@ -9202,6 +9204,18 @@ if __name__ == '__main__':
                 booklore_interval = int(os.environ.get("BOOKLORE_ANNOTATION_SYNC_MINUTES", "15") or 0)
                 if booklore_interval > 0:
                     intervals.append(booklore_interval)
+            except (TypeError, ValueError):
+                pass
+            try:
+                readest_interval = int(os.environ.get("READEST_ANNOTATION_SYNC_MINUTES", "15") or 0)
+                if readest_interval > 0:
+                    intervals.append(readest_interval)
+            except (TypeError, ValueError):
+                pass
+            try:
+                hardcover_interval = int(os.environ.get("HARDCOVER_ANNOTATION_SYNC_MINUTES", "30") or 0)
+                if hardcover_interval > 0:
+                    intervals.append(hardcover_interval)
             except (TypeError, ValueError):
                 pass
             return min(intervals) if intervals else 0

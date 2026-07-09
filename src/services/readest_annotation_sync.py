@@ -37,6 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy import or_
+
 from src.api.readest_client import ReadestClient
 from src.utils.user_config import resolve_setting
 
@@ -108,11 +110,19 @@ class ReadestAnnotationSync:
         except Exception as e:
             logger.warning("Readest: could not save watermarks: %s", e)
 
-    def _get_watermark(self, book_hash: str) -> int:
-        return int(self._watermarks.get(book_hash, 0))
+    @staticmethod
+    def _watermark_key(user_id, book_hash: str) -> str:
+        # Per-user: the same EPUB is one book_hash across the whole install, but
+        # each user pulls their own Readest notes from their own account, so the
+        # watermark must not be shared or the second user misses everything the
+        # first already advanced past.
+        return f"{user_id}:{book_hash}"
 
-    def _set_watermark(self, book_hash: str, ms: int) -> None:
-        self._watermarks[book_hash] = ms
+    def _get_watermark(self, user_id, book_hash: str) -> int:
+        return int(self._watermarks.get(self._watermark_key(user_id, book_hash), 0))
+
+    def _set_watermark(self, user_id, book_hash: str, ms: int) -> None:
+        self._watermarks[self._watermark_key(user_id, book_hash)] = ms
         self._save_watermarks()
 
     # ------------------------------------------------------------------
@@ -154,6 +164,27 @@ class ReadestAnnotationSync:
             return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
         except ValueError:
             return int(time.time() * 1000)
+
+    @staticmethod
+    def _iso_to_ms(value) -> int:
+        """Parse an ISO-8601 timestamp (as the /sync GET returns) to epoch ms.
+
+        The server hands back raw Postgres rows, so note timestamps arrive as
+        snake_case ISO strings (``created_at``/``updated_at``/``deleted_at``),
+        not the camelCase millisecond fields the client sends on push. Returns 0
+        when the value is missing or unparseable.
+        """
+        text = str(value or "").strip()
+        if not text:
+            return 0
+        normalized = text.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(normalized)
+        except ValueError:
+            return 0
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
 
     @staticmethod
     def _now_dt() -> datetime:
@@ -250,7 +281,10 @@ class ReadestAnnotationSync:
                         KoreaderAnnotation.md5 == book.kosync_doc_id,
                         KoreaderAnnotation.user_id == user_id,
                         KoreaderAnnotation.deleted == False,  # noqa: E712
-                        KoreaderAnnotation.readest_synced_at == None,  # noqa: E711
+                        or_(
+                            KoreaderAnnotation.readest_synced_at == None,  # noqa: E711
+                            KoreaderAnnotation.updated_at > KoreaderAnnotation.readest_synced_at,
+                        ),
                     )
                     .limit(_MAX_PUSH_PER_CYCLE)
                     .all()
@@ -330,7 +364,7 @@ class ReadestAnnotationSync:
 
     def _pull_for_book(self, user_id, client: ReadestClient, book, book_hash: str) -> int:
         """Pull Readest notes into the local hub. Returns apply count."""
-        since_ms = self._get_watermark(book_hash)
+        since_ms = self._get_watermark(user_id, book_hash)
         notes = client.pull_notes(book_hash, since_ms)
         if notes is None:
             return 0
@@ -346,10 +380,16 @@ class ReadestAnnotationSync:
         try:
             with self._db.get_session() as session:
                 for note in notes:
-                    created_ms = int(note.get("createdAt") or 0)
-                    updated_ms = int(note.get("updatedAt") or created_ms)
-                    if updated_ms > new_watermark:
-                        new_watermark = updated_ms
+                    # The /sync GET returns raw Postgres rows: snake_case ISO
+                    # timestamps, not the camelCase epoch-ms fields push sends.
+                    created_ms = self._iso_to_ms(note.get("created_at"))
+                    updated_ms = self._iso_to_ms(note.get("updated_at")) or created_ms
+                    deleted_ms = self._iso_to_ms(note.get("deleted_at"))
+                    # Advance the watermark by the newest of the row's timestamps so
+                    # a tombstone (updated_at may predate deleted_at) isn't re-pulled.
+                    row_ms = max(updated_ms, deleted_ms)
+                    if row_ms > new_watermark:
+                        new_watermark = row_ms
 
                     pos0 = str(note.get("xpointer0") or "").strip()
                     note_id = str(note.get("id") or "").strip()
@@ -357,7 +397,7 @@ class ReadestAnnotationSync:
                         continue
 
                     # Handle server-side deletions (tombstones)
-                    if note.get("deletedAt"):
+                    if deleted_ms:
                         self._apply_remote_delete(session, user_id, note_id, pos0, note, now_dt)
                         applied += 1
                         continue
@@ -432,7 +472,7 @@ class ReadestAnnotationSync:
             return applied
 
         if new_watermark > since_ms:
-            self._set_watermark(book_hash, new_watermark)
+            self._set_watermark(user_id, book_hash, new_watermark)
         return applied
 
     def _apply_remote_delete(self, session, user_id, note_id: str, pos0: str, note: dict, now_dt: datetime) -> None:

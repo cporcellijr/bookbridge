@@ -29,10 +29,14 @@ class TestHardcoverClientPrivateNotes(unittest.TestCase):
         from src.api.hardcover_client import HardcoverClient
         return HardcoverClient(credentials={"HARDCOVER_TOKEN": "tok", "HARDCOVER_ENABLED": "true"})
 
-    def test_update_private_notes_success(self):
+    def test_update_private_notes_uses_update_user_book(self):
         c = self._client()
-        c.query = MagicMock(return_value={"update_user_books_by_pk": {"id": 7}})
+        c.query = MagicMock(return_value={"update_user_book": {"id": 7, "error": None}})
         self.assertTrue(c.update_private_notes(7, "some notes"))
+        # Must call the real mutation, not the nonexistent *_by_pk variant.
+        sent_query = c.query.call_args[0][0]
+        self.assertIn("update_user_book(", sent_query)
+        self.assertNotIn("update_user_books_by_pk", sent_query)
 
     def test_update_private_notes_failure_returns_false(self):
         c = self._client()
@@ -41,25 +45,30 @@ class TestHardcoverClientPrivateNotes(unittest.TestCase):
 
     def test_update_private_notes_empty_result_false(self):
         c = self._client()
-        c.query = MagicMock(return_value={"update_user_books_by_pk": None})
+        c.query = MagicMock(return_value={"update_user_book": None})
         self.assertFalse(c.update_private_notes(7, ""))
 
-    def test_get_user_book_id_found(self):
+    def test_update_private_notes_graphql_error_false(self):
+        c = self._client()
+        c.query = MagicMock(return_value={"update_user_book": {"id": None, "error": "denied"}})
+        self.assertFalse(c.update_private_notes(7, "notes"))
+
+    def test_get_user_book_summary_found(self):
         c = self._client()
         c.get_user_id = MagicMock(return_value=99)
-        c.query = MagicMock(return_value={"user_books": [{"id": 55}]})
-        self.assertEqual(c.get_user_book_id(10), 55)
+        c.query = MagicMock(return_value={"user_books": [{"id": 55, "private_notes": "hi"}]})
+        self.assertEqual(c.get_user_book_summary(10), (55, "hi"))
 
-    def test_get_user_book_id_not_found(self):
+    def test_get_user_book_summary_not_found(self):
         c = self._client()
         c.get_user_id = MagicMock(return_value=99)
         c.query = MagicMock(return_value={"user_books": []})
-        self.assertIsNone(c.get_user_book_id(10))
+        self.assertEqual(c.get_user_book_summary(10), (None, None))
 
-    def test_get_user_book_id_no_user_id(self):
+    def test_get_user_book_summary_no_user_id(self):
         c = self._client()
         c.get_user_id = MagicMock(return_value=None)
-        self.assertIsNone(c.get_user_book_id(10))
+        self.assertEqual(c.get_user_book_summary(10), (None, None))
 
 
 # ---------------------------------------------------------------------------
@@ -108,17 +117,15 @@ def _make_ann(
     return a
 
 
-def _make_session_with_rows(db, rows):
+def _make_session_with_rows(db, rows, deleted_rows=None):
     session = MagicMock()
     session.__enter__ = MagicMock(return_value=session)
     session.__exit__ = MagicMock(return_value=False)
-    (
-        session.query.return_value
-        .filter.return_value
-        .order_by.return_value
-        .limit.return_value
-        .all.return_value
-    ) = rows
+    filter_mock = session.query.return_value.filter.return_value
+    # Live-highlight query: query().filter().order_by().limit().all()
+    filter_mock.order_by.return_value.limit.return_value.all.return_value = rows
+    # Deleted-since query: query().filter().all()
+    filter_mock.all.return_value = deleted_rows if deleted_rows is not None else []
     db.get_session.return_value = session
     return session
 
@@ -204,7 +211,7 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
         client.update_private_notes.return_value = True
 
         result = sync._sync_book(1, client, _make_book())
@@ -223,7 +230,7 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
 
         result = sync._sync_book(1, client, _make_book())
         self.assertFalse(result)
@@ -238,7 +245,7 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
         client.update_private_notes.return_value = True
 
         result = sync._sync_book(1, client, _make_book())
@@ -261,18 +268,21 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
     def test_skips_book_without_user_book_id(self):
         db = _make_db()
+        row = _make_ann(id=1, hardcover_synced_at=None)
+        _make_session_with_rows(db, [row])
         db.get_hardcover_details = MagicMock(return_value=self._details())
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = None
+        client.get_user_book_summary.return_value = (None, None)
         self.assertFalse(sync._sync_book(1, client, _make_book()))
+        client.update_private_notes.assert_not_called()
 
     def test_skips_book_without_doc_md5(self):
         db = _make_db()
         db.get_hardcover_details = MagicMock(return_value=self._details())
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
         book = _make_book(doc_md5="")
         self.assertFalse(sync._sync_book(1, client, book))
 
@@ -284,7 +294,7 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
         client.update_private_notes.return_value = False
 
         result = sync._sync_book(1, client, _make_book())
@@ -298,7 +308,7 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
         client.update_private_notes.return_value = True
 
         sync._sync_book(1, client, _make_book())
@@ -319,11 +329,79 @@ class TestHardcoverAnnotationSyncLogic(unittest.TestCase):
 
         sync = self._make_sync(db)
         client = MagicMock()
-        client.get_user_book_id.return_value = 55
+        client.get_user_book_summary.return_value = (55, None)
 
         result = sync._sync_book(1, client, _make_book())
         self.assertFalse(result)
         client.update_private_notes.assert_not_called()
+
+    def test_propagates_deletion_when_only_deletion_changed(self):
+        # All live highlights are already synced, but one was deleted after its
+        # last sync — the block must still be rewritten so it disappears remotely.
+        db = _make_db()
+        synced_at = _NOW + timedelta(seconds=1)
+        live = _make_ann(id=1, hardcover_synced_at=synced_at, updated_at=_NOW)
+        deleted = _make_ann(id=2, deleted=True, hardcover_synced_at=_NOW - timedelta(hours=2))
+        deleted.deleted_at = _NOW  # deleted after its last sync
+        _make_session_with_rows(db, [live], deleted_rows=[deleted])
+        db.get_hardcover_details = MagicMock(return_value=self._details())
+
+        sync = self._make_sync(db)
+        client = MagicMock()
+        client.get_user_book_summary.return_value = (55, None)
+        client.update_private_notes.return_value = True
+
+        result = sync._sync_book(1, client, _make_book())
+        self.assertTrue(result)
+        client.update_private_notes.assert_called_once()
+        # The deleted row is stamped so it doesn't retrigger next cycle.
+        self.assertEqual(deleted.hardcover_synced_at, live.hardcover_synced_at)
+
+    def test_preserves_user_private_notes_outside_managed_block(self):
+        db = _make_db()
+        row = _make_ann(id=1, text="my highlight", hardcover_synced_at=None)
+        _make_session_with_rows(db, [row])
+        db.get_hardcover_details = MagicMock(return_value=self._details())
+
+        sync = self._make_sync(db)
+        client = MagicMock()
+        client.get_user_book_summary.return_value = (55, "My own private thoughts.")
+        client.update_private_notes.return_value = True
+
+        sync._sync_book(1, client, _make_book())
+        written = client.update_private_notes.call_args[0][1]
+        self.assertIn("My own private thoughts.", written)
+        self.assertIn("my highlight", written)
+
+
+class TestHardcoverSpliceManaged(unittest.TestCase):
+    def setUp(self):
+        from src.services.hardcover_annotation_sync import HardcoverAnnotationSync
+        self.sync = HardcoverAnnotationSync.__new__(HardcoverAnnotationSync)
+        from src.services import hardcover_annotation_sync as mod
+        self.START = mod._MANAGED_START
+        self.END = mod._MANAGED_END
+
+    def test_appends_block_when_no_existing_managed_region(self):
+        out = self.sync._splice_managed("user text", "BLOCK")
+        self.assertTrue(out.startswith("user text"))
+        self.assertIn(self.START, out)
+        self.assertIn("BLOCK", out)
+
+    def test_replaces_existing_managed_region_preserving_surroundings(self):
+        existing = f"top\n\n{self.START}\nOLD\n{self.END}\n\nbottom"
+        out = self.sync._splice_managed(existing, "NEW")
+        self.assertIn("top", out)
+        self.assertIn("bottom", out)
+        self.assertIn("NEW", out)
+        self.assertNotIn("OLD", out)
+
+    def test_empty_block_removes_managed_region_keeps_user_text(self):
+        existing = f"keep me\n\n{self.START}\nOLD\n{self.END}"
+        out = self.sync._splice_managed(existing, "")
+        self.assertIn("keep me", out)
+        self.assertNotIn(self.START, out)
+        self.assertNotIn("OLD", out)
 
 
 if __name__ == "__main__":

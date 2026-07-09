@@ -34,6 +34,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_ANNOTATIONS = 500
 
+# The bridge only manages the region between these markers inside private_notes,
+# so a user's own notes above/below survive a rewrite.
+_MANAGED_START = "<!-- BookBridge highlights (auto-generated) -->"
+_MANAGED_END = "<!-- /BookBridge highlights -->"
+
 KO_TO_HARDCOVER_COLOR: dict[str, str] = {
     "yellow": "yellow",
     "red": "red",
@@ -107,6 +112,29 @@ class HardcoverAnnotationSync:
                 sections.append(block)
         return "\n\n---\n\n".join(sections)
 
+    @staticmethod
+    def _splice_managed(existing: Optional[str], block: str) -> str:
+        """Insert/replace the bridge-managed block, preserving the user's own text.
+
+        Only the region between the managed markers is ours; anything the user
+        wrote above or below is kept verbatim. An empty block removes the managed
+        region entirely (e.g. after the last highlight is deleted).
+        """
+        existing = existing or ""
+        managed = f"{_MANAGED_START}\n{block}\n{_MANAGED_END}" if block.strip() else ""
+        start = existing.find(_MANAGED_START)
+        end = existing.find(_MANAGED_END)
+        if start != -1 and end != -1 and end > start:
+            pre = existing[:start].rstrip()
+            post = existing[end + len(_MANAGED_END):].lstrip()
+            parts = [p for p in (pre, managed, post) if p]
+            return "\n\n".join(parts)
+        if not managed:
+            return existing
+        if existing.strip():
+            return existing.rstrip() + "\n\n" + managed
+        return managed
+
     # ------------------------------------------------------------------
     # Sync
     # ------------------------------------------------------------------
@@ -130,10 +158,6 @@ class HardcoverAnnotationSync:
         if not hardcover_book_id:
             return False
 
-        user_book_id = client.get_user_book_id(int(hardcover_book_id))
-        if not user_book_id:
-            return False
-
         doc_md5 = str(getattr(book, "kosync_doc_id", "") or "").strip().lower()
         if not doc_md5:
             return False
@@ -153,16 +177,43 @@ class HardcoverAnnotationSync:
                     .limit(_MAX_ANNOTATIONS)
                     .all()
                 )
+                # Highlights deleted since their last push: the live-row query
+                # can't see them, so without this a deletion-only change never
+                # rewrites the block and the highlight lingers on Hardcover.
+                deleted_since = (
+                    session.query(KoreaderAnnotation)
+                    .filter(
+                        KoreaderAnnotation.md5 == doc_md5,
+                        KoreaderAnnotation.user_id == user_id,
+                        KoreaderAnnotation.deleted == True,  # noqa: E712
+                        KoreaderAnnotation.hardcover_synced_at != None,  # noqa: E711
+                        KoreaderAnnotation.deleted_at != None,  # noqa: E711
+                        KoreaderAnnotation.deleted_at > KoreaderAnnotation.hardcover_synced_at,
+                    )
+                    .all()
+                )
 
-                if not self._needs_sync(rows):
+                if not self._needs_sync(rows) and not deleted_since:
+                    return False
+
+                # Only now that a change is confirmed do we spend Hardcover API
+                # calls (it is rate-limited) — resolve the user_book and its
+                # current private_notes so we can splice, not clobber.
+                user_book_id, existing_notes = client.get_user_book_summary(int(hardcover_book_id))
+                if not user_book_id:
                     return False
 
                 notes_text = self._build_notes_block(rows)
-                if not client.update_private_notes(user_book_id, notes_text):
-                    return False
+                new_notes = self._splice_managed(existing_notes, notes_text)
+
+                if new_notes != (existing_notes or ""):
+                    if not client.update_private_notes(user_book_id, new_notes):
+                        return False
 
                 now_dt = self._now_dt()
                 for row in rows:
+                    row.hardcover_synced_at = now_dt
+                for row in deleted_since:
                     row.hardcover_synced_at = now_dt
 
                 session.commit()

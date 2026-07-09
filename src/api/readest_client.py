@@ -22,10 +22,12 @@ _READEST_BASE_URL = "https://web.readest.com/api"
 _REQUEST_TIMEOUT = 15
 
 # Readest's public Supabase anon key (not a secret — shipped in the KOReader plugin).
+# JWT payload ref is "vbsyxfusjjqdxkjqlysc"; keep it byte-exact or the signature
+# fails to verify and every login/refresh is rejected.
 _DEFAULT_ANON_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
-    ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZicy14ZnVzampxZHhranFseXNjIiwicm9sZSI6ImFub24iL"
-    "CJpYXQiOjE3MzQxMjM2NzEsImV4cCI6MjA0OTY5OTY3MX0"
+    ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZic3l4ZnVzampxZHhranFseXNjIiwicm9sZSI6"
+    "ImFub24iLCJpYXQiOjE3MzQxMjM2NzEsImV4cCI6MjA0OTY5OTY3MX0"
     ".3U5Uqaou_1SgrVe1eo9rApc0uKjqhpQdUXhvwUHmUfg"
 )
 
@@ -234,24 +236,45 @@ class ReadestClient:
 
     @classmethod
     def compute_book_hash(cls, epub_path: str | Path) -> Optional[str]:
-        """Return the full MD5 of an EPUB file (Readest's bookHash convention)."""
+        """Return the KOReader partial MD5 of an EPUB file (Readest's bookHash).
+
+        Readest keys books on the same partial MD5 KOReader uses for its document
+        id — chunks of 1024 bytes read at offsets ``1024 * 4**i`` (i = -1..10),
+        NOT a full-file MD5. The Readest web app computes it as ``partialMD5``
+        (utils/md5.ts) and the koplugin reads it from ``partial_md5_checksum``;
+        matching it byte-for-byte is what lets a highlight pushed here line up
+        with the same book on a Readest device. This mirrors
+        ``EbookParser._compute_koreader_hash_from_bytes``.
+        """
         path = Path(epub_path)
         if not path.is_file():
             return None
         try:
-            mtime = path.stat().st_mtime
+            stat = path.stat()
         except OSError:
             return None
-        key = (str(path), mtime)
+        key = (str(path), stat.st_mtime)
         if key in cls._hash_cache:
             return cls._hash_cache[key]
         try:
-            md5 = hashlib.md5(path.read_bytes()).hexdigest()
+            md5 = hashlib.md5(usedforsecurity=False)
+            file_size = stat.st_size
+            with open(path, "rb") as f:
+                for i in range(-1, 11):
+                    offset = 0 if i == -1 else 1024 * (4 ** i)
+                    if offset >= file_size:
+                        break
+                    f.seek(offset)
+                    chunk = f.read(1024)
+                    if not chunk:
+                        break
+                    md5.update(chunk)
+            digest = md5.hexdigest()
         except OSError as e:
             logger.warning("Readest: could not hash %s: %s", path, e)
             return None
-        cls._hash_cache[key] = md5
-        return md5
+        cls._hash_cache[key] = digest
+        return digest
 
     @staticmethod
     def derive_note_id(book_hash: str, note_type: str, pos0: str, pos1: Optional[str] = None) -> str:
