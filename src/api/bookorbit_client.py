@@ -7,11 +7,12 @@ and ebook + audiobook progress read/write.
 
 API quirks (verified against a live instance, see the `bookorbit-api` memo):
   * All percentages are 0–100 on the wire (we keep 0–1 fractions internally).
-  * Login is throttled to 3 req/min, so the access token is cached for nearly its
+  * Login is throttled to 5 req/min, so the access token is cached for nearly its
     full 15-minute life and we never re-login on the hot path.
-  * Book listing is `POST /api/v1/books/query` (no bare GET /books); list rows omit
-    filenames, so per-book detail (`GET /api/v1/books/:id`) resolves the primary
-    file id, filename and duration. Detail is cached per book id.
+  * Book listing is `POST /api/v1/books/query` (no bare GET /books) with nested
+    `pagination` and optional `q` search. List-row file stubs include id/format/role
+    but omit filenames/paths, so per-book detail (`GET /api/v1/books/:id`) resolves
+    the primary file id, filename and duration. Detail is cached per book id.
   * Audio progress write (`PATCH /api/v1/books/:id/audio-progress`) requires
     `currentFileId`; omitting it is a 400.
 """
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL = 3600
 _REFRESH_COOLDOWN = 300
 _DETAIL_TTL = 3600
-# Login is throttled to 3/min; the JWT lives 15 min. Cache it for 14 min so a
+# Login is throttled to 5/min; the JWT lives 15 min. Cache it for 14 min so a
 # normal poll cadence never re-logs-in, and refresh just ahead of expiry.
 _TOKEN_MAX_AGE = 840
 _EBOOK_FORMATS = {"epub", "kepub", "pdf", "cbz", "cbr", "cb7", "mobi", "azw3", "azw", "fb2"}
@@ -263,7 +264,7 @@ class BookOrbitClient:
             # /books/query expects pagination NESTED under "pagination" (the
             # server reads query.pagination.page/size; a flat {page,size} is
             # ignored and always returns page 0). offset = page*size.
-            size = 50
+            size = 200
             max_pages = 2000  # safety against a bad/zero total
             total = 0
             while page < max_pages:
@@ -344,8 +345,8 @@ class BookOrbitClient:
     _SEARCH_MAX_LIMIT = 20
 
     def _search_raw(self, query: str, limit: int = 20) -> list:
-        """BookOrbit metadata search. Uses GET /books/search?q= — the `search`
-        field on POST /books/query is a no-op (does not filter). Returns hit dicts
+        """BookOrbit metadata search. Uses GET /books/search?q=. POST /books/query
+        supports a `q` field; the old `search` field is a no-op. Returns hit dicts
         shaped ``{id, title, authors, libraryName, formats:[...]}`` (no filename)."""
         if not query:
             return []
@@ -436,7 +437,7 @@ class BookOrbitClient:
         authors}`` straight from the book cache — NO per-book detail calls.
 
         BookOrbit's list API omits filenames and a detail call per book (~1000s)
-        would hit the request throttle, so we deliberately skip filenames here.
+        would be too expensive on a large library, so we deliberately skip filenames here.
         Matching only needs title+author; the real filename is resolved cheaply
         elsewhere (local /books index for the pool, or by id at apply time)."""
         out = []

@@ -45,6 +45,30 @@ def test_classify_format():
     assert BookOrbitClient._classify_format("txt") is None
 
 
+def test_refresh_book_cache_uses_nested_max_page_size(client):
+    calls = []
+
+    def fake_request(method, endpoint, payload=None):
+        calls.append((method, endpoint, payload))
+        return _Resp({
+            "items": [{
+                "id": 1,
+                "title": "A Book",
+                "authors": [{"name": "Author"}],
+                "files": [{"id": 11, "format": "epub", "role": "primary"}],
+            }],
+            "total": 1,
+        }, status_code=201)
+
+    with patch.object(client, '_make_request', side_effect=fake_request):
+        assert client._refresh_book_cache() is True
+
+    assert calls == [
+        ("POST", "/api/v1/books/query", {"pagination": {"page": 0, "size": 200}})
+    ]
+    assert client.get_book_by_id(1, allow_refresh=False)["primaryFileId"] == 11
+
+
 def test_get_ebook_progress_parses_list_response(client):
     # The real API returns a LIST of per-file entries.
     payload = [{"fileId": 2459, "cfi": "epubcfi(/6/4)", "pageNumber": None, "percentage": 42.5}]
