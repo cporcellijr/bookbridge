@@ -18,6 +18,7 @@ from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
 from src.sync_clients.sync_client_interface import UpdateProgressRequest, LocatorResult
 from src.db.models import Book, HardcoverDetails
 from src.db.database_service import DatabaseService
+from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
 
 
 class TestHardcoverSyncClient(unittest.TestCase):
@@ -181,6 +182,85 @@ class TestHardcoverSyncClient(unittest.TestCase):
             edition_id='67890',
             description="Managed by BookBridge from Grimmory shelf 'Fantasy'.",
         )
+
+    def test_projection_uses_per_user_settings_over_global_env(self):
+        """The acting user's own credentials drive the projection and override the
+        global os.environ config — the global toggle can be OFF and it still runs."""
+        self.test_book.ebook_source = "BookLore"
+        self.test_book.ebook_source_id = "42"
+        self.database_service.save_book(self.test_book)
+        self.mock_abs_client.get_item_details.return_value = {
+            'media': {'metadata': {'title': 'Shelf Book', 'authorName': 'Shelf Author',
+                                   'isbn': '9781234567890'}}
+        }
+        self.mock_hardcover_client.search_by_isbn.return_value = {
+            'book_id': '12345', 'edition_id': '67890', 'pages': 300, 'title': 'Shelf Book'
+        }
+        self.mock_hardcover_client.get_user_book.return_value = {'id': 'ub', 'status_id': 1}
+        self.mock_booklore_client.is_configured.return_value = True
+        self.mock_booklore_client.get_book_shelf_mapping.return_value = {"42": ["Fantasy"]}
+        # The registry builds this user's hardcover/booklore clients from one creds
+        # dict; the projection settings live there, isolated from the admin's global.
+        self.mock_hardcover_client._creds = {
+            "HARDCOVER_GRIMMORY_LIST_SYNC": "all",
+            "HARDCOVER_GRIMMORY_LIST_PREFIX": "BB: ",
+            "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES": "Archive",
+            "BOOKLORE_SHELF_NAME": "Kobo",
+            _ALLOW_GLOBAL_FALLBACK_KEY: False,
+        }
+
+        with patch.dict(os.environ, {
+            "HARDCOVER_GRIMMORY_LIST_SYNC": "off",
+            "HARDCOVER_GRIMMORY_LIST_PREFIX": "GLOBAL: ",
+            "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES": "GlobalEx",
+            "BOOKLORE_SHELF_NAME": "GlobalShelf",
+        }, clear=False):
+            result = self.hardcover_sync_client.update_progress(
+                self.test_book,
+                UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5)),
+            )
+
+        self.assertTrue(result.success)
+        self.mock_booklore_client.get_book_shelf_mapping.assert_called_once_with(
+            mode="all",
+            excludes=["Archive", "Kobo"],
+            target_book_ids=["42"],
+        )
+        self.mock_hardcover_client.ensure_book_on_list.assert_called_once_with(
+            "BB: Fantasy",
+            12345,
+            edition_id='67890',
+            description="Managed by BookBridge from Grimmory shelf 'Fantasy'.",
+        )
+
+    def test_projection_isolated_for_regular_user_without_own_setting(self):
+        """A regular user with no per-user toggle must NOT inherit the admin's global
+        ON setting — their books are never projected to the admin/global config."""
+        self.test_book.ebook_source = "BookLore"
+        self.test_book.ebook_source_id = "42"
+        self.database_service.save_book(self.test_book)
+        self.mock_abs_client.get_item_details.return_value = {
+            'media': {'metadata': {'title': 'Shelf Book', 'authorName': 'A',
+                                   'isbn': '9781234567890'}}
+        }
+        self.mock_hardcover_client.search_by_isbn.return_value = {
+            'book_id': '12345', 'edition_id': '67890', 'pages': 300, 'title': 'Shelf Book'
+        }
+        self.mock_hardcover_client.get_user_book.return_value = {'id': 'ub', 'status_id': 1}
+        self.mock_booklore_client.is_configured.return_value = True
+        self.mock_booklore_client.get_book_shelf_mapping.return_value = {"42": ["Fantasy"]}
+        # Regular user: fallback disabled, no projection setting of their own.
+        self.mock_hardcover_client._creds = {_ALLOW_GLOBAL_FALLBACK_KEY: False}
+
+        with patch.dict(os.environ, {"HARDCOVER_GRIMMORY_LIST_SYNC": "all"}, clear=False):
+            result = self.hardcover_sync_client.update_progress(
+                self.test_book,
+                UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5)),
+            )
+
+        self.assertTrue(result.success)
+        self.mock_booklore_client.get_book_shelf_mapping.assert_not_called()
+        self.mock_hardcover_client.ensure_book_on_list.assert_not_called()
 
     def test_update_progress_calls_hardcover_api(self):
         """Test that update_progress correctly calls Hardcover API for progress and status updates."""

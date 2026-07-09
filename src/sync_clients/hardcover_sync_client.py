@@ -251,13 +251,31 @@ class HardcoverSyncClient(SyncClient):
     def _split_csv(value: str) -> list[str]:
         return [part.strip() for part in str(value or "").split(",") if part.strip()]
 
-    def _grimmory_list_sync_mode(self) -> str:
-        mode = str(os.environ.get("HARDCOVER_GRIMMORY_LIST_SYNC", "off") or "off").strip().lower()
+    def _projection_credentials(self) -> Optional[dict]:
+        """The acting user's per-user credentials for this projection.
+
+        The registry builds this sync client with the user's hardcover/booklore
+        clients (same creds dict), so the toggle, prefix and shelf excludes resolve
+        from the same account that owns the Hardcover writes and Grimmory reads.
+        Falls back to the global config (creds None -> os.environ) for the global
+        single-user/default cycle and for admins."""
+        creds = getattr(self.hardcover_client, "_creds", None)
+        if not isinstance(creds, dict):
+            creds = getattr(self.booklore_client, "_creds", None) if self.booklore_client else None
+        return creds if isinstance(creds, dict) else None
+
+    def _grimmory_list_sync_mode(self, creds: Optional[dict]) -> str:
+        mode = str(resolve_setting(creds, "HARDCOVER_GRIMMORY_LIST_SYNC", "off") or "off").strip().lower()
         return mode if mode in {"all", "magic", "shelf"} else "off"
 
     def _sync_grimmory_shelves_to_hardcover_lists(self, book, hardcover_details) -> int:
-        """Project Grimmory shelf membership onto Hardcover lists for one matched book."""
-        mode = self._grimmory_list_sync_mode()
+        """Project Grimmory shelf membership onto Hardcover lists for one matched book.
+
+        Every setting resolves from the acting user's credentials, so each reader
+        opts in and configures their own projection; regular users do not inherit
+        the admin's global toggle, while admins/single-user fall back to it."""
+        creds = self._projection_credentials()
+        mode = self._grimmory_list_sync_mode(creds)
         if mode == "off":
             return 0
         if not self.booklore_client or not self.hardcover_client:
@@ -272,8 +290,8 @@ class HardcoverSyncClient(SyncClient):
         if not hardcover_book_id:
             return 0
 
-        prefix = os.environ.get("HARDCOVER_GRIMMORY_LIST_PREFIX", "Grimmory: ")
-        excluded_raw = os.environ.get("HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES", "")
+        prefix = resolve_setting(creds, "HARDCOVER_GRIMMORY_LIST_PREFIX", "Grimmory: ")
+        excluded_raw = resolve_setting(creds, "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES", "")
         attempt_key = (
             str(getattr(book, "abs_id", "") or ""),
             str(hardcover_book_id),
@@ -285,10 +303,7 @@ class HardcoverSyncClient(SyncClient):
             return 0
 
         excludes = self._split_csv(excluded_raw)
-        booklore_creds = getattr(self.booklore_client, "_creds", None)
-        if not isinstance(booklore_creds, dict):
-            booklore_creds = None
-        sync_shelf = str(resolve_setting(booklore_creds, "BOOKLORE_SHELF_NAME", "") or "").strip()
+        sync_shelf = str(resolve_setting(creds, "BOOKLORE_SHELF_NAME", "") or "").strip()
         if sync_shelf and sync_shelf not in excludes:
             excludes.append(sync_shelf)
 

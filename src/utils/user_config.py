@@ -43,6 +43,8 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "READEST_ACCESS_TOKEN", "READEST_REFRESH_TOKEN", "READEST_TOKEN_EXPIRES_AT",
     # Trackers (write targets are per-user accounts)
     "HARDCOVER_TOKEN", "HARDCOVER_ENABLED",
+    "HARDCOVER_GRIMMORY_LIST_SYNC", "HARDCOVER_GRIMMORY_LIST_PREFIX",
+    "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES",
     "STORYGRAPH_SESSION_COOKIE", "STORYGRAPH_REMEMBER_USER_TOKEN", "STORYGRAPH_ENABLED",
 })
 
@@ -116,6 +118,13 @@ PER_USER_FIELD_GROUPS = [
     ("Hardcover", [
         ("HARDCOVER_ENABLED", "Enabled", "bool"),
         ("HARDCOVER_TOKEN", "API token", "secret"),
+        (
+            "HARDCOVER_GRIMMORY_LIST_SYNC",
+            "Grimmory shelves to Hardcover lists",
+            "select:off=Off / Disabled|all=All Shelves|magic=Magic Shelves Only|shelf=Regular Shelves Only",
+        ),
+        ("HARDCOVER_GRIMMORY_LIST_PREFIX", "Hardcover list name prefix", "text"),
+        ("HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES", "Grimmory shelves to exclude", "text"),
     ]),
     ("StoryGraph", [
         ("STORYGRAPH_ENABLED", "Enabled", "bool"),
