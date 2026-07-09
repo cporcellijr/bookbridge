@@ -8,6 +8,7 @@ from src.services.llm_matching import craft_search_terms, judge_best_candidate, 
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 from src.utils.ebook_utils import EbookParser, resolve_ebook_identifiers
 from src.utils.logging_utils import sanitize_log_data
+from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class HardcoverSyncClient(SyncClient):
         # when the file isn't on local disk (BookOrbit/Grimmory ebook-only + ABS-linked).
         self.booklore_client = booklore_client
         self.bookorbit_client = bookorbit_client
+        self._grimmory_list_sync_attempted = set()
 
     def is_configured(self) -> bool:
         """Check if Hardcover is configured."""
@@ -240,9 +242,103 @@ class HardcoverSyncClient(SyncClient):
 
             self.database_service.save_hardcover_details(hardcover_details)
             self.hardcover_client.update_status(int(match.get('book_id')), 1, match.get('edition_id'))
+            self._sync_grimmory_shelves_to_hardcover_lists(book, hardcover_details)
             logger.info(f"📚 Hardcover: '{sanitize_log_data(meta.get('title'))}' matched and set to Want to Read (matched by {matched_by})")
         else:
             logger.warning(f"⚠️ Hardcover: No match found for '{sanitize_log_data(meta.get('title'))}'")
+
+    @staticmethod
+    def _split_csv(value: str) -> list[str]:
+        return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+    def _grimmory_list_sync_mode(self) -> str:
+        mode = str(os.environ.get("HARDCOVER_GRIMMORY_LIST_SYNC", "off") or "off").strip().lower()
+        return mode if mode in {"all", "magic", "shelf"} else "off"
+
+    def _sync_grimmory_shelves_to_hardcover_lists(self, book, hardcover_details) -> int:
+        """Project Grimmory shelf membership onto Hardcover lists for one matched book."""
+        mode = self._grimmory_list_sync_mode()
+        if mode == "off":
+            return 0
+        if not self.booklore_client or not self.hardcover_client:
+            return 0
+        source_name = str(getattr(book, "ebook_source", "") or "").strip().lower()
+        if source_name not in {"booklore", "grimmory"}:
+            return 0
+        source_id = str(getattr(book, "ebook_source_id", "") or "").strip()
+        if not source_id:
+            return 0
+        hardcover_book_id = getattr(hardcover_details, "hardcover_book_id", None)
+        if not hardcover_book_id:
+            return 0
+
+        prefix = os.environ.get("HARDCOVER_GRIMMORY_LIST_PREFIX", "Grimmory: ")
+        excluded_raw = os.environ.get("HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES", "")
+        attempt_key = (
+            str(getattr(book, "abs_id", "") or ""),
+            str(hardcover_book_id),
+            mode,
+            prefix,
+            excluded_raw,
+        )
+        if attempt_key in self._grimmory_list_sync_attempted:
+            return 0
+
+        excludes = self._split_csv(excluded_raw)
+        booklore_creds = getattr(self.booklore_client, "_creds", None)
+        if not isinstance(booklore_creds, dict):
+            booklore_creds = None
+        sync_shelf = str(resolve_setting(booklore_creds, "BOOKLORE_SHELF_NAME", "") or "").strip()
+        if sync_shelf and sync_shelf not in excludes:
+            excludes.append(sync_shelf)
+
+        try:
+            if not self.booklore_client.is_configured():
+                return 0
+            shelf_mapping = self.booklore_client.get_book_shelf_mapping(
+                mode=mode,
+                excludes=excludes,
+                target_book_ids=[source_id],
+            )
+        except Exception as e:
+            logger.warning(
+                "Hardcover: failed to read Grimmory shelves for '%s': %s",
+                sanitize_log_data(getattr(book, "abs_title", None) or getattr(book, "abs_id", None)),
+                e,
+            )
+            return 0
+
+        shelves = (shelf_mapping or {}).get(source_id) or []
+        added = 0
+        for shelf_name in shelves:
+            clean_shelf = str(shelf_name or "").strip()
+            if not clean_shelf:
+                continue
+            list_name = f"{prefix}{clean_shelf}"
+            try:
+                if self.hardcover_client.ensure_book_on_list(
+                    list_name,
+                    int(hardcover_book_id),
+                    edition_id=getattr(hardcover_details, "hardcover_edition_id", None),
+                    description=f"Managed by BookBridge from Grimmory shelf '{clean_shelf}'.",
+                ):
+                    added += 1
+            except Exception as e:
+                logger.warning(
+                    "Hardcover: failed to add '%s' to list '%s': %s",
+                    sanitize_log_data(getattr(book, "abs_title", None) or getattr(book, "abs_id", None)),
+                    sanitize_log_data(list_name),
+                    e,
+                )
+
+        self._grimmory_list_sync_attempted.add(attempt_key)
+        if added:
+            logger.info(
+                "Hardcover: added '%s' to %d list(s) from Grimmory shelves",
+                sanitize_log_data(getattr(book, "abs_title", None) or getattr(book, "abs_id", None)),
+                added,
+            )
+        return added
 
     def set_manual_match(self, book_abs_id: str, input_str: str) -> bool:
         """
@@ -290,6 +386,9 @@ class HardcoverSyncClient(SyncClient):
 
         # Trigger an initial status update to ensure it's tracked
         self.hardcover_client.update_status(match['book_id'], 1, match.get('edition_id'))
+        book = self.database_service.get_book(book_abs_id) if self.database_service else None
+        if book:
+            self._sync_grimmory_shelves_to_hardcover_lists(book, details)
         return True
 
     def get_text_from_current_state(self, book: Book, state: ServiceState) -> Optional[str]:
@@ -340,6 +439,7 @@ class HardcoverSyncClient(SyncClient):
         hardcover_details = self.database_service.get_hardcover_details(book.abs_id)
         if not hardcover_details or not hardcover_details.hardcover_book_id:
             return SyncResult(None, False)
+        self._sync_grimmory_shelves_to_hardcover_lists(book, hardcover_details)
 
         # Get user book from Hardcover
         ub = self.hardcover_client.get_user_book(hardcover_details.hardcover_book_id)

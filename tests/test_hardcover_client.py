@@ -105,6 +105,54 @@ class TestHardcoverClient(unittest.TestCase):
             })
             self.assertFalse(client.is_configured())
 
+    def test_ensure_list_reuses_existing_list(self):
+        self.client.get_user_id = Mock(return_value=7)
+        self.client.query = Mock(return_value={
+            "lists": [{"id": 11, "name": "Grimmory: Fantasy"}]
+        })
+
+        result = self.client.ensure_list("Grimmory: Fantasy")
+
+        self.assertEqual(result, {"id": 11, "name": "Grimmory: Fantasy"})
+        self.client.query.assert_called_once()
+
+    def test_create_list_returns_created_list(self):
+        self.client.query = Mock(return_value={
+            "insert_list": {
+                "id": 12,
+                "errors": None,
+                "list": {"id": 12, "name": "Grimmory: Horror"},
+            }
+        })
+
+        result = self.client.create_list("Grimmory: Horror", description="Managed list")
+
+        self.assertEqual(result, {"id": 12, "name": "Grimmory: Horror"})
+        variables = self.client.query.call_args[0][1]
+        self.assertEqual(variables["object"]["name"], "Grimmory: Horror")
+        self.assertEqual(variables["object"]["description"], "Managed list")
+        self.assertEqual(variables["object"]["privacy_setting_id"], 3)
+        self.assertFalse(variables["object"]["ranked"])
+
+    def test_ensure_book_on_list_skips_existing_membership(self):
+        self.client.ensure_list = Mock(return_value={"id": 21, "name": "Grimmory: Sci-Fi"})
+        self.client.get_list_book = Mock(return_value={"id": 31, "list_id": 21, "book_id": 41})
+        self.client.add_book_to_list = Mock()
+
+        self.assertTrue(self.client.ensure_book_on_list("Grimmory: Sci-Fi", 41, edition_id=51))
+
+        self.client.get_list_book.assert_called_once_with(21, 41)
+        self.client.add_book_to_list.assert_not_called()
+
+    def test_ensure_book_on_list_adds_missing_membership(self):
+        self.client.ensure_list = Mock(return_value={"id": 21, "name": "Grimmory: Sci-Fi"})
+        self.client.get_list_book = Mock(return_value=None)
+        self.client.add_book_to_list = Mock(return_value={"id": 31})
+
+        self.assertTrue(self.client.ensure_book_on_list("Grimmory: Sci-Fi", 41, edition_id=51))
+
+        self.client.add_book_to_list.assert_called_once_with(21, 41, edition_id=51)
+
 
 class TestHardcoverAuthorGate(unittest.TestCase):
     """search_by_title_author must not commit a same-title/wrong-author book."""

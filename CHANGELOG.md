@@ -4,6 +4,12 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### What's New
+
+- **Grimmory shelves can now create Hardcover lists.** When enabled in Settings -> Hardcover.app, newly matched Grimmory-backed books are added to Hardcover lists named from their Grimmory shelf membership, mirroring the shelf-to-KOReader-collection flow. The sync is additive only and can use all shelves, magic shelves only, or regular shelves only, with optional list prefixes and excluded shelf names.
+
 ## [7.1.0] - 2026-07-08
 
 The headline is **a fuller reading-state bridge**: BookBridge now moves highlights, notes, web-reader activity, audiobook progress, and richer freshness metadata together instead of treating sync as only "who has the latest percentage?"

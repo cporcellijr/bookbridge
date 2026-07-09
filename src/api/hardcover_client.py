@@ -742,6 +742,141 @@ class HardcoverClient:
             return result["insert_user_book"].get("user_book")
         return None
 
+    def get_list_by_name(self, name: str) -> Optional[Dict]:
+        """Return the current user's Hardcover list with the exact display name."""
+        list_name = str(name or "").strip()
+        user_id = self.get_user_id()
+        if not list_name or not user_id:
+            return None
+
+        result = self.query(
+            """
+            query GetListByName($userId: Int!, $name: String!) {
+                lists(where: {user_id: {_eq: $userId}, name: {_eq: $name}}, limit: 1) {
+                    id
+                    name
+                }
+            }
+            """,
+            {"userId": int(user_id), "name": list_name},
+        )
+        rows = (result or {}).get("lists") or []
+        return rows[0] if rows else None
+
+    def create_list(self, name: str, description: str = "") -> Optional[Dict]:
+        """Create a private unranked Hardcover list for the current user."""
+        list_name = str(name or "").strip()
+        if not list_name:
+            return None
+
+        result = self.query(
+            """
+            mutation CreateList($object: ListInput!) {
+                insert_list(object: $object) {
+                    id
+                    errors
+                    list {
+                        id
+                        name
+                    }
+                }
+            }
+            """,
+            {
+                "object": {
+                    "name": list_name,
+                    "description": str(description or ""),
+                    "privacy_setting_id": 3,
+                    "ranked": False,
+                }
+            },
+        )
+        payload = (result or {}).get("insert_list") or {}
+        if payload.get("errors"):
+            logger.error("❌ Hardcover create_list error: %s", payload["errors"])
+            return None
+        created = payload.get("list")
+        if created:
+            return created
+        if payload.get("id"):
+            return {"id": payload["id"], "name": list_name}
+        return None
+
+    def ensure_list(self, name: str, description: str = "") -> Optional[Dict]:
+        """Find or create the current user's Hardcover list with the given name."""
+        existing = self.get_list_by_name(name)
+        if existing:
+            return existing
+        return self.create_list(name, description=description)
+
+    def get_list_book(self, list_id: int, book_id: int) -> Optional[Dict]:
+        """Return an existing list_books row for the list/book pair, if present."""
+        if not list_id or not book_id:
+            return None
+        result = self.query(
+            """
+            query GetListBook($listId: Int!, $bookId: Int!) {
+                list_books(where: {list_id: {_eq: $listId}, book_id: {_eq: $bookId}}, limit: 1) {
+                    id
+                    list_id
+                    book_id
+                }
+            }
+            """,
+            {"listId": int(list_id), "bookId": int(book_id)},
+        )
+        rows = (result or {}).get("list_books") or []
+        return rows[0] if rows else None
+
+    def add_book_to_list(
+        self,
+        list_id: int,
+        book_id: int,
+        edition_id: int = None,
+    ) -> Optional[Dict]:
+        """Add a Hardcover book to a user list, returning the created row."""
+        if not list_id or not book_id:
+            return None
+        obj = {
+            "list_id": int(list_id),
+            "book_id": int(book_id),
+        }
+        if edition_id:
+            obj["edition_id"] = int(edition_id)
+        result = self.query(
+            """
+            mutation AddBookToList($object: ListBookInput!) {
+                insert_list_book(object: $object) {
+                    id
+                    list_book {
+                        id
+                        list_id
+                        book_id
+                    }
+                }
+            }
+            """,
+            {"object": obj},
+        )
+        payload = (result or {}).get("insert_list_book") or {}
+        return payload.get("list_book") or ({"id": payload["id"]} if payload.get("id") else None)
+
+    def ensure_book_on_list(
+        self,
+        list_name: str,
+        book_id: int,
+        edition_id: int = None,
+        description: str = "",
+    ) -> bool:
+        """Ensure a Hardcover book is present on the named current-user list."""
+        target_list = self.ensure_list(list_name, description=description)
+        if not target_list or not target_list.get("id"):
+            return False
+        list_id = int(target_list["id"])
+        if self.get_list_book(list_id, int(book_id)):
+            return True
+        return bool(self.add_book_to_list(list_id, int(book_id), edition_id=edition_id))
+
     def _get_today_date(self) -> str:
         """Get today's date in YYYY-MM-DD format for Hardcover API."""
         return date.today().isoformat()

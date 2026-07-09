@@ -1293,6 +1293,31 @@
                             value="{{ get_val('HARDCOVER_ANNOTATION_SYNC_MINUTES', '30') }}">
                         <div class="help-text">Pushes KOReader highlights (yellow highlight style) to Hardcover's highlights store every N minutes. 0 disables.</div>
                     </div>
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Grimmory Shelves to Lists</h4>
+                    <div class="form-group full-width">
+                        <label>List Syncing</label>
+                        <select name="HARDCOVER_GRIMMORY_LIST_SYNC">
+                            <option value="off" {% if get_val('HARDCOVER_GRIMMORY_LIST_SYNC', 'off') == 'off' %}selected{% endif %}>Off / Disabled</option>
+                            <option value="all" {% if get_val('HARDCOVER_GRIMMORY_LIST_SYNC') == 'all' %}selected{% endif %}>All Shelves</option>
+                            <option value="magic" {% if get_val('HARDCOVER_GRIMMORY_LIST_SYNC') == 'magic' %}selected{% endif %}>Magic Shelves Only</option>
+                            <option value="shelf" {% if get_val('HARDCOVER_GRIMMORY_LIST_SYNC') == 'shelf' %}selected{% endif %}>Regular Shelves Only</option>
+                        </select>
+                        <div class="help-text">When a Grimmory-backed book is matched to Hardcover, create matching Hardcover lists and add the book to them.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>List Name Prefix</label>
+                        <input type="text" name="HARDCOVER_GRIMMORY_LIST_PREFIX"
+                            value="{{ get_val('HARDCOVER_GRIMMORY_LIST_PREFIX', 'Grimmory: ') }}">
+                        <div class="help-text">Prefix applied to created Hardcover list names. Leave blank to use the Grimmory shelf name exactly.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Excluded Shelves</label>
+                        <input type="text" name="HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES"
+                            value="{{ get_val('HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES') }}"
+                            placeholder="e.g. Read, Archive, DNF">
+                        <div class="help-text">Comma-separated Grimmory shelf names to skip when creating Hardcover lists.</div>
+                    </div>
                 </div>
             </div>
 

@@ -6,8 +6,9 @@ Unit tests for HardcoverSyncClient to verify auto-matching and progress sync fun
 import sys
 import tempfile
 import unittest
+import os
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,6 +36,7 @@ class TestHardcoverSyncClient(unittest.TestCase):
         self.mock_hardcover_client = Mock()
         self.mock_abs_client = Mock()
         self.mock_ebook_parser = Mock()
+        self.mock_booklore_client = Mock()
 
         # Configure hardcover client mock
         self.mock_hardcover_client.is_configured.return_value = True
@@ -44,7 +46,8 @@ class TestHardcoverSyncClient(unittest.TestCase):
             hardcover_client=self.mock_hardcover_client,
             ebook_parser=self.mock_ebook_parser,
             abs_client=self.mock_abs_client,
-            database_service=self.database_service
+            database_service=self.database_service,
+            booklore_client=self.mock_booklore_client
         )
 
         # Create test book
@@ -125,6 +128,59 @@ class TestHardcoverSyncClient(unittest.TestCase):
 
         # Verify progress update was attempted
         self.assertTrue(result.success)
+
+    def test_automatch_adds_grimmory_shelves_to_hardcover_lists(self):
+        """A Grimmory-backed Hardcover match is projected to matching Hardcover lists."""
+        self.test_book.ebook_source = "BookLore"
+        self.test_book.ebook_source_id = "42"
+        self.database_service.save_book(self.test_book)
+        self.mock_abs_client.get_item_details.return_value = {
+            'media': {
+                'metadata': {
+                    'title': 'Shelf Book',
+                    'authorName': 'Shelf Author',
+                    'isbn': '9781234567890'
+                }
+            }
+        }
+        self.mock_hardcover_client.search_by_isbn.return_value = {
+            'book_id': '12345',
+            'edition_id': '67890',
+            'pages': 300,
+            'title': 'Shelf Book'
+        }
+        self.mock_hardcover_client.get_user_book.return_value = {
+            'id': 'test-user-book',
+            'status_id': 1,
+        }
+        self.mock_booklore_client.is_configured.return_value = True
+        self.mock_booklore_client.get_book_shelf_mapping.return_value = {
+            "42": ["Fantasy"]
+        }
+
+        with patch.dict(os.environ, {
+            "HARDCOVER_GRIMMORY_LIST_SYNC": "all",
+            "HARDCOVER_GRIMMORY_LIST_PREFIX": "BB: ",
+            "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES": "Archive",
+            "BOOKLORE_SHELF_NAME": "Kobo",
+        }, clear=False):
+            result = self.hardcover_sync_client.update_progress(
+                self.test_book,
+                UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5)),
+            )
+
+        self.assertTrue(result.success)
+        self.mock_booklore_client.get_book_shelf_mapping.assert_called_once_with(
+            mode="all",
+            excludes=["Archive", "Kobo"],
+            target_book_ids=["42"],
+        )
+        self.mock_hardcover_client.ensure_book_on_list.assert_called_once_with(
+            "BB: Fantasy",
+            12345,
+            edition_id='67890',
+            description="Managed by BookBridge from Grimmory shelf 'Fantasy'.",
+        )
 
     def test_update_progress_calls_hardcover_api(self):
         """Test that update_progress correctly calls Hardcover API for progress and status updates."""
