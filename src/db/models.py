@@ -883,6 +883,39 @@ class UserBook(Base):
         return f"<UserBook(user_id={self.user_id}, abs_id='{self.abs_id}')>"
 
 
+class UserBookFusionLink(Base):
+    """Per-user link between a shared BookBridge book and a BookFusion book."""
+    __tablename__ = 'user_bookfusion_links'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False, index=True)
+    bookfusion_id = Column(String(255), nullable=False)
+    title = Column(String(500), nullable=True)
+    author = Column(String(500), nullable=True)
+    created_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index('ix_user_bookfusion_links_user_abs', 'user_id', 'abs_id', unique=True),
+        Index('ix_user_bookfusion_links_user_bookfusion', 'user_id', 'bookfusion_id', unique=True),
+    )
+
+    def __init__(self, user_id: int, abs_id: str, bookfusion_id: str,
+                 title: str = None, author: str = None):
+        self.user_id = user_id
+        self.abs_id = abs_id
+        self.bookfusion_id = str(bookfusion_id)
+        self.title = title
+        self.author = author
+        now = utcnow()
+        self.created_at = now
+        self.updated_at = now
+
+    def __repr__(self):
+        return f"<UserBookFusionLink(user_id={self.user_id}, abs_id='{self.abs_id}', bookfusion_id='{self.bookfusion_id}')>"
+
+
 # Database configuration
 class DatabaseManager:
     """

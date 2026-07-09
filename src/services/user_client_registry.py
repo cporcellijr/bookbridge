@@ -138,7 +138,7 @@ class UserClientRegistry:
             "KoSync": KoSyncSyncClient(kosync_client, ep),
             "Storyteller": StorytellerSyncClient(storyteller_client, ep, db),
             "BookLore": BookloreSyncClient(booklore_client, ep),
-            "BookFusion": BookFusionSyncClient(bookfusion_client, ep),
+            "BookFusion": BookFusionSyncClient(bookfusion_client, ep, database_service=db, user_id=user_id),
             "BookLoreAudio": BookLoreAudioSyncClient(booklore_client, ep, alignment_service=align),
             "BookOrbit": BookOrbitSyncClient(bookorbit_client, ep),
             "BookOrbitAudio": BookOrbitAudioSyncClient(bookorbit_client, ep, alignment_service=align),

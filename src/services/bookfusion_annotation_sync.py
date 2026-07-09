@@ -54,7 +54,7 @@ class BookFusionAnnotationSync:
         books = self._candidate_books(user_id)
         did_work = False
         for book in books:
-            book_id = self._bookfusion_id(book)
+            book_id = self._bookfusion_id(user_id, book)
             doc_md5 = str(getattr(book, "kosync_doc_id", "") or "").strip().lower()
             filename = self._resolve_epub_filename(book)
             if not book_id or not doc_md5 or not filename:
@@ -84,19 +84,16 @@ class BookFusionAnnotationSync:
             books = self._db.get_books_by_status("active") or []
             if linked is not None:
                 books = [b for b in books if b.abs_id in linked]
-            return [b for b in books if self._bookfusion_id(b)]
+            return [b for b in books if self._bookfusion_id(user_id, b)]
         except Exception as exc:
             logger.debug("BookFusion annotation: book enumeration failed for user %s: %s", user_id, exc)
             return []
 
-    @staticmethod
-    def _bookfusion_id(book) -> Optional[str]:
-        direct = getattr(book, "bookfusion_id", None)
-        if direct not in (None, ""):
-            return str(direct)
-        if str(getattr(book, "ebook_source", "") or "").strip().lower() == "bookfusion":
-            source_id = getattr(book, "ebook_source_id", None)
-            return str(source_id) if source_id not in (None, "") else None
+    def _bookfusion_id(self, user_id: int, book) -> Optional[str]:
+        if hasattr(self._db, "resolve_bookfusion_id"):
+            resolved = self._db.resolve_bookfusion_id(user_id, book)
+            if resolved not in (None, ""):
+                return str(resolved)
         return None
 
     @staticmethod

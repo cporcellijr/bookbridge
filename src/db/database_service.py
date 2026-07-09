@@ -37,6 +37,7 @@ from .models import (
     User,
     UserCredential,
     UserBook,
+    UserBookFusionLink,
     Base,
 )
 from src.utils.time_utils import utcnow
@@ -693,6 +694,96 @@ class DatabaseService:
         with self.get_session() as session:
             rows = session.query(UserBook.abs_id).filter(UserBook.user_id == user_id).all()
             return {r[0] for r in rows}
+
+    # ---- per-user BookFusion book links (shared catalog, user-specific remote ids) ----
+    def _serialize_bookfusion_link(self, link: UserBookFusionLink) -> dict:
+        return {
+            "user_id": link.user_id,
+            "abs_id": link.abs_id,
+            "bookfusion_id": link.bookfusion_id,
+            "title": link.title,
+            "author": link.author,
+            "created_at": link.created_at,
+            "updated_at": link.updated_at,
+        }
+
+    def get_user_bookfusion_link(self, user_id: int, abs_id: str) -> Optional[dict]:
+        """Return the user's BookFusion link for one BookBridge book."""
+        if user_id is None or not abs_id:
+            return None
+        with self.get_session() as session:
+            link = session.query(UserBookFusionLink).filter(
+                UserBookFusionLink.user_id == user_id,
+                UserBookFusionLink.abs_id == abs_id,
+            ).first()
+            return self._serialize_bookfusion_link(link) if link else None
+
+    def get_user_bookfusion_links_for_books(self, user_id: int, abs_ids: list[str]) -> dict:
+        """Return BookFusion links keyed by abs_id for a user's visible books."""
+        if user_id is None or not abs_ids:
+            return {}
+        with self.get_session() as session:
+            rows = session.query(UserBookFusionLink).filter(
+                UserBookFusionLink.user_id == user_id,
+                UserBookFusionLink.abs_id.in_(abs_ids),
+            ).all()
+            return {link.abs_id: self._serialize_bookfusion_link(link) for link in rows}
+
+    def set_user_bookfusion_link(
+        self,
+        user_id: int,
+        abs_id: str,
+        bookfusion_id: str,
+        title: str = None,
+        author: str = None,
+    ) -> Optional[dict]:
+        """Create or update a user's BookFusion link for a shared book."""
+        if user_id is None or not abs_id:
+            return None
+        bf_id = str(bookfusion_id or "").strip()
+        if not bf_id:
+            return None
+        with self.get_session() as session:
+            existing = session.query(UserBookFusionLink).filter(
+                UserBookFusionLink.user_id == user_id,
+                UserBookFusionLink.abs_id == abs_id,
+            ).first()
+            if existing is None:
+                existing = UserBookFusionLink(
+                    user_id=user_id,
+                    abs_id=abs_id,
+                    bookfusion_id=bf_id,
+                    title=title,
+                    author=author,
+                )
+                session.add(existing)
+            else:
+                existing.bookfusion_id = bf_id
+                existing.title = title
+                existing.author = author
+                existing.updated_at = utcnow()
+            session.flush()
+            return self._serialize_bookfusion_link(existing)
+
+    def delete_user_bookfusion_link(self, user_id: int, abs_id: str) -> bool:
+        """Delete a user's BookFusion link for one BookBridge book."""
+        if user_id is None or not abs_id:
+            return False
+        with self.get_session() as session:
+            deleted = session.query(UserBookFusionLink).filter(
+                UserBookFusionLink.user_id == user_id,
+                UserBookFusionLink.abs_id == abs_id,
+            ).delete(synchronize_session=False)
+            return bool(deleted)
+
+    def resolve_bookfusion_id(self, user_id: int, book) -> Optional[str]:
+        """Resolve the user's BookFusion id for a shared book."""
+        abs_id = getattr(book, "abs_id", None)
+        if user_id is not None and abs_id:
+            link = self.get_user_bookfusion_link(user_id, abs_id)
+            if link and link.get("bookfusion_id"):
+                return str(link["bookfusion_id"])
+        return None
 
     def get_book_user_ids(self, abs_id: str) -> List[int]:
         """All user ids that have claimed this book."""

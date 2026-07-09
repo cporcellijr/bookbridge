@@ -291,6 +291,28 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_USER'), 'alice-ko')
         self.mock_container.mock_user_client_registry.invalidate.assert_called_with(alice.id)
 
+    def test_regular_user_links_bookfusion_book_to_own_mapping(self):
+        alice = self.svc.create_user("alice-bf", "pw", role="user")
+        bob = self.svc.create_user("bob-bf", "pw", role="user")
+        self.svc.save_book(Book(
+            abs_id="shared-book",
+            abs_title="Shared Book",
+            status="active",
+            duration=100,
+            user_id=alice.id,
+        ))
+        self.svc.link_user_book(bob.id, "shared-book")
+
+        self.client.post('/login', data={'username': 'alice-bf', 'password': 'pw'})
+        resp = self.client.post('/api/bookfusion/link/shared-book', json={
+            "bookfusion_id": "bf-alice",
+            "title": "Alice Copy",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self.svc.resolve_bookfusion_id(alice.id, self.svc.get_book("shared-book")), "bf-alice")
+        self.assertIsNone(self.svc.resolve_bookfusion_id(bob.id, self.svc.get_book("shared-book")))
+
     # --- admin-managed per-user integrations ---
     def _ipath(self, uid):
         return f'/admin/users/{uid}/integrations'

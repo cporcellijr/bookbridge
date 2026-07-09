@@ -231,6 +231,26 @@
                 </a>
                 {% endif %}
 
+                {% if integrations.bookfusion %}
+                <div class="service-item progress-item-hc" title="{% if mapping.bookfusion_linked %}BookFusion linked{% else %}Link to BookFusion{% endif %}">
+                    <span class="service-icon-emoji {% if not mapping.bookfusion_linked %}grayscale-muted{% endif %}">BF</span>
+                    <span class="service-name">BookFusion</span>
+                    <span class="service-value cursor-pointer color-inherit" title="Click to edit BookFusion link"
+                        data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.display_title|default(mapping.abs_title)|escape }}"
+                        onclick="linkBookFusion(event)">
+                        {% if mapping.bookfusion_linked %}
+                        {% if mapping.states.bookfusion is defined %}
+                        {{ '%.0f' | format(mapping.states.bookfusion.percentage|default(0)) }}%
+                        {% else %}
+                        0%
+                        {% endif %}
+                        {% else %}
+                        <span class="link-icon">+</span>
+                        {% endif %}
+                    </span>
+                </div>
+                {% endif %}
+
                 {% if integrations.hardcover %}
                 <div class="service-item progress-item-hc">
                     <a href="{{ mapping.hardcover_url|default('https://hardcover.app') }}" target="_blank"
@@ -2567,6 +2587,58 @@
                     form.appendChild(inputField);
                     document.body.appendChild(form);
                     form.submit();
+                }
+            }
+
+            async function linkBookFusion(event) {
+                event.stopPropagation();
+                const item = event.currentTarget;
+                const absId = item.dataset.absId;
+                const title = item.dataset.title || '';
+                const query = prompt('Search your BookFusion library:', title);
+                if (query === null || !query.trim()) return;
+
+                let data;
+                try {
+                    const resp = await fetch('/api/bookfusion/search?q=' + encodeURIComponent(query.trim()));
+                    data = await resp.json();
+                    if (!resp.ok) throw new Error(data.error || 'Search failed');
+                } catch (err) {
+                    alert(err.message || 'BookFusion search failed');
+                    return;
+                }
+
+                const books = (data.books || []).slice(0, 8);
+                if (!books.length) {
+                    alert('No BookFusion books found.');
+                    return;
+                }
+
+                const choices = books.map((book, idx) => `${idx + 1}. ${book.title || book.id}${book.author ? ' - ' + book.author : ''}`).join('\n');
+                const selected = prompt('Choose a BookFusion book:\n\n' + choices, '1');
+                if (selected === null) return;
+                const index = parseInt(selected, 10) - 1;
+                const book = books[index];
+                if (!book) {
+                    alert('Invalid selection.');
+                    return;
+                }
+
+                try {
+                    const resp = await fetch('/api/bookfusion/link/' + encodeURIComponent(absId), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            bookfusion_id: book.id,
+                            title: book.title || '',
+                            author: book.author || ''
+                        })
+                    });
+                    const payload = await resp.json().catch(() => ({}));
+                    if (!resp.ok) throw new Error(payload.error || 'Link failed');
+                    location.reload();
+                } catch (err) {
+                    alert(err.message || 'BookFusion link failed');
                 }
             }
 

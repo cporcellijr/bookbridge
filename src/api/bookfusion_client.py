@@ -17,6 +17,7 @@ from src.utils.user_config import resolve_setting
 logger = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = 20
+_DOWNLOAD_TIMEOUT = 120
 _DEFAULT_API_URL = "https://www.bookfusion.com"
 _ACCEPT = "application/json; api_version=10"
 
@@ -126,6 +127,42 @@ class BookFusionClient:
             return None
         data = self._json(resp)
         return data if isinstance(data, dict) else {}
+
+    def get_download_url(self, book_id: str | int, content_type: str = None) -> Optional[str]:
+        """Request a pre-signed download URL for a book (POST .../download -> {url})."""
+        body = {}
+        if content_type:
+            body["content_type"] = content_type
+        resp = self._make_request("POST", f"/api/user/books/{book_id}/download", json_data=body)
+        if resp is None or resp.status_code not in (200, 201):
+            logger.warning(
+                "BookFusion download URL request returned %s for %s",
+                getattr(resp, "status_code", "no-response"),
+                book_id,
+            )
+            return None
+        data = self._json(resp)
+        return data.get("url") if isinstance(data, dict) else None
+
+    def download_book(self, book_id: str | int) -> Optional[bytes]:
+        """Download the EPUB bytes for a book via its pre-signed URL.
+
+        Two steps, mirroring the KOReader plugin: POST to get the pre-signed URL,
+        then GET the file directly. The pre-signed URL carries its own auth, so no
+        BookFusion bearer header is added to the file request.
+        """
+        url = self.get_download_url(book_id)
+        if not url:
+            return None
+        try:
+            resp = self.session.get(url, timeout=_DOWNLOAD_TIMEOUT)
+        except Exception as exc:
+            logger.error("BookFusion file download failed for %s: %s", book_id, exc)
+            return None
+        if resp.status_code != 200:
+            logger.warning("BookFusion file download returned %s for %s", resp.status_code, book_id)
+            return None
+        return resp.content
 
     def search_books(self, page: int = 1, per_page: int = 100, **filters) -> Optional[list[dict]]:
         payload = {"page": int(page), "per_page": int(per_page), "sort": filters.pop("sort", "added_at-desc")}
