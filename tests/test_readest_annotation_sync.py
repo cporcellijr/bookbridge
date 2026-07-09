@@ -233,6 +233,65 @@ class TestReadestClientAPI(unittest.TestCase):
         self.assertFalse(result)
 
 
+class TestReadestClientEmailPassword(unittest.TestCase):
+    """Per-user email/password auth: configured via creds, login on demand,
+    tokens cached to the user's store (not os.environ)."""
+
+    def setUp(self):
+        for key in (
+            "READEST_ACCESS_TOKEN", "READEST_REFRESH_TOKEN", "READEST_TOKEN_EXPIRES_AT",
+            "READEST_EMAIL", "READEST_PASSWORD",
+        ):
+            os.environ.pop(key, None)
+
+    def _client(self, **creds):
+        from src.api.readest_client import ReadestClient
+        base = {"READEST_SUPABASE_URL": "https://readest.supabase.co"}
+        base.update(creds)
+        return ReadestClient(credentials=base)
+
+    def _token_response(self):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "access_token": "atk", "refresh_token": "rtk", "expires_in": 3600,
+        }
+        return resp
+
+    def test_is_configured_with_email_password(self):
+        c = self._client(READEST_EMAIL="a@b.com", READEST_PASSWORD="pw")
+        self.assertTrue(c.is_configured())
+
+    def test_not_configured_without_creds_or_tokens(self):
+        self.assertFalse(self._client().is_configured())
+
+    def test_ensure_authenticated_logs_in_with_email_password(self):
+        c = self._client(READEST_EMAIL="a@b.com", READEST_PASSWORD="pw")
+        with patch("requests.post", return_value=self._token_response()) as post:
+            self.assertTrue(c.ensure_authenticated())
+        post.assert_called_once()
+        self.assertEqual(c._access_token(), "atk")
+
+    def test_login_persist_false_does_not_persist(self):
+        c = self._client(READEST_EMAIL="a@b.com", READEST_PASSWORD="pw")
+        with patch("requests.post", return_value=self._token_response()):
+            self.assertTrue(c.login("a@b.com", "pw", persist=False))
+        self.assertNotIn("READEST_ACCESS_TOKEN", os.environ)
+        self.assertIsNone(c._access_token())  # creds dict left untouched
+
+    def test_persist_tokens_per_user_writes_user_credential(self):
+        from src.api.readest_client import ReadestClient
+        db = MagicMock()
+        creds = {"READEST_EMAIL": "a@b.com", "READEST_PASSWORD": "pw"}
+        c = ReadestClient(credentials=creds, database_service=db, user_id=7)
+        c._persist_tokens({"access_token": "atk", "refresh_token": "rtk", "expires_in": 3600})
+        db.set_user_credential.assert_any_call(7, "READEST_ACCESS_TOKEN", "atk")
+        db.set_setting.assert_not_called()
+        self.assertNotIn("READEST_ACCESS_TOKEN", os.environ)
+        # in-memory creds updated so later calls in the same cycle see the token
+        self.assertEqual(creds["READEST_ACCESS_TOKEN"], "atk")
+
+
 # ---------------------------------------------------------------------------
 # Color / style mapping
 # ---------------------------------------------------------------------------

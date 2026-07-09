@@ -498,7 +498,7 @@ class ReadestAnnotationSync:
     # ------------------------------------------------------------------
 
     def sync_user(self, user_id, creds: dict) -> bool:
-        client = ReadestClient(credentials=creds, database_service=self._db)
+        client = ReadestClient(credentials=creds, database_service=self._db, user_id=user_id)
         if not client.is_configured():
             return False
 

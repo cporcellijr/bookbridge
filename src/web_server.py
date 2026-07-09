@@ -1014,6 +1014,14 @@ def _apply_user_integrations(user_id):
                     database_service.set_user_credential(user_id, key, submitted)
             else:  # text: blank clears => inherit master
                 database_service.set_user_credential(user_id, key, request.form.get(key, ''))
+
+    # A newly-entered Readest password belongs to a (possibly different) account,
+    # so any cached Supabase tokens are stale — drop them so the next sync logs in
+    # fresh with the new credentials rather than refreshing the old session.
+    if request.form.get('READEST_PASSWORD'):
+        for _tok in ('READEST_ACCESS_TOKEN', 'READEST_REFRESH_TOKEN', 'READEST_TOKEN_EXPIRES_AT'):
+            database_service.set_user_credential(user_id, _tok, '')
+
     try:
         container.user_client_registry().invalidate(user_id)
     except Exception as e:
@@ -1077,6 +1085,7 @@ def admin_user_integrations(user_id):
             "Calibre-Web (Automated)": "cwa",
             "BookOrbit": "bookorbit",
             "Grimmory / BookLore": "booklore",
+            "Readest": "readest",
             "Hardcover": "hardcover",
             "StoryGraph": "storygraph",
         },
@@ -1090,6 +1099,7 @@ _TEST_CONNECTION_FIELDS = {
     'booklore': ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
     'bookorbit': ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
     'cwa': ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
+    'readest': ['READEST_ANNOTATION_SYNC', 'READEST_EMAIL', 'READEST_PASSWORD', 'READEST_SUPABASE_URL'],
     'hardcover': ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
     'storygraph': ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
 }
@@ -2754,7 +2764,6 @@ def settings():
             'CWA_SYNC_ENABLED',
             'HARDCOVER_ENABLED',
             'HARDCOVER_ANNOTATION_SYNC',
-            'READEST_ANNOTATION_SYNC',
             'STORYGRAPH_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
@@ -8478,6 +8487,11 @@ def _run_test_connection(service: str, payload: dict):
             _coerce_test_str(data.get('CWA_PASSWORD')),
             _coerce_test_str(data.get('CWA_SYNC_TOKEN')),
         ),
+        'readest': lambda data: _test_readest(
+            _coerce_test_str(data.get('READEST_EMAIL')),
+            _coerce_test_str(data.get('READEST_PASSWORD')),
+            _normalize_test_url(data.get('READEST_SUPABASE_URL')),
+        ),
         'hardcover': lambda data: _test_hardcover(
             _coerce_test_bool(data.get('HARDCOVER_ENABLED')),
             _coerce_test_str(data.get('HARDCOVER_TOKEN')),
@@ -8885,6 +8899,21 @@ def _test_hardcover(enabled: bool, token: str) -> dict:
     if r.status_code in (401, 403):
         return {"ok": False, "message": "Invalid API token"}
     return {"ok": False, "message": f"API returned {r.status_code}"}
+
+
+def _test_readest(email: str, password: str, supabase_url: str) -> dict:
+    """Validate Readest credentials by logging in — without persisting tokens."""
+    from src.api.readest_client import ReadestClient
+    email = (email or "").strip()
+    if not email or not password:
+        return {"ok": False, "message": "Enter both email and password"}
+    creds = {"READEST_EMAIL": email, "READEST_PASSWORD": password}
+    if supabase_url:
+        creds["READEST_SUPABASE_URL"] = supabase_url
+    client = ReadestClient(credentials=creds)  # no db/user_id → no persistence
+    if client.login(email, password, persist=False):
+        return {"ok": True, "message": f"Signed in to Readest as {email}"}
+    return {"ok": False, "message": "Login rejected — check email/password (Google sign-in accounts have no password)"}
 
 
 def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: str) -> dict:

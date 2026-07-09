@@ -1,8 +1,13 @@
 """
 Readest cloud sync API client.
 
-Handles Supabase JWT auth (password login + token refresh) and the
+Handles Supabase JWT auth (email/password login + token refresh) and the
 /sync REST endpoints for pulling and pushing highlights/annotations.
+
+Credentials are per-user: the user stores their Readest email + password (the
+same thing the KOReader plugin asks for), and this client logs in on demand and
+caches the rotating access/refresh tokens back into that user's credential store
+(`user_id`). Users never paste a raw JWT.
 """
 
 import hashlib
@@ -39,9 +44,10 @@ class ReadestAuthError(Exception):
 class ReadestClient:
     """Thin wrapper around the Readest sync REST API."""
 
-    def __init__(self, credentials: dict = None, database_service=None):
+    def __init__(self, credentials: dict = None, database_service=None, user_id: int = None):
         self._creds = credentials
         self._db = database_service
+        self._user_id = user_id
 
     # ------------------------------------------------------------------
     # Configuration helpers
@@ -51,7 +57,17 @@ class ReadestClient:
         return str(resolve_setting(self._creds, key, default) or default).strip()
 
     def is_configured(self) -> bool:
-        return bool(self._r("READEST_ACCESS_TOKEN") or self._r("READEST_REFRESH_TOKEN"))
+        if self._r("READEST_ACCESS_TOKEN") or self._r("READEST_REFRESH_TOKEN"):
+            return True
+        # Password-based like the other per-user services: email + password is
+        # enough — the client logs in on demand.
+        return bool(self._r("READEST_EMAIL") and self._r("READEST_PASSWORD"))
+
+    def _email(self) -> str:
+        return self._r("READEST_EMAIL")
+
+    def _password(self) -> str:
+        return self._r("READEST_PASSWORD")
 
     def _supabase_url(self) -> str:
         return self._r("READEST_SUPABASE_URL", "https://readest.supabase.co")
@@ -71,8 +87,13 @@ class ReadestClient:
     # Auth
     # ------------------------------------------------------------------
 
-    def login(self, email: str, password: str) -> bool:
-        """Exchange email/password for Supabase JWT tokens. Persists them."""
+    def login(self, email: str, password: str, persist: bool = True) -> bool:
+        """Exchange email/password for Supabase JWT tokens.
+
+        Persists the tokens (per-user when ``user_id`` is set) unless
+        ``persist=False`` — the settings "Test" button logs in to validate the
+        credentials without writing anything.
+        """
         url = f"{self._supabase_url()}/auth/v1/token?grant_type=password"
         try:
             resp = requests.post(
@@ -90,8 +111,37 @@ class ReadestClient:
             return False
 
         data = resp.json()
-        self._persist_tokens(data)
+        if persist:
+            self._persist_tokens(data)
         return True
+
+    def _token_is_fresh(self) -> bool:
+        if not self._access_token():
+            return False
+        raw = self._r("READEST_TOKEN_EXPIRES_AT")
+        try:
+            expires_at = float(raw) if raw else 0.0
+        except ValueError:
+            expires_at = 0.0
+        return bool(expires_at) and time.time() < expires_at - 60
+
+    def ensure_authenticated(self) -> bool:
+        """Guarantee a usable access token: refresh it, or log in fresh.
+
+        Mirrors the password-based clients (BookOrbit/Storyteller): a valid token
+        is reused, an expired one is refreshed via the refresh token, and if
+        neither works the stored email/password are used to log in again. The
+        rotating tokens are cached per user by the persistence path.
+        """
+        if self._refresh_token():
+            if self.refresh_token_if_needed() and self._token_is_fresh():
+                return True
+        elif self._token_is_fresh():
+            return True
+        email, password = self._email(), self._password()
+        if email and password and self.login(email, password):
+            return True
+        return self._token_is_fresh()
 
     def refresh_token_if_needed(self) -> bool:
         """Refresh the access token if it has expired or is close to expiry.
@@ -142,12 +192,21 @@ class ReadestClient:
             ("READEST_REFRESH_TOKEN", refresh),
             ("READEST_TOKEN_EXPIRES_AT", expires_at),
         ):
-            os.environ[key] = val
-            if self._db is not None:
-                try:
-                    self._db.set_setting(key, val)
-                except Exception as e:
-                    logger.warning("Readest: could not persist setting %s: %s", key, e)
+            if self._user_id is not None:
+                # Per-user: cache the rotating tokens in this user's credential
+                # store only — never os.environ, which is the admin/global config.
+                if self._db is not None:
+                    try:
+                        self._db.set_user_credential(self._user_id, key, val)
+                    except Exception as e:
+                        logger.warning("Readest: could not persist per-user setting %s: %s", key, e)
+            else:
+                os.environ[key] = val
+                if self._db is not None:
+                    try:
+                        self._db.set_setting(key, val)
+                    except Exception as e:
+                        logger.warning("Readest: could not persist setting %s: %s", key, e)
 
         # Update local creds dict so subsequent calls in the same cycle see the new token.
         if self._creds is not None:
@@ -174,7 +233,7 @@ class ReadestClient:
 
         Returns a list of note dicts, or None on error.
         """
-        if not self.refresh_token_if_needed():
+        if not self.ensure_authenticated():
             logger.warning("Readest pull_notes: no valid auth token")
             return None
         params = {
@@ -208,7 +267,7 @@ class ReadestClient:
         """Push a list of note dicts to Readest. Returns True on success."""
         if not notes:
             return True
-        if not self.refresh_token_if_needed():
+        if not self.ensure_authenticated():
             logger.warning("Readest push_notes: no valid auth token")
             return False
         try:

@@ -1132,50 +1132,32 @@
             </div>
 
 
-            <!-- Readest Annotation Sync -->
+            <!-- Readest Highlight Sync (engine knobs; account is per-user) -->
             <div class="settings-section">
-                {% set readest_ann_enabled = get_bool('READEST_ANNOTATION_SYNC') %}
                 <div class="section-header">
                     <h3>Readest Highlight Sync</h3>
-                    <div class="toggle-switch-wrapper">
-                        <span class="toggle-label">Enable</span>
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="toggle_readest_ann" name="READEST_ANNOTATION_SYNC"
-                                onchange="toggleSection('readest_ann_body', this.checked)" {% if readest_ann_enabled %}checked{% endif %}>
-                            <span class="slider"></span>
-                        </label>
-                    </div>
                 </div>
-                <div id="readest_ann_body" class="section-body {% if not readest_ann_enabled %}collapsed{% endif %}">
+                <div class="section-body">
                     <div class="form-group full-width">
                         <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
-                            Bidirectionally syncs KOReader highlights and bookmarks with your
+                            Bidirectionally syncs KOReader highlights and bookmarks with each user's
                             <a href="https://readest.com" target="_blank" style="color:#aab4f5;">Readest</a> account.
-                            Paste your Readest access and refresh tokens below (obtain them from your Readest app session or
-                            by logging in via the Readest KOReader plugin).
+                            Enable it and enter the Readest <strong>email &amp; password</strong> per user under
+                            <strong>Users → Integrations</strong> (the same credentials the Readest KOReader plugin uses).
+                            The settings below are global engine knobs.
                         </div>
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Access Token</label>
-                        <input type="password" name="READEST_ACCESS_TOKEN" value="{{ get_val('READEST_ACCESS_TOKEN') }}"
-                            placeholder="Supabase JWT access token">
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Refresh Token</label>
-                        <input type="password" name="READEST_REFRESH_TOKEN" value="{{ get_val('READEST_REFRESH_TOKEN') }}"
-                            placeholder="Supabase JWT refresh token">
-                    </div>
-                    <div class="form-group full-width">
-                        <label>Supabase URL</label>
-                        <input type="text" name="READEST_SUPABASE_URL" value="{{ get_val('READEST_SUPABASE_URL', 'https://readest.supabase.co') }}"
-                            placeholder="https://readest.supabase.co">
-                        <div class="help-text">Leave as default unless you self-host Readest.</div>
                     </div>
                     <div class="form-group">
                         <label>Sync Interval (minutes)</label>
                         <input type="number" min="0" name="READEST_ANNOTATION_SYNC_MINUTES"
                             value="{{ get_val('READEST_ANNOTATION_SYNC_MINUTES', '15') }}">
                         <div class="help-text">0 disables the sync timer (manual trigger only).</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Supabase URL (advanced)</label>
+                        <input type="text" name="READEST_SUPABASE_URL" value="{{ get_val('READEST_SUPABASE_URL', 'https://readest.supabase.co') }}"
+                            placeholder="https://readest.supabase.co">
+                        <div class="help-text">Leave as default unless you self-host Readest.</div>
                     </div>
                 </div>
             </div>
