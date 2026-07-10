@@ -131,6 +131,68 @@ class TestSuggestionsFeature(unittest.TestCase):
         # Should proceed to call DB
         self.mock_container.mock_database_service.get_all_books.assert_called()
 
+    def test_null_duration_does_not_abort_scan(self):
+        """Issue #312: an ABS progress record with duration=null must not raise
+        a TypeError and abort the whole suggestion scan — the null record is
+        skipped and later valid records still produce suggestions."""
+        from src.sync_manager import SyncManager
+
+        manager = SyncManager(
+            database_service=self.mock_container.mock_database_service,
+            sync_clients={},
+            data_dir=Path(self.temp_dir),
+        )
+
+        os.environ['SUGGESTIONS_ENABLED'] = 'true'
+        db = self.mock_container.mock_database_service
+        db.get_all_books.return_value = []
+        db.get_all_pending_suggestions.return_value = []
+        db.suggestion_exists.return_value = False
+
+        progress_map = {
+            # Completed book with a null duration — previously raised TypeError.
+            "finished-null": {"duration": None, "currentTime": 39923.828, "isFinished": True},
+            # A normal unmapped book that should still get a suggestion.
+            "valid-book": {"duration": 1000.0, "currentTime": 500.0},
+        }
+
+        created = []
+        manager._create_suggestion = lambda abs_id, item_data: created.append(abs_id)
+
+        # Must not raise.
+        manager.check_for_suggestions(progress_map, [])
+
+        # The valid record was still processed after the null one.
+        self.assertIn("valid-book", created)
+        self.assertNotIn("finished-null", created)
+
+    def test_null_duration_finished_book_is_dismissed(self):
+        """Issue #312: a pending suggestion whose book is now finished with a
+        null duration should be dismissed without raising."""
+        from src.sync_manager import SyncManager
+
+        manager = SyncManager(
+            database_service=self.mock_container.mock_database_service,
+            sync_clients={},
+            data_dir=Path(self.temp_dir),
+        )
+
+        os.environ['SUGGESTIONS_ENABLED'] = 'true'
+        db = self.mock_container.mock_database_service
+        db.get_all_books.return_value = []
+        suggestion = Mock()
+        suggestion.source_id = "finished-null"
+        suggestion.title = "Done Book"
+        db.get_all_pending_suggestions.return_value = [suggestion]
+
+        progress_map = {
+            "finished-null": {"duration": None, "currentTime": 100.0, "isFinished": True},
+        }
+
+        manager.check_for_suggestions(progress_map, [])
+
+        db.dismiss_suggestion.assert_called_once_with("finished-null")
+
     def test_suggestions_cache_path_is_user_scoped(self):
         import src.web_server as web_server
         from src.utils.user_context import set_current_user_id, reset_current_user_id

@@ -1328,12 +1328,19 @@ class TestForgeResume(unittest.TestCase):
         )
         self.mock_db.get_books_by_status.return_value = [book]
 
-        with patch("src.services.forge_service.threading.Thread") as mock_thread:
+        with patch.object(self.service, "_auto_forge_background_task") as mock_task, \
+                patch("src.services.forge_service.threading.Thread") as mock_thread:
             count = self.service.resume_pending_forge_matches()
+            # Re-forges are now wrapped in a semaphore-guarded closure so concurrent
+            # restart recovery is bounded (default 1). Invoke the thread target
+            # (inside the patch scope) to verify it forwards the reconstructed
+            # args to _auto_forge_background_task.
+            target = mock_thread.call_args.kwargs["target"]
+            target()
 
         self.assertEqual(count, 1)
-        self.assertEqual(mock_thread.call_args.kwargs["target"], self.service._auto_forge_background_task)
-        args = mock_thread.call_args.kwargs["args"]
+        self.assertTrue(mock_task.called)
+        args = mock_task.call_args.args
         # (abs_id, text_item, title, author, original_filename, original_hash)
         self.assertEqual(args[0], "abs-2")
         self.assertEqual(args[2], "T2")
@@ -1417,7 +1424,7 @@ class TestForgeResume(unittest.TestCase):
 
         self.assertEqual(count, 1)
         registry.get_clients.assert_called_once_with(4)
-        worker._reforge_pending_book.assert_called_once_with(book)
+        worker._reforge_pending_book.assert_called_once_with(book, semaphore=ANY)
 
     def test_resume_completion_task_reconstructs_and_runs_completion(self):
         book = SimpleNamespace(

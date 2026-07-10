@@ -1186,6 +1186,71 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(data_echo['accepted_page_stats'], 0)
         self.assertEqual(data_echo['echoed_page_stats'], 1)
 
+    def test_statistics_upload_retries_on_locked_database(self):
+        """Issue #315: a transient 'database is locked' during a statistics write
+        should be retried rather than surfaced as a 500."""
+        from unittest.mock import patch
+        from src.api import kosync_server
+
+        real_bulk = kosync_server._database_service.bulk_insert_koreader_page_stats
+        calls = {'n': 0}
+
+        def flaky_bulk(*args, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise Exception("(sqlite3.OperationalError) database is locked")
+            return real_bulk(*args, **kwargs)
+
+        with patch.object(kosync_server._database_service, 'bulk_insert_koreader_page_stats', side_effect=flaky_bulk), \
+                patch.object(kosync_server.time, 'sleep') as mock_sleep:
+            response = self.client.post(
+                '/koreader/device-sync/statistics',
+                headers=self.auth_headers,
+                json={
+                    'device': 'Kobo',
+                    'device_id': 'device-retry',
+                    'books': [],
+                    'page_stats': [
+                        {'md5': 'r' * 32, 'page': 1, 'start_time': 1700000500, 'duration': 30},
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls['n'], 2)  # failed once, retried and succeeded
+        mock_sleep.assert_called_once()  # backed off before the retry
+        self.assertEqual(response.get_json()['accepted_page_stats'], 1)
+
+    def test_statistics_upload_gives_up_after_persistent_lock(self):
+        """Issue #315: if the database stays locked past all retries, the endpoint
+        returns 500 rather than looping forever."""
+        from unittest.mock import patch
+        from src.api import kosync_server
+
+        with patch.dict(os.environ, {'KOREADER_STATS_WRITE_RETRIES': '2'}), \
+                patch.object(
+                    kosync_server._database_service,
+                    'bulk_insert_koreader_page_stats',
+                    side_effect=Exception("(sqlite3.OperationalError) database is locked"),
+                ), \
+                patch.object(kosync_server.time, 'sleep') as mock_sleep:
+            response = self.client.post(
+                '/koreader/device-sync/statistics',
+                headers=self.auth_headers,
+                json={
+                    'device': 'Kobo',
+                    'device_id': 'device-stuck',
+                    'books': [],
+                    'page_stats': [
+                        {'md5': 's' * 32, 'page': 1, 'start_time': 1700000600, 'duration': 30},
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 500)
+        # 2 attempts total → exactly one backoff sleep between them.
+        self.assertEqual(mock_sleep.call_count, 1)
+
     def test_merged_statistics_requires_auth(self):
         response = self.client.get('/koreader/device-sync/statistics/merged?device_id=device-b')
         self.assertEqual(response.status_code, 401)

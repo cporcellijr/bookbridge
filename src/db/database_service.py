@@ -581,6 +581,17 @@ class DatabaseService:
                 # the per-user `user_books` links, so also claim it for the creator.
                 creator_uid = book.user_id if getattr(book, "user_id", None) is not None else self._resolve_uid(None)
                 book.user_id = creator_uid
+                # If `book` is a detached instance that used to be persistent (its
+                # row was deleted out from under it — e.g. a long-running worker
+                # whose mapping was removed), it still carries its old identity key,
+                # so session.add() would emit an UPDATE that matches 0 rows and
+                # raise StaleDataError. Make it transient first so this is a clean
+                # INSERT that matches the method's "save or update" contract.
+                from sqlalchemy import inspect as _sa_inspect
+                from sqlalchemy.orm import make_transient
+                _state = _sa_inspect(book)
+                if _state.detached and _state.identity is not None:
+                    make_transient(book)
                 session.add(book)
                 session.flush()
                 if creator_uid is not None:
@@ -1809,12 +1820,15 @@ class DatabaseService:
         if not rows:
             return {"accepted": 0, "duplicates": 0, "echoes": 0}
 
-        with self.get_session() as session:
-            # Echo suppression: an event whose (md5, start_time, duration) already exists
-            # under another device_key is a merged copy injected into this device's
-            # statistics.sqlite by the plugin, not new reading on this device.
-            batch_md5s = {row["md5"] for row in rows}
-            foreign_query = session.query(
+        # Echo suppression: an event whose (md5, start_time, duration) already exists
+        # under another device_key is a merged copy injected into this device's
+        # statistics.sqlite by the plugin, not new reading on this device.
+        # Run this read in its own short session and release it before opening the
+        # write session below, so the INSERT holds the write lock for as little
+        # time as possible under contention (see issue #315).
+        batch_md5s = {row["md5"] for row in rows}
+        with self.get_session() as read_session:
+            foreign_query = read_session.query(
                 KOReaderPageStat.md5,
                 KOReaderPageStat.start_time,
                 KOReaderPageStat.duration,
@@ -1826,14 +1840,15 @@ class DatabaseService:
             foreign_fingerprints = {
                 (item.md5, float(item.start_time), float(item.duration)) for item in foreign
             }
-            fresh_rows = [
-                row for row in rows
-                if (row["md5"], row["start_time"], row["duration"]) not in foreign_fingerprints
-            ]
-            echoes = len(rows) - len(fresh_rows)
+        fresh_rows = [
+            row for row in rows
+            if (row["md5"], row["start_time"], row["duration"]) not in foreign_fingerprints
+        ]
+        echoes = len(rows) - len(fresh_rows)
 
-            inserted = 0
-            if fresh_rows:
+        inserted = 0
+        if fresh_rows:
+            with self.get_session() as session:
                 stmt = sqlite_insert(KOReaderPageStat).values(fresh_rows)
                 stmt = stmt.on_conflict_do_nothing(
                     index_elements=["md5", "user_id", "device_key", "page", "start_time"]

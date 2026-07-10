@@ -45,6 +45,8 @@ from src.utils.user_context import (
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.cache_paths import safe_cache_path
+from src.utils.transcription_cancel import is_cancelled, clear_cancel
+from src.utils.transcriber import TranscriptionCancelled
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.progress_metadata import state_metadata_kwargs
 
@@ -1237,12 +1239,17 @@ class SyncManager:
                 item_data = abs_progress_map.get(suggestion.source_id)
                 if not item_data:
                     continue
-                duration = item_data.get('duration', 0)
-                if duration > 0:
-                    pct = item_data.get('currentTime', 0) / duration
-                    if pct > 0.70 or item_data.get('isFinished'):
-                        logger.info(f"🧹 Dismissing suggestion for '{suggestion.title}': progress {pct:.1%} > 70%")
-                        self.database_service.dismiss_suggestion(suggestion.source_id)
+                # ABS may report `duration`/`currentTime` as an explicit JSON null
+                # (e.g. finished books). `dict.get(key, 0)` only applies the default
+                # when the key is absent, so coerce falsy values to 0 to avoid a
+                # `NoneType > int` TypeError that would abort the whole scan.
+                duration = item_data.get('duration') or 0
+                current_time = item_data.get('currentTime') or 0
+                is_finished = bool(item_data.get('isFinished'))
+                pct = (current_time / duration) if duration > 0 else 0
+                if is_finished or pct > 0.70:
+                    logger.info(f"🧹 Dismissing suggestion for '{suggestion.title}': progress {pct:.1%} (finished={is_finished})")
+                    self.database_service.dismiss_suggestion(suggestion.source_id)
 
             logger.debug(f"Checking for suggestions: {len(abs_progress_map)} books with progress, {len(mapped_ids)} already mapped")
 
@@ -1251,8 +1258,9 @@ class SyncManager:
                     logger.debug(f"Skipping {abs_id}: already mapped")
                     continue
 
-                duration = item_data.get('duration', 0)
-                current_time = item_data.get('currentTime', 0)
+                # Coerce null duration/currentTime (see dismissal loop above).
+                duration = item_data.get('duration') or 0
+                current_time = item_data.get('currentTime') or 0
 
                 if duration > 0:
                     pct = current_time / duration
@@ -1809,6 +1817,14 @@ class SyncManager:
                 # Update the active filename to the one we just used/downloaded
                 book.ebook_filename = new_filename
             
+            # Guard against a delete that landed after transcription finished but
+            # before we persist (e.g. via SMIL/Storyteller paths that don't hit the
+            # chunk-boundary cancel check). Re-inserting a just-deleted book would
+            # resurrect it as a ghost row, so bail out cleanly instead.
+            if is_cancelled(abs_id) or self.database_service.get_book(abs_id) is None:
+                logger.info(f"🛑 Skipping final save for {sanitize_log_data(abs_title)}: mapping was deleted")
+                return
+
             book.status = 'active'
             self.database_service.save_book(book)
 
@@ -1822,6 +1838,11 @@ class SyncManager:
 
 
             logger.info(f"✅ Completed: {sanitize_log_data(abs_title)}")
+
+        except TranscriptionCancelled:
+            # Mapping deleted mid-transcription. The worker stopped cleanly; do not
+            # touch the DB (the book row is gone) or mark the job failed.
+            logger.info(f"🛑 Transcription cancelled for {sanitize_log_data(abs_title)}: mapping deleted")
 
         except Exception as e:
             logger.error(f"❌ {sanitize_log_data(abs_title)}: {e}")
@@ -1864,6 +1885,9 @@ class SyncManager:
             self.database_service.save_book(book)
 
         finally:
+            # Drop any cancellation flag so a future mapping reusing this abs_id
+            # isn't immediately cancelled by a stale entry.
+            clear_cancel(abs_id)
             if library_token is not None:
                 _library_service_override.reset(library_token)
             if creds_token is not None:

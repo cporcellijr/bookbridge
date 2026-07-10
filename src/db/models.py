@@ -938,12 +938,20 @@ class DatabaseManager:
         self._filesystem_type = self._filesystem_type_for_path(self.db_path)
         self._journal_mode_logged = False
         self._journal_mode_warned = False
+        # Busy timeout: how long a blocked writer waits for the write lock before
+        # SQLite raises "database is locked". A long sync cycle can hold the writer
+        # for many seconds, so default to 60s (configurable) and reduce the chance
+        # of a KOReader statistics upload failing under contention (see issue #315).
+        try:
+            self._busy_timeout_ms = max(1, int(os.getenv("SQLITE_BUSY_TIMEOUT_SECONDS", "60"))) * 1000
+        except (TypeError, ValueError):
+            self._busy_timeout_ms = 60_000
         # Increase timeout to reduce lock errors, allow multi-thread access.
         # Using 4 slashes guarantees an absolute path in SQLAlchemy
         self.engine = create_engine(
             f'sqlite:///{self.db_path}',
             echo=False,
-            connect_args={'timeout': 30, 'check_same_thread': False}
+            connect_args={'timeout': self._busy_timeout_ms / 1000, 'check_same_thread': False}
         )
 
         journal_mode = self._resolve_journal_mode()
@@ -959,6 +967,9 @@ class DatabaseManager:
             cursor.execute(f"PRAGMA journal_mode={journal_mode}")
             actual_journal_mode = (cursor.fetchone() or [""])[0]
             cursor.execute("PRAGMA synchronous=NORMAL")
+            # Apply the busy timeout to every connection (not just the primary
+            # pool) so blocked writers wait rather than failing immediately.
+            cursor.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
             if not self._journal_mode_logged:
                 logger.info(
                     "SQLite journal mode for '%s': requested=%s actual=%s filesystem=%s",

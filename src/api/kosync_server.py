@@ -1798,22 +1798,48 @@ def koreader_upload_statistics():
         return jsonify({"error": "Database service unavailable"}), 503
     user_id = getattr(g, "kosync_user_id", None)
 
-    try:
-        accepted_books = _database_service.upsert_koreader_book_stats(
+    def _persist():
+        accepted = _database_service.upsert_koreader_book_stats(
             device=device,
             device_id=device_id,
             books=books,
             user_id=user_id,
         )
-        page_insert_result = _database_service.bulk_insert_koreader_page_stats(
+        result = _database_service.bulk_insert_koreader_page_stats(
             device=device,
             device_id=device_id,
             page_stats=page_stats,
             user_id=user_id,
         )
-    except Exception as e:
-        logger.error("KOReader statistics upload failed for device '%s': %s", device_key, e)
-        return jsonify({"error": "Failed to persist statistics upload"}), 500
+        return accepted, result
+
+    # A long sync cycle can hold the SQLite writer past the busy timeout, so a
+    # single "database is locked" shouldn't surface as a 500. Retry with
+    # exponential backoff before giving up (see issue #315).
+    try:
+        max_attempts = max(1, int(os.getenv("KOREADER_STATS_WRITE_RETRIES", "3")))
+    except (TypeError, ValueError):
+        max_attempts = 3
+
+    accepted_books = None
+    page_insert_result = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            accepted_books, page_insert_result = _persist()
+            break
+        except Exception as e:
+            is_locked = "database is locked" in str(e).lower()
+            if is_locked and attempt < max_attempts:
+                backoff = 0.5 * (2 ** (attempt - 1))
+                logger.warning(
+                    "KOReader statistics write for device '%s' hit a locked database "
+                    "(attempt %d/%d); retrying in %.1fs",
+                    device_key, attempt, max_attempts, backoff,
+                )
+                time.sleep(backoff)
+                continue
+            logger.error("KOReader statistics upload failed for device '%s': %s", device_key, e)
+            return jsonify({"error": "Failed to persist statistics upload"}), 500
 
     return jsonify({
         "accepted_books": int(accepted_books or 0),

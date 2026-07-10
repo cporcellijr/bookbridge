@@ -29,9 +29,14 @@ from src.utils.logging_utils import sanitize_log_data, time_execution
 from src.utils.transcription_providers import get_transcription_provider
 from src.utils.polisher import Polisher
 from src.utils.storyteller_transcript import StorytellerTranscript
+from src.utils.transcription_cancel import is_cancelled
 # We keep the import for type hinting, but we don't instantiate it directly anymore
 
 logger = logging.getLogger(__name__)
+
+
+class TranscriptionCancelled(Exception):
+    """Raised inside a transcription worker when its mapping has been deleted."""
 
 class AudioTranscriber:
     # [UPDATED] Accepted smil_extractor and polisher as arguments
@@ -555,6 +560,13 @@ class AudioTranscriber:
                 if idx < chunks_completed:
                     continue
 
+                # Cooperative cancellation: if the mapping was deleted while we
+                # were transcribing, stop before doing more work or writing into
+                # a cache directory the delete path may have already removed.
+                if is_cancelled(abs_id):
+                    logger.info(f"🛑 Transcription cancelled for {abs_id} (mapping deleted); stopping cleanly")
+                    raise TranscriptionCancelled(abs_id)
+
                 duration = self.get_audio_duration(local_path)
                 pct = (cumulative_duration / total_audio_duration * 100) if total_audio_duration > 0 else 0
                 logger.info(f"   [{pct:.0f}%] Transcribing chunk {idx + 1}/{total_chunks} ({duration/60:.1f} min)...")
@@ -577,14 +589,21 @@ class AudioTranscriber:
                 cumulative_duration += duration
                 chunks_completed = idx + 1
 
-                # Save progress after each chunk for resumption
-                with open(progress_file, 'w') as f:
-                    json.dump({
-                        'chunks_completed': chunks_completed,
-                        'cumulative_duration': cumulative_duration,
-                        'transcript': full_transcript,
-                        'done': (chunks_completed == total_chunks)
-                    }, f)
+                # Save progress after each chunk for resumption. Guard against the
+                # cache directory having been removed by a concurrent mapping
+                # delete — treat a vanished directory as a cancellation signal
+                # rather than crashing with FileNotFoundError.
+                try:
+                    with open(progress_file, 'w') as f:
+                        json.dump({
+                            'chunks_completed': chunks_completed,
+                            'cumulative_duration': cumulative_duration,
+                            'transcript': full_transcript,
+                            'done': (chunks_completed == total_chunks)
+                        }, f)
+                except (FileNotFoundError, NotADirectoryError):
+                    logger.info(f"🛑 Progress cache for {abs_id} vanished (mapping deleted); stopping cleanly")
+                    raise TranscriptionCancelled(abs_id)
 
                 if progress_callback:
                     # Report progress for this phase (handled by SyncManager logic)
@@ -599,6 +618,10 @@ class AudioTranscriber:
 
             return full_transcript
 
+        except TranscriptionCancelled:
+            # Mapping deleted mid-run — not a failure. Propagate so the caller
+            # can skip the terminal DB write without logging a scary error.
+            raise
         except Exception as e:
             logger.error(f"❌ Transcription failed: {e}")
             # Don't delete cache dir - allows resume on retry

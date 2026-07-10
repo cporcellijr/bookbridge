@@ -1868,6 +1868,18 @@ class ForgeService:
             logger.warning("Forge & Match resume: could not list forging books: %s", exc)
             return 0
 
+        # Full re-forges each stage a large audio file and TUS-upload it to
+        # Storyteller. Starting every pending book at once saturates the network
+        # and Storyteller's worker, so they all time out. Bound how many run
+        # concurrently (default 1 — serialize) via FORGE_RESUME_CONCURRENCY.
+        # Completion watchers (books already uploaded) are cheap polling loops and
+        # stay unbounded.
+        try:
+            resume_concurrency = max(1, int(os.getenv("FORGE_RESUME_CONCURRENCY", "1")))
+        except (TypeError, ValueError):
+            resume_concurrency = 1
+        reforge_semaphore = threading.Semaphore(resume_concurrency)
+
         resumed = 0
         re_forged = 0
         for book in forging:
@@ -1887,7 +1899,7 @@ class ForgeService:
                     daemon=True,
                 ).start()
                 resumed += 1
-            elif worker._reforge_pending_book(book):
+            elif worker._reforge_pending_book(book, semaphore=reforge_semaphore):
                 re_forged += 1
 
         if resumed or re_forged:
@@ -1898,8 +1910,12 @@ class ForgeService:
             )
         return resumed + re_forged
 
-    def _reforge_pending_book(self, book) -> bool:
-        """Re-run the full forge for a book whose Storyteller upload never finished."""
+    def _reforge_pending_book(self, book, semaphore=None) -> bool:
+        """Re-run the full forge for a book whose Storyteller upload never finished.
+
+        When ``semaphore`` is provided the heavy pipeline blocks on it before
+        running, so a batch of restart re-forges execute up to N-at-a-time
+        instead of all racing to upload simultaneously."""
         abs_id = getattr(book, 'abs_id', None)
         if not abs_id:
             return False
@@ -1920,12 +1936,21 @@ class ForgeService:
             "🔁 Forge & Match resume: re-running full forge for '%s' (no Storyteller upload to resume)",
             abs_id,
         )
-        threading.Thread(
-            target=self._auto_forge_background_task,
-            args=(abs_id, text_item, title, None, original_filename, original_hash),
-            kwargs=kwargs,
-            daemon=True,
-        ).start()
+
+        args = (abs_id, text_item, title, None, original_filename, original_hash)
+
+        def _run():
+            # Serialize heavy re-forges behind the shared semaphore so concurrent
+            # restart recovery doesn't overwhelm Storyteller / the network.
+            if semaphore is not None:
+                semaphore.acquire()
+            try:
+                self._auto_forge_background_task(*args, **kwargs)
+            finally:
+                if semaphore is not None:
+                    semaphore.release()
+
+        threading.Thread(target=_run, daemon=True).start()
         return True
 
     def _resume_forge_match_background_task(self, abs_id, book_uuid):

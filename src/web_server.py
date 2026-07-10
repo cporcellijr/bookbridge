@@ -6959,6 +6959,15 @@ def cleanup_mapping_resources(book):
         return
     clients = uc()
 
+    # Signal any in-flight transcription worker for this book to stop before we
+    # remove its cache directory, so it doesn't crash writing a progress
+    # checkpoint into a directory that no longer exists (see issue #313).
+    try:
+        from src.utils.transcription_cancel import request_cancel
+        request_cancel(book.abs_id)
+    except Exception:
+        pass
+
     if book.transcript_file:
         try:
             Path(book.transcript_file).unlink()
