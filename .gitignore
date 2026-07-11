@@ -42,3 +42,8 @@ BRANCH_STATUS.md
 CLAUDE.md
 AGENTS.md
 .claude/
+
+# Automated review pipeline (local-only: OpenCode + OmniRoute scheduled reviewer)
+opencode.json
+docs/automated-review/
+scripts/automated-review/
