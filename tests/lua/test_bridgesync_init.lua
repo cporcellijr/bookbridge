@@ -113,14 +113,34 @@ preload("luasettings", function()
     }
 end)
 
+local uploaded_log_payloads = {}
+
 preload("bridge_api_client", function()
     local APIClient = {}
     function APIClient:new()
         return setmetatable({}, { __index = self })
     end
-    function APIClient:init() end
+    function APIClient:init(server_url, username, key, log_callback)
+        self.server_url = server_url
+        self.username = username
+        self.key = key
+        self.log_callback = log_callback
+    end
+    function APIClient:uploadSessions()
+        return true, 200, ""
+    end
+    function APIClient:uploadClientLogs(payload)
+        uploaded_log_payloads[#uploaded_log_payloads + 1] = payload
+        return true, 200, ""
+    end
     return APIClient
 end)
+
+local sqlite_values = {
+    server_url = "http://bridge:5758",
+    username = "reader",
+    key = "secret",
+}
 
 preload("bridge_sqlite_state", function()
     local BridgeSqliteState = {}
@@ -137,7 +157,14 @@ preload("bridge_sqlite_state", function()
         if key == "migration_done" then
             return true
         end
+        if sqlite_values[key] ~= nil then
+            return sqlite_values[key]
+        end
         return default
+    end
+    function BridgeSqliteState:set_setting(key, value)
+        sqlite_values[key] = value
+        return true
     end
     function BridgeSqliteState:prune_uploaded_sessions()
         return true
@@ -164,6 +191,7 @@ preload("bridge_sessions", empty_module)
 
 local BridgeSync = require("main")
 local bridge = BridgeSync:new({
+    path = plugin_dir,
     ui = {
         menu = {
             registerToMainMenu = function() end,
@@ -182,5 +210,50 @@ local log_contents = handle:read("*a")
 handle:close()
 assert(log_contents:find("SQLite state manager initialized", 1, true),
     "BridgeSync startup did not persist its first SQLite log message")
+
+bridge:logWarn("Book sync completed with one deferred download")
+assert(bridge:_uploadDeviceLogTail("book_sync", "partial") == true)
+assert(#uploaded_log_payloads == 1)
+assert(uploaded_log_payloads[1].operation == "book_sync")
+assert(uploaded_log_payloads[1].status == "partial")
+
+bridge.pending_sessions = {
+    { session_id = "session-1", abs_id = "book-1" },
+}
+bridge.sqlite_state.mark_sessions_uploaded = function()
+    return false
+end
+local upload_ok = bridge:_uploadSessions()
+assert(upload_ok == false,
+    "session upload must fail locally when SQLite acknowledgement cannot be persisted")
+assert(#bridge.pending_sessions == 1,
+    "unacknowledged sessions must remain queued for retry")
+
+bridge.sqlite_state.mark_sessions_uploaded = function()
+    return true
+end
+upload_ok = bridge:_uploadSessions()
+assert(upload_ok == true,
+    "session upload must complete once SQLite acknowledgement succeeds")
+assert(#bridge.pending_sessions == 0,
+    "acknowledged sessions must be removed from the in-memory queue")
+assert(#uploaded_log_payloads == 3,
+    "each attempted session upload must report its device log tail")
+assert(uploaded_log_payloads[2].operation == "session_upload")
+assert(uploaded_log_payloads[2].status == "failure")
+assert(uploaded_log_payloads[3].status == "success")
+assert(uploaded_log_payloads[3].plugin_version == "0.5.3")
+assert(type(sqlite_values.device_log_upload_offset) == "number",
+    "successful telemetry must persist the acknowledged log byte offset")
+
+local saw_ack_failure = false
+for _, line in ipairs(uploaded_log_payloads[2].lines or {}) do
+    if line:find("local SQLite acknowledgement failed", 1, true) then
+        saw_ack_failure = true
+        break
+    end
+end
+assert(saw_ack_failure,
+    "failure telemetry must include the local SQLite acknowledgement diagnostic")
 
 print("BridgeSync Lua init regression test passed")

@@ -50,6 +50,7 @@ local _ = require("gettext")
 local T = require("ffi/util").template
 local STATS_UPLOAD_BATCH = 3000
 local SETTINGS_VERSION = 1
+local DEVICE_LOG_UPLOAD_MAX_BYTES = 24 * 1024
 
 local BridgeSync = WidgetContainer:extend{
     name = "bridgesync",
@@ -360,6 +361,77 @@ end
 function BridgeSync:logErr(...)
     logger.err("Bridge Sync:", ...)
     self:_appendLog("error", table.concat({...}, " "))
+end
+
+function BridgeSync:_pluginVersion()
+    if not self.path or self.path == "" then return "unknown" end
+    local chunk = loadfile(self.path .. "/_meta.lua")
+    if not chunk then return "unknown" end
+    local ok, meta = pcall(chunk)
+    if ok and type(meta) == "table" and meta.version then
+        return tostring(meta.version)
+    end
+    return "unknown"
+end
+
+function BridgeSync:_readDeviceLogChunk()
+    local handle = io.open(self.log_path, "rb")
+    if not handle then return {}, nil end
+
+    local size = handle:seek("end") or 0
+    local saved_offset = tonumber(self:_getStateScalar("device_log_upload_offset"))
+    local offset = saved_offset
+    if offset == nil or offset < 0 or offset > size then
+        offset = math.max(0, size - DEVICE_LOG_UPLOAD_MAX_BYTES)
+    end
+
+    handle:seek("set", offset)
+    local chunk = handle:read(DEVICE_LOG_UPLOAD_MAX_BYTES) or ""
+    local next_offset = handle:seek() or (offset + #chunk)
+    handle:close()
+
+    local lines = {}
+    for line in chunk:gmatch("[^\r\n]+") do
+        lines[#lines + 1] = line
+    end
+    return lines, next_offset
+end
+
+-- Best-effort telemetry: ship only the unread, bounded BridgeSync log tail.
+-- The saved byte offset advances only after a successful bridge acknowledgement,
+-- so network/server failures are retried after the next book or session sync.
+function BridgeSync:_uploadDeviceLogTail(operation, status)
+    if not self.api or not self.api.uploadClientLogs then return false end
+    if not self.server_url or self.server_url == "" then return false end
+
+    local lines, next_offset = self:_readDeviceLogChunk()
+    local device, device_id = self:_currentDeviceIdentity()
+    local payload = {
+        operation = tostring(operation or "unknown"),
+        status = tostring(status or "unknown"),
+        plugin_version = self:_pluginVersion(),
+        device = device,
+        device_id = device_id,
+        lines = lines,
+    }
+
+    -- Do not append the telemetry POST itself to bridge_sync.log, which would
+    -- otherwise create one new line to upload after every successful upload.
+    local original_callback = self.api.log_callback
+    self.api.log_callback = nil
+    local call_ok, ok, code, body = pcall(self.api.uploadClientLogs, self.api, payload)
+    self.api.log_callback = original_callback
+
+    if call_ok and ok then
+        if next_offset ~= nil then
+            self:_saveStateScalar("device_log_upload_offset", next_offset)
+        end
+        return true
+    end
+
+    local reason = call_ok and (body or code or "request failed") or ok
+    self:_appendLog("warn", "Device log telemetry upload failed: " .. tostring(reason or "unknown error"))
+    return false
 end
 
 function BridgeSync:_detectDefaultDownloadDir()
@@ -1689,6 +1761,7 @@ function BridgeSync:syncFromBridge(silent)
         if not silent then
             self:_showMessage(T(_("Bridge Sync failed: %1"), tostring(success or "Subprocess failed")), 5)
         end
+        self:_uploadDeviceLogTail("book_sync", "failure")
         return false
     end
 
@@ -1697,6 +1770,7 @@ function BridgeSync:syncFromBridge(silent)
         if not silent then
             self:_showMessage(T(_("Bridge Sync failed: %1"), tostring(result or "Unknown error")), 5)
         end
+        self:_uploadDeviceLogTail("book_sync", "failure")
         return false
     end
 
@@ -1730,6 +1804,9 @@ function BridgeSync:syncFromBridge(silent)
     end
 
     self:_maybeAutoSyncStats("manifest sync")
+
+    local sync_status = (tonumber(result.errors) or 0) > 0 and "partial" or "success"
+    self:_uploadDeviceLogTail("book_sync", sync_status)
 
     return true
 end
@@ -1981,14 +2058,23 @@ function BridgeSync:_uploadSessions()
                 end
             end
             if #uploaded_ids > 0 then
-                self.sqlite_state:mark_sessions_uploaded(uploaded_ids)
+                local marked = self.sqlite_state:mark_sessions_uploaded(uploaded_ids)
+                if not marked then
+                    self:logWarn(
+                        "Session upload reached the bridge but local SQLite acknowledgement failed; retaining queue for retry"
+                    )
+                    self:_uploadDeviceLogTail("session_upload", "failure")
+                    return false
+                end
             end
         end
         self.pending_sessions = {}
         self:_savePendingSessions(self.pending_sessions)
+        self:_uploadDeviceLogTail("session_upload", "success")
         return true
     else
         self:logWarn("Session upload failed:", code or "", body or "", "- will retry later")
+        self:_uploadDeviceLogTail("session_upload", "failure")
         return false
     end
 end

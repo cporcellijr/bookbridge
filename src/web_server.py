@@ -7386,8 +7386,7 @@ def mark_complete(abs_id):
         success = False
         if client_name.lower() == 'abs':
             try:
-                client.abs_client.mark_finished(abs_id)
-                success = True
+                success = bool(client.abs_client.mark_finished(abs_id))
             except Exception as e:
                 logger.error(f"❌ ABS mark_finished failed for '{abs_id}': {e}")
         else:

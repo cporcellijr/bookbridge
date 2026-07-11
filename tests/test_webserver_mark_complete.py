@@ -220,6 +220,7 @@ class MarkCompleteRouteTest(unittest.TestCase):
     def test_mark_complete_calls_abs_mark_finished(self):
         """ABS client receives mark_finished, not update_progress."""
         abs_client = _make_client("ABS", sync_types={'audiobook'})
+        abs_client.abs_client.mark_finished.return_value = True
         abs_client.update_progress = MagicMock()  # should NOT be called
 
         clients = {'ABS': abs_client}
@@ -230,6 +231,19 @@ class MarkCompleteRouteTest(unittest.TestCase):
 
         abs_client.abs_client.mark_finished.assert_called_once_with("test-book")
         abs_client.update_progress.assert_not_called()
+
+    def test_mark_complete_abs_false_result_does_not_persist(self):
+        """ABS HTTP failures return False and must not create a completed state."""
+        abs_client = _make_client("ABS", sync_types={'audiobook'})
+        abs_client.abs_client.mark_finished.return_value = False
+
+        client_app = self._build_test({'ABS': abs_client})
+
+        response = _post_json(client_app, '/api/mark-complete/test-book')
+        assert response.status_code == 200, response.get_data(as_text=True)
+
+        abs_client.abs_client.mark_finished.assert_called_once_with("test-book")
+        self._db.save_state.assert_not_called()
 
     def test_mark_complete_ebook_only_routes_to_ebook_clients(self):
         """ebook_only sync_mode routes to ebook-type clients only."""
@@ -358,6 +372,7 @@ class MarkCompleteKoSyncLocatorTest(unittest.TestCase):
     def test_skips_locator_for_abs_client(self):
         """ABS client does not pass through update_progress result for locator fields."""
         abs_client = _make_client("ABS", sync_types={'audiobook'})
+        abs_client.abs_client.mark_finished.return_value = True
         abs_client.update_progress = MagicMock()
 
         clients = {'ABS': abs_client}

@@ -6,9 +6,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **BridgeSync device diagnostics now reach the bridge logs automatically.** After each book sync or reading-session upload, BridgeSync 0.5.3 sends a bounded unread tail of `bridge_sync.log` through the authenticated device-sync API. Docker logs identify the KOReader device, plugin version, operation, and success/partial/failure status while preserving each relayed line's info, warning, or error severity. Failed telemetry keeps its device-side byte offset and retries on the next operation; telemetry failure never fails the underlying sync.
+
 ### Fixed
 
-- **Locator spine-position resolver and stabilization fixes from automated review.** The synthetic inter-spine separator character between EPUB spine items no longer maps to the last spine item; instead it snaps to the start of the following item. Resolved CFI values that were off by 136K+ characters. XPath resolution failures in locator stabilization no longer silently succeed with zero error. Regenerated CFI that fails round-trip verification is rejected before reaching Grimmory or BookOrbit. Marking a book complete now preserves the client's locator metadata (xpath, cfi) in the persisted state. KoSync GET resolution uses a per-user sibling's valid locator when its percentage equals the synced state (e.g. both at 100%). See `docs/automated-review/BUG_REPORT.md` for the full defect analysis.
+- **Locator spine-position resolver and stabilization fixes from automated review.** Synthetic inter-spine separators now snap to the following non-empty spine item, while trailing empty navigation/cover documents clamp to the last real character. Resolved CFI values that were off by 136K+ characters. XPath resolution failures in locator stabilization no longer silently succeed with zero error. Regenerated CFI that fails round-trip verification is rejected before reaching Grimmory or BookOrbit. Marking a book complete now preserves the client's locator metadata (xpath, cfi) in the persisted state. KoSync GET resolution uses a per-user sibling's equal-percentage locator only when the synced state has no viable locator of its own. See `docs/automated-review/BUG_REPORT.md` for the full defect analysis.
+
+- **Post-review completion, cache, and BridgeSync retry hardening.** Mark Complete now honors Audiobookshelf's normal `False` failure result before saving a completed state. EPUB path caching enforces its configured LRU bound. BridgeSync 0.5.3 retains remotely uploaded sessions until its device SQLite acknowledgement succeeds, and repeated session payloads are accepted idempotently by the bridge without inflating reading statistics.
 
 ## [7.1.1] - 2026-07-11
 

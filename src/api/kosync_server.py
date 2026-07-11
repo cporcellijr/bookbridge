@@ -80,6 +80,9 @@ _kosync_recent_external_puts_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
 _KOREADER_STATS_MERGE_LIMIT = 10000
+_BRIDGESYNC_LOG_MAX_LINES = 200
+_BRIDGESYNC_LOG_MAX_LINE_CHARS = 1000
+_BRIDGESYNC_LOG_MAX_PAYLOAD_BYTES = 64 * 1024
 
 
 def _recent_external_put_ttl_seconds() -> int:
@@ -2043,6 +2046,34 @@ def kosync_upload_sessions():
         if end_progress is not None:
             end_progress = float(end_progress) / 100.0
 
+        # A plugin keeps its local queue until SQLite acknowledges the remote
+        # upload. If that acknowledgement fails, the same payload is retried.
+        # Treat an identical, already-recorded plugin session as accepted so the
+        # retry is idempotent and does not inflate reading statistics.
+        already_recorded = False
+        if _database_service:
+            try:
+                already_recorded = _database_service.has_matching_reading_session(
+                    abs_id=abs_id,
+                    session_type=session_type,
+                    start_time=float(start_time),
+                    end_time=float(end_time),
+                    duration_seconds=int(duration_seconds),
+                    start_progress=start_progress,
+                    end_progress=end_progress,
+                    leader_client="BridgeSync_Plugin",
+                ) is True
+            except Exception as e:
+                logger.warning(
+                    "Session upload: duplicate check failed for '%s': %s",
+                    abs_id,
+                    e,
+                )
+        if already_recorded:
+            logger.info("Session upload: accepted duplicate retry for '%s'", abs_id)
+            accepted += 1
+            continue
+
         try:
             _database_service.record_reading_session(
                 abs_id=abs_id,
@@ -2178,6 +2209,73 @@ def kosync_upload_sessions():
 
     logger.info(f"Session upload: accepted={accepted}, rejected={rejected}")
     return jsonify({"accepted": accepted, "rejected": rejected}), 200
+
+
+@kosync_sync_bp.route('/device-sync/logs', methods=['POST'])
+@kosync_sync_bp.route('/koreader/device-sync/logs', methods=['POST'])
+@kosync_auth_required
+def kosync_upload_device_logs():
+    """Relay a bounded BridgeSync log tail into the bridge's Docker logs."""
+    if request.content_length and request.content_length > _BRIDGESYNC_LOG_MAX_PAYLOAD_BYTES:
+        return jsonify({"error": "Log payload is too large"}), 413
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected JSON object"}), 400
+
+    raw_lines = data.get("lines", [])
+    if not isinstance(raw_lines, list):
+        return jsonify({"error": "lines must be an array"}), 400
+
+    def clean_field(value, limit: int) -> str:
+        text = str(value or "").replace("\r", " ").replace("\n", " ")
+        return " ".join(text.split())[:limit]
+
+    operation = clean_field(data.get("operation"), 64) or "unknown"
+    status = clean_field(data.get("status"), 16).lower()
+    if status not in {"success", "partial", "failure"}:
+        status = "unknown"
+    device = clean_field(data.get("device"), 128) or "KOReader"
+    device_id = clean_field(data.get("device_id"), 128) or "unknown"
+    plugin_version = clean_field(data.get("plugin_version"), 32) or "unknown"
+    user_id = getattr(g, "kosync_user_id", None)
+
+    accepted_lines = []
+    for raw_line in raw_lines[:_BRIDGESYNC_LOG_MAX_LINES]:
+        if not isinstance(raw_line, (str, int, float, bool)):
+            continue
+        line = clean_field(raw_line, _BRIDGESYNC_LOG_MAX_LINE_CHARS)
+        if line:
+            accepted_lines.append(line)
+
+    report_logger = (
+        logger.error if status == "failure"
+        else logger.warning if status == "partial"
+        else logger.info
+    )
+    report_logger(
+        "BridgeSync device report: user_id=%s device=%s device_id=%s plugin=%s "
+        "operation=%s status=%s lines=%d",
+        user_id,
+        device,
+        device_id,
+        plugin_version,
+        operation,
+        status,
+        len(accepted_lines),
+    )
+
+    prefix = f"BridgeSync device log [{device}/{device_id}] [{operation}]"
+    for line in accepted_lines:
+        lowered = line.lower()
+        if "[error]" in lowered or "[err]" in lowered:
+            logger.error("%s %s", prefix, line)
+        elif "[warn]" in lowered or "[warning]" in lowered:
+            logger.warning("%s %s", prefix, line)
+        else:
+            logger.info("%s %s", prefix, line)
+
+    return jsonify({"accepted": len(accepted_lines)}), 200
 
 
 # ── Plugin self-update helpers ──
@@ -2617,14 +2715,24 @@ def _respond_from_book_states(doc_id, book):
         # book was just advanced from ABS/Storyteller/etc.) must be pulled forward —
         # returning its stale spot here drags the reader back and starts a GET/PUT
         # tug-of-war (e.g. a 40% audiobook position repeatedly snapping back to 9%).
-        # Use the sibling's locator when its percentage meets or exceeds the
-        # synced state's. Equal percentages (e.g. both at 100%) where the synced
-        # state has no locator fields (mark-complete with percent-only) mean the
-        # sibling's valid locator should be used rather than suppressed.
-        # The epsilon forms a forgiveness zone so that floating-point near-equal
-        # values are treated as equal while still rejecting genuinely behind
-        # siblings.
-        if float(best_doc.percentage) + 0.0001 > synced_pct:
+        # An ahead sibling still wins. An equal sibling is only a locator fallback
+        # when the synced State has no viable locator of its own; otherwise an old
+        # sibling XPath from another EPUB build could replace the authoritative
+        # synced locator at the same percentage.
+        sibling_pct = float(best_doc.percentage)
+        synced_has_locator = bool(
+            kosync_state
+            and (
+                str(getattr(kosync_state, "xpath", "") or "").strip()
+                or str(getattr(kosync_state, "cfi", "") or "").strip()
+            )
+        )
+        sibling_is_ahead = sibling_pct > synced_pct + 0.0001
+        sibling_is_equal_fallback = (
+            abs(sibling_pct - synced_pct) <= 0.0001
+            and not synced_has_locator
+        )
+        if sibling_is_ahead or sibling_is_equal_fallback:
             logger.info(f"KOSync: Resolved {doc_id} to '{book.abs_title}' via sibling hash {best_doc.document_hash} ({float(best_doc.percentage):.2%})")
             poison_pill = _suppress_empty_progress_response(doc_id, float(best_doc.percentage), best_doc.progress)
             if poison_pill is not None:

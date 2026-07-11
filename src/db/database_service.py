@@ -3474,6 +3474,34 @@ class DatabaseService:
             }
 
     # Reading session operations
+    def has_matching_reading_session(
+        self,
+        abs_id: str,
+        session_type: str,
+        start_time: float,
+        end_time: float,
+        duration_seconds: int,
+        start_progress: float = None,
+        end_progress: float = None,
+        leader_client: str = None,
+        user_id: int = None,
+    ) -> bool:
+        """Return whether an identical user-scoped reading session exists."""
+        uid = self._resolve_uid(user_id)
+        duration_seconds = min(int(duration_seconds), 14400)
+        with self.get_session() as session:
+            return session.query(ReadingSession.id).filter(
+                ReadingSession.abs_id == abs_id,
+                ReadingSession.session_type == session_type,
+                ReadingSession.start_time == float(start_time),
+                ReadingSession.end_time == float(end_time),
+                ReadingSession.duration_seconds == duration_seconds,
+                ReadingSession.start_progress == start_progress,
+                ReadingSession.end_progress == end_progress,
+                ReadingSession.leader_client == leader_client,
+                ReadingSession.user_id == uid,
+            ).first() is not None
+
     def record_reading_session(self, abs_id: str, session_type: str, start_time: float,
                                end_time: float, duration_seconds: int,
                                start_progress: float = None, end_progress: float = None,

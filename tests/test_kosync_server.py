@@ -1748,22 +1748,31 @@ class TestKosyncEndpoints(unittest.TestCase):
             kosync_server._update_grouped_kosync_session(book, doc_hash, device, device_id, 0.10, start_time)
             kosync_server._update_grouped_kosync_session(book, doc_hash, device, device_id, 0.20, end_time)
 
+            payload = [{
+                'session_id': 'plugin-session-1',
+                'document_hash': doc_hash,
+                'session_type': 'EPUB',
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration_seconds': int(end_time - start_time),
+                'start_progress': 10,
+                'end_progress': 20,
+            }]
             response = self.client.post(
                 '/koreader/device-sync/sessions',
                 headers=self.auth_headers,
-                json=[{
-                    'document_hash': doc_hash,
-                    'session_type': 'EPUB',
-                    'start_time': start_time,
-                    'end_time': end_time,
-                    'duration_seconds': int(end_time - start_time),
-                    'start_progress': 10,
-                    'end_progress': 20,
-                }],
+                json=payload,
+            )
+            retry_response = self.client.post(
+                '/koreader/device-sync/sessions',
+                headers=self.auth_headers,
+                json=payload,
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {'accepted': 1, 'rejected': 0})
+        self.assertEqual(retry_response.status_code, 200)
+        self.assertEqual(retry_response.get_json(), {'accepted': 1, 'rejected': 0})
 
         registry = web_server.database_service.get_json_setting('KOSYNC_DEVICE_SESSION_REGISTRY', default={})
         self.assertEqual(registry[device_id]['mode'], 'plugin')
@@ -1777,6 +1786,62 @@ class TestKosyncEndpoints(unittest.TestCase):
 
         with kosync_server._kosync_open_sessions_lock:
             self.assertFalse(kosync_server._kosync_open_sessions)
+
+    def test_plugin_log_upload_relays_bounded_severity_to_bridge_logs(self):
+        """Device log telemetry is authenticated, sanitized, and severity-preserving."""
+        from src.api import kosync_server
+
+        payload = {
+            'operation': 'book_sync',
+            'status': 'partial',
+            'plugin_version': '0.5.3',
+            'device': 'Kobo',
+            'device_id': 'KOBO123\nspoofed',
+            'lines': [
+                '2026-07-11 12:00:00 [info] Book sync started',
+                '2026-07-11 12:00:01 [warn] One download was deferred',
+                '2026-07-11 12:00:02 [error] One download failed',
+            ],
+        }
+
+        with patch.object(kosync_server.logger, 'info') as info_log, \
+             patch.object(kosync_server.logger, 'warning') as warning_log, \
+             patch.object(kosync_server.logger, 'error') as error_log:
+            response = self.client.post(
+                '/koreader/device-sync/logs',
+                headers=self.auth_headers,
+                json=payload,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {'accepted': 3})
+        self.assertGreaterEqual(info_log.call_count, 1)
+        self.assertGreaterEqual(warning_log.call_count, 2)
+        error_log.assert_called_once()
+        warning_line_calls = [
+            call for call in warning_log.call_args_list
+            if call.args and call.args[0] == '%s %s'
+        ]
+        self.assertEqual(len(warning_line_calls), 1)
+        warning_prefix = warning_line_calls[0].args[1]
+        self.assertIn('Kobo/KOBO123 spoofed', warning_prefix)
+        self.assertIn('[book_sync]', warning_prefix)
+        self.assertIn('[warn]', warning_line_calls[0].args[2])
+        self.assertIn('[error]', error_log.call_args.args[2])
+        self.assertTrue(any(
+            call.args and str(call.args[0]).startswith('BridgeSync device report:')
+            for call in warning_log.call_args_list
+        ))
+
+    def test_plugin_log_upload_rejects_non_array_lines(self):
+        response = self.client.post(
+            '/koreader/device-sync/logs',
+            headers=self.auth_headers,
+            json={'operation': 'book_sync', 'status': 'failure', 'lines': 'not-an-array'},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json(), {'error': 'lines must be an array'})
 
     def test_internal_kosync_put_does_not_overwrite_plugin_device_classification_source(self):
         from src import web_server

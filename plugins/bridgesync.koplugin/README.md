@@ -15,6 +15,7 @@ This plugin is **not required** for normal bridge syncing — it is an optional 
 - Tracks reading sessions (time, pages, progress) and uploads them to the bridge
 - Serializes book, statistics, session, and highlight jobs so lifecycle syncs are queued instead of dropped
 - Uploads large statistics and highlight backlogs in bounded, acknowledgment-gated batches
+- Relays a bounded unread tail of its diagnostic log after book/session syncs so device failures appear in the bridge Docker logs
 
 ## Install
 
@@ -90,7 +91,7 @@ The plugin stores its data in the KOReader settings directory:
 |-------------------------|--------------------------------------|
 | `bridge_sync.lua`       | Plugin settings (server URL, toggles)|
 | `bridge_sync_state.lua` | Sync state (manifest items, pending sessions) |
-| `bridge_sync.log`       | Debug log for troubleshooting        |
+| `bridge_sync.log`       | Debug log for troubleshooting; new lines are relayed to the authenticated bridge after book/session syncs |
 
 ## Notes
 

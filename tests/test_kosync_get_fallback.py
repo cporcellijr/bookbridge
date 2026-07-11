@@ -159,6 +159,26 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         self.assertEqual(data['progress'], "/body/DocFragment[17]/body/p[3]/text().0")
         self.assertAlmostEqual(float(data['percentage']), 1.0)
 
+    def test_equal_percentage_does_not_replace_valid_synced_locator(self):
+        """Equal sibling fallback must not override an existing synced locator."""
+        self._setup_book_with_states(
+            kosync_state_pct=0.50,
+            kosync_xpath="/body/authoritative/path",
+            kosync_cfi=None,
+            sibling_pct=0.50,
+            sibling_progress="/body/stale/sibling",
+        )
+
+        response = self.client.get(
+            '/syncs/progress/' + ('a' * 32),
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        data = response.get_json()
+        self.assertEqual(data['progress'], "/body/authoritative/path")
+        self.assertAlmostEqual(float(data['percentage']), 0.50)
+
     def test_behind_sibling_rejected(self):
         """Behind sibling returns the synced state, not the stale sibling."""
         self._setup_book_with_states(

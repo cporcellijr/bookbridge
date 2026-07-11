@@ -99,8 +99,9 @@ class EbookParser:
         # Path-resolution cache: filename -> resolved Path. Avoids repeated 6-7s
         # recursive rglob scans for frequently-looked-up files. Entries are
         # validated on access (path must still exist). Cleared on invalidate call.
-        self._path_cache: dict[str, Path] = {}
-        self._path_cache_max = int(os.getenv("EBOOK_PATH_CACHE_SIZE", "100"))
+        self._path_cache: OrderedDict[str, Path] = OrderedDict()
+        self._path_cache_max = max(0, int(os.getenv("EBOOK_PATH_CACHE_SIZE", "100")))
+        self._path_cache_lock = threading.Lock()
 
         logger.info(
             f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, "
@@ -122,12 +123,14 @@ class EbookParser:
 
     def resolve_book_path(self, filename):
         # 1. Path-resolution cache: avoid repeated recursive scans for the same file.
-        cached = self._path_cache.get(filename)
-        if cached is not None:
-            if cached.exists():
-                return cached
-            # Stale entry (file moved/deleted) — drop and re-resolve.
-            self._path_cache.pop(filename, None)
+        with self._path_cache_lock:
+            cached = self._path_cache.get(filename)
+            if cached is not None:
+                if cached.exists():
+                    self._path_cache.move_to_end(filename)
+                    return cached
+                # Stale entry (file moved/deleted) — drop and re-resolve.
+                self._path_cache.pop(filename, None)
 
         # 2. Managed cache files bypass recursive library scans. These are
         #    provider-downloaded EPUBs (BookFusion, Storyteller) that live in
@@ -137,7 +140,7 @@ class EbookParser:
             if self.epub_cache_dir.exists():
                 cached_path = safe_cache_path(self.epub_cache_dir, filename)
                 if cached_path and cached_path.exists():
-                    self._path_cache[filename] = cached_path
+                    self._remember_resolved_path(filename, cached_path)
                     return cached_path
 
         # 3. Recursive library scans (existing precedence: glob before rglob).
@@ -146,7 +149,7 @@ class EbookParser:
             try:
                 if d.exists():
                     result = next(d.glob(f"**/{safe_name}"))
-                    self._path_cache[filename] = result
+                    self._remember_resolved_path(filename, result)
                     return result
             except StopIteration:
                 continue
@@ -159,25 +162,36 @@ class EbookParser:
                 continue
             for f in d.rglob("*"):
                 if f.name == filename:
-                    self._path_cache[filename] = f
+                    self._remember_resolved_path(filename, f)
                     return f
 
         # 4. Fall back to cache directory for ordinary filenames too.
         if self.epub_cache_dir.exists():
             cached_path = safe_cache_path(self.epub_cache_dir, filename)
             if cached_path and cached_path.exists():
-                self._path_cache[filename] = cached_path
+                self._remember_resolved_path(filename, cached_path)
                 return cached_path
 
         raise FileNotFoundError(f"Could not locate {filename}")
 
+    def _remember_resolved_path(self, filename: str, path: Path) -> None:
+        """Store a resolved path and evict least-recently-used entries."""
+        if self._path_cache_max <= 0:
+            return
+        with self._path_cache_lock:
+            self._path_cache.pop(filename, None)
+            self._path_cache[filename] = path
+            while len(self._path_cache) > self._path_cache_max:
+                self._path_cache.popitem(last=False)
+
     def invalidate_path_cache(self, filename: str | None = None) -> None:
         """Drop path-resolution cache entries. Used when files are known to have
         been added, removed, or renamed so stale entries are not reused."""
-        if filename:
-            self._path_cache.pop(filename, None)
-        else:
-            self._path_cache.clear()
+        with self._path_cache_lock:
+            if filename:
+                self._path_cache.pop(filename, None)
+            else:
+                self._path_cache.clear()
 
     def get_book_identifiers(self, filepath) -> set:
         """Return the set of normalized DC identifiers embedded in an EPUB.
@@ -945,22 +959,28 @@ class EbookParser:
         """
         if not spine_map:
             return None, None
+
+        non_empty_items = [
+            item for item in spine_map
+            if item['end'] > item['start']
+        ]
+        if not non_empty_items:
+            return None, None
+
         # 1. Exact match — position falls inside a spine item's range.
-        for item in spine_map:
+        for item in non_empty_items:
             if item['start'] <= target_index < item['end']:
                 return item, target_index
-        # 2. Gap between spine items: snap to the start of the following item.
-        for item in spine_map:
+        # 2. Gap between spine items: snap to the start of the following item
+        # that contains real text, skipping empty cover/navigation documents.
+        for item in non_empty_items:
             if target_index < item['start']:
-                clamped = max(item['start'], target_index)
-                return item, clamped
+                return item, item['start']
         # 3. Trailing position past the last spine item: clamp to the last
-        #    real character, never the last item blindly.
-        last = spine_map[-1]
+        #    real character, never an empty trailing item.
+        last = non_empty_items[-1]
         clamped = min(target_index, last['end'] - 1)
-        if clamped >= last['start']:
-            return last, clamped
-        return spine_map[-1], spine_map[-1]['start']
+        return last, max(last['start'], clamped)
 
     def get_locator_from_char_offset(self, filename, char_offset: int) -> Optional[LocatorResult]:
         """

@@ -137,3 +137,24 @@ def test_fallback_to_cache_dir_for_ordinary_filenames():
 
         result = parser.resolve_book_path("downloaded.epub")
         assert result == cache_file
+
+
+def test_path_cache_enforces_configured_capacity():
+    """The parser evicts least-recently-used paths at its configured bound."""
+    with tempfile.TemporaryDirectory() as tmp, patch.dict(
+        os.environ, {"EBOOK_PATH_CACHE_SIZE": "2"}
+    ):
+        parser = _parser_with_dirs(Path(tmp))
+        books = Path(tmp) / "books"
+        for name in ("a.epub", "b.epub", "c.epub"):
+            (books / name).write_bytes(name.encode())
+
+        parser.resolve_book_path("a.epub")
+        parser.resolve_book_path("b.epub")
+        parser.resolve_book_path("a.epub")  # a is now most recently used
+        parser.resolve_book_path("c.epub")
+
+        assert len(parser._path_cache) == 2
+        assert "a.epub" in parser._path_cache
+        assert "b.epub" not in parser._path_cache
+        assert "c.epub" in parser._path_cache

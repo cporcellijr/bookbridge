@@ -135,6 +135,31 @@ class TestResolveSpineItemForPosition(unittest.TestCase):
         item, clamped = self.parser._resolve_spine_item_for_position(spine_map, 50)
         self.assertIsNotNone(item)
 
+    def test_gap_skips_zero_length_spine_item(self):
+        """Separator gaps snap to the following item containing real text."""
+        spine_map = [
+            _spine_item(0, 100, spine_index=0),
+            _spine_item(101, 101, spine_index=1),
+            _spine_item(102, 200, spine_index=2),
+        ]
+
+        item, clamped = self.parser._resolve_spine_item_for_position(spine_map, 100)
+
+        self.assertEqual(item["spine_index"], 2)
+        self.assertEqual(clamped, 102)
+
+    def test_trailing_empty_spine_item_clamps_to_last_real_character(self):
+        """Trailing empty documents never become the end-of-book locator target."""
+        spine_map = [
+            _spine_item(0, 100, spine_index=0),
+            _spine_item(101, 101, spine_index=1),
+        ]
+
+        item, clamped = self.parser._resolve_spine_item_for_position(spine_map, 101)
+
+        self.assertEqual(item["spine_index"], 0)
+        self.assertEqual(clamped, 99)
+
     def test_only_item_gap_position(self):
         """Single-item spine map with gap-like position snaps to that item's start."""
         spine_map = [_spine_item(10, 100, spine_index=0)]
