@@ -2269,9 +2269,15 @@ class DatabaseService:
                                                acked_version=row.version, ack_deleted=True)
 
                 # 3. Per-device delta.
+                delta = self._compute_annotation_delta(session, user_id, doc_md5, device_key)
                 response_books.append({
                     "hash": doc_md5,
-                    "toApply": self._compute_annotation_delta(session, user_id, doc_md5, device_key),
+                    "toApply": {
+                        "add": delta["add"],
+                        "edit": delta["edit"],
+                        "delete": delta["delete"],
+                    },
+                    "more": delta["more"],
                 })
 
             session.commit()
@@ -2279,6 +2285,7 @@ class DatabaseService:
 
     def _compute_annotation_delta(self, session, user_id, doc_md5: str, device_key: str) -> dict:
         adds, edits, deletes = [], [], []
+        pending_count = 0
         rows = (
             session.query(KoreaderAnnotation)
             .filter(
@@ -2292,19 +2299,27 @@ class DatabaseService:
             state = self._get_device_state(session, row.id, device_key)
             if row.deleted:
                 if state is not None and int(state.acked_version or 0) > 0 and not state.ack_deleted:
-                    deletes.append({"serverId": row.id, "datetime": row.datetime})
+                    pending_count += 1
+                    if pending_count <= self._ANNOTATION_APPLY_CAP:
+                        deletes.append({"serverId": row.id, "datetime": row.datetime})
                 continue
             acked = int(state.acked_version or 0) if state is not None else 0
             if acked >= int(row.version or 1):
+                continue
+            pending_count += 1
+            if pending_count > self._ANNOTATION_APPLY_CAP:
                 continue
             entry = self._annotation_response_entry(row)
             if acked == 0:
                 adds.append(entry)
             else:
                 edits.append(entry)
-            if len(adds) + len(edits) + len(deletes) >= self._ANNOTATION_APPLY_CAP:
-                break
-        return {"add": adds, "edit": edits, "delete": deletes}
+        return {
+            "add": adds,
+            "edit": edits,
+            "delete": deletes,
+            "more": pending_count > self._ANNOTATION_APPLY_CAP,
+        }
 
     def ack_koreader_annotations(self, user_id, device_key: str, books: list[dict]) -> dict:
         """Record which exchanged annotations a device actually applied/deleted.

@@ -2469,6 +2469,57 @@ class TestAnnotationExchangeEndpoints(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_exchange_reports_more_when_annotation_delta_is_truncated(self):
+        doc = "q" * 32
+        changes = []
+        for index in range(205):
+            entry = self._entry()
+            entry["datetime"] = f"2026-07-{(index // 86400) + 1:02d} " \
+                f"{(index // 3600) % 24:02d}:{(index // 60) % 60:02d}:{index % 60:02d}"
+            entry["pos0"] = f"/body/DocFragment[7]/p[{index + 1}]/text().0"
+            entry["pos1"] = f"/body/DocFragment[7]/p[{index + 1}]/text().10"
+            changes.append(entry)
+
+        upload = self.client.post(
+            '/koreader/device-sync/annotations/exchange',
+            headers=self.auth_headers,
+            json={"device": "KoboA", "device_id": "kobo-a",
+                  "books": [{"hash": doc, "keys": [], "keysComplete": False, "changes": changes}]},
+        )
+        self.assertEqual(upload.status_code, 200)
+
+        pull = self.client.post(
+            '/koreader/device-sync/annotations/exchange',
+            headers=self.auth_headers,
+            json={"device": "KindleB", "device_id": "kindle-b",
+                  "books": [{"hash": doc, "keys": [], "keysComplete": False, "changes": []}]},
+        )
+        self.assertEqual(pull.status_code, 200)
+        result = pull.get_json()["books"][0]
+        self.assertEqual(len(result["toApply"]["add"]), 200)
+        self.assertTrue(result["more"])
+
+        ack_items = [
+            {"serverId": item["serverId"], "version": item["version"], "status": "applied"}
+            for item in result["toApply"]["add"]
+        ]
+        ack = self.client.post(
+            '/koreader/device-sync/annotations/exchange-ack',
+            headers=self.auth_headers,
+            json={"device": "KindleB", "device_id": "kindle-b",
+                  "books": [{"hash": doc, "applied": ack_items, "deleted": []}]},
+        )
+        self.assertEqual(ack.status_code, 200)
+
+        remainder = self.client.post(
+            '/koreader/device-sync/annotations/exchange',
+            headers=self.auth_headers,
+            json={"device": "KindleB", "device_id": "kindle-b",
+                  "books": [{"hash": doc, "keys": [], "keysComplete": False, "changes": []}]},
+        ).get_json()["books"][0]
+        self.assertEqual(len(remainder["toApply"]["add"]), 5)
+        self.assertFalse(remainder["more"])
+
 
 if __name__ == '__main__':
     unittest.main()

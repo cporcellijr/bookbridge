@@ -1917,8 +1917,9 @@ def koreader_exchange_annotations():
     Body mirrors the exchange convention the BookOrbit koplugin established:
     ``{device, device_id, books: [{hash, keys: [{k, dt}], keysComplete,
     changes: [...]}]}``. The response returns this device's pending delta per
-    book: ``{books: [{hash, toApply: {add, edit, delete}}]}``. The device
-    applies it and reports back via the exchange-ack endpoint.
+    book: ``{books: [{hash, toApply: {add, edit, delete}, more}]}``. ``more``
+    tells paged clients to acknowledge this batch and immediately pull the
+    remainder. The device reports applied changes via the exchange-ack endpoint.
     """
     if not _annotation_sync_enabled():
         return jsonify({"enabled": False, "books": []}), 200

@@ -23,6 +23,15 @@ local md5 = require("ffi/sha2").md5
 local MAX_BOOKS_PER_EXCHANGE = 20
 local MAX_CHANGES_PER_BOOK = 50
 local MAX_HISTORY_BOOKS = 30
+local MAX_KEYS_PER_BOOK = 5000
+local MAX_PULL_ROUNDS = 10
+local MAX_FIELD_LENGTH = {
+    color = 30,
+    text = 10000,
+    note = 5000,
+    chapter = 500,
+    pos = 4000,
+}
 
 local BridgeAnnotations = {}
 
@@ -46,27 +55,34 @@ function BridgeAnnotations.buildKey(datetime, pos0)
     return md5(tostring(datetime) .. "|" .. BridgeAnnotations.normalizeXPointer(pos0))
 end
 
+local function truncatedString(value, max_length)
+    if type(value) ~= "string" or value == "" then return nil end
+    if #value > max_length then return value:sub(1, max_length) end
+    return value
+end
+
 -- Normalize a sidecar annotation entry into the wire format. Returns nil for
 -- entries that can't sync (bookmarks without a range, PDF table positions).
 function BridgeAnnotations.normalizeEntry(a)
     if type(a) ~= "table" then return nil end
     if type(a.datetime) ~= "string" or a.datetime == "" then return nil end
-    if type(a.pos0) ~= "string" or a.pos0 == "" then return nil end
-    if type(a.pos1) ~= "string" or a.pos1 == "" then return nil end
+    local pos0 = truncatedString(a.pos0, MAX_FIELD_LENGTH.pos)
+    local pos1 = truncatedString(a.pos1, MAX_FIELD_LENGTH.pos)
+    if not pos0 or not pos1 then return nil end
     local entry = {
         datetime = a.datetime,
         drawer = type(a.drawer) == "string" and a.drawer or "lighten",
         posFormat = "xpointer",
-        pos0 = a.pos0,
-        pos1 = a.pos1,
+        pos0 = pos0,
+        pos1 = pos1,
     }
     if type(a.datetime_updated) == "string" and a.datetime_updated ~= "" then
         entry.datetimeUpdated = a.datetime_updated
     end
-    if type(a.color) == "string" and a.color ~= "" then entry.color = a.color end
-    if type(a.text) == "string" and a.text ~= "" then entry.text = a.text end
-    if type(a.note) == "string" and a.note ~= "" then entry.note = a.note end
-    if type(a.chapter) == "string" and a.chapter ~= "" then entry.chapter = a.chapter end
+    entry.color = truncatedString(a.color, MAX_FIELD_LENGTH.color)
+    entry.text = truncatedString(a.text, MAX_FIELD_LENGTH.text)
+    entry.note = truncatedString(a.note, MAX_FIELD_LENGTH.note)
+    entry.chapter = truncatedString(a.chapter, MAX_FIELD_LENGTH.chapter)
     if type(a.pageno) == "number" then entry.pageno = a.pageno end
     return entry
 end
@@ -272,39 +288,75 @@ end
 -- keys_complete=false marks the key list as non-authoritative for deletion
 -- detection (the sweep uses this — a backfill must never delete server data
 -- just because a sidecar was momentarily empty/partial).
-function BridgeAnnotations.buildBookPayload(book, watermark, keys_complete, ignore_watermark)
-    local keys, changes = {}, {}
-    local max_seen = ""
+function BridgeAnnotations.buildBookPayload(book, watermark, keys_complete, ignore_watermark, offset)
+    local keys, candidates = {}, {}
     for _, raw in ipairs(book.annotations or {}) do
         local entry = BridgeAnnotations.normalizeEntry(raw)
         if entry then
             table.insert(keys, { k = BridgeAnnotations.buildKey(entry.datetime, entry.pos0), dt = entry.datetime })
             local stamp = entryTimestamp(entry)
-            if stamp > max_seen then max_seen = stamp end
-            -- ignore_watermark: the sweep re-uploads EVERYTHING so a device whose
-            -- watermark drifted ahead of the server (e.g. server data was reset)
-            -- can resync its whole back-catalogue.
-            if (ignore_watermark or stamp > (watermark or "")) and #changes < MAX_CHANGES_PER_BOOK then
-                table.insert(changes, entry)
+            if ignore_watermark or stamp > (watermark or "") then
+                table.insert(candidates, entry)
             end
         end
+    end
+
+    table.sort(candidates, function(a, b)
+        local a_stamp, b_stamp = entryTimestamp(a), entryTimestamp(b)
+        if a_stamp ~= b_stamp then return a_stamp < b_stamp end
+        if a.datetime ~= b.datetime then return a.datetime < b.datetime end
+        return tostring(a.pos0) < tostring(b.pos0)
+    end)
+
+    local keys_are_complete = keys_complete ~= false and #keys <= MAX_KEYS_PER_BOOK
+    if not keys_are_complete then keys = {} end
+
+    local start_index = math.max(tonumber(offset) or 1, 1)
+    local changes = {}
+    local max_sent = ""
+    local stop_index = math.min(#candidates, start_index + MAX_CHANGES_PER_BOOK - 1)
+    for index = start_index, stop_index do
+        local entry = candidates[index]
+        table.insert(changes, entry)
+        local stamp = entryTimestamp(entry)
+        if stamp > max_sent then max_sent = stamp end
     end
     return {
         hash = book.hash,
         keys = keys,
-        keysComplete = keys_complete ~= false,
+        keysComplete = keys_are_complete,
         changes = changes,
-    }, max_seen
+    }, max_sent, stop_index < #candidates, stop_index + 1
 end
 
 -- ------------------------------------------------------------------
 -- Applying server-side changes
 -- ------------------------------------------------------------------
 
-local function findByDatetime(annotations, datetime)
-    for index, a in ipairs(annotations or {}) do
-        if a.datetime == datetime then
-            return index
+local function normalizedText(value)
+    if type(value) ~= "string" then return "" end
+    return value:gsub("%s+", " "):match("^%s*(.-)%s*$")
+end
+
+local function findByIdentity(annotations, entry)
+    local found_index, found_count = nil, 0
+    if type(entry.datetime) == "string" and entry.datetime ~= "" then
+        for index, annotation in ipairs(annotations or {}) do
+            if annotation.datetime == entry.datetime then
+                found_index, found_count = index, found_count + 1
+            end
+        end
+        if found_count == 1 then return found_index end
+    end
+    if type(entry.pos0) == "string" and entry.pos0 ~= "" then
+        for index, annotation in ipairs(annotations or {}) do
+            if BridgeAnnotations.normalizeXPointer(annotation.pos0)
+                    == BridgeAnnotations.normalizeXPointer(entry.pos0)
+                and (normalizedText(entry.text) == ""
+                    or normalizedText(annotation.text) == normalizedText(entry.text))
+            then
+                return index
+            end
         end
     end
     return nil
@@ -319,7 +371,7 @@ function BridgeAnnotations.applyToSidecar(book, to_apply)
 
     for _, entry in ipairs(to_apply.add or {}) do
         if type(entry.pos0) == "string" and type(entry.datetime) == "string" then
-            local existing = findByDatetime(annotations, entry.datetime)
+            local existing = findByIdentity(annotations, entry)
             if existing then
                 annotations[existing] = toSidecarEntry(entry)
             else
@@ -332,7 +384,7 @@ function BridgeAnnotations.applyToSidecar(book, to_apply)
 
     for _, entry in ipairs(to_apply.edit or {}) do
         if type(entry.datetime) == "string" then
-            local existing = findByDatetime(annotations, entry.datetime)
+            local existing = findByIdentity(annotations, entry)
             if existing then
                 local target = annotations[existing]
                 target.drawer = _s(entry.drawer) or target.drawer
@@ -351,7 +403,7 @@ function BridgeAnnotations.applyToSidecar(book, to_apply)
 
     for _, entry in ipairs(to_apply.delete or {}) do
         if type(entry.datetime) == "string" then
-            local existing = findByDatetime(annotations, entry.datetime)
+            local existing = findByIdentity(annotations, entry)
             if existing then
                 table.remove(annotations, existing)
                 changed = true
@@ -398,17 +450,36 @@ function BridgeAnnotations.applyLive(to_apply)
     local applied, deleted = {}, {}
     local touched = 0
 
-    local function resolves(pos)
-        if type(pos) ~= "string" or pos == "" then return false end
-        local ok, inside = pcall(function() return ui.document:isXPointerInDocument(pos) end)
-        -- Treat "unknown" (call failed) as resolvable — don't drop on a probe error.
-        return (not ok) or inside ~= false
+    local function rangeMatches(entry)
+        if type(entry.pos0) ~= "string" or type(entry.pos1) ~= "string" then return false end
+        local ok0, inside0 = pcall(ui.document.isXPointerInDocument, ui.document, entry.pos0)
+        local ok1, inside1 = pcall(ui.document.isXPointerInDocument, ui.document, entry.pos1)
+        if not (ok0 and inside0 and ok1 and inside1) then return false end
+        if normalizedText(entry.text) == "" or not ui.document.getTextFromXPointers then return true end
+        local ok_text, text = pcall(ui.document.getTextFromXPointers, ui.document, entry.pos0, entry.pos1)
+        return ok_text and normalizedText(text) == normalizedText(entry.text)
+    end
+
+    local function repairRange(entry)
+        local text = normalizedText(entry.text)
+        if text == "" or not ui.document.findAllText then return false end
+        local ok, matches = pcall(ui.document.findAllText, ui.document, text, true, 0, 20, false)
+        pcall(ui.document.clearSelection, ui.document)
+        if not ok or type(matches) ~= "table" then return false end
+        for _, match in ipairs(matches) do
+            local candidate = { pos0 = match.start, pos1 = match["end"], text = entry.text }
+            if rangeMatches(candidate) then
+                entry.pos0, entry.pos1 = candidate.pos0, candidate.pos1
+                return true
+            end
+        end
+        return false
     end
 
     for _, entry in ipairs(to_apply.add or {}) do
-        if findByDatetime(annotations, entry.datetime) then
+        if findByIdentity(annotations, entry) then
             table.insert(applied, { serverId = entry.serverId, version = entry.version, status = "applied" })
-        elseif entry.posFormat == "xpointer" and resolves(entry.pos0) then
+        elseif entry.posFormat == "xpointer" and (rangeMatches(entry) or repairRange(entry)) then
             local item = toSidecarEntry(entry)  -- type-guarded (no JSON-null sentinels)
             local ok_add = pcall(function() ui.annotation:addItem(item) end)
             if ok_add then
@@ -423,7 +494,7 @@ function BridgeAnnotations.applyLive(to_apply)
     end
 
     for _, entry in ipairs(to_apply.edit or {}) do
-        local idx = findByDatetime(annotations, entry.datetime)
+        local idx = findByIdentity(annotations, entry)
         if idx then
             local a = annotations[idx]
             a.drawer = _s(entry.drawer) or a.drawer
@@ -442,7 +513,7 @@ function BridgeAnnotations.applyLive(to_apply)
     end
 
     for _, entry in ipairs(to_apply.delete or {}) do
-        local idx = findByDatetime(annotations, entry.datetime)
+        local idx = findByIdentity(annotations, entry)
         if idx and ui.bookmark and type(ui.bookmark.removeItemByIndex) == "function" then
             pcall(function() ui.bookmark:removeItemByIndex(idx) end)
             touched = touched + 1
@@ -479,105 +550,170 @@ function BridgeAnnotations.exchangeBooks(bridge, books, opts)
         return { books = 0, uploaded = 0, applied = 0, deleted = 0 }
     end
 
-    local payload_books = {}
-    local max_seen_by_hash = {}
-    local uploaded = 0
+    local states = {}
     for _, book in ipairs(books) do
-        -- Guard the watermark against a device clock that ran ahead: a stored
-        -- future watermark would swallow every new highlight forever.
         local watermark = watermarks[book.hash] or ""
-        if watermark > deviceNow() then watermark = "" end
-        local book_payload, max_seen = BridgeAnnotations.buildBookPayload(book, watermark, keys_complete, ignore_watermark)
-        max_seen_by_hash[book.hash] = max_seen
-        uploaded = uploaded + #book_payload.changes
-        table.insert(payload_books, book_payload)
+        if watermark > deviceNow() then
+            watermark = ""
+            watermarks[book.hash] = ""
+        end
+        table.insert(states, {
+            book = book,
+            watermark = watermark,
+            offset = 1,
+            max_sent = "",
+            has_more = false,
+        })
     end
 
-    local ok, response = bridge.api:exchangeAnnotations({
-        device = device,
-        device_id = device_id,
-        books = payload_books,
-    })
-    if not ok then
-        return nil, tostring(response or "Annotation exchange failed")
-    end
-    if response.enabled == false then
-        return { books = 0, uploaded = 0, applied = 0, deleted = 0, disabled = true }
+    local books_by_hash = {}
+    for _, book in ipairs(books) do books_by_hash[book.hash] = book end
+
+    local uploaded_total, applied_total, deleted_total = 0, 0, 0
+    local pull_more = {}
+
+    local function applyResponse(response)
+        local ack_books = {}
+        for _, result in ipairs(response.books or {}) do
+            local book = books_by_hash[result.hash]
+            local to_apply = result.toApply or {}
+            local pending = #(to_apply.add or {}) + #(to_apply.edit or {}) + #(to_apply.delete or {})
+            if result.more == true then
+                pull_more[result.hash] = true
+            else
+                pull_more[result.hash] = nil
+            end
+            if book and pending > 0 then
+                local applied, deleted
+                if opts.upload_only then
+                    bridge:logInfo("Annotation sync: close snapshot, deferring", tostring(pending), "server change(s)")
+                elseif book.live then
+                    applied, deleted = BridgeAnnotations.applyLive(to_apply)
+                    if applied == nil then
+                        bridge:logInfo("Annotation sync: open book but no live reader, deferring", tostring(pending))
+                    end
+                else
+                    local ok_apply, a, d = pcall(BridgeAnnotations.applyToSidecar, book, to_apply)
+                    if ok_apply then
+                        applied, deleted = a, d
+                    else
+                        bridge:logWarn("Annotation sync: sidecar apply failed:", tostring(a))
+                    end
+                end
+                if applied or deleted then
+                    applied_total = applied_total + #(applied or {})
+                    deleted_total = deleted_total + #(deleted or {})
+                    if #(applied or {}) > 0 or #(deleted or {}) > 0 then
+                        table.insert(ack_books, { hash = result.hash, applied = applied or {}, deleted = deleted or {} })
+                    end
+                end
+            end
+        end
+
+        if #ack_books > 0 then
+            local ok_ack, ack_err = bridge.api:ackAnnotations({
+                device = device,
+                device_id = device_id,
+                books = ack_books,
+            })
+            if not ok_ack then
+                return nil, tostring(ack_err or "Annotation acknowledgment failed")
+            end
+        end
+        return true
     end
 
-    -- Upload landed: advance watermarks (capped at the device clock so a
-    -- future-dated entry re-uploads harmlessly instead of freezing the book).
+    local first_round = true
+    while first_round or #states > 0 do
+        local payload_books = {}
+        local next_states = {}
+        for _, state in ipairs(states) do
+            local payload, max_sent, has_more, next_offset = BridgeAnnotations.buildBookPayload(
+                state.book,
+                state.watermark,
+                first_round and keys_complete or false,
+                ignore_watermark,
+                state.offset
+            )
+            uploaded_total = uploaded_total + #payload.changes
+            if max_sent > state.max_sent then state.max_sent = max_sent end
+            state.has_more = has_more
+            state.offset = next_offset
+            table.insert(payload_books, payload)
+            if has_more then table.insert(next_states, state) end
+        end
+
+        if #payload_books == 0 then break end
+        local ok, response = bridge.api:exchangeAnnotations({
+            device = device,
+            device_id = device_id,
+            books = payload_books,
+        })
+        if not ok then
+            return nil, tostring(response or "Annotation exchange failed")
+        end
+        if response.enabled == false then
+            return { books = 0, uploaded = 0, applied = 0, deleted = 0, disabled = true }
+        end
+        local applied_ok, apply_err = applyResponse(response)
+        if not applied_ok then return nil, apply_err end
+        states = next_states
+        first_round = false
+    end
+
+    -- Drain server-side deltas that exceeded one response page. These rounds
+    -- never carry an authoritative key list, so they cannot create deletions.
+    local pull_round = 0
+    while next(pull_more) and pull_round < MAX_PULL_ROUNDS and not opts.upload_only do
+        pull_round = pull_round + 1
+        local payload_books = {}
+        for hash in pairs(pull_more) do
+            table.insert(payload_books, { hash = hash, keys = {}, keysComplete = false, changes = {} })
+        end
+        local ok, response = bridge.api:exchangeAnnotations({
+            device = device,
+            device_id = device_id,
+            books = payload_books,
+        })
+        if not ok then return nil, tostring(response or "Annotation follow-up failed") end
+        local applied_ok, apply_err = applyResponse(response)
+        if not applied_ok then return nil, apply_err end
+    end
+
+    -- Every outgoing chunk and its ack round succeeded. Advance only now; a
+    -- partial failure leaves the old watermark so the idempotent retry can
+    -- safely replay all chunks.
     local now = deviceNow()
-    for hash, max_seen in pairs(max_seen_by_hash) do
-        local advance = max_seen
-        if advance > now then advance = now end
-        if advance ~= "" and advance > (watermarks[hash] or "") then
-            watermarks[hash] = advance
-        elseif watermarks[hash] == nil then
-            watermarks[hash] = ""
+    for _, state in ipairs(states) do
+        -- states is empty after a fully-drained multi-round upload; advancement
+        -- is handled from the original book list below.
+        state.max_sent = state.max_sent
+    end
+    for _, book in ipairs(books) do
+        local watermark = watermarks[book.hash] or ""
+        local _, max_sent = BridgeAnnotations.buildBookPayload(book, watermark, keys_complete, ignore_watermark, 1)
+        -- Derive the real maximum only after success; the payload helper's first
+        -- chunk is insufficient for large books, so scan normalized entries.
+        for _, raw in ipairs(book.annotations or {}) do
+            local entry = BridgeAnnotations.normalizeEntry(raw)
+            if entry then
+                local stamp = entryTimestamp(entry)
+                if (ignore_watermark or stamp > watermark) and stamp > max_sent then max_sent = stamp end
+            end
+        end
+        if max_sent > now then max_sent = now end
+        if max_sent ~= "" and max_sent > watermark then
+            watermarks[book.hash] = max_sent
+        elseif watermarks[book.hash] == nil then
+            watermarks[book.hash] = ""
         end
     end
     bridge.state:saveSetting("annotation_watermarks", watermarks)
     bridge.state:flush()
 
-    -- Apply the bridge's pending changes (closed books only) and ack.
-    local books_by_hash = {}
-    for _, book in ipairs(books) do books_by_hash[book.hash] = book end
-
-    local ack_books = {}
-    local applied_total, deleted_total = 0, 0
-    for _, result in ipairs(response.books or {}) do
-        local book = books_by_hash[result.hash]
-        local to_apply = result.toApply or {}
-        local pending = #(to_apply.add or {}) + #(to_apply.edit or {}) + #(to_apply.delete or {})
-        if book and pending > 0 then
-            local applied, deleted
-            if opts.upload_only then
-                -- Close snapshot: only push this session's highlights. Received
-                -- changes for the just-closed book are applied by the next
-                -- periodic sync (its live/closed path), never a sidecar write
-                -- that races KOReader's own close-flush.
-                bridge:logInfo("Annotation sync: close snapshot, deferring", tostring(pending), "server change(s)")
-            elseif book.live then
-                -- Open book: apply into KOReader's live list (instant + survives
-                -- the close-flush). If the reader vanished mid-cycle, leave it
-                -- for the next round rather than racing the sidecar.
-                applied, deleted = BridgeAnnotations.applyLive(to_apply)
-                if applied == nil then
-                    bridge:logInfo("Annotation sync: open book but no live reader, deferring", tostring(pending))
-                end
-            else
-                local ok_apply, a, d = pcall(BridgeAnnotations.applyToSidecar, book, to_apply)
-                if ok_apply then
-                    applied, deleted = a, d
-                else
-                    bridge:logWarn("Annotation sync: sidecar apply failed:", tostring(a))
-                end
-            end
-            if applied or deleted then
-                applied_total = applied_total + #(applied or {})
-                deleted_total = deleted_total + #(deleted or {})
-                if (applied and #applied > 0) or (deleted and #deleted > 0) then
-                    table.insert(ack_books, { hash = result.hash, applied = applied or {}, deleted = deleted or {} })
-                end
-            end
-        end
-    end
-
-    if #ack_books > 0 then
-        local ok_ack, ack_err = bridge.api:ackAnnotations({
-            device = device,
-            device_id = device_id,
-            books = ack_books,
-        })
-        if not ok_ack then
-            bridge:logWarn("Annotation sync: ack failed:", tostring(ack_err))
-        end
-    end
-
     return {
         books = #books,
-        uploaded = uploaded,
+        uploaded = uploaded_total,
         applied = applied_total,
         deleted = deleted_total,
     }

@@ -13,6 +13,8 @@ This plugin is **not required** for normal bridge syncing — it is an optional 
 - Syncs automatically on device wake or WiFi reconnect, or manually on demand
 - Skips auto-sync while you are reading to avoid interruptions
 - Tracks reading sessions (time, pages, progress) and uploads them to the bridge
+- Serializes book, statistics, session, and highlight jobs so lifecycle syncs are queued instead of dropped
+- Uploads large statistics and highlight backlogs in bounded, acknowledgment-gated batches
 
 ## Install
 
@@ -53,7 +55,7 @@ The settings menu stays open while you adjust configuration values so you can ma
 | Username       | KOSync username configured in the bridge                           |
 | Configure Key  | KOSync key/password configured in the bridge                       |
 | Test Connection         | Verifies the server URL and credentials are correct                                                                                  |
-| Check for Plugin Update | Compares the installed plugin version to the version on the bridge server and offers to download and install an update if one is available |
+| Check for Plugin Update | Compares semantic versions and offers to install a newer plugin; a throttled background check runs daily |
 
 ### Sync Behavior
 
@@ -61,6 +63,7 @@ The settings menu stays open while you adjust configuration values so you can ma
 |----------------------------|---------|-----------------------------------------------------------------------------|
 | Enable Sync                | Off     | Master toggle — nothing syncs until this is on                              |
 | Sync Now                   | —       | Triggers a manual sync immediately                                          |
+| Sync Status                | —       | Shows the active job, queued count, and last completed job                  |
 | Manual Only                | Off     | Disables all automatic sync triggers; only Sync Now works                   |
 | Auto-Sync on Wake          | Off     | Syncs after the device wakes from sleep (after the configured delay)        |
 | Auto-Sync on Network       | Off     | Syncs when WiFi reconnects                                                  |
