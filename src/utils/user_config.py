@@ -42,7 +42,8 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "READEST_ANNOTATION_SYNC", "READEST_EMAIL", "READEST_PASSWORD",
     "READEST_ACCESS_TOKEN", "READEST_REFRESH_TOKEN", "READEST_TOKEN_EXPIRES_AT",
     # BookFusion
-    "BOOKFUSION_ENABLED", "BOOKFUSION_ACCESS_TOKEN", "BOOKFUSION_ANNOTATION_SYNC",
+    "BOOKFUSION_ENABLED", "BOOKFUSION_ACCESS_TOKEN", "BOOKFUSION_API_KEY",
+    "BOOKFUSION_ANNOTATION_SYNC",
     # Trackers (write targets are per-user accounts)
     "HARDCOVER_TOKEN", "HARDCOVER_ENABLED",
     "HARDCOVER_GRIMMORY_LIST_SYNC", "HARDCOVER_GRIMMORY_LIST_PREFIX",
@@ -120,6 +121,7 @@ PER_USER_FIELD_GROUPS = [
     ("BookFusion", [
         ("BOOKFUSION_ENABLED", "Enabled", "bool"),
         ("BOOKFUSION_ACCESS_TOKEN", "Access token", "secret"),
+        ("BOOKFUSION_API_KEY", "Calibre API key (for uploads)", "secret"),
         ("BOOKFUSION_ANNOTATION_SYNC", "Highlight sync", "bool"),
     ]),
     ("Hardcover", [

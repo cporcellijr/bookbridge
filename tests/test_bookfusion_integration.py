@@ -360,5 +360,55 @@ class BookFusionAnnotationSyncTest(unittest.TestCase):
         self.assertEqual(BookFusionAnnotationSync._bookfusion_color_to_ko("#ff4954"), "red")
 
 
+class BookFusionApiKeySettingTest(unittest.TestCase):
+    """BOOKFUSION_API_KEY (Calibre upload key) is registered as a per-user secret."""
+
+    def test_registered_in_config_loader(self):
+        from src.utils import config_loader
+        self.assertIn("BOOKFUSION_API_KEY", config_loader.ALL_SETTINGS)
+        self.assertEqual(config_loader.DEFAULT_CONFIG.get("BOOKFUSION_API_KEY"), "")
+
+    def test_registered_as_per_user_credential(self):
+        from src.utils import user_config
+        self.assertIn("BOOKFUSION_API_KEY", user_config.PER_USER_CREDENTIAL_KEYS)
+
+    def test_appears_in_bookfusion_field_group_as_secret(self):
+        from src.utils import user_config
+        groups = dict(user_config.PER_USER_FIELD_GROUPS)
+        fields = {key: (label, ftype) for key, label, ftype in groups["BookFusion"]}
+        self.assertIn("BOOKFUSION_API_KEY", fields)
+        label, ftype = fields["BOOKFUSION_API_KEY"]
+        self.assertEqual(ftype, "secret")
+        self.assertIn("Calibre", label)
+
+    def test_resolves_from_per_user_credentials(self):
+        from src.utils.user_config import resolve_setting
+        creds = {"BOOKFUSION_API_KEY": "cal-key-xyz"}
+        self.assertEqual(resolve_setting(creds, "BOOKFUSION_API_KEY"), "cal-key-xyz")
+
+
+class AdminBookFusionLinkScopingTest(unittest.TestCase):
+    """Admin link-on-behalf must persist the device token to the TARGET user,
+    not the admin doing the linking."""
+
+    def test_client_for_user_binds_target_and_persists_to_them(self):
+        from src import web_server as ws
+        saved_db = ws.database_service  # restore — the suite must pass in any order
+        try:
+            db = MagicMock()
+            db.get_user_credentials.return_value = {"BOOKFUSION_API_URL": "https://bf.example"}
+            ws.database_service = db
+
+            client = ws._bookfusion_client_for_user(9)
+            self.assertEqual(client._user_id, 9)
+
+            # A successful token poll on this client must land on user 9.
+            client.session = _Session([_Resp(200, {"access_token": "tok-9"})])
+            self.assertEqual(client.poll_token("dev-code"), {"ok": True})
+            db.set_user_credential.assert_any_call(9, "BOOKFUSION_ACCESS_TOKEN", "tok-9")
+        finally:
+            ws.database_service = saved_db
+
+
 if __name__ == "__main__":
     unittest.main()

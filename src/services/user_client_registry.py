@@ -20,6 +20,7 @@ from src.api.cwa_client import CWAClient
 from src.api.cwa_sync_api import CWASyncApi
 from src.api.bookorbit_client import BookOrbitClient
 from src.api.bookfusion_client import BookFusionClient
+from src.api.bookfusion_upload_client import BookFusionUploadClient
 from src.api.booklore_client import BookloreClient
 from src.api.hardcover_client import HardcoverClient
 from src.api.storygraph_client import StorygraphClient
@@ -51,6 +52,7 @@ class UserClients:
     cwa_client: object
     bookorbit_client: object
     bookfusion_client: object
+    bookfusion_upload_client: object
     booklore_client: object
     hardcover_client: object
     storygraph_client: object
@@ -116,6 +118,7 @@ class UserClientRegistry:
         cwa_sync_api = CWASyncApi(cwa_client=cwa_client, credentials=creds)
         bookorbit_client = BookOrbitClient(ollama_client=self.ollama_client, credentials=creds)
         bookfusion_client = BookFusionClient(credentials=creds, database_service=db, user_id=user_id)
+        bookfusion_upload_client = BookFusionUploadClient(credentials=creds, database_service=db, user_id=user_id)
         booklore_client = BookloreClient(database_service=db, ollama_client=self.ollama_client, credentials=creds)
         hardcover_client = HardcoverClient(credentials=creds)
         storygraph_client = StorygraphClient(credentials=creds)
@@ -155,6 +158,7 @@ class UserClientRegistry:
             cwa_client=cwa_client,
             bookorbit_client=bookorbit_client,
             bookfusion_client=bookfusion_client,
+            bookfusion_upload_client=bookfusion_upload_client,
             booklore_client=booklore_client,
             hardcover_client=hardcover_client,
             storygraph_client=storygraph_client,

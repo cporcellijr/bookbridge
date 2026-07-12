@@ -41,6 +41,7 @@ from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
+from src.api.bookfusion_upload_client import extract_epub_metadata
 from src.version import APP_VERSION, get_update_status
 from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
@@ -3820,6 +3821,8 @@ def _build_dashboard_mapping(
         "audio_duration": getattr(book, "audio_duration", None) or book.duration or 0,
         "audio_cover_url": getattr(book, "audio_cover_url", None),
         "ebook_filename": book.ebook_filename,
+        "original_ebook_filename": getattr(book, "original_ebook_filename", None),
+        "has_local_epub": bool(book.original_ebook_filename or book.ebook_filename),
         "ebook_source": getattr(book, "ebook_source", None),
         "ebook_source_id": getattr(book, "ebook_source_id", None),
         "kosync_doc_id": book.kosync_doc_id,
@@ -9179,6 +9182,54 @@ def api_bookfusion_device_poll() -> object:
     return jsonify(result), status
 
 
+def _bookfusion_client_for_user(user_id):
+    """Build a BookFusion client bound to a specific user so a device-link token
+    persists to THAT user's credentials (used by the admin link-on-behalf flow)."""
+    from src.api.bookfusion_client import BookFusionClient
+    creds = database_service.get_user_credentials(user_id) or {}
+    return BookFusionClient(credentials=creds, database_service=database_service, user_id=user_id)
+
+
+@admin_required
+def admin_user_bookfusion_device_start(user_id) -> object:
+    """Start the BookFusion device-link flow on behalf of a specific user."""
+    target = database_service.get_user(user_id)
+    if not target:
+        return jsonify({"ok": False, "message": "User not found"}), 404
+    data = _bookfusion_client_for_user(target.id).start_device_link()
+    if not data:
+        return jsonify({"ok": False, "message": "Could not start BookFusion device link"}), 502
+    return jsonify({
+        "ok": True,
+        "device_code": data.get("device_code"),
+        "user_code": data.get("user_code"),
+        "verification_uri": data.get("verification_uri"),
+        "interval": data.get("interval", 5),
+        "expires_in": data.get("expires_in", 600),
+    })
+
+
+@admin_required
+def admin_user_bookfusion_device_poll(user_id) -> object:
+    """Poll the BookFusion device-link token endpoint on behalf of a specific
+    user, persisting the resulting access token to THAT user (not the admin)."""
+    target = database_service.get_user(user_id)
+    if not target:
+        return jsonify({"ok": False, "error": "user_not_found"}), 404
+    payload = request.get_json(silent=True) or {}
+    device_code = str(payload.get("device_code") or "").strip()
+    if not device_code:
+        return jsonify({"ok": False, "error": "missing_device_code"}), 400
+    result = _bookfusion_client_for_user(target.id).poll_token(device_code)
+    if result.get("ok"):
+        try:
+            container.user_client_registry().invalidate(target.id)
+        except Exception as e:
+            logger.debug("Could not invalidate BookFusion client bundle after admin link for user %s: %s", target.id, e)
+    status = 200 if result.get("ok") or result.get("error") in ("authorization_pending", "slow_down") else 400
+    return jsonify(result), status
+
+
 def _serialize_bookfusion_search_item(item: dict) -> dict:
     """Normalize one BookFusion library search row for dashboard linking."""
     book_id = item.get("id") or item.get("book_id")
@@ -9248,6 +9299,130 @@ def api_bookfusion_unlink(abs_id: str) -> object:
         return _forbidden_book_response(json_response=True)
     user_id = user.id if user is not None else database_service._default_user_id()
     return jsonify({"success": database_service.delete_user_bookfusion_link(user_id, abs_id)})
+
+
+def api_bookfusion_upload(abs_id: str) -> object:
+    """Upload the local EPUB of a BookBridge book to BookFusion and link it.
+
+    Requires the user to have configured the BookFusion Calibre API key
+    (``BOOKFUSION_API_KEY``), which is a per-user credential separate from the
+    reader-device access token.
+    """
+    book = database_service.get_book(abs_id)
+    if not book:
+        return jsonify({"success": False, "error": "Book not found"}), 404
+    user = current_user()
+    if not _user_may_modify_book(user, abs_id):
+        return _forbidden_book_response(json_response=True)
+    user_id = user.id if user is not None else database_service._default_user_id()
+
+    # Resolve the local EPUB path
+    filename = book.original_ebook_filename or book.ebook_filename
+    if not filename:
+        return jsonify({"success": False, "error": "No local ebook to upload"}), 400
+    try:
+        epub_path = container.ebook_parser().resolve_book_path(filename)
+    except Exception as exc:
+        logger.warning("Could not resolve ebook path for %s: %s", filename, exc)
+        return jsonify({"success": False, "error": "Local ebook file not found"}), 400
+    if not epub_path or not epub_path.exists():
+        return jsonify({"success": False, "error": "Local ebook file not found"}), 400
+
+    # Build the upload client from the current user's credentials
+    upload_client = uc().bookfusion_upload_client
+    if not upload_client.is_configured():
+        return jsonify({"success": False, "error": "BookFusion Calibre API key not set"}), 400
+
+    # Extract metadata and run the upload
+    metadata = extract_epub_metadata(str(epub_path))
+    result = upload_client.upload_epub(str(epub_path), metadata)
+
+    if result.status == "created":
+        book_id = result.book_id
+        bookfusion_id_str = str(book_id) if book_id is not None else None
+        link = database_service.set_user_bookfusion_link(
+            user_id, abs_id, bookfusion_id_str,
+            title=str(metadata.get("title") or "").strip() or None,
+            author=str((metadata.get("authors") or [None])[0] or "").strip() or None,
+        )
+        if not link:
+            logger.warning("BookFusion upload succeeded but link creation failed for %s / id=%s", abs_id, book_id)
+        return jsonify({
+            "success": True,
+            "bookfusion_id": book_id,
+            "created": True,
+        })
+
+    if result.status == "duplicate":
+        # The exact file digest already exists in BookFusion. Try to find the
+        # book id by searching the reader API, verifying title/author match.
+        title = metadata.get("title", "")
+        author = (metadata.get("authors") or [None])[0] or ""
+        search_id = _resolve_duplicate_bookfusion_id(upload_client, title, author)
+        if search_id is not None:
+            link = database_service.set_user_bookfusion_link(
+                user_id, abs_id, str(search_id),
+                title=str(metadata.get("title") or "").strip() or None,
+                author=str((metadata.get("authors") or [None])[0] or "").strip() or None,
+            )
+            return jsonify({
+                "success": True,
+                "bookfusion_id": search_id,
+                "created": False,
+            })
+        return jsonify({
+            "success": False,
+            "duplicate": True,
+            "error": "Already in your BookFusion library",
+        }), 409
+
+    # error
+    return jsonify({"success": False, "error": result.message}), 502
+
+
+def _resolve_duplicate_bookfusion_id(upload_client, title: str, author: str = "") -> int | None:
+    """Try to find a BookFusion book id for an already-uploaded duplicate.
+
+    Called when upload init returns 422 (file digest already known). Uses the
+    reader client (``uc().bookfusion_client``) to search by title and verifies
+    that the returned book's title (and first author, when available) match
+    the local metadata before linking.
+    """
+    if not title:
+        return None
+    reader_client = uc().bookfusion_client
+    if not reader_client.is_configured():
+        return None
+    try:
+        results = reader_client.search_books(page=1, per_page=5, q=title) or []
+    except Exception as exc:
+        logger.warning("BookFusion duplicate search failed: %s", exc)
+        return None
+    title_lower = title.strip().lower()
+    author_lower = author.strip().lower() if author else ""
+    for item in results:
+        item_id = item.get("id")
+        if item_id is None:
+            continue
+        # Verify title matches (case-insensitive)
+        item_title = (item.get("title") or "").strip().lower()
+        if item_title != title_lower:
+            continue
+        # Verify first author matches if we have one
+        if author_lower:
+            item_authors = item.get("authors") or item.get("author") or ""
+            first_author = ""
+            if isinstance(item_authors, list):
+                first_author = (item_authors[0] or "").strip().lower() if item_authors else ""
+            elif isinstance(item_authors, str):
+                first_author = item_authors.strip().lower()
+            if first_author != author_lower:
+                continue
+        try:
+            return int(item_id)
+        except (ValueError, TypeError):
+            continue
+    return None
 
 
 def _test_llm_provider(
@@ -9815,6 +9990,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/admin/users/<int:user_id>/test-connection/<service>', 'admin_user_test_connection', admin_user_test_connection, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/abs-libraries', 'admin_user_abs_libraries', admin_user_abs_libraries, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/booklore-libraries', 'admin_user_booklore_libraries', admin_user_booklore_libraries, methods=['POST'])
+    app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
+    app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
     app.add_url_rule('/shelfmark', 'shelfmark', shelfmark)
     app.add_url_rule('/forge', 'forge', forge)
@@ -9869,6 +10046,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/bookfusion/search', 'api_bookfusion_search', api_bookfusion_search, methods=['GET'])
     app.add_url_rule('/api/bookfusion/link/<abs_id>', 'api_bookfusion_link', api_bookfusion_link, methods=['POST'])
     app.add_url_rule('/api/bookfusion/link/<abs_id>', 'api_bookfusion_unlink', api_bookfusion_unlink, methods=['DELETE'])
+    app.add_url_rule('/api/bookfusion/upload/<abs_id>', 'api_bookfusion_upload', api_bookfusion_upload, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
 
     # Storyteller API routes

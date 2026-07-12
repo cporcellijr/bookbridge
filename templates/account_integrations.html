@@ -173,7 +173,7 @@
                     <div class="note">Username / Password is your BookOrbit web account. The KOReader sync fields are separate credentials used only for highlight and note relay.</div>
                     {% endif %}
                     {% if group == 'BookFusion' %}
-                    <div class="note">Use device linking for your BookFusion account. The raw access token field is kept for recovery or manual setup. You can find BookFusion API keys on the
+                    <div class="note"><strong>Two separate credentials.</strong> The <strong>Access token</strong> authorizes reading progress &amp; highlights — get it with the <strong>Link BookFusion</strong> button below (device flow; the raw field is kept for recovery/manual setup). The <strong>Calibre API key</strong> is only needed to <strong>upload books</strong> to BookFusion, from the
                         <a href="https://www.bookfusion.com/integrations/calibre" target="_blank" rel="noopener" style="color:#aab4f5;">BookFusion Calibre integration page</a>.</div>
                     <div class="link-actions">
                         <button type="button" onclick="startBookFusionLink()">Link BookFusion</button>

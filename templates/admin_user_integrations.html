@@ -178,8 +178,12 @@
                     the account belongs to this user.</div>
                 {% endif %}
                 {% if group == 'BookFusion' %}
-                <div class="note">BookFusion can be linked by the reader from Account -> My Integrations. If you enter a token manually here, API keys are available on the
+                <div class="note"><strong>Two separate credentials.</strong> The <strong>Access token</strong> (reading progress &amp; highlights) can be obtained with the <strong>Link BookFusion</strong> button below, or by the reader from their own <strong>Account → My Integrations</strong> page. <strong>Linking here saves the token to this user</strong> — you must be signed in to the BookFusion account you want to link when you complete the device authorization. The <strong>Calibre API key</strong> is only for <strong>uploading books</strong> and can be pasted here, from the
                     <a href="https://www.bookfusion.com/integrations/calibre" target="_blank" rel="noopener" style="color:#aab4f5;">BookFusion Calibre integration page</a>.</div>
+                <div style="margin-bottom:14px;">
+                    <button type="button" onclick="startBookFusionLink()">Link BookFusion</button>
+                    <div id="bookfusion_link_status" style="color:#aaa; font-size:12px; line-height:1.5; margin-top:8px; min-height:18px;"></div>
+                </div>
                 {% endif %}
                 {% for key, label, ftype in fields %}
                     {% if key == gate_key %}
@@ -239,6 +243,51 @@
         const TEST_URL_BASE = {{ url_for('admin_user_test_connection', user_id=target_user.id, service='__service__')|tojson }};
         const ABS_LIB_URL = {{ url_for('admin_user_abs_libraries', user_id=target_user.id)|tojson }};
         const BOOKLORE_LIB_URL = {{ url_for('admin_user_booklore_libraries', user_id=target_user.id)|tojson }};
+        const BF_DEVICE_START_URL = {{ url_for('admin_user_bookfusion_device_start', user_id=target_user.id)|tojson }};
+        const BF_DEVICE_POLL_URL = {{ url_for('admin_user_bookfusion_device_poll', user_id=target_user.id)|tojson }};
+
+        function startBookFusionLink() {
+            const status = document.getElementById('bookfusion_link_status');
+            if (!status) return;
+            status.textContent = 'Starting BookFusion link…';
+            fetch(BF_DEVICE_START_URL, { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.ok) { status.textContent = data.message || 'Could not start BookFusion link.'; return; }
+                    const interval = Math.max(5, Number(data.interval || 5));
+                    const expiresIn = Math.max(interval, Number(data.expires_in || 600));
+                    status.innerHTML = 'Go to <a href="' + data.verification_uri + '" target="_blank" style="color:#aab4f5;">'
+                        + data.verification_uri + '</a> and enter code <strong>' + data.user_code
+                        + '</strong> while signed in to this user\'s BookFusion account.';
+                    pollBookFusionToken(data.device_code, interval, Date.now() + expiresIn * 1000, status);
+                })
+                .catch(err => { status.textContent = 'BookFusion link failed: ' + err; });
+        }
+
+        function pollBookFusionToken(deviceCode, intervalSeconds, deadlineMs, status) {
+            if (Date.now() > deadlineMs) {
+                status.textContent = 'BookFusion link expired. Start a new link and try again.';
+                return;
+            }
+            window.setTimeout(function () {
+                fetch(BF_DEVICE_POLL_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_code: deviceCode })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.ok) { status.textContent = 'BookFusion linked to this user. Save or refresh to see the stored token.'; return; }
+                        if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+                            const nextInterval = data.error === 'slow_down' ? intervalSeconds + 5 : intervalSeconds;
+                            pollBookFusionToken(deviceCode, nextInterval, deadlineMs, status);
+                            return;
+                        }
+                        status.textContent = data.message || ('BookFusion link failed: ' + (data.error || 'unknown error'));
+                    })
+                    .catch(err => { status.textContent = 'BookFusion token poll failed: ' + err; });
+            }, intervalSeconds * 1000);
+        }
 
         function toggleIntegrationGroup(toggle) {
             const body = document.getElementById(toggle.dataset.bodyId || '');
