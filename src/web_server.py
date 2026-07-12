@@ -837,6 +837,8 @@ def admin_required(f):
     """Decorator for routes that require an admin user (e.g. user management)."""
     @wraps(f)
     def wrapper(*args, **kwargs):
+        if current_app.config.get('LOGIN_DISABLED'):
+            return f(*args, **kwargs)
         user = current_user()
         if user is None:
             if _request_wants_json():
@@ -8749,6 +8751,7 @@ def _extract_series_from_title(title: str) -> tuple:
     return None, None
 
 
+@admin_required
 def api_series_backfill():
     """Backfill series_name/series_sequence for all books that lack it.
 
@@ -8818,6 +8821,7 @@ def api_series_backfill():
     }), 200
 
 
+@admin_required
 def api_debug_abs_series():
     """Return the raw series metadata ABS sends for a given abs_id. For debugging only."""
     abs_id = request.args.get("abs_id", "").strip()
@@ -8855,6 +8859,9 @@ def api_debug_abs_series():
 
 def proxy_cover(abs_id):
     """Proxy cover access to allow loading covers from local network ABS instances."""
+    user = current_user()
+    if not _user_may_modify_book(user, abs_id):
+        return _forbidden_book_response(json_response=True)
     try:
         token = container.abs_client().token
         base_url = container.abs_client().base_url
@@ -8933,6 +8940,20 @@ def get_abs_libraries():
 
 def proxy_booklore_audiobook_cover(book_id):
     """Stream a Grimmory audiobook cover through the backend."""
+    user = current_user()
+    # The route id identifies the audiobook, which can be paired with an ebook
+    # from a different provider (or a different book id on the same provider).
+    book = (
+        database_service.get_book_by_audio_source('BookLore', str(book_id))
+        if database_service else None
+    )
+    if book and book.abs_id:
+        if not _user_may_modify_book(user, book.abs_id):
+            return _forbidden_book_response(json_response=True)
+    elif user is not None and not getattr(user, 'is_admin', False):
+        # Non-admin requesting a cover for an unknown Grimmory book — forbid
+        return _forbidden_book_response(json_response=True)
+
     client = container.booklore_client()
     if not client.is_configured():
         return "Grimmory not configured", 400
@@ -8951,6 +8972,19 @@ def proxy_booklore_audiobook_cover(book_id):
 
 def proxy_bookorbit_audiobook_cover(book_id):
     """Stream a BookOrbit book cover through the backend."""
+    user = current_user()
+    # The route id identifies the audiobook, not the linked ebook source.
+    book = (
+        database_service.get_book_by_audio_source('BookOrbit', str(book_id))
+        if database_service else None
+    )
+    if book and book.abs_id:
+        if not _user_may_modify_book(user, book.abs_id):
+            return _forbidden_book_response(json_response=True)
+    elif user is not None and not getattr(user, 'is_admin', False):
+        # Non-admin requesting a cover for an unknown BookOrbit book — forbid
+        return _forbidden_book_response(json_response=True)
+
     client = uc().bookorbit_client
     if not client or not client.is_configured():
         return "BookOrbit not configured", 400
@@ -9143,6 +9177,7 @@ def _run_test_connection(service: str, payload: dict):
         return jsonify({"ok": False, "message": _test_conn_error(e)})
 
 
+@admin_required
 def test_connection(service: str):
     """Test connectivity with diagnostic error messages."""
     return _run_test_connection(service, request.get_json(silent=True) or {})
@@ -10065,14 +10100,27 @@ def create_app(test_container=None):
 
     @app.route('/api/forge/active', methods=['GET'])
     def forge_active_tasks():
+        """Return active forging tasks, scoped to the current user for non-admins."""
+        user = current_user()
+        is_admin = user is not None and getattr(user, 'is_admin', False)
+        is_authenticated = user is not None
+
         tasks = set()
-        try:
-            tasks.update(container.forge_service().active_tasks or set())
-        except Exception:
-            pass
+
+        # Unauthenticated or admin: show all forge_service internal tasks
+        if not is_authenticated or is_admin:
+            try:
+                tasks.update(container.forge_service().active_tasks or set())
+            except Exception:
+                pass
+
         try:
             forging_books = database_service.get_books_by_status('forging')
             if isinstance(forging_books, (list, tuple, set)):
+                if is_authenticated and not is_admin:
+                    # Non-admins only see forging books they have claimed
+                    linked_ids = database_service.get_linked_abs_ids(user.id)
+                    forging_books = [b for b in forging_books if getattr(b, 'abs_id', None) in linked_ids]
                 for book in forging_books:
                     title = getattr(book, 'abs_title', None) or getattr(book, 'audio_title', None) or getattr(book, 'abs_id', None)
                     if title:

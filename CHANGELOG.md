@@ -12,7 +12,17 @@ All notable changes to BookBridge will be documented in this file.
 
 - **BookFusion book upload (Phase 2).** A user can now upload a book's local EPUB to BookFusion from the dashboard when the search/link flow finds no match and the book has a local EPUB file. New `src/api/bookfusion_upload_client.py` implements the 3-step Calibre upload API (init → S3 PUT → finalize) with HTTP Basic auth, EPUB metadata extraction via `extract_epub_metadata()`, SHA-256 file and metadata digest computation, and a `BookFusionUploadResult` dataclass. `POST /api/bookfusion/upload/<abs_id>` resolves the local EPUB, runs the pipeline, and links the resulting BookFusion book on success. The dashboard BookFusion link flow shows an "Upload to BookFusion" confirm dialog when the search returns no results and the book has a linked EPUB.
 
+- **Bulk-read safety warnings and user-scoped filtering on KoSync document API.** `get_all_kosync_documents()` now accepts an optional `user_id` parameter to scope results, and `/api/kosync-documents` exposes it as a query filter. `get_all_states()` and `get_all_books()` emit debug-level warnings when called without a user scope, making unfiltered bulk reads easier to spot in logs.
+
+- **Ambiguous-user fallback in `_resolve_uid()` now emits a diagnostic warning.** When neither an explicit `user_id` nor an ambient context variable is set, the fallback to `_default_user_id()` logs a visible warning so operators can detect operations silently attributed to the first admin user.
+
+- **Admin-only routes carry `@admin_required` defense-in-depth.** The global `test_connection`, `api_series_backfill`, and `api_debug_abs_series` endpoints now have an explicit `@admin_required` decorator matching the existing `_ADMIN_ONLY_ENDPOINTS` before-request guard. Per-user connection tests continue through their separately scoped account endpoints.
+
 ### Fixed
+
+- **Cover proxy endpoints now verify book ownership before serving images.** `proxy_cover`, `proxy_booklore_audiobook_cover`, and `proxy_bookorbit_audiobook_cover` reject requests for books the requesting user has not claimed, preventing cross-user cover-image information disclosure. Provider audiobook routes resolve ownership through `audio_source` and `audio_source_id`, so linked ebooks from other providers do not cause false 403 responses.
+
+- **Forge active-tasks API now scoped to the requesting user's linked books.** Non-admin callers of `/api/forge/active` see only forging books they own; admins continue to see all active forge tasks.
 
 - **BridgeSync 0.5.4 no longer loses Kobo mappings, deletion failures, or partially rejected sessions.** Managed paths on Kobo and Kindle storage now tolerate case-only mount-directory differences, so a Kobo path saved as `Koreaderbooks` still resolves when KOReader reports `KoreaderBooks`. Managed files are counted as deleted and removed from plugin state only after both the EPUB and sidecar deletion succeed. Session uploads now receive ordered per-session acknowledgements from the bridge; accepted rows are cleared while rejected rows remain queued for retry. Book deletion also removes user membership rows explicitly, with a cleanup path for orphan references left by older SQLite installs where foreign-key cascades were not active.
 

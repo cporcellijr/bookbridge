@@ -521,6 +521,11 @@ class DatabaseService:
     def get_all_books(self, user_id: int = None) -> List[Book]:
         """Get all books as model objects. When user_id is given, scope to the
         books that user has matched/claimed (shared catalog, per-user links)."""
+        if user_id is None:
+            logger.debug(
+                "get_all_books called with user_id=None — returning unfiltered "
+                "bulk data. Future callers should pass an explicit user_id."
+            )
         with self.get_session() as session:
             query = session.query(Book)
             if user_id is not None:
@@ -854,6 +859,11 @@ class DatabaseService:
         ctx_uid = get_current_user_id()
         if ctx_uid is not None:
             return ctx_uid
+        logger.warning(
+            "⚠️ _resolve_uid falling back to _default_user_id() — "
+            "neither explicit user_id nor ambient contextvar set. "
+            "Operations may be silently attributed to the default (first admin) user."
+        )
         return self._default_user_id()
 
     def _default_user_id(self):
@@ -896,6 +906,11 @@ class DatabaseService:
     def get_all_states(self, user_id: int = None) -> List[State]:
         """Get all states. When user_id is given, scope to that user; otherwise
         return every row (dashboard, until per-user scoping in the UI)."""
+        if user_id is None:
+            logger.debug(
+                "get_all_states called with user_id=None — returning unfiltered "
+                "bulk data. Future callers should pass an explicit user_id."
+            )
         with self.get_session() as session:
             query = session.query(State)
             if user_id is not None:
@@ -1172,12 +1187,15 @@ class DatabaseService:
             session.expunge(merged)
             return merged
 
-    def get_all_kosync_documents(self) -> List[KosyncDocument]:
-        """Get all KOSync documents."""
+    def get_all_kosync_documents(self, user_id: int = None) -> List[KosyncDocument]:
+        """Get all KOSync documents. When user_id is given, scope to that user."""
         with self.get_session() as session:
-            docs = session.query(KosyncDocument).order_by(
+            query = session.query(KosyncDocument).order_by(
                 KosyncDocument.last_updated.desc()
-            ).all()
+            )
+            if user_id is not None:
+                query = query.filter(KosyncDocument.user_id == user_id)
+            docs = query.all()
             for doc in docs:
                 session.expunge(doc)
             return docs

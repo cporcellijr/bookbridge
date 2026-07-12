@@ -2938,8 +2938,11 @@ def _suppress_empty_progress_response(doc_id: str, percentage: float, progress: 
 
 @kosync_admin_bp.route('/api/kosync-documents', methods=['GET'])
 def api_get_kosync_documents():
-    """Get all KOSync documents with their link status."""
-    docs = _database_service.get_all_kosync_documents()
+    """Get all KOSync documents with their link status.
+    Optional query param ?user_id= to scope results to a specific user
+    (only reachable by admins via _ADMIN_ONLY_ENDPOINTS; when omitted returns all)."""
+    user_id = request.args.get('user_id', type=int)
+    docs = _database_service.get_all_kosync_documents(user_id=user_id)
     result = []
     for doc in docs:
         linked_book = None
