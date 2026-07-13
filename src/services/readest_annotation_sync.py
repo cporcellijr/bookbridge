@@ -249,7 +249,7 @@ class ReadestAnnotationSync:
                 "color": self._ko_color_to_readest(row.color),
                 "page": row.pageno,
                 "createdAt": self._ko_datetime_to_ms(row.datetime),
-                "updatedAt": self._ko_datetime_to_ms(row.datetime_updated or row.datetime),
+                "updatedAt": int(time.time() * 1000),
             }
         else:
             # Bookmark (no drawer, pos0 is the xpointer)
@@ -265,7 +265,7 @@ class ReadestAnnotationSync:
                 "note": row.note or None,
                 "page": row.pageno,
                 "createdAt": self._ko_datetime_to_ms(row.datetime),
-                "updatedAt": self._ko_datetime_to_ms(row.datetime_updated or row.datetime),
+                "updatedAt": int(time.time() * 1000),
             }
 
     def _push_for_book(self, user_id, client: ReadestClient, book, book_hash: str) -> int:

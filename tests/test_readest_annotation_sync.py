@@ -480,6 +480,90 @@ class TestReadestAnnotationSyncPush(unittest.TestCase):
         payload = sync._build_push_payload(row, EPUB_HASH)
         self.assertEqual(payload["id"], "abc1234")
 
+    def test_push_payload_updatedAt_is_wallclock_not_historical(self):
+        """Annotation branch: updatedAt is wall-clock now, not the KOReader authoring timestamp."""
+        from src.services.readest_annotation_sync import ReadestAnnotationSync
+        sync = self._make_sync()
+        # A row with an old KOReader datetime — the fix ensures updatedAt
+        # is the time of the push, not the annotation's authoring time.
+        row = SimpleNamespace(
+            id=10,
+            pos0="/body/p[10]/text().0",
+            pos1="/body/p[10]/text().5",
+            drawer="lighten",
+            color="yellow",
+            text="old highlight",
+            note=None,
+            pageno=1,
+            datetime="2020-01-01 00:00:00",
+            datetime_updated=None,
+            readest_note_id=None,
+        )
+        before = int(time.time() * 1000)
+        payload = sync._build_push_payload(row, EPUB_HASH)
+        after = int(time.time() * 1000)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["type"], "annotation")
+        self.assertGreaterEqual(payload["updatedAt"], before,
+                                "updatedAt should be >= push start time")
+        self.assertLessEqual(payload["updatedAt"], after,
+                             "updatedAt should be <= push end time")
+
+    def test_push_payload_bookmark_updatedAt_is_wallclock(self):
+        """Bookmark branch: updatedAt is wall-clock now, not the KOReader authoring timestamp."""
+        from src.services.readest_annotation_sync import ReadestAnnotationSync
+        sync = self._make_sync()
+        row = SimpleNamespace(
+            id=11,
+            pos0="/body/p[11]/text().0",
+            pos1=None,
+            drawer=None,
+            color=None,
+            text="old bookmark",
+            note=None,
+            pageno=None,
+            datetime="2020-06-15 12:00:00",
+            datetime_updated=None,
+            readest_note_id=None,
+        )
+        before = int(time.time() * 1000)
+        payload = sync._build_push_payload(row, EPUB_HASH)
+        after = int(time.time() * 1000)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["type"], "bookmark")
+        self.assertGreaterEqual(payload["updatedAt"], before,
+                                "updatedAt should be >= push start time")
+        self.assertLessEqual(payload["updatedAt"], after,
+                             "updatedAt should be <= push end time")
+
+    def test_push_payload_regression_sea_of_rust_timestamps(self):
+        """Regression: live 'Sea of Rust' shape with near-contemporary datetimes."""
+        from src.services.readest_annotation_sync import ReadestAnnotationSync
+        sync = self._make_sync()
+        row = SimpleNamespace(
+            id=12,
+            pos0="/body/p[12]/text().0",
+            pos1="/body/p[12]/text().10",
+            drawer="lighten",
+            color="yellow",
+            text="regression test",
+            note=None,
+            pageno=2,
+            datetime="2026-07-11 21:42:34",
+            datetime_updated="2026-07-11 21:42:40",
+            readest_note_id="d759f9c",
+        )
+        before = int(time.time() * 1000)
+        payload = sync._build_push_payload(row, EPUB_HASH)
+        after = int(time.time() * 1000)
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["id"], "d759f9c", "should reuse existing readest_note_id")
+        # The bug: updatedAt must be wall-clock now, NOT 2026-07-11 21:42:40 in ms
+        self.assertGreaterEqual(payload["updatedAt"], before,
+                                "updatedAt must be wall-clock now, not the KOReader datetime_updated")
+        self.assertLessEqual(payload["updatedAt"], after,
+                             "updatedAt must be wall-clock now, not the KOReader datetime_updated")
+
 
 class TestReadestAnnotationSyncPull(unittest.TestCase):
     """Test _pull_for_book logic via mocked DB session."""

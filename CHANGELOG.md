@@ -30,6 +30,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Readest push no longer loses to a stale tombstone.** When the bridge pushed an
+  annotation to Readest, `updatedAt` was set to the KOReader annotation's historical
+  authoring timestamp. If that timestamp was older than Readest's existing tombstone
+  `updatedAt`, Readest kept the note deleted — the push appeared to succeed but the
+  note stayed gone. Both the annotation and bookmark branches of `_build_push_payload`
+  now use `int(time.time() * 1000)` (wall-clock now), matching the tombstone branch.
+
 - **Completed audiobooks no longer reopen slightly behind the end.** Audiobookshelf's finished flag now resolves progress to the book duration, Mark Complete persists service-native audio-position timestamps instead of wall-clock time, and significance checks normalize every client to a percentage delta before applying percentage or character thresholds.
 
 - **Fresh external KoSync progress no longer loses zero-delta discrepancy resolution.** A debounced device PUT can already be present in the database when its sync cycle starts, making its ordinary delta zero. Leader selection now retains that explicit recent external activity signal instead of demoting the device's percentage fallback and rolling it back to a stale service position.
