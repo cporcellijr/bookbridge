@@ -41,7 +41,7 @@ from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
-from src.api.bookfusion_upload_client import extract_epub_metadata
+from src.api.bookfusion_upload_client import extract_epub_metadata, _S3_TIMEOUT_LARGE
 from src.version import APP_VERSION, get_update_status
 from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
@@ -9351,12 +9351,22 @@ def api_bookfusion_unlink(abs_id: str) -> object:
     return jsonify({"success": database_service.delete_user_bookfusion_link(user_id, abs_id)})
 
 
-def api_bookfusion_upload(abs_id: str) -> object:
-    """Upload the local EPUB of a BookBridge book to BookFusion and link it.
+def _cleanup_temp(path: Path) -> None:
+    """Remove *path* if it exists, swallowing any errors."""
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception as exc:
+        logger.debug("Could not remove temp file %s: %s", path, exc)
 
-    Requires the user to have configured the BookFusion Calibre API key
-    (``BOOKFUSION_API_KEY``), which is a per-user credential separate from the
-    reader-device access token.
+
+def api_bookfusion_upload(abs_id: str) -> object:
+    """Upload an EPUB to BookFusion and link it.
+
+    Accepts an optional JSON body ``{"variant": "standard" | "readaloud"}``.
+    ``"standard"`` (default) uploads the book's local EPUB file. ``"readaloud"``
+    fetches the full Storyteller ReadAloud EPUB3 with embedded narration audio
+    and uploads that instead; requires the book to have a ``storyteller_uuid``.
     """
     book = database_service.get_book(abs_id)
     if not book:
@@ -9366,27 +9376,70 @@ def api_bookfusion_upload(abs_id: str) -> object:
         return _forbidden_book_response(json_response=True)
     user_id = user.id if user is not None else database_service._default_user_id()
 
-    # Resolve the local EPUB path
-    filename = book.original_ebook_filename or book.ebook_filename
-    if not filename:
-        return jsonify({"success": False, "error": "No local ebook to upload"}), 400
-    try:
-        epub_path = container.ebook_parser().resolve_book_path(filename)
-    except Exception as exc:
-        logger.warning("Could not resolve ebook path for %s: %s", filename, exc)
-        return jsonify({"success": False, "error": "Local ebook file not found"}), 400
-    if not epub_path or not epub_path.exists():
-        return jsonify({"success": False, "error": "Local ebook file not found"}), 400
+    # Parse variant from JSON body (default: standard)
+    payload = request.get_json(silent=True) or {}
+    variant = str(payload.get("variant") or "standard").strip().lower()
 
-    # Build the upload client from the current user's credentials
-    upload_client = uc().bookfusion_upload_client
-    if not upload_client.is_configured():
-        return jsonify({"success": False, "error": "BookFusion Calibre API key not set"}), 400
+    # ------------------------------------------------------------------
+    # ReadAloud variant: fetch full audio-intact EPUB from Storyteller
+    # ------------------------------------------------------------------
+    if variant == "readaloud":
+        if not book.storyteller_uuid:
+            return jsonify({"success": False, "error": "This book is not linked to Storyteller"}), 400
 
-    # Extract metadata and run the upload
-    metadata = extract_epub_metadata(str(epub_path))
-    result = upload_client.upload_epub(str(epub_path), metadata)
+        tmp_dir = Path(os.environ.get("DATA_DIR", "/data")) / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = tmp_dir / f"bf_readaloud_{abs_id}_{uuid.uuid4().hex}.epub"
 
+        storyteller_client = uc().storyteller_client
+        if not storyteller_client.is_configured():
+            return jsonify({"success": False, "error": "Storyteller is not configured for this user"}), 400
+
+        try:
+            ok = storyteller_client.download_book(book.storyteller_uuid, tmp_path, polling=False)
+        except Exception as exc:
+            logger.warning("Storyteller ReadAloud EPUB download failed for %s: %s", abs_id, exc)
+            ok = False
+        if not ok:
+            _cleanup_temp(tmp_path)
+            return jsonify({"success": False, "error": "Could not download the Storyteller ReadAloud EPUB (it may not be processed yet)"}), 502
+
+        upload_client = uc().bookfusion_upload_client
+        if not upload_client.is_configured():
+            _cleanup_temp(tmp_path)
+            return jsonify({"success": False, "error": "BookFusion Calibre API key not set"}), 400
+
+        metadata = extract_epub_metadata(str(tmp_path))
+        try:
+            result = upload_client.upload_epub(str(tmp_path), metadata, s3_timeout=_S3_TIMEOUT_LARGE)
+        finally:
+            _cleanup_temp(tmp_path)
+
+    # ------------------------------------------------------------------
+    # Standard variant: existing local-EPUB flow (unchanged behavior)
+    # ------------------------------------------------------------------
+    else:
+        filename = book.original_ebook_filename or book.ebook_filename
+        if not filename:
+            return jsonify({"success": False, "error": "No local ebook to upload"}), 400
+        try:
+            epub_path = container.ebook_parser().resolve_book_path(filename)
+        except Exception as exc:
+            logger.warning("Could not resolve ebook path for %s: %s", filename, exc)
+            return jsonify({"success": False, "error": "Local ebook file not found"}), 400
+        if not epub_path or not epub_path.exists():
+            return jsonify({"success": False, "error": "Local ebook file not found"}), 400
+
+        upload_client = uc().bookfusion_upload_client
+        if not upload_client.is_configured():
+            return jsonify({"success": False, "error": "BookFusion Calibre API key not set"}), 400
+
+        metadata = extract_epub_metadata(str(epub_path))
+        result = upload_client.upload_epub(str(epub_path), metadata)
+
+    # ------------------------------------------------------------------
+    # Shared result handling (both variants converge here)
+    # ------------------------------------------------------------------
     if result.status == "created":
         book_id = result.book_id
         bookfusion_id_str = str(book_id) if book_id is not None else None
@@ -9404,8 +9457,6 @@ def api_bookfusion_upload(abs_id: str) -> object:
         })
 
     if result.status == "duplicate":
-        # The exact file digest already exists in BookFusion. Try to find the
-        # book id by searching the reader API, verifying title/author match.
         title = metadata.get("title", "")
         author = (metadata.get("authors") or [None])[0] or ""
         search_id = _resolve_duplicate_bookfusion_id(upload_client, title, author)

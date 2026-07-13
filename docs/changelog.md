@@ -4,7 +4,7 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
-## [7.1.1]
+## [7.2.0]
 
 The headline is **reader-owned integrations and BookFusion support**: BookBridge now gives each reader a self-service place for their own service accounts, adds BookFusion progress and highlight sync, and expands list/collection bridges without changing the already-released 7.1.0 annotation foundation.
 

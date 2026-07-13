@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _INIT_TIMEOUT = 60
 _S3_TIMEOUT = 180
+_S3_TIMEOUT_LARGE = 600
 _FINALIZE_TIMEOUT = 60
 _DEFAULT_API_URL = "https://www.bookfusion.com"
 _CALIBRE_API_PATH = "/calibre-api/v1"
@@ -32,6 +33,29 @@ _NAMESPACES = {
     "dc": "http://purl.org/dc/elements/1.1/",
     "opf": "http://www.idpf.org/2007/opf",
 }
+
+
+def _parse_s3_size_limit_error(text: str) -> Optional[str]:
+    """Return a human-readable message if *text* is an S3 EntityTooLarge error, else None."""
+    try:
+        root = ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        return None
+    if root.tag != "Error" or (root.findtext("Code") or "") != "EntityTooLarge":
+        return None
+    proposed = root.findtext("ProposedSize")
+    max_allowed = root.findtext("MaxSizeAllowed")
+    if proposed and max_allowed:
+        try:
+            proposed_mb = int(proposed) / (1024 * 1024)
+            max_mb = int(max_allowed) / (1024 * 1024)
+            return (
+                f"BookFusion rejected the upload: file is {proposed_mb:.1f} MB, "
+                f"which exceeds your BookFusion account's {max_mb:.1f} MB upload limit."
+            )
+        except ValueError:
+            pass
+    return "BookFusion rejected the upload: file exceeds your BookFusion account's upload size limit."
 
 
 @dataclass
@@ -92,7 +116,7 @@ class BookFusionUploadClient:
         """``True`` when a non-empty Calibre API key is resolvable."""
         return bool(self._api_key())
 
-    def upload_epub(self, epub_path: str, metadata: dict) -> BookFusionUploadResult:
+    def upload_epub(self, epub_path: str, metadata: dict, s3_timeout: int | None = None) -> BookFusionUploadResult:
         """Run the 3-step upload pipeline for *epub_path*.
 
         Parameters
@@ -103,6 +127,9 @@ class BookFusionUploadClient:
             Dict with keys ``title``, ``summary``, ``language``, ``isbn``,
             ``issued_on``, ``authors`` (list[str]), ``tags`` (list[str]),
             ``series`` (list[dict{title, index}]).
+        s3_timeout:
+            Optional per-call timeout for the S3 PUT step. Falls back to
+            ``_S3_TIMEOUT`` (180s) when ``None``.
 
         Returns
         -------
@@ -131,9 +158,9 @@ class BookFusionUploadClient:
             return BookFusionUploadResult("error", message="Upload init missing S3 url or params")
 
         # --- Step 2: S3 PUT ---
-        s3_ok = self._s3_put(s3_url, params, epub_path)
+        s3_ok, s3_error = self._s3_put(s3_url, params, epub_path, s3_timeout=s3_timeout)
         if not s3_ok:
-            return BookFusionUploadResult("error", message="S3 upload failed")
+            return BookFusionUploadResult("error", message=s3_error or "S3 upload failed")
 
         # --- Step 3: finalize ---
         finalize_result = self._finalize(
@@ -187,23 +214,39 @@ class BookFusionUploadClient:
                 result["params"] = body.get("params")
         return result
 
-    def _s3_put(self, s3_url: str, params: dict, epub_path: str) -> bool:
+    def _s3_put(self, s3_url: str, params: dict, epub_path: str, s3_timeout: int | None = None) -> tuple[bool, Optional[str]]:
         """POST the EPUB file to the pre-signed S3 URL as multipart form.
 
-        Returns ``True`` on HTTP 204.
+        Parameters
+        ----------
+        s3_timeout:
+            Optional per-call timeout override. Falls back to ``_S3_TIMEOUT`` (180s)
+            when ``None``.
+
+        Returns
+        -------
+        tuple[bool, Optional[str]]
+            ``(True, None)`` on HTTP 204. ``(False, message)`` on failure, where
+            ``message`` is a human-readable reason (a parsed S3 size-limit error when
+            applicable, else the status code and truncated response body).
         """
+        timeout = s3_timeout if s3_timeout is not None else _S3_TIMEOUT
         try:
             with open(epub_path, "rb") as f:
                 files = {"file": (os.path.basename(epub_path), f, "application/epub+zip")}
-                resp = self.session.post(s3_url, data=params, files=files, timeout=_S3_TIMEOUT)
+                resp = self.session.post(s3_url, data=params, files=files, timeout=timeout)
         except Exception as exc:
             logger.error("BookFusion S3 upload failed: %s", exc)
-            return False
+            return False, str(exc)
 
         if resp.status_code == 204:
-            return True
+            return True, None
+
         logger.warning("BookFusion S3 upload returned %s: %s", resp.status_code, resp.text[:200])
-        return False
+        size_limit_message = _parse_s3_size_limit_error(resp.text)
+        if size_limit_message:
+            return False, size_limit_message
+        return False, f"{resp.status_code}: {resp.text[:200]}"
 
     def _finalize(
         self,

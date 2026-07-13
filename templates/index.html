@@ -238,6 +238,7 @@
                     <span class="service-value cursor-pointer color-inherit" title="Click to edit BookFusion link"
                         data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.display_title|default(mapping.abs_title)|escape }}"
                         data-has-local-epub="{% if mapping.has_local_epub %}true{% else %}false{% endif %}"
+                        data-has-storyteller="{% if mapping.storyteller_uuid %}true{% else %}false{% endif %}"
                         onclick="linkBookFusion(event)">
                         {% if mapping.bookfusion_linked %}
                         {% if mapping.states.bookfusion is defined %}
@@ -2596,6 +2597,7 @@
                 const item = event.currentTarget;
                 const absId = item.dataset.absId;
                 const title = item.dataset.title || '';
+                const hasStoryteller = item.dataset.hasStoryteller === 'true';
                 const query = prompt('Search your BookFusion library:', title);
                 if (query === null || !query.trim()) return;
 
@@ -2613,7 +2615,7 @@
                 if (!books.length) {
                     const hasLocal = item.dataset.hasLocalEpub === 'true';
                     if (hasLocal) {
-                        openBookFusionUploadModal(absId, title);
+                        openBookFusionUploadModal(absId, title, hasStoryteller);
                     } else {
                         alert('No BookFusion books found.');
                     }
@@ -3235,13 +3237,21 @@
             function _dmYesDelete() { _dmExecuteFetch(window._mcAbsId, true); }
             function _dmNoKeepMapping() { _dmExecuteFetch(window._mcAbsId, false); }
 
-            function openBookFusionUploadModal(absId, title) {
+            function openBookFusionUploadModal(absId, title, hasStoryteller) {
                 window._bfUploadAbsId = absId;
                 document.getElementById('bf-upload-title').textContent = title || 'this book';
                 const status = document.getElementById('bf-upload-status');
                 status.textContent = '';
                 const btn = document.getElementById('bf-upload-confirm-btn');
                 btn.disabled = false;
+                // Show/hide variant radio options
+                const radioGroup = document.getElementById('bf-upload-variant-group');
+                if (radioGroup) {
+                    radioGroup.style.display = hasStoryteller ? 'block' : 'none';
+                    // Reset to standard when opening
+                    const standardRadio = document.querySelector('input[name="bf-upload-variant"][value="standard"]');
+                    if (standardRadio) standardRadio.checked = true;
+                }
                 document.getElementById('bf-upload-modal').style.display = 'flex';
             }
 
@@ -3256,11 +3266,16 @@
                 const status = document.getElementById('bf-upload-status');
                 const btn = document.getElementById('bf-upload-confirm-btn');
                 btn.disabled = true;
-                status.textContent = 'Uploading…';
+                const variantInput = document.querySelector('input[name="bf-upload-variant"]:checked');
+                const variant = variantInput ? variantInput.value : 'standard';
+                status.textContent = variant === 'readaloud'
+                    ? 'Downloading and uploading ReadAloud EPUB — this can take a few minutes…'
+                    : 'Uploading…';
                 try {
                     const resp = await fetch('/api/bookfusion/upload/' + encodeURIComponent(absId), {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ variant })
                     });
                     const payload = await resp.json().catch(() => ({}));
                     if (payload.success) {
@@ -3325,6 +3340,17 @@
                         No match found in your BookFusion library. Upload
                         <strong id="bf-upload-title">this book</strong>'s linked EPUB to your BookFusion library?
                     </p>
+                    <div id="bf-upload-variant-group" style="display:none;">
+                        <label style="display:block; margin:10px 0 6px; color:rgba(255,255,255,0.85); font-size:0.9rem;">
+                            <input type="radio" name="bf-upload-variant" value="standard" checked> Standard EPUB
+                        </label>
+                        <label style="display:block; margin:0 0 6px; color:rgba(255,255,255,0.85); font-size:0.9rem;">
+                            <input type="radio" name="bf-upload-variant" value="readaloud"> Storyteller ReadAloud EPUB (with narration audio)
+                        </label>
+                        <p style="color:rgba(255,255,255,0.5); font-size:0.78rem; margin:4px 0 0;">
+                            The ReadAloud EPUB is large (~100MB) and may take a few minutes to upload.
+                        </p>
+                    </div>
                     <p id="bf-upload-status"
                         style="color:rgba(255,255,255,0.55); margin:12px 0 0; min-height:18px; font-size:0.85rem;"></p>
                 </div>

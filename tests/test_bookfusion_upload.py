@@ -7,6 +7,7 @@ digest computation, and the upload route handler.
 import hashlib
 import io
 import os
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -19,6 +20,7 @@ from flask import Flask as _Flask
 from src.api.bookfusion_upload_client import (
     BookFusionUploadClient,
     BookFusionUploadResult,
+    _parse_s3_size_limit_error,
     extract_epub_metadata,
 )
 
@@ -461,7 +463,9 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def _run_route(self, book_has_epub=True, client_configured=True,
-                   upload_result=None, ebook_path_exists=True):
+                   upload_result=None, ebook_path_exists=True,
+                   storyteller_uuid=None, storyteller_configured=None,
+                   request_data=None):
         """Call ``api_bookfusion_upload`` with mocked dependencies.
 
         Parameters
@@ -470,6 +474,13 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             ``True`` → book exists with a local EPUB.
             ``False`` → book exists but has no local EPUB.
             ``None`` → book does not exist (get_book returns None).
+        storyteller_uuid:
+            If set, ``book.storyteller_uuid`` is set to this value.
+        storyteller_configured:
+            Whether the mock storyteller client reports configured.
+            Defaults to the value of *client_configured* when ``None``.
+        request_data:
+            Optional dict sent as the JSON request body.
         """
         from src import web_server as ws
 
@@ -482,6 +493,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             book.abs_id = "test-abs-id"
             book.original_ebook_filename = None
             book.ebook_filename = "test.epub" if book_has_epub else None
+            book.storyteller_uuid = storyteller_uuid
             ws.database_service = MagicMock()
             ws.database_service.get_book.return_value = book
 
@@ -510,8 +522,14 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             upload_result = BookFusionUploadResult("created", book_id=456, message="ok")
         upload_client.upload_epub.return_value = upload_result
 
+        storyteller_client = MagicMock()
+        st_configured = storyteller_configured if storyteller_configured is not None else client_configured
+        storyteller_client.is_configured.return_value = st_configured
+        storyteller_client.download_book.return_value = True
+
         user_clients = MagicMock()
         user_clients.bookfusion_upload_client = upload_client
+        user_clients.storyteller_client = storyteller_client
         ws.uc = MagicMock(return_value=user_clients)
 
         # --- Mock set_user_bookfusion_link ---
@@ -525,9 +543,12 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             return {"bookfusion_id": bookfusion_id}
         ws.database_service.set_user_bookfusion_link = _fake_link
 
-        # --- Run inside Flask app context (jsonify requires it) ---
+        # --- Run inside Flask request context ---
         _ctx_app = _Flask(__name__)
-        with _ctx_app.app_context():
+        with _ctx_app.test_request_context(
+            "/api/bookfusion/upload/test-abs-id",
+            json=request_data or {},
+        ):
             result = ws.api_bookfusion_upload("test-abs-id")
         return result
 
@@ -563,6 +584,474 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             upload_result=BookFusionUploadResult("duplicate", message="already exists"),
         )
         self.assertEqual(result[1], 409)
+
+    # ------------------------------------------------------------------
+    # ReadAloud variant tests (§7)
+    # ------------------------------------------------------------------
+
+    def test_readaloud_variant_requires_storyteller_uuid(self):
+        """POST {"variant": "readaloud"} with no storyteller_uuid → 400."""
+        result = self._run_route(
+            book_has_epub=True,
+            client_configured=True,
+            storyteller_uuid=None,
+            request_data={"variant": "readaloud"},
+        )
+        self.assertEqual(result[1], 400)
+        self.assertIn("not linked to Storyteller", result[0].json["error"])
+
+    def test_readaloud_variant_downloads_and_uploads_full_epub(self):
+        """Happy path: download succeeds, upload called with large timeout."""
+        storyteller_uuid = "st-uuid-123"
+        result = self._run_route(
+            book_has_epub=True,
+            client_configured=True,
+            storyteller_uuid=storyteller_uuid,
+            upload_result=BookFusionUploadResult("created", book_id=789, message="ok"),
+            request_data={"variant": "readaloud"},
+        )
+        self.assertEqual(result.json["success"], True)
+        self.assertEqual(result.json["bookfusion_id"], 789)
+        self.assertEqual(result.json["created"], True)
+
+        # Verify the storyteller client was called correctly
+        st_client = self._ws.uc.return_value.storyteller_client
+        st_client.download_book.assert_called_once()
+        args, kwargs = st_client.download_book.call_args
+        self.assertEqual(args[0], storyteller_uuid)
+        self.assertEqual(kwargs.get("polling"), False)
+
+        # Verify upload was called with temp path (not the standard epub_path)
+        bf_client = self._ws.uc.return_value.bookfusion_upload_client
+        bf_client.upload_epub.assert_called_once()
+        upload_args, upload_kwargs = bf_client.upload_epub.call_args
+        self.assertIn("bf_readaloud", str(upload_args[0]))
+        self.assertEqual(upload_kwargs.get("s3_timeout"), 600)
+
+        # Verify link was created
+        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "789")
+
+    def test_readaloud_variant_download_failure_false_returns_502(self):
+        """download_book returns False → 502, upload_epub never called."""
+        from src import web_server as ws
+
+        # Manually patch storyteller_client.download_book to return False
+        original_uc = ws.uc
+        try:
+            book = MagicMock()
+            book.abs_id = "test-abs-id"
+            book.original_ebook_filename = None
+            book.ebook_filename = "test.epub"
+            book.storyteller_uuid = "st-uuid-123"
+            ws.database_service = MagicMock()
+            ws.database_service.get_book.return_value = book
+
+            mock_user = MagicMock()
+            mock_user.id = 1
+            ws.current_user = MagicMock(return_value=mock_user)
+            ws._user_may_modify_book = MagicMock(return_value=True)
+
+            bf_client = MagicMock()
+            bf_client.is_configured.return_value = True
+            st_client = MagicMock()
+            st_client.is_configured.return_value = True
+            st_client.download_book.return_value = False
+            user_clients = MagicMock()
+            user_clients.bookfusion_upload_client = bf_client
+            user_clients.storyteller_client = st_client
+            ws.uc = MagicMock(return_value=user_clients)
+
+            _ctx_app = _Flask(__name__)
+            with _ctx_app.test_request_context(
+                "/api/bookfusion/upload/test-abs-id",
+                json={"variant": "readaloud"},
+            ):
+                result = ws.api_bookfusion_upload("test-abs-id")
+
+            self.assertEqual(result[1], 502)
+            self.assertIn("Could not download", result[0].json["error"])
+            bf_client.upload_epub.assert_not_called()
+        finally:
+            ws.uc = original_uc
+
+    def test_readaloud_variant_download_raises_returns_502(self):
+        """download_book raises Exception → caught → 502."""
+        from src import web_server as ws
+
+        original_uc = ws.uc
+        try:
+            book = MagicMock()
+            book.abs_id = "test-abs-id"
+            book.original_ebook_filename = None
+            book.ebook_filename = "test.epub"
+            book.storyteller_uuid = "st-uuid-123"
+            ws.database_service = MagicMock()
+            ws.database_service.get_book.return_value = book
+
+            mock_user = MagicMock()
+            mock_user.id = 1
+            ws.current_user = MagicMock(return_value=mock_user)
+            ws._user_may_modify_book = MagicMock(return_value=True)
+
+            bf_client = MagicMock()
+            bf_client.is_configured.return_value = True
+            st_client = MagicMock()
+            st_client.is_configured.return_value = True
+            st_client.download_book.side_effect = Exception("Connection refused")
+            user_clients = MagicMock()
+            user_clients.bookfusion_upload_client = bf_client
+            user_clients.storyteller_client = st_client
+            ws.uc = MagicMock(return_value=user_clients)
+
+            _ctx_app = _Flask(__name__)
+            with _ctx_app.test_request_context(
+                "/api/bookfusion/upload/test-abs-id",
+                json={"variant": "readaloud"},
+            ):
+                result = ws.api_bookfusion_upload("test-abs-id")
+
+            self.assertEqual(result[1], 502)
+            self.assertIn("Could not download", result[0].json["error"])
+            bf_client.upload_epub.assert_not_called()
+        finally:
+            ws.uc = original_uc
+
+    def test_readaloud_variant_cleans_up_temp_file_on_success(self):
+        """Temp file is removed after successful upload."""
+        import tempfile as tf
+        from src import web_server as ws
+
+        original_uc = ws.uc
+        try:
+            # Create a real temp file that download_book "writes"
+            real_tmp = tf.NamedTemporaryFile(suffix=".epub", delete=False)
+            real_tmp.write(self.epub_bytes)
+            real_tmp.close()
+
+            book = MagicMock()
+            book.abs_id = "test-abs-id"
+            book.original_ebook_filename = None
+            book.ebook_filename = "test.epub"
+            book.storyteller_uuid = "st-uuid-123"
+            ws.database_service = MagicMock()
+            ws.database_service.get_book.return_value = book
+
+            mock_user = MagicMock()
+            mock_user.id = 1
+            ws.current_user = MagicMock(return_value=mock_user)
+            ws._user_may_modify_book = MagicMock(return_value=True)
+
+            bf_client = MagicMock()
+            bf_client.is_configured.return_value = True
+            bf_client.upload_epub.return_value = BookFusionUploadResult("created", book_id=789, message="ok")
+
+            # download_book writes to the path it's given
+            def _fake_download(uuid, path, polling=False):
+                shutil.copy2(real_tmp.name, str(path))
+                return True
+
+            st_client = MagicMock()
+            st_client.is_configured.return_value = True
+            st_client.download_book.side_effect = _fake_download
+            user_clients = MagicMock()
+            user_clients.bookfusion_upload_client = bf_client
+            user_clients.storyteller_client = st_client
+            ws.uc = MagicMock(return_value=user_clients)
+
+            # Patch _cleanup_temp to track the path
+            cleaned_paths = []
+
+            def _tracking_cleanup(path):
+                cleaned_paths.append(str(path))
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception:
+                    pass
+
+            ws._cleanup_temp = _tracking_cleanup
+
+            _ctx_app = _Flask(__name__)
+            with _ctx_app.test_request_context(
+                "/api/bookfusion/upload/test-abs-id",
+                json={"variant": "readaloud"},
+            ):
+                result = ws.api_bookfusion_upload("test-abs-id")
+
+            self.assertEqual(result.json["success"], True)
+            # Verify temp file was cleaned up (path in cleaned_paths no longer exists)
+            for p in cleaned_paths:
+                self.assertFalse(Path(p).exists(), f"Temp file still exists: {p}")
+        finally:
+            ws.uc = original_uc
+            try:
+                os.unlink(real_tmp.name)
+            except Exception:
+                pass
+
+    def test_readaloud_variant_cleans_up_temp_file_on_upload_failure(self):
+        """Temp file is removed even when upload_epub returns error."""
+        import tempfile as tf
+        from src import web_server as ws
+
+        original_uc = ws.uc
+        try:
+            real_tmp = tf.NamedTemporaryFile(suffix=".epub", delete=False)
+            real_tmp.write(self.epub_bytes)
+            real_tmp.close()
+
+            book = MagicMock()
+            book.abs_id = "test-abs-id"
+            book.original_ebook_filename = None
+            book.ebook_filename = "test.epub"
+            book.storyteller_uuid = "st-uuid-123"
+            ws.database_service = MagicMock()
+            ws.database_service.get_book.return_value = book
+
+            mock_user = MagicMock()
+            mock_user.id = 1
+            ws.current_user = MagicMock(return_value=mock_user)
+            ws._user_may_modify_book = MagicMock(return_value=True)
+
+            bf_client = MagicMock()
+            bf_client.is_configured.return_value = True
+            bf_client.upload_epub.return_value = BookFusionUploadResult("error", message="Upload failed")
+
+            def _fake_download(uuid, path, polling=False):
+                shutil.copy2(real_tmp.name, str(path))
+                return True
+
+            st_client = MagicMock()
+            st_client.is_configured.return_value = True
+            st_client.download_book.side_effect = _fake_download
+            user_clients = MagicMock()
+            user_clients.bookfusion_upload_client = bf_client
+            user_clients.storyteller_client = st_client
+            ws.uc = MagicMock(return_value=user_clients)
+
+            cleaned_paths = []
+
+            def _tracking_cleanup(path):
+                cleaned_paths.append(str(path))
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception:
+                    pass
+
+            ws._cleanup_temp = _tracking_cleanup
+
+            _ctx_app = _Flask(__name__)
+            with _ctx_app.test_request_context(
+                "/api/bookfusion/upload/test-abs-id",
+                json={"variant": "readaloud"},
+            ):
+                result = ws.api_bookfusion_upload("test-abs-id")
+
+            self.assertEqual(result[0].json["success"], False)
+            for p in cleaned_paths:
+                self.assertFalse(Path(p).exists(), f"Temp file still exists: {p}")
+        finally:
+            ws.uc = original_uc
+            try:
+                os.unlink(real_tmp.name)
+            except Exception:
+                pass
+
+    def test_standard_variant_default_when_no_body(self):
+        """POST with no body defaults to standard variant (existing behavior)."""
+        result = self._run_route(
+            book_has_epub=True,
+            client_configured=True,
+            upload_result=BookFusionUploadResult("created", book_id=456, message="ok"),
+        )
+        self.assertEqual(result.json["success"], True)
+        self.assertEqual(result.json["bookfusion_id"], 456)
+        self.assertEqual(result.json["created"], True)
+        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "456")
+
+
+class S3SizeLimitErrorTest(unittest.TestCase):
+    """Tests for _parse_s3_size_limit_error and S3 EntityTooLarge in upload_epub."""
+
+    _ENTITY_TOO_LARGE_XML = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Error><Code>EntityTooLarge</Code>"
+        "<Message>Your proposed upload exceeds the maximum allowed size</Message>"
+        "<ProposedSize>104860039</ProposedSize>"
+        "<MaxSizeAllowed>104857600</MaxSizeAllowed></Error>"
+    )
+
+    def test_parse_s3_size_limit_error_with_sizes(self):
+        result = _parse_s3_size_limit_error(self._ENTITY_TOO_LARGE_XML)
+        self.assertIsNotNone(result)
+        self.assertIn("100.0 MB", result)
+        self.assertIn("exceeds", result)
+
+    def test_parse_s3_size_limit_error_with_distinct_sizes(self):
+        xml = (
+            "<Error><Code>EntityTooLarge</Code><Message>too big</Message>"
+            "<ProposedSize>104857600</ProposedSize>"
+            "<MaxSizeAllowed>52428800</MaxSizeAllowed></Error>"
+        )
+        result = _parse_s3_size_limit_error(xml)
+        self.assertEqual(
+            result,
+            "BookFusion rejected the upload: file is 100.0 MB, "
+            "which exceeds your BookFusion account's 50.0 MB upload limit.",
+        )
+
+    def test_parse_s3_size_limit_error_without_size_tags(self):
+        xml = "<Error><Code>EntityTooLarge</Code><Message>too big</Message></Error>"
+        result = _parse_s3_size_limit_error(xml)
+        self.assertEqual(
+            result,
+            "BookFusion rejected the upload: file exceeds your BookFusion account's upload size limit.",
+        )
+
+    def test_parse_s3_size_limit_error_returns_none_for_other_errors(self):
+        xml = "<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>"
+        result = _parse_s3_size_limit_error(xml)
+        self.assertIsNone(result)
+
+    def test_parse_s3_size_limit_error_returns_none_for_non_xml(self):
+        result = _parse_s3_size_limit_error("Internal Server Error")
+        self.assertIsNone(result)
+
+    def test_s3_entity_too_large_flows_into_upload_error_result(self):
+        """Full upload_epub flow: S3 returns EntityTooLarge → error with specific message."""
+        epub_bytes = _make_minimal_epub()
+        path = _write_epub_temp(epub_bytes)
+        metadata = {"title": "T", "authors": ["A"], "tags": [], "series": []}
+        s3_params = {
+            "key": "uploads/test-key.epub",
+            "policy": "test-policy",
+            "x-amz-credential": "test-cred",
+            "x-amz-algorithm": "AWS4-HMAC-SHA256",
+            "x-amz-date": "20260712T000000Z",
+            "x-amz-signature": "test-sig",
+        }
+        s3_error_xml = (
+            "<Error><Code>EntityTooLarge</Code><Message>too big</Message>"
+            "<ProposedSize>104857600</ProposedSize>"
+            "<MaxSizeAllowed>52428800</MaxSizeAllowed></Error>"
+        )
+        responses = [
+            _Resp(201, data={"url": "https://s3.example.com/upload", "params": s3_params}),
+            _Resp(400, text=s3_error_xml),
+        ]
+        session = _Session(responses)
+        client = BookFusionUploadClient(
+            credentials={"BOOKFUSION_API_KEY": "test-api-key"},
+        )
+        client.session = session
+        try:
+            result = client.upload_epub(path, metadata)
+            self.assertEqual(result.status, "error")
+            self.assertIn("50.0 MB", result.message)
+            self.assertIn("100.0 MB", result.message)
+            self.assertEqual(len(session.calls), 2)
+        finally:
+            os.unlink(path)
+
+    def test_s3_generic_failure_still_reports_status_code(self):
+        """Non-EntityTooLarge S3 failure surfaces the status code."""
+        epub_bytes = _make_minimal_epub()
+        path = _write_epub_temp(epub_bytes)
+        metadata = {"title": "T", "authors": ["A"], "tags": [], "series": []}
+        s3_params = {
+            "key": "uploads/test-key.epub",
+            "policy": "test-policy",
+            "x-amz-credential": "test-cred",
+            "x-amz-algorithm": "AWS4-HMAC-SHA256",
+            "x-amz-date": "20260712T000000Z",
+            "x-amz-signature": "test-sig",
+        }
+        responses = [
+            _Resp(201, data={"url": "https://s3.example.com/upload", "params": s3_params}),
+            _Resp(500, text="Internal Server Error"),
+        ]
+        session = _Session(responses)
+        client = BookFusionUploadClient(
+            credentials={"BOOKFUSION_API_KEY": "test-api-key"},
+        )
+        client.session = session
+        try:
+            result = client.upload_epub(path, metadata)
+            self.assertEqual(result.status, "error")
+            self.assertIn("500", result.message)
+            self.assertEqual(len(session.calls), 2)
+        finally:
+            os.unlink(path)
+
+
+class BookFusionUploadClientS3TimeoutTest(unittest.TestCase):
+    """``upload_epub`` passes through ``s3_timeout`` correctly."""
+
+    def setUp(self):
+        self.epub_bytes = _make_minimal_epub()
+        self.path = _write_epub_temp(self.epub_bytes)
+        self.metadata = {
+            "title": "Test", "authors": ["A"], "tags": [], "series": [],
+        }
+
+    def tearDown(self):
+        os.unlink(self.path)
+
+    def test_custom_s3_timeout_passed_to_s3_post(self):
+        """upload_epub(..., s3_timeout=300) → S3 POST receives timeout=300."""
+        s3_params = {
+            "key": "uploads/test-key.epub",
+            "policy": "test-policy",
+            "x-amz-credential": "test-cred",
+            "x-amz-algorithm": "AWS4-HMAC-SHA256",
+            "x-amz-date": "20260712T000000Z",
+            "x-amz-signature": "test-sig",
+        }
+        responses = [
+            _Resp(201, data={"url": "https://s3.example.com/upload", "params": s3_params}),
+            _Resp(204),
+            _Resp(201, data={"id": 123}),
+        ]
+        session = _Session(responses)
+        client = BookFusionUploadClient(
+            credentials={"BOOKFUSION_API_KEY": "test-api-key"},
+        )
+        client.session = session
+
+        client.upload_epub(self.path, self.metadata, s3_timeout=300)
+
+        # S3 call is the second POST
+        s3_call = session.calls[1]
+        kwargs = s3_call[2]
+        self.assertEqual(kwargs.get("timeout"), 300)
+
+    def test_default_s3_timeout_when_none(self):
+        """Omitted s3_timeout uses the module default _S3_TIMEOUT (180)."""
+        s3_params = {
+            "key": "uploads/test-key.epub",
+            "policy": "test-policy",
+            "x-amz-credential": "test-cred",
+            "x-amz-algorithm": "AWS4-HMAC-SHA256",
+            "x-amz-date": "20260712T000000Z",
+            "x-amz-signature": "test-sig",
+        }
+        responses = [
+            _Resp(201, data={"url": "https://s3.example.com/upload", "params": s3_params}),
+            _Resp(204),
+            _Resp(201, data={"id": 123}),
+        ]
+        session = _Session(responses)
+        client = BookFusionUploadClient(
+            credentials={"BOOKFUSION_API_KEY": "test-api-key"},
+        )
+        client.session = session
+
+        client.upload_epub(self.path, self.metadata)
+
+        s3_call = session.calls[1]
+        kwargs = s3_call[2]
+        self.assertEqual(kwargs.get("timeout"), 180)
 
 
 if __name__ == "__main__":
