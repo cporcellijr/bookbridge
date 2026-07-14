@@ -13,6 +13,18 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: cpu
+            platforms: linux/amd64,linux/arm64
+            install_gpu: "false"
+            suffix: ""
+          - variant: cuda
+            platforms: linux/amd64
+            install_gpu: "true"
+            suffix: "-cuda"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,16 +63,30 @@ jobs:
             type=sha,enable={{is_default_branch}}
             type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=dev-${{ steps.build_num.outputs.value }},enable=${{ github.ref == 'refs/heads/dev' }}
+          flavor: |
+            suffix=${{ matrix.suffix }},onlatest=true
+
+      # Resolve app version independent of the Docker tag suffix
+      - name: Resolve app version
+        id: appver
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/dev" ]; then
+            echo "value=dev-${{ steps.build_num.outputs.value }}" >> $GITHUB_OUTPUT
+          else
+            version='${{ steps.meta.outputs.version }}'
+            echo "value=${version%${{ matrix.suffix }}}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
           build-args: |
-            APP_VERSION=${{ github.ref == 'refs/heads/dev' && format('dev-{0}', steps.build_num.outputs.value) || steps.meta.outputs.version }}
+            APP_VERSION=${{ steps.appver.outputs.value }}
+            INSTALL_GPU=${{ matrix.install_gpu }}

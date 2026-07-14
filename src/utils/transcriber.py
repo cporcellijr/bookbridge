@@ -46,12 +46,6 @@ class AudioTranscriber:
         self.cache_root = data_dir / "audio_cache"
         self.cache_root.mkdir(parents=True, exist_ok=True)
 
-        self.model_size = os.environ.get("WHISPER_MODEL", "base")
-        
-        # GPU/Device configuration
-        self.whisper_device = os.environ.get("WHISPER_DEVICE", "auto").lower()
-        self.whisper_compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "auto").lower()
-
         self._transcript_cache = OrderedDict()
         self._cache_capacity = 3
 
@@ -61,42 +55,6 @@ class AudioTranscriber:
         # [UPDATED] Use the injected instances
         self.smil_extractor = smil_extractor
         self.polisher = polisher
-
-    def _get_whisper_config(self) -> tuple[str, str]:
-        """
-        Determine the Whisper device and compute type based on configuration.
-        
-        Returns:
-            (device, compute_type) tuple
-        
-        Configuration options:
-            WHISPER_DEVICE: 'auto', 'cpu', 'cuda'
-            WHISPER_COMPUTE_TYPE: 'auto', 'int8', 'float16', 'float32'
-        
-        When 'auto', attempts CUDA detection with graceful fallback to CPU.
-        """
-        device = self.whisper_device
-        compute_type = self.whisper_compute_type
-        
-        if device == 'auto':
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    device = 'cuda'
-                    logger.info(f"🎮 CUDA available: {torch.cuda.get_device_name(0)}")
-                else:
-                    device = 'cpu'
-                    logger.info("💻 CUDA not available, using CPU")
-            except ImportError:
-                device = 'cpu'
-                logger.info("💻 PyTorch not installed, using CPU")
-        
-        if compute_type == 'auto':
-            # float16 for GPU, int8 for CPU (optimal defaults)
-            compute_type = 'float16' if device == 'cuda' else 'int8'
-        
-        logger.info(f"⚙️ Whisper config: device={device}, compute_type={compute_type}, model={self.model_size}")
-        return device, compute_type
 
     def validate_smil(self, smil_segments: list, ebook_text: str) -> tuple[bool, float]:
         """

@@ -457,15 +457,25 @@ Found under **Settings -> System**.
 
 For faster local transcription, you can give the container access to an NVIDIA GPU.
 
-### 1. Install NVIDIA Container Toolkit
+### 1. Use the CUDA image
+
+The default image does not ship the NVIDIA CUDA libraries to keep it small. Switch to the `-cuda` tag, which bundles them:
+
+```yaml
+image: ghcr.io/cporcellijr/bookbridge:latest-cuda
+```
+
+Every release tag has a CUDA twin (`v1.2.3-cuda`, `dev-cuda`, and so on). Note that these are `amd64` only.
+
+### 2. Install NVIDIA Container Toolkit
 
 Follow the official guide for the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 
-### 2. Update Docker Compose
+### 3. Update Docker Compose
 
 ```yaml
 services:
-  abs-kosync:
+  bookbridge:
     # ... other config ...
     deploy:
       resources:
@@ -476,11 +486,8 @@ services:
               capabilities: [gpu]
 ```
 
-### 3. Configure the bridge
+### 4. Configure the bridge
 
-In **Settings**:
+In **Settings**, set **Transcription Provider** to `local`. **Whisper Device** defaults to `auto`, which uses the GPU once the three steps above are done, so there is nothing else to set. Compute type follows the device (`float16` on GPU, `int8` on CPU).
 
-1. Set **Transcription Provider** to `local`.
-2. Set **Whisper Device** to `cuda`.
-3. Set **Whisper Compute Type** to `float16`.
-4. Use a larger model such as `small` or `medium` if your GPU can handle it.
+Consider raising **Whisper Model** to `small` or `medium` if your GPU can handle it.

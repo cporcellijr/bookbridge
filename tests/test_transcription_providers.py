@@ -20,36 +20,53 @@ class TestLocalWhisperProvider(unittest.TestCase):
         self.assertEqual(provider.whisper_compute_type, "auto")
         self.assertIn("LocalWhisper", provider.get_name())
 
-    @patch("utils.transcription_providers.logger")
-    def test_get_device_config_auto_cpu(self, mock_logger):
-        """Test auto detection when CUDA is NOT available."""
-        provider = LocalWhisperProvider()
-        
-        # Mock torch to raise ImportError or return false for cuda
-        with patch.dict(sys.modules, {'torch': MagicMock()}):
-            sys.modules['torch'].cuda.is_available.return_value = False
-            
-            device, compute_type = provider._get_device_config()
-            
-            self.assertEqual(device, "cpu")
-            self.assertEqual(compute_type, "int8") # Default for CPU in auto mode
+    @staticmethod
+    def _fake_cuda_env(libs_bundled: bool, device_count: int = 0):
+        """Simulate CUDA libs and visible GPU (both required for CUDA to work in the container)"""
+        mock_ct2 = MagicMock()
+        mock_ct2.get_cuda_device_count.return_value = device_count
+        return (
+            patch("utils.transcription_providers.importlib.util.find_spec",
+                  return_value=MagicMock() if libs_bundled else None),
+            patch.dict(sys.modules, {'ctranslate2': mock_ct2}),
+        )
 
     @patch("utils.transcription_providers.logger")
     def test_get_device_config_auto_gpu(self, mock_logger):
-        """Test auto detection when CUDA IS available."""
+        """CUDA image on a host with a GPU: auto picks cuda."""
         provider = LocalWhisperProvider()
-        
-        # Mock torch to have cuda available
-        mock_torch = MagicMock()
-        mock_torch.cuda.is_available.return_value = True
-        mock_torch.cuda.get_device_name.return_value = "Test GPU"
-        
-        with patch.dict(sys.modules, {'torch': mock_torch}):
+        find_spec, ct2 = self._fake_cuda_env(libs_bundled=True, device_count=1)
+
+        with find_spec, ct2:
             device, compute_type = provider._get_device_config()
-            
-            self.assertEqual(device, "cuda")
-            self.assertEqual(compute_type, "float16") # Default for GPU in auto mode
-            mock_logger.info.assert_any_call(f"🎮 CUDA available: Test GPU")
+
+        self.assertEqual(device, "cuda")
+        self.assertEqual(compute_type, "float16")  # Default for GPU in auto mode
+
+    @patch("utils.transcription_providers.logger")
+    def test_get_device_config_auto_cpu_no_libs(self, mock_logger):
+        """CPU image on a GPU host: no bundled CUDA libs, so stay on CPU."""
+        provider = LocalWhisperProvider()
+        find_spec, ct2 = self._fake_cuda_env(libs_bundled=False, device_count=1)
+
+        with find_spec, ct2:
+            device, compute_type = provider._get_device_config()
+
+        self.assertEqual(device, "cpu")
+        self.assertEqual(compute_type, "int8")  # Default for CPU in auto mode
+
+    @patch("utils.transcription_providers.logger")
+    def test_get_device_config_auto_cpu_no_gpu(self, mock_logger):
+        """CUDA image with no GPU passed through to the container: stay on CPU."""
+        provider = LocalWhisperProvider()
+        find_spec, ct2 = self._fake_cuda_env(libs_bundled=True, device_count=0)
+
+        with find_spec, ct2:
+            device, compute_type = provider._get_device_config()
+
+        self.assertEqual(device, "cpu")
+        self.assertEqual(compute_type, "int8")
+
 
     @patch("utils.transcription_providers.logger")
     def test_explicit_config(self, mock_logger):
