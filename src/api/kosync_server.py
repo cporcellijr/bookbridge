@@ -44,6 +44,7 @@ _manager = None
 _hash_cache = None
 _ebook_dir = None
 _active_scans = set()
+_active_scans_lock = threading.Lock()
 
 # Plugin self-update: resolved from src/api/ -> project root -> plugins/
 _PLUGIN_DIR = Path(__file__).parent.parent.parent / "plugins" / "bridgesync.koplugin"
@@ -1131,8 +1132,13 @@ def kosync_get_progress(doc_id):
 
     # Step 4: Unknown hash — register stub and start background discovery
     auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
-    if auto_create and doc_id not in _active_scans:
-        _active_scans.add(doc_id)
+    should_discover = False
+    if auto_create:
+        with _active_scans_lock:
+            if doc_id not in _active_scans:
+                _active_scans.add(doc_id)
+                should_discover = True
+    if should_discover:
         from src.db.models import KosyncDocument as KD
         stub = KD(document_hash=doc_id, user_id=getattr(g, "kosync_user_id", None))
         _database_service.save_kosync_document(stub)
@@ -1535,8 +1541,12 @@ def kosync_put_progress():
         auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
 
         if auto_create:
-            if doc_hash not in _active_scans:
-                _active_scans.add(doc_hash)
+            should_discover = False
+            with _active_scans_lock:
+                if doc_hash not in _active_scans:
+                    _active_scans.add(doc_hash)
+                    should_discover = True
+            if should_discover:
 
                 def run_auto_discovery(doc_hash_val):
                     try:
@@ -1638,8 +1648,8 @@ def kosync_put_progress():
                     except Exception as e:
                         logger.error(f"❌ Error in auto-discovery background task: {e}")
                     finally:
-                        if doc_hash_val in _active_scans:
-                            _active_scans.remove(doc_hash_val)
+                        with _active_scans_lock:
+                            _active_scans.discard(doc_hash_val)
 
                 _spawn_user_scoped_thread(
                     run_auto_discovery,
@@ -2920,7 +2930,8 @@ def _run_get_auto_discovery(doc_id: str):
     except Exception as e:
         logger.error(f"❌ Error in GET auto-discovery: {e}")
     finally:
-        _active_scans.discard(doc_id)
+        with _active_scans_lock:
+            _active_scans.discard(doc_id)
 
 
 # ---------------- KOSync Document Management API ----------------

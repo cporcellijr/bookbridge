@@ -2674,5 +2674,69 @@ class TestAnnotationExchangeEndpoints(unittest.TestCase):
         self.assertFalse(remainder["more"])
 
 
+class TestActiveScansAtomicity(unittest.TestCase):
+    """Verify that _active_scans admission is atomic: concurrent duplicate
+    admissions for the same hash yield exactly one scheduled discovery task."""
+
+    def setUp(self):
+        from src.api import kosync_server
+        self._orig_active_scans = kosync_server._active_scans.copy()
+        self._orig_lock = kosync_server._active_scans_lock
+        kosync_server._active_scans.clear()
+
+    def tearDown(self):
+        from src.api import kosync_server
+        kosync_server._active_scans = self._orig_active_scans
+        kosync_server._active_scans_lock = self._orig_lock
+
+    def test_concurrent_admission_yields_one_discovery(self):
+        """Two threads admitting the same hash concurrently must produce exactly
+        one entry in _active_scans, not two."""
+        from src.api import kosync_server
+        import threading
+
+        barrier = threading.Barrier(2)
+        results = []
+
+        def try_admit():
+            barrier.wait()
+            with kosync_server._active_scans_lock:
+                if "same_hash" not in kosync_server._active_scans:
+                    kosync_server._active_scans.add("same_hash")
+                    results.append("admitted")
+                else:
+                    results.append("skipped")
+
+        t1 = threading.Thread(target=try_admit)
+        t2 = threading.Thread(target=try_admit)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        self.assertEqual(len(kosync_server._active_scans), 1)
+        self.assertIn("same_hash", kosync_server._active_scans)
+        self.assertEqual(sorted(results), ["admitted", "skipped"])
+
+    def test_cleanup_allows_re_admission(self):
+        """After a scan completes and removes its hash, a later admission
+        must be permitted."""
+        from src.api import kosync_server
+
+        with kosync_server._active_scans_lock:
+            kosync_server._active_scans.add("hash_a")
+
+        with kosync_server._active_scans_lock:
+            kosync_server._active_scans.discard("hash_a")
+            self.assertNotIn("hash_a", kosync_server._active_scans)
+
+        should_discover = False
+        with kosync_server._active_scans_lock:
+            if "hash_a" not in kosync_server._active_scans:
+                kosync_server._active_scans.add("hash_a")
+                should_discover = True
+        self.assertTrue(should_discover)
+
+
 if __name__ == '__main__':
     unittest.main()

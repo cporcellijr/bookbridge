@@ -16,7 +16,11 @@ echo "🚀 Starting ABS-KoSync Enhanced (Integrated Mode)..."
 echo ""
 
 echo "🔄 Running Database Migrations..."
-alembic upgrade head
+if ! alembic upgrade head; then
+    echo "❌ Database migration failed — refusing to start."
+    echo "   Run 'alembic upgrade head' manually to diagnose."
+    exit 1
+fi
 echo "✅ Database Migrations Completed"
 echo ""
 

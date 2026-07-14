@@ -156,6 +156,7 @@ class SyncManager:
         self._sync_lock = threading.Lock()
         self._pending_sync_lock = threading.Lock()
         self._pending_sync_books: set[tuple[int | None, str]] = set()
+        self._replay_worker_running = False
         self._job_thread = None
         self._last_library_sync = 0
         self._suggestion_in_flight: set[str] = set()
@@ -1083,28 +1084,52 @@ class SyncManager:
 
     def _dispatch_pending_syncs(self) -> None:
         with self._pending_sync_lock:
-            # Sort by abs_id (always a str) first; user_id may be None (global
-            # cycle) or int (per-user instant sync), and sorting a mixed set of
-            # those directly raises TypeError — which, because .clear() is below,
-            # would strand the queue and stop every future replay.
-            pending = sorted(
+            if self._replay_worker_running or not self._pending_sync_books:
+                return
+            self._replay_worker_running = True
+            initial = sorted(
                 self._pending_sync_books,
                 key=lambda t: (t[1], t[0] is not None),
             )
             self._pending_sync_books.clear()
 
-        if pending:
-            logger.info(f"⚡ Replaying {len(pending)} queued instant sync(s) deferred during the busy cycle")
-        for user_id, abs_id in pending:
-            logger.info(f"⚡ Replaying queued instant sync for '{abs_id}'")
-            kwargs = {'target_abs_id': abs_id}
-            if user_id is not None:
-                kwargs['user_id'] = user_id
-            threading.Thread(
-                target=self.sync_cycle,
-                kwargs=kwargs,
-                daemon=True,
-            ).start()
+        def _replay_worker():
+            try:
+                pending = initial
+                while True:
+                    if len(pending) > 1:
+                        logger.info(
+                            "⚡ Replaying %d queued instant sync(s) deferred during the busy cycle",
+                            len(pending),
+                        )
+                    for user_id, abs_id in pending:
+                        logger.info("⚡ Replaying queued instant sync for '%s'", abs_id)
+                        kwargs = {'target_abs_id': abs_id}
+                        if user_id is not None:
+                            kwargs['user_id'] = user_id
+                        try:
+                            self.sync_cycle(**kwargs)
+                        except Exception as exc:
+                            logger.error(
+                                "❌ Queued instant sync failed for '%s': %s",
+                                abs_id,
+                                exc,
+                            )
+                    with self._pending_sync_lock:
+                        pending = sorted(
+                            self._pending_sync_books,
+                            key=lambda t: (t[1], t[0] is not None),
+                        )
+                        self._pending_sync_books.clear()
+                        if not pending:
+                            self._replay_worker_running = False
+                            return
+            except Exception as worker_exc:
+                logger.error("❌ Replay worker exited with error: %s", worker_exc)
+                with self._pending_sync_lock:
+                    self._replay_worker_running = False
+
+        threading.Thread(target=_replay_worker, daemon=True).start()
 
     def _resolve_storyteller_locator_from_abs_timestamp(self, book: Book, abs_timestamp: float):
         """
