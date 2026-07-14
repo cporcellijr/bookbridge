@@ -1056,6 +1056,12 @@ def kosync_get_progress(doc_id):
       3. Sibling hash resolution (same book, different epub hash)
       4. Background auto-discovery for completely unknown hashes
     """
+    if not doc_id or doc_id.lower() in ("none", "null"):
+        logger.warning(
+            f"⚠️ KOSync: Invalid or placeholder document ID requested: '{doc_id}'. This cannot be resolved."
+        )
+        return jsonify({"message": "Document not found on server"}), 502
+
     logger.info(f"KOSync: GET progress for doc {doc_id} from {request.remote_addr}")
 
     # Step 1: Direct hash lookup

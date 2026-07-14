@@ -6,6 +6,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Audiobook-only mappings no longer trigger KoSync EPUB discovery.** KoSync is
+  excluded from an `audiobook_only` sync cycle, and blank or placeholder document
+  IDs (`None` / `null`) are rejected by the KoSync endpoint before they can create
+  an unknown-document stub or scan the EPUB library. This prevents an audiobook
+  match from issuing `/syncs/progress/None` and needlessly searching local EPUBs.
+
 ## [7.2.0] - 2026-07-13
 
 The headline is **reader-owned integrations, full BookFusion support, and a more reliable BridgeSync**: BookBridge now gives each reader a self-service place for their own service accounts, connects to BookFusion for progress, highlight, and book-upload sync, reorganizes Settings and Integrations around a clearer per-service layout, and makes large-library synchronization faster and more resilient.

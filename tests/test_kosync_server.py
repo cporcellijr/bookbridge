@@ -373,6 +373,28 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertIn('message', data)
         self.assertIn('not found', data['message'].lower())
 
+    def test_get_progress_rejects_placeholder_ids(self):
+        """GET /syncs/progress/<placeholder> must return 502 without discovery."""
+        from src.api import kosync_server as ks
+        from src import web_server
+
+        for placeholder in ("None", "none", "null", "NULL"):
+            with self.assertLogs(ks.logger, level='WARNING') as captured, \
+                 patch.object(ks, '_spawn_user_scoped_thread') as mock_spawn:
+                response = self.client.get(
+                    f'/syncs/progress/{placeholder}',
+                    headers=self.auth_headers
+                )
+
+            self.assertEqual(response.status_code, 502)
+            self.assertIn(
+                f"Invalid or placeholder document ID requested: '{placeholder}'",
+                "\n".join(captured.output),
+            )
+            mock_spawn.assert_not_called()
+            self.assertIsNone(web_server.database_service.get_kosync_document(placeholder))
+
+
     def test_get_progress_returns_full_data(self):
         """Test that GET returns all fields."""
         # First PUT
