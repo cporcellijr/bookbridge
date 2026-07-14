@@ -457,6 +457,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#what-do-you-actually-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What do you actually need?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#supported-services" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -715,6 +726,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#what-do-you-actually-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What do you actually need?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#supported-services" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -825,7 +847,18 @@
 
 <hr />
 <h2 id="what-is-it">What is it?</h2>
-<p><strong>BookBridge</strong> is a self-hosted sync engine for audiobooks and ebooks. It keeps your reading and listening position aligned across multiple apps, whether the source is Audiobookshelf, KOReader, Grimmory, BookOrbit, Calibre-Web Automated, or Storyteller. With the current Bridge Sync KOReader plugin, it can also move highlights and notes between supported readers.</p>
+<p><strong>BookBridge</strong> is a self-hosted sync engine for audiobooks and ebooks. It keeps your reading and listening position aligned across multiple apps, whether the source is Audiobookshelf, KOReader, BookFusion, Grimmory, BookOrbit, Calibre-Web Automated, or Storyteller. With the current Bridge Sync KOReader plugin, it can also move highlights and notes between supported readers.</p>
+<h3 id="what-do-you-actually-need">What do you actually need?</h3>
+<p>Just two things:</p>
+<ol>
+<li><strong>Docker</strong> on any host.</li>
+<li><strong>At least two places you read or listen</strong> that you want to keep in sync — for example Audiobookshelf on the audio side and KOReader on the ebook side.</li>
+</ol>
+<p>Every service below is <strong>optional</strong> — enable only the ones you actually use. Ebook-only setups (say, KOReader + Grimmory with Audiobookshelf intentionally disabled) work fine too.</p>
+<div class="admonition tip">
+<p class="admonition-title">You do not need Storyteller</p>
+<p>Storyteller is one optional integration among many — <strong>not</strong> a requirement. BookBridge does its own audio ↔ text alignment with built-in Whisper transcription (and the EPUB's SMIL timing data when present). If you happen to run Storyteller, the bridge will use its transcripts as a higher-quality alignment source and sync its read-along position — but nothing in the bridge requires it.</p>
+</div>
 <h3 id="supported-services">Supported Services</h3>
 <table>
 <thead>
@@ -847,9 +880,14 @@
 <td style="text-align: left;">Reading progress sync; highlights/notes through the current Bridge Sync plugin</td>
 </tr>
 <tr>
+<td style="text-align: left;"><strong>BookFusion</strong></td>
+<td style="text-align: left;">Ebooks</td>
+<td style="text-align: left;">Reading progress sync, highlight relay, and uploading local EPUBs into your BookFusion bookshelf</td>
+</tr>
+<tr>
 <td style="text-align: left;"><strong>Storyteller</strong></td>
 <td style="text-align: left;">Read-along reader</td>
-<td style="text-align: left;">Progress sync and alignment source for read-along books</td>
+<td style="text-align: left;">Progress sync and a bonus alignment source for read-along books</td>
 </tr>
 <tr>
 <td style="text-align: left;"><strong>Grimmory</strong></td>
@@ -867,9 +905,19 @@
 <td style="text-align: left;">Ebook source/search/download; optional progress sync through CWA's Kobo sync protocol, used by stock Kobo readers and KOReader-via-CWA</td>
 </tr>
 <tr>
-<td style="text-align: left;"><strong>Hardcover.app</strong></td>
+<td style="text-align: left;"><strong>Readest</strong></td>
+<td style="text-align: left;">Ebooks</td>
+<td style="text-align: left;">Optional cloud highlight relay</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Hardcover</strong></td>
+<td style="text-align: left;">Reading tracker + lists</td>
+<td style="text-align: left;">Write-only tracking, optional annotation relay, optional list-backed KOReader collections</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>StoryGraph</strong></td>
 <td style="text-align: left;">Reading tracker</td>
-<td style="text-align: left;">Write-only tracking</td>
+<td style="text-align: left;">Write-only tracking with edition picking</td>
 </tr>
 </tbody>
 </table>
@@ -881,18 +929,19 @@
 <h2 id="features">Features</h2>
 <h3 id="core-sync-engine">Core Sync Engine</h3>
 <ul>
-<li><strong>Multi-service sync</strong> across the supported progress paths for Audiobookshelf, KOReader, Storyteller, Grimmory, BookOrbit, CWA/Kobo sync, and reading trackers.</li>
-<li><strong>Flexible source support</strong>: use Audiobookshelf, Grimmory, or BookOrbit as the audio source; use Audiobookshelf ebooks, Grimmory, BookOrbit, CWA, or local files as the text source; or create ebook-only links when no audiobook is needed.</li>
+<li><strong>Multi-service sync</strong> across the supported progress paths for Audiobookshelf, KOReader, BookFusion, Storyteller, Grimmory, BookOrbit, CWA/Kobo sync, and reading trackers.</li>
+<li><strong>Flexible source support</strong>: use Audiobookshelf, Grimmory, or BookOrbit as the audio source; use Audiobookshelf ebooks, BookFusion-linked books, Grimmory, BookOrbit, CWA, or local files as the text side; or create ebook-only links when no audiobook is needed.</li>
 <li><strong>Split-port security</strong> so the KOSync endpoint can be exposed separately from the dashboard.</li>
 <li><strong>Smart conflict handling</strong> with anti-regression guardrails and a deadband to avoid tiny cross-format bounce-backs.</li>
-<li><strong>Highlight and note sync</strong> for KOReader devices using the current Bridge Sync plugin, with optional Grimmory and BookOrbit web-reader relay.</li>
+<li><strong>Highlight and note sync</strong> for KOReader devices using the current Bridge Sync plugin, with optional Grimmory, BookOrbit, BookFusion, Readest, and Hardcover relay.</li>
 <li><strong>Rich locators</strong> using timestamps, href/fragment data, XPath, and EPUB CFI where available.</li>
-<li><strong>Storyteller-first alignment</strong> when valid Storyteller transcript assets exist, followed by SMIL and Whisper fallback.</li>
+<li><strong>Built-in audio ↔ text alignment</strong> using Whisper transcription and EPUB SMIL timing data — no extra services required. Storyteller transcript assets are used as a premium alignment source when you happen to run Storyteller.</li>
 <li><strong>Resumable jobs</strong> for background processing and transcript work.</li>
 </ul>
 <h3 id="management-web-ui">Management Web UI</h3>
 <ul>
 <li><strong>Multiple readers</strong> with their own sign-in, their own service logins, and their own progress — each person sees only the books they are reading.</li>
+<li><strong>Self-service integrations</strong> so each reader can manage their own usernames, passwords, tokens, API keys, and sync toggles from Account -&gt; My Integrations, while admins can still manage them centrally.</li>
 <li><strong>Dashboard</strong> for live sync status, reading session details, direct service links, and source badges.</li>
 <li><strong>Add / Update Book</strong> for ABS, Grimmory, or BookOrbit audio; CWA, Grimmory, BookOrbit, ABS, or local ebook sources; Storyteller links; ebook-only flows; and reader document fixes.</li>
 <li><strong>Batch Match</strong> for queue-based review and bulk linking.</li>
@@ -900,7 +949,7 @@
 <li><strong>Forge</strong> for Storyteller read-along preparation.</li>
 <li><strong>Dynamic Settings</strong> with live connection tests and automatic restart after saving.</li>
 <li><strong>Flexible setup</strong> including an intentional Audiobookshelf-off mode for ebook-only or maintenance-focused use.</li>
-<li><strong>Optional Bridge Sync plugin support</strong> for turning Grimmory shelves into KOReader collections, syncing reading stats, and syncing highlights/notes.</li>
+<li><strong>Optional Bridge Sync plugin support</strong> for turning Grimmory shelves or Hardcover lists into KOReader collections, syncing reading stats, and syncing highlights/notes.</li>
 </ul>
 <h3 id="automation-and-reliability">Automation and Reliability</h3>
 <ul>
@@ -917,7 +966,7 @@
 <li><strong>Normalization</strong>: timestamps, percentages, CFI, and Storyteller locators are converted into a shared timeline.</li>
 <li><strong>Change check</strong>: tiny gaps are ignored so harmless drift does not cause sync churn.</li>
 <li><strong>Leader election</strong>: the bridge picks the most trustworthy current position.</li>
-<li><strong>Translation</strong>: if audio and text need to cross formats, the bridge resolves that position through Storyteller transcript data, SMIL, or Whisper alignment.</li>
+<li><strong>Translation</strong>: if audio and text need to cross formats, the bridge resolves that position through its own alignment map — built from Whisper transcription or the EPUB's SMIL data, or from Storyteller transcripts if you use Storyteller.</li>
 <li><strong>Propagation</strong>: the resolved position is written back to every applicable client for that mapping.</li>
 </ol>
 <div class="highlight"><pre><span></span><code>graph TD
@@ -930,7 +979,7 @@
     E --&gt;|No| A
     E --&gt;|Yes| F[Choose Stable Leader]
     F --&gt; G{Audio/Text Translation Needed?}
-    G --&gt;|Yes| H[Use Storyteller, SMIL, or Whisper Alignment]
+    G --&gt;|Yes| H[Use Alignment Map: Whisper / SMIL / Storyteller]
     G --&gt;|No| I[Direct Update]
     H --&gt; J[Generate Locator or Timestamp]
     I --&gt; J
@@ -940,7 +989,7 @@
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Storyteller, Grimmory, and BookOrbit</p>
-<p>Storyteller transcript assets improve locator quality, and Grimmory or BookOrbit can act as either the ebook target or the audiobook source for a mapping.</p>
+<p>All three are optional. Storyteller transcript assets improve locator quality when present, and Grimmory or BookOrbit can act as either the ebook target or the audiobook source for a mapping.</p>
 </div>
 
 

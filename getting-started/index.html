@@ -646,10 +646,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#optional-koreader-plugin" class="md-nav__link">
+  <a href="#optional-connect-a-koreader-device" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional: KOReader Plugin
+        Optional: Connect a KOReader device
       
     </span>
   </a>
@@ -971,10 +971,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#optional-koreader-plugin" class="md-nav__link">
+  <a href="#optional-connect-a-koreader-device" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional: KOReader Plugin
+        Optional: Connect a KOReader device
       
     </span>
   </a>
@@ -1006,15 +1006,25 @@
 <p>Get your library syncing in about 10 minutes.</p>
 <hr />
 <h2 id="prerequisites">Prerequisites</h2>
-<p>Before you begin, you should have:</p>
+<p>All you actually need:</p>
 <ul>
 <li>Docker and Docker Compose</li>
-<li>A working Audiobookshelf server if you want audiobook matching or ABS sync</li>
-<li>An ebook folder on the Docker host</li>
-<li>Optional: KOSync, Grimmory and/or BookOrbit, CWA, Storyteller, or Hardcover if you want those integrations</li>
+<li>An ebook folder on the Docker host (mounted as <code>/books</code>)</li>
+<li>At least two places you read or listen that you want kept in sync</li>
 </ul>
+<p>Common starting points:</p>
+<ul>
+<li><strong>Audiobookshelf + KOReader</strong> — the classic audiobook ↔ ebook pairing</li>
+<li><strong>Ebook-only</strong> — KOReader, BookFusion, Grimmory, BookOrbit, or CWA in any combination, with Audiobookshelf intentionally disabled</li>
+</ul>
+<p>Everything else — Storyteller, Hardcover, StoryGraph, Readest, Telegram, AI assist — is optional and can be added later from the Settings UI.</p>
+<div class="admonition note">
+<p class="admonition-title">Storyteller is optional</p>
+<p>You do <strong>not</strong> need Storyteller for audio ↔ ebook sync. The bridge aligns audio and text itself using built-in Whisper transcription (or the EPUB's SMIL data). Add Storyteller only if you actually use the Storyteller read-along app.</p>
+</div>
 <hr />
 <h2 id="step-1-gather-your-abs-details">Step 1: Gather your ABS details</h2>
+<p>Setting up ebook-only? Skip this step — you will enter <code>disabled</code> for Audiobookshelf later.</p>
 <h3 id="audiobookshelf-api-token">Audiobookshelf API token</h3>
 <ol>
 <li>Log into Audiobookshelf.</li>
@@ -1033,6 +1043,7 @@
 <p>If you plan to use them, also keep these handy:</p>
 <ul>
 <li>KOSync URL, username, and password</li>
+<li>BookFusion account access, if you want BookFusion progress or highlight sync</li>
 <li>Grimmory and/or BookOrbit URL, username, and password</li>
 <li>CWA URL, username/password, and Kobo sync token if you use Calibre-Web Automated</li>
 <li>Storyteller URL, username, and password</li>
@@ -1057,7 +1068,7 @@ mkdir<span class="w"> </span>data
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">TZ=America/New_York</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LOG_LEVEL=INFO</span>
 <span class="w">      </span><span class="c1"># - KOSYNC_PORT=5758  # Optional: enable split-port mode</span>
-<span class="w">      </span><span class="c1"># Configure ABS, KOSync, Grimmory, BookOrbit, CWA, Storyteller, and other services in the Web UI.</span>
+<span class="w">      </span><span class="c1"># Configure ABS, KOSync, BookFusion, Grimmory, BookOrbit, CWA, Storyteller, and other services in the Web UI.</span>
 <span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./data:/data</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ebooks:/books</span>
@@ -1089,24 +1100,22 @@ The assets path can be configured entirely in the UI; <code>STORYTELLER_ASSETS_D
 </code></pre></div>
 <hr />
 <h2 id="step-5-create-your-account-and-finish-configuration">Step 5: Create your account and finish configuration</h2>
+<p>Settings are split by scope: <strong>server-wide connections</strong> (URLs, engine behavior) live in
+<strong>Settings → Integrations</strong>, while <strong>your personal logins</strong> (tokens, usernames, passwords)
+live in <strong>My Account → My Integrations</strong>. Both pages show the same service cards, with the
+same names, in the same order.</p>
 <ol>
-<li>Open <code>http://localhost:8080</code>. The first time you open it, you will be asked to create your account — choose a username and password. This becomes your main account.</li>
-<li>Open <strong>Settings</strong>.</li>
-<li>Enter your <strong>Audiobookshelf Server URL</strong>, <strong>API Token</strong>, and <strong>Library ID</strong>.</li>
-<li>Add any optional services you want to use:</li>
-<li>KOSync</li>
-<li>Grimmory and/or BookOrbit</li>
-<li>CWA</li>
-<li>Storyteller</li>
-<li>Hardcover</li>
-<li>Use the <strong>Test</strong> button on any service section if you want to check a service before saving.</li>
-<li>If you mounted Storyteller assets, set <strong>Storyteller Assets Path</strong> to <code>/storyteller</code>.</li>
-<li>If you are setting up an ebook-only or maintenance-focused install, you can enter <code>disabled</code> in the ABS URL or token field instead of connecting Audiobookshelf.</li>
+<li>Open <code>http://localhost:8080</code>. The first time you open it, you will be asked to create your account — choose a username and password. This becomes your main (admin) account.</li>
+<li>Open <strong>Settings → Integrations</strong>.</li>
+<li>On the <strong>Audiobookshelf</strong> card, enter your <strong>Server URL</strong> — or <code>disabled</code> for an ebook-only install.</li>
+<li>Enable any optional services you use and enter their server URLs: Grimmory, BookOrbit, CWA, BookFusion, Storyteller, Readest, Hardcover, StoryGraph.</li>
 <li>Click <strong>Save Settings</strong> and wait for the app to come back.</li>
+<li>Open <strong>Account → My Integrations</strong> and enter your personal logins: your ABS API token and Library ID, KoSync username/password, and any other service accounts. Use the <strong>Test</strong> button on a card to check a login before saving.</li>
+<li>If you mounted Storyteller assets, set <strong>Storyteller Assets Path</strong> to <code>/storyteller</code> under <strong>Settings → System</strong>.</li>
 </ol>
 <div class="admonition tip">
 <p class="admonition-title">Sharing with more than one reader?</p>
-<p>Your main account can add other people from <strong>Settings -&gt; Users</strong>. Each reader signs in to their own dashboard, enters their own service logins, and only sees the books they are reading — so everyone keeps their own progress, even on the same book.</p>
+<p>Your main account can add other people from <strong>Settings -&gt; Users</strong>. Each reader signs in to their own dashboard, opens <strong>Account -&gt; My Integrations</strong>, enters their own service logins, and only sees the books they are reading - so everyone keeps their own progress, even on the same book. Admins can also fill those integrations for a reader from <strong>Settings -&gt; Users -&gt; Integrations</strong>.</p>
 </div>
 <hr />
 <h2 id="step-6-create-your-first-mapping">Step 6: Create your first mapping</h2>
@@ -1126,17 +1135,28 @@ same-folder matches.</p>
 <ol>
 <li>Open <strong>Add / Update Book</strong>.</li>
 <li>Pick an ABS, Grimmory, or BookOrbit audiobook, or leave audio on <strong>None / Skip</strong> for an ebook-only link.</li>
-<li>Optionally pick a Storyteller title.</li>
+<li>Optionally pick a Storyteller title (skip this unless you use the Storyteller app).</li>
 <li>Pick the standard ebook.</li>
 <li>Click <strong>Create Mapping</strong>.</li>
 </ol>
 <p>That is enough to get syncing started. The normal background cycle runs every 5 minutes by default, and instant sync can react faster when supported by the source.</p>
 <hr />
-<h2 id="optional-koreader-plugin">Optional: KOReader Plugin</h2>
-<p>If you want KOReader to download and manage bridge-provided books for you, you can also install the optional <strong>Bridge Sync</strong> KOReader plugin from your <strong>Account</strong> page or the project's GitHub Releases page.</p>
-<p>The plugin is also required for the newer highlight and note sync features. Normal KOReader/KOSync progress sync works without Bridge Sync, but highlights, notes, sweep, and close-capture only work with the Bridge Sync plugin from the current release or newer.</p>
-<p>After installing or updating the plugin, restart KOReader and open <strong>Tools -&gt; Bridge Sync</strong> to set the server URL and the same KOSync username/key you configured for that reader.</p>
-<p>If you install it, you can later use the Grimmory settings to turn selected Grimmory shelves into KOReader collections for synced books.</p>
+<h2 id="optional-connect-a-koreader-device">Optional: Connect a KOReader device</h2>
+<p>Open <strong>My Account → Connect a KOReader device</strong> for a two-step card:</p>
+<ol>
+<li><strong>Point KOReader at the bridge.</strong> Copy the sync-server address shown on the card into
+   KOReader's <strong>Tools → Progress sync → Custom sync server</strong>, then sign in on the device with
+   the KoSync username/password from My Integrations. This alone gives you progress sync.</li>
+<li><strong>Install the Bridge Sync plugin</strong> (download on the same card). The plugin delivers books
+   from the bridge byte-for-byte — so KOReader progress auto-links with no manual matching —
+   and adds reading-stats sync plus highlight and note sync. Unzip it into
+   <code>koreader/plugins/</code>, restart KOReader, then open <strong>Tools -&gt; Bridge Sync</strong> to set the same
+   server URL and KoSync login.</li>
+</ol>
+<p>Plain KOReader/KOSync progress sync works without the plugin; highlights, notes, sweep, and
+close-capture need the Bridge Sync plugin from the current release or newer. With the plugin
+installed, each reader's integrations can also turn Grimmory shelves or Hardcover lists into
+KOReader collections for synced books.</p>
 <p>This is optional. The bridge works without it.</p>
 
 
