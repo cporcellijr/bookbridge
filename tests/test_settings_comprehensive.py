@@ -272,5 +272,12 @@ class TestSettingsComprehensive(unittest.TestCase):
         self.mock_container.mock_database_service.set_setting.assert_any_call('WHISPER_MODEL', 'custom-q5_k_m')
         self.assertEqual(os.environ.get('WHISPER_MODEL'), 'custom-q5_k_m')
 
+    def test_diagnostics_endpoint_is_read_only_not_editable(self):
+        html = self._render_settings_template_source()
+        self.assertIsNone(
+            re.search(r'<input[^>]*name="DIAGNOSTICS_ENDPOINT_URL"[^>]*>', html),
+            'DIAGNOSTICS_ENDPOINT_URL must not appear as an editable input',
+        )
+
 if __name__ == '__main__':
     unittest.main()

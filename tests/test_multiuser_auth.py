@@ -247,6 +247,40 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(self.client.get('/api/kosync-plugin/version').status_code, 200)
         self.assertEqual(self.client.get('/api/kosync-plugin/download').status_code, 200)
 
+    def test_account_suggests_browser_visible_kosync_url(self):
+        self.svc.create_user("reg", "pw", role="user")
+        self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
+
+        with patch.dict(os.environ, {'KOSYNC_PORT': '5758'}):
+            page = self.client.get('/account').get_data(as_text=True)
+
+        self.assertIn("location.protocol === 'https:'", page)
+        self.assertIn("? location.origin", page)
+        self.assertIn("location.protocol + '//' + location.hostname + ':' + syncPort", page)
+        self.assertIn('var syncPort = "5758"', page)
+
+    def test_account_warns_and_blocks_copy_for_loopback_url(self):
+        self.svc.create_user("reg", "pw", role="user")
+        self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
+
+        page = self.client.get('/account').get_data(as_text=True)
+
+        self.assertIn("host === 'localhost' || host === '127.0.0.1' || host === '::1'", page)
+        self.assertIn('points back to the KOReader device itself', page)
+        self.assertIn("showCopyResult(btn, 'Replace host')", page)
+
+    def test_account_copy_reports_real_result_and_has_http_fallback(self):
+        self.svc.create_user("reg", "pw", role="user")
+        self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
+
+        page = self.client.get('/account').get_data(as_text=True)
+
+        self.assertIn("navigator.clipboard.writeText(input.value)", page)
+        self.assertIn("Promise.resolve(document.execCommand('copy'))", page)
+        self.assertIn("ok === false ? 'Copy failed' : 'Copied'", page)
+        self.assertIn(".catch(function ()", page)
+        self.assertIn("showCopyResult(btn, 'Copy failed')", page)
+
     def test_regular_user_account_links_to_self_service_integrations(self):
         self.svc.create_user("alice", "pw", role="user")
         self.client.post('/login', data={'username': 'alice', 'password': 'pw'})
@@ -305,6 +339,11 @@ class TestMultiUserAuth(unittest.TestCase):
         ))
         self.svc.link_user_book(bob.id, "shared-book")
 
+        bf_client = MagicMock()
+        bf_client.is_configured.return_value = True
+        bf_client.get_download_url.return_value = "https://bf.example/dl/ok"
+        self.mock_container.mock_user_client_registry.get_clients.return_value.bookfusion_client = bf_client
+
         self.client.post('/login', data={'username': 'alice-bf', 'password': 'pw'})
         resp = self.client.post('/api/bookfusion/link/shared-book', json={
             "bookfusion_id": "bf-alice",
@@ -314,6 +353,90 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(self.svc.resolve_bookfusion_id(alice.id, self.svc.get_book("shared-book")), "bf-alice")
         self.assertIsNone(self.svc.resolve_bookfusion_id(bob.id, self.svc.get_book("shared-book")))
+
+    def test_bookfusion_link_rejects_inaccessible_id(self):
+        """Linking a BookFusion id that returns no download URL returns 400
+        and does not overwrite an existing valid link (Six Wakes regression: id 8916607)."""
+        alice = self.svc.create_user("alice-inacc", "pw", role="user")
+        self.svc.save_book(Book(
+            abs_id="bf-probe-book",
+            abs_title="Probe Book",
+            status="active",
+            duration=100,
+            user_id=alice.id,
+        ))
+        self.svc.set_user_bookfusion_link(
+            alice.id, "bf-probe-book", "10812762",
+            title="Existing Book", author="Author A",
+        )
+
+        bf_client = MagicMock()
+        bf_client.is_configured.return_value = True
+        bf_client.get_download_url.return_value = None
+        self.mock_container.mock_user_client_registry.get_clients.return_value.bookfusion_client = bf_client
+
+        self.client.post('/login', data={'username': 'alice-inacc', 'password': 'pw'})
+        resp = self.client.post('/api/bookfusion/link/bf-probe-book', json={
+            "bookfusion_id": "8916607",
+            "title": "Inaccessible Book",
+        })
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json().get("success"))
+        self.assertIn("not available", resp.get_json().get("error", "").lower())
+        self.assertEqual(self.svc.resolve_bookfusion_id(alice.id, self.svc.get_book("bf-probe-book")), "10812762")
+
+    def test_bookfusion_link_rejects_when_probe_raises(self):
+        """If the existence probe raises, the link is not persisted."""
+        alice = self.svc.create_user("alice-probe-err", "pw", role="user")
+        self.svc.save_book(Book(
+            abs_id="bf-probe-err-book",
+            abs_title="Probe Error Book",
+            status="active",
+            duration=100,
+            user_id=alice.id,
+        ))
+
+        bf_client = MagicMock()
+        bf_client.is_configured.return_value = True
+        bf_client.get_download_url.side_effect = ConnectionError("timeout")
+        self.mock_container.mock_user_client_registry.get_clients.return_value.bookfusion_client = bf_client
+
+        self.client.post('/login', data={'username': 'alice-probe-err', 'password': 'pw'})
+        resp = self.client.post('/api/bookfusion/link/bf-probe-err-book', json={
+            "bookfusion_id": "999999",
+            "title": "Error Book",
+        })
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json().get("success"))
+        self.assertIsNone(self.svc.resolve_bookfusion_id(alice.id, self.svc.get_book("bf-probe-err-book")))
+
+    def test_bookfusion_link_persists_when_probe_succeeds(self):
+        """Link succeeds and persists when the existence probe returns a URL."""
+        alice = self.svc.create_user("alice-ok", "pw", role="user")
+        self.svc.save_book(Book(
+            abs_id="bf-ok-book",
+            abs_title="OK Book",
+            status="active",
+            duration=100,
+            user_id=alice.id,
+        ))
+
+        bf_client = MagicMock()
+        bf_client.is_configured.return_value = True
+        bf_client.get_download_url.return_value = "https://bf.example/dl/10812762"
+        self.mock_container.mock_user_client_registry.get_clients.return_value.bookfusion_client = bf_client
+
+        self.client.post('/login', data={'username': 'alice-ok', 'password': 'pw'})
+        resp = self.client.post('/api/bookfusion/link/bf-ok-book', json={
+            "bookfusion_id": "10812762",
+            "title": "OK Book",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json().get("success"))
+        self.assertEqual(self.svc.resolve_bookfusion_id(alice.id, self.svc.get_book("bf-ok-book")), "10812762")
 
     # --- admin-managed per-user integrations ---
     def _ipath(self, uid):

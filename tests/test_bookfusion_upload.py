@@ -1054,5 +1054,106 @@ class BookFusionUploadClientS3TimeoutTest(unittest.TestCase):
         self.assertEqual(kwargs.get("timeout"), 180)
 
 
+class ResolveDuplicateBookfusionIdTest(unittest.TestCase):
+    """Tests for ``_resolve_duplicate_bookfusion_id``: the probe must succeed
+    before a title/author-matching id is returned."""
+
+    def setUp(self):
+        from src import web_server as ws
+        self._ws = ws
+        self._saved_uc = getattr(ws, "uc", None)
+
+    def tearDown(self):
+        if self._saved_uc is not None:
+            self._ws.uc = self._saved_uc
+
+    def _make_reader_client(self, search_results=None, get_download_url_returns=None):
+        bf = MagicMock()
+        bf.is_configured.return_value = True
+        bf.search_books.return_value = search_results or []
+        bf.get_download_url.return_value = get_download_url_returns
+        return bf
+
+    def test_returns_none_when_no_title(self):
+        bf = self._make_reader_client()
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        self.assertIsNone(_resolve_duplicate_bookfusion_id(None, "", ""))
+
+    def test_returns_none_when_unconfigured(self):
+        bf = MagicMock()
+        bf.is_configured.return_value = False
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        self.assertIsNone(_resolve_duplicate_bookfusion_id(None, "Title"))
+
+    def test_skips_inaccessible_exact_match(self):
+        """Inaccessible first match is skipped; no second match → None."""
+        bf = self._make_reader_client(
+            search_results=[{"id": 100, "title": "My Book", "authors": ["Author A"]}],
+            get_download_url_returns=None,
+        )
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertIsNone(result)
+        bf.get_download_url.assert_called_once_with(100)
+
+    def test_accepts_later_accessible_exact_match(self):
+        """First exact match is inaccessible, second is accessible → returns second."""
+        bf = self._make_reader_client(
+            search_results=[
+                {"id": 100, "title": "My Book", "authors": ["Author A"]},
+                {"id": 200, "title": "My Book", "authors": ["Author A"]},
+            ],
+        )
+        bf.get_download_url.side_effect = [None, "https://bf.example/dl/200"]
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertEqual(result, 200)
+        self.assertEqual(bf.get_download_url.call_count, 2)
+
+    def test_skips_on_probe_exception_and_continues(self):
+        """Probe raising exception on first match skips it; second succeeds."""
+        bf = self._make_reader_client(
+            search_results=[
+                {"id": 300, "title": "My Book", "authors": ["Author A"]},
+                {"id": 400, "title": "My Book", "authors": ["Author A"]},
+            ],
+        )
+        bf.get_download_url.side_effect = [ConnectionError("timeout"), "https://bf.example/dl/400"]
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertEqual(result, 400)
+
+    def test_accessible_first_match_returned_immediately(self):
+        """First match is accessible → returned without checking others."""
+        bf = self._make_reader_client(
+            search_results=[{"id": 500, "title": "My Book", "authors": ["Author A"]}],
+            get_download_url_returns="https://bf.example/dl/500",
+        )
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertEqual(result, 500)
+
+    def test_all_inaccessible_returns_none(self):
+        """All matches inaccessible → returns None."""
+        bf = self._make_reader_client(
+            search_results=[
+                {"id": 600, "title": "My Book", "authors": ["Author A"]},
+                {"id": 700, "title": "My Book", "authors": ["Author A"]},
+            ],
+            get_download_url_returns=None,
+        )
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertIsNone(result)
+        self.assertEqual(bf.get_download_url.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

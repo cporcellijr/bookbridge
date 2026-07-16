@@ -2359,6 +2359,40 @@
                 </div>
             </div>
 
+            <!-- Diagnostics -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>Diagnostics</h3>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_diagnostics" name="DIAGNOSTICS_OPT_IN"
+                                onchange="toggleSection('diagnostics_body', this.checked)"
+                                {% if get_bool('DIAGNOSTICS_OPT_IN') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="diagnostics_body" class="section-body {% if not get_bool('DIAGNOSTICS_OPT_IN') %}collapsed{% endif %}">
+                    <p style="color:rgba(255,255,255,0.6); font-size:0.85rem; margin:0 0 12px;">
+                        Share anonymous diagnostics to help find and fix bugs faster.
+                        Reports contain scrubbed warning log lines &mdash; never library contents or credentials.
+                    </p>
+                    <input type="hidden" name="DIAGNOSTICS_PROMPTED" value="true">
+                    <div class="form-group full-width">
+                        <label>Last sent</label>
+                        <div style="padding:8px 12px; background:rgba(255,255,255,0.05); border-radius:6px; font-size:0.85rem; color:rgba(255,255,255,0.65);">
+                            {% set _last = get_val('DIAGNOSTICS_LAST_SENT') %}
+                            {% if _last %}{{ _last }}{% else %}never{% endif %}
+                        </div>
+                    </div>
+                    <div class="form-group full-width">
+                        <button class="btn btn-primary btn-sm" type="button" onclick="_sendDiagnosticsNow(this)">Send report now</button>
+                        <span id="diag-send-status" style="margin-left:10px; font-size:0.85rem; color:rgba(255,255,255,0.65);"></span>
+                    </div>
+                </div>
+            </div>
+
             </div><!-- /system panel -->
 
             <div class="submit-bar">
@@ -2631,6 +2665,32 @@
                 // Optional: Clear inputs when disabling?
                 // For now, we prefer keeping values in UI so user doesn't lose config by accidental toggle
             }
+        }
+
+        function _sendDiagnosticsNow(btn) {
+            const status = document.getElementById('diag-send-status');
+            const orig = btn.innerHTML;
+            btn.innerHTML = 'Sending...';
+            btn.disabled = true;
+            if (status) status.textContent = '';
+            fetch('/api/diagnostics/send-now', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.sent) {
+                        btn.innerHTML = 'Sent';
+                        if (status) status.textContent = 'Sent (' + (data.warning_count || 0) + ' warnings)';
+                    } else {
+                        btn.innerHTML = 'Not sent';
+                        if (status) status.textContent = data.reason || 'Not sent';
+                    }
+                    setTimeout(function() { btn.innerHTML = orig; }, 3000);
+                })
+                .catch(function() {
+                    btn.innerHTML = 'Error';
+                    if (status) status.textContent = 'Request failed';
+                    setTimeout(function() { btn.innerHTML = orig; }, 3000);
+                })
+                .finally(function() { btn.disabled = false; });
         }
 
         function togglePollSeconds(rowId, mode) {

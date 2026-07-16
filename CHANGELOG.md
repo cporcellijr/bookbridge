@@ -8,6 +8,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Opt-in anonymous diagnostics.** Help improve BookBridge by sharing a small
+  daily diagnostic report: deduplicated warning lines from your sync logs with
+  book titles, file paths, and URLs replaced by anonymous tokens — never your
+  library contents or credentials. Admins are asked once via a dashboard
+  prompt (existing installs see it after upgrading), and the choice can be
+  reviewed anytime under Settings → Diagnostics, which also shows the
+  instance ID, the last send time, and a "Send report now" button. Nothing is
+  ever collected or sent unless you opt in.
+
 - **CUDA container images are now published alongside CPU images.** Use a
   `-cuda` tag such as `latest-cuda` or `dev-cuda` on amd64 hosts with NVIDIA
   GPU transcription. The image bundles the required CUDA libraries, while
@@ -16,6 +25,31 @@ All notable changes to BookBridge will be documented in this file.
   [@ykpdang](https://github.com/ykpdang). (#320)
 
 ### Fixed
+
+- **Hardened dashboard and KoSync trust boundaries.** Storyteller search results
+  are rendered as text instead of executable HTML; requests are capped at 8 MiB;
+  unknown-document discovery uses a bounded worker queue; repeated login and
+  KoSync authentication failures are throttled; KoSync document access now
+  requires the authenticated user's book claim; and regular users cannot change
+  a hash shared with another claimant.
+
+- **KOReader device setup now suggests a reachable sync-server address.** Reverse-proxied
+  HTTPS keeps the browser-visible origin without exposing the internal KoSync port, while
+  direct LAN access uses the configured KoSync port. Loopback addresses now show a warning
+  and must be replaced before copying, and the Copy button only reports success after the
+  clipboard operation succeeds (with a plain-HTTP fallback).
+
+- **BookFusion dashboard link now validates the book exists before persisting.**
+  Dashboard search and the duplicate-resolution path during upload previously
+  persisted a BookFusion id without checking whether the BookFusion reader API
+  could actually serve it. An inaccessible id (e.g. uploaded but not yet
+  indexed, or belonging to a different account) would silently fail every
+  download and reading-position request with 404. Both the manual link route
+  and the upload-duplicate resolver now probe `get_download_url` first; a
+  failed probe returns a clear 400 error suggesting the user upload or
+  re-search, and the existing link (if any) is never overwritten. Already-broken
+  links require re-uploading and re-linking; valid links self-sync on the next
+  cycle.
 
 - **Upgraded multi-user BookOrbit matches now keep each reader's library identity.**
   The 7.2.0 ownership migration could silently skip legacy rows whose shared book

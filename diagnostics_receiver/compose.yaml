@@ -1,0 +1,17 @@
+services:
+  bookbridge-diagnostics:
+    build: .
+    container_name: bookbridge_diagnostics
+    restart: unless-stopped
+    ports:
+      - "20129:20129"
+    volumes:
+      - ./data:/data
+    networks:
+      - blackcat-net
+    environment:
+      - TZ=America/New_York
+
+networks:
+  blackcat-net:
+    external: true

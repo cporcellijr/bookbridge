@@ -39,6 +39,7 @@
         .nav { max-width: 520px; margin: 0 auto 16px; }
         .nav a { color: #667eea; text-decoration: none; font-size: 13px; }
         .help { color: #777; font-size: 12px; margin: -6px 0 14px; }
+        .warning { color: #ffb74d; }
         .plugin-card h2 { font-size: 17px; margin: 0 0 8px; }
         .plugin-version { color: #888; font-size: 12px; font-weight: 500; }
         .plugin-card p { color: #aaa; font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
@@ -112,6 +113,10 @@
         </div>
         <p class="help">Suggested from this browser's address — adjust the host or port to match how
             your devices reach the server (KoSync port: {{ get_val('KOSYNC_PORT', '5757') }}).</p>
+        <p class="help warning" id="kosync_url_warning" hidden>
+            This address uses localhost/loopback, which points back to the KOReader device itself.
+            Replace the host above with this server's LAN hostname or IP address before copying it.
+        </p>
         <p>
             <strong>2 · Install the BridgeSync plugin</strong>
             <span id="bridgesync_plugin_version" class="plugin-version"></span><br>
@@ -131,20 +136,59 @@
                 }
             }).catch(function () { });
 
+        function isLoopbackUrl(value) {
+            try {
+                var host = new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+                return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+            } catch (err) {
+                return false;
+            }
+        }
+
+        function updatePublicUrlWarning() {
+            var input = document.getElementById('kosync_public_url');
+            var warning = document.getElementById('kosync_url_warning');
+            warning.hidden = !isLoopbackUrl(input.value);
+        }
+
         (function () {
             var urlInput = document.getElementById('kosync_public_url');
             if (!urlInput) return;
-            urlInput.value = location.protocol + '//' + location.hostname + ':' + {{ get_val('KOSYNC_PORT', '5757')|tojson }};
+            var syncPort = {{ get_val('KOSYNC_PORT', '5757')|tojson }};
+            urlInput.value = location.protocol === 'https:'
+                ? location.origin
+                : location.protocol + '//' + location.hostname + ':' + syncPort;
+            urlInput.addEventListener('input', updatePublicUrlWarning);
+            updatePublicUrlWarning();
         })();
+
+        function showCopyResult(btn, text) {
+            var original = btn.textContent;
+            btn.textContent = text;
+            window.setTimeout(function () { btn.textContent = original; }, 1500);
+        }
 
         function copyPublicUrl(btn) {
             var input = document.getElementById('kosync_public_url');
+            if (isLoopbackUrl(input.value)) {
+                showCopyResult(btn, 'Replace host');
+                return;
+            }
             input.select();
             input.setSelectionRange(0, 99999);
-            try { navigator.clipboard.writeText(input.value); } catch (err) { }
-            var original = btn.textContent;
-            btn.textContent = 'Copied';
-            window.setTimeout(function () { btn.textContent = original; }, 1500);
+            var copied;
+            try {
+                copied = navigator.clipboard && navigator.clipboard.writeText
+                    ? navigator.clipboard.writeText(input.value)
+                    : Promise.resolve(document.execCommand('copy'));
+            } catch (err) {
+                copied = Promise.reject(err);
+            }
+            copied.then(function (ok) {
+                showCopyResult(btn, ok === false ? 'Copy failed' : 'Copied');
+            }).catch(function () {
+                showCopyResult(btn, 'Copy failed');
+            });
         }
     </script>
 </body>

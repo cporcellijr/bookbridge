@@ -39,13 +39,24 @@ async function searchStoryteller() {
         const noneCard = document.createElement('div');
         noneCard.className = 'st-result-card st-none-option';
         noneCard.style.border = '1px dashed #666';
-        noneCard.innerHTML = `
-            <div class="st-card-info">
-                <div class="st-card-title">None - Do not link</div>
-                <div class="st-card-author" style="font-style: italic; color: #888;">Unlink current Storyteller book</div>
-            </div>
-            <button class="action-btn secondary" onclick="linkStoryteller('none')">Unlink</button>
-        `;
+        const noneInfo = document.createElement('div');
+        noneInfo.className = 'st-card-info';
+        const noneTitle = document.createElement('div');
+        noneTitle.className = 'st-card-title';
+        noneTitle.textContent = 'None - Do not link';
+        const noneAuthor = document.createElement('div');
+        noneAuthor.className = 'st-card-author';
+        noneAuthor.style.fontStyle = 'italic';
+        noneAuthor.style.color = '#888';
+        noneAuthor.textContent = 'Unlink current Storyteller book';
+        noneInfo.appendChild(noneTitle);
+        noneInfo.appendChild(noneAuthor);
+        noneCard.appendChild(noneInfo);
+        const unlinkBtn = document.createElement('button');
+        unlinkBtn.className = 'action-btn secondary';
+        unlinkBtn.textContent = 'Unlink';
+        unlinkBtn.addEventListener('click', function() { linkStoryteller('none'); });
+        noneCard.appendChild(unlinkBtn);
         resultsDiv.appendChild(noneCard);
 
         if (books.length === 0) {
@@ -59,18 +70,25 @@ async function searchStoryteller() {
         books.forEach(book => {
             const card = document.createElement('div');
             card.className = 'st-result-card';
-            card.innerHTML = `
-                <div class="st-card-info">
-                    <div class="st-card-title">${book.title}</div>
-                    <div class="st-card-author">${book.authors.join(', ')}</div>
-                </div>
-                <button class="action-btn success" onclick="linkStoryteller('${book.uuid}')">Link</button>
-            `;
+            const info = document.createElement('div');
+            info.className = 'st-card-info';
+            const title = document.createElement('div');
+            title.className = 'st-card-title';
+            title.textContent = book.title || '';
+            const author = document.createElement('div');
+            author.className = 'st-card-author';
+            author.textContent = Array.isArray(book.authors) ? book.authors.join(', ') : '';
+            const button = document.createElement('button');
+            button.className = 'action-btn success';
+            button.textContent = 'Link';
+            button.addEventListener('click', () => linkStoryteller(String(book.uuid || '')));
+            info.append(title, author);
+            card.append(info, button);
             resultsDiv.appendChild(card);
         });
 
     } catch (e) {
-        resultsDiv.innerHTML = `<div class="st-error">Error: ${e.message}</div>`;
+        resultsDiv.textContent = `Error: ${e.message}`;
     }
 }
 
@@ -78,7 +96,11 @@ async function linkStoryteller(uuid) {
     if (!currentAbsId) return;
 
     const resultsDiv = document.getElementById('st-results');
-    resultsDiv.innerHTML = '<div class="st-loading">Linking and downloading...</div>';
+    while (resultsDiv.firstChild) resultsDiv.removeChild(resultsDiv.firstChild);
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'st-loading';
+    loadingDiv.textContent = 'Linking and downloading...';
+    resultsDiv.appendChild(loadingDiv);
 
     try {
         const response = await fetch(`/api/storyteller/link/${currentAbsId}`, {
@@ -96,7 +118,7 @@ async function linkStoryteller(uuid) {
             throw new Error(err.error || 'Failed to link');
         }
     } catch (e) {
-        resultsDiv.innerHTML = `<div class="st-error">Link Failed: ${e.message}</div>`;
+        resultsDiv.textContent = `Link Failed: ${e.message}`;
     }
 }
 

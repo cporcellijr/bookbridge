@@ -3362,7 +3362,66 @@
                 </div>
             </div>
         </div>
-</body>
 
+        {% if show_diagnostics_modal %}
+        <div id="diagnostics-optin-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'"></div>
+            <div class="hc-modal-content" style="max-width:480px;">
+                <div class="hc-modal-header">
+                    <h3>Help improve BookBridge</h3>
+                    <button class="hc-modal-close" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'" aria-label="Close">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <p style="color:rgba(255,255,255,0.75); margin:0 0 12px; line-height:1.6;">
+                        Opt in to send a small daily diagnostic report so we can find and fix bugs faster.
+                        Reports contain warning messages from your sync logs with book titles, file paths and
+                        URLs replaced by anonymous tokens &mdash; never your library contents or credentials.
+                    </p>
+                    <details style="margin-bottom:12px;">
+                        <summary style="color:rgba(255,255,255,0.65); font-size:0.85rem; cursor:pointer;">What exactly is sent?</summary>
+                        <ul style="color:rgba(255,255,255,0.6); font-size:0.82rem; line-height:1.6; margin:8px 0 0 18px; padding:0;">
+                            <li>Deduplicated warning log lines (scrubbed)</li>
+                            <li>Recent scrubbed log context around each warning</li>
+                            <li>BookBridge version</li>
+                            <li>Which integrations are enabled (on/off flags only)</li>
+                            <li>Total number of synced books (count only)</li>
+                            <li>A random instance ID</li>
+                        </ul>
+                        <p style="color:rgba(255,255,255,0.5); font-size:0.78rem; margin:6px 0 0;">
+                            This can be changed anytime in Settings.
+                        </p>
+                    </details>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'">Ask me later</button>
+                    <button class="hc-btn-cancel" onclick="_diagnosticsOptIn(false)">No thanks</button>
+                    <button onclick="_diagnosticsOptIn(true)"
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:linear-gradient(135deg,#667eea,#764ba2); color:#fff;">Enable diagnostics</button>
+                </div>
+            </div>
+        </div>
+        <script>
+            function _diagnosticsOptIn(optIn) {
+                fetch('/api/diagnostics/opt-in', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({opt_in: optIn})
+                }).then(function() {
+                    document.getElementById('diagnostics-optin-modal').style.display = 'none';
+                }).catch(function() {
+                    document.getElementById('diagnostics-optin-modal').style.display = 'none';
+                });
+            }
+            document.addEventListener('DOMContentLoaded', function() {
+                var m = document.getElementById('diagnostics-optin-modal');
+                if (m) m.style.display = 'flex';
+            });
+        </script>
+        {% endif %}
+</body>
 
 </html>

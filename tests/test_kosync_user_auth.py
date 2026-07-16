@@ -3,7 +3,10 @@ import tempfile
 import shutil
 import unittest
 
+from flask import Flask, g
+
 import src.api.kosync_server as ks
+from src.db.models import Book
 from src.db.database_service import DatabaseService
 from src.utils.kosync_headers import hash_kosync_key
 
@@ -17,6 +20,7 @@ class TestKosyncUserAuth(unittest.TestCase):
         self._orig_env = {k: os.environ.get(k) for k in ("KOSYNC_USER", "KOSYNC_KEY")}
         os.environ.pop("KOSYNC_USER", None)
         os.environ.pop("KOSYNC_KEY", None)
+        ks._AUTH_FAILURES.clear()
 
     def tearDown(self):
         ks._database_service = self._orig_db
@@ -74,6 +78,30 @@ class TestKosyncUserAuth(unittest.TestCase):
 
     def test_no_match_when_unconfigured(self):
         self.assertEqual(ks.authenticate_kosync("nobody", "nope"), (False, None))
+
+    def test_foreign_linked_book_is_not_accessible(self):
+        owner = self.svc.create_user("owner", "pw")
+        other = self.svc.create_user("other", "pw")
+        self.svc.save_book(Book(abs_id="shared-book", abs_title="Shared"))
+        self.svc.link_user_book(owner.id, "shared-book")
+        app = Flask(__name__)
+        with app.test_request_context('/'):
+            g.kosync_user_id = other.id
+            self.assertFalse(ks._kosync_user_may_access_book(self.svc.get_book("shared-book")))
+            g.kosync_user_id = owner.id
+            self.assertTrue(ks._kosync_user_may_access_book(self.svc.get_book("shared-book")))
+
+    def test_kosync_auth_limiter_blocks_after_five_failures(self):
+        app = Flask(__name__)
+
+        @ks.kosync_auth_required
+        def protected():
+            return "ok"
+
+        with app.test_request_context('/', headers={'x-auth-user': 'attacker', 'x-auth-key': 'bad'}):
+            for _ in range(5):
+                self.assertEqual(protected()[1], 401)
+            self.assertEqual(protected()[1], 429)
 
 
 if __name__ == "__main__":
