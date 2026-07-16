@@ -8,6 +8,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Added an admin-only My Reports dashboard where opted-in instances can read
+  maintainer responses and add comments without exposing diagnostics tokens to
+  the browser.
 - Contributor-scoped diagnostics findings with sanitized comment threads,
   maintainer responses, moderation, and per-instance comment quotas.
 

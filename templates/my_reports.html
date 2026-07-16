@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>My Reports - BookBridge</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #0a0a0a; color: #fff; min-height: 100vh;
+        }
+        .top-nav {
+            background: rgba(20,20,20,0.95); border-bottom: 1px solid rgba(255,255,255,0.08);
+            padding: 16px 28px; position: sticky; top: 0; z-index: 100;
+            display: flex; justify-content: space-between; align-items: center; gap: 12px;
+        }
+        .logo-section { display: flex; align-items: center; gap: 20px; }
+        .logo-section a { text-decoration: none; }
+        .logo-section h1 {
+            font-size: 28px; font-weight: 700;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .container { max-width: 1100px; margin: 0 auto; padding: 28px 24px 56px; }
+        .page-header { margin-bottom: 24px; }
+        .page-header h2 { font-size: 32px; margin-bottom: 8px; }
+        .page-header p { color: rgba(255,255,255,0.65); line-height: 1.6; }
+        .btn {
+            padding: 9px 14px; font-size: 14px; border-radius: 8px; border: 1px solid rgba(102,126,234,0.35);
+            background: rgba(102,126,234,0.16); color: #9fb2ff; text-decoration: none; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 6px; font-weight: 600;
+        }
+        .btn:hover { background: rgba(102,126,234,0.28); }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
+        .btn-primary { background: rgba(102,126,234,0.28); color: #d9e0ff; border-color: rgba(102,126,234,0.55); }
+        .btn-primary:hover { background: rgba(102,126,234,0.38); }
+        .alert {
+            padding: 14px 18px; border-radius: 10px; margin-bottom: 20px; font-size: 14px; line-height: 1.5;
+        }
+        .alert-error {
+            background: rgba(244,67,54,0.14); border: 1px solid rgba(244,67,54,0.35); color: #ffb3ad;
+        }
+        .alert-info {
+            background: rgba(102,126,234,0.12); border: 1px solid rgba(102,126,234,0.3); color: #b8c9ff;
+        }
+        .finding-card {
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px; padding: 20px; margin-bottom: 16px;
+        }
+        .finding-header {
+            display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .finding-id {
+            font-size: 13px; font-weight: 700; color: #9fb2ff;
+            background: rgba(102,126,234,0.14); padding: 3px 10px; border-radius: 999px;
+        }
+        .finding-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .badge {
+            display: inline-block; padding: 3px 10px; border-radius: 999px;
+            font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+        }
+        .badge-severity-high { background: rgba(244,67,54,0.2); color: #f17f78; }
+        .badge-severity-medium { background: rgba(255,193,7,0.2); color: #ffd54f; }
+        .badge-severity-low { background: rgba(76,175,80,0.2); color: #81c784; }
+        .badge-severity-info { background: rgba(33,150,243,0.2); color: #64b5f6; }
+        .badge-status { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.78); }
+        .finding-template {
+            font-size: 15px; line-height: 1.5; margin-bottom: 10px;
+            white-space: pre-wrap; word-break: break-word;
+        }
+        .finding-stats {
+            font-size: 12px; color: rgba(255,255,255,0.5); margin-bottom: 14px;
+            display: flex; gap: 16px; flex-wrap: wrap;
+        }
+        .finding-response {
+            background: rgba(54,211,153,0.1); border: 1px solid rgba(54,211,153,0.25);
+            border-radius: 8px; padding: 12px 14px; margin-bottom: 14px;
+        }
+        .finding-response-label {
+            font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+            color: #36d399; margin-bottom: 6px;
+        }
+        .finding-response-body {
+            font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+        }
+        .comments-section { margin-top: 10px; }
+        .comments-label {
+            font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+            color: rgba(255,255,255,0.5); margin-bottom: 8px;
+        }
+        .comment {
+            background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;
+        }
+        .comment-meta {
+            font-size: 11px; color: rgba(255,255,255,0.45); margin-bottom: 4px;
+            display: flex; justify-content: space-between; gap: 8px;
+        }
+        .comment-label-mine {
+            color: #9fb2ff; font-weight: 700;
+        }
+        .comment-label-contributor {
+            color: rgba(255,255,255,0.55);
+        }
+        .comment-body {
+            font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+        }
+        .comment-form { margin-top: 12px; display: flex; gap: 8px; align-items: flex-end; }
+        .comment-form textarea {
+            flex: 1; min-height: 60px; padding: 10px 12px; border-radius: 8px;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14);
+            color: #fff; font-family: inherit; font-size: 14px; resize: vertical;
+        }
+        .comment-form textarea:focus { outline: none; border-color: rgba(102,126,234,0.55); }
+        .comment-form label { font-size: 13px; font-weight: 600; }
+        .sr-only {
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0,0,0,0); border: 0;
+        }
+        .status-region { font-size: 13px; margin-top: 8px; min-height: 1.2em; }
+        .status-region.error { color: #f17f78; }
+        .status-region.success { color: #81c784; }
+    </style>
+</head>
+<body>
+    <nav class="top-nav">
+        <div class="logo-section">
+            <a href="/"><h1>BookBridge</h1></a>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="page-header">
+            <a href="/" class="btn" style="margin-bottom:14px;">&larr; Dashboard</a>
+            <h2>My Reports</h2>
+            <p>Findings submitted by this instance to the diagnostics receiver.</p>
+        </div>
+
+        {% if error %}
+        <div class="alert alert-error" role="alert">{{ error }}</div>
+        {% elif findings|length == 0 %}
+        <div class="alert alert-info" role="status">No findings reported yet.</div>
+        {% else %}
+        {% for f in findings %}
+        <div class="finding-card">
+            <div class="finding-header">
+                <span class="finding-id">#{{ f.id }}</span>
+                <div class="finding-meta">
+                    <span class="badge badge-severity-{{ f.severity|default('info') }}">{{ f.severity|default('unknown') }}</span>
+                    <span class="badge badge-status">{{ f.status|default('open') }}</span>
+                    <span class="finding-id">{{ f.category|default('general') }}</span>
+                </div>
+            </div>
+            <div class="finding-template">{{ f.template }}</div>
+            <div class="finding-stats">
+                <span>Count: {{ f.total_count|default(0) }}</span>
+                <span>Last seen: {{ f.last_seen|default('unknown') }}</span>
+            </div>
+
+            {% if f.response_md %}
+            <div class="finding-response">
+                <div class="finding-response-label">Maintainer response</div>
+                <div class="finding-response-body">{{ f.response_md }}</div>
+            </div>
+            {% endif %}
+
+            {% if f.comments %}
+            <div class="comments-section">
+                <div class="comments-label">Comments</div>
+                {% for c in f.comments %}
+                <div class="comment">
+                    <div class="comment-meta">
+                        <span class="{% if c.is_mine %}comment-label-mine{% else %}comment-label-contributor{% endif %}">
+                            {%- if c.is_mine %}Mine{%- else %}Contributor{%- endif %}
+                        </span>
+                        <span>{{ c.created_at|default('') }}</span>
+                    </div>
+                    <div class="comment-body">{{ c.body }}</div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="comment-form" id="comment-form-{{ f.id }}">
+                <label for="comment-input-{{ f.id }}" class="sr-only">Add a comment on finding #{{ f.id }}</label>
+                <textarea id="comment-input-{{ f.id }}" placeholder="Add a comment..." aria-label="Comment on finding #{{ f.id }}"></textarea>
+                <button class="btn btn-primary" type="button"
+                    data-finding-id="{{ f.id }}"
+                    onclick="postComment(this)">Send</button>
+            </div>
+            <div class="status-region" id="comment-status-{{ f.id }}" role="status" aria-live="polite"></div>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+    <script>
+    function postComment(btn) {
+        var findingId = btn.getAttribute('data-finding-id');
+        var form = document.getElementById('comment-form-' + findingId);
+        var textarea = document.getElementById('comment-input-' + findingId);
+        var statusEl = document.getElementById('comment-status-' + findingId);
+        var body = textarea.value;
+        if (!body.trim()) {
+            statusEl.className = 'status-region error';
+            statusEl.textContent = 'Comment cannot be empty.';
+            return;
+        }
+        btn.disabled = true;
+        statusEl.className = 'status-region';
+        statusEl.textContent = 'Sending...';
+        fetch('/api/diagnostics/findings/' + findingId + '/comments', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({body: body})
+        }).then(function(resp) {
+            return resp.json().catch(function() { return null; }).then(function(data) {
+                if (resp.ok) {
+                    statusEl.className = 'status-region success';
+                    statusEl.textContent = 'Comment posted.';
+                    textarea.value = '';
+                    setTimeout(function() { location.reload(); }, 600);
+                } else {
+                    statusEl.className = 'status-region error';
+                    statusEl.textContent = (data && data.error) ? data.error : 'Failed to post comment.';
+                    btn.disabled = false;
+                }
+            });
+        }).catch(function() {
+            statusEl.className = 'status-region error';
+            statusEl.textContent = 'Could not reach the server.';
+            btn.disabled = false;
+        });
+    }
+    </script>
+</body>
+</html>

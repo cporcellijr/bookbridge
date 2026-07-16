@@ -2098,6 +2098,7 @@
             <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add / Update Book</a>
             {% if is_admin %}
             <a href="/suggestions" class="btn">💡 Suggestions</a>
+            <a href="{{ url_for('my_reports') }}" class="btn">📋 My Reports</a>
             {% endif %}
             {% if current_user %}
             <div class="user-menu" id="user-menu">

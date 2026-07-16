@@ -463,6 +463,8 @@ _ADMIN_ONLY_ENDPOINTS = {
     'kosync_admin.api_link_kosync_document',
     'kosync_admin.api_unlink_kosync_document',
     'kosync_admin.api_delete_kosync_document',
+    'my_reports',
+    'api_diagnostics_finding_comment',
 }
 
 
@@ -10342,6 +10344,104 @@ def api_diagnostics_opt_in():
     return jsonify({'ok': True, 'opt_in': opted_in, 'instance_id': instance_id})
 
 
+def _diagnostics_receiver_context():
+    """Validate settings and derive the receiver base URL for proxied requests.
+
+    Returns ``(base_url, token, error_message)``.  ``base_url`` is
+    ``scheme://netloc`` parsed from ``DIAGNOSTICS_ENDPOINT_URL`` (no
+    attacker-controlled path component).  ``token`` is the raw ingest
+    token.  When either setting is missing/empty *error_message* is a
+    human-readable string and both URL and token are empty.
+    """
+    endpoint = os.environ.get('DIAGNOSTICS_ENDPOINT_URL', '').strip()
+    token = os.environ.get('DIAGNOSTICS_INGEST_TOKEN', '').strip()
+    if not endpoint:
+        return '', '', 'Diagnostics endpoint is not configured.'
+    if not token:
+        return '', '', 'Diagnostics ingest token is not configured.'
+    parsed = urlparse(endpoint)
+    base = (
+        f'{parsed.scheme}://{parsed.netloc}'
+        if parsed.scheme in ('http', 'https') and parsed.netloc else ''
+    )
+    if not base:
+        return '', '', 'Diagnostics endpoint URL is invalid.'
+    return base, token, ''
+
+
+@admin_required
+def my_reports():
+    """Admin-only view: show findings from the diagnostics receiver."""
+    base_url, token, error = _diagnostics_receiver_context()
+    if error:
+        return render_template('my_reports.html', findings=[], error=error)
+
+    headers = {'Authorization': f'Bearer {token}'}
+    try:
+        resp = requests.get(
+            f'{base_url}/api/v1/my/findings', headers=headers, timeout=15,
+        )
+    except requests.RequestException:
+        return render_template(
+            'my_reports.html', findings=[],
+            error='Could not reach the diagnostics receiver.',
+        )
+
+    if resp.status_code != 200:
+        return render_template(
+            'my_reports.html', findings=[],
+            error='The diagnostics receiver returned an error.',
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return render_template(
+            'my_reports.html', findings=[],
+            error='The diagnostics receiver returned an invalid response.',
+        )
+
+    return render_template(
+        'my_reports.html', findings=data.get('findings', []), error=None,
+    )
+
+
+@admin_required
+def api_diagnostics_finding_comment(finding_id):
+    """Proxy a comment to the diagnostics receiver for a finding."""
+    base_url, token, error = _diagnostics_receiver_context()
+    if error:
+        return jsonify({'error': error}), 503
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get('body'), str):
+        return jsonify({'error': 'Request must include a JSON body with a string "body" field.'}), 400
+    text = body['body'].strip()
+    if not text:
+        return jsonify({'error': 'Comment body must not be empty.'}), 400
+
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json',
+    }
+    try:
+        resp = requests.post(
+            f'{base_url}/api/v1/findings/{finding_id}/comments',
+            json={'body': text}, headers=headers, timeout=15,
+        )
+    except requests.RequestException:
+        return jsonify({'error': 'Could not reach the diagnostics receiver.'}), 502
+
+    try:
+        data = resp.json()
+    except ValueError:
+        data = None
+
+    if data is not None:
+        return jsonify(data), resp.status_code
+    return jsonify({'error': 'The diagnostics receiver returned an invalid response.'}), 502
+
+
 # --- Application Factory ---
 def create_app(test_container=None):
     # Under a test container, run deferred work inline so integration tests are
@@ -10493,6 +10593,8 @@ def create_app(test_container=None):
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
     app.add_url_rule('/api/diagnostics/send-now', 'api_diagnostics_send_now', api_diagnostics_send_now, methods=['POST'])
     app.add_url_rule('/api/diagnostics/opt-in', 'api_diagnostics_opt_in', api_diagnostics_opt_in, methods=['POST'])
+    app.add_url_rule('/my-reports', 'my_reports', my_reports, methods=['GET'])
+    app.add_url_rule('/api/diagnostics/findings/<int:finding_id>/comments', 'api_diagnostics_finding_comment', api_diagnostics_finding_comment, methods=['POST'])
 
     # Storyteller API routes
     app.add_url_rule('/api/storyteller/search', 'api_storyteller_search', api_storyteller_search, methods=['GET'])

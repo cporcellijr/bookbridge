@@ -304,3 +304,8 @@ finding PATCH endpoint. Comments can be hidden or restored with
 `PATCH /api/v1/findings/<id>/comments/<comment_id>`. Public deployments must
 set `DIAG_READ_TOKEN`, and maintainer reads and PATCHes send that token as a
 Bearer credential.
+
+The bridge exposes an admin-only **My Reports** page. Its backend reads the
+instance's existing ingest token at request time and proxies finding reads and
+comment writes to the receiver. The receiver URL and bearer token are never
+included in browser responses.
