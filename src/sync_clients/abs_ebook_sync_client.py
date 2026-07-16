@@ -37,17 +37,46 @@ class ABSEbookSyncClient(SyncClient):
         """
         return {'audiobook', 'ebook'}
 
-    def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
-        # [FIX] Prefer specific ebook item ID if it exists (Tri-Link), otherwise fallback to primary ID (Standard)
-        target_id = book.abs_ebook_item_id if book.abs_ebook_item_id else book.abs_id
-        response = self.abs_client.get_progress(target_id)
-        if response is None:
-            return None
-        abs_pct, abs_cfi = response.get('ebookProgress'), response.get('ebookLocation') if response is not None else None
+    @staticmethod
+    def _resolve_target_id(book: Book) -> str:
+        """Resolve the mapped ABS ebook item, including legacy direct matches."""
+        if book.abs_ebook_item_id:
+            return book.abs_ebook_item_id
+        if getattr(book, "ebook_source", None) == "ABS" and getattr(book, "ebook_source_id", None):
+            return book.ebook_source_id
+        return book.abs_id
 
-        if abs_pct is None:
-            logger.warning("⚠️ ABS ebook percentage is None - returning None for service state")
-            return None
+    @staticmethod
+    def _is_explicit_abs_ebook(book: Book) -> bool:
+        """Return whether the mapping proves that an ABS ebook exists."""
+        return bool(
+            book.abs_ebook_item_id
+            or (
+                getattr(book, "ebook_source", None) == "ABS"
+                and getattr(book, "ebook_source_id", None)
+            )
+        )
+
+    def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
+        target_id = self._resolve_target_id(book)
+        response, status = self.abs_client.get_progress_with_status(target_id)
+        explicit = self._is_explicit_abs_ebook(book)
+
+        if response is None:
+            if status == 404 and explicit:
+                abs_pct, abs_cfi = 0.0, ""
+            else:
+                return None
+        else:
+            abs_pct = response.get('ebookProgress')
+            abs_cfi = response.get('ebookLocation')
+
+            if abs_pct is None:
+                if explicit:
+                    abs_pct = 0.0
+                    abs_cfi = abs_cfi or ""
+                else:
+                    return None
 
         # Get previous ABS ebook state
         prev_abs_pct = prev_state.percentage if prev_state else 0
@@ -79,7 +108,9 @@ class ABSEbookSyncClient(SyncClient):
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
         locator = request.locator_result
         if locator.percentage == 0:
-            success = self.abs_client.update_ebook_progress(book.abs_id, 0, "")
+            success = self.abs_client.update_ebook_progress(
+                self._resolve_target_id(book), 0, ""
+            )
             if success:
                 try:
                     from src.services.write_tracker import record_write
@@ -92,7 +123,7 @@ class ABSEbookSyncClient(SyncClient):
             return SyncResult(0, False)
 
         pct = locator.percentage
-        target_id = book.abs_ebook_item_id if book.abs_ebook_item_id else book.abs_id
+        target_id = self._resolve_target_id(book)
         cfi = locator.cfi
         success = self.abs_client.update_ebook_progress(target_id, pct, cfi)
         if success:
@@ -106,4 +137,3 @@ class ABSEbookSyncClient(SyncClient):
             'cfi': cfi
         }
         return SyncResult(pct, success, updated_state)
-

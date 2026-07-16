@@ -423,17 +423,24 @@ class ABSClient:
             logger.error(f"ABS: Error fetching listening sessions: {e}")
         return []
 
-    def get_progress(self, item_id):
-        if not self.is_configured(): return None
+    def get_progress_with_status(self, item_id: str) -> tuple[dict | None, int | None]:
+        """Return progress and its HTTP status, preserving an expected 404."""
+        if not self.is_configured():
+            return None, None
         self._update_session_headers()
         url = f"{self.base_url}/api/me/progress/{item_id}"
         try:
             r = self.session.get(url, timeout=self.timeout)
-            if r.status_code == 200: return r.json()
+            if r.status_code == 200:
+                return r.json(), 200
+            return None, r.status_code
         except Exception:
             logger.exception(f"Error fetching ABS progress for item {item_id}")
-            pass
-        return None
+            return None, None
+
+    def get_progress(self, item_id: str) -> dict | None:
+        response, _status = self.get_progress_with_status(item_id)
+        return response
 
     def mark_finished(self, abs_id):
         """Mark an ABS item as finished."""

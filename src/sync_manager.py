@@ -3156,6 +3156,49 @@ class SyncManager:
                     f"original_epub='{sanitize_log_data(getattr(book, 'original_ebook_filename', None))}'"
                 )
 
+                abs_ebook_locator = None
+                if (
+                    "ABSEbook" in config
+                    and not locator.cfi
+                    and epub
+                    and not str(epub).startswith("storyteller_")
+                    and locator.percentage is not None
+                ):
+                    try:
+                        _full_text, total_len = self._get_cached_ebook_text(epub)
+                        if total_len:
+                            target_offset = locator.match_index
+                            if target_offset is None:
+                                target_offset = int(locator.percentage * total_len)
+                            target_offset = max(0, min(int(target_offset), total_len - 1))
+                            hydrated = self.ebook_parser.get_locator_from_char_offset(
+                                epub, target_offset
+                            )
+                            if hydrated and hydrated.cfi:
+                                hydrated.percentage = locator.percentage
+                                cfi_offset = self.ebook_parser.resolve_cfi_to_index(
+                                    epub, hydrated.cfi
+                                )
+                            else:
+                                cfi_offset = None
+                            if (
+                                cfi_offset is not None
+                                and abs(int(cfi_offset) - target_offset) / total_len <= 0.01
+                                and not self._locator_collapsed_to_start(
+                                    LocatorResult(percentage=cfi_offset / total_len),
+                                    locator.percentage,
+                                )
+                            ):
+                                abs_ebook_locator = hydrated
+                                logger.debug(
+                                    f"'{abs_id}' '{title_snip}' Hydrated missing ABS ebook CFI "
+                                    f"at offset {target_offset} (roundtrip={cfi_offset})"
+                                )
+                    except Exception as exc:
+                        logger.debug(
+                            f"'{abs_id}' '{title_snip}' ABS ebook CFI hydration failed: {exc}"
+                        )
+
                 # Guard: never write a start-of-book (0%) reset that came from a
                 # FAILED locator resolution. When the leader is materially ahead but
                 # the resolved locator collapsed to ~0% — e.g. a KoSync XPath that no
@@ -3199,8 +3242,13 @@ class SyncManager:
                         ):
                             continue
 
+                        target_locator = (
+                            abs_ebook_locator
+                            if client_name == "ABSEbook" and abs_ebook_locator
+                            else locator
+                        )
                         request = UpdateProgressRequest(
-                            locator,
+                            target_locator,
                             txt,
                             previous_location=client_state.previous_pct if client_state else None,
                             credit_listening=(credit_listening_leader and client_name == primary_audio_client),

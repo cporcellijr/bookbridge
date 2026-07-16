@@ -26,6 +26,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Audiobookshelf audiobook-to-ebook sync now handles unopened and separate ebook items.**
+  Explicit ABS ebook mappings participate from a 0% baseline before their first read,
+  legacy direct matches resolve the separate ebook item ID, and percentage-only audio
+  locations are converted to a validated EPUB CFI before ABS is updated. Zero-progress
+  resets now target the ebook item as well. Existing mappings self-heal on their next
+  sync cycle without rematching or database changes. (#322)
+
 - **Hardened dashboard and KoSync trust boundaries.** Storyteller search results
   are rendered as text instead of executable HTML; requests are capped at 8 MiB;
   unknown-document discovery uses a bounded worker queue; repeated login and
