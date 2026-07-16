@@ -11,6 +11,8 @@ services:
       - blackcat-net
     environment:
       - TZ=America/New_York
+      - DIAG_READ_TOKEN=${DIAG_READ_TOKEN:-}
+      - DIAG_MAX_COMMENTS_PER_DAY=${DIAG_MAX_COMMENTS_PER_DAY:-20}
 
 networks:
   blackcat-net:

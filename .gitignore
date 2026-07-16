@@ -65,3 +65,4 @@ reports_site/docs/reports/*
 !reports_site/docs/reports/index.md
 !reports_site/docs/reports/2026-07-16_sample-finding.md
 reports_site/site/
+diagnostics_receiver/.env

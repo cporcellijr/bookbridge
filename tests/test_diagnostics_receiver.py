@@ -1277,6 +1277,569 @@ class TestHygiene(unittest.TestCase):
             self.assertEqual(overflow, 0)
 
 
+class TestInstanceFeedback(unittest.TestCase):
+    """Phase 11: instance-token auth, my/findings, comment create, admin moderation, response_md."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.mkdtemp()
+        self._db_path = os.path.join(self._tmpdir, "test.db")
+        self._app = create_receiver_app(db_path=self._db_path)
+        self._client = self._app.test_client()
+        self._tokens: dict[str, str] = {}
+        self._saved: dict[str, str | None] = {}
+        for key in ("DIAG_MIN_BATCH_INTERVAL_HOURS", "DIAG_READ_TOKEN",
+                     "DIAG_MAX_COMMENTS_PER_DAY"):
+            self._saved[key] = os.environ.pop(key, None)
+        os.environ["DIAG_MIN_BATCH_INTERVAL_HOURS"] = "0"
+        self.addCleanup(self._restore_env)
+        self.addCleanup(
+            lambda: __import__("shutil").rmtree(self._tmpdir, ignore_errors=True)
+        )
+
+    def _restore_env(self) -> None:
+        for key, val in self._saved.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+    def _post(self, payload: dict) -> dict:
+        iid = payload.get("instance_id", "")
+        headers: dict[str, str] = {}
+        if iid in self._tokens:
+            headers["Authorization"] = f"Bearer {self._tokens[iid]}"
+        resp = self._client.post(
+            "/api/v1/diagnostics",
+            data=json.dumps(payload),
+            content_type="application/json",
+            headers=headers,
+        )
+        data = resp.get_json()
+        if data and data.get("token"):
+            self._tokens[iid] = data["token"]
+        return data
+
+    def _token(self, iid: str) -> str:
+        return self._tokens.get(iid, "")
+
+    # -- helpers -------------------------------------------------------------
+
+    def _register_finding(
+        self,
+        iid: str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        template: str = "Find #",
+    ) -> int:
+        """Register an instance with a finding; return the finding id."""
+        self._post(_valid_payload(
+            instance_id=iid,
+            warnings=[{"template": template, "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute("SELECT id FROM findings").fetchone()["id"]
+
+    def _auth_get(self, token: str, path: str):
+        return self._client.get(
+            path,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def _auth_post(self, token: str, path: str, body: dict):
+        return self._client.post(
+            path,
+            data=json.dumps(body),
+            content_type="application/json",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    # -- GET /api/v1/my/findings -------------------------------------------
+
+    def test_my_findings_returns_401_without_token(self) -> None:
+        resp = self._client.get("/api/v1/my/findings")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_my_findings_returns_401_with_wrong_token(self) -> None:
+        resp = self._auth_get("deadbeef", "/api/v1/my/findings")
+        self.assertEqual(resp.status_code, 401)
+
+    def test_my_findings_returns_403_when_banned(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        self._post(_valid_payload(
+            instance_id=iid,
+            warnings=[{"template": "Ban #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "UPDATE instances SET banned = 1 WHERE instance_id = ?",
+                (iid,),
+            )
+            conn.commit()
+        resp = self._auth_get(self._token(iid), "/api/v1/my/findings")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.get_json()["error"], "banned")
+
+    def test_my_findings_returns_only_own_findings(self) -> None:
+        iid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        iid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        self._post(_valid_payload(
+            instance_id=iid_a,
+            warnings=[{"template": "A-only #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        self._post(_valid_payload(
+            instance_id=iid_b,
+            warnings=[{"template": "B-only #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        resp = self._auth_get(self._token(iid_a), "/api/v1/my/findings")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertEqual(data["findings"][0]["template"], "A-only #")
+        self.assertNotIn("instance_id", data)
+
+    def test_my_findings_includes_response_md_and_comments(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "Resp #")
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "INSERT INTO finding_comments (finding_id, instance_id, body, created_at, hidden) "
+                "VALUES (?, ?, 'visible comment', '2026-07-15T10:00:00Z', 0)",
+                (fid, iid),
+            )
+            conn.execute(
+                "INSERT INTO finding_comments (finding_id, instance_id, body, created_at, hidden) "
+                "VALUES (?, ?, 'hidden comment', '2026-07-15T11:00:00Z', 1)",
+                (fid, iid),
+            )
+            conn.execute(
+                "UPDATE findings SET response_md = 'Fixed in 7.3', response_at = '2026-07-15T12:00:00Z' "
+                "WHERE id = ?",
+                (fid,),
+            )
+            conn.commit()
+
+        resp = self._auth_get(self._token(iid), "/api/v1/my/findings")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        finding = data["findings"][0]
+        self.assertEqual(finding["response_md"], "Fixed in 7.3")
+        self.assertEqual(finding["response_at"], "2026-07-15T12:00:00Z")
+        self.assertEqual(len(finding["comments"]), 1)
+        self.assertEqual(finding["comments"][0]["body"], "visible comment")
+        self.assertTrue(finding["comments"][0]["is_mine"])
+        self.assertNotIn("instance_id", finding["comments"][0])
+
+    def test_my_findings_is_mine_false_for_other_instances_comment(self) -> None:
+        iid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        iid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        self._post(_valid_payload(
+            instance_id=iid_a,
+            warnings=[{"template": "IM #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        self._post(_valid_payload(instance_id=iid_b))
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            fid = conn.execute("SELECT id FROM findings").fetchone()["id"]
+            conn.execute(
+                "INSERT INTO finding_comments (finding_id, instance_id, body, created_at, hidden) "
+                "VALUES (?, ?, 'from b', '2026-07-15T10:00:00Z', 0)",
+                (fid, iid_b),
+            )
+            conn.commit()
+
+        resp = self._auth_get(self._token(iid_a), "/api/v1/my/findings")
+        finding = resp.get_json()["findings"][0]
+        self.assertEqual(len(finding["comments"]), 1)
+        self.assertFalse(finding["comments"][0]["is_mine"])
+
+    def test_my_findings_empty_when_no_membership(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        other_iid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        self._post(_valid_payload(
+            instance_id=iid,
+            warnings=[{"template": "Empty #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        self._post(_valid_payload(
+            instance_id=other_iid,
+            warnings=[{"template": "Other #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        resp = self._auth_get(self._token(other_iid), "/api/v1/my/findings")
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(data["findings"]), 1)
+        self.assertEqual(data["findings"][0]["template"], "Other #")
+
+    # -- POST /api/v1/findings/<id>/comments --------------------------------
+
+    def test_create_comment_401_without_token(self) -> None:
+        resp = self._client.post(
+            "/api/v1/findings/1/comments",
+            data=json.dumps({"body": "hi"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_create_comment_403_when_banned(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "BanC #")
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "UPDATE instances SET banned = 1 WHERE instance_id = ?",
+                (iid,),
+            )
+            conn.commit()
+        resp = self._auth_post(
+            self._token(iid),
+            f"/api/v1/findings/{fid}/comments",
+            {"body": "should be blocked"},
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.get_json()["error"], "banned")
+
+    def test_create_comment_404_when_finding_absent(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        self._post(_valid_payload(instance_id=iid))
+        resp = self._auth_post(
+            self._token(iid), "/api/v1/findings/99999/comments", {"body": "hi"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_create_comment_404_when_not_member(self) -> None:
+        iid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        iid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        self._post(_valid_payload(
+            instance_id=iid_a,
+            warnings=[{"template": "CM #", "count": 1,
+                       "first_seen": "2026-07-15T00:00:00Z",
+                       "last_seen": "2026-07-15T00:00:00Z"}],
+        ))
+        self._post(_valid_payload(instance_id=iid_b))
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            fid = conn.execute("SELECT id FROM findings").fetchone()["id"]
+        resp = self._auth_post(
+            self._token(iid_b),
+            f"/api/v1/findings/{fid}/comments",
+            {"body": "sneaky"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_create_comment_400_missing_body(self) -> None:
+        fid = self._register_finding()
+        resp = self._auth_post(
+            self._token("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            f"/api/v1/findings/{fid}/comments", {},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_create_comment_400_empty_after_sanitize(self) -> None:
+        fid = self._register_finding()
+        resp = self._auth_post(
+            self._token("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            f"/api/v1/findings/{fid}/comments", {"body": "   \n\t  "},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_create_comment_400_non_string_body(self) -> None:
+        fid = self._register_finding()
+        resp = self._auth_post(
+            self._token("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            f"/api/v1/findings/{fid}/comments", {"body": 123},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_create_comment_201_success(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "COK #")
+        resp = self._auth_post(
+            self._token(iid),
+            f"/api/v1/findings/{fid}/comments",
+            {"body": "I see this too"},
+        )
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(data["body"], "I see this too")
+        self.assertTrue(data["is_mine"])
+        self.assertIn("id", data)
+        self.assertIn("created_at", data)
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM finding_comments WHERE finding_id = ?", (fid,)
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["instance_id"], iid)
+            self.assertEqual(row["hidden"], 0)
+
+    def test_create_comment_sanitizes_body(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "CSN #")
+        resp = self._auth_post(
+            self._token(iid),
+            f"/api/v1/findings/{fid}/comments",
+            {"body": "```\n# evil\n[link](http://bad)"},
+        )
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 201)
+        self.assertNotIn("```", data["body"])
+        self.assertNotIn("](", data["body"])
+
+    def test_create_comment_quota_429(self) -> None:
+        os.environ["DIAG_MAX_COMMENTS_PER_DAY"] = "2"
+        self.addCleanup(lambda: os.environ.pop("DIAG_MAX_COMMENTS_PER_DAY", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "CQ #")
+        for i in range(2):
+            resp = self._auth_post(
+                self._token(iid),
+                f"/api/v1/findings/{fid}/comments",
+                {"body": f"comment {i}"},
+            )
+            self.assertEqual(resp.status_code, 201)
+        resp = self._auth_post(
+            self._token(iid),
+            f"/api/v1/findings/{fid}/comments",
+            {"body": "overflow"},
+        )
+        self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.get_json()["error"], "comment_quota_exceeded")
+
+    def test_create_comment_quota_disabled_allows_many(self) -> None:
+        os.environ["DIAG_MAX_COMMENTS_PER_DAY"] = "0"
+        self.addCleanup(lambda: os.environ.pop("DIAG_MAX_COMMENTS_PER_DAY", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "CQD #")
+        for i in range(5):
+            resp = self._auth_post(
+                self._token(iid),
+                f"/api/v1/findings/{fid}/comments",
+                {"body": f"unlimited {i}"},
+            )
+            self.assertEqual(resp.status_code, 201)
+
+    # -- PATCH /api/v1/findings/<fid>/comments/<cid> ------------------------
+
+    def _insert_comment(self, fid: int, iid: str, body: str = "msg",
+                       hidden: int = 0) -> int:
+        with sqlite3.connect(self._db_path) as conn:
+            cur = conn.execute(
+                "INSERT INTO finding_comments (finding_id, instance_id, body, created_at, hidden) "
+                "VALUES (?, ?, ?, '2026-07-15T10:00:00Z', ?)",
+                (fid, iid, body, hidden),
+            )
+            conn.commit()
+            return cur.lastrowid
+
+    def test_admin_hide_comment_200(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "AH #")
+        cid = self._insert_comment(fid, iid, "visible")
+        resp = self._client.patch(
+            f"/api/v1/findings/{fid}/comments/{cid}",
+            data=json.dumps({"hidden": True}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer admintok"},
+        )
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(data["hidden"])
+        self.assertEqual(data["id"], cid)
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT hidden FROM finding_comments WHERE id = ?", (cid,)
+            ).fetchone()
+            self.assertEqual(row[0], 1)
+
+    def test_admin_unhide_comment_200(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "AU #")
+        cid = self._insert_comment(fid, iid, "was hidden", hidden=1)
+        resp = self._client.patch(
+            f"/api/v1/findings/{fid}/comments/{cid}",
+            data=json.dumps({"hidden": False}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer admintok"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.get_json()["hidden"])
+
+    def test_admin_moderate_401_without_read_token(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        resp = self._client.patch(
+            "/api/v1/findings/1/comments/1",
+            data=json.dumps({"hidden": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    def test_admin_moderate_404_comment_not_found(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        resp = self._client.patch(
+            "/api/v1/findings/1/comments/99999",
+            data=json.dumps({"hidden": True}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer admintok"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_admin_moderate_404_wrong_finding(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "AWF #")
+        cid = self._insert_comment(fid, iid)
+        resp = self._client.patch(
+            f"/api/v1/findings/{fid + 1}/comments/{cid}",
+            data=json.dumps({"hidden": True}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer admintok"},
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_admin_moderate_400_missing_hidden(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "AMH #")
+        cid = self._insert_comment(fid, iid)
+        resp = self._client.patch(
+            f"/api/v1/findings/{fid}/comments/{cid}",
+            data=json.dumps({"hidden": "yes"}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer admintok"},
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    # -- Admin PATCH finding with response_md --------------------------------
+
+    def _admin_patch(self, fid: int, body: dict):
+        return self._client.patch(
+            f"/api/v1/findings/{fid}",
+            data=json.dumps(body),
+            content_type="application/json",
+            headers={"Authorization": "Bearer admintok"},
+        )
+
+    def test_patch_response_md_string_sets_fields(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        fid = self._register_finding()
+        resp = self._admin_patch(fid, {"response_md": "Acknowledged, fix planned"})
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(data["response_md"], "Acknowledged, fix planned")
+        self.assertIsNotNone(data["response_at"])
+
+    def test_patch_response_md_null_clears_fields(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        fid = self._register_finding()
+        self._admin_patch(fid, {"response_md": "test"})
+        resp = self._admin_patch(fid, {"response_md": None})
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(data["response_md"])
+        self.assertIsNone(data["response_at"])
+
+    def test_patch_response_md_400_non_string_non_null(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        fid = self._register_finding()
+        resp = self._admin_patch(fid, {"response_md": 123})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_patch_response_md_does_not_auto_change_status(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        fid = self._register_finding()
+        resp = self._admin_patch(fid, {"response_md": "test"})
+        self.assertEqual(resp.get_json()["status"], "open")
+
+    def test_patch_response_md_caps_at_10k(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        fid = self._register_finding()
+        resp = self._admin_patch(fid, {"response_md": "A" * 15000})
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertLessEqual(len(data["response_md"]), 10000)
+
+    def test_patch_response_md_preserves_markdown_headings_and_links(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        fid = self._register_finding()
+        md = "# Heading\n\n[link](https://example.com)\n\n```code```"
+        resp = self._admin_patch(fid, {"response_md": md})
+        data = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("# Heading", data["response_md"])
+        self.assertIn("[link](https://example.com)", data["response_md"])
+        self.assertIn("```code```", data["response_md"])
+
+    # -- Admin finding detail includes comments ------------------------------
+
+    def test_get_detail_includes_hidden_and_visible_comments(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "admintok"
+        self.addCleanup(lambda: os.environ.pop("DIAG_READ_TOKEN", None))
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "DC #")
+        self._insert_comment(fid, iid, "visible")
+        self._insert_comment(fid, iid, "hidden", hidden=1)
+
+        resp = self._client.get(
+            f"/api/v1/findings/{fid}",
+            headers={"Authorization": "Bearer admintok"},
+        )
+        data = resp.get_json()
+        self.assertEqual(len(data["comments"]), 2)
+        visible = [c for c in data["comments"] if not c["hidden"]]
+        hidden = [c for c in data["comments"] if c["hidden"]]
+        self.assertEqual(len(visible), 1)
+        self.assertEqual(len(hidden), 1)
+        self.assertIn("instance_id", data["comments"][0])
+
+    # -- Rebuild safety: comments deleted before findings --------------------
+
+    def test_rebuild_deletes_comments_before_findings(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        fid = self._register_finding(iid, "RB #")
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "INSERT INTO finding_comments (finding_id, instance_id, body, created_at, hidden) "
+                "VALUES (?, ?, 'a comment', '2026-07-15T10:00:00Z', 0)",
+                (fid, iid),
+            )
+            conn.commit()
+        with sqlite3.connect(self._db_path) as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM finding_comments").fetchone()[0], 1
+            )
+        count = rebuild_findings(self._db_path)
+        self.assertEqual(count, 1)
+        with sqlite3.connect(self._db_path) as conn:
+            cc = conn.execute("SELECT COUNT(*) FROM finding_comments").fetchone()[0]
+            self.assertEqual(cc, 0)
+
+
 class TestInjectionSanitization(unittest.TestCase):
     """Prompt-injection defense tests (Phase 10)."""
 

@@ -23,6 +23,8 @@ _SCHEMA_VERSION = 1
 _MAX_BODY_BYTES = 1_000_000
 _DEFAULT_EXPORT_CAP = 500
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_COMMENT_BODY_CAP = 2000
+_FINDING_RESPONSE_CAP = 10000
 
 
 def _sanitize_text(value: Any, max_len: int) -> str:
@@ -118,6 +120,8 @@ CREATE TABLE IF NOT EXISTS findings (
     analysis_md        TEXT,
     analysis_at        TEXT,
     reopened_at        TEXT,
+    response_md        TEXT,
+    response_at        TEXT,
     UNIQUE(template, logger, level)
 );
 
@@ -127,9 +131,20 @@ CREATE TABLE IF NOT EXISTS finding_instances (
     PRIMARY KEY (finding_id, instance_id)
 );
 
+CREATE TABLE IF NOT EXISTS finding_comments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    finding_id   INTEGER NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+    instance_id  TEXT NOT NULL REFERENCES instances(instance_id),
+    body         TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    hidden       INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_findings_status    ON findings(status);
 CREATE INDEX IF NOT EXISTS idx_findings_category  ON findings(category);
 CREATE INDEX IF NOT EXISTS idx_findings_last_seen ON findings(last_seen);
+CREATE INDEX IF NOT EXISTS idx_fc_finding         ON finding_comments(finding_id);
+CREATE INDEX IF NOT EXISTS idx_fc_instance        ON finding_comments(instance_id);
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
@@ -155,6 +170,10 @@ def _ensure_columns(db_path: str) -> None:
             "token": "TEXT",
             "banned": "INTEGER NOT NULL DEFAULT 0",
         },
+        "findings": {
+            "response_md": "TEXT",
+            "response_at": "TEXT",
+        },
     }
     with sqlite3.connect(db_path, timeout=10) as conn:
         for table, columns in expected.items():
@@ -165,6 +184,27 @@ def _ensure_columns(db_path: str) -> None:
                 if col not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
                     logger.info("Added column %s.%s", table, col)
+
+        # Ensure finding_comments table exists for DBs created before Phase 11
+        existing_tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "finding_comments" not in existing_tables:
+            conn.executescript("""\
+                CREATE TABLE IF NOT EXISTS finding_comments (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    finding_id   INTEGER NOT NULL REFERENCES findings(id) ON DELETE CASCADE,
+                    instance_id  TEXT NOT NULL REFERENCES instances(instance_id),
+                    body         TEXT NOT NULL,
+                    created_at   TEXT NOT NULL,
+                    hidden       INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_fc_finding  ON finding_comments(finding_id);
+                CREATE INDEX IF NOT EXISTS idx_fc_instance ON finding_comments(instance_id);
+            """)
+            logger.info("Created finding_comments table")
 
 
 def _maybe_cleanup(db: sqlite3.Connection, now_iso: str) -> None:
@@ -259,6 +299,23 @@ def _read_authorized() -> bool:
     if not required:
         return True
     return hmac.compare_digest(_bearer_token(), required)
+
+
+def _authenticate_instance_token(
+    db: sqlite3.Connection,
+) -> Optional[sqlite3.Row]:
+    """Authenticate the request via Bearer token against ``instances.token``.
+
+    Returns the matching instance row, or *None* if no/invalid token.
+    Uses a direct parameterized lookup.
+    """
+    token = _bearer_token()
+    if not token:
+        return None
+    row = db.execute(
+        "SELECT * FROM instances WHERE token = ?", (token,)
+    ).fetchone()
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +530,7 @@ def rebuild_findings(db_path: str) -> int:
     """
     with sqlite3.connect(db_path, timeout=10) as db:
         db.row_factory = sqlite3.Row
+        db.execute("DELETE FROM finding_comments")
         db.execute("DELETE FROM finding_instances")
         db.execute("DELETE FROM findings")
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -1000,6 +1058,18 @@ def create_receiver_app(db_path: Optional[str] = None) -> Flask:
             (rd["template"], rd["logger"], rd["level"]),
         ).fetchall()
         rd["recent_evidence"] = [dict(r) for r in recent]
+
+        comments = db.execute(
+            """\
+            SELECT id, body, created_at, hidden, instance_id
+            FROM finding_comments
+            WHERE finding_id = ?
+            ORDER BY created_at ASC
+            """,
+            (finding_id,),
+        ).fetchall()
+        rd["comments"] = [dict(c) for c in comments]
+
         return jsonify(rd)
 
     # -- findings update ------------------------------------------------------
@@ -1048,6 +1118,21 @@ def create_receiver_app(db_path: Optional[str] = None) -> Flask:
                 set_clauses.append("status = ?")
                 params.append("triaged")
 
+        if "response_md" in body:
+            value = body["response_md"]
+            if value is not None and not isinstance(value, str):
+                return jsonify({"ok": False, "error": "response_md must be a string or null"}), 400
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if value:
+                truncated = value[:_FINDING_RESPONSE_CAP]
+                set_clauses.append("response_md = ?")
+                params.append(truncated)
+                set_clauses.append("response_at = ?")
+                params.append(now_iso)
+            else:
+                set_clauses.append("response_md = NULL")
+                set_clauses.append("response_at = NULL")
+
         if not set_clauses:
             return jsonify({"ok": False, "error": "no valid fields to update"}), 400
 
@@ -1065,6 +1150,178 @@ def create_receiver_app(db_path: Optional[str] = None) -> Flask:
         except (json.JSONDecodeError, TypeError):
             rd["app_versions"] = []
         return jsonify(rd)
+
+    # -- my findings (instance-token auth) ----------------------------------
+    @app.route("/api/v1/my/findings")
+    def my_findings() -> Any:
+        db = _get_db()
+        instance = _authenticate_instance_token(db)
+        if instance is None:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+        if instance["banned"]:
+            return jsonify({"ok": False, "error": "banned"}), 403
+
+        iid = instance["instance_id"]
+        rows = db.execute(
+            """\
+            SELECT f.id, f.template, f.logger, f.level, f.category,
+                   f.status, f.severity, f.first_seen, f.last_seen,
+                   f.total_count, f.instance_count, f.app_versions_json,
+                   f.analysis_md, f.analysis_at, f.reopened_at,
+                   f.response_md, f.response_at
+            FROM findings f
+            JOIN finding_instances fi ON f.id = fi.finding_id
+            WHERE fi.instance_id = ?
+            ORDER BY f.instance_count DESC, f.total_count DESC, f.last_seen DESC
+            """,
+            (iid,),
+        ).fetchall()
+
+        findings_list: list[dict[str, Any]] = []
+        for r in rows:
+            rd = dict(r)
+            try:
+                rd["app_versions"] = json.loads(rd.pop("app_versions_json"))
+            except (json.JSONDecodeError, TypeError):
+                rd["app_versions"] = []
+            rd["has_analysis"] = rd.pop("analysis_md") is not None
+            rd.pop("analysis_at", None)
+
+            comments = db.execute(
+                """\
+                SELECT id, body, created_at, instance_id
+                FROM finding_comments
+                WHERE finding_id = ? AND hidden = 0
+                ORDER BY created_at ASC
+                """,
+                (rd["id"],),
+            ).fetchall()
+            rd["comments"] = [
+                {
+                    "id": c["id"],
+                    "body": c["body"],
+                    "created_at": c["created_at"],
+                    "is_mine": c["instance_id"] == iid,
+                }
+                for c in comments
+            ]
+            findings_list.append(rd)
+
+        return jsonify({
+            "findings": findings_list,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    # -- instance comments: create ------------------------------------------
+    @app.route("/api/v1/findings/<int:finding_id>/comments", methods=["POST"])
+    def create_comment(finding_id: int) -> Any:
+        db = _get_db()
+        instance = _authenticate_instance_token(db)
+        if instance is None:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+        if instance["banned"]:
+            return jsonify({"ok": False, "error": "banned"}), 403
+
+        iid = instance["instance_id"]
+
+        # Verify finding exists and instance is a member
+        finding = db.execute(
+            "SELECT id FROM findings WHERE id = ?", (finding_id,)
+        ).fetchone()
+        if finding is None:
+            return jsonify({"ok": False, "error": "not found"}), 404
+
+        member = db.execute(
+            "SELECT 1 FROM finding_instances WHERE finding_id = ? AND instance_id = ?",
+            (finding_id, iid),
+        ).fetchone()
+        if member is None:
+            return jsonify({"ok": False, "error": "not found"}), 404
+
+        body = request.get_json(force=False, silent=True)
+        if body is None or not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "invalid JSON body"}), 400
+
+        raw_body = body.get("body")
+        if not isinstance(raw_body, str) or not raw_body.strip():
+            return jsonify({"ok": False, "error": "body must be a non-empty string"}), 400
+
+        sanitized = _sanitize_text(raw_body, _COMMENT_BODY_CAP)
+        if not sanitized.strip():
+            return jsonify({"ok": False, "error": "body must be a non-empty string"}), 400
+
+        # Rolling 24h per-instance comment quota
+        try:
+            quota = int(os.environ.get("DIAG_MAX_COMMENTS_PER_DAY", "20"))
+        except ValueError:
+            quota = 20
+        if quota > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            recent_count = db.execute(
+                "SELECT COUNT(*) FROM finding_comments WHERE instance_id = ? AND created_at > ?",
+                (iid, cutoff),
+            ).fetchone()[0]
+            if recent_count >= quota:
+                return jsonify({
+                    "ok": False,
+                    "error": "comment_quota_exceeded",
+                }), 429
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cur = db.execute(
+            """\
+            INSERT INTO finding_comments (finding_id, instance_id, body, created_at, hidden)
+            VALUES (?, ?, ?, ?, 0)
+            """,
+            (finding_id, iid, sanitized, now_iso),
+        )
+        db.commit()
+
+        return jsonify({
+            "id": cur.lastrowid,
+            "body": sanitized,
+            "created_at": now_iso,
+            "is_mine": True,
+        }), 201
+
+    # -- admin comment moderation -------------------------------------------
+    @app.route(
+        "/api/v1/findings/<int:finding_id>/comments/<int:comment_id>",
+        methods=["PATCH"],
+    )
+    def update_comment(finding_id: int, comment_id: int) -> Any:
+        if not _read_authorized():
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+        db = _get_db()
+
+        comment = db.execute(
+            "SELECT * FROM finding_comments WHERE id = ? AND finding_id = ?",
+            (comment_id, finding_id),
+        ).fetchone()
+        if comment is None:
+            return jsonify({"ok": False, "error": "not found"}), 404
+
+        body = request.get_json(force=False, silent=True)
+        if body is None or not isinstance(body, dict):
+            return jsonify({"ok": False, "error": "invalid JSON body"}), 400
+
+        if "hidden" not in body or not isinstance(body["hidden"], bool):
+            return jsonify({"ok": False, "error": "hidden must be a boolean"}), 400
+
+        db.execute(
+            "UPDATE finding_comments SET hidden = ? WHERE id = ?",
+            (1 if body["hidden"] else 0, comment_id),
+        )
+        db.commit()
+
+        return jsonify({
+            "id": comment_id,
+            "hidden": body["hidden"],
+            "body": comment["body"],
+            "created_at": comment["created_at"],
+            "instance_id": comment["instance_id"],
+        })
 
     return app
 

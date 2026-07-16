@@ -289,4 +289,18 @@ Two per-call env-var quotas protect the receiver:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DIAG_READ_TOKEN` | *(unset)* | When set, `GET /api/v1/export`, `/api/v1/summary`, `/api/v1/findings`, `/api/v1/findings/<id>`, and `PATCH /api/v1/findings/<id>` require `Authorization: Bearer <that token>`. `GET /api/v1/health` is always open. The ingest `POST /api/v1/diagnostics` is **not** affected (it uses per-instance tokens). |
+| `DIAG_READ_TOKEN` | *(unset)* | When set, maintainer read and PATCH endpoints require `Authorization: Bearer <that token>`. `GET /api/v1/health` remains open and ingest uses per-instance tokens. |
+
+### Contributor Feedback
+
+An instance can use its existing ingest bearer token with
+`GET /api/v1/my/findings` to retrieve only findings it contributed to. It can
+add a sanitized comment with `POST /api/v1/findings/<id>/comments`; the rolling
+24-hour quota defaults to 20 comments per instance and is configured with
+`DIAG_MAX_COMMENTS_PER_DAY` (`0` disables it).
+
+Maintainers add user-visible Markdown through `response_md` on the existing
+finding PATCH endpoint. Comments can be hidden or restored with
+`PATCH /api/v1/findings/<id>/comments/<comment_id>`. Public deployments must
+set `DIAG_READ_TOKEN`, and maintainer reads and PATCHes send that token as a
+Bearer credential.

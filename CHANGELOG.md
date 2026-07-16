@@ -8,6 +8,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Contributor-scoped diagnostics findings with sanitized comment threads,
+  maintainer responses, moderation, and per-instance comment quotas.
+
 - **Opt-in anonymous diagnostics.** Help improve BookBridge by sharing a small
   daily diagnostic report: deduplicated warning lines from your sync logs with
   book titles, file paths, and URLs replaced by anonymous tokens — never your
