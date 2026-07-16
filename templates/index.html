@@ -1,11 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
+{% set active_page = 'library' %}
 
-<head>
-    <meta charset="UTF-8">
-
-    {# Macro for rendering a book card - used by both currently-reading and all-books grids #}
-    {% macro render_book_card(mapping, integrations) %}
+{# Macro for rendering a book card - used by both currently-reading and all-books grids #}
+{% macro render_book_card(mapping, integrations) %}
     {% set sync_warning_pct = mapping.sync_warning_pct|default(0) %}
     {% set full_display_title = mapping.display_title %}
     {% if mapping.display_subtitle %}
@@ -404,192 +401,8 @@
     </div>
     {% endmacro %}
 
-    <title>BookBridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" type="image/png" href="/static/icon.png">
-    <link rel="apple-touch-icon" href="/static/icon.png">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            background: #0a0a0a;
-            color: #ffffff;
-            min-height: 100vh;
-            padding: 0;
-        }
-
-        /* Top Navigation Bar */
-        .top-nav {
-            background: linear-gradient(180deg, rgba(20, 20, 20, 0.98) 0%, rgba(20, 20, 20, 0.95) 100%);
-            -webkit-backdrop-filter: blur(20px);
-            backdrop-filter: blur(20px);
-            padding: 20px 40px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .logo-section {
-            display: flex;
-            align-items: center;
-            gap: 24px;
-        }
-
-        .logo-section h1 {
-            font-size: 28px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .app-icon {
-            display: block;
-            width: 32px;
-            height: 32px;
-            border-radius: 6px;
-            object-fit: cover;
-        }
-
-        .library-links {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding-left: 20px;
-            border-left: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .nav-icon-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-            color: rgba(255, 255, 255, 0.6);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            background: rgba(255, 255, 255, 0.03);
-            text-decoration: none;
-        }
-
-        .nav-icon-link:hover {
-            color: #ffffff;
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
-
-        .nav-icon-link svg {
-            width: 20px;
-            height: 20px;
-            stroke-width: 2;
-        }
-
-        .nav-actions {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .btn {
-            padding: 10px 20px;
-            background: rgba(102, 126, 234, 0.15);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.3);
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn:hover {
-            background: rgba(102, 126, 234, 0.25);
-            border-color: rgba(102, 126, 234, 0.5);
-            transform: translateY(-2px);
-        }
-
-        .btn-primary {
-            background: rgba(102, 126, 234, 0.2);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-primary:hover {
-            background: rgba(102, 126, 234, 0.3);
-            border-color: rgba(102, 126, 234, 0.6);
-        }
-
-        /* User menu (account + logout dropdown) */
-        .user-menu {
-            position: relative;
-            display: inline-flex;
-        }
-
-        .user-menu-caret {
-            font-size: 10px;
-            opacity: 0.7;
-            transition: transform 0.2s;
-        }
-
-        .user-menu.open .user-menu-caret {
-            transform: rotate(180deg);
-        }
-
-        .user-menu-dropdown {
-            position: absolute;
-            top: calc(100% + 8px);
-            right: 0;
-            min-width: 180px;
-            background: rgba(28, 28, 30, 0.98);
-            -webkit-backdrop-filter: blur(20px);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-            padding: 6px;
-            display: none;
-            flex-direction: column;
-            gap: 2px;
-            z-index: 200;
-        }
-
-        .user-menu.open .user-menu-dropdown {
-            display: flex;
-        }
-
-        .user-menu-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            border-radius: 8px;
-            color: rgba(255, 255, 255, 0.85);
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            transition: background 0.2s, color 0.2s;
-        }
-
-        .user-menu-item:hover {
-            background: rgba(102, 126, 234, 0.2);
-            color: #ffffff;
-        }
-
+{% block head %}
+<style>
         /* Main Container */
         .container {
             max-width: 1800px;
@@ -608,7 +421,7 @@
         .section-header h2 {
             font-size: 32px;
             font-weight: 700;
-            color: #ffffff;
+            color: var(--text);
         }
 
         .dashboard-section + .dashboard-section .section-header {
@@ -623,13 +436,13 @@
 
         .section-chevron {
             font-size: 24px;
-            color: #667eea;
+            color: var(--accent);
             transition: color 0.2s ease;
         }
 
         .collapsible-section-header:hover .section-chevron,
         .collapsible-section-header.active .section-chevron {
-            color: #ffffff;
+            color: var(--text);
         }
 
         .book-grid.collapsible-book-grid {
@@ -642,7 +455,7 @@
         }
 
         .section-link {
-            color: #667eea;
+            color: var(--accent);
             font-size: 16px;
             font-weight: 600;
             text-decoration: none;
@@ -650,7 +463,7 @@
         }
 
         .section-link:hover {
-            color: #764ba2;
+            color: var(--accent-2);
         }
 
         /* Controls */
@@ -658,11 +471,12 @@
             display: flex;
             gap: 20px;
             align-items: center;
+            flex-wrap: wrap;
             margin-bottom: 30px;
             padding: 16px 24px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            background: var(--panel-soft);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
         }
 
         .control-group {
@@ -674,76 +488,41 @@
         .control-group label {
             font-size: 14px;
             font-weight: 600;
-            color: rgba(255, 255, 255, 0.7);
+            color: var(--muted);
         }
 
         /* UPDATED: Clickable Arrow Styles */
         .sort-direction {
             font-size: 20px;
             margin-left: 8px;
-            color: #667eea;
+            color: var(--accent);
             cursor: pointer;
             -webkit-user-select: none;
             user-select: none;
             padding: 4px 8px;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             transition: all 0.2s;
-            background: rgba(255, 255, 255, 0.05);
+            background: var(--panel);
         }
 
         .sort-direction:hover {
             background: rgba(102, 126, 234, 0.2);
-            color: #ffffff;
+            color: var(--text);
             transform: scale(1.1);
         }
 
-        select {
-            padding: 8px 16px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            color: #ffffff;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.3s;
+        .controls-bar .form-select {
+            width: auto;
         }
 
-        select option {
+        .controls-bar select.form-select option {
             background: #1a1a1a;
-            color: #ffffff;
+            color: var(--text);
             padding: 8px;
         }
 
-        select:hover {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: rgba(102, 126, 234, 0.3);
-        }
-
-        select:focus {
-            outline: none;
-            border-color: #667eea;
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        #dashboard-search {
-            padding: 8px 16px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            color: #ffffff;
-            font-size: 14px;
-            transition: all 0.3s;
+        #dashboard-search.form-input {
             width: 250px;
-        }
-
-        #dashboard-search:focus {
-            outline: none;
-            border-color: #667eea;
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        #dashboard-search::placeholder {
-            color: rgba(255, 255, 255, 0.5);
         }
 
         /* Book Grid */
@@ -757,22 +536,23 @@
         /* Book Card - Horizontal Layout */
         .book-card {
             display: flex;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
             overflow: hidden;
-            transition: all 0.3s ease;
+            transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
         }
 
         .book-card:hover {
             transform: translateY(-4px);
-            border-color: rgba(102, 126, 234, 0.4);
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+            background: rgba(255, 255, 255, 0.07);
+            border-color: var(--border-strong);
+            box-shadow: var(--shadow);
         }
 
         .book-card.out-of-sync {
-            border-color: rgba(255, 152, 0, 0.5);
-            box-shadow: 0 0 20px rgba(255, 152, 0, 0.15);
+            border-color: rgba(255, 209, 102, 0.5);
+            box-shadow: 0 0 20px rgba(255, 209, 102, 0.15);
         }
 
         /* Cover Section */
@@ -791,8 +571,9 @@
             flex-shrink: 0;
             align-self: flex-start;
             overflow: hidden;
-            border-radius: 8px;
+            border-radius: var(--radius);
             background: rgba(0, 0, 0, 0.3);
+            box-shadow: var(--shadow);
         }
 
         .book-cover {
@@ -810,7 +591,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--gradient);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -831,9 +612,9 @@
             min-height: 20px;
             max-width: 100%;
             padding: 2px 5px;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 4px;
-            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            background: var(--panel);
             color: rgba(255, 255, 255, 0.88);
             font-size: 10px;
             line-height: 1;
@@ -841,12 +622,12 @@
         }
 
         .rating-source {
-            color: rgba(255, 255, 255, 0.58);
+            color: var(--muted-soft);
             font-weight: 700;
         }
 
         .rating-value {
-            color: #ffffff;
+            color: var(--text);
             font-weight: 700;
         }
 
@@ -882,8 +663,8 @@
             flex: 1;
             min-width: 0;
             font-size: 14px;
-            font-weight: 700;
-            color: #ffffff;
+            font-weight: 600;
+            color: var(--text);
             line-height: 1.3;
             word-break: break-word;
             display: -webkit-box;
@@ -893,7 +674,7 @@
         }
 
         .book-title-main {
-            color: #ffffff;
+            color: var(--text);
         }
 
         .book-title-subtitle {
@@ -902,7 +683,7 @@
 
         .book-author {
             font-size: 11px;
-            color: rgba(255, 255, 255, 0.55);
+            color: var(--muted);
             margin-bottom: 8px;
             white-space: nowrap;
             overflow: hidden;
@@ -925,7 +706,7 @@
             letter-spacing: 0.03em;
             text-transform: uppercase;
             background: rgba(79, 195, 247, 0.18);
-            color: #81d4fa;
+            color: var(--reading);
         }
 
         .mapping-link {
@@ -935,69 +716,35 @@
         }
 
         .mapping-link:hover {
-            color: #ffffff;
+            color: var(--text);
         }
 
-        /* Status Badge */
-        .status-badge {
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            white-space: nowrap;
-            flex: 0 0 auto;
-        }
-
-        .status-active {
-            background: rgba(76, 175, 80, 0.2);
-            color: #4CAF50;
-            border: 1px solid rgba(76, 175, 80, 0.3);
-        }
-
+        /* Status Badge: .status-badge base + the shared color variants (active/processing/
+           forging/error/inactive/completed) come from app.css. These fill in the extra
+           status strings this dashboard uses that the shared set doesn't cover. */
         .status-pending {
-            background: rgba(255, 152, 0, 0.2);
-            color: #FF9800;
-            border: 1px solid rgba(255, 152, 0, 0.3);
-        }
-
-        .status-processing {
-            background: rgba(33, 150, 243, 0.2);
-            color: #2196F3;
-            border: 1px solid rgba(33, 150, 243, 0.3);
+            background: rgba(255, 209, 102, 0.15);
+            color: var(--warning);
+            border: 1px solid rgba(255, 209, 102, 0.3);
         }
 
         .status-failed,
         .status-crashed,
         .status-failed_retry_later {
-            background: rgba(244, 67, 54, 0.2);
-            color: #f44336;
-            border: 1px solid rgba(244, 67, 54, 0.3);
+            background: rgba(255, 107, 107, 0.15);
+            color: var(--danger);
+            border: 1px solid rgba(255, 107, 107, 0.3);
         }
 
-        .status-forging,
         .status-manual_forge {
-            background: rgba(156, 39, 176, 0.2);
-            color: #e040fb;
-            border: 1px solid rgba(156, 39, 176, 0.3);
-            animation: pulse 2s infinite;
+            background: rgba(255, 209, 102, 0.15);
+            color: var(--warning);
+            border: 1px solid rgba(255, 209, 102, 0.3);
+            animation: bb-pulse 2s infinite;
         }
 
-        @keyframes pulse {
-            0% {
-                opacity: 0.7;
-            }
-
-            50% {
-                opacity: 1;
-            }
-
-            100% {
-                opacity: 0.7;
-            }
-        }
-
-        /* Unified Progress */
+        /* Unified Progress: base .progress-bar/.progress-bar-fill visuals come from
+           app.css; this just makes the bar flex to fill the row next to the percent. */
         .unified-progress {
             display: flex;
             align-items: center;
@@ -1005,34 +752,24 @@
             margin-bottom: 6px;
         }
 
-        .progress-bar {
+        .unified-progress .progress-bar {
             flex: 1;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 3px;
-            overflow: hidden;
-        }
-
-        .progress-bar-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            transition: width 0.5s ease;
         }
 
         .progress-percent {
             font-size: 12px;
             font-weight: 700;
-            color: #667eea;
+            color: var(--accent);
             white-space: nowrap;
         }
 
         /* Sync Warning */
         .sync-warning {
             font-size: 11px;
-            color: #FF9800;
-            background: rgba(255, 152, 0, 0.1);
+            color: var(--warning);
+            background: rgba(255, 209, 102, 0.1);
             padding: 4px 8px;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             margin-bottom: 8px;
         }
 
@@ -1043,11 +780,11 @@
             gap: 10px;
             padding: 5px 8px;
             margin-bottom: 8px;
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.04);
-            border-radius: 6px;
+            background: var(--panel-soft);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
             font-size: 11px;
-            color: rgba(255,255,255,0.45);
+            color: var(--muted-soft);
             flex-wrap: wrap;
         }
         .reading-stats .rs-item {
@@ -1056,10 +793,10 @@
             gap: 3px;
         }
         .reading-stats .rs-icon { font-size: 11px; line-height: 1; }
-        .reading-stats .rs-val { color: rgba(255,255,255,0.7); font-weight: 600; }
+        .reading-stats .rs-val { color: var(--muted); font-weight: 600; }
         .reading-stats .rs-sep { color: rgba(255,255,255,0.12); user-select: none; }
 
-        /* Service Progress Grid */
+        /* Service Progress Grid: small icons, muted labels, right-aligned percentages */
         .service-progress {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1073,12 +810,12 @@
             align-items: center;
             gap: 4px;
             padding: 3px 6px;
-            background: rgba(255, 255, 255, 0.04);
-            border-radius: 4px;
+            background: var(--panel-soft);
+            border-radius: var(--radius-sm);
             font-size: 11px;
-            color: rgba(255, 255, 255, 0.8);
+            color: var(--text);
             text-decoration: none;
-            transition: background 0.2s;
+            transition: background-color 0.2s ease;
             min-height: 24px;
             min-width: 0;
             overflow: hidden;
@@ -1086,7 +823,7 @@
 
         .service-item:hover {
             background: rgba(255, 255, 255, 0.1);
-            color: #fff;
+            color: var(--text);
         }
 
         .service-item.disabled {
@@ -1109,7 +846,7 @@
         .service-name {
             flex: 1;
             font-size: 11px;
-            color: rgba(255, 255, 255, 0.6);
+            color: var(--muted-soft);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -1118,9 +855,10 @@
 
         .service-value {
             font-weight: 600;
-            color: #fff;
+            color: var(--text);
             flex-shrink: 0;
             white-space: nowrap;
+            text-align: right;
         }
 
         .link-icon {
@@ -1134,12 +872,12 @@
             align-items: center;
             margin-top: auto;
             padding-top: 8px;
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            border-top: 1px solid var(--border);
         }
 
         .last-sync {
             font-size: 11px;
-            color: rgba(255, 255, 255, 0.4);
+            color: var(--muted-soft);
         }
 
         /* Quick Actions */
@@ -1155,12 +893,12 @@
         .action-btn {
             padding: 5px 10px;
             background: rgba(255, 255, 255, 0.08);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 4px;
-            color: white;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            color: var(--text);
             font-size: 12px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: background-color 0.2s ease;
         }
 
         .action-btn:hover {
@@ -1168,31 +906,25 @@
         }
 
         .action-btn.danger {
-            background: rgba(244, 67, 54, 0.15);
-            border-color: rgba(244, 67, 54, 0.3);
+            background: rgba(255, 107, 107, 0.15);
+            border-color: rgba(255, 107, 107, 0.3);
         }
 
         .action-btn.danger:hover {
-            background: rgba(244, 67, 54, 0.25);
+            background: rgba(255, 107, 107, 0.25);
         }
 
         .action-btn.warning {
-            background: rgba(255, 152, 0, 0.15);
-            border-color: rgba(255, 152, 0, 0.3);
-            color: #FF9800;
+            background: rgba(255, 209, 102, 0.15);
+            border-color: rgba(255, 209, 102, 0.3);
+            color: var(--warning);
         }
 
         .action-btn.warning:hover {
-            background: rgba(255, 152, 0, 0.25);
+            background: rgba(255, 209, 102, 0.25);
         }
 
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 120px 40px;
-            color: rgba(255, 255, 255, 0.5);
-        }
-
+        /* Empty State: base centering/padding comes from app.css's shared .empty-state */
         .empty-state-icon {
             font-size: 96px;
             margin-bottom: 24px;
@@ -1201,13 +933,14 @@
 
         .empty-state h2 {
             font-size: 28px;
-            color: rgba(255, 255, 255, 0.7);
+            color: var(--text);
             margin-bottom: 12px;
         }
 
         .empty-state p {
             font-size: 16px;
             margin-bottom: 32px;
+            color: var(--muted);
         }
 
         /* Responsive */
@@ -1221,17 +954,6 @@
         @media (max-width: 768px) {
             .container {
                 padding: 16px;
-            }
-
-            .top-nav {
-                padding: 12px 16px;
-                flex-direction: column;
-                gap: 12px;
-            }
-
-            .nav-actions {
-                flex-wrap: wrap;
-                justify-content: center;
             }
 
             .section-header h2 {
@@ -1272,11 +994,6 @@
             display: none !important;
         }
 
-        .text-inherit-no-deco {
-            text-decoration: none !important;
-            color: inherit !important;
-        }
-
         /* Storyteller Modal */
         #st-modal {
             position: fixed;
@@ -1284,29 +1001,30 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(6, 8, 14, .72);
             z-index: 1000;
             display: flex;
             align-items: center;
             justify-content: center;
-            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(6px);
+            backdrop-filter: blur(6px);
         }
 
         .st-modal-content {
-            background: #1a1a1a;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
+            background: #11131b;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
             width: 90%;
             max-width: 600px;
             max-height: 80vh;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 25px 70px rgba(0, 0, 0, .45);
         }
 
         .st-modal-header {
             padding: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -1331,9 +1049,9 @@
         }
 
         .st-result-card {
-            background: rgba(255, 255, 255, 0.05);
+            background: var(--panel);
             padding: 12px;
-            border-radius: 8px;
+            border-radius: var(--radius-sm);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -1345,12 +1063,12 @@
 
         .st-card-title {
             font-weight: bold;
-            color: #fff;
+            color: var(--text);
         }
 
         .st-card-author {
             font-size: 12px;
-            color: #aaa;
+            color: var(--muted);
         }
 
         .st-loading,
@@ -1358,11 +1076,11 @@
         .st-error {
             text-align: center;
             padding: 20px;
-            color: #aaa;
+            color: var(--muted);
         }
 
         .st-error {
-            color: #ff6b6b;
+            color: var(--danger);
         }
 
         .pe-none {
@@ -1401,16 +1119,17 @@
 
         .flash-msg-container {
             padding: 12px !important;
-            border-radius: 8px !important;
+            border-radius: var(--radius-sm) !important;
             background: rgba(0, 0, 0, 0.5) !important;
-            border: 1px solid rgba(255, 255, 255, 0.04) !important;
+            border: 1px solid var(--border) !important;
         }
 
         .mt-80 {
             margin-top: 80px !important;
         }
 
-        /* Hardcover Edition Picker Modal */
+        /* Hardcover Edition Picker Modal — also reused by the StoryGraph, delete-mapping,
+           BookFusion-upload, and diagnostics opt-in modals below via the same hc-* classes. */
 
         .hc-modal {
             position: fixed;
@@ -1430,20 +1149,20 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.8);
-            backdrop-filter: blur(4px);
-            -webkit-backdrop-filter: blur(4px);
+            background: rgba(6, 8, 14, .72);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
         }
 
         .hc-modal-content {
             position: relative;
-            background: linear-gradient(180deg, #1a1a1a 0%, #141414 100%);
-            border-radius: 16px;
+            background: linear-gradient(180deg, #14161f 0%, #11131b 100%);
+            border-radius: var(--radius-lg);
             max-width: 520px;
             width: 94%;
             max-height: 85vh;
             overflow: hidden;
-            border: 1px solid rgba(102, 126, 234, 0.15);
+            border: 1px solid var(--border);
             box-shadow:
                 0 24px 80px rgba(0, 0, 0, 0.6),
                 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
@@ -1464,7 +1183,7 @@
 
         .hc-modal-header {
             padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            border-bottom: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -1474,7 +1193,7 @@
             margin: 0;
             font-size: 1.1rem;
             font-weight: 600;
-            background: linear-gradient(135deg, #667eea 0%, #a78bfa 100%);
+            background: linear-gradient(135deg, var(--accent) 0%, #a78bfa 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -1483,10 +1202,10 @@
         .hc-modal-close {
             background: rgba(255, 255, 255, 0.05);
             border: none;
-            color: rgba(255, 255, 255, 0.5);
+            color: var(--muted-soft);
             width: 32px;
             height: 32px;
-            border-radius: 8px;
+            border-radius: var(--radius-sm);
             font-size: 1.25rem;
             cursor: pointer;
             line-height: 1;
@@ -1498,7 +1217,7 @@
 
         .hc-modal-close:hover {
             background: rgba(255, 255, 255, 0.1);
-            color: #fff;
+            color: var(--text);
         }
 
         .hc-modal-body {
@@ -1542,17 +1261,17 @@
         .hc-btn-cancel {
             background: rgba(255, 255, 255, 0.06);
             color: rgba(255, 255, 255, 0.7);
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border: 1px solid var(--border) !important;
         }
 
         .hc-btn-cancel:hover {
             background: rgba(255, 255, 255, 0.1);
-            color: #fff;
+            color: var(--text);
         }
 
         .hc-btn-link {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
+            background: var(--gradient);
+            color: var(--text);
             box-shadow: 0 2px 12px rgba(102, 126, 234, 0.3);
         }
 
@@ -1571,20 +1290,20 @@
         .hc-book-info {
             margin-bottom: 1.5rem;
             padding-bottom: 1.25rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            border-bottom: 1px solid var(--border);
         }
 
         .hc-book-title {
             font-size: 1.2rem;
             font-weight: 600;
-            color: #fff;
+            color: var(--text);
             margin-bottom: 0.25rem;
             line-height: 1.4;
         }
 
         .hc-book-author {
             font-size: 0.9rem;
-            color: rgba(255, 255, 255, 0.5);
+            color: var(--muted-soft);
         }
 
         /* Editions section */
@@ -1658,7 +1377,7 @@
         .hc-edition-format {
             font-weight: 600;
             font-size: 0.9rem;
-            color: #fff;
+            color: var(--text);
             display: flex;
             align-items: center;
             gap: 0.5rem;
@@ -1705,9 +1424,9 @@
             width: 100%;
             padding: 0.75rem 1rem;
             border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--border);
             background: rgba(0, 0, 0, 0.3);
-            color: #fff;
+            color: var(--text);
             margin-bottom: 0.75rem;
             font-size: 0.9rem;
             transition: all 0.2s;
@@ -1724,8 +1443,8 @@
         }
 
         #hc-manual button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
+            background: var(--gradient);
+            color: var(--text);
             border: none;
             padding: 0.6rem 1.25rem;
             border-radius: 8px;
@@ -1747,7 +1466,7 @@
         }
 
         .hc-text-muted a {
-            color: #667eea;
+            color: var(--accent);
             text-decoration: none;
             transition: color 0.2s;
         }
@@ -1772,7 +1491,7 @@
             height: 40px;
             margin: 0 auto 1rem;
             border: 3px solid rgba(102, 126, 234, 0.2);
-            border-top-color: #667eea;
+            border-top-color: var(--accent);
             border-radius: 50%;
             animation: hc-spin 0.8s linear infinite;
         }
@@ -1787,15 +1506,11 @@
             font-size: 0.9rem;
         }
 
-        .hidden {
-            display: none !important;
-        }
-
         /* Suggestions Banner Styling */
         .suggestions-banner {
             background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
             border: 1px solid rgba(102, 126, 234, 0.2);
-            border-radius: 12px;
+            border-radius: var(--radius-lg);
             padding: 16px 24px;
             margin-bottom: 24px;
             cursor: pointer;
@@ -1828,7 +1543,7 @@
         .suggestions-title {
             font-size: 1.1rem;
             font-weight: 600;
-            color: #ffffff;
+            color: var(--text);
             margin: 0;
             display: flex;
             align-items: center;
@@ -1836,7 +1551,7 @@
         }
 
         .count-badge {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--gradient);
             color: white;
             padding: 2px 10px;
             border-radius: 20px;
@@ -1856,7 +1571,7 @@
         .chevron {
             font-size: 1.2rem;
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            color: #667eea;
+            color: var(--accent);
         }
 
         .suggestions-banner.active .chevron {
@@ -1899,9 +1614,9 @@
             align-items: center;
             gap: 14px;
             padding: 14px 16px;
-            background: rgba(255, 255, 255, 0.03);
+            background: var(--panel-soft);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
+            border-radius: var(--radius-lg);
             cursor: pointer;
             transition: all 0.3s ease;
             user-select: none;
@@ -1927,10 +1642,10 @@
             position: absolute;
             width: 56px;
             height: 84px;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             object-fit: cover;
             background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--border);
             box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         }
         .series-stack-cover.stack-1 { left: 0;   top: 6px; transform: rotate(-5deg); z-index: 1; }
@@ -1939,12 +1654,12 @@
         .series-stack-placeholder {
             display: flex; align-items: center; justify-content: center;
             font-size: 28px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--gradient);
         }
 
         .series-info { flex: 1; min-width: 0; }
         .series-name {
-            font-size: 15px; font-weight: 700; color: #fff;
+            font-size: 15px; font-weight: 700; color: var(--text);
             line-height: 1.3;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
@@ -1962,13 +1677,13 @@
         .series-next { color: rgba(102, 126, 234, 0.9); font-weight: 600; }
 
         .series-progress-bar {
-            height: 4px; background: rgba(255, 255, 255, 0.1);
+            height: 4px; background: var(--border);
             border-radius: 2px; overflow: hidden;
             margin-top: 8px;
         }
         .series-progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            background: var(--gradient);
             transition: width 0.5s ease;
         }
 
@@ -2015,129 +1730,45 @@
            cards left inside them that are duplicates of flat-rendered cards. */
         body.series-grouping-off .series-group { display: none !important; }
         body.series-grouping-off .book-card.flatten-duplicate { display: none !important; }
-    </style>
-</head>
+        /* Forge Status Banner */
+        .forge-banner {
+            background: var(--gradient);
+            color: white;
+            padding: 12px 20px;
+            border-radius: var(--radius-lg);
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            animation: slideDown 0.3s ease-out;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            border: 1px solid var(--border);
+        }
 
-<body>
-    <div class="top-nav">
-        <div class="logo-section">
-            <a href="/" style="display: flex; align-items: center; gap: 12px; text-decoration: none;">
-                <img src="/static/icon.png" alt="BookBridge" class="app-icon">
-                <h1 style="font-size: 22px; margin: 0;">BookBridge</h1>
-            </a>
+        .spinner-sm {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
 
-            <div class="library-links">
-                {% if abs_server %}
-                <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
-                    title="Audiobookshelf">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    </svg>
-                </a>
-                {% endif %}
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
 
-                {# Ebook/reading-app links reflect THIS user's enabled integration:
-                   admin -> BookOrbit/Grimmory, another user -> their CWA, etc. #}
-                {% if booklore_server and get_user_bool('BOOKLORE_ENABLED') %}
-                <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
-                    title="Ebook Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+</style>
+{% endblock %}
 
-                {% if get_val('BOOKORBIT_SERVER') and get_user_bool('BOOKORBIT_ENABLED') %}
-                <a href="{{ get_val('BOOKORBIT_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
-                    title="BookOrbit Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if get_val('CWA_SERVER') and get_user_bool('CWA_ENABLED') %}
-                <a href="{{ get_val('CWA_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer"
-                    title="Calibre-Web Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if shelfmark_url and (get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and
-                get_val('SHELFMARK_ENABLED') == '')) %}
-                <a href="/shelfmark" class="nav-icon-link" title="Shelfmark Tool" target="_blank"
-                    rel="noopener noreferrer">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    </svg>
-                </a>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/bookbridge/" class="btn" target="_blank"
-                rel="noopener noreferrer">📚 Docs</a>
-            {% set is_admin = current_user and current_user.is_admin %}
-            {% if is_admin %}
-            <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="/stats" class="btn">📊 Stats</a>
-            {% endif %}
-            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add / Update Book</a>
-            {% if is_admin %}
-            <a href="/suggestions" class="btn">💡 Suggestions</a>
-            {% endif %}
-            {% if current_user %}
-            <div class="user-menu" id="user-menu">
-                <button type="button" class="btn user-menu-toggle" id="user-menu-toggle"
-                    aria-haspopup="true" aria-expanded="false" title="Account: {{ current_user.username }}">
-                    👤 {{ current_user.username }} <span class="user-menu-caret">▾</span>
-                </button>
-                <div class="user-menu-dropdown" role="menu">
-                    <a href="/account" class="user-menu-item" role="menuitem">👤 Account</a>
-                    <a href="/logout" class="user-menu-item" role="menuitem">🚪 Logout</a>
-                </div>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-    <script>
-        (function () {
-            const menu = document.getElementById('user-menu');
-            if (!menu) return;
-            const toggle = document.getElementById('user-menu-toggle');
-            toggle.addEventListener('click', function (e) {
-                e.stopPropagation();
-                const open = menu.classList.toggle('open');
-                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-            });
-            document.addEventListener('click', function (e) {
-                if (!menu.contains(e.target)) {
-                    menu.classList.remove('open');
-                    toggle.setAttribute('aria-expanded', 'false');
-                }
-            });
-            document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape') {
-                    menu.classList.remove('open');
-                    toggle.setAttribute('aria-expanded', 'false');
-                }
-            });
-        })();
-    </script>
-
+{% block content %}
     <div class="container">
         <!-- Forge Status Banner -->
         <div id="forge-status-banner" class="forge-banner" style="display: none;">
@@ -2147,42 +1778,6 @@
             </div>
             <small style="opacity: 0.8">Processing in background</small>
         </div>
-        <style>
-            .forge-banner {
-                background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 12px 20px;
-                border-radius: 12px;
-                margin-bottom: 24px;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                animation: slideDown 0.3s ease-out;
-                box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-            }
-
-            .spinner-sm {
-                width: 16px;
-                height: 16px;
-                border: 2px solid rgba(255, 255, 255, 0.3);
-                border-top-color: white;
-                border-radius: 50%;
-                animation: spin 0.8s linear infinite;
-            }
-
-            @keyframes slideDown {
-                from {
-                    opacity: 0;
-                    transform: translateY(-10px);
-                }
-
-                to {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
-            }
-        </style>
         <script>
             function checkForgeStatus() {
                 fetch('/api/forge/active')
@@ -2343,11 +1938,11 @@
         {% endfor %}
         <div class="controls-bar">
             <div class="control-group">
-                <input type="text" id="dashboard-search" placeholder="Search books...">
+                <input type="text" id="dashboard-search" class="form-input" placeholder="Search books...">
             </div>
             <div class="control-group">
                 <label for="filter-select">Show:</label>
-                <select id="filter-select">
+                <select id="filter-select" class="form-select">
                     <option value="all">All Books</option>
                     <option value="audiobook">Audiobooks</option>
                     <option value="ebook_only">Ebooks Only</option>
@@ -2355,7 +1950,7 @@
             </div>
             <div class="control-group">
                 <label for="sort-select">Sort by:</label>
-                <select id="sort-select">
+                <select id="sort-select" class="form-select">
                     <option value="title">Title</option>
                     <option value="progress">Progress</option>
                     <option value="status">Status</option>
@@ -3151,7 +2746,7 @@
             </span>
             {% if update_available %}
             <a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank"
-                style="font-size: 11px; color: #667eea; text-decoration: none; background: rgba(102,126,234,0.15); border: 1px solid rgba(102,126,234,0.3); border-radius: 4px; padding: 3px 8px; white-space: nowrap; transition: all 0.2s; font-weight: 600;"
+                style="font-size: 11px; color: var(--accent); text-decoration: none; background: rgba(102,126,234,0.15); border: 1px solid rgba(102,126,234,0.3); border-radius: 4px; padding: 3px 8px; white-space: nowrap; transition: all 0.2s; font-weight: 600;"
                 onmouseover="this.style.background='rgba(102,126,234,0.25)'"
                 onmouseout="this.style.background='rgba(102,126,234,0.15)'">
                 ↑ v{{ latest_version }} Available
@@ -3357,7 +2952,7 @@
                 <div class="hc-modal-footer">
                     <button class="hc-btn-cancel" onclick="closeBookFusionUploadModal()">No, Cancel</button>
                     <button id="bf-upload-confirm-btn" onclick="_bfConfirmUpload()"
-                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:linear-gradient(135deg,#667eea,#764ba2); color:#fff;">Yes,
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">Yes,
                         Upload</button>
                 </div>
             </div>
@@ -3400,7 +2995,7 @@
                     <button class="hc-btn-cancel" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'">Ask me later</button>
                     <button class="hc-btn-cancel" onclick="_diagnosticsOptIn(false)">No thanks</button>
                     <button onclick="_diagnosticsOptIn(true)"
-                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:linear-gradient(135deg,#667eea,#764ba2); color:#fff;">Enable diagnostics</button>
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">Enable diagnostics</button>
                 </div>
             </div>
         </div>
@@ -3422,6 +3017,4 @@
             });
         </script>
         {% endif %}
-</body>
-
-</html>
+{% endblock %}
