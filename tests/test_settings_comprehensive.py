@@ -37,7 +37,14 @@ class TestSettingsComprehensive(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         os.environ['DATA_DIR'] = self.temp_dir
         self.settings_store = {}
-        
+
+        # settings.html extends base.html, so the app's Jinja loader must point
+        # at the real templates directory (create_app defaults to /app/templates).
+        self._orig_template_dir = os.environ.get('TEMPLATE_DIR')
+        self._orig_static_dir = os.environ.get('STATIC_DIR')
+        os.environ['TEMPLATE_DIR'] = str(Path(__file__).parent.parent / 'templates')
+        os.environ['STATIC_DIR'] = str(Path(__file__).parent.parent / 'static')
+
         self.mock_container = MockContainer()
         self.mock_container.mock_database_service.get_all_settings.side_effect = lambda: dict(self.settings_store)
         self.mock_container.mock_database_service.set_setting.side_effect = (
@@ -92,6 +99,14 @@ class TestSettingsComprehensive(unittest.TestCase):
         src.db.migration_utils.initialize_database = self.original_init_db
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+        if self._orig_template_dir is None:
+            os.environ.pop('TEMPLATE_DIR', None)
+        else:
+            os.environ['TEMPLATE_DIR'] = self._orig_template_dir
+        if self._orig_static_dir is None:
+            os.environ.pop('STATIC_DIR', None)
+        else:
+            os.environ['STATIC_DIR'] = self._orig_static_dir
         # Clear env vars
         for key in self.bool_keys:
             if key in os.environ:
