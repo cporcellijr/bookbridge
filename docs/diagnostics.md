@@ -232,9 +232,14 @@ break ties.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/api/v1/diagnostics` | Store an automatic heartbeat or manual bug report |
+| `GET` | `/api/v1/summary` | Fleet, finding, and feedback totals |
 | `GET` | `/api/v1/findings` | List findings (filtered, paginated) |
-| `GET` | `/api/v1/findings/<id>` | Full finding detail + recent evidence |
+| `GET` | `/api/v1/findings/<id>` | Full finding detail, evidence, and linked user feedback |
 | `PATCH` | `/api/v1/findings/<id>` | Update status/category/severity/analysis |
+| `GET` | `/api/v1/submissions` | List manual submissions for the maintainer dashboard |
+| `GET`, `PATCH` | `/api/v1/submissions/<id>` | Read a submission or save its maintainer response |
+| `GET` | `/api/v1/my/submissions` | Instance-scoped manual report history |
 
 **GET /api/v1/findings** query parameters:
 
@@ -245,8 +250,8 @@ break ties.
 | `needs_triage` | (none) | Set `1` to filter findings needing triage |
 | `limit` | `50` | Max results (capped at 200) |
 
-Response rows omit `analysis_md` and `sample_context` for a lighter
-payload; `has_analysis` boolean indicates whether an analysis exists.
+Response rows include `analysis_md` for the private dashboard plus feedback and
+unanswered-feedback counts. Raw evidence remains on the detail endpoint.
 
 **PATCH /api/v1/findings/<id>** JSON body fields (all optional):
 
@@ -278,40 +283,69 @@ intervention.
 
 ### Quotas
 
-Two per-call env-var quotas protect the receiver:
+Automatic and manual reports have independent limits:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DIAG_MIN_BATCH_INTERVAL_HOURS` | `20` | Minimum hours between batches from the same instance. Exceeded → `429 {"error": "too_frequent", "retry_after_hours": N}`. Set to `0` to disable. |
+| `DIAG_MIN_BATCH_INTERVAL_HOURS` | `20` | Minimum hours between automatic batches from the same instance. Manual reports neither consume nor reset this interval. Exceeded → `429 {"error": "too_frequent", "retry_after_hours": N}`. Set to `0` to disable. |
 | `DIAG_NEW_INSTANCES_PER_HOUR` | `50` | Maximum new instance registrations per hour (global). Exceeded → `429 {"error": "registration_limited"}`. Set to `0` to disable. |
+
+Manual reports are capped at five per instance in a rolling 24-hour window.
+The sixth returns `429 {"error": "manual_report_quota_exceeded",
+"retry_after_hours": N}`. Quota checks and inserts are serialized so concurrent
+requests cannot race past the cap.
 
 ### Read-Token Gate
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DIAG_READ_TOKEN` | *(unset)* | When set, maintainer read and PATCH endpoints require `Authorization: Bearer <that token>`. `GET /api/v1/health` remains open and ingest uses per-instance tokens. |
+| `DIAG_READ_TOKEN` | **required** | Maintainer read and PATCH endpoints require `Authorization: Bearer <that token>`. Missing configuration fails closed. `GET /api/v1/health` remains open and ingest uses per-instance tokens. |
 
-### Contributor Feedback
+The receiver Compose file also requires the variable and binds port 20129 to
+`127.0.0.1`; expose it through a TLS reverse proxy rather than a public raw
+port.
 
-An instance can use its existing ingest bearer token with
-`GET /api/v1/my/findings` to retrieve only findings it contributed to. It can
-add a sanitized comment with `POST /api/v1/findings/<id>/comments`; the rolling
-24-hour quota defaults to 20 comments per instance and is configured with
-`DIAG_MAX_COMMENTS_PER_DAY` (`0` disables it).
+### Manual Bug Reports and Replies
 
-Maintainers add user-visible Markdown through `response_md` on the existing
-finding PATCH endpoint. Comments can be hidden or restored with
-`PATCH /api/v1/findings/<id>/comments/<comment_id>`. Public deployments must
-set `DIAG_READ_TOKEN`, and maintainer reads and PATCHes send that token as a
-Bearer credential.
+When diagnostics are enabled, BookBridge admins see an optional **What went
+wrong?** field and **Send bug report** button under Settings → Diagnostics.
+The written note is stored once on the manual submission; the current scrubbed
+warning snapshot is attached automatically and may produce zero, one, or many
+linked anomalies.
 
-The bridge exposes an admin-only **My Reports** page. Its backend reads the
-instance's existing ingest token at request time and proxies finding reads and
-comment writes to the receiver. The receiver URL and bearer token are never
-included in browser responses.
+The same Settings section shows the 50 most recent manual submissions for that
+BookBridge instance. It displays only the submission time, the admin's note,
+whether the report was received or replied to, and the maintainer response. It
+never exposes anomaly analysis, logs, receiver URLs, instance tokens, or reports
+from another installation. All admins on one BookBridge installation share the
+same history; non-admin users cannot send or read reports.
 
-The local reports console regenerates active finding pages from receiver state
-on every diagnostics scan. Maintainers can respond from the repository root
-with `powershell -ExecutionPolicy Bypass -File reports_site/respond-finding.ps1
-<id> "<message>"`; the next scan renders that response and visible submitter
-comments into the corresponding MkDocs page.
+A maintainer response belongs to the manual submission, not to every finding it
+contains. The receiver only accepts a response when the user included a written
+note. The bridge proxies history server-side with its existing per-instance TOFU
+token, so that credential never reaches the browser.
+
+### Private Maintainer Dashboard
+
+`reports_site/` is a dynamic, local-only dashboard at
+<http://localhost:5761>. It reads the receiver on demand and shows:
+
+- seven-day fleet totals and the all-time unanswered-feedback backlog;
+- clickable active anomalies with Bugscout's Pattern and Suggested next step;
+- finding details with Hypothesis, Severity, Category, versions, enabled
+  integrations, and collapsed technical evidence; and
+- written user feedback linked to its anomalies, with a response form.
+
+The service reads the endpoint from
+`docs/automated-review/review-state.json` and the admin token from
+`%USERPROFILE%/.bookbridge/diagnostics-read.key`, both server-side. It accepts
+remote receivers over HTTPS only (plain HTTP is allowed only for loopback or
+Docker's local host gateway during development), refuses redirects, rejects
+non-loopback Host headers, disables browser caching, and binds Docker to
+`127.0.0.1:5761`.
+
+Start or rebuild it from `reports_site/` with:
+
+```powershell
+docker compose up -d --build
+```

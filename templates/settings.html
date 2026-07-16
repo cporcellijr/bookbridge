@@ -233,7 +233,8 @@
         }
 
         .form-group input,
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             padding: 10px;
             background: rgba(0, 0, 0, 0.3);
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -241,6 +242,12 @@
             color: #fff;
             font-size: 14px;
             width: 100%;
+        }
+
+        .form-group textarea {
+            min-height: 92px;
+            resize: vertical;
+            font-family: inherit;
         }
 
         .form-group select {
@@ -253,7 +260,8 @@
         }
 
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             outline: none;
             border-color: #667eea;
         }
@@ -262,6 +270,49 @@
             font-size: 11px;
             color: rgba(255, 255, 255, 0.3);
             margin-top: -4px;
+        }
+
+        .diagnostics-history {
+            display: grid;
+            gap: 10px;
+        }
+
+        .diagnostics-submission {
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .diagnostics-submission-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 12px;
+        }
+
+        .diagnostics-submission-status {
+            color: #9fb2ff;
+            font-weight: 600;
+        }
+
+        .diagnostics-submission-label {
+            margin-top: 10px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .diagnostics-submission-text {
+            margin-top: 4px;
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 13px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
         }
 
         /* Custom Checkbox */
@@ -2380,15 +2431,27 @@
                     </p>
                     <input type="hidden" name="DIAGNOSTICS_PROMPTED" value="true">
                     <div class="form-group full-width">
-                        <label>Last sent</label>
+                        <label for="diag-problem-message">What went wrong? (optional)</label>
+                        <textarea id="diag-problem-message" maxlength="2000"
+                            placeholder="Tell us what you were doing and what you expected to happen."></textarea>
+                        <div class="help-text">Technical details are included automatically.</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Last automatic report</label>
                         <div style="padding:8px 12px; background:rgba(255,255,255,0.05); border-radius:6px; font-size:0.85rem; color:rgba(255,255,255,0.65);">
                             {% set _last = get_val('DIAGNOSTICS_LAST_SENT') %}
                             {% if _last %}{{ _last }}{% else %}never{% endif %}
                         </div>
                     </div>
                     <div class="form-group full-width">
-                        <button class="btn btn-primary btn-sm" type="button" onclick="_sendDiagnosticsNow(this)">Send report now</button>
-                        <span id="diag-send-status" style="margin-left:10px; font-size:0.85rem; color:rgba(255,255,255,0.65);"></span>
+                        <button class="btn btn-primary btn-sm" type="button" onclick="_sendDiagnosticsNow(this)">Send bug report</button>
+                        <span id="diag-send-status" role="status" aria-live="polite"
+                            style="margin-left:10px; font-size:0.85rem; color:rgba(255,255,255,0.65);"></span>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Recent submitted reports</label>
+                        <div id="diag-submission-history" class="diagnostics-history" role="status"
+                            aria-live="polite" aria-busy="true">Loading reports...</div>
                     </div>
                 </div>
             </div>
@@ -2667,31 +2730,111 @@
             }
         }
 
+        function _diagnosticsHistoryLine(className, text) {
+            const line = document.createElement('div');
+            line.className = className;
+            line.textContent = text;
+            return line;
+        }
+
+        function _renderDiagnosticsSubmissions(submissions) {
+            const history = document.getElementById('diag-submission-history');
+            if (!history) return;
+            history.textContent = '';
+            history.setAttribute('aria-busy', 'false');
+            if (!Array.isArray(submissions) || submissions.length === 0) {
+                history.appendChild(_diagnosticsHistoryLine('help-text', 'No manual reports submitted yet.'));
+                return;
+            }
+
+            submissions.forEach(function(submission) {
+                const card = document.createElement('div');
+                card.className = 'diagnostics-submission';
+                const header = document.createElement('div');
+                header.className = 'diagnostics-submission-header';
+                let submittedAt = submission.submitted_at || '';
+                if (submittedAt) {
+                    const parsed = new Date(submittedAt);
+                    if (!Number.isNaN(parsed.getTime())) submittedAt = parsed.toLocaleString();
+                }
+                header.appendChild(_diagnosticsHistoryLine('', submittedAt || 'Submitted report'));
+                header.appendChild(_diagnosticsHistoryLine(
+                    'diagnostics-submission-status',
+                    submission.status === 'replied' ? 'Maintainer replied' : 'Report received'
+                ));
+                card.appendChild(header);
+
+                if (submission.user_message) {
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', 'Your note'));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.user_message));
+                }
+                if (submission.response_md) {
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', 'Maintainer response'));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.response_md));
+                }
+                history.appendChild(card);
+            });
+        }
+
+        function _loadDiagnosticsSubmissions() {
+            const history = document.getElementById('diag-submission-history');
+            if (!history) return;
+            history.setAttribute('aria-busy', 'true');
+            fetch('/api/diagnostics/submissions')
+                .then(function(response) {
+                    return response.json().catch(function() { return {}; }).then(function(data) {
+                        if (!response.ok) throw new Error('unavailable');
+                        return data;
+                    });
+                })
+                .then(function(data) { _renderDiagnosticsSubmissions(data.submissions); })
+                .catch(function() {
+                    history.textContent = 'Submitted reports are unavailable right now.';
+                    history.setAttribute('aria-busy', 'false');
+                });
+        }
+
         function _sendDiagnosticsNow(btn) {
             const status = document.getElementById('diag-send-status');
-            const orig = btn.innerHTML;
-            btn.innerHTML = 'Sending...';
+            const message = document.getElementById('diag-problem-message');
+            btn.textContent = 'Sending...';
             btn.disabled = true;
             if (status) status.textContent = '';
-            fetch('/api/diagnostics/send-now', {method: 'POST', headers: {'Content-Type': 'application/json'}})
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                    if (data.sent) {
-                        btn.innerHTML = 'Sent';
-                        if (status) status.textContent = 'Sent (' + (data.warning_count || 0) + ' warnings)';
-                    } else {
-                        btn.innerHTML = 'Not sent';
-                        if (status) status.textContent = data.reason || 'Not sent';
+            fetch('/api/diagnostics/send-now', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: message ? message.value : ''})
+            })
+                .then(function(response) {
+                    return response.json().catch(function() { return {}; }).then(function(data) {
+                        return {ok: response.ok, status: response.status, data: data};
+                    });
+                })
+                .then(function(result) {
+                    if (result.ok && result.data.sent) {
+                        if (status) status.textContent = 'Report received.';
+                        if (message) message.value = '';
+                        _loadDiagnosticsSubmissions();
+                    } else if (result.status === 429) {
+                        let retry = '';
+                        if (result.data.retry_after_hours) {
+                            retry = ' Try again in about ' + result.data.retry_after_hours + ' hours.';
+                        }
+                        if (status) status.textContent = 'Please wait before sending another report.' + retry;
+                    } else if (status) {
+                        status.textContent = 'Report could not be sent.';
                     }
-                    setTimeout(function() { btn.innerHTML = orig; }, 3000);
                 })
                 .catch(function() {
-                    btn.innerHTML = 'Error';
-                    if (status) status.textContent = 'Request failed';
-                    setTimeout(function() { btn.innerHTML = orig; }, 3000);
+                    if (status) status.textContent = 'Report could not be sent.';
                 })
-                .finally(function() { btn.disabled = false; });
+                .finally(function() {
+                    btn.textContent = 'Send bug report';
+                    btn.disabled = false;
+                });
         }
+
+        _loadDiagnosticsSubmissions();
 
         function togglePollSeconds(rowId, mode) {
             const row = document.getElementById(rowId);

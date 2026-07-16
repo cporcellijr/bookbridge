@@ -333,6 +333,7 @@ class DiagnosticsLogHandler(logging.Handler):
 # ---------------------------------------------------------------------------
 
 _diagnostics_handler: Optional[DiagnosticsLogHandler] = None
+_diagnostics_send_lock = threading.Lock()
 
 
 def setup_diagnostics_logging() -> DiagnosticsLogHandler:
@@ -388,6 +389,8 @@ def build_diagnostics_payload(
     service_flags: Dict[str, bool],
     total_books: Optional[int],
     snapshot: Dict[str, Any],
+    manual: bool = False,
+    user_message: str = "",
 ) -> Dict[str, Any]:
     """Build the JSON payload for the diagnostics POST.
 
@@ -398,7 +401,7 @@ def build_diagnostics_payload(
         cleaned = {k: v for k, v in entry.items() if not k.startswith('_')}
         warnings.append(cleaned)
 
-    return {
+    payload: Dict[str, Any] = {
         'schema': 1,
         'instance_id': instance_id,
         'sent_at': _utc_iso(),
@@ -412,6 +415,10 @@ def build_diagnostics_payload(
         'dropped': snapshot.get('dropped', 0),
         'warnings': warnings,
     }
+    if manual:
+        payload['manual'] = True
+        payload['user_message'] = user_message
+    return payload
 
 
 def maybe_send_diagnostics(
@@ -419,8 +426,30 @@ def maybe_send_diagnostics(
     service_flags: Optional[Dict[str, bool]] = None,
     total_books: Optional[int] = None,
     force: bool = False,
+    manual: bool = False,
+    user_message: str = "",
 ) -> Dict[str, Any]:
-    """Orchestrate a single diagnostics send cycle.
+    """Serialize one diagnostics send from snapshot through successful clear."""
+    with _diagnostics_send_lock:
+        return _maybe_send_diagnostics_locked(
+            database_service,
+            service_flags=service_flags,
+            total_books=total_books,
+            force=force,
+            manual=manual,
+            user_message=user_message,
+        )
+
+
+def _maybe_send_diagnostics_locked(
+    database_service: Any,
+    service_flags: Optional[Dict[str, bool]] = None,
+    total_books: Optional[int] = None,
+    force: bool = False,
+    manual: bool = False,
+    user_message: str = "",
+) -> Dict[str, Any]:
+    """Orchestrate a send while ``_diagnostics_send_lock`` is held.
 
     Returns ``{'sent': bool, 'reason': str, 'warning_count': int}``.
     Guard clauses short-circuit before any network call when the instance is
@@ -463,6 +492,8 @@ def maybe_send_diagnostics(
         service_flags=service_flags or {},
         total_books=total_books,
         snapshot=snapshot,
+        manual=manual,
+        user_message=user_message,
     )
     warning_count = len(payload.get('warnings', []))
 
@@ -474,8 +505,11 @@ def maybe_send_diagnostics(
         resp = requests.post(endpoint, json=payload, timeout=30, headers=headers)
         if 200 <= resp.status_code < 300:
             # Persist token returned by the receiver (TOFU registration)
+            resp_json: Dict[str, Any] = {}
             try:
-                resp_json = resp.json()
+                parsed = resp.json()
+                if isinstance(parsed, dict):
+                    resp_json = parsed
                 returned_token = (resp_json or {}).get('token', '')
                 if returned_token:
                     os.environ['DIAGNOSTICS_INGEST_TOKEN'] = returned_token
@@ -486,25 +520,40 @@ def maybe_send_diagnostics(
             except Exception:
                 pass
             handler.clear_snapshot(snapshot)
-            now_iso = _utc_iso()
-            os.environ['DIAGNOSTICS_LAST_SENT'] = now_iso
-            try:
-                database_service.set_setting('DIAGNOSTICS_LAST_SENT', now_iso)
-            except Exception:
-                pass
+            if not manual:
+                now_iso = _utc_iso()
+                os.environ['DIAGNOSTICS_LAST_SENT'] = now_iso
+                try:
+                    database_service.set_setting('DIAGNOSTICS_LAST_SENT', now_iso)
+                except Exception:
+                    pass
             logger.info(
                 "Diagnostics report sent (%d warnings)", warning_count
             )
-            return {'sent': True, 'reason': 'ok', 'warning_count': warning_count}
+            result = {'sent': True, 'reason': 'ok', 'warning_count': warning_count}
+            if resp_json.get('batch_id') is not None:
+                result['submission_id'] = resp_json['batch_id']
+            return result
         else:
             logger.info(
                 "Diagnostics POST returned status %d", resp.status_code
             )
-            return {
+            result = {
                 'sent': False,
                 'reason': f'http_{resp.status_code}',
                 'warning_count': warning_count,
             }
+            if resp.status_code == 429:
+                try:
+                    error_data = resp.json()
+                except (TypeError, ValueError):
+                    error_data = None
+                if isinstance(error_data, dict):
+                    if isinstance(error_data.get('error'), str):
+                        result['error'] = error_data['error']
+                    if error_data.get('retry_after_hours') is not None:
+                        result['retry_after_hours'] = error_data['retry_after_hours']
+            return result
     except Exception as exc:
         logger.info("Diagnostics POST failed: %s", type(exc).__name__)
         return {

@@ -4,6 +4,18 @@ services:
     container_name: bookbridge_reports
     restart: unless-stopped
     ports:
-      - "5761:8000"
+      - "127.0.0.1:5761:8000"
+    environment:
+      DIAGNOSTICS_REVIEW_STATE: /run/config/review-state.json
+      DIAGNOSTICS_READ_TOKEN_FILE: /run/secrets/diagnostics_read_token
     volumes:
-      - ./docs:/site/docs:ro
+      - type: bind
+        source: ../docs/automated-review/review-state.json
+        target: /run/config/review-state.json
+        read_only: true
+    secrets:
+      - diagnostics_read_token
+
+secrets:
+  diagnostics_read_token:
+    file: ${USERPROFILE}/.bookbridge/diagnostics-read.key

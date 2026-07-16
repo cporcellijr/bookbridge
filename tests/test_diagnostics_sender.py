@@ -2,6 +2,7 @@
 import logging
 import os
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, Mock
@@ -100,6 +101,19 @@ class TestBuildDiagnosticsPayload(unittest.TestCase):
         self.assertEqual(payload['window'], {'start': 'w1', 'end': 't1'})
         self.assertEqual(payload['dropped'], 2)
         self.assertEqual(payload['warnings'], [])
+        self.assertNotIn('manual', payload)
+        self.assertNotIn('user_message', payload)
+
+    def test_manual_payload_includes_user_message(self):
+        payload = build_diagnostics_payload(
+            'abc', {}, 0, {'entries': []},
+            manual=True, user_message='The sync button stopped working.',
+        )
+        self.assertTrue(payload['manual'])
+        self.assertEqual(
+            payload['user_message'],
+            'The sync button stopped working.',
+        )
 
     def test_warnings_copied_from_entries(self):
         entry = {
@@ -294,6 +308,86 @@ class TestMaybeSendPaths(unittest.TestCase):
         self.assertTrue(any(k == 'DIAGNOSTICS_LAST_SENT' for k, _ in self.db.set_setting_calls))
 
     @patch('src.services.diagnostics.requests.post')
+    def test_manual_success_returns_submission_without_updating_last_sent(self, mock_post):
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            'ok': True,
+            'batch_id': 42,
+            'token': 'manual-token',
+        }
+        mock_post.return_value = mock_resp
+
+        result = maybe_send_diagnostics(
+            self.db,
+            force=True,
+            manual=True,
+            user_message='It stopped at 50%.',
+        )
+
+        self.assertTrue(result['sent'])
+        self.assertEqual(result['submission_id'], 42)
+        self.assertNotIn('DIAGNOSTICS_LAST_SENT', os.environ)
+        self.assertFalse(any(
+            key == 'DIAGNOSTICS_LAST_SENT'
+            for key, _value in self.db.set_setting_calls
+        ))
+        self.assertEqual(os.environ['DIAGNOSTICS_INGEST_TOKEN'], 'manual-token')
+        with self.handler._lock:
+            self.assertEqual(len(self.handler._entries), 0)
+
+        payload = mock_post.call_args.kwargs['json']
+        self.assertTrue(payload['manual'])
+        self.assertEqual(payload['user_message'], 'It stopped at 50%.')
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_concurrent_sends_serialize_snapshot_post_and_clear(self, mock_post):
+        first_post_started = threading.Event()
+        release_first_post = threading.Event()
+        second_post_started = threading.Event()
+        payloads = []
+
+        def post_side_effect(*_args, **kwargs):
+            payloads.append(kwargs['json'])
+            if len(payloads) == 1:
+                first_post_started.set()
+                self.assertTrue(release_first_post.wait(2))
+            else:
+                second_post_started.set()
+            response = Mock(status_code=200)
+            response.json.return_value = {'ok': True}
+            return response
+
+        mock_post.side_effect = post_side_effect
+        results = []
+
+        def send() -> None:
+            results.append(maybe_send_diagnostics(
+                self.db, force=True, manual=True,
+            ))
+
+        first = threading.Thread(target=send)
+        second = threading.Thread(target=send)
+        first.start()
+        self.assertTrue(first_post_started.wait(2))
+        second.start()
+        self.assertFalse(second_post_started.wait(0.1))
+
+        self.handler.emit(_make_record('test', logging.WARNING, 'boom #2'))
+        release_first_post.set()
+        first.join(2)
+        second.join(2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result['sent'] for result in results))
+        self.assertEqual(
+            [payload['warnings'][0]['count'] for payload in payloads],
+            [1, 1],
+        )
+
+    @patch('src.services.diagnostics.requests.post')
     def test_http_500_does_not_clear_entries(self, mock_post):
         mock_resp = Mock()
         mock_resp.status_code = 500
@@ -308,6 +402,29 @@ class TestMaybeSendPaths(unittest.TestCase):
 
         self.assertNotIn('DIAGNOSTICS_LAST_SENT', os.environ)
         self.assertEqual(len(self.db.set_setting_calls), 0)
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_http_429_preserves_receiver_error_and_retry(self, mock_post):
+        mock_resp = Mock()
+        mock_resp.status_code = 429
+        mock_resp.json.return_value = {
+            'error': 'manual_report_quota_exceeded',
+            'retry_after_hours': 3.5,
+        }
+        mock_post.return_value = mock_resp
+
+        result = maybe_send_diagnostics(
+            self.db,
+            force=True,
+            manual=True,
+        )
+
+        self.assertFalse(result['sent'])
+        self.assertEqual(result['reason'], 'http_429')
+        self.assertEqual(result['error'], 'manual_report_quota_exceeded')
+        self.assertEqual(result['retry_after_hours'], 3.5)
+        with self.handler._lock:
+            self.assertGreater(len(self.handler._entries), 0)
 
     @patch('src.services.diagnostics.requests.post', side_effect=ConnectionError('net'))
     def test_exception_does_not_clear_entries(self, mock_post):
@@ -400,40 +517,85 @@ class TestDiagnosticsSendNowRoute(unittest.TestCase):
 
     def setUp(self):
         self._orig = os.environ.pop('DIAGNOSTICS_OPT_IN', None)
+        from tests.test_webserver import MockContainer
+        from src.web_server import create_app
+
+        import src.db.migration_utils
+        self._orig_init = src.db.migration_utils.initialize_database
+        mock_db = Mock()
+        mock_db.get_all_settings.return_value = {}
+        src.db.migration_utils.initialize_database = lambda data_dir: mock_db
+
+        container = MockContainer()
+        self.app, _ = create_app(test_container=container)
+        self.app.config['TESTING'] = True
+        self.client = self.app.test_client()
 
     def tearDown(self):
+        import src.db.migration_utils
+        src.db.migration_utils.initialize_database = self._orig_init
         if self._orig is not None:
             os.environ['DIAGNOSTICS_OPT_IN'] = self._orig
         else:
             os.environ.pop('DIAGNOSTICS_OPT_IN', None)
 
     @patch('src.services.diagnostics.maybe_send_diagnostics',
+           return_value={'sent': True, 'reason': 'ok', 'warning_count': 0,
+                         'submission_id': 7})
+    def test_send_now_trims_message_and_marks_manual(self, mock_send):
+        resp = self.client.post(
+            '/api/diagnostics/send-now',
+            json={'message': '  Sync stopped  '},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()['sent'])
+        mock_send.assert_called_once()
+        _, kwargs = mock_send.call_args
+        self.assertTrue(kwargs['force'])
+        self.assertTrue(kwargs['manual'])
+        self.assertEqual(kwargs['user_message'], 'Sync stopped')
+
+    @patch('src.services.diagnostics.maybe_send_diagnostics',
            return_value={'sent': True, 'reason': 'ok', 'warning_count': 0})
-    def test_send_now_returns_200(self, mock_send):
-        from tests.test_webserver import MockContainer
-        from src.web_server import create_app
+    def test_send_now_allows_missing_message(self, mock_send):
+        resp = self.client.post('/api/diagnostics/send-now')
 
-        import src.db.migration_utils
-        orig_init = src.db.migration_utils.initialize_database
-        mock_db = Mock()
-        mock_db.get_all_settings.return_value = {}
-        src.db.migration_utils.initialize_database = lambda data_dir: mock_db
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mock_send.call_args.kwargs['user_message'], '')
 
-        try:
-            container = MockContainer()
-            app, _ = create_app(test_container=container)
-            app.config['TESTING'] = True
-            client = app.test_client()
+    @patch('src.services.diagnostics.maybe_send_diagnostics')
+    def test_send_now_rejects_non_string_message(self, mock_send):
+        resp = self.client.post(
+            '/api/diagnostics/send-now',
+            json={'message': 123},
+        )
 
-            resp = client.post('/api/diagnostics/send-now')
-            self.assertEqual(resp.status_code, 200)
-            data = resp.get_json()
-            self.assertTrue(data['sent'])
-            mock_send.assert_called_once()
-            _, kwargs = mock_send.call_args
-            self.assertTrue(kwargs.get('force', False))
-        finally:
-            src.db.migration_utils.initialize_database = orig_init
+        self.assertEqual(resp.status_code, 400)
+        mock_send.assert_not_called()
+
+    @patch('src.services.diagnostics.maybe_send_diagnostics')
+    def test_send_now_rejects_message_over_2000_characters(self, mock_send):
+        resp = self.client.post(
+            '/api/diagnostics/send-now',
+            json={'message': 'x' * 2001},
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        mock_send.assert_not_called()
+
+    @patch('src.services.diagnostics.maybe_send_diagnostics', return_value={
+        'sent': False,
+        'reason': 'http_429',
+        'warning_count': 1,
+        'error': 'manual_report_quota_exceeded',
+        'retry_after_hours': 2,
+    })
+    def test_send_now_preserves_429_status_and_details(self, _mock_send):
+        resp = self.client.post('/api/diagnostics/send-now', json={})
+
+        self.assertEqual(resp.status_code, 429)
+        self.assertEqual(resp.get_json()['retry_after_hours'], 2)
 
 
 if __name__ == '__main__':

@@ -8,23 +8,24 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- Added a maintainer response helper and receiver-backed regeneration of the
-  local diagnostics reports console, including current responses and visible
-  submitter comments.
-- Added an admin-only My Reports dashboard where opted-in instances can read
-  maintainer responses and add comments without exposing diagnostics tokens to
-  the browser.
-- Contributor-scoped diagnostics findings with sanitized comment threads,
-  maintainer responses, moderation, and per-instance comment quotas.
+- Added manual diagnostics bug reports with an optional written note and a
+  compact, instance-private reply history under Settings. All admins on one
+  BookBridge installation share that history; regular users and other
+  installations cannot read it.
+- Added a private local maintainer dashboard with fleet totals, clickable
+  Bugscout anomaly analysis, technical evidence, links to written user feedback,
+  and submission-level response forms. It runs only on `localhost:5761` and
+  keeps receiver credentials server-side.
 
 - **Opt-in anonymous diagnostics.** Help improve BookBridge by sharing a small
   daily diagnostic report: deduplicated warning lines from your sync logs with
   book titles, file paths, and URLs replaced by anonymous tokens — never your
   library contents or credentials. Admins are asked once via a dashboard
   prompt (existing installs see it after upgrading), and the choice can be
-  reviewed anytime under Settings → Diagnostics, which also shows the
-  instance ID, the last send time, and a "Send report now" button. Nothing is
-  ever collected or sent unless you opt in.
+  reviewed anytime under Settings → Diagnostics, which also shows the last
+  automatic send, an optional problem-description box, a "Send bug report"
+  button, and recent replies. Nothing is ever collected or sent unless you opt
+  in.
 
 - **CUDA container images are now published alongside CPU images.** Use a
   `-cuda` tag such as `latest-cuda` or `dev-cuda` on amd64 hosts with NVIDIA
@@ -34,6 +35,11 @@ All notable changes to BookBridge will be documented in this file.
   [@ykpdang](https://github.com/ykpdang). (#320)
 
 ### Fixed
+
+- Diagnostics maintainer APIs now fail closed when their read token is missing,
+  manual-report quota checks are atomic, overlapping sender runs cannot consume
+  unsent warning evidence, and private dashboard requests reject redirects and
+  non-loopback plain HTTP endpoints.
 
 - **Audiobookshelf audiobook-to-ebook sync now handles unopened and separate ebook items.**
   Explicit ABS ebook mappings participate from a 0% baseline before their first read,

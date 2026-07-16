@@ -4,8 +4,10 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
-from datetime import datetime, timezone
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from diagnostics_receiver.app import create_receiver_app, init_db, rebuild_findings
@@ -264,14 +266,21 @@ class TestPostDiagnostics(unittest.TestCase):
 
 class TestExport(unittest.TestCase):
     def setUp(self) -> None:
+        self._orig_read_token = os.environ.get("DIAG_READ_TOKEN")
+        os.environ["DIAG_READ_TOKEN"] = "test-read-token"
         self._tmpdir = tempfile.mkdtemp()
         self._db_path = os.path.join(self._tmpdir, "test.db")
         self._app = create_receiver_app(db_path=self._db_path)
         self._client = self._app.test_client()
+        self._client.environ_base["HTTP_AUTHORIZATION"] = "Bearer test-read-token"
 
     def tearDown(self) -> None:
         import shutil
         shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_read_token is None:
+            os.environ.pop("DIAG_READ_TOKEN", None)
+        else:
+            os.environ["DIAG_READ_TOKEN"] = self._orig_read_token
 
     def test_export_returns_batches_with_warnings(self) -> None:
         p = _valid_payload()
@@ -314,14 +323,21 @@ class TestExport(unittest.TestCase):
 
 class TestSummary(unittest.TestCase):
     def setUp(self) -> None:
+        self._orig_read_token = os.environ.get("DIAG_READ_TOKEN")
+        os.environ["DIAG_READ_TOKEN"] = "test-read-token"
         self._tmpdir = tempfile.mkdtemp()
         self._db_path = os.path.join(self._tmpdir, "test.db")
         self._app = create_receiver_app(db_path=self._db_path)
         self._client = self._app.test_client()
+        self._client.environ_base["HTTP_AUTHORIZATION"] = "Bearer test-read-token"
 
     def tearDown(self) -> None:
         import shutil
         shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_read_token is None:
+            os.environ.pop("DIAG_READ_TOKEN", None)
+        else:
+            os.environ["DIAG_READ_TOKEN"] = self._orig_read_token
 
     def test_summary_aggregates_templates_across_instances(self) -> None:
         template = "Sync failed after # retries"
@@ -578,13 +594,13 @@ class TestIngestAuth(unittest.TestCase):
         resp = self._client.get("/api/v1/health")
         self.assertEqual(resp.status_code, 200)
 
-    def test_read_token_unset_allows_all(self) -> None:
+    def test_read_token_unset_fails_closed(self) -> None:
         os.environ.pop("DIAG_READ_TOKEN", None)
         os.environ["DIAG_MIN_BATCH_INTERVAL_HOURS"] = "0"
         self._post(_valid_payload())
 
         resp = self._client.get("/api/v1/findings")
-        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.status_code, 401)
 
     def test_read_token_gates_export(self) -> None:
         os.environ["DIAG_MIN_BATCH_INTERVAL_HOURS"] = "0"
@@ -623,10 +639,13 @@ class TestIngestAuth(unittest.TestCase):
 
 class TestFindings(unittest.TestCase):
     def setUp(self) -> None:
+        self._orig_read_token = os.environ.get("DIAG_READ_TOKEN")
+        os.environ["DIAG_READ_TOKEN"] = "test-read-token"
         self._tmpdir = tempfile.mkdtemp()
         self._db_path = os.path.join(self._tmpdir, "test.db")
         self._app = create_receiver_app(db_path=self._db_path)
         self._client = self._app.test_client()
+        self._client.environ_base["HTTP_AUTHORIZATION"] = "Bearer test-read-token"
         self._tokens: dict[str, str] = {}
         self._orig_interval: str | None = os.environ.get("DIAG_MIN_BATCH_INTERVAL_HOURS")
         os.environ["DIAG_MIN_BATCH_INTERVAL_HOURS"] = "0"
@@ -639,6 +658,10 @@ class TestFindings(unittest.TestCase):
     def tearDown(self) -> None:
         import shutil
         shutil.rmtree(self._tmpdir, ignore_errors=True)
+        if self._orig_read_token is None:
+            os.environ.pop("DIAG_READ_TOKEN", None)
+        else:
+            os.environ["DIAG_READ_TOKEN"] = self._orig_read_token
 
     def _post(self, payload: dict) -> dict:
         iid = payload.get("instance_id", "")
@@ -832,10 +855,12 @@ class TestFindings(unittest.TestCase):
         self.assertEqual(findings[0]["template"], "B #")
         self.assertEqual(findings[0]["instance_count"], 1)
         self.assertEqual(findings[0]["total_count"], 2)
-        # Light fields
-        self.assertNotIn("analysis_md", findings[0])
+        # Dashboard fields
+        self.assertIn("analysis_md", findings[0])
         self.assertNotIn("sample_context", findings[0])
         self.assertIn("has_analysis", findings[0])
+        self.assertEqual(findings[0]["feedback_count"], 0)
+        self.assertEqual(findings[0]["unanswered_feedback_count"], 0)
 
     def test_get_detail_with_analysis_and_evidence(self) -> None:
         p = _valid_payload(
@@ -1436,7 +1461,7 @@ class TestInstanceFeedback(unittest.TestCase):
         self.assertTrue(finding["comments"][0]["is_mine"])
         self.assertNotIn("instance_id", finding["comments"][0])
 
-    def test_my_findings_is_mine_false_for_other_instances_comment(self) -> None:
+    def test_my_findings_hides_other_instances_comment(self) -> None:
         iid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         iid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         self._post(_valid_payload(
@@ -1458,8 +1483,7 @@ class TestInstanceFeedback(unittest.TestCase):
 
         resp = self._auth_get(self._token(iid_a), "/api/v1/my/findings")
         finding = resp.get_json()["findings"][0]
-        self.assertEqual(len(finding["comments"]), 1)
-        self.assertFalse(finding["comments"][0]["is_mine"])
+        self.assertEqual(finding["comments"], [])
 
     def test_my_findings_empty_when_no_membership(self) -> None:
         iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -1838,6 +1862,369 @@ class TestInstanceFeedback(unittest.TestCase):
         with sqlite3.connect(self._db_path) as conn:
             cc = conn.execute("SELECT COUNT(*) FROM finding_comments").fetchone()[0]
             self.assertEqual(cc, 0)
+
+
+class TestSubmissionSchemaUpgrade(unittest.TestCase):
+    def test_existing_batches_gain_submission_columns_without_reclassification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "legacy.db")
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.executescript("""\
+                    CREATE TABLE batches (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        instance_id TEXT NOT NULL,
+                        received_at TEXT NOT NULL,
+                        sent_at TEXT,
+                        app_version TEXT,
+                        services_json TEXT,
+                        total_books INTEGER,
+                        window_start TEXT,
+                        window_end TEXT,
+                        dropped INTEGER NOT NULL DEFAULT 0
+                    );
+                    INSERT INTO batches (instance_id, received_at)
+                    VALUES ('legacy-instance', '2026-07-01T00:00:00+00:00');
+                """)
+
+            init_db(db_path)
+
+            with closing(sqlite3.connect(db_path)) as conn, conn:
+                conn.row_factory = sqlite3.Row
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(batches)")
+                }
+                row = dict(conn.execute("SELECT * FROM batches").fetchone())
+            self.assertTrue({
+                "is_manual", "user_message", "response_md", "response_at",
+            }.issubset(columns))
+            self.assertEqual(row["is_manual"], 0)
+            self.assertIsNone(row["user_message"])
+            self.assertIsNone(row["response_md"])
+            self.assertIsNone(row["response_at"])
+
+
+class TestManualSubmissions(unittest.TestCase):
+    """Manual batch storage, quotas, privacy, and maintainer workflow."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.mkdtemp()
+        self._db_path = os.path.join(self._tmpdir, "test.db")
+        self._app = create_receiver_app(db_path=self._db_path)
+        self._client = self._app.test_client()
+        self._tokens: dict[str, str] = {}
+        self._saved = {
+            key: os.environ.pop(key, None)
+            for key in ("DIAG_MIN_BATCH_INTERVAL_HOURS", "DIAG_READ_TOKEN")
+        }
+        os.environ["DIAG_MIN_BATCH_INTERVAL_HOURS"] = "20"
+        self.addCleanup(self._restore)
+
+    def _restore(self) -> None:
+        import shutil
+
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _post(self, payload: dict):
+        iid = payload["instance_id"]
+        headers = {}
+        if iid in self._tokens:
+            headers["Authorization"] = f"Bearer {self._tokens[iid]}"
+        response = self._client.post(
+            "/api/v1/diagnostics",
+            json=payload,
+            headers=headers,
+        )
+        data = response.get_json() or {}
+        if data.get("token"):
+            self._tokens[iid] = data["token"]
+        return response
+
+    def _admin_headers(self) -> dict[str, str]:
+        return {"Authorization": "Bearer maintainer-token"}
+
+    def test_manual_fields_validate_and_store_sanitized_message(self) -> None:
+        bad_manual = self._post(_valid_payload(manual="yes"))
+        self.assertEqual(bad_manual.status_code, 400)
+        bad_message = self._post(_valid_payload(manual=True, user_message=7))
+        self.assertEqual(bad_message.status_code, 400)
+
+        message = "# heading\n```code```\n[link](https://example.com)\n" + ("x" * 2100)
+        response = self._post(_valid_payload(
+            manual=True,
+            user_message=message,
+            warnings=[],
+        ))
+        self.assertEqual(response.status_code, 200)
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM batches WHERE id = ?",
+                (response.get_json()["batch_id"],),
+            ).fetchone()
+        self.assertEqual(row["is_manual"], 1)
+        self.assertLessEqual(len(row["user_message"]), 2000)
+        self.assertNotIn("```", row["user_message"])
+        self.assertNotIn("](", row["user_message"])
+        self.assertIn(r"\# heading", row["user_message"])
+
+    def test_manual_and_automatic_quotas_are_independent(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        first_auto = self._post(_valid_payload(instance_id=iid))
+        self.assertEqual(first_auto.status_code, 200)
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                "UPDATE batches SET received_at = ? WHERE id = ?",
+                (
+                    (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(),
+                    first_auto.get_json()["batch_id"],
+                ),
+            )
+            conn.commit()
+
+        manual = self._post(_valid_payload(
+            instance_id=iid,
+            manual=True,
+            user_message="Please investigate",
+        ))
+        self.assertEqual(manual.status_code, 200)
+        second_auto = self._post(_valid_payload(instance_id=iid))
+        self.assertEqual(second_auto.status_code, 200)
+
+    def test_manual_report_bypasses_fresh_automatic_throttle(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        automatic = self._post(_valid_payload(instance_id=iid, warnings=[]))
+        self.assertEqual(automatic.status_code, 200)
+
+        manual = self._post(_valid_payload(
+            instance_id=iid,
+            manual=True,
+            user_message="This happened just after the automatic report.",
+            warnings=[],
+        ))
+        self.assertEqual(manual.status_code, 200)
+
+    def test_sixth_manual_report_in_24_hours_returns_429(self) -> None:
+        payload = _valid_payload(manual=True, user_message="help", warnings=[])
+        for _ in range(5):
+            self.assertEqual(self._post(payload).status_code, 200)
+        response = self._post(payload)
+        data = response.get_json()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(data["error"], "manual_report_quota_exceeded")
+        self.assertGreater(data["retry_after_hours"], 0)
+
+    def test_concurrent_manual_reports_cannot_race_past_quota(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        self._post(_valid_payload(instance_id=iid, warnings=[]))
+        token = self._tokens[iid]
+        barrier = threading.Barrier(9)
+        statuses: list[int] = []
+
+        def submit() -> None:
+            client = self._app.test_client()
+            barrier.wait()
+            response = client.post(
+                "/api/v1/diagnostics",
+                json=_valid_payload(
+                    instance_id=iid,
+                    manual=True,
+                    user_message="Concurrent report",
+                    warnings=[],
+                ),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            statuses.append(response.status_code)
+
+        threads = [threading.Thread(target=submit) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(5)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(statuses.count(200), 5)
+        self.assertEqual(statuses.count(429), 3)
+
+    def test_my_submissions_is_instance_scoped_and_privacy_minimal(self) -> None:
+        iid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        iid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        self._post(_valid_payload(
+            instance_id=iid_a, manual=True, user_message="Message A", warnings=[],
+        ))
+        self._post(_valid_payload(instance_id=iid_a, warnings=[]))
+        self._post(_valid_payload(
+            instance_id=iid_b, manual=True, user_message="Message B", warnings=[],
+        ))
+
+        response = self._client.get(
+            "/api/v1/my/submissions",
+            headers={"Authorization": f"Bearer {self._tokens[iid_a]}"},
+        )
+        submissions = response.get_json()["submissions"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(submissions), 1)
+        self.assertEqual(submissions[0]["user_message"], "Message A")
+        self.assertEqual(set(submissions[0]), {
+            "id", "submitted_at", "user_message", "response_md", "response_at",
+            "status",
+        })
+        self.assertEqual(submissions[0]["status"], "received")
+        self.assertEqual(self._client.get("/api/v1/my/submissions").status_code, 401)
+
+    def test_my_submissions_returns_only_50_most_recent(self) -> None:
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        self._post(_valid_payload(instance_id=iid, warnings=[]))
+        with sqlite3.connect(self._db_path) as conn:
+            conn.executemany(
+                "INSERT INTO batches "
+                "(instance_id, received_at, is_manual, user_message) "
+                "VALUES (?, ?, 1, ?)",
+                [
+                    (iid, f"2026-07-16T12:{index:02d}:00+00:00", f"Message {index}")
+                    for index in range(55)
+                ],
+            )
+            conn.commit()
+
+        response = self._client.get(
+            "/api/v1/my/submissions",
+            headers={"Authorization": f"Bearer {self._tokens[iid]}"},
+        )
+        submissions = response.get_json()["submissions"]
+        self.assertEqual(len(submissions), 50)
+        self.assertEqual(submissions[0]["user_message"], "Message 54")
+        self.assertEqual(submissions[-1]["user_message"], "Message 5")
+
+    def test_maintainer_submission_response_and_linked_findings(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "maintainer-token"
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        manual = self._post(_valid_payload(
+            instance_id=iid,
+            manual=True,
+            user_message="The sync is stuck",
+            warnings=[{"template": "Stuck #", "logger": "sync", "level": "WARNING", "count": 1}],
+        ))
+        submission_id = manual.get_json()["batch_id"]
+
+        self.assertEqual(self._client.get("/api/v1/submissions").status_code, 401)
+        listing = self._client.get(
+            "/api/v1/submissions", headers=self._admin_headers(),
+        ).get_json()["submissions"]
+        self.assertEqual(len(listing), 1)
+        self.assertEqual(listing[0]["id"], submission_id)
+        self.assertEqual(len(listing[0]["linked_findings"]), 1)
+        finding_id = listing[0]["linked_findings"][0]["id"]
+        detail_response = self._client.get(
+            f"/api/v1/submissions/{submission_id}",
+            headers=self._admin_headers(),
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.get_json()["linked_findings"][0]["id"], finding_id)
+
+        response = self._client.patch(
+            f"/api/v1/submissions/{submission_id}",
+            json={"response_md": "I found the problem."},
+            headers=self._admin_headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["response_md"], "I found the problem.")
+        self.assertEqual(response.get_json()["status"], "replied")
+
+        history = self._client.get(
+            "/api/v1/my/submissions",
+            headers={"Authorization": f"Bearer {self._tokens[iid]}"},
+        ).get_json()["submissions"]
+        self.assertEqual(history[0]["response_md"], "I found the problem.")
+        self.assertEqual(history[0]["status"], "replied")
+
+        detail = self._client.get(
+            f"/api/v1/findings/{finding_id}", headers=self._admin_headers(),
+        ).get_json()
+        self.assertEqual(detail["user_feedback"][0]["submission_id"], submission_id)
+        self.assertEqual(detail["user_feedback"][0]["user_message"], "The sync is stuck")
+        self.assertEqual(detail["user_feedback"][0]["status"], "replied")
+
+        no_message = self._post(_valid_payload(
+            instance_id=iid, manual=True, warnings=[],
+        )).get_json()["batch_id"]
+        rejected = self._client.patch(
+            f"/api/v1/submissions/{no_message}",
+            json={"response_md": "Should not save"},
+            headers=self._admin_headers(),
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+    def test_response_is_capped_before_blank_validation(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "maintainer-token"
+        iid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        submission_id = self._post(_valid_payload(
+            instance_id=iid,
+            manual=True,
+            user_message="Please investigate",
+            warnings=[],
+        )).get_json()["batch_id"]
+
+        response = self._client.patch(
+            f"/api/v1/submissions/{submission_id}",
+            json={"response_md": (" " * 10_000) + "not stored"},
+            headers=self._admin_headers(),
+        )
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(data["response_md"])
+        self.assertIsNone(data["response_at"])
+        self.assertEqual(data["status"], "received")
+
+    def test_summary_and_finding_list_include_feedback_counts(self) -> None:
+        os.environ["DIAG_READ_TOKEN"] = "maintainer-token"
+        manual = self._post(_valid_payload(
+            manual=True,
+            user_message="A useful report",
+            warnings=[{"template": "Feedback #", "logger": "sync", "level": "ERROR", "count": 1}],
+        ))
+        submission_id = manual.get_json()["batch_id"]
+        with sqlite3.connect(self._db_path) as conn:
+            finding_id = conn.execute("SELECT id FROM findings").fetchone()[0]
+        self._client.patch(
+            f"/api/v1/findings/{finding_id}",
+            json={"analysis_md": "**Pattern:** useful title"},
+            headers=self._admin_headers(),
+        )
+
+        summary = self._client.get(
+            "/api/v1/summary?days=30", headers=self._admin_headers(),
+        ).get_json()
+        self.assertEqual(summary["submissions"], {
+            "total": 1,
+            "with_message": 1,
+            "awaiting_response": 1,
+            "awaiting_response_all_time": 1,
+            "responded": 0,
+        })
+        finding = self._client.get(
+            "/api/v1/findings?status=all",
+            headers=self._admin_headers(),
+        ).get_json()["findings"][0]
+        self.assertEqual(finding["analysis_md"], "**Pattern:** useful title")
+        self.assertEqual(finding["feedback_count"], 1)
+        self.assertEqual(finding["unanswered_feedback_count"], 1)
+
+        self._client.patch(
+            f"/api/v1/submissions/{submission_id}",
+            json={"response_md": "Thanks"},
+            headers=self._admin_headers(),
+        )
+        summary = self._client.get(
+            "/api/v1/summary?days=30", headers=self._admin_headers(),
+        ).get_json()
+        self.assertEqual(summary["submissions"]["awaiting_response"], 0)
+        self.assertEqual(summary["submissions"]["responded"], 1)
 
 
 class TestInjectionSanitization(unittest.TestCase):

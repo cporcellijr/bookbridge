@@ -1,1 +1,2 @@
-mkdocs-material>=9.5
+flask>=3.0,<4.0
+waitress>=3.0,<4.0

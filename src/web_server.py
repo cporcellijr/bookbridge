@@ -464,7 +464,7 @@ _ADMIN_ONLY_ENDPOINTS = {
     'kosync_admin.api_unlink_kosync_document',
     'kosync_admin.api_delete_kosync_document',
     'my_reports',
-    'api_diagnostics_finding_comment',
+    'api_diagnostics_submissions',
 }
 
 
@@ -1486,7 +1486,11 @@ from src.services.alignment_service import ingest_storyteller_transcripts
 
 
 
-def _run_diagnostics_send(force: bool = False) -> dict:
+def _run_diagnostics_send(
+    force: bool = False,
+    manual: bool = False,
+    user_message: str = "",
+) -> dict:
     """Build service flags and delegate to the diagnostics sender.
 
     Every flag is computed in its own try/except so a missing or broken
@@ -1517,7 +1521,12 @@ def _run_diagnostics_send(force: bool = False) -> dict:
 
     from src.services import diagnostics
     return diagnostics.maybe_send_diagnostics(
-        database_service, service_flags=flags, total_books=total_books, force=force,
+        database_service,
+        service_flags=flags,
+        total_books=total_books,
+        force=force,
+        manual=manual,
+        user_message=user_message,
     )
 
 
@@ -10318,10 +10327,28 @@ def _resolve_web_secret_key() -> str:
 
 @admin_required
 def api_diagnostics_send_now():
-    """Admin endpoint: force a diagnostics send immediately."""
-    result = _run_diagnostics_send(force=True)
+    """Submit a manual diagnostics report for this BookBridge instance."""
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object.'}), 400
+    message = body.get('message', '')
+    if not isinstance(message, str):
+        return jsonify({'error': 'Message must be a string.'}), 400
+    message = message.strip()
+    if len(message) > 2000:
+        return jsonify({'error': 'Message must be 2000 characters or fewer.'}), 400
+
+    result = _run_diagnostics_send(
+        force=True,
+        manual=True,
+        user_message=message,
+    )
     if result.get('sent') or result.get('reason') in ('opt_out', 'no_endpoint'):
         return jsonify(result), 200
+    if result.get('reason') == 'http_429':
+        return jsonify(result), 429
     return jsonify(result), 502
 
 
@@ -10371,75 +10398,56 @@ def _diagnostics_receiver_context():
 
 @admin_required
 def my_reports():
-    """Admin-only view: show findings from the diagnostics receiver."""
+    """Redirect the retired technical reports page to Diagnostics settings."""
+    return redirect(url_for('settings') + '#system')
+
+
+@admin_required
+def api_diagnostics_submissions():
+    """Return this instance's manual report history without exposing its token."""
     base_url, token, error = _diagnostics_receiver_context()
     if error:
-        return render_template('my_reports.html', findings=[], error=error)
+        if error == 'Diagnostics ingest token is not configured.':
+            return jsonify({'submissions': []})
+        return jsonify({'error': error}), 503
 
     headers = {'Authorization': f'Bearer {token}'}
     try:
         resp = requests.get(
-            f'{base_url}/api/v1/my/findings', headers=headers, timeout=15,
-        )
-    except requests.RequestException:
-        return render_template(
-            'my_reports.html', findings=[],
-            error='Could not reach the diagnostics receiver.',
-        )
-
-    if resp.status_code != 200:
-        return render_template(
-            'my_reports.html', findings=[],
-            error='The diagnostics receiver returned an error.',
-        )
-
-    try:
-        data = resp.json()
-    except ValueError:
-        return render_template(
-            'my_reports.html', findings=[],
-            error='The diagnostics receiver returned an invalid response.',
-        )
-
-    return render_template(
-        'my_reports.html', findings=data.get('findings', []), error=None,
-    )
-
-
-@admin_required
-def api_diagnostics_finding_comment(finding_id):
-    """Proxy a comment to the diagnostics receiver for a finding."""
-    base_url, token, error = _diagnostics_receiver_context()
-    if error:
-        return jsonify({'error': error}), 503
-
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict) or not isinstance(body.get('body'), str):
-        return jsonify({'error': 'Request must include a JSON body with a string "body" field.'}), 400
-    text = body['body'].strip()
-    if not text:
-        return jsonify({'error': 'Comment body must not be empty.'}), 400
-
-    headers = {
-        'Authorization': f'Bearer {token}',
-        'Content-Type': 'application/json',
-    }
-    try:
-        resp = requests.post(
-            f'{base_url}/api/v1/findings/{finding_id}/comments',
-            json={'body': text}, headers=headers, timeout=15,
+            f'{base_url}/api/v1/my/submissions', headers=headers, timeout=15,
         )
     except requests.RequestException:
         return jsonify({'error': 'Could not reach the diagnostics receiver.'}), 502
 
+    if resp.status_code != 200:
+        return jsonify({'error': 'The diagnostics receiver returned an error.'}), 502
+
     try:
         data = resp.json()
     except ValueError:
-        data = None
+        return jsonify({'error': 'The diagnostics receiver returned an invalid response.'}), 502
+    if not isinstance(data, dict) or not isinstance(data.get('submissions'), list):
+        return jsonify({'error': 'The diagnostics receiver returned an invalid response.'}), 502
 
-    if data is not None:
-        return jsonify(data), resp.status_code
-    return jsonify({'error': 'The diagnostics receiver returned an invalid response.'}), 502
+    submissions = []
+    for item in data['submissions']:
+        if not isinstance(item, dict):
+            continue
+        user_message = item.get('user_message')
+        response_md = item.get('response_md')
+        submitted_at = item.get('submitted_at') or item.get('received_at')
+        submissions.append({
+            'id': item.get('id'),
+            'submitted_at': submitted_at if isinstance(submitted_at, str) else '',
+            'user_message': user_message if isinstance(user_message, str) else '',
+            'response_md': response_md if isinstance(response_md, str) else '',
+            'response_at': item.get('response_at') if isinstance(item.get('response_at'), str) else '',
+            'status': 'replied' if (
+                item.get('status') == 'replied'
+                or isinstance(response_md, str) and bool(response_md.strip())
+            ) else 'received',
+        })
+    return jsonify({'submissions': submissions})
 
 
 # --- Application Factory ---
@@ -10594,7 +10602,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/diagnostics/send-now', 'api_diagnostics_send_now', api_diagnostics_send_now, methods=['POST'])
     app.add_url_rule('/api/diagnostics/opt-in', 'api_diagnostics_opt_in', api_diagnostics_opt_in, methods=['POST'])
     app.add_url_rule('/my-reports', 'my_reports', my_reports, methods=['GET'])
-    app.add_url_rule('/api/diagnostics/findings/<int:finding_id>/comments', 'api_diagnostics_finding_comment', api_diagnostics_finding_comment, methods=['POST'])
+    app.add_url_rule('/api/diagnostics/submissions', 'api_diagnostics_submissions', api_diagnostics_submissions, methods=['GET'])
 
     # Storyteller API routes
     app.add_url_rule('/api/storyteller/search', 'api_storyteller_search', api_storyteller_search, methods=['GET'])
