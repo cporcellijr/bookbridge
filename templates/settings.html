@@ -403,17 +403,6 @@
             display: block;
         }
 
-        /* Embedded logs viewer (Logs tab) */
-        .logs-frame {
-            display: block;
-            width: 100%;
-            height: calc(100vh - 140px);
-            min-height: 640px;
-            border: 0;
-            border-radius: 12px;
-            background: rgba(0, 0, 0, 0.2);
-        }
-
         @media (max-width: 760px) {
             .settings-layout {
                 flex-direction: column;
@@ -702,7 +691,6 @@
                 <button type="button" class="settings-tab" data-tab="ai" onclick="showSettingsTab('ai')">🤖 AI</button>
                 <button type="button" class="settings-tab" data-tab="system" onclick="showSettingsTab('system')">🛠️ System</button>
                 <button type="button" class="settings-tab" data-tab="users" onclick="showSettingsTab('users')">👥 Users</button>
-                <button type="button" class="settings-tab" data-tab="logs" onclick="showSettingsTab('logs')">📊 Logs</button>
             </aside>
             <div class="settings-main">
 
@@ -2349,12 +2337,6 @@
             </div>
         </div><!-- /users panel -->
 
-        <!-- Logs tab (embedded real-time log viewer; iframe loaded lazily on open,
-             unloaded on leave so its live-tail polling only runs while active) -->
-        <div class="tab-panel" data-panel="logs">
-            <iframe id="logsFrame" class="logs-frame" title="Application logs" data-src="/logs?embed=1"></iframe>
-        </div><!-- /logs panel -->
-
             </div><!-- /.settings-main -->
         </div><!-- /.settings-layout -->
     </div>
@@ -3047,21 +3029,9 @@
     </script>
     <script>
         // --- Settings sidebar tabs ---
-        const SETTINGS_TABS = ['integrations', 'sync', 'features', 'ai', 'system', 'users', 'logs'];
+        const SETTINGS_TABS = ['integrations', 'sync', 'features', 'ai', 'system', 'users'];
         // Old tab names (bookmarks / external links) map onto the new grouping.
         const LEGACY_TAB_ALIASES = { general: 'integrations', reading_apps: 'integrations', trackers: 'integrations', tools: 'features' };
-
-        // Lazy-load the embedded log viewer on first open; unload it on leave so
-        // its live-tail polling only runs while the Logs tab is active.
-        function syncLogsFrame(name) {
-            const frame = document.getElementById('logsFrame');
-            if (!frame) return;
-            if (name === 'logs') {
-                frame.src = frame.dataset.src;
-            } else if (frame.src && frame.src !== 'about:blank') {
-                frame.src = 'about:blank';
-            }
-        }
 
         function showSettingsTab(name) {
             if (LEGACY_TAB_ALIASES[name]) name = LEGACY_TAB_ALIASES[name];
@@ -3072,11 +3042,10 @@
             document.querySelectorAll('.tab-panel').forEach(function (p) {
                 p.classList.toggle('active', p.dataset.panel === name);
             });
-            // The Users and Logs panels live outside the application form; hide the
-            // form (and its Save bar) while either is showing.
+            // The Users panel lives outside the application form; hide the
+            // form (and its Save bar) while it is showing.
             const form = document.getElementById('settingsForm');
-            if (form) form.style.display = (name === 'users' || name === 'logs') ? 'none' : '';
-            syncLogsFrame(name);
+            if (form) form.style.display = (name === 'users') ? 'none' : '';
             if (history.replaceState) {
                 history.replaceState(null, '', '#' + name);
             } else {
