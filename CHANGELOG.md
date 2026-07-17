@@ -36,6 +36,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **BookFusion ReadAloud uploads now reject incomplete Storyteller packages.**
+  Before upload and automatic linking, BookBridge verifies that every narration
+  reference in the EPUB's SMIL overlays points to an audio file actually present
+  in the archive. If Storyteller is still processing the book, the upload stops
+  with a clear retry message instead of creating a BookFusion book that later
+  fails because its MP4 files are missing. Existing incomplete BookFusion copies
+  must be deleted and uploaded again.
+
 - Diagnostics maintainer APIs now fail closed when their read token is missing,
   manual-report quota checks are atomic, overlapping sender runs cannot consume
   unsent warning evidence, and private dashboard requests reject redirects and

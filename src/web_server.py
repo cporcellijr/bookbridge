@@ -6,6 +6,7 @@ import logging
 import json
 import contextvars
 import os
+import posixpath
 import queue
 import re
 import secrets
@@ -15,10 +16,12 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 import requests
@@ -9668,6 +9671,44 @@ def _cleanup_temp(path: Path) -> None:
         logger.debug("Could not remove temp file %s: %s", path, exc)
 
 
+def _readaloud_integrity_error(path: Path) -> str | None:
+    """Return a user-facing error when an EPUB has broken audio overlays."""
+    try:
+        with zipfile.ZipFile(path) as epub:
+            names = set(epub.namelist())
+            audio_refs = 0
+            missing: set[str] = set()
+            for smil_name in (name for name in names if name.lower().endswith(".smil")):
+                root = ElementTree.fromstring(epub.read(smil_name))
+                for element in root.iter():
+                    if element.tag.rsplit("}", 1)[-1].lower() != "audio":
+                        continue
+                    src = str(element.get("src") or "").strip()
+                    if not src:
+                        continue
+                    audio_refs += 1
+                    ref_path = unquote(urlparse(src).path)
+                    if ref_path.startswith("/"):
+                        target = posixpath.normpath(ref_path.lstrip("/"))
+                    else:
+                        target = posixpath.normpath(
+                            posixpath.join(posixpath.dirname(smil_name), ref_path)
+                        )
+                    if target not in names:
+                        missing.add(target)
+    except (OSError, zipfile.BadZipFile, ElementTree.ParseError) as exc:
+        logger.warning("Could not validate Storyteller ReadAloud EPUB %s: %s", path, exc)
+        return "Storyteller returned an invalid ReadAloud EPUB. Wait for processing to finish and try again."
+
+    if not audio_refs:
+        return "Storyteller ReadAloud EPUB is incomplete (no narration audio was found). Wait for processing to finish and try again."
+    if missing:
+        count = len(missing)
+        noun = "file is" if count == 1 else "files are"
+        return f"Storyteller ReadAloud EPUB is incomplete ({count} narration audio {noun} missing). Wait for processing to finish and try again."
+    return None
+
+
 def api_bookfusion_upload(abs_id: str) -> object:
     """Upload an EPUB to BookFusion and link it.
 
@@ -9711,6 +9752,12 @@ def api_bookfusion_upload(abs_id: str) -> object:
         if not ok:
             _cleanup_temp(tmp_path)
             return jsonify({"success": False, "error": "Could not download the Storyteller ReadAloud EPUB (it may not be processed yet)"}), 502
+
+        integrity_error = _readaloud_integrity_error(tmp_path)
+        if integrity_error:
+            logger.warning("Rejected incomplete Storyteller ReadAloud EPUB for %s: %s", abs_id, integrity_error)
+            _cleanup_temp(tmp_path)
+            return jsonify({"success": False, "error": integrity_error}), 502
 
         upload_client = uc().bookfusion_upload_client
         if not upload_client.is_configured():
