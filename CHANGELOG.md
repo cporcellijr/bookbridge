@@ -44,6 +44,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Missing remote annotations and already-absent collection items no longer
+  create false diagnostics.** BookFusion highlight creation treats a 404 for a
+  deleted or stale linked book as unavailable at DEBUG while preserving the
+  local pending annotation for a future valid relink. Audiobookshelf collection
+  cleanup now treats a 404 as successful idempotent removal.
+
 - **Unavailable linked books no longer create false diagnostics or lead sync.**
   BookFusion highlight pulls quietly skip a saved book that now returns 404
   without deleting local annotation state, while genuine server failures still

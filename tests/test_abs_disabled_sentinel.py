@@ -195,5 +195,30 @@ class TestABSDisabledSentinel(unittest.TestCase):
         )
 
 
+class TestABSCollectionCleanup(unittest.TestCase):
+    def test_missing_collection_item_is_already_removed(self):
+        with patch.dict(
+            os.environ,
+            {"ABS_SERVER": "http://abs.example", "ABS_KEY": "token"},
+            clear=False,
+        ):
+            client = ABSClient()
+        collections = MagicMock(status_code=200)
+        collections.json.return_value = {
+            "collections": [{"id": "collection-1", "name": "Synced with KOReader"}],
+        }
+        missing = MagicMock(status_code=404, text="Not Found")
+        client.session = MagicMock()
+        client.session.get.return_value = collections
+        client.session.delete.return_value = missing
+
+        with self.assertLogs("src.api.api_clients", level="INFO") as captured:
+            result = client.remove_from_collection("missing-item", "Synced with KOReader")
+
+        self.assertTrue(result)
+        self.assertFalse(any("Failed to remove item 'missing-item'" in line
+                             for line in captured.output))
+
+
 if __name__ == "__main__":
     unittest.main()

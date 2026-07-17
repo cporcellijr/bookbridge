@@ -217,6 +217,12 @@ class BookFusionClient:
 
     def create_highlight(self, payload: dict) -> Optional[dict]:
         resp = self._make_request("POST", "/api/user/highlights", json_data=payload)
+        if resp is not None and resp.status_code == 404:
+            logger.debug(
+                "BookFusion highlight create unavailable for book %s (404)",
+                payload.get("book_id"),
+            )
+            return None
         if resp is None or resp.status_code not in (200, 201):
             logger.warning("BookFusion highlight create returned %s", getattr(resp, "status_code", "no-response"))
             return None

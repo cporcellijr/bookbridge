@@ -729,7 +729,7 @@ class ABSClient:
             remove_url = f"{self.base_url}/api/collections/{target_collection['id']}/book/{item_id}"
             r_remove = self.session.delete(remove_url)
             
-            if r_remove.status_code in [200, 201, 204]:
+            if r_remove.status_code in [200, 201, 204, 404]:
                 logger.info(f"🗑️ Removed item '{item_id}' from ABS Collection: '{collection_name}'")
                 return True
             else:

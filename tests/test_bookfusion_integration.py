@@ -77,6 +77,27 @@ class BookFusionClientTest(unittest.TestCase):
         self.assertTrue(any("BookFusion highlights/search returned 500" in line
                             for line in captured.output))
 
+    def test_missing_book_skips_highlight_create_without_warning(self):
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([_Resp(404, text='{"code":"not_found"}')])
+
+        with self.assertLogs("src.api.bookfusion_client", level="DEBUG") as captured:
+            result = client.create_highlight({"book_id": "8906705", "text": "quote"})
+
+        self.assertIsNone(result)
+        self.assertTrue(any(
+            "BookFusion highlight create unavailable for book 8906705 (404)" in line
+            for line in captured.output
+        ))
+        self.assertFalse(any("BookFusion highlight create returned 404" in line
+                             for line in captured.output))
+
     def test_poll_token_persists_per_user_access_token(self):
         db = MagicMock()
         client = BookFusionClient(
