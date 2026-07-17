@@ -209,6 +209,16 @@ def _prepare_submission(raw: dict[str, Any]) -> dict[str, Any]:
         _prepare_finding(item) if isinstance(item, dict) else item
         for item in linked
     ]
+    submission["reviewed_findings"] = [
+        item
+        for item in submission["findings"]
+        if isinstance(item, dict) and not item["needs_triage"]
+    ]
+    submission["pending_findings"] = [
+        item
+        for item in submission["findings"]
+        if not isinstance(item, dict) or item["needs_triage"]
+    ]
     return submission
 
 
@@ -285,19 +295,25 @@ def create_app(
     def friendly_date(value: Any) -> str:
         return _format_date(value)
 
+    @app.template_filter("number")
+    def number(value: Any) -> str:
+        return f"{_integer(value):,}"
+
     @app.get("/")
     def dashboard():
         try:
             summary = _receiver_json("/api/v1/summary?days=7")
             result = _receiver_json("/api/v1/findings?status=all&limit=200")
+            submission_result = _receiver_json("/api/v1/submissions?limit=5")
         except ReceiverError:
             return render_template(
                 "dashboard.html",
                 page="dashboard",
                 error="The diagnostics receiver is unavailable. Try refreshing in a moment.",
                 findings=[],
+                reports=[],
                 cards={},
-                focus="all",
+                focus="reviewed",
             ), 502
 
         all_findings = [
@@ -308,14 +324,21 @@ def create_app(
         active = [item for item in all_findings if item.get("status") in {"open", "triaged"}]
         active.sort(
             key=lambda item: (
-                -item["awaiting_feedback_count"],
-                -item["feedback_count"],
-                -int(bool(item.get("reopened_at"))),
-                -{"high": 3, "medium": 2, "low": 1}.get(str(item.get("severity")), 0),
-                -_integer(item.get("instance_count")),
-                -_integer(item.get("total_count")),
-            )
+                {"high": 3, "medium": 2, "low": 1}.get(str(item.get("severity")), 0),
+                _integer(item.get("instance_count")),
+                _integer(item.get("total_count")),
+                str(item.get("last_seen") or ""),
+            ),
+            reverse=True,
         )
+        reviewed = [item for item in active if not item["needs_triage"]]
+        reports = [
+            _prepare_submission(item)
+            for item in submission_result.get("submissions", [])
+            if isinstance(item, dict) and _submission_message(item)
+        ]
+        reports.sort(key=lambda item: str(item["submitted_at"]), reverse=True)
+        reports.sort(key=lambda item: item["awaiting_response"], reverse=True)
 
         summary_submissions = summary.get("submissions") or {}
         totals = summary.get("totals") or {}
@@ -327,27 +350,31 @@ def create_app(
         )
         cards = {
             "active": len(active),
+            "reviewed": len(reviewed),
             "needs_triage": sum(item["needs_triage"] for item in active),
             "awaiting_response": awaiting,
             "instances": _integer(totals.get("instances")),
-            "batches": _integer(totals.get("batches")),
+            "reports": _integer(totals.get("batches")),
             "warnings": _integer(totals.get("warnings")),
         }
 
-        focus = request.args.get("focus", "all")
-        shown = active
-        if focus == "feedback":
-            shown = [item for item in active if item["feedback_count"]]
-        elif focus == "triage":
+        focus = request.args.get("focus", "reviewed")
+        if focus == "triage":
             shown = [item for item in active if item["needs_triage"]]
+        elif focus == "all":
+            shown = active
+        elif focus == "feedback":
+            shown = [item for item in active if item["feedback_count"]]
         else:
-            focus = "all"
+            shown = reviewed
+            focus = "reviewed"
 
         return render_template(
             "dashboard.html",
             page="dashboard",
             error=None,
             findings=shown,
+            reports=reports[:3],
             cards=cards,
             focus=focus,
         )

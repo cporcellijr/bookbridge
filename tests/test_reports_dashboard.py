@@ -115,6 +115,15 @@ class ReportsDashboardTestCase(unittest.TestCase):
                 "last_seen": "2026-07-16T12:00:00Z",
             }]
         })
+        self.receiver.add("GET", "/api/v1/submissions?limit=5", {
+            "submissions": [{
+                "id": 77,
+                "submitted_at": "2026-07-16T11:00:00Z",
+                "user_message": "It resets whenever I sync.",
+                "response_md": None,
+                "linked_findings": [],
+            }]
+        })
 
     def test_dashboard_renders_plain_language_cards_and_anomaly(self):
         self._add_dashboard_responses()
@@ -123,24 +132,79 @@ class ReportsDashboardTestCase(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Active anomalies", html)
+        self.assertIn("Ready to review", html)
         self.assertIn("Waiting for Bugscout", html)
-        self.assertIn("Feedback awaiting reply", html)
+        self.assertIn("User reports awaiting reply", html)
         self.assertIn('<span class="metric-number">3</span>', html)
-        self.assertIn("Installations reporting", html)
+        self.assertIn("1 installation", html)
         self.assertIn("Storyteller can lead even when its EPUB returns 404.", html)
         self.assertIn("Skip Storyteller when its EPUB cannot be loaded.", html)
         self.assertIn('href="/findings/4"', html)
-        self.assertIn('href="/findings/4#feedback"', html)
+        self.assertIn("Linked user report", html)
+        self.assertIn('href="/feedback/77"', html)
         self.assertNotIn("server-secret-token", html)
         self.assertNotIn("receiver.example.test", html)
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
-        self.assertEqual(len(self.receiver.calls), 2)
+        self.assertEqual(len(self.receiver.calls), 3)
         for call in self.receiver.calls:
             self.assertEqual(call["authorization"], "Bearer server-secret-token")
             self.assertEqual(call["timeout"], 15)
+
+    def test_home_prioritizes_reviewed_findings_and_shows_each_report_once(self):
+        pending = [
+            {
+                "id": finding_id,
+                "template": f"Pending raw anomaly {finding_id}",
+                "status": "open",
+                "analysis_md": None,
+                "feedback_count": 1,
+                "unanswered_feedback_count": 1,
+            }
+            for finding_id in range(2, 59)
+        ]
+        self.receiver.add("GET", "/api/v1/summary?days=7", {
+            "totals": {"instances": 2, "batches": 4, "warnings": 1283},
+            "submissions": {"awaiting_response_all_time": 1},
+        })
+        self.receiver.add("GET", "/api/v1/findings?status=all&limit=200", {
+            "findings": [{
+                "id": 1,
+                "template": "Reviewed anomaly",
+                "status": "triaged",
+                "severity": "medium",
+                "category": "code-bug",
+                "analysis_md": (
+                    "**Pattern:** Reviewed anomaly\n"
+                    "**Suggested next step:** Ask Codex to inspect the choke point."
+                ),
+            }, *pending],
+        })
+        self.receiver.add("GET", "/api/v1/submissions?limit=5", {
+            "submissions": [{
+                "id": 91,
+                "submitted_at": "2026-07-17T10:00:00Z",
+                "app_version": "dev 835",
+                "user_message": "BookFusion will not sync this book.",
+                "response_md": None,
+                "linked_findings": [{"id": 1, "analysis_md": "**Pattern:** Reviewed anomaly"}],
+            }],
+        })
+
+        response = self.client.get("/")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Report center", html)
+        self.assertIn("Reviewed anomaly", html)
+        self.assertNotIn("Pending raw anomaly 2", html)
+        self.assertIn("Waiting (57)", html)
+        self.assertIn("2 installations", html)
+        self.assertIn("4 reports received", html)
+        self.assertIn("1,283 warnings", html)
+        self.assertEqual(html.count('href="/feedback/91"'), 1)
+        self.assertIn("BookFusion will not sync this book.", html)
 
     def test_bad_host_is_rejected_before_receiver_access(self):
         response = self.client.get("/", headers={"Host": "attacker.example"})
@@ -188,8 +252,8 @@ class ReportsDashboardTestCase(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("What Bugscout thinks", html)
-        self.assertIn("Suggested next step", html)
+        self.assertIn("What this likely means", html)
+        self.assertIn("What to do next", html)
         self.assertIn("Technical evidence", html)
         self.assertIn("Full Bugscout analysis", html)
         self.assertIn("&lt;script&gt;alert", html)
@@ -213,7 +277,7 @@ class ReportsDashboardTestCase(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(self.receiver.calls), 2)
+        self.assertEqual(len(self.receiver.calls), 3)
 
     def test_local_env_style_token_file_is_supported(self):
         self.token_path.write_text(
@@ -253,6 +317,7 @@ class ReportsDashboardTestCase(unittest.TestCase):
                 },
             ],
         })
+        self.receiver.add("GET", "/api/v1/submissions?limit=5", {"submissions": []})
 
         response = self.client.get("/?focus=triage")
         html = response.get_data(as_text=True)
@@ -261,6 +326,33 @@ class ReportsDashboardTestCase(unittest.TestCase):
         self.assertIn('<span class="metric-number">1</span>', html)
         self.assertIn("Reopened active finding", html)
         self.assertNotIn("Fixed unreviewed finding", html)
+
+    def test_report_detail_separates_reviewed_from_pending_anomalies(self):
+        self.receiver.add("GET", "/api/v1/submissions/90", {
+            "id": 90,
+            "submitted_at": "2026-07-17T10:00:00Z",
+            "user_message": "Sync is failing.",
+            "response_md": None,
+            "linked_findings": [
+                {
+                    "id": 1,
+                    "template": "Reviewed finding",
+                    "status": "triaged",
+                    "analysis_md": "**Pattern:** Reviewed finding",
+                },
+                {"id": 2, "template": "Pending finding A", "status": "open"},
+                {"id": 3, "template": "Pending finding B", "status": "open"},
+            ],
+        })
+
+        response = self.client.get("/feedback/90")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("1 reviewed anomaly", html)
+        self.assertIn("2 waiting for Bugscout", html)
+        self.assertIn('href="/findings/1"', html)
+        self.assertIn('href="/findings/2"', html)
 
     def test_feedback_index_only_lists_written_messages(self):
         self.receiver.add("GET", "/api/v1/submissions", {
@@ -456,7 +548,7 @@ class ReportsDashboardTestCase(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(self.receiver.calls), 2)
+        self.assertEqual(len(self.receiver.calls), 3)
 
     def test_receiver_redirect_is_not_followed_with_admin_token(self):
         redirected_requests: list[str] = []

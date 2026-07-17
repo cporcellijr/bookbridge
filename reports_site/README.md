@@ -7,12 +7,17 @@ sending the receiver token to the browser.
 
 ## What it shows
 
-- Current anomaly, Bugscout, feedback, and seven-day installation totals.
-- A clickable active-anomaly list with Bugscout's pattern and suggested action.
-- Finding detail with the hypothesis up front and escaped technical evidence
+- An inbox-first home page where each written user report appears once, even
+  when that submission contains many warning findings.
+- Seven-day installation, report, warning, reviewed, and Bugscout-queue totals.
+- Bugscout-reviewed anomalies by default, with unreviewed raw findings behind a
+  separate filter instead of mixed into the actionable list.
+- Finding detail with the hypothesis and next step up front, links back to user
+  reports, a ready-made Codex/Claude prompt, and escaped technical evidence
   collapsed below it.
-- Manual submissions that contain a written user message. Response forms exist
-  only on those submissions and update the submission-level receiver response.
+- Report detail that puts reviewed anomalies first and collapses findings still
+  waiting for Bugscout. Response forms exist only when the user wrote a message
+  and update the submission-level receiver response.
 
 The dashboard is deliberately not a ticket tracker. Status management and code
 changes remain in the normal BookBridge review workflow.
