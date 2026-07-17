@@ -908,29 +908,65 @@ textarea.form-input {
 
 /* ============ Responsive ============ */
 @media (max-width: 768px) {
+
+    /* Two compact rows: logo + library links + user menu on the first row,
+       the tab strip full-width and swipeable on the second. */
     .top-nav {
         flex-wrap: wrap;
         min-height: auto;
-        padding: 12px 16px;
-        row-gap: 10px;
+        padding: 10px 12px;
+        row-gap: 8px;
+        column-gap: 10px;
     }
 
     .logo-section {
-        width: 100%;
+        margin-right: auto;
     }
 
     .nav-tabs {
+        order: 5;
+        flex: 1 1 100%;
         width: 100%;
+    }
+
+    .nav-tab {
+        padding: 8px 12px;
     }
 
     .library-links {
         border-left: none;
         padding-left: 0;
+        gap: 6px;
+    }
+
+    .nav-icon-link {
+        width: 32px;
+        height: 32px;
+    }
+
+    .user-menu-trigger {
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .card,
     .panel {
         padding: 18px;
         border-radius: var(--radius);
+    }
+}
+
+@media (max-width: 420px) {
+
+    /* Icon-only brand so the first row never overflows on small phones. */
+    .brand-wordmark {
+        display: none;
+    }
+
+    .library-links .nav-icon-link {
+        width: 30px;
+        height: 30px;
     }
 }
