@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Added clickable Bugscout category counts to the private diagnostics dashboard
+  for code bugs, configuration issues, documentation gaps, environment problems,
+  and unclassified findings. Category views include reviewed active and archived
+  findings, place the most frequent first, and identify code bugs as actionable.
+
 - Redesigned the private local diagnostics dashboard as an inbox-first report
   center. Written user reports now appear once at submission level, reviewed
   Bugscout anomalies are the default view, the raw triage queue has its own

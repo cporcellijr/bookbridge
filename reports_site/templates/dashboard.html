@@ -102,6 +102,15 @@
         .metric-number { display: block; font-size: 34px; font-weight: 800; line-height: 1.1; }
         .metric-label { display: block; margin-top: 7px; font-size: 14px; font-weight: 700; }
         .metric-note { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; }
+        .category-section { margin: 18px 0 28px; }
+        .category-heading { margin-bottom: 10px; }
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .category-grid .metric { min-height: 0; padding: 14px; }
+        .category-filter.active { background: var(--brand-soft); }
         .fleet {
             display: grid;
             grid-template-columns: minmax(180px, 1.25fr) repeat(3, minmax(130px, .75fr));
@@ -260,12 +269,14 @@
         .small { font-size: 12px; }
         @media (max-width: 820px) {
             .cards { grid-template-columns: 1fr 1fr; }
+            .category-grid { grid-template-columns: 1fr 1fr; }
             .fleet { grid-template-columns: 1fr 1fr; }
             .detail-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 560px) {
             .topbar-inner, main { padding-left: 16px; padding-right: 16px; }
             .cards { grid-template-columns: 1fr; }
+            .category-grid { grid-template-columns: 1fr; }
             .fleet { grid-template-columns: 1fr; }
             .metric { min-height: auto; }
             .section-head, .anomaly-top, .feedback-row { align-items: stretch; flex-direction: column; }
@@ -309,6 +320,24 @@
             <span class="metric-label">Waiting for Bugscout</span>
             <span class="metric-note">Collected safely; no action needed yet</span>
         </a>
+    </section>
+
+    <section class="category-section" aria-labelledby="category-heading">
+        <div class="category-heading">
+            <h2 id="category-heading">Bugscout categories</h2>
+            <p class="muted small">Reviewed findings, including archived items. Waiting findings are counted after Bugscout classifies them.</p>
+        </div>
+        <div class="category-grid">
+            {% for category in category_filters %}
+            <a class="metric category-filter{% if selected_category and selected_category.value == category.value %} active{% endif %}"
+               href="{{ url_for('dashboard', category=category.value) }}#anomalies"
+               aria-label="{{ category.label }}: {{ category.count }} finding{% if category.count != 1 %}s{% endif %}">
+                <span class="metric-number">{{ category.count }}</span>
+                <span class="metric-label">{{ category.label }}</span>
+                <span class="metric-note">{{ category.note }}</span>
+            </a>
+            {% endfor %}
+        </div>
     </section>
 
     <section class="fleet" aria-label="Seven-day fleet totals">
@@ -356,8 +385,8 @@
     <section class="dashboard-section" id="anomalies">
         <div class="section-head">
             <div>
-                <h2>{% if focus == 'feedback' %}Linked to user reports{% elif focus == 'triage' %}Waiting for Bugscout{% elif focus == 'all' %}All active anomalies{% elif focus == 'archived' %}Archived anomalies{% else %}Reviewed by Bugscout{% endif %}</h2>
-                <p class="muted small">{% if focus == 'triage' %}These are queued for analysis; you do not need to interpret the raw warnings.{% elif focus == 'archived' %}Findings you marked fixed or reviewed with no action. You can reopen any of them.{% else %}Open one for the plain-language hypothesis, next step, and linked user reports.{% endif %}</p>
+                <h2>{% if focus == 'category' %}{{ selected_category.label }}{% elif focus == 'feedback' %}Linked to user reports{% elif focus == 'triage' %}Waiting for Bugscout{% elif focus == 'all' %}All active anomalies{% elif focus == 'archived' %}Archived anomalies{% else %}Reviewed by Bugscout{% endif %}</h2>
+                <p class="muted small">{% if focus == 'category' %}{{ selected_category.note }}. Highest occurrence count first; includes active and archived findings.{% elif focus == 'triage' %}These are queued for analysis; you do not need to interpret the raw warnings.{% elif focus == 'archived' %}Findings you marked fixed or reviewed with no action. You can reopen any of them.{% else %}Open one for the plain-language hypothesis, next step, and linked user reports.{% endif %}</p>
             </div>
             <div class="filters" aria-label="Filter anomalies">
                 <a class="filter{% if focus == 'reviewed' %} active{% endif %}" href="{{ url_for('dashboard', focus='reviewed') }}#anomalies">Reviewed ({{ cards.reviewed }})</a>
@@ -383,7 +412,7 @@
                         <span class="badge badge-{{ item.severity|default('unknown', true) }}">{{ item.severity|default('unrated', true) }}</span>
                         {% if item.category and item.category != 'unknown' %}<span class="badge badge-category">{{ item.category }}</span>{% endif %}
                         {% if item.feedback_count %}<span class="badge badge-feedback">Linked user report</span>{% endif %}
-                        {% if focus == 'archived' %}<span class="badge badge-reviewed">{% if item.status == 'ignored' %}Reviewed — no action{% else %}Fixed{% endif %}</span>{% endif %}
+                        {% if item.status in ['fixed', 'ignored'] %}<span class="badge badge-reviewed">{% if item.status == 'ignored' %}Reviewed — no action{% else %}Fixed{% endif %}</span>{% endif %}
                     </div>
                 </div>
                 <div class="meta">
@@ -396,7 +425,7 @@
             {% endfor %}
         </div>
         {% else %}
-        <div class="empty">{% if focus == 'reviewed' %}Nothing is ready for review yet. Bugscout will fill this view as it works through the queue.{% else %}Nothing matches this view.{% endif %}</div>
+        <div class="empty">{% if focus == 'reviewed' %}Nothing is ready for review yet. Bugscout will fill this view as it works through the queue.{% elif focus == 'category' %}No reviewed findings are in this category yet.{% else %}Nothing matches this view.{% endif %}</div>
         {% endif %}
     </section>
     {% endif %}

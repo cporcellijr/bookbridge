@@ -10,6 +10,10 @@ sending the receiver token to the browser.
 - An inbox-first home page where each written user report appears once, even
   when that submission contains many warning findings.
 - Seven-day installation, report, warning, reviewed, and Bugscout-queue totals.
+- Clickable Bugscout category totals for actionable code bugs, configuration
+  issues, documentation gaps, environment problems, and unclassified findings.
+  These totals retain archived evidence so repeated setup or docs confusion is
+  still visible after individual findings are reviewed.
 - Bugscout-reviewed anomalies by default, with unreviewed raw findings behind a
   separate filter instead of mixed into the actionable list.
 - Finding detail with the hypothesis and next step up front, links back to user

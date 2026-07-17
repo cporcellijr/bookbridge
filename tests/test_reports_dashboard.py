@@ -413,6 +413,84 @@ class ReportsDashboardTestCase(unittest.TestCase):
         self.assertIn("Reviewed — no action", html)
         self.assertNotIn("Still active", html)
 
+    def test_category_filters_count_reviewed_active_and_archived_findings(self):
+        self.receiver.add("GET", "/api/v1/summary?days=7", {
+            "totals": {"instances": 2, "batches": 3, "warnings": 30},
+            "submissions": {"awaiting_response_all_time": 0},
+        })
+        self.receiver.add("GET", "/api/v1/findings?status=all&limit=200", {
+            "findings": [
+                {
+                    "id": 1,
+                    "template": "Active code defect",
+                    "status": "triaged",
+                    "category": "code-bug",
+                    "analysis_md": "**Pattern:** Active code defect",
+                    "total_count": 4,
+                },
+                {
+                    "id": 2,
+                    "template": "Resolved frequent defect",
+                    "status": "fixed",
+                    "category": "code-bug",
+                    "analysis_md": "**Pattern:** Resolved frequent defect",
+                    "total_count": 18,
+                },
+                {
+                    "id": 3,
+                    "template": "Configuration help",
+                    "status": "ignored",
+                    "category": "config-issue",
+                    "analysis_md": "**Pattern:** Configuration help",
+                },
+                {
+                    "id": 4,
+                    "template": "Documentation clarification",
+                    "status": "triaged",
+                    "category": "docs-gap",
+                    "analysis_md": "**Pattern:** Documentation clarification",
+                },
+                {
+                    "id": 5,
+                    "template": "Reviewed environment issue",
+                    "status": "ignored",
+                    "category": "environment",
+                    "analysis_md": "**Pattern:** Reviewed environment issue",
+                },
+                {
+                    "id": 6,
+                    "template": "Waiting environment warning",
+                    "status": "open",
+                    "category": "environment",
+                    "analysis_md": None,
+                },
+            ],
+        })
+        self.receiver.add("GET", "/api/v1/submissions?limit=5", {"submissions": []})
+
+        response = self.client.get("/?category=code-bug")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Bugscout categories", html)
+        self.assertIn('aria-label="Code bugs: 2 findings"', html)
+        self.assertIn('aria-label="Configuration: 1 finding"', html)
+        self.assertIn('aria-label="Documentation: 1 finding"', html)
+        self.assertIn('aria-label="Environment: 1 finding"', html)
+        self.assertIn('aria-label="Unclassified: 0 findings"', html)
+        self.assertIn('href="/?category=code-bug#anomalies"', html)
+        self.assertIn("Code bugs", html)
+        self.assertIn("Actionable defects in BookBridge", html)
+        self.assertIn("Active code defect", html)
+        self.assertIn("Resolved frequent defect", html)
+        self.assertIn("Fixed", html)
+        self.assertNotIn("Configuration help", html)
+        self.assertNotIn("Waiting environment warning", html)
+        self.assertLess(
+            html.index("Resolved frequent defect"),
+            html.index("Active code defect"),
+        )
+
     def test_report_detail_separates_reviewed_from_pending_anomalies(self):
         self.receiver.add("GET", "/api/v1/submissions/90", {
             "id": 90,

@@ -21,6 +21,13 @@ _MAX_RESPONSE_CHARS = 10_000
 _API_TIMEOUT_SECONDS = 15
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
 _FINDING_ACTION_STATUSES = {"fixed", "ignored", "open"}
+_FINDING_CATEGORIES = (
+    ("code-bug", "Code bugs", "Actionable defects in BookBridge"),
+    ("config-issue", "Configuration", "Setup users may need help with"),
+    ("docs-gap", "Documentation", "Possible docs or troubleshooting gaps"),
+    ("environment", "Environment", "Problems outside BookBridge code"),
+    ("unknown", "Unclassified", "Reviewed but not classified"),
+)
 _LOCAL_RECEIVER_HOSTS = {
     "localhost", "127.0.0.1", "::1", "host.docker.internal",
 }
@@ -314,6 +321,8 @@ def create_app(
                 findings=[],
                 reports=[],
                 cards={},
+                category_filters=[],
+                selected_category=None,
                 focus="reviewed",
             ), 502
 
@@ -334,6 +343,16 @@ def create_app(
         active = [item for item in all_findings if item.get("status") in {"open", "triaged"}]
         archived = [item for item in all_findings if item.get("status") in {"fixed", "ignored"}]
         reviewed = [item for item in active if not item["needs_triage"]]
+        reviewed_all = [item for item in all_findings if not item["needs_triage"]]
+        category_filters = [
+            {
+                "value": value,
+                "label": label,
+                "note": note,
+                "count": sum(item.get("category") == value for item in reviewed_all),
+            }
+            for value, label, note in _FINDING_CATEGORIES
+        ]
         reports = [
             _prepare_submission(item)
             for item in submission_result.get("submissions", [])
@@ -361,8 +380,32 @@ def create_app(
             "warnings": _integer(totals.get("warnings")),
         }
 
+        selected_category = next(
+            (
+                item
+                for item in category_filters
+                if item["value"] == request.args.get("category", "")
+            ),
+            None,
+        )
         focus = request.args.get("focus", "reviewed")
-        if focus == "triage":
+        if selected_category:
+            shown = [
+                item
+                for item in reviewed_all
+                if item.get("category") == selected_category["value"]
+            ]
+            shown.sort(
+                key=lambda item: (
+                    _integer(item.get("total_count")),
+                    _integer(item.get("instance_count")),
+                    {"high": 3, "medium": 2, "low": 1}.get(str(item.get("severity")), 0),
+                    str(item.get("last_seen") or ""),
+                ),
+                reverse=True,
+            )
+            focus = "category"
+        elif focus == "triage":
             shown = [item for item in active if item["needs_triage"]]
         elif focus == "all":
             shown = active
@@ -381,6 +424,8 @@ def create_app(
             findings=shown,
             reports=reports[:3],
             cards=cards,
+            category_filters=category_filters,
+            selected_category=selected_category,
             focus=focus,
         )
 
