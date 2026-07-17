@@ -1,215 +1,27 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
+{% block title %}Shelfmark · BookBridge{% endblock %}
 
-<head>
-    <meta charset="UTF-8">
-    <title>Shelfmark - BookBridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+{% block head %}
+<style>
+    body {
+        overflow: hidden;
+    }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            background: #0a0a0a;
-            color: #ffffff;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
+    .iframe-container {
+        width: 100%;
+        height: calc(100vh - var(--nav-height));
+    }
 
-        /* Top Navigation Bar */
-        .top-nav {
-            background: linear-gradient(180deg, rgba(20, 20, 20, 0.98) 0%, rgba(20, 20, 20, 0.95) 100%);
-            -webkit-backdrop-filter: blur(20px);
-            backdrop-filter: blur(20px);
-            padding: 20px 40px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            z-index: 100;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-        }
+    iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+    }
+</style>
+{% endblock %}
 
-        .logo-section {
-            display: flex;
-            align-items: center;
-            gap: 24px;
-        }
-
-        .logo-section a {
-            text-decoration: none;
-        }
-
-        .logo-section h1 {
-            font-size: 28px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .library-links {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding-left: 20px;
-            border-left: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .nav-icon-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-            color: rgba(255, 255, 255, 0.6);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            background: rgba(255, 255, 255, 0.03);
-            text-decoration: none;
-        }
-
-        .nav-icon-link:hover {
-            color: #ffffff;
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
-
-        .nav-icon-link svg {
-            width: 20px;
-            height: 20px;
-            stroke-width: 2;
-        }
-
-        .nav-actions {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .btn {
-            padding: 10px 20px;
-            background: rgba(102, 126, 234, 0.15);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.3);
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn:hover {
-            background: rgba(102, 126, 234, 0.25);
-            border-color: rgba(102, 126, 234, 0.5);
-            transform: translateY(-2px);
-        }
-
-        .btn-primary {
-            background: rgba(102, 126, 234, 0.2);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-active {
-            background: rgba(102, 126, 234, 0.3);
-            border-color: #667eea;
-            color: #ffffff;
-        }
-
-        /* Iframe Container */
-        .iframe-container {
-            flex: 1;
-            width: 100%;
-            height: 100%;
-        }
-
-        iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-
-        @media (max-width: 768px) {
-            .top-nav {
-                padding: 16px 20px;
-                flex-direction: column;
-                gap: 15px;
-            }
-
-            .nav-actions {
-                flex-wrap: wrap;
-                justify-content: center;
-            }
-        }
-    </style>
-</head>
-
-<body>
-    <div class="top-nav">
-        <div class="logo-section">
-            <a href="/">
-                <h1>📚 BookBridge</h1>
-            </a>
-
-            <div class="library-links">
-                {% if abs_server %}
-                <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" title="Audiobookshelf">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if booklore_server %}
-                <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" title="Ebook Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if shelfmark_url %}
-                <a href="/shelfmark" class="nav-icon-link nav-icon-link-active" title="Shelfmark Tool" target="_blank"
-                    rel="noopener noreferrer">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    </svg>
-                </a>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/bookbridge/" class="btn" target="_blank"
-                rel="noopener noreferrer">📚 Docs</a>
-            <a href="/" class="btn">← Dashboard</a>
-            <a href="/logs" class="btn">📊 Logs</a>
-            <a href="/suggestions" class="btn">💡 Suggestions</a>
-        </div>
-    </div>
-
-    <div class="iframe-container">
-        <iframe src="{{ shelfmark_url }}" title="Shelfmark Tool" allowfullscreen></iframe>
-    </div>
-</body>
-
-</html>
+{% block content %}
+<div class="iframe-container">
+    <iframe src="{{ shelfmark_url }}" title="Shelfmark Tool" allowfullscreen></iframe>
+</div>
+{% endblock %}

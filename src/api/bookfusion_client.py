@@ -190,6 +190,9 @@ class BookFusionClient:
         header when present (the API reports pagination via headers), else
         ``None``. A ``None`` highlight list means the request itself failed."""
         resp = self._make_request("POST", "/api/user/highlights/search", json_data={"book_id": book_id})
+        if resp is not None and resp.status_code == 404:
+            logger.debug("BookFusion highlights unavailable for book %s (404)", book_id)
+            return None, None
         if resp is None or resp.status_code != 200:
             logger.warning(
                 "BookFusion highlights/search returned %s: %s",

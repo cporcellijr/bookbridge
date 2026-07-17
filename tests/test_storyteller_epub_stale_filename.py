@@ -15,9 +15,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from src.db.models import Book
+from src.db.models import Book, State
 from src.sync_manager import SyncManager
 from src.sync_clients.storyteller_sync_client import StorytellerSyncClient
+from src.sync_clients.sync_client_interface import ServiceState
 
 
 def _build_manager(tmp_path):
@@ -97,6 +98,16 @@ class TestSyncManagerStaleStorytellerFilename(unittest.TestCase):
 class TestStorytellerSyncClientStaleFilename(unittest.TestCase):
     """_resolve_storyteller_epub_filename must not trust a persisted storyteller_ name."""
 
+    def setUp(self):
+        import tempfile
+
+        self._temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
+
     def test_stale_persisted_filename_triggers_recache_attempt(self):
         """When ebook_filename is a storyteller_ name whose resolve_book_path
         raises, the method must fall through to the re-download path and call
@@ -138,8 +149,7 @@ class TestStorytellerSyncClientStaleFilename(unittest.TestCase):
 
     def test_stale_filename_returns_none_when_recache_also_fails(self):
         """When resolve_book_path fails for the stale name AND
-        ensure_readaloud_epub_cached also fails, the method should return
-        current (the stale name) as a last resort — same as before the fix.
+        ensure_readaloud_epub_cached also fails, the stale filename is unusable.
         """
         mock_ebook_parser = MagicMock()
         mock_storyteller_client = MagicMock()
@@ -166,9 +176,65 @@ class TestStorytellerSyncClientStaleFilename(unittest.TestCase):
 
         result = client._resolve_storyteller_epub_filename(book)
 
-        # Falls through to the last-resort `return current`.
-        self.assertEqual(result, _STALE_FILENAME)
+        self.assertIsNone(result)
         mock_storyteller_client.ensure_readaloud_epub_cached.assert_called_once()
+
+    def test_unavailable_epub_excludes_storyteller_from_real_sync_cycle(self):
+        """A stale UUID must not reproduce the reported false-leader decision."""
+        tmp_path = Path(self._temp_dir)
+
+        manager = _build_manager(tmp_path)
+        parser = MagicMock()
+        parser.epub_cache_dir = str(tmp_path / "epub_cache")
+        parser.resolve_book_path.side_effect = FileNotFoundError("No such file")
+
+        storyteller_api = MagicMock()
+        storyteller_api.is_configured.return_value = True
+        storyteller_api.get_position_details_payload = None
+        storyteller_api.get_position_details_rich = None
+        storyteller_api.get_position_details.return_value = (0.0, 0, None, None, None)
+        storyteller_api.ensure_readaloud_epub_cached.return_value = False
+        storyteller = StorytellerSyncClient(storyteller_api, parser)
+
+        abs_client = MagicMock()
+        abs_client.get_supported_sync_types.return_value = {"audiobook"}
+        abs_client.supports_book.return_value = True
+        abs_client.can_be_leader.return_value = True
+        abs_client.get_service_state.return_value = ServiceState(
+            current={"pct": 0.5, "ts": 500.0},
+            previous_pct=0.5,
+            delta=0.0,
+            threshold=60.0,
+            is_configured=True,
+            display=("ABS", "{prev:.4%} -> {curr:.4%}"),
+            value_formatter=lambda value: f"{value:.4%}",
+        )
+
+        book = Book(
+            abs_id="d3845713-da29-4150-8d7e-16215b90b666",
+            abs_title="Dungeon Crawler Carl (Unabridged)",
+            storyteller_uuid=_STORYTELLER_UUID,
+            ebook_filename=_STALE_FILENAME,
+            status="active",
+            duration=1000.0,
+        )
+        previous = [
+            State(abs_id=book.abs_id, client_name="abs", percentage=0.5, timestamp=500.0),
+            State(abs_id=book.abs_id, client_name="storyteller", percentage=0.5, timestamp=500.0),
+        ]
+        manager.sync_clients = {"ABS": abs_client, "Storyteller": storyteller}
+        manager.storyteller_client = storyteller_api
+        manager.ebook_parser = parser
+        manager.database_service.get_book.return_value = book
+        manager.database_service.get_states_for_book.return_value = previous
+        manager._normalize_for_cross_format_comparison = MagicMock(return_value=None)
+
+        with self.assertLogs("src.sync_manager", level="INFO") as captured:
+            manager.sync_cycle(book.abs_id)
+
+        reported = "Storyteller leads at 0.0000% (only client with change)"
+        self.assertFalse(any(reported in line for line in captured.output))
+        storyteller_api.get_position_details.assert_not_called()
 
 
 if __name__ == "__main__":

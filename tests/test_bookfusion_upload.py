@@ -124,6 +124,25 @@ def _make_minimal_epub(
     return buf.getvalue()
 
 
+def _make_readaloud_epub(missing_audio: bool = False) -> bytes:
+    """Build a minimal EPUB with one SMIL reference and optional audio."""
+    source = io.BytesIO(_make_minimal_epub(title="ReadAloud Route Test Book"))
+    output = io.BytesIO()
+    with zipfile.ZipFile(source, "r") as source_zip, zipfile.ZipFile(output, "w") as output_zip:
+        for info in source_zip.infolist():
+            output_zip.writestr(info, source_zip.read(info.filename))
+        output_zip.writestr(
+            "OEBPS/MediaOverlays/chapter001.smil",
+            """<?xml version="1.0" encoding="utf-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+  <body><seq><par><audio src="../Audio/00001-00158.mp4#t=0,1"/></par></seq></body>
+</smil>""",
+        )
+        if not missing_audio:
+            output_zip.writestr("OEBPS/Audio/00001-00158.mp4", b"audio")
+    return output.getvalue()
+
+
 def _write_epub_temp(data: bytes) -> str:
     """Write *data* to a temp file and return its path."""
     tmp = tempfile.NamedTemporaryFile(suffix=".epub", delete=False)
@@ -448,6 +467,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
 
         # Build a synthetic EPUB for the "has local file" scenario
         self.epub_bytes = _make_minimal_epub(title="Route Test Book")
+        self.readaloud_epub_bytes = _make_readaloud_epub()
         self.tmp_epub = _write_epub_temp(self.epub_bytes)
 
         # Saved kwargs from set_user_bookfusion_link
@@ -465,7 +485,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
     def _run_route(self, book_has_epub=True, client_configured=True,
                    upload_result=None, ebook_path_exists=True,
                    storyteller_uuid=None, storyteller_configured=None,
-                   request_data=None):
+                   request_data=None, storyteller_epub_bytes=None):
         """Call ``api_bookfusion_upload`` with mocked dependencies.
 
         Parameters
@@ -525,7 +545,13 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         storyteller_client = MagicMock()
         st_configured = storyteller_configured if storyteller_configured is not None else client_configured
         storyteller_client.is_configured.return_value = st_configured
-        storyteller_client.download_book.return_value = True
+
+        def _fake_storyteller_download(_uuid, path, polling=False):
+            data = storyteller_epub_bytes or self.readaloud_epub_bytes
+            Path(path).write_bytes(data)
+            return True
+
+        storyteller_client.download_book.side_effect = _fake_storyteller_download
 
         user_clients = MagicMock()
         user_clients.bookfusion_upload_client = upload_client
@@ -631,6 +657,22 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         # Verify link was created
         self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "789")
 
+    def test_readaloud_variant_rejects_missing_mp4_before_upload(self):
+        """A SMIL reference to a missing MP4 must never reach BookFusion."""
+        result = self._run_route(
+            book_has_epub=True,
+            client_configured=True,
+            storyteller_uuid="st-uuid-123",
+            request_data={"variant": "readaloud"},
+            storyteller_epub_bytes=_make_readaloud_epub(missing_audio=True),
+        )
+
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(result[1], 502)
+        self.assertIn("incomplete", result[0].json["error"].lower())
+        self._ws.uc.return_value.bookfusion_upload_client.upload_epub.assert_not_called()
+        self.assertEqual(self.saved_link_kwargs, {})
+
     def test_readaloud_variant_download_failure_false_returns_502(self):
         """download_book returns False → 502, upload_epub never called."""
         from src import web_server as ws
@@ -725,7 +767,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         try:
             # Create a real temp file that download_book "writes"
             real_tmp = tf.NamedTemporaryFile(suffix=".epub", delete=False)
-            real_tmp.write(self.epub_bytes)
+            real_tmp.write(self.readaloud_epub_bytes)
             real_tmp.close()
 
             book = MagicMock()
@@ -797,7 +839,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         original_uc = ws.uc
         try:
             real_tmp = tf.NamedTemporaryFile(suffix=".epub", delete=False)
-            real_tmp.write(self.epub_bytes)
+            real_tmp.write(self.readaloud_epub_bytes)
             real_tmp.close()
 
             book = MagicMock()

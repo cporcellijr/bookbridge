@@ -39,6 +39,44 @@ class _Session:
 
 
 class BookFusionClientTest(unittest.TestCase):
+    def test_missing_link_skips_highlight_pull_without_warning(self):
+        """A deleted BookFusion book is not an annotation-sync failure."""
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([
+            _Resp(404, {"code": "not_found"}, text='{"code":"not_found","message":"Not found"}'),
+        ])
+
+        with self.assertLogs("src.api.bookfusion_client", level="DEBUG") as captured:
+            result = client.pull_highlights("8906705")
+
+        self.assertEqual(result, (None, None))
+        self.assertTrue(any("BookFusion highlights unavailable for book 8906705 (404)" in line
+                            for line in captured.output))
+        self.assertFalse(any("WARNING" in line for line in captured.output))
+
+    def test_highlight_pull_still_warns_for_server_failure(self):
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([_Resp(500, text="server error")])
+
+        with self.assertLogs("src.api.bookfusion_client", level="WARNING") as captured:
+            result = client.pull_highlights("8906705")
+
+        self.assertEqual(result, (None, None))
+        self.assertTrue(any("BookFusion highlights/search returned 500" in line
+                            for line in captured.output))
+
     def test_poll_token_persists_per_user_access_token(self):
         db = MagicMock()
         client = BookFusionClient(

@@ -1,1178 +1,1092 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Stats - BookBridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" type="image/png" href="/static/icon.png">
-    <link rel="apple-touch-icon" href="/static/icon.png">
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        :root {
-            color-scheme: dark;
-            --bg: #0a0a0a; --panel: rgba(255,255,255,.05); --panel-soft: rgba(255,255,255,.03);
-            --border: rgba(255,255,255,.1); --text: #fff; --muted: rgba(255,255,255,.68);
-            --muted-soft: rgba(255,255,255,.5); --accent: #667eea; --accent-2: #764ba2;
-            --reading: #4fc3f7; --listening: #9b7cff; --success: #36d399; --warning: #ffd166;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            background:
-                radial-gradient(circle at top left, rgba(102,126,234,.16), transparent 32%),
-                radial-gradient(circle at top right, rgba(118,75,162,.14), transparent 28%),
-                linear-gradient(180deg, #080808 0%, #0a0a0a 55%, #0f0f14 100%);
-            color: var(--text); min-height: 100vh;
-        }
-        .top-nav {
-            background: linear-gradient(180deg, rgba(20,20,20,.98) 0%, rgba(20,20,20,.95) 100%);
-            -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
-            padding: 20px 40px; border-bottom: 1px solid rgba(255,255,255,.05);
-            position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center;
-        }
-        .logo-section, .nav-actions, .library-links, .toolbar, .status-row, .tab-strip, .hero-meta, .panel-head {
-            display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-        }
-        .logo-section { gap: 24px; }
-        .logo-section a { text-decoration: none; }
-        .logo-section h1 {
-            font-size: 28px; font-weight: 700;
-            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-        }
-        .app-icon {
-            display: block; width: 32px; height: 32px; border-radius: 6px; object-fit: cover;
-        }
-        .library-links { padding-left: 20px; border-left: 1px solid rgba(255,255,255,.1); }
-        .nav-icon-link {
-            display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;
-            border-radius: 10px; color: rgba(255,255,255,.6); transition: all .2s ease;
-            background: rgba(255,255,255,.03); text-decoration: none;
-        }
-        .nav-icon-link:hover { color: #fff; background: rgba(255,255,255,.1); transform: translateY(-2px); }
-        .nav-icon-link svg { width: 20px; height: 20px; stroke-width: 2; }
-        .nav-actions { justify-content: flex-end; }
-        .btn {
-            padding: 12px 20px; border: none; border-radius: 8px; font-weight: 600; text-decoration: none;
-            display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: all .2s ease; font-size: 14px;
-        }
-        .btn-primary { background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%); color: #fff; box-shadow: 0 4px 15px rgba(102,126,234,.3); }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(102,126,234,.4); }
-        .btn-secondary { background: rgba(255,255,255,.08); color: #fff; border: 1px solid rgba(255,255,255,.14); }
-        .btn-secondary:hover, .btn-secondary.is-active { background: rgba(255,255,255,.14); transform: translateY(-1px); }
-        .container { max-width: 1440px; margin: 0 auto; padding: 36px 20px 56px; }
-        .hero, .dashboard-header, .stat-card, .panel, .summary-card, .recent-item, .empty-state {
-            border-radius: 22px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 14px 35px rgba(0,0,0,.18);
-        }
-        .hero {
-            margin-bottom: 24px; padding: 32px;
-            background: linear-gradient(135deg, rgba(102,126,234,.18), rgba(118,75,162,.15)), rgba(255,255,255,.04);
-            border: 1px solid rgba(255,255,255,.08);
-        }
-        .hero-top, .dashboard-header, .recent-item, .heatmap-legend { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
-        .hero h1 { font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1.05; margin-bottom: 12px; letter-spacing: -.03em; }
-        .hero p, .dashboard-header p, .empty-state p { color: var(--muted); line-height: 1.6; }
-        .hero-meta { margin-top: 22px; gap: 10px; }
-        .hero-chip, .status-pill {
-            display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px;
-            background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08); color: rgba(255,255,255,.92); font-size: 13px; font-weight: 600;
-        }
-        .hero-chip strong { color: #fff; }
-        .toolbar { justify-content: space-between; margin-bottom: 24px; }
-        .tab-btn { min-width: 132px; justify-content: center; }
-        .status-pill { color: var(--muted); background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.1); }
-        .status-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--muted-soft); box-shadow: 0 0 12px rgba(255,255,255,.16); }
-        .status-pill.available .status-dot { background: var(--success); box-shadow: 0 0 16px rgba(54,211,153,.4); }
-        .status-pill.unavailable .status-dot { background: var(--warning); box-shadow: 0 0 16px rgba(255,209,102,.32); }
-        .dashboard-shell, .recent-list, .heatmap-shell { display: grid; gap: 18px; }
-        .dashboard-header, .panel { padding: 22px 24px; }
-        .dashboard-header h2 { font-size: 30px; margin-bottom: 8px; }
-        .dashboard-note, .panel-head span, .summary-card-sub, .recent-time, .heatmap-days, .heatmap-legend, .heatmap-months { color: var(--muted-soft); font-size: 12px; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 16px; }
-        .stat-card { padding: 20px 22px; background: linear-gradient(135deg, rgba(255,255,255,.08), transparent 55%), var(--panel); }
-        .stat-card-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; margin-bottom: 10px; }
-        .stat-card-value { font-size: clamp(1.7rem, 3vw, 2.4rem); font-weight: 800; line-height: 1.05; }
-        .stat-card-hint { margin-top: 10px; color: var(--muted-soft); font-size: 13px; }
-        .insights-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; }
-        .panel-head { justify-content: space-between; margin-bottom: 18px; }
-        .panel-head h3 { font-size: 20px; font-weight: 700; }
-        .chart-wrap { position: relative; min-height: 320px; }
-        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; }
-        .summary-card, .recent-item { padding: 18px 20px; background: var(--panel-soft); }
-        .summary-card-label { color: var(--muted); font-size: 13px; margin-bottom: 8px; font-weight: 600; }
-        .summary-card-value { font-size: 22px; font-weight: 800; }
-        .recent-main { display: flex; gap: 14px; align-items: center; min-width: 0; }
-        .recent-badge {
-            width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
-            font-size: 20px; font-weight: 700; flex-shrink: 0; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08);
-        }
-        .recent-badge.reading { color: var(--reading); background: rgba(79,195,247,.12); }
-        .recent-badge.listening { color: var(--listening); background: rgba(155,124,255,.12); }
-        .recent-text { min-width: 0; }
-        .recent-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .recent-meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
-        .recent-side { text-align: right; flex-shrink: 0; }
-        .recent-duration { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-        .heatmap-months, .heatmap-main { display: grid; gap: 10px; }
-        .heatmap-months { grid-template-columns: 38px 1fr; font-weight: 600; }
-        .heatmap-month-track { position: relative; min-height: 14px; overflow: hidden; }
-        .heatmap-month-label { position: absolute; top: 0; transform: translateX(-4px); white-space: nowrap; }
-        .heatmap-main { grid-template-columns: 28px minmax(0,1fr); align-items: start; }
-        .heatmap-days, .heatmap-week { display: grid; gap: 4px; }
-        .heatmap-grid { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
-        .heatmap-cell { width: 12px; height: 12px; border-radius: 4px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.05); }
-        button.heatmap-cell { padding: 0; appearance: none; cursor: default; }
-        .heatmap-cell.level-1 { background: rgba(102,126,234,.28); }
-        .heatmap-cell.level-2 { background: rgba(102,126,234,.5); }
-        .heatmap-cell.level-3 { background: rgba(118,75,162,.68); }
-        .heatmap-cell.level-4 { background: rgba(155,124,255,.88); box-shadow: 0 0 12px rgba(155,124,255,.28); }
-        .heatmap-cell.is-clickable { cursor: pointer; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
-        .heatmap-cell.is-clickable:hover,
-        .heatmap-cell.is-clickable:focus-visible { transform: translateY(-1px) scale(1.08); border-color: rgba(255,255,255,.35); outline: none; }
-        .legend-swatches { display: inline-flex; gap: 4px; }
-        .empty-state { padding: 38px 28px; text-align: center; }
-        .empty-state h3 { font-size: 24px; margin-bottom: 10px; }
-        .loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 40px; color: var(--muted); }
-        .spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
-        .day-detail-backdrop {
-            position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-            background: rgba(6, 8, 14, .72); padding: 20px; z-index: 220;
-        }
-        .day-detail-backdrop.is-open { display: flex; }
-        .day-detail-modal {
-            width: min(760px, 100%); max-height: min(82vh, 860px); overflow: hidden;
-            border-radius: 24px; background: #11131b; border: 1px solid rgba(255,255,255,.1);
-            box-shadow: 0 25px 70px rgba(0,0,0,.45); display: grid; grid-template-rows: auto auto 1fr;
-        }
-        .day-detail-head, .day-detail-summary { padding: 20px 22px; border-bottom: 1px solid rgba(255,255,255,.08); }
-        .day-detail-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
-        .day-detail-head h3 { font-size: 24px; margin-bottom: 6px; }
-        .day-detail-head p, .day-detail-summary { color: var(--muted); }
-        .day-detail-close {
-            width: 40px; height: 40px; border-radius: 999px; border: 1px solid rgba(255,255,255,.12);
-            background: rgba(255,255,255,.06); color: #fff; cursor: pointer; font-size: 20px;
-        }
-        .day-detail-body { overflow-y: auto; padding: 18px 22px 22px; }
-        .day-detail-list { display: grid; gap: 12px; }
-        .day-book-item {
-            padding: 16px 18px; border-radius: 18px; background: rgba(255,255,255,.04);
-            border: 1px solid rgba(255,255,255,.08); display: flex; justify-content: space-between; gap: 18px; align-items: center;
-        }
-        .day-book-main { min-width: 0; }
-        .day-book-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
-        .day-book-meta { color: var(--muted); font-size: 13px; line-height: 1.5; }
-        .day-book-stats { text-align: right; flex-shrink: 0; }
-        .day-book-stat { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
-        .day-book-sub { font-size: 12px; color: var(--muted-soft); }
-        .calendar-panel { display: grid; gap: 16px; }
-        .calendar-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-        .calendar-month-title { font-size: 22px; font-weight: 800; }
-        .calendar-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-        .calendar-grid { display: grid; gap: 10px; }
-        .calendar-weekday {
-            padding: 8px 10px; color: var(--muted-soft); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; text-align: center;
-        }
-        .calendar-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0; }
-        .calendar-weeks { display: grid; gap: 10px; }
-        .calendar-week {
-            display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); column-gap: 0; row-gap: 4px;
-            align-items: start; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08);
-            border-radius: 14px; overflow: hidden; padding-bottom: 8px;
-        }
-        .calendar-cell {
-            padding: 8px 10px; border-right: 1px solid rgba(255,255,255,.06);
-            border-bottom: 1px solid rgba(255,255,255,.06);
-            display: flex; align-items: center; grid-row: 1;
-        }
-        .calendar-week > .calendar-cell:nth-child(7) { border-right: none; }
-        .calendar-cell.is-outside { opacity: .33; }
-        .calendar-cell.is-active-day { background: rgba(79,195,247,.07); }
-        .calendar-cell-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; width: 100%; }
-        .calendar-day-number { font-size: 13px; font-weight: 800; color: #fff; }
-        .calendar-day-total { font-size: 11px; color: var(--muted-soft); }
-        .calendar-day-open {
-            width: 100%; text-align: left; padding: 0; border: none; background: none; color: inherit; cursor: pointer;
-        }
-        .calendar-day-open:focus-visible { outline: 2px solid rgba(79,195,247,.45); outline-offset: 3px; border-radius: 4px; }
-        .calendar-span {
-            min-height: 24px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center;
-            font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-            border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.94); cursor: pointer;
-            margin: 0 3px;
-        }
-        .calendar-span:hover, .calendar-span:focus-visible { filter: brightness(1.15); outline: none; }
-        .calendar-span-text { overflow: hidden; text-overflow: ellipsis; }
-        .calendar-lane-spacer { visibility: hidden; min-height: 24px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @media (max-width: 1100px) { .insights-grid { grid-template-columns: 1fr; } }
-        @media (max-width: 768px) {
-            .top-nav { padding: 16px 20px; flex-direction: column; gap: 16px; align-items: stretch; }
-            .logo-section, .nav-actions { justify-content: center; }
-            .container { padding: 20px 12px 40px; }
-            .hero, .dashboard-header, .panel, .stat-card, .summary-card, .recent-item, .empty-state { border-radius: 18px; }
-            .hero { padding: 24px 20px; } .dashboard-header, .panel { padding: 20px 18px; }
-            .recent-item { flex-direction: column; align-items: flex-start; } .recent-side { text-align: left; } .chart-wrap { min-height: 280px; }
-            .day-detail-modal { border-radius: 18px; }
-            .day-book-item { flex-direction: column; align-items: flex-start; }
-            .day-book-stats { text-align: left; }
-            .calendar-weekdays { display: none; }
-            .calendar-week { column-gap: 0; row-gap: 4px; }
-            .calendar-cell { padding: 6px 8px; }
-            .calendar-span { min-height: 24px; font-size: 11px; padding: 0 8px; }
-        }
+{% extends "base.html" %}
+{% set active_page = 'stats' %}
+{% block title %}Stats · BookBridge{% endblock %}
 
-        /* Time-of-day histogram + yearly recap bars */
-        .bar-row { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding-top: 8px; }
-        .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
-        .bar-fill { width: 100%; max-width: 26px; border-radius: 6px 6px 2px 2px;
-            background: linear-gradient(180deg, var(--reading) 0%, rgba(79,195,247,.35) 100%); min-height: 2px; transition: opacity .2s; }
-        .bar-fill.listening { background: linear-gradient(180deg, var(--listening) 0%, rgba(155,124,255,.35) 100%); }
-        .bar-fill.muted { background: rgba(255,255,255,.08); }
-        .bar-col:hover .bar-fill { opacity: .82; }
-        .bar-label { font-size: 10px; color: var(--muted-soft); white-space: nowrap; }
-        .recap-toolbar { display: flex; align-items: center; gap: 10px; }
-        .recap-year-btn { background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
-            border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 16px; line-height: 1; }
-        .recap-year-btn:hover:not(:disabled) { background: rgba(255,255,255,.14); }
-        .recap-year-btn:disabled { opacity: .35; cursor: default; }
-        .recap-year-label { font-weight: 700; font-size: 15px; min-width: 52px; text-align: center; }
-        .books-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
-            border-radius: 14px; border: 1px solid var(--border); background: var(--panel-soft); cursor: pointer; transition: all .15s; }
-        .books-row:hover { background: rgba(255,255,255,.07); transform: translateX(2px); }
-        .books-row + .books-row { margin-top: 8px; }
-        .books-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
-        .books-side { text-align: right; flex-shrink: 0; }
-        .books-side .v { font-weight: 700; }
-        .books-side .s { font-size: 11px; color: var(--muted-soft); }
-        .pct-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; overflow: hidden; }
-        .pct-bar > span { display: block; height: 100%; background: var(--success); }
-        .scroll-list { max-height: 360px; overflow-y: auto; }
-        .finished-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
-        .finished-row:last-child { border-bottom: none; }
-    </style>
-</head>
-<body>
-    <div class="top-nav">
-        <div class="logo-section">
-            <a href="/" style="display: flex; align-items: center; gap: 12px; text-decoration: none;">
-                <img src="/static/icon.png" alt="BookBridge" class="app-icon">
-                <h1 style="font-size: 22px; margin: 0;">BookBridge</h1>
-            </a>
-            <div class="library-links">
-                {% if abs_server %}
-                <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" title="Audiobookshelf">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-                </a>
-                {% endif %}
-                {% if booklore_server %}
-                <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" title="Ebook Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-                </a>
-                {% endif %}
-                {% if shelfmark_url %}
-                <a href="/shelfmark" class="nav-icon-link" title="Shelfmark Tool" target="_blank" rel="noopener noreferrer">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
-                </a>
-                {% endif %}
-            </div>
-        </div>
-        <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/bookbridge/" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">📚 Docs</a>
-            <a href="/" class="btn btn-secondary">← Dashboard</a>
-            <a href="/stats" class="btn btn-secondary is-active">📊 Stats</a>
-            <a href="/settings" class="btn btn-secondary">⚙️ Settings</a>
-            <a href="/logs" class="btn btn-secondary">🪵 Logs</a>
-            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add / Update Book</a>
-        </div>
-    </div>
-    <main class="container">
-        <section class="hero">
-            <div class="hero-top">
-                <div>
-                    <h1>Unified activity dashboard</h1>
-                    <p>Live listening stats come from Audiobookshelf, reading stats come from KOReader uploads, and the combined view merges both into one BookBridge-native dashboard.</p>
-                    <div class="hero-meta">
-                        <div class="hero-chip"><strong>Listening</strong> ABS live data</div>
-                        <div class="hero-chip"><strong>Reading</strong> KOReader sync uploads</div>
-                        <div class="hero-chip"><strong>Timezone</strong> <span id="timezone-chip">Loading…</span></div>
-                    </div>
+{% block head %}
+<style>
+    .toolbar, .status-row, .tab-strip, .hero-meta, .panel-head {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .btn-secondary.is-active { background: rgba(255,255,255,.14); }
+    .stats-wrap { max-width: 1440px; margin: 0 auto; padding: 36px 20px 56px; }
+    .hero, .dashboard-header, .stat-card, .panel, .summary-card, .recent-item, .empty-state {
+        border-radius: 22px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 14px 35px rgba(0,0,0,.18);
+    }
+    .hero {
+        margin-bottom: 24px; padding: 32px;
+        background: linear-gradient(135deg, rgba(102,126,234,.18), rgba(118,75,162,.15)), rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08);
+    }
+    .hero-top, .dashboard-header, .recent-item, .heatmap-legend { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    .hero h1 { font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1.05; margin-bottom: 12px; letter-spacing: -.03em; }
+    .hero p, .dashboard-header p, .empty-state p { color: var(--muted); line-height: 1.6; }
+    .hero-meta { margin-top: 22px; gap: 10px; }
+    .hero-chip, .status-pill {
+        display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px;
+        background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08); color: rgba(255,255,255,.92); font-size: 13px; font-weight: 600;
+    }
+    .hero-chip strong { color: #fff; }
+    .toolbar { justify-content: space-between; margin-bottom: 24px; }
+    .tab-btn { min-width: 132px; justify-content: center; }
+    .status-pill { color: var(--muted); background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.1); }
+    .status-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--muted-soft); box-shadow: 0 0 12px rgba(255,255,255,.16); }
+    .status-pill.available .status-dot { background: var(--success); box-shadow: 0 0 16px rgba(54,211,153,.4); }
+    .status-pill.unavailable .status-dot { background: var(--warning); box-shadow: 0 0 16px rgba(255,209,102,.32); }
+    .dashboard-shell, .recent-list, .heatmap-shell { display: grid; gap: 18px; }
+    .dashboard-header, .panel { padding: 22px 24px; }
+    .dashboard-header h2 { font-size: 30px; margin-bottom: 8px; }
+    .dashboard-note, .panel-head span, .summary-card-sub, .recent-time, .heatmap-days, .heatmap-legend, .heatmap-months { color: var(--muted-soft); font-size: 12px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 16px; }
+    .stat-card { padding: 20px 22px; background: linear-gradient(135deg, rgba(255,255,255,.08), transparent 55%), var(--panel); }
+    .stat-card-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; margin-bottom: 10px; }
+    .stat-card-value { font-size: clamp(1.7rem, 3vw, 2.4rem); font-weight: 800; line-height: 1.05; }
+    .stat-card-hint { margin-top: 10px; color: var(--muted-soft); font-size: 13px; }
+    .insights-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; }
+    .panel-head { justify-content: space-between; margin-bottom: 18px; }
+    .panel-head h3 { font-size: 20px; font-weight: 700; }
+    .chart-wrap { position: relative; min-height: 320px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; }
+    .summary-card, .recent-item { padding: 18px 20px; background: var(--panel-soft); }
+    .summary-card-label { color: var(--muted); font-size: 13px; margin-bottom: 8px; font-weight: 600; }
+    .summary-card-value { font-size: 22px; font-weight: 800; }
+    .recent-main { display: flex; gap: 14px; align-items: center; min-width: 0; }
+    .recent-badge {
+        width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+        font-size: 20px; font-weight: 700; flex-shrink: 0; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08);
+    }
+    .recent-badge.reading { color: var(--reading); background: rgba(79,195,247,.12); }
+    .recent-badge.listening { color: var(--listening); background: rgba(155,124,255,.12); }
+    .recent-text { min-width: 0; }
+    .recent-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .recent-meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .recent-side { text-align: right; flex-shrink: 0; }
+    .recent-duration { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .heatmap-months, .heatmap-main { display: grid; gap: 10px; }
+    .heatmap-months { grid-template-columns: 38px 1fr; font-weight: 600; }
+    .heatmap-month-track { position: relative; min-height: 14px; overflow: hidden; }
+    .heatmap-month-label { position: absolute; top: 0; transform: translateX(-4px); white-space: nowrap; }
+    .heatmap-main { grid-template-columns: 28px minmax(0,1fr); align-items: start; }
+    .heatmap-days, .heatmap-week { display: grid; gap: 4px; }
+    .heatmap-grid { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+    .heatmap-cell { width: 12px; height: 12px; border-radius: 4px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.05); }
+    button.heatmap-cell { padding: 0; appearance: none; cursor: default; }
+    .heatmap-cell.level-1 { background: rgba(102,126,234,.28); }
+    .heatmap-cell.level-2 { background: rgba(102,126,234,.5); }
+    .heatmap-cell.level-3 { background: rgba(118,75,162,.68); }
+    .heatmap-cell.level-4 { background: rgba(155,124,255,.88); box-shadow: 0 0 12px rgba(155,124,255,.28); }
+    .heatmap-cell.is-clickable { cursor: pointer; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+    .heatmap-cell.is-clickable:hover,
+    .heatmap-cell.is-clickable:focus-visible { transform: translateY(-1px) scale(1.08); border-color: rgba(255,255,255,.35); outline: none; }
+    .legend-swatches { display: inline-flex; gap: 4px; }
+    .empty-state { padding: 38px 28px; text-align: center; }
+    .empty-state h3 { font-size: 24px; margin-bottom: 10px; }
+    .loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 40px; color: var(--muted); }
+    .spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+    .day-detail-backdrop {
+        position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(6, 8, 14, .72); padding: 20px; z-index: 220;
+    }
+    .day-detail-backdrop.is-open { display: flex; }
+    .day-detail-modal {
+        width: min(760px, 100%); max-height: min(82vh, 860px); overflow: hidden;
+        border-radius: 24px; background: #11131b; border: 1px solid rgba(255,255,255,.1);
+        box-shadow: 0 25px 70px rgba(0,0,0,.45); display: grid; grid-template-rows: auto auto 1fr;
+    }
+    .day-detail-head, .day-detail-summary { padding: 20px 22px; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .day-detail-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+    .day-detail-head h3 { font-size: 24px; margin-bottom: 6px; }
+    .day-detail-head p, .day-detail-summary { color: var(--muted); }
+    .day-detail-close {
+        width: 40px; height: 40px; border-radius: 999px; border: 1px solid rgba(255,255,255,.12);
+        background: rgba(255,255,255,.06); color: #fff; cursor: pointer; font-size: 20px;
+    }
+    .day-detail-body { overflow-y: auto; padding: 18px 22px 22px; }
+    .day-detail-list { display: grid; gap: 12px; }
+    .day-book-item {
+        padding: 16px 18px; border-radius: 18px; background: rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08); display: flex; justify-content: space-between; gap: 18px; align-items: center;
+    }
+    .day-book-main { min-width: 0; }
+    .day-book-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .day-book-meta { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .day-book-stats { text-align: right; flex-shrink: 0; }
+    .day-book-stat { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .day-book-sub { font-size: 12px; color: var(--muted-soft); }
+    .calendar-panel { display: grid; gap: 16px; }
+    .calendar-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .calendar-month-title { font-size: 22px; font-weight: 800; }
+    .calendar-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .calendar-grid { display: grid; gap: 10px; }
+    .calendar-weekday {
+        padding: 8px 10px; color: var(--muted-soft); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; text-align: center;
+    }
+    .calendar-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0; }
+    .calendar-weeks { display: grid; gap: 10px; }
+    .calendar-week {
+        display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); column-gap: 0; row-gap: 4px;
+        align-items: start; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08);
+        border-radius: 14px; overflow: hidden; padding-bottom: 8px;
+    }
+    .calendar-cell {
+        padding: 8px 10px; border-right: 1px solid rgba(255,255,255,.06);
+        border-bottom: 1px solid rgba(255,255,255,.06);
+        display: flex; align-items: center; grid-row: 1;
+    }
+    .calendar-week > .calendar-cell:nth-child(7) { border-right: none; }
+    .calendar-cell.is-outside { opacity: .33; }
+    .calendar-cell.is-active-day { background: rgba(79,195,247,.07); }
+    .calendar-cell-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; width: 100%; }
+    .calendar-day-number { font-size: 13px; font-weight: 800; color: #fff; }
+    .calendar-day-total { font-size: 11px; color: var(--muted-soft); }
+    .calendar-day-open {
+        width: 100%; text-align: left; padding: 0; border: none; background: none; color: inherit; cursor: pointer;
+    }
+    .calendar-day-open:focus-visible { outline: 2px solid rgba(79,195,247,.45); outline-offset: 3px; border-radius: 4px; }
+    .calendar-span {
+        min-height: 24px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center;
+        font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.94); cursor: pointer;
+        margin: 0 3px;
+    }
+    .calendar-span:hover, .calendar-span:focus-visible { filter: brightness(1.15); outline: none; }
+    .calendar-span-text { overflow: hidden; text-overflow: ellipsis; }
+    .calendar-lane-spacer { visibility: hidden; min-height: 24px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1100px) { .insights-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 768px) {
+        .stats-wrap { padding: 20px 12px 40px; }
+        .hero, .dashboard-header, .panel, .stat-card, .summary-card, .recent-item, .empty-state { border-radius: 18px; }
+        .hero { padding: 24px 20px; } .dashboard-header, .panel { padding: 20px 18px; }
+        .recent-item { flex-direction: column; align-items: flex-start; } .recent-side { text-align: left; } .chart-wrap { min-height: 280px; }
+        .day-detail-modal { border-radius: 18px; }
+        .day-book-item { flex-direction: column; align-items: flex-start; }
+        .day-book-stats { text-align: left; }
+        .calendar-weekdays { display: none; }
+        .calendar-week { column-gap: 0; row-gap: 4px; }
+        .calendar-cell { padding: 6px 8px; }
+        .calendar-span { min-height: 24px; font-size: 11px; padding: 0 8px; }
+    }
+
+    /* Time-of-day histogram + yearly recap bars */
+    .bar-row { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding-top: 8px; }
+    .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+    .bar-fill { width: 100%; max-width: 26px; border-radius: 6px 6px 2px 2px;
+        background: linear-gradient(180deg, var(--reading) 0%, rgba(79,195,247,.35) 100%); min-height: 2px; transition: opacity .2s; }
+    .bar-fill.listening { background: linear-gradient(180deg, var(--listening) 0%, rgba(155,124,255,.35) 100%); }
+    .bar-fill.muted { background: rgba(255,255,255,.08); }
+    .bar-col:hover .bar-fill { opacity: .82; }
+    .bar-label { font-size: 10px; color: var(--muted-soft); white-space: nowrap; }
+    .recap-toolbar { display: flex; align-items: center; gap: 10px; }
+    .recap-year-btn { background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
+        border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 16px; line-height: 1; }
+    .recap-year-btn:hover:not(:disabled) { background: rgba(255,255,255,.14); }
+    .recap-year-btn:disabled { opacity: .35; cursor: default; }
+    .recap-year-label { font-weight: 700; font-size: 15px; min-width: 52px; text-align: center; }
+    .books-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
+        border-radius: 14px; border: 1px solid var(--border); background: var(--panel-soft); cursor: pointer; transition: all .15s; }
+    .books-row:hover { background: rgba(255,255,255,.07); transform: translateX(2px); }
+    .books-row + .books-row { margin-top: 8px; }
+    .books-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .books-side { text-align: right; flex-shrink: 0; }
+    .books-side .v { font-weight: 700; }
+    .books-side .s { font-size: 11px; color: var(--muted-soft); }
+    .pct-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; overflow: hidden; }
+    .pct-bar > span { display: block; height: 100%; background: var(--success); }
+    .scroll-list { max-height: 360px; overflow-y: auto; }
+    .finished-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+    .finished-row:last-child { border-bottom: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="stats-wrap">
+    <section class="hero">
+        <div class="hero-top">
+            <div>
+                <h1>Unified activity dashboard</h1>
+                <p>Live listening stats come from Audiobookshelf, reading stats come from KOReader uploads, and the combined view merges both into one BookBridge-native dashboard.</p>
+                <div class="hero-meta">
+                    <div class="hero-chip"><strong>Listening</strong> ABS live data</div>
+                    <div class="hero-chip"><strong>Reading</strong> KOReader sync uploads</div>
+                    <div class="hero-chip"><strong>Timezone</strong> <span id="timezone-chip">Loading…</span></div>
                 </div>
-                <div class="dashboard-note" id="last-updated">Waiting for stats…</div>
             </div>
-        </section>
-        <section class="toolbar">
-            <div class="tab-strip">
-                <button type="button" class="btn btn-secondary tab-btn is-active" data-tab="combined">Combined</button>
-                <button type="button" class="btn btn-secondary tab-btn" data-tab="reading">Reading</button>
-                <button type="button" class="btn btn-secondary tab-btn" data-tab="listening">Listening</button>
-            </div>
-            <div class="status-row">
-                <div class="status-pill unavailable" id="status-listening"><span class="status-dot"></span><span>Listening</span></div>
-                <div class="status-pill unavailable" id="status-reading"><span class="status-dot"></span><span>Reading</span></div>
-                <button type="button" class="btn btn-secondary" id="refresh-btn">↻ Refresh</button>
-            </div>
-        </section>
-        <section id="dashboard-root">
-            <div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading dashboard data…</span></div>
-        </section>
-    </main>
-    <div class="day-detail-backdrop" id="day-detail-backdrop" aria-hidden="true">
-        <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="day-detail-title">
-            <div class="day-detail-head">
-                <div>
-                    <h3 id="day-detail-title">Books read on this day</h3>
-                    <p id="day-detail-subtitle">Select a day from the reading calendar to see which books were active.</p>
-                </div>
-                <button type="button" class="day-detail-close" id="day-detail-close" aria-label="Close">×</button>
-            </div>
-            <div class="day-detail-summary" id="day-detail-summary">No day selected.</div>
-            <div class="day-detail-body" id="day-detail-body"></div>
+            <div class="dashboard-note" id="last-updated">Waiting for stats…</div>
         </div>
-    </div>
-    <div class="day-detail-backdrop" id="book-detail-backdrop" aria-hidden="true">
-        <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
-            <div class="day-detail-head">
-                <div>
-                    <h3 id="book-detail-title">Book detail</h3>
-                    <p id="book-detail-subtitle">Per-book reading and listening statistics.</p>
-                </div>
-                <button type="button" class="day-detail-close" id="book-detail-close" aria-label="Close">×</button>
-            </div>
-            <div class="day-detail-summary" id="book-detail-summary">Loading…</div>
-            <div class="day-detail-body" id="book-detail-body"></div>
+    </section>
+    <section class="toolbar">
+        <div class="tab-strip">
+            <button type="button" class="btn btn-secondary tab-btn is-active" data-tab="combined">Combined</button>
+            <button type="button" class="btn btn-secondary tab-btn" data-tab="reading">Reading</button>
+            <button type="button" class="btn btn-secondary tab-btn" data-tab="listening">Listening</button>
         </div>
+        <div class="status-row">
+            <div class="status-pill unavailable" id="status-listening"><span class="status-dot"></span><span>Listening</span></div>
+            <div class="status-pill unavailable" id="status-reading"><span class="status-dot"></span><span>Reading</span></div>
+            <button type="button" class="btn btn-secondary" id="refresh-btn">↻ Refresh</button>
+        </div>
+    </section>
+    <section id="dashboard-root">
+        <div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading dashboard data…</span></div>
+    </section>
+</main>
+<div class="day-detail-backdrop" id="day-detail-backdrop" aria-hidden="true">
+    <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="day-detail-title">
+        <div class="day-detail-head">
+            <div>
+                <h3 id="day-detail-title">Books read on this day</h3>
+                <p id="day-detail-subtitle">Select a day from the reading calendar to see which books were active.</p>
+            </div>
+            <button type="button" class="day-detail-close" id="day-detail-close" aria-label="Close">×</button>
+        </div>
+        <div class="day-detail-summary" id="day-detail-summary">No day selected.</div>
+        <div class="day-detail-body" id="day-detail-body"></div>
     </div>
-    <script src="/static/vendor/chart.umd.min.js"></script>
-    <script>
-        const BRIDGE_TIMEZONE = {{ get_val('TZ')|tojson }};
-        const dashboardRoot = document.getElementById("dashboard-root");
-        const refreshButton = document.getElementById("refresh-btn");
-        const timezoneChip = document.getElementById("timezone-chip");
-        const lastUpdated = document.getElementById("last-updated");
-        const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
-        const statusListening = document.getElementById("status-listening");
-        const statusReading = document.getElementById("status-reading");
-        const dayDetailBackdrop = document.getElementById("day-detail-backdrop");
-        const dayDetailTitle = document.getElementById("day-detail-title");
-        const dayDetailSubtitle = document.getElementById("day-detail-subtitle");
-        const dayDetailSummary = document.getElementById("day-detail-summary");
-        const dayDetailBody = document.getElementById("day-detail-body");
-        const dayDetailClose = document.getElementById("day-detail-close");
-        const state = {
-            activeTab: "combined",
-            payload: null,
-            chart: null,
-            readingDayCache: {},
-            readingCalendarCache: {},
-            readingCalendarMonth: new Date().toISOString().slice(0, 7)
+</div>
+<div class="day-detail-backdrop" id="book-detail-backdrop" aria-hidden="true">
+    <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
+        <div class="day-detail-head">
+            <div>
+                <h3 id="book-detail-title">Book detail</h3>
+                <p id="book-detail-subtitle">Per-book reading and listening statistics.</p>
+            </div>
+            <button type="button" class="day-detail-close" id="book-detail-close" aria-label="Close">×</button>
+        </div>
+        <div class="day-detail-summary" id="book-detail-summary">Loading…</div>
+        <div class="day-detail-body" id="book-detail-body"></div>
+    </div>
+</div>
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script>
+    const BRIDGE_TIMEZONE = {{ get_val('TZ')|tojson }};
+    const dashboardRoot = document.getElementById("dashboard-root");
+    const refreshButton = document.getElementById("refresh-btn");
+    const timezoneChip = document.getElementById("timezone-chip");
+    const lastUpdated = document.getElementById("last-updated");
+    const tabButtons = Array.from(document.querySelectorAll(".tab-btn"));
+    const statusListening = document.getElementById("status-listening");
+    const statusReading = document.getElementById("status-reading");
+    const dayDetailBackdrop = document.getElementById("day-detail-backdrop");
+    const dayDetailTitle = document.getElementById("day-detail-title");
+    const dayDetailSubtitle = document.getElementById("day-detail-subtitle");
+    const dayDetailSummary = document.getElementById("day-detail-summary");
+    const dayDetailBody = document.getElementById("day-detail-body");
+    const dayDetailClose = document.getElementById("day-detail-close");
+    const state = {
+        activeTab: "combined",
+        payload: null,
+        chart: null,
+        readingDayCache: {},
+        readingCalendarCache: {},
+        readingCalendarMonth: new Date().toISOString().slice(0, 7)
+    };
+
+    const TAB_CONFIG = {
+        combined: {
+            title: "Combined activity",
+            subtitle: "Reading and listening merged into one timeline, one heatmap, and one recent activity stream.",
+            emptyTitle: "No combined activity yet",
+            emptyBody: "Stats will appear here as soon as either Audiobookshelf listening data or KOReader reading uploads are available.",
+            cards: [
+                ["Active Days", d => d.stats?.activeDays ?? 0, "Days with any synced activity"],
+                ["Total Activity", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Reading + listening time"],
+                ["Daily Average", d => formatDurationCompact(d.stats?.dailyAverageSeconds ?? 0), "Average over the last 7 days"],
+                ["Current Streak", d => `${d.stats?.currentStreakDays ?? 0} days`, "Continuous active days"],
+                ["Books With Activity", d => d.stats?.booksWithActivity ?? 0, "Distinct books"]
+            ]
+        },
+        reading: {
+            title: "Reading activity",
+            subtitle: "Derived from KOReader page-level statistics uploads and grouped into approximate dashboard sessions.",
+            emptyTitle: "No reading stats yet",
+            emptyBody: "Use the Bridge Sync plugin menu item “Sync Reading Stats” to populate this view with KOReader reading activity.",
+            cards: [
+                ["Books Tracked", d => d.stats?.booksTracked ?? 0, "All KOReader books with activity"],
+                ["Days Read", d => d.stats?.daysRead ?? 0, "Days with reading events"],
+                ["Total Reading", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated reading time"],
+                ["Pages Read", d => (d.stats?.pagesRead ?? 0).toLocaleString(), "Matches KOReader's own count"],
+                ["Reading Pace", d => `${d.stats?.pagesPerHour ?? 0}/hr`, "Pages per hour read"]
+            ]
+        },
+        listening: {
+            title: "Listening activity",
+            subtitle: "Live Audiobookshelf user stats with weekly activity, recent sessions, and yearly listening heatmap.",
+            emptyTitle: "Listening stats are unavailable",
+            emptyBody: "Audiobookshelf may be unconfigured, offline, or temporarily unreachable. The rest of BookBridge will continue working normally.",
+            cards: [
+                ["Items Finished", d => d.stats?.itemsFinished ?? 0, "Finished items reported by ABS"],
+                ["Days Listened", d => d.stats?.daysListened ?? 0, "Days with listening time"],
+                ["Total Listening", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated listening time"],
+                ["Hours / Day", d => `${d.stats?.hoursPerDay ?? 0}h`, "Average over the last 7 days"],
+                ["Avg Session", d => formatDurationCompact(d.stats?.avgSessionSeconds ?? 0), "Recent session length"]
+            ]
+        }
+    };
+
+    function destroyChart() {
+        if (state.chart) {
+            state.chart.destroy();
+            state.chart = null;
+        }
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function setStatusPill(el, available) {
+        el.classList.toggle("available", Boolean(available));
+        el.classList.toggle("unavailable", !available);
+    }
+
+    function showLoading(message) {
+        destroyChart();
+        dashboardRoot.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span><span>${escapeHtml(message)}</span></div>`;
+    }
+
+    function showError(message) {
+        destroyChart();
+        dashboardRoot.innerHTML = `<div class="empty-state"><h3>Stats could not be loaded</h3><p>${escapeHtml(message)}</p></div>`;
+    }
+
+    function formatDurationCompact(totalSeconds) {
+        const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (hours >= 24) return `${(hours / 24).toFixed(hours >= 48 ? 0 : 1)}d`;
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+    }
+
+    function formatDurationLong(totalSeconds) {
+        const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
+    }
+
+    function formatDateLabel(value) {
+        if (!value) return "No activity";
+        return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`));
+    }
+
+    function formatBestDay(bestDay) {
+        if (!bestDay || !bestDay.date) return "No activity";
+        return `${formatDateLabel(bestDay.date)} · ${formatDurationLong(bestDay.seconds || 0)}`;
+    }
+
+    function formatRelativeTime(epochSeconds) {
+        const timestamp = Number(epochSeconds || 0) * 1000;
+        if (!timestamp) return "Unknown time";
+        const diffSeconds = Math.round((Date.now() - timestamp) / 1000);
+        const abs = Math.abs(diffSeconds);
+        if (abs < 60) return "Just now";
+        if (abs < 3600) return `${Math.floor(abs / 60)}m ago`;
+        if (abs < 86400) return `${Math.floor(abs / 3600)}h ago`;
+        return `${Math.floor(abs / 86400)}d ago`;
+    }
+
+    function formatLongDate(value) {
+        if (!value) return "Unknown date";
+        return new Intl.DateTimeFormat(undefined, {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            year: "numeric"
+        }).format(new Date(`${value}T12:00:00`));
+    }
+
+    function formatMonthLabel(value) {
+        if (!value) return "Unknown month";
+        return new Intl.DateTimeFormat(undefined, {
+            month: "long",
+            year: "numeric"
+        }).format(new Date(`${value}-01T12:00:00`));
+    }
+
+    function shiftMonth(value, delta) {
+        const date = new Date(`${value}-01T12:00:00`);
+        date.setMonth(date.getMonth() + delta);
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    }
+
+    function trimTitle(value) {
+        const text = String(value || "").trim();
+        if (text.length <= 28) return text;
+        return `${text.slice(0, 27)}…`;
+    }
+
+    function bookColor(key) {
+        const text = String(key || "");
+        let hash = 0;
+        for (let i = 0; i < text.length; i += 1) {
+            hash = ((hash << 5) - hash) + text.charCodeAt(i);
+            hash |= 0;
+        }
+        const hue = Math.abs(hash) % 360;
+        return {
+            background: `hsla(${hue}, 62%, 56%, 0.32)`,
+            border: `hsla(${hue}, 68%, 72%, 0.32)`,
+            preview: `hsla(${hue}, 62%, 62%, 0.55)`
         };
+    }
 
-        const TAB_CONFIG = {
-            combined: {
-                title: "Combined activity",
-                subtitle: "Reading and listening merged into one timeline, one heatmap, and one recent activity stream.",
-                emptyTitle: "No combined activity yet",
-                emptyBody: "Stats will appear here as soon as either Audiobookshelf listening data or KOReader reading uploads are available.",
-                cards: [
-                    ["Active Days", d => d.stats?.activeDays ?? 0, "Days with any synced activity"],
-                    ["Total Activity", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Reading + listening time"],
-                    ["Daily Average", d => formatDurationCompact(d.stats?.dailyAverageSeconds ?? 0), "Average over the last 7 days"],
-                    ["Current Streak", d => `${d.stats?.currentStreakDays ?? 0} days`, "Continuous active days"],
-                    ["Books With Activity", d => d.stats?.booksWithActivity ?? 0, "Distinct books"]
-                ]
-            },
-            reading: {
-                title: "Reading activity",
-                subtitle: "Derived from KOReader page-level statistics uploads and grouped into approximate dashboard sessions.",
-                emptyTitle: "No reading stats yet",
-                emptyBody: "Use the Bridge Sync plugin menu item “Sync Reading Stats” to populate this view with KOReader reading activity.",
-                cards: [
-                    ["Books Tracked", d => d.stats?.booksTracked ?? 0, "All KOReader books with activity"],
-                    ["Days Read", d => d.stats?.daysRead ?? 0, "Days with reading events"],
-                    ["Total Reading", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated reading time"],
-                    ["Pages Read", d => (d.stats?.pagesRead ?? 0).toLocaleString(), "Matches KOReader's own count"],
-                    ["Reading Pace", d => `${d.stats?.pagesPerHour ?? 0}/hr`, "Pages per hour read"]
-                ]
-            },
-            listening: {
-                title: "Listening activity",
-                subtitle: "Live Audiobookshelf user stats with weekly activity, recent sessions, and yearly listening heatmap.",
-                emptyTitle: "Listening stats are unavailable",
-                emptyBody: "Audiobookshelf may be unconfigured, offline, or temporarily unreachable. The rest of BookBridge will continue working normally.",
-                cards: [
-                    ["Items Finished", d => d.stats?.itemsFinished ?? 0, "Finished items reported by ABS"],
-                    ["Days Listened", d => d.stats?.daysListened ?? 0, "Days with listening time"],
-                    ["Total Listening", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated listening time"],
-                    ["Hours / Day", d => `${d.stats?.hoursPerDay ?? 0}h`, "Average over the last 7 days"],
-                    ["Avg Session", d => formatDurationCompact(d.stats?.avgSessionSeconds ?? 0), "Recent session length"]
-                ]
-            }
-        };
+    function openDayDetail() {
+        dayDetailBackdrop.classList.add("is-open");
+        dayDetailBackdrop.setAttribute("aria-hidden", "false");
+    }
 
-        function destroyChart() {
-            if (state.chart) {
-                state.chart.destroy();
-                state.chart = null;
-            }
+    function closeDayDetail() {
+        dayDetailBackdrop.classList.remove("is-open");
+        dayDetailBackdrop.setAttribute("aria-hidden", "true");
+    }
+
+    function renderReadingDayDetail(payload) {
+        dayDetailTitle.textContent = "Books read on this day";
+        dayDetailSubtitle.textContent = formatLongDate(payload.date);
+        dayDetailSummary.textContent = `${payload.totalBooks || 0} books · ${formatDurationLong(payload.totalSeconds || 0)} total · ${payload.totalPages || 0} page events`;
+
+        const books = Array.isArray(payload.books) ? payload.books : [];
+        if (!books.length) {
+            dayDetailBody.innerHTML = `<div class="empty-state"><h3>No KOReader books that day</h3><p>This day had no KOReader reading activity after timezone bucketing.</p></div>`;
+            return;
         }
 
-        function escapeHtml(value) {
-            return String(value ?? "")
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/\"/g, "&quot;")
-                .replace(/'/g, "&#39;");
-        }
-
-        function setStatusPill(el, available) {
-            el.classList.toggle("available", Boolean(available));
-            el.classList.toggle("unavailable", !available);
-        }
-
-        function showLoading(message) {
-            destroyChart();
-            dashboardRoot.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span><span>${escapeHtml(message)}</span></div>`;
-        }
-
-        function showError(message) {
-            destroyChart();
-            dashboardRoot.innerHTML = `<div class="empty-state"><h3>Stats could not be loaded</h3><p>${escapeHtml(message)}</p></div>`;
-        }
-
-        function formatDurationCompact(totalSeconds) {
-            const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            if (hours >= 24) return `${(hours / 24).toFixed(hours >= 48 ? 0 : 1)}d`;
-            if (hours > 0) return `${hours}h ${minutes}m`;
-            return `${minutes}m`;
-        }
-
-        function formatDurationLong(totalSeconds) {
-            const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            if (hours > 0) return `${hours}h ${minutes}m`;
-            return `${minutes}m`;
-        }
-
-        function formatDateLabel(value) {
-            if (!value) return "No activity";
-            return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`));
-        }
-
-        function formatBestDay(bestDay) {
-            if (!bestDay || !bestDay.date) return "No activity";
-            return `${formatDateLabel(bestDay.date)} · ${formatDurationLong(bestDay.seconds || 0)}`;
-        }
-
-        function formatRelativeTime(epochSeconds) {
-            const timestamp = Number(epochSeconds || 0) * 1000;
-            if (!timestamp) return "Unknown time";
-            const diffSeconds = Math.round((Date.now() - timestamp) / 1000);
-            const abs = Math.abs(diffSeconds);
-            if (abs < 60) return "Just now";
-            if (abs < 3600) return `${Math.floor(abs / 60)}m ago`;
-            if (abs < 86400) return `${Math.floor(abs / 3600)}h ago`;
-            return `${Math.floor(abs / 86400)}d ago`;
-        }
-
-        function formatLongDate(value) {
-            if (!value) return "Unknown date";
-            return new Intl.DateTimeFormat(undefined, {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-                year: "numeric"
-            }).format(new Date(`${value}T12:00:00`));
-        }
-
-        function formatMonthLabel(value) {
-            if (!value) return "Unknown month";
-            return new Intl.DateTimeFormat(undefined, {
-                month: "long",
-                year: "numeric"
-            }).format(new Date(`${value}-01T12:00:00`));
-        }
-
-        function shiftMonth(value, delta) {
-            const date = new Date(`${value}-01T12:00:00`);
-            date.setMonth(date.getMonth() + delta);
-            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        }
-
-        function trimTitle(value) {
-            const text = String(value || "").trim();
-            if (text.length <= 28) return text;
-            return `${text.slice(0, 27)}…`;
-        }
-
-        function bookColor(key) {
-            const text = String(key || "");
-            let hash = 0;
-            for (let i = 0; i < text.length; i += 1) {
-                hash = ((hash << 5) - hash) + text.charCodeAt(i);
-                hash |= 0;
-            }
-            const hue = Math.abs(hash) % 360;
-            return {
-                background: `hsla(${hue}, 62%, 56%, 0.32)`,
-                border: `hsla(${hue}, 68%, 72%, 0.32)`,
-                preview: `hsla(${hue}, 62%, 62%, 0.55)`
-            };
-        }
-
-        function openDayDetail() {
-            dayDetailBackdrop.classList.add("is-open");
-            dayDetailBackdrop.setAttribute("aria-hidden", "false");
-        }
-
-        function closeDayDetail() {
-            dayDetailBackdrop.classList.remove("is-open");
-            dayDetailBackdrop.setAttribute("aria-hidden", "true");
-        }
-
-        function renderReadingDayDetail(payload) {
-            dayDetailTitle.textContent = "Books read on this day";
-            dayDetailSubtitle.textContent = formatLongDate(payload.date);
-            dayDetailSummary.textContent = `${payload.totalBooks || 0} books · ${formatDurationLong(payload.totalSeconds || 0)} total · ${payload.totalPages || 0} page events`;
-
-            const books = Array.isArray(payload.books) ? payload.books : [];
-            if (!books.length) {
-                dayDetailBody.innerHTML = `<div class="empty-state"><h3>No KOReader books that day</h3><p>This day had no KOReader reading activity after timezone bucketing.</p></div>`;
-                return;
-            }
-
-            dayDetailBody.innerHTML = `
-                <div class="day-detail-list">
-                    ${books.map(book => `
-                        <article class="day-book-item">
-                            <div class="day-book-main">
-                                <div class="day-book-title">${escapeHtml(book.title || "Unknown book")}</div>
-                                <div class="day-book-meta">${escapeHtml([book.author || "Unknown author", book.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · "))}</div>
-                                <div class="day-book-meta">First activity ${escapeHtml(formatRelativeTime(book.firstStartedAt || 0))} · Last activity ${escapeHtml(formatRelativeTime(book.lastEndedAt || 0))}</div>
-                            </div>
-                            <div class="day-book-stats">
-                                <div class="day-book-stat">${escapeHtml(formatDurationLong(book.totalSeconds || 0))}</div>
-                                <div class="day-book-sub">${escapeHtml(`${book.pagesRead || 0} page events`)}</div>
-                                <div class="day-book-sub">${escapeHtml(`${book.sessionCount || 0} sessions`)}</div>
-                            </div>
-                        </article>
-                    `).join("")}
-                </div>
-            `;
-        }
-
-        async function openReadingDay(dateStr) {
-            if (!dateStr) return;
-            openDayDetail();
-            dayDetailTitle.textContent = "Books read on this day";
-            dayDetailSubtitle.textContent = formatLongDate(dateStr);
-            dayDetailSummary.textContent = "Loading KOReader day details…";
-            dayDetailBody.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading book activity…</span></div>`;
-
-            if (state.readingDayCache[dateStr]) {
-                renderReadingDayDetail(state.readingDayCache[dateStr]);
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/stats/reading-day?date=${encodeURIComponent(dateStr)}`, { cache: "no-store" });
-                if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
-                const payload = await response.json();
-                state.readingDayCache[dateStr] = payload;
-                renderReadingDayDetail(payload);
-            } catch (error) {
-                dayDetailSummary.textContent = "Could not load day details";
-                dayDetailBody.innerHTML = `<div class="empty-state"><h3>Day details are unavailable</h3><p>${escapeHtml(error.message || "Unknown error")}</p></div>`;
-            }
-        }
-
-        function calendarPanelSkeleton() {
-            return `
-                <section class="panel">
-                    <div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div>
-                    <div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading monthly reading calendar…</span></div>
-                </section>
-            `;
-        }
-
-        function renderReadingCalendar(calendarPayload) {
-            const month = calendarPayload?.month || state.readingCalendarMonth;
-            const days = calendarPayload?.days || {};
-            const firstDay = new Date(`${month}-01T12:00:00`);
-            const monthIndex = firstDay.getMonth();
-            const firstGridDate = new Date(firstDay);
-            const weekday = (firstGridDate.getDay() + 6) % 7;
-            firstGridDate.setDate(firstGridDate.getDate() - weekday);
-
-            const weekdayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-            const cells = [];
-            for (let i = 0; i < 42; i += 1) {
-                const cellDate = new Date(firstGridDate);
-                cellDate.setDate(firstGridDate.getDate() + i);
-                const iso = cellDate.toISOString().slice(0, 10);
-                const inMonth = cellDate.getMonth() === monthIndex;
-                const books = Array.isArray(days[iso]) ? days[iso] : [];
-                const totalSeconds = books.reduce((sum, book) => sum + Number(book.totalSeconds || 0), 0);
-                cells.push({ iso, day: cellDate.getDate(), inMonth, books, totalSeconds });
-            }
-
-            const weeks = [];
-            for (let offset = 0; offset < cells.length; offset += 7) {
-                const weekCells = cells.slice(offset, offset + 7);
-                const bookSegments = [];
-                const perBook = new Map();
-
-                weekCells.forEach((cell, dayIndex) => {
-                    cell.books.forEach(book => {
-                        const key = String(book.bookKey || book.absId || book.md5 || `${cell.iso}-${book.title}`);
-                        const existing = perBook.get(key) || {
-                            key,
-                            title: book.title || "Unknown book",
-                            isLinked: book.isLinked !== false,
-                            totalSeconds: 0,
-                            days: [],
-                            color: bookColor(key)
-                        };
-                        existing.totalSeconds += Number(book.totalSeconds || 0);
-                        existing.days.push(dayIndex);
-                        perBook.set(key, existing);
-                    });
-                });
-
-                Array.from(perBook.values())
-                    .sort((a, b) => b.totalSeconds - a.totalSeconds || a.title.localeCompare(b.title))
-                    .forEach(book => {
-                        const indices = Array.from(new Set(book.days)).sort((a, b) => a - b);
-                        let start = indices[0];
-                        let previous = indices[0];
-                        for (let i = 1; i <= indices.length; i += 1) {
-                            const current = indices[i];
-                            if (current === previous + 1) {
-                                previous = current;
-                                continue;
-                            }
-                            bookSegments.push({
-                                key: book.key,
-                                title: book.title,
-                                isLinked: book.isLinked,
-                                start,
-                                end: previous,
-                                totalSeconds: book.totalSeconds,
-                                color: book.color
-                            });
-                            start = current;
-                            previous = current;
-                        }
-                    });
-
-                const lanes = [];
-                bookSegments
-                    .sort((a, b) => a.start - b.start || b.end - a.end || b.totalSeconds - a.totalSeconds)
-                    .forEach(segment => {
-                        let lane = 0;
-                        while (lane < lanes.length && lanes[lane] >= segment.start) lane += 1;
-                        if (lane === lanes.length) lanes.push(-1);
-                        lanes[lane] = segment.end;
-                        segment.lane = lane;
-                    });
-
-                weeks.push({
-                    cells: weekCells,
-                    segments: bookSegments,
-                    laneCount: Math.max(lanes.length, 0)
-                });
-            }
-
-            return `
-                <section class="panel">
-                    <div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div>
-                    <div class="calendar-panel">
-                        <div class="calendar-nav">
-                            <div class="calendar-month-title">${escapeHtml(formatMonthLabel(month))}</div>
-                            <div class="calendar-actions">
-                                <button type="button" class="btn btn-secondary" data-calendar-shift="-1">← Prev</button>
-                                <button type="button" class="btn btn-secondary" data-calendar-today="1">Current Month</button>
-                                <button type="button" class="btn btn-secondary" data-calendar-shift="1">Next →</button>
-                            </div>
+        dayDetailBody.innerHTML = `
+            <div class="day-detail-list">
+                ${books.map(book => `
+                    <article class="day-book-item">
+                        <div class="day-book-main">
+                            <div class="day-book-title">${escapeHtml(book.title || "Unknown book")}</div>
+                            <div class="day-book-meta">${escapeHtml([book.author || "Unknown author", book.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · "))}</div>
+                            <div class="day-book-meta">First activity ${escapeHtml(formatRelativeTime(book.firstStartedAt || 0))} · Last activity ${escapeHtml(formatRelativeTime(book.lastEndedAt || 0))}</div>
                         </div>
-                        <div class="calendar-grid">
-                            <div class="calendar-weekdays">${weekdayLabels.map(label => `<div class="calendar-weekday">${label}</div>`).join("")}</div>
-                            <div class="calendar-weeks">
-                                ${weeks.map(week => `
-                                    <div class="calendar-week">
-                                        ${week.cells.map(cell => `
-                                            <div class="calendar-cell ${cell.inMonth ? "" : "is-outside"} ${cell.books.length ? "is-active-day" : ""}">
-                                                <button type="button" class="calendar-day-open" ${cell.books.length ? `data-reading-date="${cell.iso}"` : ""} ${cell.books.length ? `title="Show books for ${cell.iso}"` : 'tabindex="-1"'} ${cell.books.length ? "" : "disabled"}>
-                                                    <div class="calendar-cell-top">
-                                                        <div class="calendar-day-number">${cell.day}</div>
-                                                        <div class="calendar-day-total">${cell.books.length ? escapeHtml(formatDurationLong(cell.totalSeconds)) : ""}</div>
-                                                    </div>
-                                                </button>
-                                            </div>
-                                        `).join("")}
-                                        ${week.segments.map(segment => `
-                                            <button
-                                                type="button"
-                                                class="calendar-span"
-                                                data-reading-date="${week.cells[segment.start].iso}"
-                                                title="${escapeHtml(segment.isLinked === false ? `Unlinked · ${segment.title}` : segment.title)}"
-                                                style="grid-column:${segment.start + 1} / ${segment.end + 2}; grid-row:${segment.lane + 2}; background:${segment.color.background}; border-color:${segment.color.border};"
-                                            >
-                                                <span class="calendar-span-text">${escapeHtml(trimTitle(segment.title))}</span>
-                                            </button>
-                                        `).join("")}
-                                        ${Array.from({ length: week.laneCount }).map((_, index) => `<div class="calendar-lane-spacer" style="grid-column:1 / -1; grid-row:${index + 2};"></div>`).join("")}
-                                    </div>
-                                `).join("")}
-                            </div>
+                        <div class="day-book-stats">
+                            <div class="day-book-stat">${escapeHtml(formatDurationLong(book.totalSeconds || 0))}</div>
+                            <div class="day-book-sub">${escapeHtml(`${book.pagesRead || 0} page events`)}</div>
+                            <div class="day-book-sub">${escapeHtml(`${book.sessionCount || 0} sessions`)}</div>
                         </div>
-                    </div>
-                </section>
-            `;
+                    </article>
+                `).join("")}
+            </div>
+        `;
+    }
+
+    async function openReadingDay(dateStr) {
+        if (!dateStr) return;
+        openDayDetail();
+        dayDetailTitle.textContent = "Books read on this day";
+        dayDetailSubtitle.textContent = formatLongDate(dateStr);
+        dayDetailSummary.textContent = "Loading KOReader day details…";
+        dayDetailBody.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading book activity…</span></div>`;
+
+        if (state.readingDayCache[dateStr]) {
+            renderReadingDayDetail(state.readingDayCache[dateStr]);
+            return;
         }
 
-        async function loadReadingCalendarMonth(month, force = false) {
-            const normalizedMonth = month || state.readingCalendarMonth;
-            if (!force && state.readingCalendarCache[normalizedMonth]) {
-                return state.readingCalendarCache[normalizedMonth];
-            }
-
-            const response = await fetch(`/api/stats/reading-calendar?month=${encodeURIComponent(normalizedMonth)}`, { cache: "no-store" });
+        try {
+            const response = await fetch(`/api/stats/reading-day?date=${encodeURIComponent(dateStr)}`, { cache: "no-store" });
             if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
             const payload = await response.json();
-            state.readingCalendarCache[normalizedMonth] = payload;
-            return payload;
+            state.readingDayCache[dateStr] = payload;
+            renderReadingDayDetail(payload);
+        } catch (error) {
+            dayDetailSummary.textContent = "Could not load day details";
+            dayDetailBody.innerHTML = `<div class="empty-state"><h3>Day details are unavailable</h3><p>${escapeHtml(error.message || "Unknown error")}</p></div>`;
+        }
+    }
+
+    function calendarPanelSkeleton() {
+        return `
+            <section class="panel">
+                <div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div>
+                <div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading monthly reading calendar…</span></div>
+            </section>
+        `;
+    }
+
+    function renderReadingCalendar(calendarPayload) {
+        const month = calendarPayload?.month || state.readingCalendarMonth;
+        const days = calendarPayload?.days || {};
+        const firstDay = new Date(`${month}-01T12:00:00`);
+        const monthIndex = firstDay.getMonth();
+        const firstGridDate = new Date(firstDay);
+        const weekday = (firstGridDate.getDay() + 6) % 7;
+        firstGridDate.setDate(firstGridDate.getDate() - weekday);
+
+        const weekdayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        const cells = [];
+        for (let i = 0; i < 42; i += 1) {
+            const cellDate = new Date(firstGridDate);
+            cellDate.setDate(firstGridDate.getDate() + i);
+            const iso = cellDate.toISOString().slice(0, 10);
+            const inMonth = cellDate.getMonth() === monthIndex;
+            const books = Array.isArray(days[iso]) ? days[iso] : [];
+            const totalSeconds = books.reduce((sum, book) => sum + Number(book.totalSeconds || 0), 0);
+            cells.push({ iso, day: cellDate.getDate(), inMonth, books, totalSeconds });
         }
 
-        function summaryCards(dataset) {
-            const summary = [
-                ["Week Total", formatDurationLong(dataset.stats?.weekTotalSeconds ?? 0)],
-                ["Daily Average", formatDurationLong(dataset.stats?.dailyAverageSeconds ?? 0)],
-                ["Best Day", formatBestDay(dataset.stats?.bestDay)],
-                ["Current Streak", `${dataset.stats?.currentStreakDays ?? 0} days`]
-            ];
-            return `
-                <section class="panel">
-                    <div class="panel-head"><h3>Weekly summary</h3><span>Last 7 days</span></div>
-                    <div class="summary-grid">
-                        ${summary.map(item => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(item[0])}</div><div class="summary-card-value">${escapeHtml(item[1])}</div><div class="summary-card-sub">Bucketed using the configured bridge timezone.</div></article>`).join("")}
-                    </div>
-                </section>
-            `;
-        }
+        const weeks = [];
+        for (let offset = 0; offset < cells.length; offset += 7) {
+            const weekCells = cells.slice(offset, offset + 7);
+            const bookSegments = [];
+            const perBook = new Map();
 
-        function recentSessions(dataset) {
-            const sessions = Array.isArray(dataset.recentSessions) ? dataset.recentSessions : [];
-            if (!sessions.length) {
-                return `<section class="panel"><div class="panel-head"><h3>Recent sessions</h3><span>No recent activity</span></div><div class="empty-state"><h3>Nothing recent yet</h3><p>Recent reading or listening sessions will show up here as the bridge receives activity.</p></div></section>`;
-            }
-            return `
-                <section class="panel">
-                    <div class="panel-head"><h3>Recent sessions</h3><span>Newest activity first</span></div>
-                    <div class="recent-list">
-                        ${sessions.map(session => {
-                            const type = session.activityType === "reading" ? "reading" : "listening";
-                            const icon = type === "reading" ? "📖" : "🎧";
-                            const meta = [session.author || null, type === "reading" && session.pagesRead ? `${session.pagesRead} pages` : null, type === "reading" && session.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · ");
-                            return `<article class="recent-item"><div class="recent-main"><div class="recent-badge ${type}">${icon}</div><div class="recent-text"><div class="recent-title">${escapeHtml(session.title || "Unknown title")}</div><div class="recent-meta">${escapeHtml(meta || (type === "reading" ? "Reading session" : "Listening session"))}</div></div></div><div class="recent-side"><div class="recent-duration">${escapeHtml(formatDurationLong(session.durationSeconds || 0))}</div><div class="recent-time">${escapeHtml(formatRelativeTime(session.endedAt || session.startedAt || 0))}</div></div></article>`;
-                        }).join("")}
-                    </div>
-                </section>
-            `;
-        }
+            weekCells.forEach((cell, dayIndex) => {
+                cell.books.forEach(book => {
+                    const key = String(book.bookKey || book.absId || book.md5 || `${cell.iso}-${book.title}`);
+                    const existing = perBook.get(key) || {
+                        key,
+                        title: book.title || "Unknown book",
+                        isLinked: book.isLinked !== false,
+                        totalSeconds: 0,
+                        days: [],
+                        color: bookColor(key)
+                    };
+                    existing.totalSeconds += Number(book.totalSeconds || 0);
+                    existing.days.push(dayIndex);
+                    perBook.set(key, existing);
+                });
+            });
 
-        function heatLevel(seconds, maxSeconds) {
-            if (!seconds || seconds <= 0 || !maxSeconds) return 0;
-            const ratio = seconds / maxSeconds;
-            if (ratio < 0.25) return 1;
-            if (ratio < 0.5) return 2;
-            if (ratio < 0.8) return 3;
-            return 4;
-        }
-
-        function heatmap(dataset) {
-            const entries = Array.isArray(dataset.heatmap) ? dataset.heatmap : [];
-            const readingInteractive = state.activeTab === "reading";
-            const year = new Date().getFullYear();
-            const start = new Date(year, 0, 1);
-            const end = new Date(year, 11, 31);
-            const firstSunday = new Date(start);
-            firstSunday.setDate(firstSunday.getDate() - firstSunday.getDay());
-            const lastSaturday = new Date(end);
-            lastSaturday.setDate(lastSaturday.getDate() + (6 - lastSaturday.getDay()));
-            const map = new Map(entries.map(entry => [entry.date, Number(entry.seconds || 0)]));
-            const maxSeconds = entries.reduce((max, entry) => Math.max(max, Number(entry.seconds || 0)), 0);
-            const weeks = [];
-            const labels = [];
-            const cursor = new Date(firstSunday);
-
-            while (cursor <= lastSaturday) {
-                const weekStart = new Date(cursor);
-                const cells = [];
-                for (let day = 0; day < 7; day += 1) {
-                    const current = new Date(weekStart);
-                    current.setDate(weekStart.getDate() + day);
-                    const iso = current.toISOString().slice(0, 10);
-                    const inYear = current.getFullYear() === year;
-                    const seconds = inYear ? (map.get(iso) || 0) : 0;
-                    cells.push({ iso, inYear, seconds, level: inYear ? heatLevel(seconds, maxSeconds) : 0 });
-                }
-                if (weekStart.getDate() <= 7) {
-                    labels.push({ label: weekStart.toLocaleString(undefined, { month: "short" }), index: weeks.length });
-                }
-                weeks.push(cells);
-                cursor.setDate(cursor.getDate() + 7);
-            }
-
-            return `
-                <section class="panel">
-                    <div class="panel-head"><h3>Yearly heatmap</h3><span>${readingInteractive ? `${year} · Click a day to see books` : year}</span></div>
-                    <div class="heatmap-shell">
-                        <div class="heatmap-months"><div></div><div class="heatmap-month-track">${labels.map(label => `<span class="heatmap-month-label" style="left:${label.index * 16}px">${escapeHtml(label.label)}</span>`).join("")}</div></div>
-                        <div class="heatmap-main">
-                            <div class="heatmap-days"><span>Sun</span><span></span><span>Tue</span><span></span><span>Thu</span><span></span><span>Sat</span></div>
-                            <div class="heatmap-grid">
-                                ${weeks.map(week => `<div class="heatmap-week">${week.map(cell => `<button type="button" class="heatmap-cell ${cell.level ? `level-${cell.level}` : ""} ${readingInteractive && cell.inYear ? "is-clickable" : ""}" ${readingInteractive && cell.inYear ? `data-reading-date="${cell.iso}"` : ""} title="${cell.inYear ? `${cell.iso}: ${formatDurationLong(cell.seconds)}` : ""}" ${readingInteractive && cell.inYear ? `aria-label="Show reading books for ${cell.iso}"` : 'tabindex="-1" aria-hidden="true"'}></button>`).join("")}</div>`).join("")}
-                            </div>
-                        </div>
-                        <div class="heatmap-legend"><span>Less</span><span class="legend-swatches"><span class="heatmap-cell"></span><span class="heatmap-cell level-1"></span><span class="heatmap-cell level-2"></span><span class="heatmap-cell level-3"></span><span class="heatmap-cell level-4"></span></span><span>More</span></div>
-                    </div>
-                </section>
-            `;
-        }
-
-        function renderChart(dataset) {
-            const canvas = document.getElementById("activity-chart");
-            if (!canvas) return;
-
-            const rows = Array.isArray(dataset.daily) ? dataset.daily : [];
-            const labels = rows.map(row => formatDateLabel(row.date));
-            let datasets;
-            if (state.activeTab === "combined") {
-                datasets = [
-                    { label: "Listening", data: rows.map(row => Number(row.listeningSeconds || 0)), backgroundColor: "rgba(155,124,255,.72)", borderRadius: 10, stack: "activity" },
-                    { label: "Reading", data: rows.map(row => Number(row.readingSeconds || 0)), backgroundColor: "rgba(79,195,247,.8)", borderRadius: 10, stack: "activity" }
-                ];
-            } else {
-                const isReading = state.activeTab === "reading";
-                datasets = [
-                    {
-                        label: isReading ? "Reading" : "Listening",
-                        data: rows.map(row => Number(row.seconds || 0)),
-                        backgroundColor: isReading ? "rgba(79,195,247,.82)" : "rgba(155,124,255,.78)",
-                        borderColor: isReading ? "rgba(79,195,247,1)" : "rgba(155,124,255,1)",
-                        borderWidth: 1,
-                        borderRadius: 10
-                    }
-                ];
-            }
-
-            state.chart = new Chart(canvas, {
-                type: "bar",
-                data: { labels, datasets },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { mode: "index", intersect: false },
-                    plugins: {
-                        legend: { labels: { color: "rgba(255,255,255,.78)" } },
-                        tooltip: { callbacks: { label(context) { return `${context.dataset.label}: ${formatDurationLong(context.parsed.y || 0)}`; } } }
-                    },
-                    scales: {
-                        x: { ticks: { color: "rgba(255,255,255,.62)" }, grid: { display: false } },
-                        y: {
-                            beginAtZero: true,
-                            ticks: { color: "rgba(255,255,255,.62)", callback(value) { return formatDurationLong(value); } },
-                            grid: { color: "rgba(255,255,255,.08)" }
+            Array.from(perBook.values())
+                .sort((a, b) => b.totalSeconds - a.totalSeconds || a.title.localeCompare(b.title))
+                .forEach(book => {
+                    const indices = Array.from(new Set(book.days)).sort((a, b) => a - b);
+                    let start = indices[0];
+                    let previous = indices[0];
+                    for (let i = 1; i <= indices.length; i += 1) {
+                        const current = indices[i];
+                        if (current === previous + 1) {
+                            previous = current;
+                            continue;
                         }
+                        bookSegments.push({
+                            key: book.key,
+                            title: book.title,
+                            isLinked: book.isLinked,
+                            start,
+                            end: previous,
+                            totalSeconds: book.totalSeconds,
+                            color: book.color
+                        });
+                        start = current;
+                        previous = current;
+                    }
+                });
+
+            const lanes = [];
+            bookSegments
+                .sort((a, b) => a.start - b.start || b.end - a.end || b.totalSeconds - a.totalSeconds)
+                .forEach(segment => {
+                    let lane = 0;
+                    while (lane < lanes.length && lanes[lane] >= segment.start) lane += 1;
+                    if (lane === lanes.length) lanes.push(-1);
+                    lanes[lane] = segment.end;
+                    segment.lane = lane;
+                });
+
+            weeks.push({
+                cells: weekCells,
+                segments: bookSegments,
+                laneCount: Math.max(lanes.length, 0)
+            });
+        }
+
+        return `
+            <section class="panel">
+                <div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div>
+                <div class="calendar-panel">
+                    <div class="calendar-nav">
+                        <div class="calendar-month-title">${escapeHtml(formatMonthLabel(month))}</div>
+                        <div class="calendar-actions">
+                            <button type="button" class="btn btn-secondary" data-calendar-shift="-1">← Prev</button>
+                            <button type="button" class="btn btn-secondary" data-calendar-today="1">Current Month</button>
+                            <button type="button" class="btn btn-secondary" data-calendar-shift="1">Next →</button>
+                        </div>
+                    </div>
+                    <div class="calendar-grid">
+                        <div class="calendar-weekdays">${weekdayLabels.map(label => `<div class="calendar-weekday">${label}</div>`).join("")}</div>
+                        <div class="calendar-weeks">
+                            ${weeks.map(week => `
+                                <div class="calendar-week">
+                                    ${week.cells.map(cell => `
+                                        <div class="calendar-cell ${cell.inMonth ? "" : "is-outside"} ${cell.books.length ? "is-active-day" : ""}">
+                                            <button type="button" class="calendar-day-open" ${cell.books.length ? `data-reading-date="${cell.iso}"` : ""} ${cell.books.length ? `title="Show books for ${cell.iso}"` : 'tabindex="-1"'} ${cell.books.length ? "" : "disabled"}>
+                                                <div class="calendar-cell-top">
+                                                    <div class="calendar-day-number">${cell.day}</div>
+                                                    <div class="calendar-day-total">${cell.books.length ? escapeHtml(formatDurationLong(cell.totalSeconds)) : ""}</div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                    `).join("")}
+                                    ${week.segments.map(segment => `
+                                        <button
+                                            type="button"
+                                            class="calendar-span"
+                                            data-reading-date="${week.cells[segment.start].iso}"
+                                            title="${escapeHtml(segment.isLinked === false ? `Unlinked · ${segment.title}` : segment.title)}"
+                                            style="grid-column:${segment.start + 1} / ${segment.end + 2}; grid-row:${segment.lane + 2}; background:${segment.color.background}; border-color:${segment.color.border};"
+                                        >
+                                            <span class="calendar-span-text">${escapeHtml(trimTitle(segment.title))}</span>
+                                        </button>
+                                    `).join("")}
+                                    ${Array.from({ length: week.laneCount }).map((_, index) => `<div class="calendar-lane-spacer" style="grid-column:1 / -1; grid-row:${index + 2};"></div>`).join("")}
+                                </div>
+                            `).join("")}
+                        </div>
+                    </div>
+                </div>
+            </section>
+        `;
+    }
+
+    async function loadReadingCalendarMonth(month, force = false) {
+        const normalizedMonth = month || state.readingCalendarMonth;
+        if (!force && state.readingCalendarCache[normalizedMonth]) {
+            return state.readingCalendarCache[normalizedMonth];
+        }
+
+        const response = await fetch(`/api/stats/reading-calendar?month=${encodeURIComponent(normalizedMonth)}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+        const payload = await response.json();
+        state.readingCalendarCache[normalizedMonth] = payload;
+        return payload;
+    }
+
+    function summaryCards(dataset) {
+        const summary = [
+            ["Week Total", formatDurationLong(dataset.stats?.weekTotalSeconds ?? 0)],
+            ["Daily Average", formatDurationLong(dataset.stats?.dailyAverageSeconds ?? 0)],
+            ["Best Day", formatBestDay(dataset.stats?.bestDay)],
+            ["Current Streak", `${dataset.stats?.currentStreakDays ?? 0} days`]
+        ];
+        return `
+            <section class="panel">
+                <div class="panel-head"><h3>Weekly summary</h3><span>Last 7 days</span></div>
+                <div class="summary-grid">
+                    ${summary.map(item => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(item[0])}</div><div class="summary-card-value">${escapeHtml(item[1])}</div><div class="summary-card-sub">Bucketed using the configured bridge timezone.</div></article>`).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    function recentSessions(dataset) {
+        const sessions = Array.isArray(dataset.recentSessions) ? dataset.recentSessions : [];
+        if (!sessions.length) {
+            return `<section class="panel"><div class="panel-head"><h3>Recent sessions</h3><span>No recent activity</span></div><div class="empty-state"><h3>Nothing recent yet</h3><p>Recent reading or listening sessions will show up here as the bridge receives activity.</p></div></section>`;
+        }
+        return `
+            <section class="panel">
+                <div class="panel-head"><h3>Recent sessions</h3><span>Newest activity first</span></div>
+                <div class="recent-list">
+                    ${sessions.map(session => {
+                        const type = session.activityType === "reading" ? "reading" : "listening";
+                        const icon = type === "reading" ? "📖" : "🎧";
+                        const meta = [session.author || null, type === "reading" && session.pagesRead ? `${session.pagesRead} pages` : null, type === "reading" && session.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · ");
+                        return `<article class="recent-item"><div class="recent-main"><div class="recent-badge ${type}">${icon}</div><div class="recent-text"><div class="recent-title">${escapeHtml(session.title || "Unknown title")}</div><div class="recent-meta">${escapeHtml(meta || (type === "reading" ? "Reading session" : "Listening session"))}</div></div></div><div class="recent-side"><div class="recent-duration">${escapeHtml(formatDurationLong(session.durationSeconds || 0))}</div><div class="recent-time">${escapeHtml(formatRelativeTime(session.endedAt || session.startedAt || 0))}</div></div></article>`;
+                    }).join("")}
+                </div>
+            </section>
+        `;
+    }
+
+    function heatLevel(seconds, maxSeconds) {
+        if (!seconds || seconds <= 0 || !maxSeconds) return 0;
+        const ratio = seconds / maxSeconds;
+        if (ratio < 0.25) return 1;
+        if (ratio < 0.5) return 2;
+        if (ratio < 0.8) return 3;
+        return 4;
+    }
+
+    function heatmap(dataset) {
+        const entries = Array.isArray(dataset.heatmap) ? dataset.heatmap : [];
+        const readingInteractive = state.activeTab === "reading";
+        const year = new Date().getFullYear();
+        const start = new Date(year, 0, 1);
+        const end = new Date(year, 11, 31);
+        const firstSunday = new Date(start);
+        firstSunday.setDate(firstSunday.getDate() - firstSunday.getDay());
+        const lastSaturday = new Date(end);
+        lastSaturday.setDate(lastSaturday.getDate() + (6 - lastSaturday.getDay()));
+        const map = new Map(entries.map(entry => [entry.date, Number(entry.seconds || 0)]));
+        const maxSeconds = entries.reduce((max, entry) => Math.max(max, Number(entry.seconds || 0)), 0);
+        const weeks = [];
+        const labels = [];
+        const cursor = new Date(firstSunday);
+
+        while (cursor <= lastSaturday) {
+            const weekStart = new Date(cursor);
+            const cells = [];
+            for (let day = 0; day < 7; day += 1) {
+                const current = new Date(weekStart);
+                current.setDate(weekStart.getDate() + day);
+                const iso = current.toISOString().slice(0, 10);
+                const inYear = current.getFullYear() === year;
+                const seconds = inYear ? (map.get(iso) || 0) : 0;
+                cells.push({ iso, inYear, seconds, level: inYear ? heatLevel(seconds, maxSeconds) : 0 });
+            }
+            if (weekStart.getDate() <= 7) {
+                labels.push({ label: weekStart.toLocaleString(undefined, { month: "short" }), index: weeks.length });
+            }
+            weeks.push(cells);
+            cursor.setDate(cursor.getDate() + 7);
+        }
+
+        return `
+            <section class="panel">
+                <div class="panel-head"><h3>Yearly heatmap</h3><span>${readingInteractive ? `${year} · Click a day to see books` : year}</span></div>
+                <div class="heatmap-shell">
+                    <div class="heatmap-months"><div></div><div class="heatmap-month-track">${labels.map(label => `<span class="heatmap-month-label" style="left:${label.index * 16}px">${escapeHtml(label.label)}</span>`).join("")}</div></div>
+                    <div class="heatmap-main">
+                        <div class="heatmap-days"><span>Sun</span><span></span><span>Tue</span><span></span><span>Thu</span><span></span><span>Sat</span></div>
+                        <div class="heatmap-grid">
+                            ${weeks.map(week => `<div class="heatmap-week">${week.map(cell => `<button type="button" class="heatmap-cell ${cell.level ? `level-${cell.level}` : ""} ${readingInteractive && cell.inYear ? "is-clickable" : ""}" ${readingInteractive && cell.inYear ? `data-reading-date="${cell.iso}"` : ""} title="${cell.inYear ? `${cell.iso}: ${formatDurationLong(cell.seconds)}` : ""}" ${readingInteractive && cell.inYear ? `aria-label="Show reading books for ${cell.iso}"` : 'tabindex="-1" aria-hidden="true"'}></button>`).join("")}</div>`).join("")}
+                        </div>
+                    </div>
+                    <div class="heatmap-legend"><span>Less</span><span class="legend-swatches"><span class="heatmap-cell"></span><span class="heatmap-cell level-1"></span><span class="heatmap-cell level-2"></span><span class="heatmap-cell level-3"></span><span class="heatmap-cell level-4"></span></span><span>More</span></div>
+                </div>
+            </section>
+        `;
+    }
+
+    function renderChart(dataset) {
+        const canvas = document.getElementById("activity-chart");
+        if (!canvas) return;
+
+        const rows = Array.isArray(dataset.daily) ? dataset.daily : [];
+        const labels = rows.map(row => formatDateLabel(row.date));
+        let datasets;
+        if (state.activeTab === "combined") {
+            datasets = [
+                { label: "Listening", data: rows.map(row => Number(row.listeningSeconds || 0)), backgroundColor: "rgba(155,124,255,.72)", borderRadius: 10, stack: "activity" },
+                { label: "Reading", data: rows.map(row => Number(row.readingSeconds || 0)), backgroundColor: "rgba(79,195,247,.8)", borderRadius: 10, stack: "activity" }
+            ];
+        } else {
+            const isReading = state.activeTab === "reading";
+            datasets = [
+                {
+                    label: isReading ? "Reading" : "Listening",
+                    data: rows.map(row => Number(row.seconds || 0)),
+                    backgroundColor: isReading ? "rgba(79,195,247,.82)" : "rgba(155,124,255,.78)",
+                    borderColor: isReading ? "rgba(79,195,247,1)" : "rgba(155,124,255,1)",
+                    borderWidth: 1,
+                    borderRadius: 10
+                }
+            ];
+        }
+
+        state.chart = new Chart(canvas, {
+            type: "bar",
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: "index", intersect: false },
+                plugins: {
+                    legend: { labels: { color: "rgba(255,255,255,.78)" } },
+                    tooltip: { callbacks: { label(context) { return `${context.dataset.label}: ${formatDurationLong(context.parsed.y || 0)}`; } } }
+                },
+                scales: {
+                    x: { ticks: { color: "rgba(255,255,255,.62)" }, grid: { display: false } },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: "rgba(255,255,255,.62)", callback(value) { return formatDurationLong(value); } },
+                        grid: { color: "rgba(255,255,255,.08)" }
                     }
                 }
-            });
-        }
-
-        function monthFull(i) {
-            return ["January","February","March","April","May","June","July","August","September","October","November","December"][i] || "";
-        }
-
-        function hourHistogramPanel(dataset) {
-            const hours = Array.isArray(dataset.hourHistogram) ? dataset.hourHistogram : [];
-            const max = hours.reduce((m, h) => Math.max(m, Number(h.seconds || 0)), 0);
-            if (!max) return "";
-            const peak = hours.reduce((a, h) => (Number(h.seconds || 0) > Number(a.seconds || 0) ? h : a), hours[0]);
-            const hr = n => (n % 12 === 0 ? 12 : n % 12) + (n < 12 ? "a" : "p");
-            const bars = hours.map(h => {
-                const secs = Number(h.seconds || 0);
-                const pct = max ? Math.round((secs / max) * 100) : 0;
-                return `<div class="bar-col" title="${h.hour}:00 · ${escapeHtml(formatDurationLong(secs))}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${h.hour % 3 === 0 ? hr(h.hour) : ""}</div></div>`;
-            }).join("");
-            return `<section class="panel"><div class="panel-head"><h3>Time of day</h3><span>Peak around ${hr(peak.hour)}</span></div><div class="bar-row">${bars}</div></section>`;
-        }
-
-        function booksListPanel(dataset) {
-            const books = Array.isArray(dataset.books) ? dataset.books : [];
-            if (!books.length) return "";
-            const rows = books.slice(0, 80).map(b => {
-                const meta = [];
-                if (b.author) meta.push(escapeHtml(b.author));
-                if (b.pagesRead) meta.push(`${Number(b.pagesRead).toLocaleString()} pages`);
-                if (b.sessionCount) meta.push(`${b.sessionCount} sessions`);
-                if (b.isLinked === false) meta.push("Unlinked");
-                const pace = b.pagesPerHour ? `${b.pagesPerHour}/hr` : (b.lastReadAt ? formatRelativeTime(b.lastReadAt) : "");
-                const pct = (b.percentComplete != null) ? `<div class="pct-bar"><span style="width:${Math.min(b.percentComplete, 100)}%"></span></div>` : "";
-                return `<div class="books-row" data-book-key="${escapeHtml(b.bookKey)}"><div style="min-width:0"><div class="recent-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="books-meta">${meta.join(" · ") || "Activity"}</div>${pct}</div><div class="books-side"><div class="v">${escapeHtml(formatDurationCompact(b.totalSeconds || 0))}</div><div class="s">${escapeHtml(pace)}</div></div></div>`;
-            }).join("");
-            return `<section class="panel"><div class="panel-head"><h3>Books</h3><span>${books.length} tracked · tap for detail</span></div><div class="scroll-list">${rows}</div></section>`;
-        }
-
-        function yearlyRecapInner(recap) {
-            const months = Array.isArray(recap.months) ? recap.months : [];
-            const max = months.reduce((m, x) => Math.max(m, Number(x.seconds || 0)), 0);
-            const labels = ["J","F","M","A","M","J","J","A","S","O","N","D"];
-            const bars = months.map((mo, i) => {
-                const secs = Number(mo.seconds || 0);
-                const pct = max ? Math.round((secs / max) * 100) : 0;
-                const fin = mo.finished ? ` · ${mo.finished} finished` : "";
-                return `<div class="bar-col" title="${monthFull(i)}: ${escapeHtml(formatDurationLong(secs))}${fin}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${labels[i]}</div></div>`;
-            }).join("");
-            const years = Array.isArray(recap.availableYears) ? recap.availableYears : [];
-            const minYear = years.length ? years[0] : recap.year;
-            const maxYear = years.length ? years[years.length - 1] : recap.year;
-            const finished = (recap.finishedBooks || []).slice(0, 40).map(b =>
-                `<div class="finished-row"><div class="recent-title" style="font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="s" style="color:var(--muted-soft);font-size:12px;flex-shrink:0">${escapeHtml(formatLongDate(new Date((b.finishedAt || 0) * 1000).toISOString().slice(0, 10)))}</div></div>`
-            ).join("");
-            const finishedBlock = finished
-                ? `<div style="margin-top:16px"><div class="panel-head" style="margin-bottom:8px"><h3 style="font-size:14px">Finished this year</h3><span>${recap.booksFinished || 0} books</span></div><div class="scroll-list">${finished}</div></div>`
-                : `<div class="empty-state" style="margin-top:12px"><p>No books recorded as finished in ${recap.year}.</p></div>`;
-            return `
-                <div class="panel-head">
-                    <h3>${recap.year} in review</h3>
-                    <div class="recap-toolbar">
-                        <button type="button" class="recap-year-btn" data-recap-year="${recap.year - 1}" ${recap.year <= minYear ? "disabled" : ""}>‹</button>
-                        <span class="recap-year-label">${recap.year}</span>
-                        <button type="button" class="recap-year-btn" data-recap-year="${recap.year + 1}" ${recap.year >= maxYear ? "disabled" : ""}>›</button>
-                    </div>
-                </div>
-                <div class="summary-grid" style="margin-bottom:14px">
-                    <article class="summary-card"><div class="summary-card-label">Time</div><div class="summary-card-value">${escapeHtml(formatDurationCompact(recap.totalSeconds || 0))}</div><div class="summary-card-sub">This year</div></article>
-                    <article class="summary-card"><div class="summary-card-label">Pages</div><div class="summary-card-value">${Number(recap.totalPages || 0).toLocaleString()}</div><div class="summary-card-sub">Read this year</div></article>
-                    <article class="summary-card"><div class="summary-card-label">Finished</div><div class="summary-card-value">${recap.booksFinished || 0}</div><div class="summary-card-sub">Books completed</div></article>
-                </div>
-                <div class="bar-row">${bars}</div>
-                ${finishedBlock}
-            `;
-        }
-
-        function yearlyRecapPanel(dataset) {
-            const recap = dataset.yearlyRecap;
-            if (!recap || !Array.isArray(recap.months)) return "";
-            const hasAny = recap.months.some(m => Number(m.seconds || 0) > 0) || (recap.finishedBooks || []).length;
-            if (!hasAny) return "";
-            return `<section class="panel" id="recap-panel">${yearlyRecapInner(recap)}</section>`;
-        }
-
-        async function loadYearlyRecap(year) {
-            const panel = document.getElementById("recap-panel");
-            if (!panel) return;
-            try {
-                const response = await fetch(`/api/stats/yearly-recap?year=${year}&scope=${state.activeTab}`, { cache: "no-store" });
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || "Failed");
-                panel.innerHTML = yearlyRecapInner(data);
-            } catch (error) {
-                console.error(error);
             }
-        }
-
-        function renderDashboard() {
-            destroyChart();
-            const config = TAB_CONFIG[state.activeTab];
-            const dataset = state.payload?.[state.activeTab] || null;
-            const hasData = Boolean(dataset && dataset.available && dataset.stats);
-
-            if (!hasData) {
-                dashboardRoot.innerHTML = `<section class="dashboard-shell"><header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Waiting for source data</div></header><article class="empty-state"><h3>${escapeHtml(config.emptyTitle)}</h3><p>${escapeHtml(config.emptyBody)}</p></article></section>`;
-                return;
-            }
-
-            const booksPanel = booksListPanel(dataset);
-            const recapPanel = yearlyRecapPanel(dataset);
-            const hourPanel = state.activeTab !== "listening" ? hourHistogramPanel(dataset) : "";
-
-            dashboardRoot.innerHTML = `
-                <section class="dashboard-shell">
-                    <header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Last 7 days plus yearly activity</div></header>
-                    <div class="stats-grid">${config.cards.map(card => `<article class="stat-card"><div class="stat-card-label">${escapeHtml(card[0])}</div><div class="stat-card-value">${escapeHtml(card[1](dataset))}</div><div class="stat-card-hint">${escapeHtml(card[2])}</div></article>`).join("")}</div>
-                    <div class="insights-grid">
-                        <section class="panel"><div class="panel-head"><h3>Weekly activity</h3><span>Daily totals</span></div><div class="chart-wrap"><canvas id="activity-chart" aria-label="Weekly activity chart"></canvas></div></section>
-                        ${summaryCards(dataset)}
-                    </div>
-                    ${(booksPanel || recapPanel) ? `<div class="insights-grid">${booksPanel}${recapPanel}</div>` : ""}
-                    ${hourPanel ? `<div class="insights-grid">${hourPanel}</div>` : ""}
-                    <div class="insights-grid">
-                        ${recentSessions(dataset)}
-                        ${state.activeTab === "reading" ? calendarPanelSkeleton() : heatmap(dataset)}
-                    </div>
-                </section>
-            `;
-            renderChart(dataset);
-            if (state.activeTab === "reading") {
-                const container = dashboardRoot.querySelector(".insights-grid:last-child .panel:last-child");
-                loadReadingCalendarMonth(state.readingCalendarMonth)
-                    .then(payload => {
-                        if (!container || state.activeTab !== "reading") return;
-                        container.outerHTML = renderReadingCalendar(payload);
-                    })
-                    .catch(error => {
-                        if (!container || state.activeTab !== "reading") return;
-                        container.outerHTML = `<section class="panel"><div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div><div class="empty-state"><h3>Calendar unavailable</h3><p>${escapeHtml(error.message || "Unknown error")}</p></div></section>`;
-                    });
-            }
-        }
-
-        async function loadStats(force = false) {
-            if (force) showLoading("Refreshing dashboard data…");
-            try {
-                const response = await fetch(`/api/stats${force ? `?t=${Date.now()}` : ""}`, { cache: "no-store" });
-                if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
-                state.payload = await response.json();
-                if (force) {
-                    state.readingDayCache = {};
-                    state.readingCalendarCache = {};
-                }
-                timezoneChip.textContent = BRIDGE_TIMEZONE || "America/New_York";
-                lastUpdated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
-                setStatusPill(statusListening, state.payload?.listening?.available);
-                setStatusPill(statusReading, state.payload?.reading?.available);
-                renderDashboard();
-            } catch (error) {
-                console.error(error);
-                showError(error.message || "Unknown error");
-            }
-        }
-
-        tabButtons.forEach(button => {
-            button.addEventListener("click", () => {
-                state.activeTab = button.dataset.tab;
-                tabButtons.forEach(candidate => candidate.classList.toggle("is-active", candidate === button));
-                if (state.activeTab !== "reading") closeDayDetail();
-                renderDashboard();
-            });
         });
+    }
 
-        dashboardRoot.addEventListener("click", event => {
-            const trigger = event.target.closest("[data-reading-date]");
-            if (!trigger || state.activeTab !== "reading") return;
-            openReadingDay(trigger.dataset.readingDate);
-        });
+    function monthFull(i) {
+        return ["January","February","March","April","May","June","July","August","September","October","November","December"][i] || "";
+    }
 
-        dashboardRoot.addEventListener("click", event => {
-            const shiftTrigger = event.target.closest("[data-calendar-shift]");
-            if (!shiftTrigger || state.activeTab !== "reading") return;
-            state.readingCalendarMonth = shiftMonth(state.readingCalendarMonth, Number(shiftTrigger.dataset.calendarShift || 0));
+    function hourHistogramPanel(dataset) {
+        const hours = Array.isArray(dataset.hourHistogram) ? dataset.hourHistogram : [];
+        const max = hours.reduce((m, h) => Math.max(m, Number(h.seconds || 0)), 0);
+        if (!max) return "";
+        const peak = hours.reduce((a, h) => (Number(h.seconds || 0) > Number(a.seconds || 0) ? h : a), hours[0]);
+        const hr = n => (n % 12 === 0 ? 12 : n % 12) + (n < 12 ? "a" : "p");
+        const bars = hours.map(h => {
+            const secs = Number(h.seconds || 0);
+            const pct = max ? Math.round((secs / max) * 100) : 0;
+            return `<div class="bar-col" title="${h.hour}:00 · ${escapeHtml(formatDurationLong(secs))}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${h.hour % 3 === 0 ? hr(h.hour) : ""}</div></div>`;
+        }).join("");
+        return `<section class="panel"><div class="panel-head"><h3>Time of day</h3><span>Peak around ${hr(peak.hour)}</span></div><div class="bar-row">${bars}</div></section>`;
+    }
+
+    function booksListPanel(dataset) {
+        const books = Array.isArray(dataset.books) ? dataset.books : [];
+        if (!books.length) return "";
+        const rows = books.slice(0, 80).map(b => {
+            const meta = [];
+            if (b.author) meta.push(escapeHtml(b.author));
+            if (b.pagesRead) meta.push(`${Number(b.pagesRead).toLocaleString()} pages`);
+            if (b.sessionCount) meta.push(`${b.sessionCount} sessions`);
+            if (b.isLinked === false) meta.push("Unlinked");
+            const pace = b.pagesPerHour ? `${b.pagesPerHour}/hr` : (b.lastReadAt ? formatRelativeTime(b.lastReadAt) : "");
+            const pct = (b.percentComplete != null) ? `<div class="pct-bar"><span style="width:${Math.min(b.percentComplete, 100)}%"></span></div>` : "";
+            return `<div class="books-row" data-book-key="${escapeHtml(b.bookKey)}"><div style="min-width:0"><div class="recent-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="books-meta">${meta.join(" · ") || "Activity"}</div>${pct}</div><div class="books-side"><div class="v">${escapeHtml(formatDurationCompact(b.totalSeconds || 0))}</div><div class="s">${escapeHtml(pace)}</div></div></div>`;
+        }).join("");
+        return `<section class="panel"><div class="panel-head"><h3>Books</h3><span>${books.length} tracked · tap for detail</span></div><div class="scroll-list">${rows}</div></section>`;
+    }
+
+    function yearlyRecapInner(recap) {
+        const months = Array.isArray(recap.months) ? recap.months : [];
+        const max = months.reduce((m, x) => Math.max(m, Number(x.seconds || 0)), 0);
+        const labels = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+        const bars = months.map((mo, i) => {
+            const secs = Number(mo.seconds || 0);
+            const pct = max ? Math.round((secs / max) * 100) : 0;
+            const fin = mo.finished ? ` · ${mo.finished} finished` : "";
+            return `<div class="bar-col" title="${monthFull(i)}: ${escapeHtml(formatDurationLong(secs))}${fin}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${labels[i]}</div></div>`;
+        }).join("");
+        const years = Array.isArray(recap.availableYears) ? recap.availableYears : [];
+        const minYear = years.length ? years[0] : recap.year;
+        const maxYear = years.length ? years[years.length - 1] : recap.year;
+        const finished = (recap.finishedBooks || []).slice(0, 40).map(b =>
+            `<div class="finished-row"><div class="recent-title" style="font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="s" style="color:var(--muted-soft);font-size:12px;flex-shrink:0">${escapeHtml(formatLongDate(new Date((b.finishedAt || 0) * 1000).toISOString().slice(0, 10)))}</div></div>`
+        ).join("");
+        const finishedBlock = finished
+            ? `<div style="margin-top:16px"><div class="panel-head" style="margin-bottom:8px"><h3 style="font-size:14px">Finished this year</h3><span>${recap.booksFinished || 0} books</span></div><div class="scroll-list">${finished}</div></div>`
+            : `<div class="empty-state" style="margin-top:12px"><p>No books recorded as finished in ${recap.year}.</p></div>`;
+        return `
+            <div class="panel-head">
+                <h3>${recap.year} in review</h3>
+                <div class="recap-toolbar">
+                    <button type="button" class="recap-year-btn" data-recap-year="${recap.year - 1}" ${recap.year <= minYear ? "disabled" : ""}>‹</button>
+                    <span class="recap-year-label">${recap.year}</span>
+                    <button type="button" class="recap-year-btn" data-recap-year="${recap.year + 1}" ${recap.year >= maxYear ? "disabled" : ""}>›</button>
+                </div>
+            </div>
+            <div class="summary-grid" style="margin-bottom:14px">
+                <article class="summary-card"><div class="summary-card-label">Time</div><div class="summary-card-value">${escapeHtml(formatDurationCompact(recap.totalSeconds || 0))}</div><div class="summary-card-sub">This year</div></article>
+                <article class="summary-card"><div class="summary-card-label">Pages</div><div class="summary-card-value">${Number(recap.totalPages || 0).toLocaleString()}</div><div class="summary-card-sub">Read this year</div></article>
+                <article class="summary-card"><div class="summary-card-label">Finished</div><div class="summary-card-value">${recap.booksFinished || 0}</div><div class="summary-card-sub">Books completed</div></article>
+            </div>
+            <div class="bar-row">${bars}</div>
+            ${finishedBlock}
+        `;
+    }
+
+    function yearlyRecapPanel(dataset) {
+        const recap = dataset.yearlyRecap;
+        if (!recap || !Array.isArray(recap.months)) return "";
+        const hasAny = recap.months.some(m => Number(m.seconds || 0) > 0) || (recap.finishedBooks || []).length;
+        if (!hasAny) return "";
+        return `<section class="panel" id="recap-panel">${yearlyRecapInner(recap)}</section>`;
+    }
+
+    async function loadYearlyRecap(year) {
+        const panel = document.getElementById("recap-panel");
+        if (!panel) return;
+        try {
+            const response = await fetch(`/api/stats/yearly-recap?year=${year}&scope=${state.activeTab}`, { cache: "no-store" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || "Failed");
+            panel.innerHTML = yearlyRecapInner(data);
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    function renderDashboard() {
+        destroyChart();
+        const config = TAB_CONFIG[state.activeTab];
+        const dataset = state.payload?.[state.activeTab] || null;
+        const hasData = Boolean(dataset && dataset.available && dataset.stats);
+
+        if (!hasData) {
+            dashboardRoot.innerHTML = `<section class="dashboard-shell"><header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Waiting for source data</div></header><article class="empty-state"><h3>${escapeHtml(config.emptyTitle)}</h3><p>${escapeHtml(config.emptyBody)}</p></article></section>`;
+            return;
+        }
+
+        const booksPanel = booksListPanel(dataset);
+        const recapPanel = yearlyRecapPanel(dataset);
+        const hourPanel = state.activeTab !== "listening" ? hourHistogramPanel(dataset) : "";
+
+        dashboardRoot.innerHTML = `
+            <section class="dashboard-shell">
+                <header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Last 7 days plus yearly activity</div></header>
+                <div class="stats-grid">${config.cards.map(card => `<article class="stat-card"><div class="stat-card-label">${escapeHtml(card[0])}</div><div class="stat-card-value">${escapeHtml(card[1](dataset))}</div><div class="stat-card-hint">${escapeHtml(card[2])}</div></article>`).join("")}</div>
+                <div class="insights-grid">
+                    <section class="panel"><div class="panel-head"><h3>Weekly activity</h3><span>Daily totals</span></div><div class="chart-wrap"><canvas id="activity-chart" aria-label="Weekly activity chart"></canvas></div></section>
+                    ${summaryCards(dataset)}
+                </div>
+                ${(booksPanel || recapPanel) ? `<div class="insights-grid">${booksPanel}${recapPanel}</div>` : ""}
+                ${hourPanel ? `<div class="insights-grid">${hourPanel}</div>` : ""}
+                <div class="insights-grid">
+                    ${recentSessions(dataset)}
+                    ${state.activeTab === "reading" ? calendarPanelSkeleton() : heatmap(dataset)}
+                </div>
+            </section>
+        `;
+        renderChart(dataset);
+        if (state.activeTab === "reading") {
+            const container = dashboardRoot.querySelector(".insights-grid:last-child .panel:last-child");
+            loadReadingCalendarMonth(state.readingCalendarMonth)
+                .then(payload => {
+                    if (!container || state.activeTab !== "reading") return;
+                    container.outerHTML = renderReadingCalendar(payload);
+                })
+                .catch(error => {
+                    if (!container || state.activeTab !== "reading") return;
+                    container.outerHTML = `<section class="panel"><div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div><div class="empty-state"><h3>Calendar unavailable</h3><p>${escapeHtml(error.message || "Unknown error")}</p></div></section>`;
+                });
+        }
+    }
+
+    async function loadStats(force = false) {
+        if (force) showLoading("Refreshing dashboard data…");
+        try {
+            const response = await fetch(`/api/stats${force ? `?t=${Date.now()}` : ""}`, { cache: "no-store" });
+            if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+            state.payload = await response.json();
+            if (force) {
+                state.readingDayCache = {};
+                state.readingCalendarCache = {};
+            }
+            timezoneChip.textContent = BRIDGE_TIMEZONE || "America/New_York";
+            lastUpdated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+            setStatusPill(statusListening, state.payload?.listening?.available);
+            setStatusPill(statusReading, state.payload?.reading?.available);
+            renderDashboard();
+        } catch (error) {
+            console.error(error);
+            showError(error.message || "Unknown error");
+        }
+    }
+
+    tabButtons.forEach(button => {
+        button.addEventListener("click", () => {
+            state.activeTab = button.dataset.tab;
+            tabButtons.forEach(candidate => candidate.classList.toggle("is-active", candidate === button));
+            if (state.activeTab !== "reading") closeDayDetail();
             renderDashboard();
         });
+    });
 
-        dashboardRoot.addEventListener("click", event => {
-            const currentTrigger = event.target.closest("[data-calendar-today]");
-            if (!currentTrigger || state.activeTab !== "reading") return;
-            state.readingCalendarMonth = new Date().toISOString().slice(0, 7);
-            renderDashboard();
-        });
+    dashboardRoot.addEventListener("click", event => {
+        const trigger = event.target.closest("[data-reading-date]");
+        if (!trigger || state.activeTab !== "reading") return;
+        openReadingDay(trigger.dataset.readingDate);
+    });
 
-        dayDetailClose.addEventListener("click", closeDayDetail);
-        dayDetailBackdrop.addEventListener("click", event => {
-            if (event.target === dayDetailBackdrop) closeDayDetail();
-        });
-        document.addEventListener("keydown", event => {
-            if (event.key === "Escape" && dayDetailBackdrop.classList.contains("is-open")) {
-                closeDayDetail();
-            }
-        });
+    dashboardRoot.addEventListener("click", event => {
+        const shiftTrigger = event.target.closest("[data-calendar-shift]");
+        if (!shiftTrigger || state.activeTab !== "reading") return;
+        state.readingCalendarMonth = shiftMonth(state.readingCalendarMonth, Number(shiftTrigger.dataset.calendarShift || 0));
+        renderDashboard();
+    });
 
-        const bookDetailBackdrop = document.getElementById("book-detail-backdrop");
-        const bookDetailTitle = document.getElementById("book-detail-title");
-        const bookDetailSubtitle = document.getElementById("book-detail-subtitle");
-        const bookDetailSummary = document.getElementById("book-detail-summary");
-        const bookDetailBody = document.getElementById("book-detail-body");
-        const bookDetailClose = document.getElementById("book-detail-close");
+    dashboardRoot.addEventListener("click", event => {
+        const currentTrigger = event.target.closest("[data-calendar-today]");
+        if (!currentTrigger || state.activeTab !== "reading") return;
+        state.readingCalendarMonth = new Date().toISOString().slice(0, 7);
+        renderDashboard();
+    });
 
-        function openBookDetailModal() {
-            bookDetailBackdrop.classList.add("is-open");
-            bookDetailBackdrop.setAttribute("aria-hidden", "false");
+    dayDetailClose.addEventListener("click", closeDayDetail);
+    dayDetailBackdrop.addEventListener("click", event => {
+        if (event.target === dayDetailBackdrop) closeDayDetail();
+    });
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && dayDetailBackdrop.classList.contains("is-open")) {
+            closeDayDetail();
         }
-        function closeBookDetailModal() {
-            bookDetailBackdrop.classList.remove("is-open");
-            bookDetailBackdrop.setAttribute("aria-hidden", "true");
+    });
+
+    const bookDetailBackdrop = document.getElementById("book-detail-backdrop");
+    const bookDetailTitle = document.getElementById("book-detail-title");
+    const bookDetailSubtitle = document.getElementById("book-detail-subtitle");
+    const bookDetailSummary = document.getElementById("book-detail-summary");
+    const bookDetailBody = document.getElementById("book-detail-body");
+    const bookDetailClose = document.getElementById("book-detail-close");
+
+    function openBookDetailModal() {
+        bookDetailBackdrop.classList.add("is-open");
+        bookDetailBackdrop.setAttribute("aria-hidden", "false");
+    }
+    function closeBookDetailModal() {
+        bookDetailBackdrop.classList.remove("is-open");
+        bookDetailBackdrop.setAttribute("aria-hidden", "true");
+    }
+
+    function renderBookDetail(data) {
+        const reading = data.reading;
+        const listening = data.listening;
+        bookDetailTitle.textContent = data.title || "Book detail";
+        bookDetailSubtitle.textContent = [reading ? "Reading" : null, listening ? "Listening" : null].filter(Boolean).join(" + ") + " statistics";
+
+        const chips = [];
+        if (reading) {
+            chips.push(["Reading time", formatDurationCompact(reading.totalSeconds || 0)]);
+            chips.push(["Pages", Number(reading.pagesRead || 0).toLocaleString()]);
+            chips.push(["Pace", `${reading.pagesPerHour || 0}/hr`]);
+            chips.push(["Sessions", reading.sessionCount || 0]);
+            chips.push(["Avg session", formatDurationCompact(reading.avgSessionSeconds || 0)]);
+            if (reading.percentComplete != null) chips.push(["Complete", `${reading.percentComplete}%`]);
         }
-
-        function renderBookDetail(data) {
-            const reading = data.reading;
-            const listening = data.listening;
-            bookDetailTitle.textContent = data.title || "Book detail";
-            bookDetailSubtitle.textContent = [reading ? "Reading" : null, listening ? "Listening" : null].filter(Boolean).join(" + ") + " statistics";
-
-            const chips = [];
-            if (reading) {
-                chips.push(["Reading time", formatDurationCompact(reading.totalSeconds || 0)]);
-                chips.push(["Pages", Number(reading.pagesRead || 0).toLocaleString()]);
-                chips.push(["Pace", `${reading.pagesPerHour || 0}/hr`]);
-                chips.push(["Sessions", reading.sessionCount || 0]);
-                chips.push(["Avg session", formatDurationCompact(reading.avgSessionSeconds || 0)]);
-                if (reading.percentComplete != null) chips.push(["Complete", `${reading.percentComplete}%`]);
-            }
-            if (listening) {
-                chips.push(["Listening time", formatDurationCompact(listening.totalSeconds || 0)]);
-                if (listening.sessionCount) chips.push(["Listen sessions", listening.sessionCount]);
-            }
-            bookDetailSummary.innerHTML = `<div class="summary-grid">${chips.map(c => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(c[0])}</div><div class="summary-card-value">${escapeHtml(String(c[1]))}</div></article>`).join("")}</div>`;
-
-            let body = "";
-            const sessions = (reading && Array.isArray(reading.sessions)) ? reading.sessions : [];
-            if (sessions.length) {
-                body += `<div class="panel-head" style="margin:4px 0 8px"><h3 style="font-size:14px">Recent reading sessions</h3><span>${sessions.length}</span></div>`;
-                body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(new Date((s.startTime || 0) * 1000).toISOString().slice(0, 10)))}</div><div class="books-meta">${s.pagesRead || 0} pages</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
-            }
-            if (!body) body = `<div class="empty-state"><p>No session breakdown available for this book.</p></div>`;
-            bookDetailBody.innerHTML = body;
+        if (listening) {
+            chips.push(["Listening time", formatDurationCompact(listening.totalSeconds || 0)]);
+            if (listening.sessionCount) chips.push(["Listen sessions", listening.sessionCount]);
         }
+        bookDetailSummary.innerHTML = `<div class="summary-grid">${chips.map(c => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(c[0])}</div><div class="summary-card-value">${escapeHtml(String(c[1]))}</div></article>`).join("")}</div>`;
 
-        async function openBookDetail(key) {
-            if (!key) return;
-            openBookDetailModal();
-            bookDetailTitle.textContent = "Book detail";
-            bookDetailSubtitle.textContent = "Loading…";
-            bookDetailSummary.textContent = "Loading…";
-            bookDetailBody.innerHTML = "";
-            try {
-                const response = await fetch(`/api/stats/book-detail?key=${encodeURIComponent(key)}`, { cache: "no-store" });
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || "Failed to load");
-                renderBookDetail(data);
-            } catch (error) {
-                bookDetailSubtitle.textContent = "Error";
-                bookDetailSummary.textContent = error.message || "Failed to load book detail.";
-            }
+        let body = "";
+        const sessions = (reading && Array.isArray(reading.sessions)) ? reading.sessions : [];
+        if (sessions.length) {
+            body += `<div class="panel-head" style="margin:4px 0 8px"><h3 style="font-size:14px">Recent reading sessions</h3><span>${sessions.length}</span></div>`;
+            body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(new Date((s.startTime || 0) * 1000).toISOString().slice(0, 10)))}</div><div class="books-meta">${s.pagesRead || 0} pages</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
         }
+        if (!body) body = `<div class="empty-state"><p>No session breakdown available for this book.</p></div>`;
+        bookDetailBody.innerHTML = body;
+    }
 
-        bookDetailClose.addEventListener("click", closeBookDetailModal);
-        bookDetailBackdrop.addEventListener("click", event => {
-            if (event.target === bookDetailBackdrop) closeBookDetailModal();
-        });
-        document.addEventListener("keydown", event => {
-            if (event.key === "Escape" && bookDetailBackdrop.classList.contains("is-open")) closeBookDetailModal();
-        });
+    async function openBookDetail(key) {
+        if (!key) return;
+        openBookDetailModal();
+        bookDetailTitle.textContent = "Book detail";
+        bookDetailSubtitle.textContent = "Loading…";
+        bookDetailSummary.textContent = "Loading…";
+        bookDetailBody.innerHTML = "";
+        try {
+            const response = await fetch(`/api/stats/book-detail?key=${encodeURIComponent(key)}`, { cache: "no-store" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || "Failed to load");
+            renderBookDetail(data);
+        } catch (error) {
+            bookDetailSubtitle.textContent = "Error";
+            bookDetailSummary.textContent = error.message || "Failed to load book detail.";
+        }
+    }
 
-        dashboardRoot.addEventListener("click", event => {
-            const yearBtn = event.target.closest("[data-recap-year]");
-            if (yearBtn && !yearBtn.disabled) { loadYearlyRecap(Number(yearBtn.dataset.recapYear)); return; }
-            const bookRow = event.target.closest("[data-book-key]");
-            if (bookRow) openBookDetail(bookRow.dataset.bookKey);
-        });
+    bookDetailClose.addEventListener("click", closeBookDetailModal);
+    bookDetailBackdrop.addEventListener("click", event => {
+        if (event.target === bookDetailBackdrop) closeBookDetailModal();
+    });
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && bookDetailBackdrop.classList.contains("is-open")) closeBookDetailModal();
+    });
 
-        refreshButton.addEventListener("click", () => loadStats(true));
-        loadStats();
-    </script>
-</body>
-</html>
+    dashboardRoot.addEventListener("click", event => {
+        const yearBtn = event.target.closest("[data-recap-year]");
+        if (yearBtn && !yearBtn.disabled) { loadYearlyRecap(Number(yearBtn.dataset.recapYear)); return; }
+        const bookRow = event.target.closest("[data-book-key]");
+        if (bookRow) openBookDetail(bookRow.dataset.bookKey);
+    });
+
+    refreshButton.addEventListener("click", () => loadStats(true));
+    loadStats();
+</script>
+{% endblock %}

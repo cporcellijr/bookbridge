@@ -189,12 +189,19 @@ class TestTemplateStructure(unittest.TestCase):
     """Regression: templates must have proper HTML closing tags."""
 
     def test_index_html_ends_with_closing_tags(self):
+        # index.html extends base.html, which owns the document chrome; the
+        # closing tags live there and index.html must end with a complete
+        # content block (still catches template truncation).
+        base = Path(__file__).parent.parent / 'templates' / 'base.html'
+        base_content = base.read_text(encoding='utf-8').rstrip()
+        self.assertTrue(base_content.endswith('</html>'),
+                        f"base.html must end with </html>, got: ...{base_content[-40:]}")
+        self.assertIn('</body>', base_content)
+
         index = Path(__file__).parent.parent / 'templates' / 'index.html'
-        content = index.read_text(encoding='utf-8')
-        stripped = content.rstrip()
-        self.assertTrue(stripped.endswith('</html>'),
-                        f"index.html must end with </html>, got: ...{stripped[-40:]}")
-        self.assertIn('</body>', stripped)
+        stripped = index.read_text(encoding='utf-8').rstrip()
+        self.assertTrue(stripped.endswith('{% endblock %}'),
+                        f"index.html must end with a closed block, got: ...{stripped[-40:]}")
 
 
 class TestSettingsBoolean(_DiagnosticsOptInBase):

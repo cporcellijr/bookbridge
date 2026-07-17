@@ -1,75 +1,48 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ target_user.username }} - Integrations - BookBridge admin</title>
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            background: #0a0a0a; color: #fff; margin: 0; padding: 40px 16px;
-        }
-        .card {
-            background: #151515; border: 1px solid #262626; border-radius: 14px;
-            padding: 32px; max-width: 560px; margin: 0 auto 20px;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.5);
-        }
-        h1 { font-size: 20px; margin: 0 0 4px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
-        .sub { color: #888; font-size: 13px; margin: 0 0 20px; }
-        .group { border-top: 1px solid #262626; padding-top: 16px; margin-top: 16px; }
-        .group:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
-        .group h2 { font-size: 14px; color: #cfcfcf; margin: 0 0 12px; }
-        label { display: block; font-size: 13px; color: #bbb; margin: 0 0 6px; }
-        input[type=text], input[type=password], select {
-            width: 100%; padding: 10px 12px; margin-bottom: 14px;
-            background: #0e0e0e; border: 1px solid #2c2c2c; border-radius: 8px; color: #fff; font-size: 14px;
-        }
-        input:focus, select:focus { outline: none; border-color: #667eea; }
-        .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-        .toggle-row input { width: 16px; height: 16px; }
-        .toggle-row label { margin: 0; color: #ddd; }
-        .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-        .group-head h2 { margin: 0; }
-        .group-head-actions { display: flex; align-items: center; gap: 10px; }
-        .group-body.collapsed { display: none; }
-        .toggle-switch-wrapper { display: flex; align-items: center; gap: 8px; }
-        .toggle-label { color: #aaa; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-        .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; margin: 0; }
-        .toggle-switch input { opacity: 0; width: 0; height: 0; }
-        .slider {
-            position: absolute; cursor: pointer; inset: 0; background: #303030;
-            transition: .18s; border-radius: 999px; border: 1px solid #444;
-        }
-        .slider:before {
-            position: absolute; content: ""; height: 18px; width: 18px; left: 2px; bottom: 2px;
-            background: #bdbdbd; transition: .18s; border-radius: 50%;
-        }
-        .toggle-switch input:checked + .slider { background: #667eea; border-color: #7b8df0; }
-        .toggle-switch input:checked + .slider:before { transform: translateX(20px); background: #fff; }
-        button {
-            width: 100%; padding: 11px; margin-top: 6px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;
-        }
-        button:hover { opacity: .92; }
-        .test-btn {
-            width: auto; min-width: 72px; padding: 7px 10px; margin-top: 0;
-            font-size: 12px; background: #222; border: 1px solid #343434;
-        }
-        .test-btn.ok { background: rgba(76,175,80,.18); border-color: rgba(76,175,80,.45); color: #b8e6ba; }
-        .test-btn.fail { background: rgba(244,67,54,.16); border-color: rgba(244,67,54,.45); color: #ffc2bc; }
-        .test-btn:disabled { cursor: wait; opacity: .75; }
-        .msg { padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;
-            background: rgba(76,175,80,.12); border: 1px solid rgba(76,175,80,.4); color: #a5d6a7; }
-        .nav { max-width: 560px; margin: 0 auto 16px; }
-        .nav a { color: #667eea; text-decoration: none; font-size: 13px; margin-right: 16px; }
-        .note { color: #888; font-size: 12px; background: #0e0e0e; border: 1px solid #222; border-radius: 8px; padding: 10px 12px; margin-bottom: 18px; }
-    </style>
-</head>
-<body>
+{% extends "base.html" %}
+{% set active_page = 'settings' %}
+{% block title %}{{ target_user.username }} - Integrations - BookBridge admin{% endblock %}
+
+{% block head %}
+<style>
+    .integrations-wrap { padding: 40px 16px; }
+    .integrations-wrap .card { max-width: 560px; margin: 0 auto 20px; }
+    .integrations-wrap h1 {
+        font-size: 20px; margin: 0 0 4px;
+        background: var(--gradient);
+        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .integrations-wrap .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+    .integrations-wrap .group { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 16px; }
+    .integrations-wrap .group:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+    .integrations-wrap .group h2 { font-size: 14px; color: var(--muted); margin: 0 0 12px; }
+    .integrations-wrap label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+    .integrations-wrap .card input[type="text"],
+    .integrations-wrap .card input[type="password"],
+    .integrations-wrap .card select { margin-bottom: 14px; }
+    .integrations-wrap .toggle-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .integrations-wrap .toggle-row input { width: 16px; height: 16px; }
+    .integrations-wrap .toggle-row label { margin: 0; color: var(--text); }
+    .integrations-wrap .group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .integrations-wrap .group-head h2 { margin: 0; }
+    .integrations-wrap .group-head-actions { display: flex; align-items: center; gap: 10px; }
+    .integrations-wrap .group-body.collapsed { display: none; }
+    .integrations-wrap .toggle-switch-wrapper { display: flex; align-items: center; gap: 8px; }
+    .integrations-wrap .toggle-label { color: var(--muted-soft); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+    .integrations-wrap .test-btn {
+        width: auto; min-width: 72px; padding: 7px 10px; margin-top: 0;
+        font-size: 12px; background: rgba(255, 255, 255, .06); border: 1px solid var(--border);
+    }
+    .integrations-wrap .test-btn.ok { background: rgba(54, 211, 153, .18); border-color: rgba(54, 211, 153, .45); color: #b8e6ba; }
+    .integrations-wrap .test-btn.fail { background: rgba(255, 107, 107, .16); border-color: rgba(255, 107, 107, .45); color: #ffc2bc; }
+    .integrations-wrap .test-btn:disabled { cursor: wait; opacity: .75; }
+    .integrations-wrap .nav { max-width: 560px; margin: 0 auto 16px; }
+    .integrations-wrap .nav a { color: var(--accent); text-decoration: none; font-size: 13px; margin-right: 16px; }
+    .integrations-wrap .note { color: var(--muted); font-size: 12px; background: rgba(0, 0, 0, .2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 18px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="integrations-wrap">
     <div class="nav">
         <a href="{{ url_for('settings') }}#users">← Users</a>
         <a href="{{ url_for('index') }}">Dashboard</a>
@@ -87,7 +60,7 @@
         <div class="note">You can manage these fields for this reader here, or the reader can sign in and update
             their own accounts, tokens, and sync toggles from <strong>Account -> My Integrations</strong>.</div>
 
-        {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+        {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
 
         <form method="POST" action="{{ url_for('admin_user_integrations', user_id=target_user.id) }}">
             {% for group, fields in groups %}
@@ -181,8 +154,8 @@
                 <div class="note"><strong>Two separate credentials.</strong> The <strong>Access token</strong> (reading progress &amp; highlights) can be obtained with the <strong>Link BookFusion</strong> button below, or by the reader from their own <strong>Account → My Integrations</strong> page. <strong>Linking here saves the token to this user</strong> — you must be signed in to the BookFusion account you want to link when you complete the device authorization. The <strong>Calibre API key</strong> is only for <strong>uploading books</strong> and can be pasted here, from the
                     <a href="https://www.bookfusion.com/integrations/calibre" target="_blank" rel="noopener" style="color:#aab4f5;">BookFusion Calibre integration page</a>.</div>
                 <div style="margin-bottom:14px;">
-                    <button type="button" onclick="startBookFusionLink()">Link BookFusion</button>
-                    <div id="bookfusion_link_status" style="color:#aaa; font-size:12px; line-height:1.5; margin-top:8px; min-height:18px;"></div>
+                    <button type="button" class="btn btn-secondary" onclick="startBookFusionLink()">Link BookFusion</button>
+                    <div id="bookfusion_link_status" style="color:var(--muted); font-size:12px; line-height:1.5; margin-top:8px; min-height:18px;"></div>
                 </div>
                 {% endif %}
                 {% for key, label, ftype in fields %}
@@ -236,9 +209,10 @@
                 </div>
             </div>
             {% endfor %}
-            <button type="submit">Save integrations</button>
+            <button type="submit" class="btn btn-primary" style="width:100%;">Save integrations</button>
         </form>
     </div>
+</div>
     <script>
         const TEST_URL_BASE = {{ url_for('admin_user_test_connection', user_id=target_user.id, service='__service__')|tojson }};
         const ABS_LIB_URL = {{ url_for('admin_user_abs_libraries', user_id=target_user.id)|tojson }};
@@ -391,5 +365,4 @@
                 });
         }
     </script>
-</body>
-</html>
+{% endblock %}

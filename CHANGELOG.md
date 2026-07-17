@@ -8,6 +8,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Redesigned the private local diagnostics dashboard as an inbox-first report
+  center. Written user reports now appear once at submission level, reviewed
+  Bugscout anomalies are the default view, the raw triage queue has its own
+  filter, seven-day fleet totals remain visible, and large reports separate
+  reviewed findings from those still waiting for analysis. Finding detail now
+  offers review decisions for **Reviewed — no action**, **Fixed**, and **Reopen**,
+  with completed findings retained in an Archived view.
+
 - Added manual diagnostics bug reports with an optional written note and a
   compact, instance-private reply history under Settings. All admins on one
   BookBridge installation share that history; regular users and other
@@ -35,6 +43,21 @@ All notable changes to BookBridge will be documented in this file.
   [@ykpdang](https://github.com/ykpdang). (#320)
 
 ### Fixed
+
+- **Unavailable linked books no longer create false diagnostics or lead sync.**
+  BookFusion highlight pulls quietly skip a saved book that now returns 404
+  without deleting local annotation state, while genuine server failures still
+  warn. Storyteller books whose linked ReadAloud EPUB cannot be resolved or
+  recovered are excluded before leader selection, preventing a stale UUID from
+  rolling another service back to 0%.
+
+- **BookFusion ReadAloud uploads now reject incomplete Storyteller packages.**
+  Before upload and automatic linking, BookBridge verifies that every narration
+  reference in the EPUB's SMIL overlays points to an audio file actually present
+  in the archive. If Storyteller is still processing the book, the upload stops
+  with a clear retry message instead of creating a BookFusion book that later
+  fails because its MP4 files are missing. Existing incomplete BookFusion copies
+  must be deleted and uploaded again.
 
 - Diagnostics maintainer APIs now fail closed when their read token is missing,
   manual-report quota checks are atomic, overlapping sender runs cannot consume

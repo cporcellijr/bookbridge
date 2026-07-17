@@ -115,6 +115,13 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         os.environ['DATA_DIR'] = self.temp_dir
         os.environ['BOOKS_DIR'] = self.temp_dir
 
+        # index.html extends base.html, so the app's Jinja loader must point at
+        # the real templates directory (create_app defaults to /app/templates).
+        self._orig_template_dir = os.environ.get('TEMPLATE_DIR')
+        self._orig_static_dir = os.environ.get('STATIC_DIR')
+        os.environ['TEMPLATE_DIR'] = str(Path(__file__).parent.parent / 'templates')
+        os.environ['STATIC_DIR'] = str(Path(__file__).parent.parent / 'static')
+
         # Create mock container
         self.mock_container = MockContainer()
 
@@ -163,6 +170,15 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         # Restore original function
         import src.db.migration_utils
         src.db.migration_utils.initialize_database = self.original_init_db
+
+        if self._orig_template_dir is None:
+            os.environ.pop('TEMPLATE_DIR', None)
+        else:
+            os.environ['TEMPLATE_DIR'] = self._orig_template_dir
+        if self._orig_static_dir is None:
+            os.environ.pop('STATIC_DIR', None)
+        else:
+            os.environ['STATIC_DIR'] = self._orig_static_dir
 
         # Clean up temp directory
         import shutil
@@ -1551,7 +1567,10 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         index_html = self._read_template_source('index.html')
         add_book_html = self._read_template_source('add_book.html')
 
-        self.assertIn('Add / Update Book', index_html)
+        # The Add/Update Book entry point lives in the shared nav chrome
+        # (templates/_nav.html), so assert it on the rendered dashboard.
+        rendered_index = self._render_index_template_source()
+        self.assertIn('/add-book', rendered_index)
         self.assertNotIn('Reader Docs', index_html)
         self.assertNotIn("{{ url_for('add_book') }}#kosync-documents", index_html)
         self.assertIn('id="kosync-documents"', add_book_html)

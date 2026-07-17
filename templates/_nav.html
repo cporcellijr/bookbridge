@@ -1,0 +1,115 @@
+{# Canonical top navigation, included by base.html on every page that does
+   not set hide_chrome. Mirrors the gating semantics of templates/index.html's
+   nav (is_admin = current_user and current_user.is_admin): Stats/Suggestions/
+   Settings are admin-only as before; Logs joins them (it was never advertised
+   to regular users on the dashboard). Add Book stays visible to every
+   logged-in user, matching today's dashboard button and route enforcement. #}
+{% set is_admin = current_user and current_user.is_admin %}
+<nav class="top-nav">
+    <div class="logo-section">
+        <a href="/">
+            <img src="/static/icon.png" alt="BookBridge" class="app-icon">
+            <span class="brand-wordmark">BookBridge</span>
+        </a>
+    </div>
+
+    <div class="nav-tabs">
+        <a href="/" class="nav-tab {% if active_page == 'library' %}active{% endif %}">Library</a>
+        <a href="{{ url_for('add_book') }}" class="nav-tab {% if active_page == 'add_book' %}active{% endif %}">Add Book</a>
+        {% if is_admin %}
+        <a href="/stats" class="nav-tab {% if active_page == 'stats' %}active{% endif %}">Stats</a>
+        {% endif %}
+        {% if is_admin %}
+        <a href="/suggestions" class="nav-tab {% if active_page == 'suggestions' %}active{% endif %}">Suggestions</a>
+        {% endif %}
+        {% if is_admin %}
+        <a href="/logs" class="nav-tab {% if active_page == 'logs' %}active{% endif %}">Logs</a>
+        {% endif %}
+        {% if is_admin %}
+        <a href="/settings" class="nav-tab {% if active_page == 'settings' %}active{% endif %}">Settings</a>
+        {% endif %}
+    </div>
+
+    <div class="library-links">
+        {% if abs_server %}
+        <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="Audiobookshelf">
+            <img src="/static/audiobookshelf.png" alt="Audiobookshelf">
+        </a>
+        {% endif %}
+
+        {# Ebook/reading-app links reflect THIS user's enabled integration:
+           admin -> BookOrbit/Grimmory, another user -> their CWA, etc. #}
+        {% if booklore_server and get_user_bool('BOOKLORE_ENABLED') %}
+        <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="Ebook Library">
+            <img src="/static/grimmory.webp" alt="Ebook Library">
+        </a>
+        {% endif %}
+
+        {% if get_val('BOOKORBIT_SERVER') and get_user_bool('BOOKORBIT_ENABLED') %}
+        <a href="{{ get_val('BOOKORBIT_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="BookOrbit Library">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+        </a>
+        {% endif %}
+
+        {% if get_val('CWA_SERVER') and get_user_bool('CWA_ENABLED') %}
+        <a href="{{ get_val('CWA_SERVER') }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="Calibre-Web Library">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+        </a>
+        {% endif %}
+
+        {% if shelfmark_url and (get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and get_val('SHELFMARK_ENABLED') == '')) %}
+        <a href="/shelfmark" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="Shelfmark Tool">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                <line x1="7" y1="7" x2="7.01" y2="7"></line>
+            </svg>
+        </a>
+        {% endif %}
+    </div>
+
+    {% if current_user %}
+    <div class="user-menu" id="bbnav-user-menu">
+        <button type="button" class="user-menu-trigger" id="bbnav-user-menu-toggle"
+            aria-haspopup="true" aria-expanded="false" title="Account: {{ current_user.username }}">
+            👤 {{ current_user.username }} <span class="user-menu-caret">▾</span>
+        </button>
+        <div class="user-menu-dropdown" role="menu">
+            <a href="/account" class="user-menu-item" role="menuitem">👤 Account</a>
+            <a href="https://cporcellijr.github.io/bookbridge/" class="user-menu-item" role="menuitem"
+                target="_blank" rel="noopener noreferrer">📚 Docs</a>
+            <a href="/logout" class="user-menu-item" role="menuitem">🚪 Logout</a>
+        </div>
+    </div>
+    {% endif %}
+</nav>
+
+<script>
+    (function () {
+        var menu = document.getElementById('bbnav-user-menu');
+        if (!menu) return;
+        var toggle = document.getElementById('bbnav-user-menu-toggle');
+        toggle.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var open = menu.classList.toggle('open');
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        document.addEventListener('click', function (e) {
+            if (!menu.contains(e.target)) {
+                menu.classList.remove('open');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                menu.classList.remove('open');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+    })();
+</script>
