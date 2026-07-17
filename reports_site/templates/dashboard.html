@@ -253,6 +253,9 @@
             cursor: pointer;
         }
         button:hover { filter: brightness(1.08); }
+        .status-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .status-actions button { margin-top: 12px; }
+        .button-secondary { color: var(--text); background: var(--panel-soft); border: 1px solid var(--line); }
         .muted { color: var(--muted); }
         .small { font-size: 12px; }
         @media (max-width: 820px) {
@@ -353,13 +356,14 @@
     <section class="dashboard-section" id="anomalies">
         <div class="section-head">
             <div>
-                <h2>{% if focus == 'feedback' %}Linked to user reports{% elif focus == 'triage' %}Waiting for Bugscout{% elif focus == 'all' %}All active anomalies{% else %}Reviewed by Bugscout{% endif %}</h2>
-                <p class="muted small">{% if focus == 'triage' %}These are queued for analysis; you do not need to interpret the raw warnings.{% else %}Open one for the plain-language hypothesis, next step, and linked user reports.{% endif %}</p>
+                <h2>{% if focus == 'feedback' %}Linked to user reports{% elif focus == 'triage' %}Waiting for Bugscout{% elif focus == 'all' %}All active anomalies{% elif focus == 'archived' %}Archived anomalies{% else %}Reviewed by Bugscout{% endif %}</h2>
+                <p class="muted small">{% if focus == 'triage' %}These are queued for analysis; you do not need to interpret the raw warnings.{% elif focus == 'archived' %}Findings you marked fixed or reviewed with no action. You can reopen any of them.{% else %}Open one for the plain-language hypothesis, next step, and linked user reports.{% endif %}</p>
             </div>
             <div class="filters" aria-label="Filter anomalies">
                 <a class="filter{% if focus == 'reviewed' %} active{% endif %}" href="{{ url_for('dashboard', focus='reviewed') }}#anomalies">Reviewed ({{ cards.reviewed }})</a>
                 <a class="filter{% if focus == 'triage' %} active{% endif %}" href="{{ url_for('dashboard', focus='triage') }}#anomalies">Waiting ({{ cards.needs_triage }})</a>
                 <a class="filter{% if focus == 'all' %} active{% endif %}" href="{{ url_for('dashboard', focus='all') }}#anomalies">All ({{ cards.active }})</a>
+                <a class="filter{% if focus == 'archived' %} active{% endif %}" href="{{ url_for('dashboard', focus='archived') }}#anomalies">Archived ({{ cards.archived }})</a>
             </div>
         </div>
         {% if findings %}
@@ -379,6 +383,7 @@
                         <span class="badge badge-{{ item.severity|default('unknown', true) }}">{{ item.severity|default('unrated', true) }}</span>
                         {% if item.category and item.category != 'unknown' %}<span class="badge badge-category">{{ item.category }}</span>{% endif %}
                         {% if item.feedback_count %}<span class="badge badge-feedback">Linked user report</span>{% endif %}
+                        {% if focus == 'archived' %}<span class="badge badge-reviewed">{% if item.status == 'ignored' %}Reviewed — no action{% else %}Fixed{% endif %}</span>{% endif %}
                     </div>
                 </div>
                 <div class="meta">
@@ -409,6 +414,8 @@
         <span>{{ finding.total_count|default(0) }} occurrences</span>
         <span>{{ finding.instance_count|default(0) }} installations</span>
     </div>
+    {% if status_message %}<div class="alert alert-success" role="status">{{ status_message }}</div>{% endif %}
+    {% if status_error %}<div class="alert alert-error" role="alert">The review decision could not be saved. Try again.</div>{% endif %}
 
     <div class="detail-grid">
         <div class="stack">
@@ -458,10 +465,29 @@
         </div>
         <aside class="stack">
             <section class="panel">
+                <h3>Review decision</h3>
+                {% if finding.status == 'ignored' %}
+                <p class="small muted">Archived as reviewed — no action. Future occurrences stay archived unless you reopen it.</p>
+                {% elif finding.status == 'fixed' %}
+                <p class="small muted">Closed as fixed. It will reopen automatically if the warning returns.</p>
+                {% else %}
+                <p class="small muted">Choose after you or an assistant reviews the evidence.</p>
+                {% endif %}
+                <form class="status-actions" method="post" action="{{ url_for('save_finding_status', finding_id=finding.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if finding.status in ['fixed', 'ignored'] %}
+                    <button type="submit" name="status" value="open">Reopen</button>
+                    {% else %}
+                    <button class="button-secondary" type="submit" name="status" value="ignored">Reviewed — no action</button>
+                    <button type="submit" name="status" value="fixed">Fixed</button>
+                    {% endif %}
+                </form>
+            </section>
+            <section class="panel">
                 <h3>At a glance</h3>
                 <div class="facts">
                     <div class="fact"><span>Severity</span><strong>{{ finding.severity|default('Unknown', true) }}</strong></div>
-                    <div class="fact"><span>Status</span><strong>{{ finding.status|default('Open', true) }}</strong></div>
+                    <div class="fact"><span>Status</span><strong>{% if finding.status == 'ignored' %}Reviewed — no action{% elif finding.status == 'fixed' %}Fixed{% elif finding.status == 'triaged' %}Reviewed{% else %}Open{% endif %}</strong></div>
                     <div class="fact"><span>Category</span><strong>{{ finding.category|default('Unknown', true) }}</strong></div>
                     <div class="fact"><span>First seen</span><strong>{{ finding.first_seen|friendly_date }}</strong></div>
                     <div class="fact"><span>Last seen</span><strong>{{ finding.last_seen|friendly_date }}</strong></div>

@@ -266,6 +266,53 @@ class ReportsDashboardTestCase(unittest.TestCase):
         self.assertIn("Audiobookshelf, Storyteller", html)
         self.assertNotIn("secret_service", html)
         self.assertIn("UTC", html)
+        self.assertIn('action="/findings/4/status"', html)
+        self.assertIn('name="csrf_token"', html)
+        self.assertIn('value="ignored"', html)
+        self.assertIn("Reviewed — no action", html)
+        self.assertIn('value="fixed"', html)
+
+    def test_finding_status_action_patches_receiver_server_side(self):
+        self.receiver.add("PATCH", "/api/v1/findings/4", {
+            "id": 4,
+            "status": "ignored",
+        })
+
+        response = self.client.post(
+            "/findings/4/status",
+            data={
+                "csrf_token": self.app.config["CSRF_TOKEN"],
+                "status": "ignored",
+            },
+        )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["Location"], "/findings/4?updated=ignored")
+        self.assertEqual(len(self.receiver.calls), 1)
+        patch_call = self.receiver.calls[0]
+        self.assertEqual(patch_call["method"], "PATCH")
+        self.assertEqual(patch_call["authorization"], "Bearer server-secret-token")
+        self.assertEqual(
+            json.loads(patch_call["body"]),
+            {"status": "ignored"},
+        )
+
+    def test_finding_status_action_rejects_bad_csrf_and_unknown_status(self):
+        bad_csrf = self.client.post(
+            "/findings/4/status",
+            data={"csrf_token": "wrong", "status": "ignored"},
+        )
+        unknown_status = self.client.post(
+            "/findings/4/status",
+            data={
+                "csrf_token": self.app.config["CSRF_TOKEN"],
+                "status": "deleted",
+            },
+        )
+
+        self.assertEqual(bad_csrf.status_code, 400)
+        self.assertEqual(unknown_status.status_code, 400)
+        self.assertEqual(self.receiver.calls, [])
 
     def test_dashboard_reads_windows_utf8_bom_state_file(self):
         state = json.dumps({
@@ -326,6 +373,45 @@ class ReportsDashboardTestCase(unittest.TestCase):
         self.assertIn('<span class="metric-number">1</span>', html)
         self.assertIn("Reopened active finding", html)
         self.assertNotIn("Fixed unreviewed finding", html)
+
+    def test_archived_filter_lists_fixed_and_no_action_findings(self):
+        self.receiver.add("GET", "/api/v1/summary?days=7", {
+            "totals": {"instances": 1, "batches": 1, "warnings": 3},
+            "submissions": {"awaiting_response_all_time": 0},
+        })
+        self.receiver.add("GET", "/api/v1/findings?status=all&limit=200", {
+            "findings": [
+                {
+                    "id": 1,
+                    "template": "Still active",
+                    "status": "triaged",
+                    "analysis_md": "**Pattern:** Still active",
+                },
+                {
+                    "id": 2,
+                    "template": "Expected environment noise",
+                    "status": "ignored",
+                    "analysis_md": "**Pattern:** Expected environment noise",
+                },
+                {
+                    "id": 3,
+                    "template": "Resolved defect",
+                    "status": "fixed",
+                    "analysis_md": "**Pattern:** Resolved defect",
+                },
+            ],
+        })
+        self.receiver.add("GET", "/api/v1/submissions?limit=5", {"submissions": []})
+
+        response = self.client.get("/?focus=archived")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Archived (2)", html)
+        self.assertIn("Expected environment noise", html)
+        self.assertIn("Resolved defect", html)
+        self.assertIn("Reviewed — no action", html)
+        self.assertNotIn("Still active", html)
 
     def test_report_detail_separates_reviewed_from_pending_anomalies(self):
         self.receiver.add("GET", "/api/v1/submissions/90", {

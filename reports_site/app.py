@@ -20,6 +20,7 @@ _MAX_API_RESPONSE_BYTES = 2_000_000
 _MAX_RESPONSE_CHARS = 10_000
 _API_TIMEOUT_SECONDS = 15
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1"}
+_FINDING_ACTION_STATUSES = {"fixed", "ignored", "open"}
 _LOCAL_RECEIVER_HOSTS = {
     "localhost", "127.0.0.1", "::1", "host.docker.internal",
 }
@@ -321,8 +322,7 @@ def create_app(
             for item in result.get("findings", [])
             if isinstance(item, dict)
         ]
-        active = [item for item in all_findings if item.get("status") in {"open", "triaged"}]
-        active.sort(
+        all_findings.sort(
             key=lambda item: (
                 {"high": 3, "medium": 2, "low": 1}.get(str(item.get("severity")), 0),
                 _integer(item.get("instance_count")),
@@ -331,6 +331,8 @@ def create_app(
             ),
             reverse=True,
         )
+        active = [item for item in all_findings if item.get("status") in {"open", "triaged"}]
+        archived = [item for item in all_findings if item.get("status") in {"fixed", "ignored"}]
         reviewed = [item for item in active if not item["needs_triage"]]
         reports = [
             _prepare_submission(item)
@@ -350,6 +352,7 @@ def create_app(
         )
         cards = {
             "active": len(active),
+            "archived": len(archived),
             "reviewed": len(reviewed),
             "needs_triage": sum(item["needs_triage"] for item in active),
             "awaiting_response": awaiting,
@@ -365,6 +368,8 @@ def create_app(
             shown = active
         elif focus == "feedback":
             shown = [item for item in active if item["feedback_count"]]
+        elif focus == "archived":
+            shown = archived
         else:
             shown = reviewed
             focus = "reviewed"
@@ -390,11 +395,45 @@ def create_app(
                 error="This anomaly could not be loaded. Try again in a moment.",
                 finding=None,
             ), 502
+        status_message = {
+            "ignored": "Marked reviewed — no action.",
+            "fixed": "Marked fixed. It will reopen automatically if it returns.",
+            "open": "Reopened for review.",
+        }.get(request.args.get("updated", ""))
         return render_template(
             "dashboard.html",
             page="finding",
             error=None,
             finding=finding,
+            csrf_token=current_app.config["CSRF_TOKEN"],
+            status_message=status_message,
+            status_error=request.args.get("update_error") == "1",
+        )
+
+    @app.post("/findings/<int:finding_id>/status")
+    def save_finding_status(finding_id: int):
+        supplied_token = request.form.get("csrf_token", "")
+        if not hmac.compare_digest(supplied_token, current_app.config["CSRF_TOKEN"]):
+            abort(400)
+
+        status = request.form.get("status", "")
+        if status not in _FINDING_ACTION_STATUSES:
+            abort(400)
+
+        try:
+            _receiver_json(
+                f"/api/v1/findings/{finding_id}",
+                method="PATCH",
+                payload={"status": status},
+            )
+        except ReceiverError:
+            return redirect(
+                url_for("finding_detail", finding_id=finding_id, update_error=1),
+                code=303,
+            )
+        return redirect(
+            url_for("finding_detail", finding_id=finding_id, updated=status),
+            code=303,
         )
 
     @app.get("/feedback")
