@@ -23,7 +23,7 @@ if os.path.exists(TEST_DIR):
     shutil.rmtree(TEST_DIR)
 os.makedirs(TEST_DIR, exist_ok=True)
 
-from src.db.models import KosyncDocument, Book, ReadingSession, Setting, State, HardcoverDetails, UserCredential
+from src.db.models import KosyncDocument, Book, ReadingSession, Setting, State, HardcoverDetails, UserCredential, KosyncUserProgress
 # Initialize DB service with test path
 from src.db.database_service import DatabaseService
 
@@ -241,6 +241,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         with web_server.database_service.get_session() as session:
              session.query(ReadingSession).delete()
              session.query(KosyncDocument).delete()
+             session.query(KosyncUserProgress).delete()
              session.query(Setting).delete()
              session.query(State).delete()
              session.query(HardcoverDetails).delete()
@@ -361,20 +362,20 @@ class TestKosyncEndpoints(unittest.TestCase):
         # It linked to the existing book rather than auto-creating an ebook-only mapping.
         self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
 
-    def test_get_progress_returns_502_for_missing(self):
-        """Test that GET returns 502 (not 404) for missing document."""
+    def test_get_progress_returns_404_for_missing(self):
+        """Test that GET returns 404 (not 502) for missing document."""
         response = self.client.get(
             '/syncs/progress/' + 'z' * 32,
             headers=self.auth_headers
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 404)
         data = response.get_json()
         self.assertIn('message', data)
         self.assertIn('not found', data['message'].lower())
 
     def test_get_progress_rejects_placeholder_ids(self):
-        """GET /syncs/progress/<placeholder> must return 502 without discovery."""
+        """GET /syncs/progress/<placeholder> must return 404 without discovery."""
         from src.api import kosync_server as ks
         from src import web_server
 
@@ -386,7 +387,7 @@ class TestKosyncEndpoints(unittest.TestCase):
                     headers=self.auth_headers
                 )
 
-            self.assertEqual(response.status_code, 502)
+            self.assertEqual(response.status_code, 404)
             self.assertIn(
                 f"Invalid or placeholder document ID requested: '{placeholder}'",
                 "\n".join(captured.output),
@@ -652,7 +653,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             0.80,
         )
 
-    def test_get_progress_returns_502_when_direct_hash_has_pct_but_empty_progress(self):
+    def test_get_progress_returns_404_when_direct_hash_has_pct_but_empty_progress(self):
         self.client.put(
             '/syncs/progress',
             headers=self.auth_headers,
@@ -670,9 +671,9 @@ class TestKosyncEndpoints(unittest.TestCase):
             headers=self.auth_headers
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 404)
 
-    def test_get_progress_returns_502_when_state_has_pct_but_empty_locator(self):
+    def test_get_progress_returns_404_when_state_has_pct_but_empty_locator(self):
         from src import web_server
 
         book = Book(
@@ -700,7 +701,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             headers=self.auth_headers
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 404)
 
     def test_device_sync_manifest_requires_auth(self):
         response = self.client.get('/koreader/device-sync/manifest')
@@ -1544,7 +1545,7 @@ class TestKosyncEndpoints(unittest.TestCase):
 
 
     def test_get_progress_unknown_hash_creates_stub(self):
-        """Test that GET for a completely unknown hash returns 502 and creates a stub for background discovery."""
+        """Test that GET for a completely unknown hash returns 404 and creates a stub for background discovery."""
         from src import web_server
 
         # Create a book with a known kosync_doc_id
@@ -1577,13 +1578,13 @@ class TestKosyncEndpoints(unittest.TestCase):
         # First, we need hash_B to be findable. The sibling resolution requires
         # the unknown hash to have a filename in common. Since hash_B is brand new
         # with no filename, it will fall through to Step 4 (background discovery).
-        # So this tests that the 502 + stub creation path works.
+        # So this tests that the 404 + stub creation path works.
         response = self.client.get(
             '/syncs/progress/' + 'b' * 32,
             headers=self.auth_headers
         )
-        # Unknown hash with no filename link returns 502
-        self.assertEqual(response.status_code, 502)
+        # Unknown hash with no filename link returns 404
+        self.assertEqual(response.status_code, 404)
 
         # Clean up
         with web_server.database_service.get_session() as session:

@@ -60,6 +60,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **KOReader sync server no longer aborts strict clients on books that aren't in
+  the library yet.** The built-in sync server now answers "unknown document"
+  requests with HTTP 404 instead of 502. KOReader treated both the same way, but
+  strict sync clients (e.g. Crosspoint e-readers) read any 5xx as a fatal server
+  error and abandoned the sync attempt entirely; they now correctly recognize 404
+  as "no remote progress yet" and offer to upload local progress instead. (#332)
+
 - **Missing remote annotations and already-absent collection items no longer
   create false diagnostics.** BookFusion highlight creation treats a 404 for a
   deleted or stale linked book as unavailable at DEBUG while preserving the

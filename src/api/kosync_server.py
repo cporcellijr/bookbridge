@@ -1094,7 +1094,10 @@ def kosync_users_login():
 def kosync_get_progress(doc_id):
     """
     Fetch progress for a specific document.
-    Returns 502 (not 404) if document not found, per kosync-dotnet spec.
+    Returns 404 if document not found. (kosync-dotnet returns 502 here, the original
+    sync server returns 200 + {}; we use 404 because strict clients like Crosspoint
+    treat 5xx as a fatal server error and abort sync, while KOReader treats any
+    non-200 the same. See issue #332.)
 
     Lookup order:
       1. Direct hash match in kosync_documents
@@ -1106,7 +1109,7 @@ def kosync_get_progress(doc_id):
         logger.warning(
             f"⚠️ KOSync: Invalid or placeholder document ID requested: '{doc_id}'. This cannot be resolved."
         )
-        return jsonify({"message": "Document not found on server"}), 502
+        return jsonify({"message": "Document not found on server"}), 404
 
     logger.info(f"KOSync: GET progress for doc {doc_id} from {request.remote_addr}")
 
@@ -1120,13 +1123,13 @@ def kosync_get_progress(doc_id):
             book = _database_service.get_book(kosync_doc.linked_abs_id)
             if book:
                 if not _kosync_user_may_access_book(book):
-                    return jsonify({"message": "Document not found on server"}), 502
+                    return jsonify({"message": "Document not found on server"}), 404
                 return _respond_from_book_states(doc_id, book)
 
         resolved_book = _resolve_book_by_sibling_hash(doc_id, existing_doc=kosync_doc)
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
-                return jsonify({"message": "Document not found on server"}), 502
+                return jsonify({"message": "Document not found on server"}), 404
             _register_hash_for_book(doc_id, resolved_book)
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1175,7 +1178,7 @@ def kosync_get_progress(doc_id):
     book = _database_service.get_book_by_kosync_id(doc_id)
     if book:
         if not _kosync_user_may_access_book(book):
-            return jsonify({"message": "Document not found on server"}), 502
+            return jsonify({"message": "Document not found on server"}), 404
         return _respond_from_book_states(doc_id, book)
 
     # Step 3: Sibling hash resolution — find the book via other linked hashes.
@@ -1186,7 +1189,7 @@ def kosync_get_progress(doc_id):
         resolved_book = _resolve_book_by_sibling_hash(doc_id, existing_doc=kosync_doc)
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
-                return jsonify({"message": "Document not found on server"}), 502
+                return jsonify({"message": "Document not found on server"}), 404
             _register_hash_for_book(doc_id, resolved_book)
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1195,7 +1198,7 @@ def kosync_get_progress(doc_id):
         logger.warning(
             f"⚠️ KOSync: Rejected malformed document ID: '{doc_id}' (GET from {request.remote_addr})"
         )
-        return jsonify({"message": "Document not found on server"}), 502
+        return jsonify({"message": "Document not found on server"}), 404
     _schedule_auto_discovery(
         doc_id,
         user_id=getattr(g, "kosync_user_id", None),
@@ -1208,7 +1211,7 @@ def kosync_get_progress(doc_id):
         "the library file), link it manually from Add / Update Book -> Reader Documents, or re-deliver "
         "the book via the BridgeSync plugin's 'Sync books' so the hash matches."
     )
-    return jsonify({"message": "Document not found on server"}), 502
+    return jsonify({"message": "Document not found on server"}), 404
 
 
 def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
@@ -2737,7 +2740,7 @@ def _respond_from_book_states(doc_id, book):
             return jsonify(response_data), 200
 
     if not states:
-        return jsonify({"message": "Document not found on server"}), 502
+        return jsonify({"message": "Document not found on server"}), 404
 
     latest_state = kosync_state or max(states, key=lambda s: s.last_updated if s.last_updated else 0)
     latest_progress = (latest_state.xpath or latest_state.cfi or "") if hasattr(latest_state, 'xpath') else ""
@@ -3015,11 +3018,11 @@ def _suppress_empty_progress_response(doc_id: str, percentage: float, progress: 
     safe_progress = progress.strip() if isinstance(progress, str) else ""
     if percentage > 0 and not safe_progress:
         logger.warning(
-            "KOSync: Suppressing response for %s - percentage %.2f%% but no locator available. Returning 502 to prevent page-0 reset.",
+            "KOSync: Suppressing response for %s - percentage %.2f%% but no locator available. Returning 404 to prevent page-0 reset.",
             doc_id,
             percentage * 100.0,
         )
-        return jsonify({"message": "Document not found on server"}), 502
+        return jsonify({"message": "Document not found on server"}), 404
     return None
 
 @kosync_admin_bp.route('/api/kosync-documents', methods=['GET'])
