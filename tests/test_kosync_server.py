@@ -258,6 +258,11 @@ class TestKosyncEndpoints(unittest.TestCase):
             kosync_server._kosync_open_sessions.clear()
         with kosync_server._kosync_debounce_lock:
             kosync_server._kosync_debounce.clear()
+        # The manifest endpoint serves a module-global prebuilt cache; a real
+        # manifest left there by a prior test or the prebuilder daemon would
+        # otherwise shadow the mocked service in manifest tests (any-order safety).
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
 
     def test_admin_plugin_version_returns_version_without_auth(self):
         """Settings-page version endpoint returns the plugin version, no KOSync auth."""
@@ -740,6 +745,8 @@ class TestKosyncEndpoints(unittest.TestCase):
         container = MagicMock()
         container.koreader_device_sync_service.return_value = service
 
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
         with patch.object(kosync_server, '_container', container):
             response = self.client.get('/koreader/device-sync/manifest', headers=self.auth_headers)
 
