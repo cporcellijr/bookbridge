@@ -8,6 +8,7 @@ import threading
 import unittest
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import patch
 
 from diagnostics_receiver.app import create_receiver_app, init_db, rebuild_findings
