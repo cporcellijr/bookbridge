@@ -4,7 +4,7 @@
 
 All notable changes to BookBridge will be documented in this file.
 
-## [Unreleased]
+## [7.3.0] - 2026-07-19
 
 ### Added
 
@@ -47,7 +47,19 @@ All notable changes to BookBridge will be documented in this file.
   GPU passed through to the container before choosing CUDA. Contributed by
   [@ykpdang](https://github.com/ykpdang). (#320)
 
+- **BookFusion polling can now wait for your reading position to settle.** A new
+  per-poll option holds the sync while your BookFusion position is still moving
+  between polls — meaning you are actively reading — and runs it once a poll shows
+  no further movement, avoiding a burst of intermediate writes mid-chapter.
+
 ### Changed
+
+- **BookBridge has a redesigned interface.** A shared design system now spans
+  every page: a compact top navigation bar (with Logs promoted to its own tab)
+  replaces the old scattered links, and the dashboard, settings, account,
+  matching, suggestions, forge, logs, stats, and Shelfmark pages are restyled
+  onto one common base template. The navigation collapses to a swipeable strip on
+  phones, and sign-in and first-run setup share the same look.
 
 - Updated dashboard service cards and top library shortcuts with official
   BookOrbit, Shelfmark, KOReader, BookFusion, and Hardcover artwork. The shared
@@ -112,6 +124,16 @@ All notable changes to BookBridge will be documented in this file.
   with a clear retry message instead of creating a BookFusion book that later
   fails because its MP4 files are missing. Existing incomplete BookFusion copies
   must be deleted and uploaded again.
+
+- **BookBridge now warns at boot when an admin's saved credentials have drifted
+  from the shared engine copies.** After the 7.2.0 per-user credentials move, the
+  global settings store and the primary admin's per-user credential rows could
+  diverge silently — background workers (ABS socket, shelf-watch, scans, manifest)
+  read the global copy while syncs and connection tests read the account copy,
+  producing "connection test passes but sync fails" reports that only a data wipe
+  seemed to cure. Startup now logs a stable warning per divergent key pointing at
+  Account → Integrations as the reconcile path; a blank per-user value with a set
+  global value stays silent, since that is the healthy admin fallback. (#328)
 
 - Diagnostics maintainer APIs now fail closed when their read token is missing,
   manual-report quota checks are atomic, overlapping sender runs cannot consume

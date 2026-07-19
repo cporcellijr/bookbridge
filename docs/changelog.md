@@ -4,6 +4,34 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.3.0]
+
+The headline is **a redesigned interface, opt-in diagnostics, and GPU-accelerated transcription**: BookBridge gets a consistent new look built around a top navigation bar, an optional way to help improve the project by sharing anonymized diagnostics, and CUDA container images for faster Whisper transcription — alongside a round of sync-reliability fixes.
+
+### What's New
+
+- **A redesigned interface.** Every page now shares one design system and a compact top navigation bar, with Logs promoted to its own tab. The dashboard, settings, account, matching, suggestions, and forge pages were restyled onto a common look, and the navigation collapses to a swipeable strip on phones.
+
+- **Opt-in anonymous diagnostics.** You can choose to share a small daily diagnostic report — deduplicated warning lines from your sync logs with book titles, file paths, and URLs replaced by anonymous tokens, never your library contents or credentials — to help improve BookBridge. Admins are asked once, the choice lives under Settings → Diagnostics, and you can also send a one-off bug report with an optional note. Nothing is ever collected or sent unless you opt in.
+
+- **CUDA container images for GPU transcription.** BookBridge now publishes `-cuda` image tags (such as `latest-cuda` and `dev-cuda`) for amd64 hosts with an NVIDIA GPU. The image bundles the required CUDA libraries, and automatic Whisper device selection verifies both those libraries and a passed-through GPU before choosing CUDA. Contributed by @ykpdang.
+
+- **BookFusion polling can wait for your position to settle.** An optional setting holds BookFusion sync while you are actively reading and runs it once your position stops moving between polls.
+
+### What Changed
+
+- **Dashboard service cards and library shortcuts use official artwork.** Service cards and the top library shortcuts now show BookOrbit, Shelfmark, KOReader, BookFusion, and Hardcover logos, and the shared navigation links to your own configured audiobook and ebook libraries.
+
+### Fixed
+
+- **Audiobookshelf audiobook progress now reaches your ebooks reliably**, including unopened ebooks and separately catalogued ebook items. (#322)
+- **KOReader sync no longer aborts strict e-readers** on books that aren't in your library yet — unknown documents now return 404 instead of 502. (#332)
+- **Upgraded BookOrbit matches keep each reader's own library identity** after the 7.2.0 ownership migration. (#318)
+- **BookBridge warns at boot when an admin's saved credentials have drifted from the shared engine copies**, catching "connection test passes but sync fails" setups before they confuse you. (#328)
+- **Unavailable or deleted linked books no longer create false warnings** or roll another service back to the start, and stale BookFusion links recover after a confirmed 404.
+
+---
+
 ## [7.2.0]
 
 The headline is **reader-owned integrations and BookFusion support**: BookBridge now gives each reader a self-service place for their own service accounts, adds BookFusion progress and highlight sync, and expands list/collection bridges without changing the already-released 7.1.0 annotation foundation.
