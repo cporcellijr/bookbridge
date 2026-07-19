@@ -4,6 +4,15 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **External KoSync relays can now use HTTP Basic authentication.** Choose
+  **HTTP Basic (Calibre-Web Automated)** in the user's KOReader / KoSync
+  integration when targeting CWA's built-in `/kosync` endpoint; classic KoSync
+  header authentication remains the default. (#334)
+
 ## [7.3.0] - 2026-07-19
 
 ### Added

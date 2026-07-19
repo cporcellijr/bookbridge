@@ -315,6 +315,7 @@ class TestMultiUserAuth(unittest.TestCase):
             'BOOKFUSION_ENABLED': 'on',
             'BOOKFUSION_ANNOTATION_SYNC': 'on',
             'KOSYNC_ENABLED': 'on',
+            'KOSYNC_AUTH_METHOD': 'basic',
             'KOSYNC_USER': 'alice-ko',
             'KOSYNC_KEY': '',
         })
@@ -324,6 +325,7 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(self.svc.get_user_credential(alice.id, 'BOOKFUSION_ANNOTATION_SYNC'), 'true')
         self.assertEqual(self.svc.get_user_credential(alice.id, 'BOOKFUSION_ACCESS_TOKEN'), 'existing-token')
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_ENABLED'), 'true')
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_AUTH_METHOD'), 'basic')
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_USER'), 'alice-ko')
         self.mock_container.mock_user_client_registry.invalidate.assert_called_with(alice.id)
 

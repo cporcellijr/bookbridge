@@ -20,7 +20,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     # Audiobookshelf (server URL stays global; API token + library + collection are per-user)
     "ABS_KEY", "ABS_LIBRARY_ID", "ABS_COLLECTION_NAME",
     # KOReader / KoSync (server URL global; account is per-user)
-    "KOSYNC_USER", "KOSYNC_KEY", "KOSYNC_ENABLED",
+    "KOSYNC_USER", "KOSYNC_KEY", "KOSYNC_ENABLED", "KOSYNC_AUTH_METHOD",
     "DEVICE_SYNC_COLLECTION_SOURCE", "DEVICE_SYNC_COLLECTIONS",
     "DEVICE_SYNC_EXCLUDED_SHELVES", "DEVICE_SYNC_HARDCOVER_LISTS",
     "DEVICE_SYNC_HARDCOVER_LIST_NAMES",
@@ -74,6 +74,11 @@ PER_USER_FIELD_GROUPS = [
     ]),
     ("KOReader / KoSync", [
         ("KOSYNC_ENABLED", "Enabled", "bool"),
+        (
+            "KOSYNC_AUTH_METHOD",
+            "Authentication",
+            "select:kosync=KoSync headers (default)|basic=HTTP Basic (Calibre-Web Automated)",
+        ),
         ("KOSYNC_USER", "Sync username", "text"),
         ("KOSYNC_KEY", "Sync password", "secret"),
     ]),

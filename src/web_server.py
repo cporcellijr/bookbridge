@@ -51,7 +51,7 @@ from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.utils.storyteller_transcript import StorytellerTranscript
-from src.utils.kosync_headers import hash_kosync_key, kosync_auth_headers
+from src.utils.kosync_headers import kosync_request_kwargs
 
 def _reconfigure_logging():
     """Force update of root logger level based on env var."""
@@ -1172,7 +1172,10 @@ _USER_TEST_SERVICES = {
 
 _TEST_CONNECTION_FIELDS = {
     'abs': ['ABS_SERVER', 'ABS_KEY'],
-    'kosync': ['KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY'],
+    'kosync': [
+        'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY',
+        'KOSYNC_AUTH_METHOD',
+    ],
     'storyteller': ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
     'booklore': ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
     'bookorbit': ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
@@ -9408,6 +9411,7 @@ def _run_test_connection(service: str, payload: dict):
             _normalize_test_url(data.get('KOSYNC_SERVER')),
             _coerce_test_str(data.get('KOSYNC_USER')),
             _coerce_test_str(data.get('KOSYNC_KEY')),
+            _coerce_test_str(data.get('KOSYNC_AUTH_METHOD')) or 'kosync',
         ),
         'storyteller': lambda data: _test_storyteller(
             _coerce_test_bool(data.get('STORYTELLER_ENABLED')),
@@ -10042,20 +10046,26 @@ def _test_abs(url: str, token: str) -> dict:
     return {"ok": False, "message": f"Server returned {r.status_code}"}
 
 
-def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
+def _test_kosync(
+    enabled: bool,
+    url: str,
+    user: str,
+    key: str,
+    auth_method: str = 'kosync',
+) -> dict:
     if not enabled or not url:
         return {"ok": False, "message": "KOSync not configured or disabled"}
     if not user or not key:
         return {"ok": False, "message": "Missing username or password"}
 
-    headers = kosync_auth_headers(user, hash_kosync_key(key))
+    request_kwargs = kosync_request_kwargs(user, key, auth_method)
     healthcheck_status = None
     healthcheck_error = None
     try:
         healthcheck = requests.get(
             _build_test_url(url, "healthcheck"),
-            headers=headers,
             timeout=5,
+            **request_kwargs,
         )
         healthcheck_status = healthcheck.status_code
     except Exception as e:
@@ -10083,7 +10093,11 @@ def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
             ),
         }
 
-    auth = requests.get(_build_test_url(url, "users/auth"), headers=headers, timeout=5)
+    auth = requests.get(
+        _build_test_url(url, "users/auth"),
+        timeout=5,
+        **request_kwargs,
+    )
     if auth.status_code == 200:
         if healthcheck_status not in (None, 200):
             return {
