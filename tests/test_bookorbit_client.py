@@ -39,6 +39,29 @@ def test_is_configured_requires_all_fields(client):
         assert client.is_configured() is False
 
 
+def test_login_failure_cooldown_prevents_per_request_retries(client):
+    failed = _Resp(status_code=400)
+    with patch.object(client.session, "post", return_value=failed) as login:
+        assert client._get_fresh_token() is None
+        assert client._get_fresh_token() is None
+
+    login.assert_called_once()
+
+
+def test_login_throttle_reuses_existing_stale_token(client):
+    client._token = "still-accepted"
+    client._token_timestamp = 0
+    throttled = _Resp(status_code=429)
+
+    with patch.object(client.session, "post", return_value=throttled):
+        with patch("src.api.bookorbit_client.logger.warning") as warning:
+            assert client._get_fresh_token() == "still-accepted"
+
+    warning.assert_called_once_with(
+        "BookOrbit login throttled (429); reusing stale cached token"
+    )
+
+
 def test_classify_format():
     assert BookOrbitClient._classify_format("epub") == "ebook"
     assert BookOrbitClient._classify_format("M4B") == "audiobook"

@@ -70,6 +70,8 @@ def upgrade() -> None:
     has_ebook_sid = "ebook_source_id" in book_cols
     has_audio_sid = "audio_source_id" in book_cols
     has_user_id = "user_id" in book_cols
+    has_audio_provider_id = "audio_provider_book_id" in book_cols
+    tables = _tables(inspector)
 
     if has_ebook_src or has_audio_src:
         # Build the backfill SELECT dynamically based on available columns.
@@ -79,12 +81,42 @@ def upgrade() -> None:
         if has_ebook_src and has_ebook_sid:
             ebook_id_expr = "CASE WHEN b.ebook_source = 'BookOrbit' THEN b.ebook_source_id ELSE NULL END"
         audio_id_expr = "NULL"
-        if has_audio_src and has_audio_sid:
-            audio_id_expr = "CASE WHEN b.audio_source = 'BookOrbit' THEN b.audio_source_id ELSE NULL END"
+        if has_audio_src and (has_audio_provider_id or has_audio_sid):
+            audio_columns = []
+            if has_audio_provider_id:
+                audio_columns.append("b.audio_provider_book_id")
+            if has_audio_sid:
+                audio_columns.append("b.audio_source_id")
+            audio_value_expr = (
+                audio_columns[0]
+                if len(audio_columns) == 1
+                else f"COALESCE({', '.join(audio_columns)})"
+            )
+            audio_id_expr = (
+                "CASE WHEN b.audio_source = 'BookOrbit' "
+                f"THEN {audio_value_expr} ELSE NULL END"
+            )
 
-        user_expr = "b.user_id"
-        if not has_user_id:
-            user_expr = "(SELECT ub.user_id FROM user_books ub WHERE ub.abs_id = b.abs_id LIMIT 1)"
+        owner_candidates = []
+        if has_user_id:
+            owner_candidates.append("b.user_id")
+        if "user_books" in tables:
+            owner_candidates.append(
+                "(SELECT ub.user_id FROM user_books ub "
+                "WHERE ub.abs_id = b.abs_id ORDER BY ub.user_id LIMIT 1)"
+            )
+        if "users" in tables:
+            owner_candidates.extend([
+                "(SELECT u.id FROM users u WHERE u.role = 'admin' ORDER BY u.id LIMIT 1)",
+                "(SELECT u.id FROM users u ORDER BY u.id LIMIT 1)",
+            ])
+        if not owner_candidates:
+            return
+        user_expr = (
+            owner_candidates[0]
+            if len(owner_candidates) == 1
+            else f"COALESCE({', '.join(owner_candidates)})"
+        )
 
         op.execute(
             f"""
@@ -100,8 +132,9 @@ def upgrade() -> None:
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             FROM books b
-            WHERE ({ebook_id_expr}) IS NOT NULL
-               OR ({audio_id_expr}) IS NOT NULL
+            WHERE ({user_expr}) IS NOT NULL
+              AND (({ebook_id_expr}) IS NOT NULL
+               OR ({audio_id_expr}) IS NOT NULL)
             """
         )
 

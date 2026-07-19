@@ -1014,6 +1014,11 @@ class ForgeService:
 
         temp_dir = None
         try:
+            st_client = self.storyteller_client
+            if not st_client or not st_client.is_configured():
+                logger.info(f"Forge: Storyteller is not configured; skipping '{title}'")
+                return
+
             safe_title = self.safe_folder_name(title) if title else "Unknown"
             temp_dir = Path(tempfile.mkdtemp(prefix=".forge_tus_"))
 
@@ -1099,7 +1104,6 @@ class ForgeService:
                 return
 
             # Step 3: Upload to Storyteller via TUS
-            st_client = self.storyteller_client
             book_uuid = str(uuid.uuid4())
 
             logger.info(f"Forge: Uploading epub to Storyteller ({book_uuid})...")
@@ -1251,6 +1255,20 @@ class ForgeService:
         temp_dir = None
 
         try:
+            st_client = self.storyteller_client
+            if not st_client or not st_client.is_configured():
+                message = "Storyteller is not configured"
+                logger.info(f"Auto-Forge: {message}; skipping '{title}'")
+                try:
+                    book = self.database_service.get_book(abs_id)
+                    if book:
+                        book.status = "error"
+                        self.database_service.save_book(book)
+                    self._update_forge_match_job(abs_id, last_error=message)
+                except Exception as exc:
+                    logger.debug("Auto-Forge: failed to record unavailable Storyteller: %s", exc)
+                return
+
             original_ebook_filename = self._extract_original_filename(text_item, original_filename)
             safe_title = self.safe_folder_name(title) if title else "Unknown"
             temp_dir = Path(tempfile.mkdtemp(prefix=".forge_tus_"))
@@ -1306,7 +1324,6 @@ class ForgeService:
                 raise Exception("Failed to acquire text source")
 
             # Upload to Storyteller via TUS
-            st_client = self.storyteller_client
             book_uuid = str(uuid.uuid4())
 
             logger.info(f"Auto-Forge: Uploading epub to Storyteller ({book_uuid})...")

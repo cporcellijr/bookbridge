@@ -114,6 +114,42 @@ class TestUserClientRegistry(unittest.TestCase):
         self.registry.invalidate(u.id)
         self.assertEqual(self.registry.get_clients(u.id).abs_client.token, "new")
 
+    def test_transient_db_exception_does_not_cache_fallback(self):
+        """A DB exception on the first credential read returns a fallback bundle
+        for that request but does NOT place it in the cache. A subsequent
+        successful read must return real credentials and be cached."""
+        u = self.svc.create_user("frank", "pw")
+        self.svc.set_user_credential(u.id, "ABS_KEY", "real-token")
+
+        call_count = [0]
+        original_get_creds = self.svc.get_user_credentials
+
+        def _flaky_get_creds(uid):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("simulated DB failure")
+            return original_get_creds(uid)
+
+        self.svc.get_user_credentials = _flaky_get_creds
+        try:
+            # First call: DB exception → fallback returned, NOT cached
+            fallback = self.registry.get_clients(u.id)
+            self.assertIsInstance(fallback, UserClients)
+            self.assertEqual(fallback.abs_client.token, "")
+            self.assertNotIn(u.id, self.registry._cache)
+
+            # Second call: DB succeeds → real credentials, now cached
+            real = self.registry.get_clients(u.id)
+            self.assertEqual(real.abs_client.token, "real-token")
+            self.assertIn(u.id, self.registry._cache)
+            self.assertIs(real, self.registry._cache[u.id])
+
+            # Third call: served from cache
+            cached = self.registry.get_clients(u.id)
+            self.assertIs(cached, real)
+        finally:
+            self.svc.get_user_credentials = original_get_creds
+
 
 if __name__ == "__main__":
     unittest.main()

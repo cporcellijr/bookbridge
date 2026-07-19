@@ -124,6 +124,25 @@ def _make_minimal_epub(
     return buf.getvalue()
 
 
+def _make_readaloud_epub(missing_audio: bool = False) -> bytes:
+    """Build a minimal EPUB with one SMIL reference and optional audio."""
+    source = io.BytesIO(_make_minimal_epub(title="ReadAloud Route Test Book"))
+    output = io.BytesIO()
+    with zipfile.ZipFile(source, "r") as source_zip, zipfile.ZipFile(output, "w") as output_zip:
+        for info in source_zip.infolist():
+            output_zip.writestr(info, source_zip.read(info.filename))
+        output_zip.writestr(
+            "OEBPS/MediaOverlays/chapter001.smil",
+            """<?xml version="1.0" encoding="utf-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+  <body><seq><par><audio src="../Audio/00001-00158.mp4#t=0,1"/></par></seq></body>
+</smil>""",
+        )
+        if not missing_audio:
+            output_zip.writestr("OEBPS/Audio/00001-00158.mp4", b"audio")
+    return output.getvalue()
+
+
 def _write_epub_temp(data: bytes) -> str:
     """Write *data* to a temp file and return its path."""
     tmp = tempfile.NamedTemporaryFile(suffix=".epub", delete=False)
@@ -448,6 +467,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
 
         # Build a synthetic EPUB for the "has local file" scenario
         self.epub_bytes = _make_minimal_epub(title="Route Test Book")
+        self.readaloud_epub_bytes = _make_readaloud_epub()
         self.tmp_epub = _write_epub_temp(self.epub_bytes)
 
         # Saved kwargs from set_user_bookfusion_link
@@ -465,7 +485,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
     def _run_route(self, book_has_epub=True, client_configured=True,
                    upload_result=None, ebook_path_exists=True,
                    storyteller_uuid=None, storyteller_configured=None,
-                   request_data=None):
+                   request_data=None, storyteller_epub_bytes=None):
         """Call ``api_bookfusion_upload`` with mocked dependencies.
 
         Parameters
@@ -525,7 +545,13 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         storyteller_client = MagicMock()
         st_configured = storyteller_configured if storyteller_configured is not None else client_configured
         storyteller_client.is_configured.return_value = st_configured
-        storyteller_client.download_book.return_value = True
+
+        def _fake_storyteller_download(_uuid, path, polling=False):
+            data = storyteller_epub_bytes or self.readaloud_epub_bytes
+            Path(path).write_bytes(data)
+            return True
+
+        storyteller_client.download_book.side_effect = _fake_storyteller_download
 
         user_clients = MagicMock()
         user_clients.bookfusion_upload_client = upload_client
@@ -631,6 +657,22 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         # Verify link was created
         self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "789")
 
+    def test_readaloud_variant_rejects_missing_mp4_before_upload(self):
+        """A SMIL reference to a missing MP4 must never reach BookFusion."""
+        result = self._run_route(
+            book_has_epub=True,
+            client_configured=True,
+            storyteller_uuid="st-uuid-123",
+            request_data={"variant": "readaloud"},
+            storyteller_epub_bytes=_make_readaloud_epub(missing_audio=True),
+        )
+
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(result[1], 502)
+        self.assertIn("incomplete", result[0].json["error"].lower())
+        self._ws.uc.return_value.bookfusion_upload_client.upload_epub.assert_not_called()
+        self.assertEqual(self.saved_link_kwargs, {})
+
     def test_readaloud_variant_download_failure_false_returns_502(self):
         """download_book returns False → 502, upload_epub never called."""
         from src import web_server as ws
@@ -725,7 +767,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         try:
             # Create a real temp file that download_book "writes"
             real_tmp = tf.NamedTemporaryFile(suffix=".epub", delete=False)
-            real_tmp.write(self.epub_bytes)
+            real_tmp.write(self.readaloud_epub_bytes)
             real_tmp.close()
 
             book = MagicMock()
@@ -797,7 +839,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         original_uc = ws.uc
         try:
             real_tmp = tf.NamedTemporaryFile(suffix=".epub", delete=False)
-            real_tmp.write(self.epub_bytes)
+            real_tmp.write(self.readaloud_epub_bytes)
             real_tmp.close()
 
             book = MagicMock()
@@ -1052,6 +1094,107 @@ class BookFusionUploadClientS3TimeoutTest(unittest.TestCase):
         s3_call = session.calls[1]
         kwargs = s3_call[2]
         self.assertEqual(kwargs.get("timeout"), 180)
+
+
+class ResolveDuplicateBookfusionIdTest(unittest.TestCase):
+    """Tests for ``_resolve_duplicate_bookfusion_id``: the probe must succeed
+    before a title/author-matching id is returned."""
+
+    def setUp(self):
+        from src import web_server as ws
+        self._ws = ws
+        self._saved_uc = getattr(ws, "uc", None)
+
+    def tearDown(self):
+        if self._saved_uc is not None:
+            self._ws.uc = self._saved_uc
+
+    def _make_reader_client(self, search_results=None, get_download_url_returns=None):
+        bf = MagicMock()
+        bf.is_configured.return_value = True
+        bf.search_books.return_value = search_results or []
+        bf.get_download_url.return_value = get_download_url_returns
+        return bf
+
+    def test_returns_none_when_no_title(self):
+        bf = self._make_reader_client()
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        self.assertIsNone(_resolve_duplicate_bookfusion_id(None, "", ""))
+
+    def test_returns_none_when_unconfigured(self):
+        bf = MagicMock()
+        bf.is_configured.return_value = False
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        self.assertIsNone(_resolve_duplicate_bookfusion_id(None, "Title"))
+
+    def test_skips_inaccessible_exact_match(self):
+        """Inaccessible first match is skipped; no second match → None."""
+        bf = self._make_reader_client(
+            search_results=[{"id": 100, "title": "My Book", "authors": ["Author A"]}],
+            get_download_url_returns=None,
+        )
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertIsNone(result)
+        bf.get_download_url.assert_called_once_with(100)
+
+    def test_accepts_later_accessible_exact_match(self):
+        """First exact match is inaccessible, second is accessible → returns second."""
+        bf = self._make_reader_client(
+            search_results=[
+                {"id": 100, "title": "My Book", "authors": ["Author A"]},
+                {"id": 200, "title": "My Book", "authors": ["Author A"]},
+            ],
+        )
+        bf.get_download_url.side_effect = [None, "https://bf.example/dl/200"]
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertEqual(result, 200)
+        self.assertEqual(bf.get_download_url.call_count, 2)
+
+    def test_skips_on_probe_exception_and_continues(self):
+        """Probe raising exception on first match skips it; second succeeds."""
+        bf = self._make_reader_client(
+            search_results=[
+                {"id": 300, "title": "My Book", "authors": ["Author A"]},
+                {"id": 400, "title": "My Book", "authors": ["Author A"]},
+            ],
+        )
+        bf.get_download_url.side_effect = [ConnectionError("timeout"), "https://bf.example/dl/400"]
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertEqual(result, 400)
+
+    def test_accessible_first_match_returned_immediately(self):
+        """First match is accessible → returned without checking others."""
+        bf = self._make_reader_client(
+            search_results=[{"id": 500, "title": "My Book", "authors": ["Author A"]}],
+            get_download_url_returns="https://bf.example/dl/500",
+        )
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertEqual(result, 500)
+
+    def test_all_inaccessible_returns_none(self):
+        """All matches inaccessible → returns None."""
+        bf = self._make_reader_client(
+            search_results=[
+                {"id": 600, "title": "My Book", "authors": ["Author A"]},
+                {"id": 700, "title": "My Book", "authors": ["Author A"]},
+            ],
+            get_download_url_returns=None,
+        )
+        self._ws.uc = MagicMock(return_value=MagicMock(bookfusion_client=bf))
+        from src.web_server import _resolve_duplicate_bookfusion_id
+        result = _resolve_duplicate_bookfusion_id(None, "My Book", "Author A")
+        self.assertIsNone(result)
+        self.assertEqual(bf.get_download_url.call_count, 2)
 
 
 if __name__ == "__main__":

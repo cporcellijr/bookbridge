@@ -940,6 +940,82 @@ class DatabaseService:
                 UserBookOrbitLink.abs_id == abs_id,
             ).first() is not None
 
+    def repair_missing_bookorbit_user_links(self) -> dict:
+        """Create missing per-user links for legacy BookOrbit mappings.
+
+        Existing links are authoritative and are never modified. For an old
+        shared row without a link, ownership is resolved from ``Book.user_id``,
+        then the first ``UserBook`` claimant, then the first admin/user.
+        """
+        counts = {
+            "examined": 0,
+            "created": 0,
+            "skipped_existing": 0,
+            "unresolved_owner": 0,
+        }
+        with self.get_session() as session:
+            books = session.query(Book).filter(
+                (
+                    (Book.ebook_source == "BookOrbit")
+                    & Book.ebook_source_id.isnot(None)
+                )
+                | (
+                    (Book.audio_source == "BookOrbit")
+                    & (
+                        Book.audio_provider_book_id.isnot(None)
+                        | Book.audio_source_id.isnot(None)
+                    )
+                )
+            ).all()
+
+            default_owner = session.query(User.id).filter(
+                User.role == "admin"
+            ).order_by(User.id).first()
+            if default_owner is None:
+                default_owner = session.query(User.id).order_by(User.id).first()
+            default_owner_id = default_owner[0] if default_owner else None
+
+            for book in books:
+                counts["examined"] += 1
+                existing = session.query(UserBookOrbitLink.id).filter(
+                    UserBookOrbitLink.abs_id == book.abs_id
+                ).first()
+                if existing is not None:
+                    counts["skipped_existing"] += 1
+                    continue
+
+                owner_id = book.user_id
+                if owner_id is None:
+                    claimant = session.query(UserBook.user_id).filter(
+                        UserBook.abs_id == book.abs_id
+                    ).order_by(UserBook.user_id).first()
+                    owner_id = claimant[0] if claimant else default_owner_id
+                if owner_id is None:
+                    counts["unresolved_owner"] += 1
+                    continue
+
+                ebook_id = None
+                if book.ebook_source == "BookOrbit" and book.ebook_source_id:
+                    ebook_id = str(book.ebook_source_id).strip() or None
+                audio_id = None
+                if book.audio_source == "BookOrbit":
+                    raw_audio_id = book.audio_provider_book_id or book.audio_source_id
+                    if raw_audio_id:
+                        audio_id = str(raw_audio_id).strip() or None
+                if not ebook_id and not audio_id:
+                    continue
+
+                session.add(UserBookOrbitLink(
+                    user_id=owner_id,
+                    abs_id=book.abs_id,
+                    ebook_id=ebook_id,
+                    audio_id=audio_id,
+                    title=book.abs_title,
+                ))
+                counts["created"] += 1
+
+        return counts
+
     def resolve_bookorbit_ebook_id(self, user_id: int, book) -> Optional[str]:
         """Resolve the user's BookOrbit ebook id for a shared book.
 
@@ -951,6 +1027,11 @@ class DatabaseService:
             link = self.get_user_bookorbit_link(user_id, abs_id)
             if link is not None:
                 return str(link["ebook_id"]) if link.get("ebook_id") else None
+            claimant_ids = self.get_book_user_ids(abs_id)
+            if len(claimant_ids) > 1 or (
+                len(claimant_ids) == 1 and claimant_ids[0] != user_id
+            ):
+                return None
         # Fallback: legacy shared Book fields
         if getattr(book, "ebook_source", None) == "BookOrbit":
             val = getattr(book, "ebook_source_id", None)
@@ -969,6 +1050,11 @@ class DatabaseService:
             link = self.get_user_bookorbit_link(user_id, abs_id)
             if link is not None:
                 return str(link["audio_id"]) if link.get("audio_id") else None
+            claimant_ids = self.get_book_user_ids(abs_id)
+            if len(claimant_ids) > 1 or (
+                len(claimant_ids) == 1 and claimant_ids[0] != user_id
+            ):
+                return None
         # Fallback: legacy shared Book fields
         if getattr(book, "audio_source", None) == "BookOrbit":
             val = getattr(book, "audio_provider_book_id", None) or getattr(book, "audio_source_id", None)

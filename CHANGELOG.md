@@ -4,7 +4,188 @@
 
 All notable changes to BookBridge will be documented in this file.
 
-## [Unreleased]
+## [7.3.0] - 2026-07-19
+
+### Added
+
+- Added clickable Bugscout category counts to the private diagnostics dashboard
+  for code bugs, configuration issues, documentation gaps, environment problems,
+  and unclassified findings. Category views include reviewed active and archived
+  findings, place the most frequent first, and identify code bugs as actionable.
+
+- Redesigned the private local diagnostics dashboard as an inbox-first report
+  center. Written user reports now appear once at submission level, reviewed
+  Bugscout anomalies are the default view, the raw triage queue has its own
+  filter, seven-day fleet totals remain visible, and large reports separate
+  reviewed findings from those still waiting for analysis. Finding detail now
+  offers review decisions for **Reviewed — no action**, **Fixed**, and **Reopen**,
+  with completed findings retained in an Archived view.
+
+- Added manual diagnostics bug reports with an optional written note and a
+  compact, instance-private reply history under Settings. All admins on one
+  BookBridge installation share that history; regular users and other
+  installations cannot read it.
+- Added a private local maintainer dashboard with fleet totals, clickable
+  Bugscout anomaly analysis, technical evidence, links to written user feedback,
+  and submission-level response forms. It runs only on `localhost:5761` and
+  keeps receiver credentials server-side.
+
+- **Opt-in anonymous diagnostics.** Help improve BookBridge by sharing a small
+  daily diagnostic report: deduplicated warning lines from your sync logs with
+  book titles, file paths, and URLs replaced by anonymous tokens — never your
+  library contents or credentials. Admins are asked once via a dashboard
+  prompt (existing installs see it after upgrading), and the choice can be
+  reviewed anytime under Settings → Diagnostics, which also shows the last
+  automatic send, an optional problem-description box, a "Send bug report"
+  button, and recent replies. Nothing is ever collected or sent unless you opt
+  in.
+
+- **CUDA container images are now published alongside CPU images.** Use a
+  `-cuda` tag such as `latest-cuda` or `dev-cuda` on amd64 hosts with NVIDIA
+  GPU transcription. The image bundles the required CUDA libraries, while
+  automatic Whisper device selection now verifies both those libraries and a
+  GPU passed through to the container before choosing CUDA. Contributed by
+  [@ykpdang](https://github.com/ykpdang). (#320)
+
+- **BookFusion polling can now wait for your reading position to settle.** A new
+  per-poll option holds the sync while your BookFusion position is still moving
+  between polls — meaning you are actively reading — and runs it once a poll shows
+  no further movement, avoiding a burst of intermediate writes mid-chapter.
+
+### Changed
+
+- **BookBridge has a redesigned interface.** A shared design system now spans
+  every page: a compact top navigation bar (with Logs promoted to its own tab)
+  replaces the old scattered links, and the dashboard, settings, account,
+  matching, suggestions, forge, logs, stats, and Shelfmark pages are restyled
+  onto one common base template. The navigation collapses to a swipeable strip on
+  phones, and sign-in and first-run setup share the same look.
+
+- Updated dashboard service cards and top library shortcuts with official
+  BookOrbit, Shelfmark, KOReader, BookFusion, and Hardcover artwork. The shared
+  navigation now links to the signed-in user's configured audiobook and ebook
+  libraries instead of always presenting Audiobookshelf plus every enabled
+  reading integration.
+
+- Replaced the Account menu's Docs emoji with a consistent vector icon and
+  repaired the GitHub Pages logo, favicon, and homepage hero buttons.
+
+### Fixed
+
+- **Stale BookFusion links now recover after a confirmed write-time 404.**
+  BookBridge removes only the affected user's obsolete link so it stops retrying
+  a deleted or incorrect BookFusion book and can be linked again cleanly.
+
+- **KOReader managed-folder sync can now serve BookOrbit-sourced EPUBs.**
+  When the original file is not mounted locally, BookBridge downloads the linked
+  BookOrbit ebook into its existing EPUB cache instead of omitting the book.
+
+- **Forge jobs now stop immediately when Storyteller is not configured.**
+  Manual and automatic Forge & Match jobs no longer stage files or attempt a TUS
+  upload that can only fail with a misleading authentication-token warning.
+
+- Expected splitting of long audio for transcription is now logged as routine
+  information rather than a warning requiring review.
+
+- **BookOrbit login failures no longer hammer its rate-limited auth endpoint.**
+  A failed login now pauses further attempts from that client for one minute,
+  and a 429 reuses an existing cached token when available instead of claiming
+  reuse while silently disabling BookOrbit requests.
+
+- **Audiobookshelf instant sync now waits between HTTP-failure retries.** Socket
+  token acquisition applies its existing backoff after 5xx responses as well as
+  connection exceptions, giving short ABS or reverse-proxy outages time to
+  recover before the listener falls back to its supervised restart.
+
+- **KOReader sync server no longer aborts strict clients on books that aren't in
+  the library yet.** The built-in sync server now answers "unknown document"
+  requests with HTTP 404 instead of 502. KOReader treated both the same way, but
+  strict sync clients (e.g. Crosspoint e-readers) read any 5xx as a fatal server
+  error and abandoned the sync attempt entirely; they now correctly recognize 404
+  as "no remote progress yet" and offer to upload local progress instead. (#332)
+
+- **Missing remote annotations and already-absent collection items no longer
+  create false diagnostics.** BookFusion highlight creation treats a 404 for a
+  deleted or stale linked book as unavailable at DEBUG while preserving the
+  local pending annotation for a future valid relink. Audiobookshelf collection
+  cleanup now treats a 404 as successful idempotent removal.
+
+- **Unavailable linked books no longer create false diagnostics or lead sync.**
+  BookFusion highlight pulls quietly skip a saved book that now returns 404
+  without deleting local annotation state, while genuine server failures still
+  warn. Storyteller books whose linked ReadAloud EPUB cannot be resolved or
+  recovered are excluded before leader selection, preventing a stale UUID from
+  rolling another service back to 0%.
+
+- **BookFusion ReadAloud uploads now reject incomplete Storyteller packages.**
+  Before upload and automatic linking, BookBridge verifies that every narration
+  reference in the EPUB's SMIL overlays points to an audio file actually present
+  in the archive. If Storyteller is still processing the book, the upload stops
+  with a clear retry message instead of creating a BookFusion book that later
+  fails because its MP4 files are missing. Existing incomplete BookFusion copies
+  must be deleted and uploaded again.
+
+- **BookBridge now warns at boot when an admin's saved credentials have drifted
+  from the shared engine copies.** After the 7.2.0 per-user credentials move, the
+  global settings store and the primary admin's per-user credential rows could
+  diverge silently — background workers (ABS socket, shelf-watch, scans, manifest)
+  read the global copy while syncs and connection tests read the account copy,
+  producing "connection test passes but sync fails" reports that only a data wipe
+  seemed to cure. Startup now logs a stable warning per divergent key pointing at
+  Account → Integrations as the reconcile path; a blank per-user value with a set
+  global value stays silent, since that is the healthy admin fallback. (#328)
+
+- Diagnostics maintainer APIs now fail closed when their read token is missing,
+  manual-report quota checks are atomic, overlapping sender runs cannot consume
+  unsent warning evidence, and private dashboard requests reject redirects and
+  non-loopback plain HTTP endpoints.
+
+- **Audiobookshelf audiobook-to-ebook sync now handles unopened and separate ebook items.**
+  Explicit ABS ebook mappings participate from a 0% baseline before their first read,
+  legacy direct matches resolve the separate ebook item ID, and percentage-only audio
+  locations are converted to a validated EPUB CFI before ABS is updated. Zero-progress
+  resets now target the ebook item as well. Existing mappings self-heal on their next
+  sync cycle without rematching or database changes. (#322)
+
+- **Hardened dashboard and KoSync trust boundaries.** Storyteller search results
+  are rendered as text instead of executable HTML; requests are capped at 8 MiB;
+  unknown-document discovery uses a bounded worker queue; repeated login and
+  KoSync authentication failures are throttled; KoSync document access now
+  requires the authenticated user's book claim; and regular users cannot change
+  a hash shared with another claimant.
+
+- **KOReader device setup now suggests a reachable sync-server address.** Reverse-proxied
+  HTTPS keeps the browser-visible origin without exposing the internal KoSync port, while
+  direct LAN access uses the configured KoSync port. Loopback addresses now show a warning
+  and must be replaced before copying, and the Copy button only reports success after the
+  clipboard operation succeeds (with a plain-HTTP fallback).
+
+- **BookFusion dashboard link now validates the book exists before persisting.**
+  Dashboard search and the duplicate-resolution path during upload previously
+  persisted a BookFusion id without checking whether the BookFusion reader API
+  could actually serve it. An inaccessible id (e.g. uploaded but not yet
+  indexed, or belonging to a different account) would silently fail every
+  download and reading-position request with 404. Both the manual link route
+  and the upload-duplicate resolver now probe `get_download_url` first; a
+  failed probe returns a clear 400 error suggesting the user upload or
+  re-search, and the existing link (if any) is never overwritten. Already-broken
+  links require re-uploading and re-linking; valid links self-sync on the next
+  cycle.
+
+- **Upgraded multi-user BookOrbit matches now keep each reader's library identity.**
+  The 7.2.0 ownership migration could silently skip legacy rows whose shared book
+  had no creator ID, leaving sync clients to reuse a shared BookOrbit ebook or
+  audiobook ID. A follow-up migration and startup repair now recover those rows
+  from their user claim (or default admin), preserve existing per-user links, and
+  prevent a scoped client from using a legacy ID when multiple readers claim the
+  same book. Existing installs self-heal after migration and restart; deleting and
+  rematching the book is no longer required. (#318)
+
+- **Audiobook-only mappings no longer trigger KoSync EPUB discovery.** KoSync is
+  excluded from an `audiobook_only` sync cycle, and blank or placeholder document
+  IDs (`None` / `null`) are rejected by the KoSync endpoint before they can create
+  an unknown-document stub or scan the EPUB library. This prevents an audiobook
+  match from issuing `/syncs/progress/None` and needlessly searching local EPUBs.
 
 ## [7.2.0] - 2026-07-13
 

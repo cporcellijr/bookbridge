@@ -693,11 +693,19 @@ class TestPendingSyncUserScope(unittest.TestCase):
         mgr._sync_lock = _BusyLock()
         mgr._pending_sync_lock = threading.Lock()
         mgr._pending_sync_books = set()
+        mgr._replay_worker_running = False
         mgr._post_cycle_callbacks = []
         mgr._sync_cycle_internal = lambda target_abs_id=None: None
 
+        # Use the real sync_cycle to trigger the timeout→queue path
         mgr.sync_cycle(target_abs_id="book-1", user_id=2)
         self.assertEqual(mgr._pending_sync_books, {(2, "book-1")})
+
+        # Now set up a mock for the worker's replay of the queued item
+        replayed = []
+        def _fake_sync_cycle(target_abs_id=None, user_id=None):
+            replayed.append((target_abs_id, user_id))
+        mgr.sync_cycle = _fake_sync_cycle
 
         from unittest.mock import patch
         with patch("src.sync_manager.threading.Thread") as thread_cls:
@@ -705,13 +713,12 @@ class TestPendingSyncUserScope(unittest.TestCase):
 
         self.assertEqual(mgr._pending_sync_books, set())
         thread_cls.assert_called_once()
-        target = thread_cls.call_args.kwargs["target"]
-        self.assertIs(target.__self__, mgr)
-        self.assertIs(target.__func__, SyncManager.sync_cycle)
-        self.assertEqual(
-            thread_cls.call_args.kwargs["kwargs"],
-            {'target_abs_id': 'book-1', 'user_id': 2},
-        )
+        # Execute the worker synchronously to verify it replays correctly.
+        worker_target = thread_cls.call_args.kwargs["target"]
+        worker_target()
+
+        self.assertEqual(replayed, [("book-1", 2)])
+        self.assertFalse(mgr._replay_worker_running)
 
     def test_dispatch_handles_mixed_none_and_int_user_ids(self):
         # A global cycle (user_id=None) and a per-user instant sync (user_id=int)
@@ -721,13 +728,131 @@ class TestPendingSyncUserScope(unittest.TestCase):
         mgr = SyncManager.__new__(SyncManager)
         mgr._pending_sync_lock = threading.Lock()
         mgr._pending_sync_books = {(None, "book-a"), (2, "book-b"), (1, "book-a")}
+        mgr._replay_worker_running = False
+        mgr.sync_cycle = lambda **kw: None
 
         from unittest.mock import patch
         with patch("src.sync_manager.threading.Thread") as thread_cls:
             mgr._dispatch_pending_syncs()
+            # Dispatch clears the set and captures items in the worker.
+            self.assertEqual(mgr._pending_sync_books, set())
+            worker_target = thread_cls.call_args.kwargs["target"]
 
-        self.assertEqual(mgr._pending_sync_books, set())
-        self.assertEqual(thread_cls.call_count, 3)
+        # Execute the worker to drain all queued items.
+        replayed = []
+        mgr.sync_cycle = lambda target_abs_id=None, user_id=None: replayed.append((target_abs_id, user_id))
+        worker_target()
+        self.assertEqual(
+            set(replayed),
+            {("book-a", None), ("book-b", 2), ("book-a", 1)},
+        )
+        self.assertFalse(mgr._replay_worker_running)
+
+
+class TestReplayWorkerSerialism(unittest.TestCase):
+    """Verify the serial replay worker starts at most one worker and preserves
+    queued target_abs_id / user_id pairs."""
+
+    def test_multi_item_replay_starts_at_most_one_worker(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr._pending_sync_lock = threading.Lock()
+        mgr._pending_sync_books = {
+            (None, "book-a"),
+            (2, "book-b"),
+            (1, "book-c"),
+        }
+        mgr._replay_worker_running = False
+        mgr._sync_cycle_calls = []
+
+        def _fake_sync_cycle(target_abs_id=None, user_id=None):
+            mgr._sync_cycle_calls.append((target_abs_id, user_id))
+
+        mgr.sync_cycle = _fake_sync_cycle
+
+        from unittest.mock import patch
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr._dispatch_pending_syncs()
+            # The dispatch itself only starts one thread.
+            self.assertEqual(thread_cls.call_count, 1)
+            worker_target = thread_cls.call_args.kwargs["target"]
+
+        # Execute the worker synchronously to verify behaviour.
+        worker_target()
+
+        # All three queued items were replayed.
+        self.assertEqual(
+            set(mgr._sync_cycle_calls),
+            {("book-a", None), ("book-b", 2), ("book-c", 1)},
+        )
+        # Worker is not running after draining.
+        self.assertFalse(mgr._replay_worker_running)
+
+    def test_second_dispatch_while_worker_runs_is_noop(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr._pending_sync_lock = threading.Lock()
+        mgr._pending_sync_books = set()
+        mgr._replay_worker_running = True
+
+        from unittest.mock import patch
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr._dispatch_pending_syncs()
+            thread_cls.assert_not_called()
+
+    def test_empty_queue_does_not_start_worker(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr._pending_sync_lock = threading.Lock()
+        mgr._pending_sync_books = set()
+        mgr._replay_worker_running = False
+
+        from unittest.mock import patch
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr._dispatch_pending_syncs()
+            thread_cls.assert_not_called()
+        self.assertFalse(mgr._replay_worker_running)
+
+    def test_dispatch_starts_worker_after_previous_worker_clears_flag(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr._pending_sync_lock = threading.Lock()
+        mgr._pending_sync_books = set()
+        mgr._replay_worker_running = True
+
+        from unittest.mock import patch
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr._dispatch_pending_syncs()
+            thread_cls.assert_not_called()
+
+            with mgr._pending_sync_lock:
+                mgr._replay_worker_running = False
+                mgr._pending_sync_books.add((4, "queued-after-worker"))
+
+            mgr._dispatch_pending_syncs()
+            thread_cls.assert_called_once()
+
+    def test_worker_drains_items_added_during_run(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr._pending_sync_lock = threading.Lock()
+        mgr._pending_sync_books = {("x", "initial")}
+        mgr._replay_worker_running = False
+        mgr.sync_cycle = lambda **kw: None
+
+        from unittest.mock import patch
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr._dispatch_pending_syncs()
+            worker_target = thread_cls.call_args.kwargs["target"]
+
+        call_log = []
+
+        def _sync_with_inject(**kw):
+            call_log.append(kw.get("target_abs_id"))
+            if kw.get("target_abs_id") == "initial":
+                with mgr._pending_sync_lock:
+                    mgr._pending_sync_books.add((3, "injected"))
+
+        mgr.sync_cycle = _sync_with_inject
+        worker_target()
+
+        self.assertEqual(set(call_log), {"initial", "injected"})
+        self.assertFalse(mgr._replay_worker_running)
 
 
 if __name__ == "__main__":

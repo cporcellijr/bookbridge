@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}BookBridge{% endblock %}</title>
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
+    <link rel="stylesheet" href="/static/css/app.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    {% if not hide_chrome %}
+    {% include "_nav.html" %}
+    {% endif %}
+    {% block content %}{% endblock %}
+    {% block scripts %}{% endblock %}
+</body>
+</html>

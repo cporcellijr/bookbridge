@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 # Match existing tests that add project root for `src.*` imports.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
 from src.sync_clients.booklore_sync_client import BookloreSyncClient
 from src.sync_clients.sync_client_interface import LocatorResult, ServiceState, SyncResult
 from src.sync_manager import SyncManager
@@ -1068,3 +1069,186 @@ def test_persist_state_snapshot_records_leader_value_without_sync():
     assert saved.client_name == "kosync"
     assert saved.percentage == 0.5314
     assert saved.last_updated == 123.0
+
+
+# --- issue #322: ABSEbook hydration regression tests ------------------------
+
+
+def test_abs_ebook_hydration_from_percentage_only_locator():
+    """Integration-style _sync_cycle_internal regression for #322:
+    ABS is leader with a timestamp, ABSEbook is in config as a 0% follower
+    with no CFI.  The hydration step should resolve a CFI from the percentage
+    so update_ebook_progress is called with a real CFI instead of being skipped.
+    """
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+    manager.sync_delta_between_clients = 0.005
+    manager.delta_chars_thresh = 2000
+    manager._sync_cycle_ebook_cache = {}
+    manager._sync_cycle_local_epub_cache = {}
+    manager._storyteller_epub_ensure_attempted = set()
+    manager._last_library_sync = 0
+    manager.library_service = None
+    manager.booklore_client = None
+    manager.alignment_service = None
+    manager._storygraph_cooldown = {}
+    manager._storygraph_cooldown_lock = __import__("threading").Lock()
+    manager._hardcover_cooldown = {}
+    manager._hardcover_cooldown_lock = __import__("threading").Lock()
+    manager._suggestion_in_flight = set()
+    manager._suggestion_lock = __import__("threading").Lock()
+    manager._job_queue = []
+    manager._job_lock = __import__("threading").Lock()
+    manager._sync_lock = __import__("threading").Lock()
+    manager._pending_sync_lock = __import__("threading").Lock()
+    manager._pending_sync_books = set()
+    manager._replay_worker_running = False
+    manager._job_thread = None
+    manager._post_cycle_callbacks = []
+    manager.user_client_registry = None
+
+    manager.ebook_parser = MagicMock()
+    manager.ebook_parser.extract_text_and_map.return_value = ("a" * 10000, [])
+    manager.ebook_parser.locator_roundtrip_tolerance = 5
+    manager.ebook_parser.resolve_xpath_to_index.return_value = 500
+    manager.ebook_parser.resolve_cfi_to_index.return_value = 500
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
+
+    # Hydration mock: returns a locator with a CFI
+    hydrated_locator = LocatorResult(
+        percentage=0.5, cfi="epubcfi(/6/10!/4/2:0)", match_index=500,
+    )
+    manager.ebook_parser.get_locator_from_char_offset.return_value = hydrated_locator
+
+    abs_client = _SyncLoopClient(supported_types={"audiobook"})
+    abs_api = MagicMock()
+    abs_api.update_ebook_progress.return_value = True
+    abs_ebook_client = ABSEbookSyncClient(abs_api, manager.ebook_parser)
+    manager.sync_clients = {"ABS": abs_client, "ABSEbook": abs_ebook_client}
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Hydration Test", status="active",
+        duration=32385, transcript_file="DB_MANAGED",
+        ebook_filename="book.epub", original_ebook_filename="book.epub",
+        audio_source="ABS", sync_mode="audiobook",
+        abs_ebook_item_id="ebook-1", ebook_source="ABS",
+        ebook_source_id="ebook-1",
+    )
+    manager.database_service = MagicMock()
+    manager.database_service.get_book.return_value = book
+    manager.database_service.get_states_for_book.return_value = [
+        SimpleNamespace(client_name="abs", last_updated=1000, timestamp=23000.0, percentage=0.70),
+        SimpleNamespace(client_name="abs_ebook", last_updated=1001, timestamp=None, percentage=0.0),
+    ]
+    manager.database_service.save_state = MagicMock()
+    manager.database_service.save_book = MagicMock()
+
+    # ABSEbook in config: 0% follower, no CFI
+    config = {
+        "ABS": _state({"pct": 0.5, "ts": 23000.0}),
+        "ABSEbook": _state({"pct": 0.0}),
+    }
+    config["ABS"].previous_pct = 0.70
+    config["ABS"].delta = 0.2
+    config["ABS"].threshold = 0.01
+    config["ABS"].value_seconds_formatter = lambda v: f"{v:.2f}s"
+    config["ABSEbook"].previous_pct = 0.0
+    config["ABSEbook"].delta = 0.0
+    config["ABSEbook"].threshold = 0.01
+
+    manager._fetch_states_parallel = MagicMock(return_value=config)
+    manager._normalize_for_cross_format_comparison = MagicMock(return_value=None)
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(
+            LocatorResult(percentage=0.5, match_index=500),
+            "anchor text",
+        )
+    )
+
+    manager._sync_cycle_internal(target_abs_id="abs-1")
+
+    abs_api.update_ebook_progress.assert_called_once_with(
+        "ebook-1", 0.5, "epubcfi(/6/10!/4/2:0)"
+    )
+
+
+def test_hydration_failure_does_not_bypass_collapse_guard():
+    """When hydration fails, the original percentage-only locator is kept.
+    If it collapses to 0% while the leader is ahead, the collapse guard
+    must still fire and skip the write."""
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+    manager.sync_delta_between_clients = 0.005
+    manager.delta_chars_thresh = 2000
+    manager._sync_cycle_ebook_cache = {}
+    manager._sync_cycle_local_epub_cache = {}
+    manager._storyteller_epub_ensure_attempted = set()
+    manager._last_library_sync = 0
+    manager.library_service = None
+    manager.booklore_client = None
+    manager.alignment_service = None
+    manager._storygraph_cooldown = {}
+    manager._storygraph_cooldown_lock = __import__("threading").Lock()
+    manager._hardcover_cooldown = {}
+    manager._hardcover_cooldown_lock = __import__("threading").Lock()
+    manager._suggestion_in_flight = set()
+    manager._suggestion_lock = __import__("threading").Lock()
+    manager._job_queue = []
+    manager._job_lock = __import__("threading").Lock()
+    manager._sync_lock = __import__("threading").Lock()
+    manager._pending_sync_lock = __import__("threading").Lock()
+    manager._pending_sync_books = set()
+    manager._replay_worker_running = False
+    manager._job_thread = None
+    manager._post_cycle_callbacks = []
+    manager.user_client_registry = None
+
+    manager.ebook_parser = MagicMock()
+    manager.ebook_parser.extract_text_and_map.side_effect = Exception("hydration boom")
+    manager.ebook_parser.locator_roundtrip_tolerance = 5
+    manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
+
+    abs_client = _SyncLoopClient(supported_types={"audiobook"})
+    abs_ebook_client = _SyncLoopClient(supported_types={"audiobook", "ebook"})
+    manager.sync_clients = {"ABS": abs_client, "ABSEbook": abs_ebook_client}
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Collapse Guard Test", status="active",
+        duration=32385, transcript_file=None,
+        ebook_filename="book.epub", original_ebook_filename="book.epub",
+        audio_source="ABS", sync_mode="audiobook",
+    )
+    manager.database_service = MagicMock()
+    manager.database_service.get_book.return_value = book
+    manager.database_service.get_states_for_book.return_value = [
+        SimpleNamespace(client_name="abs", last_updated=1000, timestamp=23000.0, percentage=0.70),
+        SimpleNamespace(client_name="abs_ebook", last_updated=1001, timestamp=None, percentage=0.0),
+    ]
+    manager.database_service.save_state = MagicMock()
+
+    config = {
+        "ABS": _state({"pct": 0.53, "ts": 23000.0}),
+        "ABSEbook": _state({"pct": 0.0}),
+    }
+    config["ABS"].previous_pct = 0.70
+    config["ABS"].delta = 0.17
+    config["ABS"].threshold = 0.01
+    config["ABS"].value_seconds_formatter = lambda v: f"{v:.2f}s"
+    config["ABSEbook"].previous_pct = 0.0
+    config["ABSEbook"].delta = 0.0
+    config["ABSEbook"].threshold = 0.01
+
+    manager._fetch_states_parallel = MagicMock(return_value=config)
+    manager._normalize_for_cross_format_comparison = MagicMock(return_value=None)
+    # Alignment returns a locator that collapses to 0%
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(LocatorResult(percentage=0.0, match_index=0), "start text")
+    )
+
+    manager._sync_cycle_internal(target_abs_id="abs-1")
+
+    # ABSEbook must NOT be updated — collapse guard fires because the
+    # original locator at 0% while leader is at 53%
+    abs_ebook_client.update_progress.assert_not_called()
+    # The state save for the leader should still fire (collapse-skip path)
+    assert manager.database_service.save_state.called

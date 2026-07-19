@@ -52,6 +52,18 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
 })
 
 
+# Library-lookup credentials the primary admin's account also lends to the
+# engine's global singletons (shelf-watch, scans, suggestions, ABS socket,
+# manifest). web_server mirrors these to the global settings when the primary
+# admin saves; user_bootstrap warns at boot when the two stores diverge.
+ENGINE_MIRROR_KEYS = (
+    "ABS_KEY", "ABS_LIBRARY_ID",
+    "BOOKLORE_USER", "BOOKLORE_PASSWORD", "BOOKLORE_SHELF_NAME", "BOOKLORE_LIBRARY_ID",
+    "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_SHELF_NAME",
+    "CWA_USERNAME", "CWA_PASSWORD", "CWA_SYNC_TOKEN",
+)
+
+
 # UI grouping for the per-user credentials page. (group_label, [(key, label, type)])
 # type: 'text' (blank clears), 'secret' (blank keeps existing), 'bool' (checkbox).
 PER_USER_FIELD_GROUPS = [

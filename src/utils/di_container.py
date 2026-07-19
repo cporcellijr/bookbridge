@@ -174,6 +174,7 @@ class Container(containers.DeclarativeContainer):
         cwa_client=cwa_client,
         kavita_client=kavita_client,
         epub_cache_dir=epub_cache_dir,
+        bookorbit_client=bookorbit_client,
     )
 
     migration_service = providers.Singleton(

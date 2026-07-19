@@ -189,6 +189,28 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
             )
         self.assertEqual(listener._server_url, "http://abs.local:13378")
 
+    def test_socket_token_http_failures_use_retry_backoff(self):
+        """The reported 502 path must wait between token-exchange retries."""
+        bad_gateway = MagicMock(status_code=502)
+        recovered = MagicMock(status_code=200)
+        recovered.json.return_value = {
+            "username": "reader",
+            "type": "user",
+            "token": "legacy-token",
+        }
+
+        with patch(
+            "src.services.abs_socket_listener.requests.get",
+            side_effect=[bad_gateway, bad_gateway, recovered],
+        ), patch(
+            "src.services.abs_socket_listener.requests.post",
+            return_value=MagicMock(status_code=404),
+        ), patch("src.services.abs_socket_listener.time.sleep") as sleep:
+            token = self.listener._acquire_socket_token()
+
+        self.assertEqual(token, "legacy-token")
+        self.assertEqual([item.args[0] for item in sleep.call_args_list], [5, 10])
+
     def test_per_user_listener_fires_scoped_sync_cycle(self):
         """A listener bound to a user_id triggers that user's scoped sync cycle."""
         with patch("src.services.abs_socket_listener.socketio.Client"):

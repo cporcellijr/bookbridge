@@ -4,15 +4,18 @@
 # See README.md for detailed configuration instructions.
 
 services:
-  abs-kosync:
+  bookbridge:
     container_name: bookbridge
     image: ghcr.io/cporcellijr/bookbridge:latest
+    # For NVIDIA GPU transcription, use the CUDA image instead (amd64 only, ~800MB larger):
+    #   image: ghcr.io/cporcellijr/bookbridge:latest-cuda
+    # It also needs the deploy block at the bottom of this file.
 
-    # Optional: Build locally if you need specific modifications or GPU libraries included
+    # Optional: Build locally if you need specific modifications.
     # build:
     #   context: .
     #   args:
-    #     # Set to "true" to download NVIDIA CUDA libraries (adds ~800MB to image)
+    #     # Set to "true" to bundle the NVIDIA CUDA libraries (same as the -cuda image)
     #     INSTALL_GPU: "false"
     restart: unless-stopped
 

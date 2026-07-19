@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if page == 'finding' and finding %}Anomaly {{ finding.id }} · {% elif page == 'feedback' and submission %}Feedback {{ submission.id }} · {% endif %}BookBridge Diagnostics</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #f3f5f2;
+            --panel: #ffffff;
+            --panel-soft: #f7f9f7;
+            --text: #17231f;
+            --muted: #68756f;
+            --line: #dce3df;
+            --brand: #28665a;
+            --brand-soft: #e6f2ee;
+            --green: #18794e;
+            --green-soft: #e9f7f0;
+            --amber: #8a5700;
+            --amber-soft: #fff5d9;
+            --red: #b42318;
+            --red-soft: #feefed;
+            --shadow: 0 10px 30px rgba(28, 54, 44, .055);
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #101713;
+                --panel: #18211d;
+                --panel-soft: #1e2924;
+                --text: #eef5f1;
+                --muted: #aab8b1;
+                --line: #33423b;
+                --brand: #86d4c2;
+                --brand-soft: #213e36;
+                --green: #7dd3a7;
+                --green-soft: #183a2c;
+                --amber: #ffd071;
+                --amber-soft: #443516;
+                --red: #ff9b93;
+                --red-soft: #482321;
+                --shadow: none;
+            }
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.5;
+        }
+        a { color: var(--brand); }
+        .topbar {
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .topbar-inner {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 14px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+        }
+        .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-size: 17px; font-weight: 800; text-decoration: none; }
+        .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--brand); color: var(--panel); font-size: 14px; }
+        .topnav { display: flex; gap: 18px; }
+        .topnav a { color: var(--muted); font-size: 14px; font-weight: 650; text-decoration: none; }
+        .topnav a:hover { color: var(--brand); }
+        main { max-width: 1180px; margin: 0 auto; padding: 40px 24px 72px; }
+        h1 { margin: 0; font-size: clamp(27px, 4vw, 40px); line-height: 1.15; letter-spacing: -.025em; }
+        h2 { margin: 0; font-size: 21px; }
+        h3 { margin: 0; font-size: 16px; }
+        p { margin: 0; }
+        .eyebrow { color: var(--brand); margin-bottom: 8px; font-size: 11px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+        .lede { color: var(--muted); max-width: 720px; margin-top: 9px; }
+        .dashboard-lede { font-size: 17px; }
+        .back { display: inline-block; margin-bottom: 18px; color: var(--muted); font-size: 14px; text-decoration: none; }
+        .back:hover { color: var(--brand); }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin: 28px 0 18px;
+        }
+        .metric {
+            min-height: 132px;
+            padding: 18px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            box-shadow: var(--shadow);
+            color: inherit;
+            text-decoration: none;
+        }
+        .metric:hover { border-color: var(--brand); }
+        .metric-number { display: block; font-size: 34px; font-weight: 800; line-height: 1.1; }
+        .metric-label { display: block; margin-top: 7px; font-size: 14px; font-weight: 700; }
+        .metric-note { display: block; color: var(--muted); margin-top: 4px; font-size: 12px; }
+        .category-section { margin: 18px 0 28px; }
+        .category-heading { margin-bottom: 10px; }
+        .category-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+        }
+        .category-grid .metric { min-height: 0; padding: 14px; }
+        .category-filter.active { background: var(--brand-soft); }
+        .fleet {
+            display: grid;
+            grid-template-columns: minmax(180px, 1.25fr) repeat(3, minmax(130px, .75fr));
+            gap: 1px;
+            overflow: hidden;
+            margin-bottom: 38px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: var(--line);
+        }
+        .fleet-intro, .fleet-stat { padding: 16px 18px; background: var(--panel); }
+        .fleet-intro strong, .fleet-stat strong { display: block; }
+        .fleet-intro span, .fleet-stat span { color: var(--muted); font-size: 12px; }
+        .fleet-stat strong { font-size: 17px; }
+        .dashboard-section { margin-top: 34px; }
+        .section-head { display: flex; justify-content: space-between; align-items: end; gap: 18px; margin-bottom: 14px; }
+        .section-link { color: var(--brand); font-size: 13px; font-weight: 750; text-decoration: none; }
+        .filters { display: flex; flex-wrap: wrap; gap: 7px; }
+        .filter {
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 6px 11px;
+            color: var(--muted);
+            background: var(--panel);
+            font-size: 12px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+        .filter.active { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+        .list { display: grid; gap: 12px; }
+        .anomaly, .feedback-row, .report-preview, .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            box-shadow: var(--shadow);
+        }
+        .anomaly { padding: 18px 20px; }
+        .report-preview { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 20px; border-left: 4px solid var(--amber); }
+        .report-title { display: block; margin-top: 8px; color: var(--text); font-size: 17px; font-weight: 760; line-height: 1.4; text-decoration: none; }
+        .report-title:hover { color: var(--brand); }
+        .report-action { color: var(--brand); font-size: 13px; font-weight: 800; white-space: nowrap; }
+        .anomaly-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+        .anomaly-title { color: var(--text); font-size: 17px; font-weight: 750; text-decoration: none; line-height: 1.35; }
+        .anomaly-title:hover { color: var(--brand); }
+        .next-step { color: var(--muted); font-size: 14px; margin-top: 8px; }
+        .next-step strong { color: var(--text); }
+        .meta, .badges { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+        .meta { margin-top: 13px; color: var(--muted); font-size: 12px; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            padding: 4px 9px;
+            background: var(--panel-soft);
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .02em;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .badge-high { background: var(--red-soft); color: var(--red); }
+        .badge-medium { background: var(--amber-soft); color: var(--amber); }
+        .badge-low { background: var(--green-soft); color: var(--green); }
+        .badge-feedback { background: var(--amber-soft); color: var(--amber); }
+        .badge-replied { background: var(--green-soft); color: var(--green); }
+        .badge-reviewed { background: var(--brand-soft); color: var(--brand); }
+        .badge-category { border: 1px solid var(--line); background: transparent; }
+        .empty, .alert { border-radius: 12px; padding: 16px 18px; }
+        .empty { background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+        .alert { margin: 20px 0; border: 1px solid var(--line); }
+        .alert-error { color: var(--red); background: var(--red-soft); border-color: var(--red); }
+        .alert-success { color: var(--green); background: var(--green-soft); border-color: var(--green); }
+        .detail-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 18px; margin-top: 24px; }
+        .stack { display: grid; gap: 16px; align-content: start; }
+        .panel { padding: 20px; }
+        .panel h2, .panel h3 { margin-bottom: 10px; }
+        .panel p + p { margin-top: 10px; }
+        .highlight { border-left: 4px solid var(--brand); }
+        .highlight-next { border-left-color: var(--green); }
+        .feedback-panel { border-color: var(--amber); }
+        .feedback-link {
+            display: block;
+            padding: 13px 0;
+            color: inherit;
+            text-decoration: none;
+            border-top: 1px solid var(--line);
+        }
+        .feedback-link:first-of-type { border-top: 0; }
+        .feedback-link:hover strong { color: var(--brand); }
+        .feedback-preview { color: var(--muted); font-size: 13px; margin-top: 4px; }
+        .assistant-prompt { padding: 13px; border-radius: 10px; background: var(--brand-soft); color: var(--text); font-size: 13px; }
+        .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .fact { padding: 12px; border-radius: 10px; background: var(--panel-soft); }
+        .fact span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+        .fact strong { display: block; margin-top: 3px; font-size: 15px; }
+        details { border-top: 1px solid var(--line); padding: 14px 0; }
+        details:first-of-type { border-top: 0; }
+        summary { cursor: pointer; font-weight: 700; }
+        .pending-findings { margin-top: 10px; }
+        .pending-findings .feedback-link { font-size: 13px; }
+        pre {
+            margin: 12px 0 0;
+            max-height: 520px;
+            overflow: auto;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--panel-soft);
+            color: var(--text);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+        }
+        .feedback-row { padding: 18px 20px; display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+        .feedback-row a { color: var(--text); font-weight: 750; text-decoration: none; }
+        .feedback-row a:hover { color: var(--brand); }
+        .message {
+            margin-top: 14px;
+            padding: 18px;
+            background: var(--panel-soft);
+            border-left: 4px solid var(--amber);
+            border-radius: 8px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        label { display: block; margin: 18px 0 7px; font-weight: 750; }
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--panel-soft);
+            color: var(--text);
+            font: inherit;
+            resize: vertical;
+        }
+        textarea:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+        button {
+            margin-top: 12px;
+            border: 0;
+            border-radius: 9px;
+            padding: 10px 16px;
+            background: var(--brand);
+            color: #fff;
+            font: inherit;
+            font-weight: 750;
+            cursor: pointer;
+        }
+        button:hover { filter: brightness(1.08); }
+        .status-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .status-actions button { margin-top: 12px; }
+        .button-secondary { color: var(--text); background: var(--panel-soft); border: 1px solid var(--line); }
+        .muted { color: var(--muted); }
+        .small { font-size: 12px; }
+        @media (max-width: 820px) {
+            .cards { grid-template-columns: 1fr 1fr; }
+            .category-grid { grid-template-columns: 1fr 1fr; }
+            .fleet { grid-template-columns: 1fr 1fr; }
+            .detail-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 560px) {
+            .topbar-inner, main { padding-left: 16px; padding-right: 16px; }
+            .cards { grid-template-columns: 1fr; }
+            .category-grid { grid-template-columns: 1fr; }
+            .fleet { grid-template-columns: 1fr; }
+            .metric { min-height: auto; }
+            .section-head, .anomaly-top, .feedback-row { align-items: stretch; flex-direction: column; }
+            .report-preview { grid-template-columns: 1fr; }
+            .facts { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+<header class="topbar">
+    <div class="topbar-inner">
+        <a class="brand" href="{{ url_for('dashboard') }}"><span class="brand-mark">BB</span> Report center</a>
+        <nav class="topnav" aria-label="Main navigation">
+            <a href="{{ url_for('dashboard') }}">Overview</a>
+            <a href="{{ url_for('feedback_list') }}">User reports</a>
+        </nav>
+    </div>
+</header>
+<main>
+{% if page == 'dashboard' %}
+    <p class="eyebrow">Private · local only</p>
+    <h1>Report center</h1>
+    <p class="lede dashboard-lede">Start with user messages, then review the anomalies Bugscout has already explained.</p>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% else %}
+    <section class="cards" aria-label="Report center priorities">
+        <a class="metric" href="{{ url_for('feedback_list') }}">
+            <span class="metric-number">{{ cards.awaiting_response }}</span>
+            <span class="metric-label">User reports awaiting reply</span>
+            <span class="metric-note">Respond only when a user wrote a message</span>
+        </a>
+        <a class="metric" href="{{ url_for('dashboard', focus='reviewed') }}#anomalies">
+            <span class="metric-number">{{ cards.reviewed }}</span>
+            <span class="metric-label">Ready to review</span>
+            <span class="metric-note">Bugscout has a hypothesis and next step</span>
+        </a>
+        <a class="metric" href="{{ url_for('dashboard', focus='triage') }}#anomalies">
+            <span class="metric-number">{{ cards.needs_triage }}</span>
+            <span class="metric-label">Waiting for Bugscout</span>
+            <span class="metric-note">Collected safely; no action needed yet</span>
+        </a>
+    </section>
+
+    <section class="category-section" aria-labelledby="category-heading">
+        <div class="category-heading">
+            <h2 id="category-heading">Bugscout categories</h2>
+            <p class="muted small">Reviewed findings, including archived items. Waiting findings are counted after Bugscout classifies them.</p>
+        </div>
+        <div class="category-grid">
+            {% for category in category_filters %}
+            <a class="metric category-filter{% if selected_category and selected_category.value == category.value %} active{% endif %}"
+               href="{{ url_for('dashboard', category=category.value) }}#anomalies"
+               aria-label="{{ category.label }}: {{ category.count }} finding{% if category.count != 1 %}s{% endif %}">
+                <span class="metric-number">{{ category.count }}</span>
+                <span class="metric-label">{{ category.label }}</span>
+                <span class="metric-note">{{ category.note }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="fleet" aria-label="Seven-day fleet totals">
+        <div class="fleet-intro">
+            <strong>Last 7 days</strong>
+            <span>Automatic and user-submitted diagnostics</span>
+        </div>
+        <div class="fleet-stat"><strong>{{ cards.instances|number }} installation{% if cards.instances != 1 %}s{% endif %}</strong><span>reporting privately</span></div>
+        <div class="fleet-stat"><strong>{{ cards.reports|number }} reports received</strong><span>automatic and manual</span></div>
+        <div class="fleet-stat"><strong>{{ cards.warnings|number }} warnings</strong><span>grouped into {{ cards.active|number }} anomal{% if cards.active == 1 %}y{% else %}ies{% endif %}</span></div>
+    </section>
+
+    {% if reports %}
+    <section class="dashboard-section" aria-labelledby="inbox-heading">
+        <div class="section-head">
+            <div>
+                <h2 id="inbox-heading">User report inbox</h2>
+                <p class="muted small">Each message appears once, even when its report contains many warnings.</p>
+            </div>
+            <a class="section-link" href="{{ url_for('feedback_list') }}">View all user reports →</a>
+        </div>
+        <div class="list">
+            {% for report in reports %}
+            <article class="report-preview">
+                <div>
+                    <div class="badges">
+                        {% if report.awaiting_response %}<span class="badge badge-feedback">Awaiting reply</span>{% else %}<span class="badge badge-replied">Replied</span>{% endif %}
+                        <span class="badge">Report #{{ report.id }}</span>
+                        <span class="badge">BookBridge {{ report.app_version|default('version unknown', true) }}</span>
+                    </div>
+                    <a class="report-title" href="{{ url_for('feedback_detail', submission_id=report.id) }}">{{ report.message|truncate(240) }}</a>
+                    <div class="meta">
+                        <span>Submitted {{ report.submitted_at|friendly_date }}</span>
+                        <span>{{ report.findings|length }} anomal{% if report.findings|length == 1 %}y{% else %}ies{% endif %} attached</span>
+                        <span>{{ report.reviewed_findings|length }} reviewed</span>
+                    </div>
+                </div>
+                <span class="report-action">Open report →</span>
+            </article>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="dashboard-section" id="anomalies">
+        <div class="section-head">
+            <div>
+                <h2>{% if focus == 'category' %}{{ selected_category.label }}{% elif focus == 'feedback' %}Linked to user reports{% elif focus == 'triage' %}Waiting for Bugscout{% elif focus == 'all' %}All active anomalies{% elif focus == 'archived' %}Archived anomalies{% else %}Reviewed by Bugscout{% endif %}</h2>
+                <p class="muted small">{% if focus == 'category' %}{{ selected_category.note }}. Highest occurrence count first; includes active and archived findings.{% elif focus == 'triage' %}These are queued for analysis; you do not need to interpret the raw warnings.{% elif focus == 'archived' %}Findings you marked fixed or reviewed with no action. You can reopen any of them.{% else %}Open one for the plain-language hypothesis, next step, and linked user reports.{% endif %}</p>
+            </div>
+            <div class="filters" aria-label="Filter anomalies">
+                <a class="filter{% if focus == 'reviewed' %} active{% endif %}" href="{{ url_for('dashboard', focus='reviewed') }}#anomalies">Reviewed ({{ cards.reviewed }})</a>
+                <a class="filter{% if focus == 'triage' %} active{% endif %}" href="{{ url_for('dashboard', focus='triage') }}#anomalies">Waiting ({{ cards.needs_triage }})</a>
+                <a class="filter{% if focus == 'all' %} active{% endif %}" href="{{ url_for('dashboard', focus='all') }}#anomalies">All ({{ cards.active }})</a>
+                <a class="filter{% if focus == 'archived' %} active{% endif %}" href="{{ url_for('dashboard', focus='archived') }}#anomalies">Archived ({{ cards.archived }})</a>
+            </div>
+        </div>
+        {% if findings %}
+        <div class="list">
+            {% for item in findings %}
+            <article class="anomaly">
+                <div class="anomaly-top">
+                    <div>
+                        <a class="anomaly-title" href="{{ url_for('finding_detail', finding_id=item.id) }}">{{ item.pattern }}</a>
+                        {% if not item.needs_triage %}
+                        <p class="next-step"><strong>Suggested next step:</strong> {{ item.suggested_next_step }}</p>
+                        {% else %}
+                        <p class="next-step">Bugscout has not reviewed this anomaly yet.</p>
+                        {% endif %}
+                    </div>
+                    <div class="badges">
+                        <span class="badge badge-{{ item.severity|default('unknown', true) }}">{{ item.severity|default('unrated', true) }}</span>
+                        {% if item.category and item.category != 'unknown' %}<span class="badge badge-category">{{ item.category }}</span>{% endif %}
+                        {% if item.feedback_count %}<span class="badge badge-feedback">Linked user report</span>{% endif %}
+                        {% if item.status in ['fixed', 'ignored'] %}<span class="badge badge-reviewed">{% if item.status == 'ignored' %}Reviewed — no action{% else %}Fixed{% endif %}</span>{% endif %}
+                    </div>
+                </div>
+                <div class="meta">
+                    <span>Anomaly #{{ item.id }}</span>
+                    <span>{{ item.total_count|default(0) }} occurrences</span>
+                    <span>{{ item.instance_count|default(0) }} installations</span>
+                    <span>Last seen {{ item.last_seen|friendly_date }}</span>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">{% if focus == 'reviewed' %}Nothing is ready for review yet. Bugscout will fill this view as it works through the queue.{% elif focus == 'category' %}No reviewed findings are in this category yet.{% else %}Nothing matches this view.{% endif %}</div>
+        {% endif %}
+    </section>
+    {% endif %}
+
+{% elif page == 'finding' %}
+    <a class="back" href="{{ url_for('dashboard') }}">← Back to report center</a>
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% elif finding %}
+    <h1>{{ finding.pattern }}</h1>
+    <div class="meta">
+        <span class="badge badge-{{ finding.severity|default('unknown', true) }}">{{ finding.severity|default('unrated', true) }}</span>
+        {% if finding.category and finding.category != 'unknown' %}<span class="badge badge-category">{{ finding.category }}</span>{% endif %}
+        <span>Anomaly #{{ finding.id }}</span>
+        <span>{{ finding.total_count|default(0) }} occurrences</span>
+        <span>{{ finding.instance_count|default(0) }} installations</span>
+    </div>
+    {% if status_message %}<div class="alert alert-success" role="status">{{ status_message }}</div>{% endif %}
+    {% if status_error %}<div class="alert alert-error" role="alert">The review decision could not be saved. Try again.</div>{% endif %}
+
+    <div class="detail-grid">
+        <div class="stack">
+            {% if finding.user_feedback %}
+            <section class="panel feedback-panel" id="feedback">
+                <h2>User feedback</h2>
+                <p class="muted small">Open a submitted message to read it and respond.</p>
+                {% for feedback in finding.user_feedback %}
+                <a class="feedback-link" href="{{ url_for('feedback_detail', submission_id=feedback.submission_id|default(feedback.id, true)) }}">
+                    <strong>Report submitted {{ feedback.submitted_at|friendly_date }}</strong>
+                    <div class="feedback-preview">{{ feedback.message|truncate(180) }}</div>
+                    {% if feedback.response_md %}<span class="badge badge-replied">Replied</span>{% else %}<span class="badge badge-feedback">Awaiting reply</span>{% endif %}
+                </a>
+                {% endfor %}
+            </section>
+            {% endif %}
+
+            <section class="panel highlight">
+                <h2>What this likely means</h2>
+                <p>{{ finding.hypothesis|default('Bugscout has not reviewed this anomaly yet.', true) }}</p>
+            </section>
+            <section class="panel highlight highlight-next">
+                <h2>What to do next</h2>
+                <p>{{ finding.suggested_next_step }}</p>
+            </section>
+
+            <section class="panel">
+                <h2>Technical evidence</h2>
+                <p class="muted small">Collapsed by default; this is useful when asking Codex or Claude to investigate.</p>
+                {% if finding.analysis_md %}
+                <details>
+                    <summary>Full Bugscout analysis</summary>
+                    <pre>{{ finding.analysis_md }}</pre>
+                </details>
+                {% endif %}
+                {% for evidence in finding.recent_evidence|default([], true) %}
+                <details>
+                    <summary>Evidence from {{ evidence.last_seen|friendly_date }} ({{ evidence.count|default(1) }} occurrences)</summary>
+                    <pre>{{ evidence.message|default(evidence.template, true) }}{% if evidence.context_text %}
+{{ evidence.context_text }}{% endif %}</pre>
+                </details>
+                {% endfor %}
+                {% if not finding.analysis_md and not finding.recent_evidence %}
+                <p class="muted">No technical evidence is available yet.</p>
+                {% endif %}
+            </section>
+        </div>
+        <aside class="stack">
+            <section class="panel">
+                <h3>Review decision</h3>
+                {% if finding.status == 'ignored' %}
+                <p class="small muted">Archived as reviewed — no action. Future occurrences stay archived unless you reopen it.</p>
+                {% elif finding.status == 'fixed' %}
+                <p class="small muted">Closed as fixed. It will reopen automatically if the warning returns.</p>
+                {% else %}
+                <p class="small muted">Choose after you or an assistant reviews the evidence.</p>
+                {% endif %}
+                <form class="status-actions" method="post" action="{{ url_for('save_finding_status', finding_id=finding.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if finding.status in ['fixed', 'ignored'] %}
+                    <button type="submit" name="status" value="open">Reopen</button>
+                    {% else %}
+                    <button class="button-secondary" type="submit" name="status" value="ignored">Reviewed — no action</button>
+                    <button type="submit" name="status" value="fixed">Fixed</button>
+                    {% endif %}
+                </form>
+            </section>
+            <section class="panel">
+                <h3>At a glance</h3>
+                <div class="facts">
+                    <div class="fact"><span>Severity</span><strong>{{ finding.severity|default('Unknown', true) }}</strong></div>
+                    <div class="fact"><span>Status</span><strong>{% if finding.status == 'ignored' %}Reviewed — no action{% elif finding.status == 'fixed' %}Fixed{% elif finding.status == 'triaged' %}Reviewed{% else %}Open{% endif %}</strong></div>
+                    <div class="fact"><span>Category</span><strong>{{ finding.category|default('Unknown', true) }}</strong></div>
+                    <div class="fact"><span>First seen</span><strong>{{ finding.first_seen|friendly_date }}</strong></div>
+                    <div class="fact"><span>Last seen</span><strong>{{ finding.last_seen|friendly_date }}</strong></div>
+                    <div class="fact"><span>BookBridge versions</span><strong>{{ finding.app_versions|default([], true)|join(', ') or 'Not reported' }}</strong></div>
+                </div>
+            </section>
+            <section class="panel">
+                <h3>Enabled integrations</h3>
+                {% if finding.enabled_services %}
+                <p class="small muted">{{ finding.enabled_services|join(', ') }}</p>
+                {% else %}
+                <p class="small muted">Not reported.</p>
+                {% endif %}
+            </section>
+            {% if finding.trace %}
+            <section class="panel">
+                <h3>Code path</h3>
+                <p class="small muted">{{ finding.trace }}</p>
+            </section>
+            {% endif %}
+            <section class="panel">
+                <h3>Ask Codex or Claude</h3>
+                <p class="assistant-prompt">Review diagnostics anomaly #{{ finding.id }} and tell me whether it needs a BookBridge code change or an installation fix.</p>
+            </section>
+        </aside>
+    </div>
+    {% endif %}
+
+{% elif page == 'feedback_list' %}
+    <a class="back" href="{{ url_for('dashboard') }}">← Back to report center</a>
+    <p class="eyebrow">Your inbox</p>
+    <h1>User reports</h1>
+    <p class="lede">Only reports with a written message appear here. Reports without a message still contribute to the anomaly totals.</p>
+    {% if error %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% elif submissions %}
+    <div class="list" style="margin-top:24px">
+        {% for item in submissions %}
+        <article class="feedback-row">
+            <div>
+                <a href="{{ url_for('feedback_detail', submission_id=item.id) }}">Report #{{ item.id }} · submitted {{ item.submitted_at|friendly_date }}</a>
+                <p class="feedback-preview">{{ item.message|truncate(220) }}</p>
+                <div class="meta">
+                    <span>BookBridge {{ item.app_version|default('version unknown', true) }}</span>
+                    <span>{{ item.findings|length }} anomal{% if item.findings|length == 1 %}y{% else %}ies{% endif %}</span>
+                    <span>{{ item.reviewed_findings|length }} reviewed</span>
+                </div>
+            </div>
+            {% if item.awaiting_response %}<span class="badge badge-feedback">Awaiting reply</span>{% else %}<span class="badge badge-replied">Replied</span>{% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+        <div class="empty" style="margin-top:24px">No user reports include a written message yet.</div>
+    {% endif %}
+
+{% elif page == 'feedback' %}
+    <a class="back" href="{{ url_for('feedback_list') }}">← Back to user reports</a>
+    {% if error and not submission %}
+    <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% elif submission %}
+    <p class="eyebrow">User report</p>
+    <h1>Report #{{ submission.id }}</h1>
+    <p class="lede">Submitted {{ submission.submitted_at|friendly_date }} · BookBridge {{ submission.app_version|default('version not reported', true) }}</p>
+    {% if saved %}<div class="alert alert-success" role="status">Response saved.</div>{% endif %}
+    {% if error %}<div class="alert alert-error" role="alert">{{ error }}</div>{% endif %}
+
+    <div class="detail-grid">
+        <div class="stack">
+            <section class="panel feedback-panel">
+                <h2>User’s message</h2>
+                {% if submission.message %}
+                <div class="message">{{ submission.message }}</div>
+                {% else %}
+                <p class="muted">This report did not include a written message.</p>
+                {% endif %}
+            </section>
+
+            {% if submission.message %}
+            <section class="panel">
+                <h2>{% if submission.response_md %}Update response{% else %}Respond to user{% endif %}</h2>
+                <form method="post" action="{{ url_for('save_feedback_response', submission_id=submission.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <label for="response_md">Response</label>
+                    <textarea id="response_md" name="response_md" maxlength="10000" required>{{ draft_response if draft_response is not none else submission.response_md }}</textarea>
+                    <button type="submit">{% if submission.response_md %}Update response{% else %}Save response{% endif %}</button>
+                </form>
+            </section>
+            {% endif %}
+        </div>
+        <aside class="stack">
+            <section class="panel">
+                <h3>Status</h3>
+                {% if submission.message and not submission.response_md %}
+                <span class="badge badge-feedback">Awaiting reply</span>
+                {% elif submission.response_md %}
+                <span class="badge badge-replied">Replied {{ submission.response_at|friendly_date }}</span>
+                {% else %}
+                <span class="badge">No message</span>
+                {% endif %}
+                <p class="muted small" style="margin-top:12px">BookBridge {{ submission.app_version|default('version not reported', true) }}</p>
+            </section>
+            {% if submission.findings %}
+            <section class="panel">
+                {% set reviewed_count = submission.reviewed_findings|length %}
+                <h3>{{ reviewed_count }} reviewed anomal{% if reviewed_count == 1 %}y{% else %}ies{% endif %}</h3>
+                {% if submission.reviewed_findings %}
+                {% for related in submission.reviewed_findings %}
+                    {% if related is mapping %}
+                    <a class="feedback-link" href="{{ url_for('finding_detail', finding_id=related.id) }}">{{ related.pattern|default(related.template, true)|default('Anomaly #' ~ related.id, true) }}</a>
+                    {% else %}
+                    <a class="feedback-link" href="{{ url_for('finding_detail', finding_id=related) }}">Anomaly #{{ related }}</a>
+                    {% endif %}
+                {% endfor %}
+                {% else %}
+                <p class="muted small">Bugscout has not reviewed the attached anomalies yet.</p>
+                {% endif %}
+
+                {% if submission.pending_findings %}
+                <details class="pending-findings">
+                    <summary>{{ submission.pending_findings|length }} waiting for Bugscout</summary>
+                    {% for related in submission.pending_findings %}
+                        {% if related is mapping %}
+                        <a class="feedback-link" href="{{ url_for('finding_detail', finding_id=related.id) }}">{{ related.pattern|default(related.template, true)|default('Anomaly #' ~ related.id, true) }}</a>
+                        {% else %}
+                        <a class="feedback-link" href="{{ url_for('finding_detail', finding_id=related) }}">Anomaly #{{ related }}</a>
+                        {% endif %}
+                    {% endfor %}
+                </details>
+                {% endif %}
+            </section>
+            {% endif %}
+        </aside>
+    </div>
+    {% endif %}
+{% endif %}
+</main>
+</body>
+</html>

@@ -6,6 +6,7 @@ import logging
 import json
 import contextvars
 import os
+import posixpath
 import queue
 import re
 import secrets
@@ -15,10 +16,12 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
 import requests
@@ -37,6 +40,7 @@ from src.utils.config_loader import ConfigLoader, env_truthy
 from src.utils.cache_paths import safe_cache_path
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
+from src.services.diagnostics import setup_diagnostics_logging
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
@@ -266,6 +270,9 @@ def setup_dependencies(app, test_container=None):
         # Force reconfigure logging level based on new settings
         _reconfigure_logging()
 
+        # Setup diagnostics warning collector
+        setup_diagnostics_logging()
+
     # RELOAD GLOBALS from updated os.environ
 
     global LINKER_BOOKS_DIR, STORYTELLER_INGEST, ABS_AUDIO_ROOT
@@ -435,6 +442,10 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'kosync_admin.admin_plugin_version',
     'kosync_admin.admin_plugin_download',
 }
+_LOGIN_FAILURES: dict[tuple[str, str], list[float]] = {}
+_LOGIN_FAILURES_LOCK = threading.Lock()
+_LOGIN_FAILURE_LIMIT = 5
+_LOGIN_FAILURE_WINDOW = 60
 
 # Endpoints only admins may reach. Regular users get a simple home + match /
 # forge / sync; global engine config, library-wide tools, logs, stats and
@@ -455,6 +466,8 @@ _ADMIN_ONLY_ENDPOINTS = {
     'kosync_admin.api_link_kosync_document',
     'kosync_admin.api_unlink_kosync_document',
     'kosync_admin.api_delete_kosync_document',
+    'my_reports',
+    'api_diagnostics_submissions',
 }
 
 
@@ -904,11 +917,25 @@ def login():
     if request.method == 'POST':
         username = (request.form.get('username') or '').strip()
         password = request.form.get('password') or ''
+        failure_key = (username.lower(), request.remote_addr or "")
+        now = time.time()
+        with _LOGIN_FAILURES_LOCK:
+            failures = [t for t in _LOGIN_FAILURES.get(failure_key, []) if now - t < _LOGIN_FAILURE_WINDOW]
+            if failures:
+                _LOGIN_FAILURES[failure_key] = failures
+            else:
+                _LOGIN_FAILURES.pop(failure_key, None)
+        if len(failures) >= _LOGIN_FAILURE_LIMIT:
+            return render_template('login.html', error="Too many login attempts. Try again shortly."), 429
         user = None
         if database_service is not None:
             user = database_service.verify_user_credentials(username, password)
         if user:
+            with _LOGIN_FAILURES_LOCK:
+                _LOGIN_FAILURES.pop(failure_key, None)
             return _establish_session_and_redirect(user)
+        with _LOGIN_FAILURES_LOCK:
+            _LOGIN_FAILURES[failure_key] = failures + [now]
         error = "Invalid username or password"
         logger.warning("Failed login attempt for username '%s' from %s", username, request.remote_addr)
 
@@ -1038,12 +1065,7 @@ def account_integrations():
 # Library-lookup credentials the primary admin's account also lends to the
 # engine's global singletons (shelf-watch, scans, suggestions, ABS socket,
 # manifest). Mirrored to the global settings when the primary admin saves.
-_ENGINE_MIRROR_KEYS = (
-    "ABS_KEY", "ABS_LIBRARY_ID",
-    "BOOKLORE_USER", "BOOKLORE_PASSWORD", "BOOKLORE_SHELF_NAME", "BOOKLORE_LIBRARY_ID",
-    "BOOKORBIT_USER", "BOOKORBIT_PASSWORD", "BOOKORBIT_SHELF_NAME",
-    "CWA_USERNAME", "CWA_PASSWORD", "CWA_SYNC_TOKEN",
-)
+from src.utils.user_config import ENGINE_MIRROR_KEYS as _ENGINE_MIRROR_KEYS
 
 
 def _apply_user_integrations(user_id):
@@ -1462,6 +1484,50 @@ from src.services.alignment_service import ingest_storyteller_transcripts
 
 
 
+def _run_diagnostics_send(
+    force: bool = False,
+    manual: bool = False,
+    user_message: str = "",
+) -> dict:
+    """Build service flags and delegate to the diagnostics sender.
+
+    Every flag is computed in its own try/except so a missing or broken
+    provider never prevents the heartbeat from reaching the collector.
+    """
+    def _flag(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            return False
+
+    flags = {
+        'abs': _flag(lambda: container.abs_client().is_configured()),
+        'kosync': env_truthy('KOSYNC_ENABLED'),
+        'storyteller': _flag(lambda: container.storyteller_client().is_configured()),
+        'booklore': _flag(lambda: container.booklore_client().is_configured()),
+        'bookfusion': _flag(lambda: container.bookfusion_client().is_configured()),
+        'book_orbit': _flag(lambda: container.bookorbit_client().is_configured()),
+        'cwa': _flag(lambda: container.cwa_client().is_configured()),
+        'hardcover': _flag(lambda: container.hardcover_client().is_configured()),
+        'storygraph': _flag(lambda: container.storygraph_client().is_configured()),
+        'slash_books': os.path.isdir(os.environ.get('EBOOK_IMPORT_DIR', '/books')),
+    }
+    try:
+        total_books = len(database_service.get_books_by_status('active'))
+    except Exception:
+        total_books = None
+
+    from src.services import diagnostics
+    return diagnostics.maybe_send_diagnostics(
+        database_service,
+        service_flags=flags,
+        total_books=total_books,
+        force=force,
+        manual=manual,
+        user_message=user_message,
+    )
+
+
 def sync_daemon():
     """Background sync daemon running in a separate thread."""
     try:
@@ -1469,6 +1535,7 @@ def sync_daemon():
         # Use the global SYNC_PERIOD_MINS which is validated
         schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(manager.run_sync_for_all_users)
         schedule.every(1).minutes.do(manager.check_pending_jobs)
+        schedule.every(1).hours.do(_run_diagnostics_send)
 
         logger.info(f"🔄 Sync daemon started (period: {SYNC_PERIOD_MINS} minutes)")
 
@@ -1477,6 +1544,12 @@ def sync_daemon():
             manager.run_sync_for_all_users()
         except Exception as e:
             logger.error(f"❌ Initial sync cycle failed: {e}")
+
+        # Catch-up diagnostics send on startup (24h guard inside is a no-op when not due)
+        try:
+            _run_diagnostics_send()
+        except Exception:
+            pass
 
         # Main daemon loop
         while True:
@@ -3208,6 +3281,7 @@ def settings():
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
             'STORYTELLER_POLL_WAIT_FOR_SETTLE',
+            'BOOKFUSION_POLL_WAIT_FOR_SETTLE',
             'STORYTELLER_LISTENING_SESSIONS',
             'STORYTELLER_NO_EPUB_CACHE',
             'BOOKLORE_SHELF_WATCH_ENABLED',
@@ -3226,6 +3300,7 @@ def settings():
             'OLLAMA_TRACKER_MATCH',
             'OLLAMA_LIBRARY_MATCH',
             'OLLAMA_EBOOK_TEXT_FALLBACK',
+            'DIAGNOSTICS_OPT_IN',
         ]
 
         # Current settings in DB
@@ -4342,6 +4417,12 @@ def index():
 
     latest_version, update_available = get_update_status()
 
+    show_diagnostics_modal = (
+        not env_truthy('DIAGNOSTICS_PROMPTED')
+        and bool(os.environ.get('DIAGNOSTICS_ENDPOINT_URL', '').strip())
+        and (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False)))
+    )
+
     return render_template(
         'index.html',
         mappings=mappings,
@@ -4351,7 +4432,8 @@ def index():
         suggestions=suggestions,
         app_version=APP_VERSION,
         update_available=update_available,
-        latest_version=latest_version
+        latest_version=latest_version,
+        show_diagnostics_modal=show_diagnostics_modal
     )
 
 
@@ -7649,6 +7731,13 @@ def update_hash(abs_id):
     user = current_user()
     if not _user_may_modify_book(user, abs_id):
         return _forbidden_book_response()
+    claimants = database_service.get_book_user_ids(abs_id)
+    if (
+        user is not None
+        and not user.is_admin
+        and len(claimants) > 1
+    ):
+        return ("Forbidden: only an administrator can change a shared book hash", 403)
 
     old_hash = book.kosync_doc_id
 
@@ -9522,6 +9611,26 @@ def api_bookfusion_link(abs_id: str) -> object:
     bookfusion_id = str(payload.get("bookfusion_id") or "").strip()
     if not bookfusion_id:
         return jsonify({"success": False, "error": "Missing BookFusion book id"}), 400
+    reader_client = uc().bookfusion_client
+    if not reader_client.is_configured():
+        return jsonify({"success": False, "error": "BookFusion not configured"}), 400
+    try:
+        probe_url = reader_client.get_download_url(bookfusion_id)
+    except Exception as exc:
+        logger.warning(
+            "BookFusion link probe failed for id %s: %s",
+            bookfusion_id, exc,
+        )
+        probe_url = None
+    if not probe_url:
+        return jsonify({
+            "success": False,
+            "error": (
+                "This BookFusion result is not available to the reader API "
+                "and cannot be linked yet. Upload the book to BookFusion first, "
+                "then re-search and link it."
+            ),
+        }), 400
     link = database_service.set_user_bookfusion_link(
         user_id,
         abs_id,
@@ -9555,6 +9664,44 @@ def _cleanup_temp(path: Path) -> None:
             path.unlink()
     except Exception as exc:
         logger.debug("Could not remove temp file %s: %s", path, exc)
+
+
+def _readaloud_integrity_error(path: Path) -> str | None:
+    """Return a user-facing error when an EPUB has broken audio overlays."""
+    try:
+        with zipfile.ZipFile(path) as epub:
+            names = set(epub.namelist())
+            audio_refs = 0
+            missing: set[str] = set()
+            for smil_name in (name for name in names if name.lower().endswith(".smil")):
+                root = ElementTree.fromstring(epub.read(smil_name))
+                for element in root.iter():
+                    if element.tag.rsplit("}", 1)[-1].lower() != "audio":
+                        continue
+                    src = str(element.get("src") or "").strip()
+                    if not src:
+                        continue
+                    audio_refs += 1
+                    ref_path = unquote(urlparse(src).path)
+                    if ref_path.startswith("/"):
+                        target = posixpath.normpath(ref_path.lstrip("/"))
+                    else:
+                        target = posixpath.normpath(
+                            posixpath.join(posixpath.dirname(smil_name), ref_path)
+                        )
+                    if target not in names:
+                        missing.add(target)
+    except (OSError, zipfile.BadZipFile, ElementTree.ParseError) as exc:
+        logger.warning("Could not validate Storyteller ReadAloud EPUB %s: %s", path, exc)
+        return "Storyteller returned an invalid ReadAloud EPUB. Wait for processing to finish and try again."
+
+    if not audio_refs:
+        return "Storyteller ReadAloud EPUB is incomplete (no narration audio was found). Wait for processing to finish and try again."
+    if missing:
+        count = len(missing)
+        noun = "file is" if count == 1 else "files are"
+        return f"Storyteller ReadAloud EPUB is incomplete ({count} narration audio {noun} missing). Wait for processing to finish and try again."
+    return None
 
 
 def api_bookfusion_upload(abs_id: str) -> object:
@@ -9600,6 +9747,12 @@ def api_bookfusion_upload(abs_id: str) -> object:
         if not ok:
             _cleanup_temp(tmp_path)
             return jsonify({"success": False, "error": "Could not download the Storyteller ReadAloud EPUB (it may not be processed yet)"}), 502
+
+        integrity_error = _readaloud_integrity_error(tmp_path)
+        if integrity_error:
+            logger.warning("Rejected incomplete Storyteller ReadAloud EPUB for %s: %s", abs_id, integrity_error)
+            _cleanup_temp(tmp_path)
+            return jsonify({"success": False, "error": integrity_error}), 502
 
         upload_client = uc().bookfusion_upload_client
         if not upload_client.is_configured():
@@ -9717,9 +9870,24 @@ def _resolve_duplicate_bookfusion_id(upload_client, title: str, author: str = ""
             if first_author != author_lower:
                 continue
         try:
-            return int(item_id)
+            candidate_id = int(item_id)
         except (ValueError, TypeError):
             continue
+        try:
+            probe_url = reader_client.get_download_url(candidate_id)
+        except Exception as exc:
+            logger.debug(
+                "BookFusion duplicate probe failed for id %s: %s",
+                candidate_id, exc,
+            )
+            continue
+        if not probe_url:
+            logger.debug(
+                "BookFusion duplicate id %s not accessible, skipping",
+                candidate_id,
+            )
+            continue
+        return candidate_id
     return None
 
 
@@ -10199,6 +10367,131 @@ def _resolve_web_secret_key() -> str:
     return new_key
 
 
+@admin_required
+def api_diagnostics_send_now():
+    """Submit a manual diagnostics report for this BookBridge instance."""
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Request body must be a JSON object.'}), 400
+    message = body.get('message', '')
+    if not isinstance(message, str):
+        return jsonify({'error': 'Message must be a string.'}), 400
+    message = message.strip()
+    if len(message) > 2000:
+        return jsonify({'error': 'Message must be 2000 characters or fewer.'}), 400
+
+    result = _run_diagnostics_send(
+        force=True,
+        manual=True,
+        user_message=message,
+    )
+    if result.get('sent') or result.get('reason') in ('opt_out', 'no_endpoint'):
+        return jsonify(result), 200
+    if result.get('reason') == 'http_429':
+        return jsonify(result), 429
+    return jsonify(result), 502
+
+
+@admin_required
+def api_diagnostics_opt_in():
+    """Admin endpoint: toggle diagnostics opt-in state."""
+    body = request.get_json(silent=True) or {}
+    opted_in = bool(body.get('opt_in'))
+    val = 'true' if opted_in else 'false'
+    database_service.set_setting('DIAGNOSTICS_OPT_IN', val)
+    os.environ['DIAGNOSTICS_OPT_IN'] = val
+    database_service.set_setting('DIAGNOSTICS_PROMPTED', 'true')
+    os.environ['DIAGNOSTICS_PROMPTED'] = 'true'
+
+    instance_id = ''
+    if opted_in:
+        from src.services import diagnostics
+        instance_id = diagnostics.ensure_instance_id(database_service)
+
+    return jsonify({'ok': True, 'opt_in': opted_in, 'instance_id': instance_id})
+
+
+def _diagnostics_receiver_context():
+    """Validate settings and derive the receiver base URL for proxied requests.
+
+    Returns ``(base_url, token, error_message)``.  ``base_url`` is
+    ``scheme://netloc`` parsed from ``DIAGNOSTICS_ENDPOINT_URL`` (no
+    attacker-controlled path component).  ``token`` is the raw ingest
+    token.  When either setting is missing/empty *error_message* is a
+    human-readable string and both URL and token are empty.
+    """
+    endpoint = os.environ.get('DIAGNOSTICS_ENDPOINT_URL', '').strip()
+    token = os.environ.get('DIAGNOSTICS_INGEST_TOKEN', '').strip()
+    if not endpoint:
+        return '', '', 'Diagnostics endpoint is not configured.'
+    if not token:
+        return '', '', 'Diagnostics ingest token is not configured.'
+    parsed = urlparse(endpoint)
+    base = (
+        f'{parsed.scheme}://{parsed.netloc}'
+        if parsed.scheme in ('http', 'https') and parsed.netloc else ''
+    )
+    if not base:
+        return '', '', 'Diagnostics endpoint URL is invalid.'
+    return base, token, ''
+
+
+@admin_required
+def my_reports():
+    """Redirect the retired technical reports page to Diagnostics settings."""
+    return redirect(url_for('settings') + '#system')
+
+
+@admin_required
+def api_diagnostics_submissions():
+    """Return this instance's manual report history without exposing its token."""
+    base_url, token, error = _diagnostics_receiver_context()
+    if error:
+        if error == 'Diagnostics ingest token is not configured.':
+            return jsonify({'submissions': []})
+        return jsonify({'error': error}), 503
+
+    headers = {'Authorization': f'Bearer {token}'}
+    try:
+        resp = requests.get(
+            f'{base_url}/api/v1/my/submissions', headers=headers, timeout=15,
+        )
+    except requests.RequestException:
+        return jsonify({'error': 'Could not reach the diagnostics receiver.'}), 502
+
+    if resp.status_code != 200:
+        return jsonify({'error': 'The diagnostics receiver returned an error.'}), 502
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return jsonify({'error': 'The diagnostics receiver returned an invalid response.'}), 502
+    if not isinstance(data, dict) or not isinstance(data.get('submissions'), list):
+        return jsonify({'error': 'The diagnostics receiver returned an invalid response.'}), 502
+
+    submissions = []
+    for item in data['submissions']:
+        if not isinstance(item, dict):
+            continue
+        user_message = item.get('user_message')
+        response_md = item.get('response_md')
+        submitted_at = item.get('submitted_at') or item.get('received_at')
+        submissions.append({
+            'id': item.get('id'),
+            'submitted_at': submitted_at if isinstance(submitted_at, str) else '',
+            'user_message': user_message if isinstance(user_message, str) else '',
+            'response_md': response_md if isinstance(response_md, str) else '',
+            'response_at': item.get('response_at') if isinstance(item.get('response_at'), str) else '',
+            'status': 'replied' if (
+                item.get('status') == 'replied'
+                or isinstance(response_md, str) and bool(response_md.strip())
+            ) else 'received',
+        })
+    return jsonify({'submissions': submissions})
+
+
 # --- Application Factory ---
 def create_app(test_container=None):
     # Under a test container, run deferred work inline so integration tests are
@@ -10217,6 +10510,8 @@ def create_app(test_container=None):
     )
     if str(os.environ.get("SESSION_COOKIE_SECURE", "")).strip().lower() in ("true", "1", "yes", "on"):
         app.config["SESSION_COOKIE_SECURE"] = True
+
+    app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
     # Tests inject a test_container and exercise routes without a session; honor
     # Flask's conventional LOGIN_DISABLED so the auth guard is a no-op there.
@@ -10346,6 +10641,10 @@ def create_app(test_container=None):
     app.add_url_rule('/api/bookfusion/link/<abs_id>', 'api_bookfusion_unlink', api_bookfusion_unlink, methods=['DELETE'])
     app.add_url_rule('/api/bookfusion/upload/<abs_id>', 'api_bookfusion_upload', api_bookfusion_upload, methods=['POST'])
     app.add_url_rule('/api/test-connection/<service>', 'test_connection', test_connection, methods=['POST'])
+    app.add_url_rule('/api/diagnostics/send-now', 'api_diagnostics_send_now', api_diagnostics_send_now, methods=['POST'])
+    app.add_url_rule('/api/diagnostics/opt-in', 'api_diagnostics_opt_in', api_diagnostics_opt_in, methods=['POST'])
+    app.add_url_rule('/my-reports', 'my_reports', my_reports, methods=['GET'])
+    app.add_url_rule('/api/diagnostics/submissions', 'api_diagnostics_submissions', api_diagnostics_submissions, methods=['GET'])
 
     # Storyteller API routes
     app.add_url_rule('/api/storyteller/search', 'api_storyteller_search', api_storyteller_search, methods=['GET'])

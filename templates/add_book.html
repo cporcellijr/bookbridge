@@ -1,2130 +1,1831 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
+{% set active_page = 'add_book' %}
+{% block title %}Add / Update Book · BookBridge{% endblock %}
 
-<head>
-    <meta charset="UTF-8">
-    <title>Add / Update Book - BookBridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
+{% block head %}
+<style>
+    .addbook-wrap {
+        max-width: 1800px;
+        margin: 0 auto;
+        padding: 40px;
+    }
+
+    .page-header {
+        margin-bottom: 30px;
+    }
+
+    .page-header h2 {
+        font-size: 32px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .page-header .subtitle {
+        font-size: 16px;
+        color: var(--muted);
+    }
+
+    .btn-badge {
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: rgba(255, 152, 0, 0.18);
+        color: #ffb74d;
+        border: 1px solid rgba(255, 152, 0, 0.35);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        line-height: 1;
+    }
+
+    .btn-success {
+        background: linear-gradient(135deg, #36d399 0%, #2bb381 100%);
+        color: #fff;
+        border: none;
+    }
+
+    .btn-success:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(54, 211, 153, 0.35);
+    }
+
+    /* Layout Grid */
+    .layout {
+        display: grid;
+        grid-template-columns: 1fr 400px;
+        gap: 30px;
+        margin-top: 30px;
+    }
+
+    /* Selection Area */
+    .selection-area {
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 24px;
+    }
+
+    .search-box {
+        width: 100%;
+        padding: 16px 20px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 16px;
+        margin-bottom: 16px;
+        transition: all 0.3s;
+    }
+
+    .search-box:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: var(--focus-ring);
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .search-box::placeholder {
+        color: var(--muted-soft);
+    }
+
+    /* Section Titles */
+    .section-title {
+        font-size: 20px;
+        font-weight: 700;
+        margin: 24px 0 16px 0;
+        color: var(--text);
+    }
+
+    .section-number {
+        display: inline-block;
+        width: 28px;
+        height: 28px;
+        background: var(--gradient);
+        border-radius: 50%;
+        text-align: center;
+        line-height: 28px;
+        margin-right: 10px;
+        font-size: 14px;
+        font-weight: 700;
+    }
+
+    /* Book Grid */
+    .matching-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 20px;
+        margin: 20px 0;
+    }
+
+    .book-card {
+        cursor: pointer;
+        border: 2px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        transition: all 0.3s;
+        background: var(--panel-soft);
+        position: relative;
+    }
+
+    .book-card:hover {
+        border-color: rgba(102, 126, 234, 0.5);
+        transform: translateY(-4px);
+        box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
+    }
+
+    .book-card.selected {
+        border-color: var(--accent);
+        background: rgba(102, 126, 234, 0.15);
+        box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+    }
+
+    .book-card.ghost-card {
+        border-style: dashed;
+        background: transparent;
+    }
+
+    .book-card.ghost-card .book-cover-placeholder {
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(255, 255, 255, 0.45);
+    }
+
+    .book-card.selected::after {
+        content: '✓';
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 28px;
+        height: 28px;
+        background: var(--accent);
+        color: #fff;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: 700;
+        z-index: 2;
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5);
+    }
+
+    .book-cover-container {
+        width: 100%;
+        aspect-ratio: 2/3;
+        overflow: hidden;
+    }
+
+    .book-cover {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .book-cover-placeholder {
+        width: 100%;
+        height: 100%;
+        background: var(--gradient);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 48px;
+    }
+
+    .book-title {
+        padding: 12px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        line-height: 1.3;
+    }
+
+    /* Resource Grid (square cards for Storyteller + Ebook) */
+    .selection-grid-scroll {
+        max-height: clamp(220px, 30vh, 360px);
+        overflow-y: auto;
+        padding-right: 6px;
+        margin: 16px 0;
+    }
+
+    .resource-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 16px;
+        margin: 0;
+        align-content: start;
+    }
+
+    .resource-card {
+        cursor: pointer;
+        border: 2px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        transition: all 0.25s;
+        background: var(--panel-soft);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 8px;
+        aspect-ratio: 1/1;
+        text-align: center;
+        gap: 8px;
+        position: relative;
+    }
+
+    .resource-card:hover {
+        border-color: rgba(102, 126, 234, 0.5);
+        transform: translateY(-2px);
+        box-shadow: 0 4px 14px rgba(102, 126, 234, 0.2);
+    }
+
+    .resource-card.selected {
+        border-color: var(--accent);
+        background: rgba(102, 126, 234, 0.15);
+        box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+    }
+
+    .resource-card.selected::after {
+        content: '✓';
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 28px;
+        height: 28px;
+        background: var(--accent);
+        color: #fff;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: 700;
+        z-index: 2;
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5);
+    }
+
+    .resource-card.ghost-card {
+        border: 2px dashed rgba(255, 255, 255, 0.15);
+        background: transparent;
+    }
+
+    .resource-card.ghost-card:hover {
+        border-color: rgba(102, 126, 234, 0.4);
+        background: rgba(102, 126, 234, 0.05);
+    }
+
+    .resource-card.ghost-card.selected {
+        border-color: rgba(102, 126, 234, 0.6);
+        background: rgba(102, 126, 234, 0.08);
+    }
+
+    .resource-icon {
+        font-size: 32px;
+        line-height: 1;
+        flex-shrink: 0;
+    }
+
+    .resource-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+        line-height: 1.3;
+        word-break: break-word;
+    }
+
+    .resource-subtitle {
+        font-size: 12px;
+        color: var(--muted-soft);
+        line-height: 1.2;
+    }
+
+    /* Source badge */
+    .source-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 6px;
+    }
+
+    .source-badge.grimmory {
+        background: rgba(76, 175, 80, 0.2);
+        color: #81c784;
+    }
+
+    .source-badge.bookorbit {
+        background: rgba(0, 188, 212, 0.2);
+        color: #4dd0e1;
+    }
+
+    .source-badge.abs {
+        background: rgba(102, 126, 234, 0.2);
+        color: #93a5f6;
+    }
+
+    .source-badge.cwa {
+        background: rgba(255, 152, 0, 0.2);
+        color: #ffb74d;
+    }
+
+    .source-badge.localfile {
+        background: rgba(156, 39, 176, 0.2);
+        color: #ce93d8;
+    }
+
+    .source-badge.transcript {
+        background: rgba(167, 139, 250, 0.2);
+        color: #a78bfa;
+    }
+
+    .source-badge.linked {
+        background: rgba(76, 175, 80, 0.22);
+        color: #81c784;
+    }
+
+    .add-to-queue-btn {
+        width: 100%;
+        margin-top: 16px;
+    }
+
+    .submit-feedback {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 13px;
+    }
+
+    .submit-feedback.show {
+        display: inline-flex;
+    }
+
+    .submit-feedback.block.show {
+        display: flex;
+    }
+
+    .submit-feedback-spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #93a5f6;
+        border-radius: 50%;
+        animation: submit-spin 0.8s linear infinite;
+        flex-shrink: 0;
+    }
+
+    @keyframes submit-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
+    /* Queue Area */
+    .queue-area {
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 24px;
+        position: sticky;
+        top: calc(var(--nav-height) + 24px);
+        height: fit-content;
+        max-height: calc(100vh - var(--nav-height) - 48px);
+        overflow-y: auto;
+    }
+
+    .queue-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .queue-header h3 {
+        font-size: 20px;
+        font-weight: 700;
+    }
+
+    .queue-count {
+        background: var(--gradient);
+        color: #fff;
+        padding: 6px 14px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    /* Queue Items */
+    .queue-item {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 12px;
+        margin-bottom: 12px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        transition: all 0.3s;
+    }
+
+    .queue-item:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .queue-item-cover {
+        width: 40px;
+        height: 60px;
+        object-fit: cover;
+        border-radius: 4px;
+        flex-shrink: 0;
+    }
+
+    .queue-item-info {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .queue-item-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        margin: 0 0 4px 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .queue-item-ebook {
+        font-size: 11px;
+        color: var(--muted);
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .queue-item-remove {
+        background: rgba(255, 107, 107, 0.2);
+        color: var(--danger);
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        cursor: pointer;
+        font-size: 16px;
+        line-height: 1;
+        flex-shrink: 0;
+        transition: all 0.3s;
+    }
+
+    .queue-item-remove:hover {
+        background: rgba(255, 107, 107, 0.3);
+        border-color: rgba(255, 107, 107, 0.5);
+    }
+
+    /* Queue Actions */
+    .queue-actions {
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid var(--border);
+    }
+
+    .queue-actions form {
+        margin-bottom: 12px;
+    }
+
+    .queue-actions form:last-child {
+        margin-bottom: 0;
+    }
+
+    .queue-action-note {
+        color: var(--muted-soft);
+        font-size: 12px;
+        line-height: 1.4;
+        margin: -4px 0 12px 0;
+    }
+
+    /* Forge staging modal (shared .modal-overlay/.modal visuals, page-toggled) */
+    #forgeStageModal {
+        display: none;
+    }
+
+    #forgeStageModal.open {
+        display: flex;
+    }
+
+    .modal-card h3 {
+        font-size: 20px;
+        margin-bottom: 8px;
+    }
+
+    .modal-card p {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.45;
+        margin-bottom: 18px;
+    }
+
+    .modal-options {
+        display: grid;
+        gap: 12px;
+    }
+
+    .modal-option {
+        width: 100%;
+        text-align: left;
+        padding: 16px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background: var(--panel-soft);
+        color: var(--text);
+        font-family: inherit;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .modal-option:hover {
+        border-color: rgba(102, 126, 234, 0.45);
+        background: rgba(102, 126, 234, 0.12);
+        transform: translateY(-1px);
+    }
+
+    .modal-option strong {
+        display: block;
+        font-size: 15px;
+        margin-bottom: 6px;
+    }
+
+    .modal-option span {
+        display: block;
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.45;
+    }
+
+    .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 16px;
+    }
+
+    /* Reader Documents (KoSync) panel */
+    .kosync-section {
+        margin-top: 28px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+    }
+
+    .kosync-section summary {
+        cursor: pointer;
+        list-style: none;
+    }
+
+    .kosync-section summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .kosync-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        color: var(--text);
+    }
+
+    .kosync-summary-main {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+    }
+
+    .kosync-summary-title {
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    .kosync-summary-meta {
+        color: var(--muted-soft);
+        font-size: 13px;
+    }
+
+    .kosync-summary-chevron {
+        color: var(--muted-soft);
+        transition: transform 0.2s, color 0.2s;
+    }
+
+    .kosync-section[open] .kosync-summary-chevron {
+        transform: rotate(180deg);
+        color: var(--text);
+    }
+
+    .kosync-panel-body {
+        margin-top: 18px;
+    }
+
+    .kosync-toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+    }
+
+    .kosync-search {
+        flex: 1;
+        min-width: 220px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+    }
+
+    .kosync-filter {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+    }
+
+    .kosync-filter button {
+        border: none;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        padding: 10px 12px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+    }
+
+    .kosync-filter button.active {
+        background: rgba(102, 126, 234, 0.25);
+        color: var(--text);
+    }
+
+    .kosync-note {
+        color: var(--muted-soft);
+        font-size: 13px;
+        line-height: 1.45;
+        margin-bottom: 14px;
+    }
+
+    .kosync-show-toggle {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+    }
+
+    .kosync-doc-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .kosync-doc-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        padding: 14px;
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+    }
+
+    .kosync-doc-main {
+        min-width: 0;
+    }
+
+    .kosync-doc-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+
+    .kosync-hash {
+        font-family: 'SFMono-Regular', Consolas, monospace;
+        color: var(--text);
+    }
+
+    .kosync-status {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #81c784;
+    }
+
+    .kosync-status.unlinked {
+        color: #ffb74d;
+    }
+
+    .kosync-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        color: var(--muted-soft);
+        font-size: 12px;
+    }
+
+    .kosync-actions {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .kosync-actions button,
+    .kosync-link-panel button {
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        background: rgba(102, 126, 234, 0.14);
+        color: #93a5f6;
+        border-radius: 7px;
+        padding: 8px 10px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+    }
+
+    .kosync-actions button:hover,
+    .kosync-link-panel button:hover {
+        background: rgba(102, 126, 234, 0.24);
+    }
+
+    .kosync-link-panel {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+    }
+
+    .kosync-link-panel select {
+        flex: 1;
+        min-width: 220px;
+        padding: 10px 12px;
+        background: #1a1a1a;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+    }
+
+    .kosync-empty,
+    .kosync-error {
+        color: var(--muted-soft);
+        font-size: 13px;
+        padding: 12px 0;
+    }
+
+    .kosync-error {
+        color: #ff8a80;
+    }
+
+    .hidden {
+        display: none !important;
+    }
+
+    .d-inline {
+        display: inline;
+    }
+
+    .w-100 {
+        width: 100%;
+    }
+
+    /* Empty Queue */
+    .empty-queue {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--muted-soft);
+    }
+
+    .empty-queue-icon {
+        font-size: 64px;
+        margin-bottom: 16px;
+        opacity: 0.3;
+    }
+
+    /* Responsive */
+    @media (max-width: 1400px) {
+        .layout {
+            grid-template-columns: 1fr 350px;
         }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            background: #0a0a0a;
-            color: #ffffff;
-            min-height: 100vh;
-            padding: 0;
+        .matching-grid {
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        }
+    }
+
+    @media (max-width: 1024px) {
+        .layout {
+            grid-template-columns: 1fr;
         }
 
-        /* Top Navigation Bar */
-        .top-nav {
-            background: linear-gradient(180deg, rgba(20, 20, 20, 0.98) 0%, rgba(20, 20, 20, 0.95) 100%);
-            -webkit-backdrop-filter: blur(20px);
-            backdrop-filter: blur(20px);
-            padding: 20px 40px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            position: sticky;
+        .queue-area {
+            position: relative;
             top: 0;
-            z-index: 100;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            max-height: 600px;
         }
 
-        .logo-section {
-            display: flex;
-            align-items: center;
-            gap: 24px;
+        .selection-grid-scroll {
+            max-height: none;
+            overflow: visible;
+            padding-right: 0;
         }
+    }
 
-        .logo-section a {
-            text-decoration: none;
-        }
-
-        .logo-section h1 {
-            font-size: 28px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .library-links {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding-left: 20px;
-            border-left: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .nav-icon-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-            color: rgba(255, 255, 255, 0.6);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            background: rgba(255, 255, 255, 0.03);
-            text-decoration: none;
-        }
-
-        .nav-icon-link:hover {
-            color: #ffffff;
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
-
-        .nav-icon-link svg {
-            width: 20px;
-            height: 20px;
-            stroke-width: 2;
-        }
-
-        .nav-actions {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .btn {
-            padding: 10px 20px;
-            background: rgba(102, 126, 234, 0.15);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.3);
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn:hover {
-            background: rgba(102, 126, 234, 0.25);
-            border-color: rgba(102, 126, 234, 0.5);
-            transform: translateY(-2px);
-        }
-
-        .btn-primary {
-            background: rgba(102, 126, 234, 0.2);
-            color: #667eea;
-            border: 1px solid rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-primary:hover {
-            background: rgba(102, 126, 234, 0.3);
-            border-color: rgba(102, 126, 234, 0.6);
-        }
-
-        .btn-badge {
-            min-width: 20px;
-            height: 20px;
-            padding: 0 6px;
-            border-radius: 999px;
-            background: rgba(255, 152, 0, 0.18);
-            color: #ffb74d;
-            border: 1px solid rgba(255, 152, 0, 0.35);
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            line-height: 1;
-        }
-
-        .btn-success {
-            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-            color: white;
-            border: none;
-        }
-
-        .btn-success:hover {
-            background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
-            box-shadow: 0 8px 24px rgba(76, 175, 80, 0.4);
-        }
-
-        .btn-success:disabled {
-            background: rgba(76, 175, 80, 0.2);
-            color: rgba(255, 255, 255, 0.4);
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .btn-danger {
-            background: rgba(244, 67, 54, 0.15);
-            color: #f44336;
-            border: 1px solid rgba(244, 67, 54, 0.3);
-        }
-
-        .btn-danger:hover {
-            background: rgba(244, 67, 54, 0.25);
-            border-color: rgba(244, 67, 54, 0.5);
-        }
-
-        /* Main Container */
-        .container {
-            max-width: 1800px;
-            margin: 0 auto;
-            padding: 40px;
-        }
-
-        .page-header {
-            margin-bottom: 30px;
+    @media (max-width: 768px) {
+        .addbook-wrap {
+            padding: 20px;
         }
 
         .page-header h2 {
-            font-size: 32px;
-            font-weight: 700;
-            margin-bottom: 8px;
+            font-size: 24px;
         }
 
-        .page-header .subtitle {
-            font-size: 16px;
-            color: rgba(255, 255, 255, 0.6);
-        }
-
-        /* Layout Grid */
-        .layout {
-            display: grid;
-            grid-template-columns: 1fr 400px;
-            gap: 30px;
-            margin-top: 30px;
-        }
-
-        /* Selection Area */
-        .selection-area {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 24px;
-        }
-
-        /* Search Box */
-        .search-box {
-            width: 100%;
-            padding: 16px 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            color: #ffffff;
-            font-size: 16px;
-            margin-bottom: 16px;
-            transition: all 0.3s;
-        }
-
-        .search-box:focus {
-            outline: none;
-            border-color: #667eea;
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        .search-box::placeholder {
-            color: rgba(255, 255, 255, 0.4);
-        }
-
-        /* Section Titles */
-        .section-title {
-            font-size: 20px;
-            font-weight: 700;
-            margin: 24px 0 16px 0;
-            color: #ffffff;
-        }
-
-        .section-number {
-            display: inline-block;
-            width: 28px;
-            height: 28px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 50%;
-            text-align: center;
-            line-height: 28px;
-            margin-right: 10px;
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        /* Book Grid */
         .matching-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-
-        .book-card {
-            cursor: pointer;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            overflow: hidden;
-            transition: all 0.3s;
-            background: rgba(255, 255, 255, 0.03);
-            position: relative;
-        }
-
-        .book-card:hover {
-            border-color: rgba(102, 126, 234, 0.5);
-            transform: translateY(-4px);
-            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
-        }
-
-        .book-card.selected {
-            border-color: #667eea;
-            background: rgba(102, 126, 234, 0.15);
-            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
-        }
-
-        .book-card.ghost-card {
-            border-style: dashed;
-            background: transparent;
-        }
-
-        .book-card.ghost-card .book-cover-placeholder {
-            background: rgba(255, 255, 255, 0.04);
-            color: rgba(255, 255, 255, 0.45);
-        }
-
-        .book-card.selected::after {
-            content: '✓';
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            width: 28px;
-            height: 28px;
-            background: #6366f1;
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            font-weight: 700;
-            z-index: 2;
-            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5);
-        }
-
-        .book-cover-container {
-            width: 100%;
-            aspect-ratio: 2/3;
-            overflow: hidden;
-        }
-
-        .book-cover {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .book-cover-placeholder {
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 48px;
-        }
-
-        .book-title {
-            padding: 12px;
-            font-size: 13px;
-            font-weight: 600;
-            color: #ffffff;
-            line-height: 1.3;
-        }
-
-        /* Resource Grid (square cards for Storyteller + Ebook) */
-        .selection-grid-scroll {
-            max-height: clamp(220px, 30vh, 360px);
-            overflow-y: auto;
-            padding-right: 6px;
-            margin: 16px 0;
-        }
-
-        .selection-grid-scroll::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .selection-grid-scroll::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 4px;
-        }
-
-        .selection-grid-scroll::-webkit-scrollbar-thumb {
-            background: rgba(102, 126, 234, 0.3);
-            border-radius: 4px;
-        }
-
-        .selection-grid-scroll::-webkit-scrollbar-thumb:hover {
-            background: rgba(102, 126, 234, 0.5);
-        }
-
-        .resource-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 16px;
-            margin: 0;
-            align-content: start;
-        }
-
-        .resource-card {
-            cursor: pointer;
-            border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            overflow: hidden;
-            transition: all 0.25s;
-            background: rgba(255, 255, 255, 0.03);
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 12px 8px;
-            aspect-ratio: 1/1;
-            text-align: center;
-            gap: 8px;
-            position: relative;
-        }
-
-        .resource-card:hover {
-            border-color: rgba(102, 126, 234, 0.5);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 14px rgba(102, 126, 234, 0.2);
-        }
-
-        .resource-card.selected {
-            border-color: #667eea;
-            background: rgba(102, 126, 234, 0.15);
-            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
-        }
-
-        .resource-card.selected::after {
-            content: '✓';
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            width: 28px;
-            height: 28px;
-            background: #6366f1;
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            font-weight: 700;
-            z-index: 2;
-            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5);
-        }
-
-        .resource-card.ghost-card {
-            border: 2px dashed rgba(255, 255, 255, 0.15);
-            background: transparent;
-        }
-
-        .resource-card.ghost-card:hover {
-            border-color: rgba(102, 126, 234, 0.4);
-            background: rgba(102, 126, 234, 0.05);
-        }
-
-        .resource-card.ghost-card.selected {
-            border-color: rgba(102, 126, 234, 0.6);
-            background: rgba(102, 126, 234, 0.08);
-        }
-
-        .resource-icon {
-            font-size: 32px;
-            line-height: 1;
-            flex-shrink: 0;
-        }
-
-        .resource-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #ffffff;
-            line-height: 1.3;
-            word-break: break-word;
-        }
-
-        .resource-subtitle {
-            font-size: 12px;
-            color: rgba(255, 255, 255, 0.5);
-            line-height: 1.2;
-        }
-
-        /* Source badge */
-        .source-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: 6px;
-        }
-
-        .source-badge.grimmory {
-            background: rgba(76, 175, 80, 0.2);
-            color: #81c784;
-        }
-
-        .source-badge.bookorbit {
-            background: rgba(0, 188, 212, 0.2);
-            color: #4dd0e1;
-        }
-
-        .source-badge.abs {
-            background: rgba(102, 126, 234, 0.2);
-            color: #93a5f6;
-        }
-
-        .source-badge.cwa {
-            background: rgba(255, 152, 0, 0.2);
-            color: #ffb74d;
-        }
-
-        .source-badge.localfile {
-            background: rgba(156, 39, 176, 0.2);
-            color: #ce93d8;
-        }
-
-        .source-badge.transcript {
-            background: rgba(167, 139, 250, 0.2);
-            color: #a78bfa;
-        }
-
-        .source-badge.linked {
-            background: rgba(76, 175, 80, 0.22);
-            color: #81c784;
-        }
-
-        /* Ebook Select (kept for fallback but hidden when cards shown) */
-        select.ebook-select {
-            width: 100%;
-            padding: 16px 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            color: #ffffff;
-            font-size: 14px;
-            cursor: pointer;
-            transition: all 0.3s;
-            margin: 16px 0;
-        }
-
-        select.ebook-select option {
-            background: #1a1a1a;
-            color: #ffffff;
-            padding: 12px;
-        }
-
-        select.ebook-select:hover {
-            background: rgba(255, 255, 255, 0.08);
-            border-color: rgba(102, 126, 234, 0.3);
-        }
-
-        select.ebook-select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .add-to-queue-btn {
-            width: 100%;
-            margin-top: 16px;
-        }
-
-        .submit-feedback {
-            display: none;
-            align-items: center;
-            gap: 10px;
-            margin-top: 12px;
-            color: rgba(255, 255, 255, 0.72);
-            font-size: 13px;
-        }
-
-        .submit-feedback.show {
-            display: inline-flex;
-        }
-
-        .submit-feedback.block.show {
-            display: flex;
-        }
-
-        .submit-feedback-spinner {
-            width: 16px;
-            height: 16px;
-            border: 2px solid rgba(255, 255, 255, 0.2);
-            border-top-color: #93a5f6;
-            border-radius: 50%;
-            animation: submit-spin 0.8s linear infinite;
-            flex-shrink: 0;
-        }
-
-        @keyframes submit-spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
-
-        /* Queue Area */
-        .queue-area {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 24px;
-            position: sticky;
-            top: 100px;
-            height: fit-content;
-            max-height: calc(100vh - 120px);
-            overflow-y: auto;
-        }
-
-        .queue-area::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .queue-area::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 4px;
-        }
-
-        .queue-area::-webkit-scrollbar-thumb {
-            background: rgba(102, 126, 234, 0.3);
-            border-radius: 4px;
-        }
-
-        .queue-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .queue-header h3 {
-            font-size: 20px;
-            font-weight: 700;
-        }
-
-        .queue-count {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 6px 14px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        /* Queue Items */
-        .queue-item {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 12px;
-            display: flex;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
             gap: 12px;
-            align-items: center;
-            transition: all 0.3s;
-        }
-
-        .queue-item:hover {
-            background: rgba(255, 255, 255, 0.08);
-        }
-
-        .queue-item-cover {
-            width: 40px;
-            height: 60px;
-            object-fit: cover;
-            border-radius: 4px;
-            flex-shrink: 0;
-        }
-
-        .queue-item-info {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .queue-item-title {
-            font-size: 13px;
-            font-weight: 600;
-            color: #ffffff;
-            margin: 0 0 4px 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .queue-item-ebook {
-            font-size: 11px;
-            color: rgba(255, 255, 255, 0.6);
-            margin: 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .queue-item-remove {
-            background: rgba(244, 67, 54, 0.2);
-            color: #f44336;
-            border: 1px solid rgba(244, 67, 54, 0.3);
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            cursor: pointer;
-            font-size: 16px;
-            line-height: 1;
-            flex-shrink: 0;
-            transition: all 0.3s;
-        }
-
-        .queue-item-remove:hover {
-            background: rgba(244, 67, 54, 0.3);
-            border-color: rgba(244, 67, 54, 0.5);
-        }
-
-        /* Queue Actions */
-        .queue-actions {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .queue-actions form {
-            margin-bottom: 12px;
-        }
-
-        .queue-actions form:last-child {
-            margin-bottom: 0;
-        }
-
-        .queue-action-note {
-            color: rgba(255, 255, 255, 0.52);
-            font-size: 12px;
-            line-height: 1.4;
-            margin: -4px 0 12px 0;
-        }
-
-        .queue-actions button:disabled {
-            opacity: 0.45;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.72);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            padding: 24px;
-        }
-
-        .modal-overlay.open {
-            display: flex;
-        }
-
-        .modal-card {
-            width: min(560px, 100%);
-            background: #141414;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
-        }
-
-        .modal-card h3 {
-            font-size: 20px;
-            margin-bottom: 8px;
-        }
-
-        .modal-card p {
-            color: rgba(255, 255, 255, 0.64);
-            font-size: 14px;
-            line-height: 1.45;
-            margin-bottom: 18px;
-        }
-
-        .modal-options {
-            display: grid;
-            gap: 12px;
-        }
-
-        .modal-option {
-            width: 100%;
-            text-align: left;
-            padding: 16px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(255, 255, 255, 0.04);
-            color: #ffffff;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .modal-option:hover {
-            border-color: rgba(102, 126, 234, 0.45);
-            background: rgba(102, 126, 234, 0.12);
-            transform: translateY(-1px);
-        }
-
-        .modal-option strong {
-            display: block;
-            font-size: 15px;
-            margin-bottom: 6px;
-        }
-
-        .modal-option span {
-            display: block;
-            font-size: 13px;
-            color: rgba(255, 255, 255, 0.62);
-            line-height: 1.45;
-        }
-
-        .modal-actions {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 16px;
-        }
-
-        .modal-cancel {
-            background: transparent;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            color: rgba(255, 255, 255, 0.72);
-        }
-
-        .kosync-section {
-            margin-top: 28px;
-            padding-top: 24px;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .kosync-section summary {
-            cursor: pointer;
-            list-style: none;
-        }
-
-        .kosync-section summary::-webkit-details-marker {
-            display: none;
         }
 
         .kosync-summary {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            color: #ffffff;
-        }
-
-        .kosync-summary-main {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            min-width: 0;
-        }
-
-        .kosync-summary-title {
-            font-size: 18px;
-            font-weight: 700;
+            flex-direction: column;
+            align-items: flex-start;
         }
 
         .kosync-summary-meta {
-            color: rgba(255, 255, 255, 0.5);
-            font-size: 13px;
-        }
-
-        .kosync-summary-chevron {
-            color: rgba(255, 255, 255, 0.5);
-            transition: transform 0.2s, color 0.2s;
-        }
-
-        .kosync-section[open] .kosync-summary-chevron {
-            transform: rotate(180deg);
-            color: #ffffff;
-        }
-
-        .kosync-panel-body {
-            margin-top: 18px;
-        }
-
-        .kosync-toolbar {
+            width: 100%;
             display: flex;
-            gap: 12px;
-            align-items: center;
-            margin-bottom: 12px;
-            flex-wrap: wrap;
-        }
-
-        .kosync-search {
-            flex: 1;
-            min-width: 220px;
-            padding: 12px 14px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            color: #ffffff;
-            font-size: 14px;
-        }
-
-        .kosync-filter {
-            display: inline-flex;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        .kosync-filter button {
-            border: none;
-            background: rgba(255, 255, 255, 0.04);
-            color: rgba(255, 255, 255, 0.65);
-            padding: 10px 12px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        .kosync-filter button.active {
-            background: rgba(102, 126, 234, 0.25);
-            color: #ffffff;
-        }
-
-        .kosync-note {
-            color: rgba(255, 255, 255, 0.58);
-            font-size: 13px;
-            line-height: 1.45;
-            margin-bottom: 14px;
-        }
-
-        .kosync-show-toggle {
-            background: rgba(255, 255, 255, 0.05);
-            color: rgba(255, 255, 255, 0.75);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 8px;
-            padding: 10px 12px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        .kosync-doc-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
+            justify-content: space-between;
         }
 
         .kosync-doc-row {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 14px;
-            padding: 14px;
-            background: rgba(255, 255, 255, 0.04);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 8px;
+            grid-template-columns: 1fr;
         }
 
-        .kosync-doc-main {
-            min-width: 0;
-        }
-
-        .kosync-doc-title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 8px;
-        }
-
-        .kosync-hash {
-            font-family: 'SFMono-Regular', Consolas, monospace;
-            color: #ffffff;
-        }
-
-        .kosync-status {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: #81c784;
-        }
-
-        .kosync-status.unlinked {
-            color: #ffb74d;
-        }
-
-        .kosync-meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px 12px;
-            color: rgba(255, 255, 255, 0.55);
-            font-size: 12px;
-        }
-
+        .kosync-toolbar,
         .kosync-actions {
-            display: flex;
-            align-items: flex-start;
-            gap: 8px;
-            flex-wrap: wrap;
-            justify-content: flex-end;
+            align-items: stretch;
         }
 
-        .kosync-actions button,
-        .kosync-link-panel button {
-            border: 1px solid rgba(102, 126, 234, 0.3);
-            background: rgba(102, 126, 234, 0.14);
-            color: #93a5f6;
-            border-radius: 7px;
-            padding: 8px 10px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-
-        .kosync-actions button:hover,
-        .kosync-link-panel button:hover {
-            background: rgba(102, 126, 234, 0.24);
-        }
-
-        .kosync-link-panel {
-            grid-column: 1 / -1;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            padding-top: 12px;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-        }
-
-        .kosync-link-panel select {
-            flex: 1;
-            min-width: 220px;
-            padding: 10px 12px;
-            background: #1a1a1a;
-            color: #ffffff;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: 8px;
-        }
-
-        .kosync-empty,
-        .kosync-error {
-            color: rgba(255, 255, 255, 0.55);
-            font-size: 13px;
-            padding: 12px 0;
-        }
-
-        .kosync-error {
-            color: #ff8a80;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        .d-inline {
-            display: inline;
-        }
-
-        .w-100 {
+        .kosync-filter,
+        .kosync-search,
+        .kosync-show-toggle {
             width: 100%;
         }
 
-        /* Empty Queue */
-        .empty-queue {
-            text-align: center;
-            padding: 60px 20px;
-            color: rgba(255, 255, 255, 0.4);
+        .kosync-filter button {
+            flex: 1;
         }
+    }
+</style>
+{% endblock %}
 
-        .empty-queue-icon {
-            font-size: 64px;
-            margin-bottom: 16px;
-            opacity: 0.3;
-        }
-
-        /* Responsive */
-        @media (max-width: 1400px) {
-            .layout {
-                grid-template-columns: 1fr 350px;
-            }
-
-            .matching-grid {
-                grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            }
-        }
-
-        @media (max-width: 1024px) {
-            .layout {
-                grid-template-columns: 1fr;
-            }
-
-            .queue-area {
-                position: relative;
-                top: 0;
-                max-height: 600px;
-            }
-
-            .selection-grid-scroll {
-                max-height: none;
-                overflow: visible;
-                padding-right: 0;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .container {
-                padding: 20px;
-            }
-
-            .top-nav {
-                padding: 16px 20px;
-            }
-
-            .nav-actions {
-                flex-wrap: wrap;
-            }
-
-            .page-header h2 {
-                font-size: 24px;
-            }
-
-            .matching-grid {
-                grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-                gap: 12px;
-            }
-
-            .kosync-summary {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-
-            .kosync-summary-meta {
-                width: 100%;
-                display: flex;
-                justify-content: space-between;
-            }
-
-            .kosync-doc-row {
-                grid-template-columns: 1fr;
-            }
-
-            .kosync-toolbar,
-            .kosync-actions {
-                align-items: stretch;
-            }
-
-            .kosync-filter,
-            .kosync-search,
-            .kosync-show-toggle {
-                width: 100%;
-            }
-
-            .kosync-filter button {
-                flex: 1;
-            }
-
-            .hidden {
-                display: none !important;
-            }
-
-            .d-inline {
-                display: inline;
-            }
-
-            .w-100 {
-                width: 100%;
-            }
-        }
-    </style>
-</head>
-
-<body>
-    <!-- Top Navigation -->
-    <div class="top-nav">
-        <div class="logo-section">
-            <a href="/">
-                <h1>📚 BookBridge</h1>
-            </a>
-
-            <div class="library-links">
-                {% if abs_server %}
-                <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" title="Audiobookshelf">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if booklore_server %}
-                <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" title="Ebook Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if shelfmark_url %}
-                <a href="/shelfmark" class="nav-icon-link" title="Shelfmark Tool" target="_blank"
-                    rel="noopener noreferrer">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    </svg>
-                </a>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/bookbridge/" class="btn" target="_blank"
-                rel="noopener noreferrer">📚 Docs</a>
-            <a href="/" class="btn">← Dashboard</a>
-            <a href="/logs" class="btn">📊 Logs</a>
-            <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add / Update Book</a>
-            <a href="/suggestions" class="btn">💡 Suggestions</a>
-        </div>
+{% block content %}
+<div class="addbook-wrap">
+    <div class="page-header">
+        <h2>Add / Update Book</h2>
+        <p class="subtitle">Pick text by itself, or pair audio with text and choose how the list should be processed</p>
     </div>
 
-    <!-- Main Container -->
-    <div class="container">
-        <div class="page-header">
-            <h2>Add / Update Book</h2>
-            <p class="subtitle">Pick text by itself, or pair audio with text and choose how the list should be processed</p>
-        </div>
+    <div class="layout">
+        <!-- Selection Area -->
+        <div class="selection-area">
+            <form method="GET" action="{{ url_for(self_endpoint) }}" id="searchForm">
+                <input type="text" name="search" placeholder="🔍 Search by title, author, or filename..."
+                    class="search-box" value="{{ search }}" autofocus>
+                <button type="submit" class="btn btn-primary" id="searchBtn"
+                    data-primary-action="search"
+                    data-working-label="Searching..."
+                    data-working-message="Searching the library..."
+                    data-feedback-target="searchFeedback">
+                    Search
+                </button>
+                <div id="searchFeedback" class="submit-feedback" aria-live="polite"></div>
+            </form>
 
-        <div class="layout">
-            <!-- Selection Area -->
-            <div class="selection-area">
-                <form method="GET" action="{{ url_for(self_endpoint) }}" id="searchForm">
-                    <input type="text" name="search" placeholder="🔍 Search by title, author, or filename..."
-                        class="search-box" value="{{ search }}" autofocus>
-                    <button type="submit" class="btn btn-primary" id="searchBtn"
-                        data-primary-action="search"
-                        data-working-label="Searching..."
-                        data-working-message="Searching the library..."
-                        data-feedback-target="searchFeedback">
-                        Search
-                    </button>
-                    <div id="searchFeedback" class="submit-feedback" aria-live="polite"></div>
-                </form>
+            <form method="POST" action="{{ url_for(self_endpoint) }}" id="addToQueueForm">
+                <input type="hidden" name="action" value="add_to_queue">
+                <input type="hidden" name="search" value="{{ search }}">
+                <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
+                <input type="hidden" name="audio_source" id="selected_audio_source">
+                <input type="hidden" name="audio_source_id" id="selected_audio_source_id">
+                <input type="hidden" name="audio_title" id="selected_audio_title">
+                <input type="hidden" name="audio_duration" id="selected_audio_duration">
+                <input type="hidden" name="audio_provider_book_id" id="selected_audio_provider_book_id">
+                <input type="hidden" name="audio_provider_file_id" id="selected_audio_provider_file_id">
+                <input type="hidden" name="audio_cover_url" id="selected_audio_cover_url">
+                <input type="hidden" name="ebook_filename" id="selected_ebook_filename">
+                <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
+                <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
+                <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
+                <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
+                <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
+                <input type="hidden" name="audio_only" id="selected_audio_only" value="">
 
-                <form method="POST" action="{{ url_for(self_endpoint) }}" id="addToQueueForm">
-                    <input type="hidden" name="action" value="add_to_queue">
-                    <input type="hidden" name="search" value="{{ search }}">
-                    <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
-                    <input type="hidden" name="audio_source" id="selected_audio_source">
-                    <input type="hidden" name="audio_source_id" id="selected_audio_source_id">
-                    <input type="hidden" name="audio_title" id="selected_audio_title">
-                    <input type="hidden" name="audio_duration" id="selected_audio_duration">
-                    <input type="hidden" name="audio_provider_book_id" id="selected_audio_provider_book_id">
-                    <input type="hidden" name="audio_provider_file_id" id="selected_audio_provider_file_id">
-                    <input type="hidden" name="audio_cover_url" id="selected_audio_cover_url">
-                    <input type="hidden" name="ebook_filename" id="selected_ebook_filename">
-                    <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
-                    <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
-                    <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
-                    <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
-                    <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
-                    <input type="hidden" name="audio_only" id="selected_audio_only" value="">
-
-                    {% set single_ab_match = audiobooks|length == 1 %}
-                    <h3 class="section-title"><span class="section-number">1</span>Select Audiobook <span
-                            style="font-size:12px; color:#aaa; font-weight:normal;">(optional)</span></h3>
-                    <div class="matching-grid">
-                        <div class="book-card ghost-card {% if not single_ab_match %}selected{% endif %}"
-                            data-value=""
-                            data-audio-source=""
-                            data-audio-source-id=""
-                            data-audio-title=""
-                            data-audio-duration=""
-                            data-audio-provider-book-id=""
-                            data-audio-provider-file-id=""
-                            data-audio-cover-url=""
-                            onclick="selectAudiobook(this)">
-                            <div class="book-cover-container">
-                                <div class="book-cover-placeholder">None</div>
-                            </div>
-                            <div class="book-title">No audio</div>
+                {% set single_ab_match = audiobooks|length == 1 %}
+                <h3 class="section-title"><span class="section-number">1</span>Select Audiobook <span
+                        style="font-size:12px; color:#aaa; font-weight:normal;">(optional)</span></h3>
+                <div class="matching-grid">
+                    <div class="book-card ghost-card {% if not single_ab_match %}selected{% endif %}"
+                        data-value=""
+                        data-audio-source=""
+                        data-audio-source-id=""
+                        data-audio-title=""
+                        data-audio-duration=""
+                        data-audio-provider-book-id=""
+                        data-audio-provider-file-id=""
+                        data-audio-cover-url=""
+                        onclick="selectAudiobook(this)">
+                        <div class="book-cover-container">
+                            <div class="book-cover-placeholder">None</div>
                         </div>
-                        {% for ab in audiobooks %}
-                        <div class="book-card {% if single_ab_match %}selected{% endif %}"
-                            data-value="{{ ab.source_id }}"
-                            data-audio-source="{{ ab.source }}"
-                            data-audio-source-id="{{ ab.source_id }}"
-                            data-audio-title="{{ ab.title }}"
-                            data-audio-duration="{{ ab.duration or '' }}"
-                            data-audio-provider-book-id="{{ ab.provider_book_id or ab.source_id }}"
-                            data-audio-provider-file-id="{{ ab.provider_file_id or '' }}"
-                            data-audio-cover-url="{{ ab.cover_url or '' }}"
-                            onclick="selectAudiobook(this)">
-                            <div class="book-cover-container">
-                                {% if ab.cover_url %}
-                                <img src="{{ ab.cover_url }}" alt="Cover" class="book-cover"
-                                    onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
-                                <div class="book-cover-placeholder hidden">🎧</div>
-                                {% else %}
-                                <div class="book-cover-placeholder">🎧</div>
-                                {% endif %}
-                            </div>
-                            <div class="book-title">
-                                {{ ab.title }}
-                                {% set ab_src = 'Grimmory' if ab.source == 'BookLore' else ab.source %}
-                                <span class="source-badge {{ ab_src.lower().replace(' ', '') }}">{{ ab_src }}</span>
-                            </div>
-                        </div>
-                        {% endfor %}
+                        <div class="book-title">No audio</div>
                     </div>
-
-                    {% if storyteller_books %}
-                    {% set single_st_match = storyteller_books|length == 1 %}
-                    <h3 class="section-title"><span class="section-number">2</span>Storyteller (Preferred)</h3>
-                    <div class="selection-grid-scroll">
-                        <div class="resource-grid">
-                        <div class="resource-card st-card ghost-card {% if not single_st_match %}selected{% endif %}"
-                            id="st-none-card" data-value="" onclick="selectStoryteller(this, '')">
-                            <div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div>
-                            <div class="resource-title" style="color: rgba(255,255,255,0.5);">None / Skip</div>
-                        </div>
-                        {% for st in storyteller_books %}
-                        <div class="resource-card st-card {% if single_st_match %}selected{% endif %}"
-                            data-value="{{ st.uuid }}" onclick="selectStoryteller(this, '{{ st.uuid }}')">
-                            <div class="resource-icon">⚡</div>
-                            <div class="resource-title" title="{{ st.title }}{% if st.subtitle %}: {{ st.subtitle }}{% endif %}">
-                                {{ st.title }}{% if st.subtitle %}: {{ st.subtitle }}{% endif %}
-                            </div>
-                            {% if st.authors %}
-                            <div class="resource-subtitle">{{ st.authors|join(', ') }}</div>
-                            {% endif %}
-                            {% if st.has_transcript %}
-                            <span class="source-badge transcript">Transcript</span>
+                    {% for ab in audiobooks %}
+                    <div class="book-card {% if single_ab_match %}selected{% endif %}"
+                        data-value="{{ ab.source_id }}"
+                        data-audio-source="{{ ab.source }}"
+                        data-audio-source-id="{{ ab.source_id }}"
+                        data-audio-title="{{ ab.title }}"
+                        data-audio-duration="{{ ab.duration or '' }}"
+                        data-audio-provider-book-id="{{ ab.provider_book_id or ab.source_id }}"
+                        data-audio-provider-file-id="{{ ab.provider_file_id or '' }}"
+                        data-audio-cover-url="{{ ab.cover_url or '' }}"
+                        onclick="selectAudiobook(this)">
+                        <div class="book-cover-container">
+                            {% if ab.cover_url %}
+                            <img src="{{ ab.cover_url }}" alt="Cover" class="book-cover"
+                                onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
+                            <div class="book-cover-placeholder hidden">🎧</div>
+                            {% else %}
+                            <div class="book-cover-placeholder">🎧</div>
                             {% endif %}
                         </div>
-                        {% endfor %}
+                        <div class="book-title">
+                            {{ ab.title }}
+                            {% set ab_src = 'Grimmory' if ab.source == 'BookLore' else ab.source %}
+                            <span class="source-badge {{ ab_src.lower().replace(' ', '') }}">{{ ab_src }}</span>
                         </div>
                     </div>
-                    {% endif %}
+                    {% endfor %}
+                </div>
 
-                    {% set single_eb_match = ebooks|length == 1 %}
-                    <h3 class="section-title"><span class="section-number">{% if storyteller_books %}3{% else %}2{%
-                            endif %}</span>Select Ebook <span
-                            style="font-size:12px; color:#aaa; font-weight:normal;">(optional if Storyteller
-                            selected)</span></h3>
-                    {% if ebooks %}
-                    <div class="selection-grid-scroll">
-                        <div class="resource-grid" id="ebook-card-grid">
-                        <div class="resource-card eb-card audio-only-card ghost-card"
-                            data-audio-only="true" onclick="selectAudioOnly(this)">
-                            <div class="resource-icon">🎧</div>
-                            <div class="resource-title">Audio only (no ebook)</div>
-                            <span class="source-badge">Audio only</span>
-                        </div>
-                        {% for eb in ebooks %}
-                        <div class="resource-card eb-card {% if single_eb_match %}selected{% endif %}"
-                            data-value="{{ eb.name }}"
-                            data-display-name="{{ eb.display_name | replace("'", "\\'") }}"
-                            data-source-type="{{ eb.source }}"
-                            data-source-id="{{ eb.source_id }}"
-                            data-source-path="{{ eb.path if eb.path else '' }}"
-                            data-abs-identifier="{{ eb.abs_identifier or '' }}"
-                            onclick="selectEbookCard(this, '{{ eb.name }}', '{{ eb.display_name | replace("'", "\\'") }}')">
-                            <div class="resource-icon">📖</div>
-                            <div class="resource-title" title="{{ eb.display_name }}">
-                                {{ eb.title }}{% if eb.subtitle %}: {{ eb.subtitle }}{% endif %}
-                            </div>
-                            {% if eb.authors %}
-                            <div class="resource-subtitle">{{ eb.authors }}</div>
-                            {% endif %}
-                            {% if eb.source %}
-                            {% set badge_cls = eb.source.lower().replace(' ', '') %}
-                            <span class="source-badge {{ badge_cls }}">{{ eb.source }}</span>
-                            {% endif %}
-                            {% if eb.abs_identifier %}
-                            <span class="source-badge linked" title="Authoritative match via Calibre audiobookshelf_id">📌 Linked</span>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                        </div>
+                {% if storyteller_books %}
+                {% set single_st_match = storyteller_books|length == 1 %}
+                <h3 class="section-title"><span class="section-number">2</span>Storyteller (Preferred)</h3>
+                <div class="selection-grid-scroll">
+                    <div class="resource-grid">
+                    <div class="resource-card st-card ghost-card {% if not single_st_match %}selected{% endif %}"
+                        id="st-none-card" data-value="" onclick="selectStoryteller(this, '')">
+                        <div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div>
+                        <div class="resource-title" style="color: rgba(255,255,255,0.5);">None / Skip</div>
                     </div>
-                    {% else %}
-                    <div style="color: rgba(255,255,255,0.4); font-size: 13px; margin: 12px 0;">No ebooks found for this
-                        search.</div>
+                    {% for st in storyteller_books %}
+                    <div class="resource-card st-card {% if single_st_match %}selected{% endif %}"
+                        data-value="{{ st.uuid }}" onclick="selectStoryteller(this, '{{ st.uuid }}')">
+                        <div class="resource-icon">⚡</div>
+                        <div class="resource-title" title="{{ st.title }}{% if st.subtitle %}: {{ st.subtitle }}{% endif %}">
+                            {{ st.title }}{% if st.subtitle %}: {{ st.subtitle }}{% endif %}
+                        </div>
+                        {% if st.authors %}
+                        <div class="resource-subtitle">{{ st.authors|join(', ') }}</div>
+                        {% endif %}
+                        {% if st.has_transcript %}
+                        <span class="source-badge transcript">Transcript</span>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                {% set single_eb_match = ebooks|length == 1 %}
+                <h3 class="section-title"><span class="section-number">{% if storyteller_books %}3{% else %}2{%
+                        endif %}</span>Select Ebook <span
+                        style="font-size:12px; color:#aaa; font-weight:normal;">(optional if Storyteller
+                        selected)</span></h3>
+                {% if ebooks %}
+                <div class="selection-grid-scroll">
+                    <div class="resource-grid" id="ebook-card-grid">
                     <div class="resource-card eb-card audio-only-card ghost-card"
                         data-audio-only="true" onclick="selectAudioOnly(this)">
                         <div class="resource-icon">🎧</div>
                         <div class="resource-title">Audio only (no ebook)</div>
+                        <span class="source-badge">Audio only</span>
                     </div>
-                    {% endif %}
-
-                    <button type="submit" class="btn btn-success add-to-queue-btn" id="addToQueueBtn" disabled
-                        data-primary-action="selection-actions"
-                        data-working-label="Adding to queue..."
-                        data-working-message="Adding this item to the queue..."
-                        data-feedback-target="selectionFeedback">
-                        Add to Queue
-                    </button>
-                    <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
-                </form>
-
-                <details class="kosync-section" id="kosync-documents">
-                    <summary class="kosync-summary">
-                        <span class="kosync-summary-main">
-                            <span class="kosync-summary-title">Reader Documents</span>
-                            <span id="kosync-docs-badge" class="btn-badge hidden">0</span>
-                        </span>
-                        <span class="kosync-summary-meta">
-                            <span id="kosync-docs-summary">Checking...</span>
-                            <span class="kosync-summary-chevron">⌄</span>
-                        </span>
-                    </summary>
-                    <div class="kosync-panel-body">
-                        <div class="kosync-toolbar">
-                            <input id="kosync-doc-search" class="kosync-search" type="search"
-                                placeholder="Search hash, device, or book">
-                            <div class="kosync-filter" aria-label="Reader document filter">
-                                <button type="button" data-filter="unlinked" class="active">Needs Linking</button>
-                                <button type="button" data-filter="linked">Linked</button>
-                                <button type="button" data-filter="all">All</button>
-                            </div>
-                            <button type="button" id="kosync-show-all" class="kosync-show-toggle hidden">Show All</button>
+                    {% for eb in ebooks %}
+                    <div class="resource-card eb-card {% if single_eb_match %}selected{% endif %}"
+                        data-value="{{ eb.name }}"
+                        data-display-name="{{ eb.display_name | replace("'", "\\'") }}"
+                        data-source-type="{{ eb.source }}"
+                        data-source-id="{{ eb.source_id }}"
+                        data-source-path="{{ eb.path if eb.path else '' }}"
+                        data-abs-identifier="{{ eb.abs_identifier or '' }}"
+                        onclick="selectEbookCard(this, '{{ eb.name }}', '{{ eb.display_name | replace("'", "\\'") }}')">
+                        <div class="resource-icon">📖</div>
+                        <div class="resource-title" title="{{ eb.display_name }}">
+                            {{ eb.title }}{% if eb.subtitle %}: {{ eb.subtitle }}{% endif %}
                         </div>
-                        <div class="kosync-note">
-                            Books your e-reader has reported to the sync server, identified by file hash. BookBridge
-                            links them to your books automatically; if a device copy doesn't match any library file
-                            (progress not syncing), link it to the right book here. Old unlinked documents are usually
-                            just history — link one only when a current book is failing to sync.
-                        </div>
-                        <div id="kosync-doc-status" class="kosync-empty">Loading...</div>
-                        <div id="kosync-doc-list" class="kosync-doc-list"></div>
-                    </div>
-                </details>
-            </div>
-
-            <!-- Queue Area -->
-            <div class="queue-area">
-                <div class="queue-header">
-                    <h3>Queue</h3>
-                    <span class="queue-count">{{ queue|length }} items</span>
-                </div>
-
-                {% if queue %}
-                {% set queue_ns = namespace(forge_eligible=0) %}
-                {% for item in queue %}
-                    {% if item.audio_source and item.ebook_filename and not item.storyteller_uuid %}
-                        {% set queue_ns.forge_eligible = queue_ns.forge_eligible + 1 %}
-                    {% endif %}
-                {% endfor %}
-                {% for item in queue %}
-                <div class="queue-item">
-                    {% if item.cover_url %}
-                    <img src="{{ item.cover_url }}" alt="Cover" class="queue-item-cover"
-                        onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 60%22%3E%3Crect fill=%22%23667eea%22 width=%2240%22 height=%2260%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2224%22 fill=%22white%22%3E📖%3C/text%3E%3C/svg%3E';">
-                    {% else %}
-                    <div class="queue-item-cover book-cover-placeholder" style="font-size:18px;">Text</div>
-                    {% endif %}
-                    <div class="queue-item-info">
-                        <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
-                        {% if item.audio_only %}
-                        <p class="queue-item-ebook">
-                            <span style="color: #fbbf24; font-size: 11px;">🎧 Audio only</span>
-                            {% if item.audio_source %}
-                            <span class="source-badge {{ item.audio_source.lower().replace(' ', '') }}">{{ item.audio_source }}</span>
-                            {% endif %}
-                        </p>
-                        {% elif item.storyteller_uuid %}
-                        <p class="queue-item-ebook">
-                            <span style="color: #a78bfa; font-size: 11px;">⚡ Storyteller</span>{% if item.ebook_display_name %} + {{ item.ebook_display_name }}{% endif %}
-                        </p>
-                        {% else %}
-                        <p class="queue-item-ebook" title="{{ item.ebook_filename }}">
-                            📖 {{ item.ebook_display_name or item.ebook_filename }}
-                            {% if item.audio_source %}
-                            <span class="source-badge {{ item.audio_source.lower().replace(' ', '') }}">{{ item.audio_source }}</span>
-                            {% endif %}
-                        </p>
+                        {% if eb.authors %}
+                        <div class="resource-subtitle">{{ eb.authors }}</div>
+                        {% endif %}
+                        {% if eb.source %}
+                        {% set badge_cls = eb.source.lower().replace(' ', '') %}
+                        <span class="source-badge {{ badge_cls }}">{{ eb.source }}</span>
+                        {% endif %}
+                        {% if eb.abs_identifier %}
+                        <span class="source-badge linked" title="Authoritative match via Calibre audiobookshelf_id">📌 Linked</span>
                         {% endif %}
                     </div>
-                    <form method="POST" action="{{ url_for(self_endpoint) }}" class="d-inline">
-                        <input type="hidden" name="action" value="remove_from_queue">
-                        <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
-                        <button type="submit" class="queue-item-remove">×</button>
-                    </form>
-                </div>
-                {% endfor %}
-
-                <div class="queue-actions">
-                    <form method="POST" action="{{ url_for(self_endpoint) }}">
-                        <input type="hidden" name="action" value="process_queue">
-                        <button type="submit" class="btn btn-success w-100"
-                            data-primary-action="queue-actions"
-                            data-working-label="Processing queue..."
-                            data-working-message="Processing queued matches and returning to the dashboard..."
-                            data-feedback-target="queueFeedback">
-                            Match All ({{ queue|length }})
-                        </button>
-                    </form>
-
-                    {% if queue_ns.forge_eligible > 0 %}
-                    <form method="POST" action="{{ url_for(self_endpoint) }}">
-                        <input type="hidden" name="action" value="forge_and_match_queue">
-                        <button type="submit" class="btn btn-primary w-100"
-                            data-primary-action="queue-actions"
-                            data-working-label="Forging + matching..."
-                            data-working-message="Forging queued Storyteller editions and saving matches..."
-                            data-feedback-target="queueFeedback">
-                            Forge & Match All ({{ queue|length }})
-                        </button>
-                    </form>
-                    <div class="queue-action-note">Forge applies to audio plus standard ebook items; Storyteller or text-only items are matched directly.</div>
-                    {% endif %}
-
-                    {% if queue|length == 1 and queue_ns.forge_eligible == 1 %}
-                    <form method="POST" action="{{ url_for(self_endpoint) }}" id="forgeOnlyQueueForm">
-                        <input type="hidden" name="action" value="forge_only_queue">
-                        <input type="hidden" name="forge_stage_mode" id="forgeOnlyStageMode" value="">
-                        <button type="submit" class="btn btn-primary w-100" id="forgeOnlyQueueBtn"
-                            data-primary-action="queue-actions"
-                            data-working-label="Starting forge..."
-                            data-working-message="Starting the Storyteller forge and returning to the dashboard..."
-                            data-feedback-target="queueFeedback">
-                            Forge Only
-                        </button>
-                    </form>
-                    {% elif queue|length > 1 and queue_ns.forge_eligible > 0 %}
-                    <button type="button" class="btn btn-primary w-100" disabled title="Forge only is available for one queued book at a time.">
-                        Forge Only
-                    </button>
-                    <div class="queue-action-note">Forge only is disabled when more than one item is queued.</div>
-                    {% endif %}
-
-                    <form method="POST" action="{{ url_for(self_endpoint) }}">
-                        <input type="hidden" name="action" value="clear_queue">
-                        <button type="submit" class="btn btn-danger w-100"
-                            onclick="return confirm('Clear entire queue?')">
-                            🗑️ Clear Queue
-                        </button>
-                    </form>
-                    <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
+                    {% endfor %}
+                    </div>
                 </div>
                 {% else %}
-                <div class="empty-queue">
-                    <div class="empty-queue-icon">📋</div>
-                    <p>Queue is empty<br>Add items to get started</p>
+                <div style="color: rgba(255,255,255,0.4); font-size: 13px; margin: 12px 0;">No ebooks found for this
+                    search.</div>
+                <div class="resource-card eb-card audio-only-card ghost-card"
+                    data-audio-only="true" onclick="selectAudioOnly(this)">
+                    <div class="resource-icon">🎧</div>
+                    <div class="resource-title">Audio only (no ebook)</div>
                 </div>
                 {% endif %}
+
+                <button type="submit" class="btn btn-success add-to-queue-btn" id="addToQueueBtn" disabled
+                    data-primary-action="selection-actions"
+                    data-working-label="Adding to queue..."
+                    data-working-message="Adding this item to the queue..."
+                    data-feedback-target="selectionFeedback">
+                    Add to Queue
+                </button>
+                <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
+            </form>
+
+            <details class="kosync-section" id="kosync-documents">
+                <summary class="kosync-summary">
+                    <span class="kosync-summary-main">
+                        <span class="kosync-summary-title">Reader Documents</span>
+                        <span id="kosync-docs-badge" class="btn-badge hidden">0</span>
+                    </span>
+                    <span class="kosync-summary-meta">
+                        <span id="kosync-docs-summary">Checking...</span>
+                        <span class="kosync-summary-chevron">⌄</span>
+                    </span>
+                </summary>
+                <div class="kosync-panel-body">
+                    <div class="kosync-toolbar">
+                        <input id="kosync-doc-search" class="kosync-search" type="search"
+                            placeholder="Search hash, device, or book">
+                        <div class="kosync-filter" aria-label="Reader document filter">
+                            <button type="button" data-filter="unlinked" class="active">Needs Linking</button>
+                            <button type="button" data-filter="linked">Linked</button>
+                            <button type="button" data-filter="all">All</button>
+                        </div>
+                        <button type="button" id="kosync-show-all" class="kosync-show-toggle hidden">Show All</button>
+                    </div>
+                    <div class="kosync-note">
+                        Books your e-reader has reported to the sync server, identified by file hash. BookBridge
+                        links them to your books automatically; if a device copy doesn't match any library file
+                        (progress not syncing), link it to the right book here. Old unlinked documents are usually
+                        just history — link one only when a current book is failing to sync.
+                    </div>
+                    <div id="kosync-doc-status" class="kosync-empty">Loading...</div>
+                    <div id="kosync-doc-list" class="kosync-doc-list"></div>
+                </div>
+            </details>
+        </div>
+
+        <!-- Queue Area -->
+        <div class="queue-area">
+            <div class="queue-header">
+                <h3>Queue</h3>
+                <span class="queue-count">{{ queue|length }} items</span>
             </div>
+
+            {% if queue %}
+            {% set queue_ns = namespace(forge_eligible=0) %}
+            {% for item in queue %}
+                {% if item.audio_source and item.ebook_filename and not item.storyteller_uuid %}
+                    {% set queue_ns.forge_eligible = queue_ns.forge_eligible + 1 %}
+                {% endif %}
+            {% endfor %}
+            {% for item in queue %}
+            <div class="queue-item">
+                {% if item.cover_url %}
+                <img src="{{ item.cover_url }}" alt="Cover" class="queue-item-cover"
+                    onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 60%22%3E%3Crect fill=%22%23667eea%22 width=%2240%22 height=%2260%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2224%22 fill=%22white%22%3E📖%3C/text%3E%3C/svg%3E';">
+                {% else %}
+                <div class="queue-item-cover book-cover-placeholder" style="font-size:18px;">Text</div>
+                {% endif %}
+                <div class="queue-item-info">
+                    <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
+                    {% if item.audio_only %}
+                    <p class="queue-item-ebook">
+                        <span style="color: #fbbf24; font-size: 11px;">🎧 Audio only</span>
+                        {% if item.audio_source %}
+                        <span class="source-badge {{ item.audio_source.lower().replace(' ', '') }}">{{ item.audio_source }}</span>
+                        {% endif %}
+                    </p>
+                    {% elif item.storyteller_uuid %}
+                    <p class="queue-item-ebook">
+                        <span style="color: #a78bfa; font-size: 11px;">⚡ Storyteller</span>{% if item.ebook_display_name %} + {{ item.ebook_display_name }}{% endif %}
+                    </p>
+                    {% else %}
+                    <p class="queue-item-ebook" title="{{ item.ebook_filename }}">
+                        📖 {{ item.ebook_display_name or item.ebook_filename }}
+                        {% if item.audio_source %}
+                        <span class="source-badge {{ item.audio_source.lower().replace(' ', '') }}">{{ item.audio_source }}</span>
+                        {% endif %}
+                    </p>
+                    {% endif %}
+                </div>
+                <form method="POST" action="{{ url_for(self_endpoint) }}" class="d-inline">
+                    <input type="hidden" name="action" value="remove_from_queue">
+                    <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
+                    <button type="submit" class="queue-item-remove">×</button>
+                </form>
+            </div>
+            {% endfor %}
+
+            <div class="queue-actions">
+                <form method="POST" action="{{ url_for(self_endpoint) }}">
+                    <input type="hidden" name="action" value="process_queue">
+                    <button type="submit" class="btn btn-success w-100"
+                        data-primary-action="queue-actions"
+                        data-working-label="Processing queue..."
+                        data-working-message="Processing queued matches and returning to the dashboard..."
+                        data-feedback-target="queueFeedback">
+                        Match All ({{ queue|length }})
+                    </button>
+                </form>
+
+                {% if queue_ns.forge_eligible > 0 %}
+                <form method="POST" action="{{ url_for(self_endpoint) }}">
+                    <input type="hidden" name="action" value="forge_and_match_queue">
+                    <button type="submit" class="btn btn-primary w-100"
+                        data-primary-action="queue-actions"
+                        data-working-label="Forging + matching..."
+                        data-working-message="Forging queued Storyteller editions and saving matches..."
+                        data-feedback-target="queueFeedback">
+                        Forge & Match All ({{ queue|length }})
+                    </button>
+                </form>
+                <div class="queue-action-note">Forge applies to audio plus standard ebook items; Storyteller or text-only items are matched directly.</div>
+                {% endif %}
+
+                {% if queue|length == 1 and queue_ns.forge_eligible == 1 %}
+                <form method="POST" action="{{ url_for(self_endpoint) }}" id="forgeOnlyQueueForm">
+                    <input type="hidden" name="action" value="forge_only_queue">
+                    <input type="hidden" name="forge_stage_mode" id="forgeOnlyStageMode" value="">
+                    <button type="submit" class="btn btn-primary w-100" id="forgeOnlyQueueBtn"
+                        data-primary-action="queue-actions"
+                        data-working-label="Starting forge..."
+                        data-working-message="Starting the Storyteller forge and returning to the dashboard..."
+                        data-feedback-target="queueFeedback">
+                        Forge Only
+                    </button>
+                </form>
+                {% elif queue|length > 1 and queue_ns.forge_eligible > 0 %}
+                <button type="button" class="btn btn-primary w-100" disabled title="Forge only is available for one queued book at a time.">
+                    Forge Only
+                </button>
+                <div class="queue-action-note">Forge only is disabled when more than one item is queued.</div>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for(self_endpoint) }}">
+                    <input type="hidden" name="action" value="clear_queue">
+                    <button type="submit" class="btn btn-danger w-100"
+                        onclick="return confirm('Clear entire queue?')">
+                        🗑️ Clear Queue
+                    </button>
+                </form>
+                <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
+            </div>
+            {% else %}
+            <div class="empty-queue">
+                <div class="empty-queue-icon">📋</div>
+                <p>Queue is empty<br>Add items to get started</p>
+            </div>
+            {% endif %}
         </div>
     </div>
+</div>
 
-    <div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
-        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">
-            <h3 id="forgeStageTitle">Forge staging mode</h3>
-            <p>Choose what happens to the staged source files after Storyteller finishes processing.</p>
-            <div class="modal-options">
-                <button type="button" class="modal-option" onclick="chooseForgeStageMode('cleanup')">
-                    <strong>Delete staged sources</strong>
-                    <span>Default. Copy files into Storyteller, then remove the staged audio and EPUB after processing completes.</span>
-                </button>
-                <button type="button" class="modal-option" onclick="chooseForgeStageMode('hardlink')">
-                    <strong>Keep staged files / hardlink local</strong>
-                    <span>Use hardlinks for local files when possible and skip staged-source cleanup. Remote downloads still fall back to copied files.</span>
-                </button>
-            </div>
-            <div class="modal-actions">
-                <button type="button" class="btn modal-cancel" onclick="closeForgeStageModal()">Cancel</button>
-            </div>
+<div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
+    <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">
+        <h3 id="forgeStageTitle">Forge staging mode</h3>
+        <p>Choose what happens to the staged source files after Storyteller finishes processing.</p>
+        <div class="modal-options">
+            <button type="button" class="modal-option" onclick="chooseForgeStageMode('cleanup')">
+                <strong>Delete staged sources</strong>
+                <span>Default. Copy files into Storyteller, then remove the staged audio and EPUB after processing completes.</span>
+            </button>
+            <button type="button" class="modal-option" onclick="chooseForgeStageMode('hardlink')">
+                <strong>Keep staged files / hardlink local</strong>
+                <span>Use hardlinks for local files when possible and skip staged-source cleanup. Remote downloads still fall back to copied files.</span>
+            </button>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeForgeStageModal()">Cancel</button>
         </div>
     </div>
+</div>
 
-    <script>
-        let selectedAudiobookId = null;
-        let selectedAudioSource = null;
-        let selectedEbookFilename = null;
-        let selectedStorytellerUuid = null;
-        let selectedAudioOnly = false;
-        let batchSubmitInFlight = false;
-        let pendingForgeOnlySubmit = false;
+<script>
+    let selectedAudiobookId = null;
+    let selectedAudioSource = null;
+    let selectedEbookFilename = null;
+    let selectedStorytellerUuid = null;
+    let selectedAudioOnly = false;
+    let batchSubmitInFlight = false;
+    let pendingForgeOnlySubmit = false;
 
-        function showBatchSubmitFeedback(targetId, message) {
-            const feedback = document.getElementById(targetId);
-            if (!feedback) return;
+    function showBatchSubmitFeedback(targetId, message) {
+        const feedback = document.getElementById(targetId);
+        if (!feedback) return;
 
-            if (!message) {
-                feedback.classList.remove('show');
-                feedback.innerHTML = '';
-                return;
-            }
-
-            feedback.classList.add('show');
-            feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+        if (!message) {
+            feedback.classList.remove('show');
+            feedback.innerHTML = '';
+            return;
         }
 
-        function setBatchButtonHtml(button, html) {
-            button.innerHTML = html;
+        feedback.classList.add('show');
+        feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+    }
+
+    function setBatchButtonHtml(button, html) {
+        button.innerHTML = html;
+    }
+
+    function getPrimarySubmitter(form) {
+        return form.querySelector('[data-primary-action]:not([disabled])');
+    }
+
+    function startBatchSubmitState(submitter) {
+        if (!submitter || batchSubmitInFlight) {
+            return false;
         }
 
-        function getPrimarySubmitter(form) {
-            return form.querySelector('[data-primary-action]:not([disabled])');
+        batchSubmitInFlight = true;
+        const groupName = submitter.dataset.primaryAction || '';
+        if (groupName) {
+            document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
+                if (!button.dataset.originalHtml) {
+                    button.dataset.originalHtml = button.innerHTML;
+                }
+                button.disabled = true;
+            });
+        } else {
+            submitter.disabled = true;
         }
 
-        function startBatchSubmitState(submitter) {
-            if (!submitter || batchSubmitInFlight) {
-                return false;
-            }
+        setBatchButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
+        showBatchSubmitFeedback(
+            submitter.dataset.feedbackTarget || '',
+            submitter.dataset.workingMessage || 'Working...'
+        );
+        return true;
+    }
 
-            batchSubmitInFlight = true;
-            const groupName = submitter.dataset.primaryAction || '';
-            if (groupName) {
-                document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
-                    if (!button.dataset.originalHtml) {
-                        button.dataset.originalHtml = button.innerHTML;
-                    }
-                    button.disabled = true;
-                });
-            } else {
-                submitter.disabled = true;
-            }
+    // Initialise from server-side auto-selects (single-match logic)
+    (function init() {
+        const preSelectedAb = document.querySelector('.book-card.selected');
+        if (preSelectedAb) {
+            selectAudiobook(preSelectedAb);
+        }
+        const preSelectedEb = document.querySelector('.eb-card.selected');
+        if (preSelectedEb) {
+            selectedEbookFilename = preSelectedEb.dataset.value;
+            document.getElementById('selected_ebook_filename').value = selectedEbookFilename;
+            document.getElementById('selected_ebook_display_name').value = preSelectedEb.dataset.displayName || selectedEbookFilename;
+            document.getElementById('selected_ebook_source').value = preSelectedEb.dataset.sourceType || '';
+            document.getElementById('selected_ebook_source_id').value = preSelectedEb.dataset.sourceId || '';
+            document.getElementById('selected_ebook_source_path').value = preSelectedEb.dataset.sourcePath || '';
+        }
+        const preSelectedSt = document.querySelector('.st-card.selected');
+        if (preSelectedSt) {
+            selectedStorytellerUuid = preSelectedSt.dataset.value || '';
+            document.getElementById('selected_storyteller_uuid').value = selectedStorytellerUuid;
+        }
+        updateAddButton();
+    })();
 
-            setBatchButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
-            showBatchSubmitFeedback(
-                submitter.dataset.feedbackTarget || '',
-                submitter.dataset.workingMessage || 'Working...'
+    function selectAudiobook(element) {
+        document.querySelectorAll('.book-card').forEach(el => {
+            el.classList.remove('selected');
+        });
+        element.classList.add('selected');
+        selectedAudiobookId = element.dataset.audioSource === 'ABS' ? (element.dataset.audioSourceId || '') : '';
+        selectedAudioSource = element.dataset.audioSource || '';
+        document.getElementById('selected_audiobook_id').value = selectedAudiobookId;
+        document.getElementById('selected_audio_source').value = selectedAudioSource;
+        document.getElementById('selected_audio_source_id').value = element.dataset.audioSourceId || '';
+        document.getElementById('selected_audio_title').value = element.dataset.audioTitle || '';
+        document.getElementById('selected_audio_duration').value = element.dataset.audioDuration || '';
+        document.getElementById('selected_audio_provider_book_id').value = element.dataset.audioProviderBookId || '';
+        document.getElementById('selected_audio_provider_file_id').value = element.dataset.audioProviderFileId || '';
+        document.getElementById('selected_audio_cover_url').value = element.dataset.audioCoverUrl || '';
+        updateAddButton();
+    }
+
+    function selectEbookCard(element, filename, display_name) {
+        document.querySelectorAll('.eb-card').forEach(el => {
+            el.classList.remove('selected');
+        });
+        element.classList.add('selected');
+        selectedEbookFilename = filename;
+        selectedAudioOnly = false;
+        document.getElementById('selected_audio_only').value = '';
+        document.getElementById('selected_ebook_filename').value = filename;
+        document.getElementById('selected_ebook_display_name').value = display_name || filename;
+        document.getElementById('selected_ebook_source').value = element.dataset.sourceType || '';
+        document.getElementById('selected_ebook_source_id').value = element.dataset.sourceId || '';
+        document.getElementById('selected_ebook_source_path').value = element.dataset.sourcePath || '';
+        updateAddButton();
+    }
+
+    function selectStoryteller(element, uuid) {
+        document.querySelectorAll('.st-card').forEach(el => {
+            el.classList.remove('selected');
+        });
+        element.classList.add('selected');
+        selectedStorytellerUuid = uuid;
+        selectedAudioOnly = false;
+        document.getElementById('selected_audio_only').value = '';
+        document.querySelectorAll('.audio-only-card').forEach(el => el.classList.remove('selected'));
+        document.getElementById('selected_storyteller_uuid').value = uuid;
+        updateAddButton();
+    }
+
+    function selectAudioOnly(element) {
+        document.querySelectorAll('.eb-card').forEach(el => el.classList.remove('selected'));
+        document.querySelectorAll('.st-card').forEach(el => el.classList.remove('selected'));
+        element.classList.add('selected');
+        selectedAudioOnly = true;
+        selectedEbookFilename = null;
+        selectedStorytellerUuid = null;
+        document.getElementById('selected_audio_only').value = 'true';
+        document.getElementById('selected_ebook_filename').value = '';
+        document.getElementById('selected_ebook_display_name').value = '';
+        document.getElementById('selected_ebook_source').value = '';
+        document.getElementById('selected_ebook_source_id').value = '';
+        document.getElementById('selected_ebook_source_path').value = '';
+        document.getElementById('selected_storyteller_uuid').value = '';
+        updateAddButton();
+    }
+
+    function updateAddButton() {
+        const btn = document.getElementById('addToQueueBtn');
+        // Valid if a text source is selected, or audio-only is paired with audio.
+        if (selectedEbookFilename || selectedStorytellerUuid || (selectedAudioOnly && selectedAudioSource)) {
+            btn.disabled = false;
+        } else {
+            btn.disabled = true;
+        }
+    }
+
+    function openForgeStageModal() {
+        document.getElementById('forgeStageModal').classList.add('open');
+    }
+
+    function closeForgeStageModal() {
+        pendingForgeOnlySubmit = false;
+        document.getElementById('forgeStageModal').classList.remove('open');
+    }
+
+    function chooseForgeStageMode(mode) {
+        const form = document.getElementById('forgeOnlyQueueForm');
+        const stageInput = document.getElementById('forgeOnlyStageMode');
+        const button = document.getElementById('forgeOnlyQueueBtn');
+        if (!form || !stageInput || !button) {
+            closeForgeStageModal();
+            return;
+        }
+        stageInput.value = mode;
+        pendingForgeOnlySubmit = true;
+        document.getElementById('forgeStageModal').classList.remove('open');
+        form.requestSubmit(button);
+    }
+
+    const kosyncDocsState = {
+        documents: [],
+        books: [],
+        filter: 'unlinked',
+        search: '',
+        showAll: false,
+        loaded: false
+    };
+    const KOSYNC_DEFAULT_VISIBLE_LIMIT = 25;
+
+    function shortKosyncHash(hash) {
+        if (!hash) return '';
+        return hash.length > 16 ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : hash;
+    }
+
+    function formatKosyncPercent(value) {
+        const n = Number(value || 0) * 100;
+        return `${n.toFixed(1)}%`;
+    }
+
+    function formatKosyncDate(value) {
+        if (!value) return '';
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleString();
+    }
+
+    function setKosyncStatus(message, isError) {
+        const status = document.getElementById('kosync-doc-status');
+        if (!status) return;
+        status.textContent = message || '';
+        status.className = isError ? 'kosync-error' : 'kosync-empty';
+        status.style.display = message ? 'block' : 'none';
+    }
+
+    function updateKosyncSummary() {
+        const badge = document.getElementById('kosync-docs-badge');
+        const summary = document.getElementById('kosync-docs-summary');
+        const unlinkedCount = kosyncDocsState.documents.filter(d => !d.linked_abs_id).length;
+        if (badge) {
+            badge.textContent = unlinkedCount > KOSYNC_DEFAULT_VISIBLE_LIMIT ? `${KOSYNC_DEFAULT_VISIBLE_LIMIT}+` : String(unlinkedCount);
+            badge.title = unlinkedCount ? `${unlinkedCount} reader document${unlinkedCount === 1 ? '' : 's'} to review` : '';
+            badge.classList.toggle('hidden', unlinkedCount === 0);
+        }
+        if (summary) {
+            summary.textContent = unlinkedCount
+                ? `${unlinkedCount} to review`
+                : 'No current review items';
+        }
+    }
+
+    async function fetchKosyncJson(url, options) {
+        const response = await fetch(url, options || {});
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.error || data.message || `Request failed (${response.status})`);
+        }
+        return data;
+    }
+
+    async function loadKosyncDocuments(force) {
+        if (kosyncDocsState.loaded && !force) {
+            renderKosyncDocuments();
+            return;
+        }
+        setKosyncStatus('Loading...', false);
+        const [docsData, booksData] = await Promise.all([
+            fetchKosyncJson('/api/me/kosync-documents'),
+            fetchKosyncJson('/api/me/books')
+        ]);
+        kosyncDocsState.documents = docsData.documents || [];
+        kosyncDocsState.books = booksData.books || [];
+        kosyncDocsState.loaded = true;
+        updateKosyncSummary();
+        renderKosyncDocuments();
+    }
+
+    function documentMatchesKosyncFilter(doc) {
+        if (kosyncDocsState.filter === 'linked' && !doc.linked_abs_id) return false;
+        if (kosyncDocsState.filter === 'unlinked' && doc.linked_abs_id) return false;
+        const query = kosyncDocsState.search.trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+            doc.document_hash,
+            doc.device,
+            doc.device_id,
+            doc.linked_book_title,
+            doc.filename,
+            doc.source
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(query);
+    }
+
+    function replaceKosyncDocument(updatedDoc) {
+        const idx = kosyncDocsState.documents.findIndex(d => d.document_hash === updatedDoc.document_hash);
+        if (idx >= 0) {
+            kosyncDocsState.documents[idx] = updatedDoc;
+        }
+        updateKosyncSummary();
+        renderKosyncDocuments();
+    }
+
+    function removeKosyncDocument(hash) {
+        kosyncDocsState.documents = kosyncDocsState.documents.filter(d => d.document_hash !== hash);
+        updateKosyncSummary();
+        renderKosyncDocuments();
+    }
+
+    function renderKosyncDocuments() {
+        const list = document.getElementById('kosync-doc-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const docs = kosyncDocsState.documents.filter(documentMatchesKosyncFilter);
+        const showAllBtn = document.getElementById('kosync-show-all');
+        const shouldLimit = (
+            kosyncDocsState.filter === 'unlinked'
+            && !kosyncDocsState.search.trim()
+            && docs.length > KOSYNC_DEFAULT_VISIBLE_LIMIT
+        );
+        if (showAllBtn) {
+            showAllBtn.classList.toggle('hidden', !shouldLimit);
+            showAllBtn.textContent = kosyncDocsState.showAll ? 'Show Latest' : 'Show All';
+        }
+        if (!docs.length) {
+            setKosyncStatus('No reader documents match this view.', false);
+            return;
+        }
+        const visibleDocs = shouldLimit && !kosyncDocsState.showAll
+            ? docs.slice(0, KOSYNC_DEFAULT_VISIBLE_LIMIT)
+            : docs;
+        if (shouldLimit && !kosyncDocsState.showAll) {
+            setKosyncStatus(
+                `Showing the newest ${KOSYNC_DEFAULT_VISIBLE_LIMIT} of ${docs.length} reader documents.`,
+                false
             );
-            return true;
+        } else {
+            setKosyncStatus('', false);
+        }
+        visibleDocs.forEach(doc => list.appendChild(buildKosyncDocumentRow(doc)));
+    }
+
+    function buildKosyncDocumentRow(doc) {
+        const row = document.createElement('div');
+        row.className = 'kosync-doc-row';
+        row.dataset.hash = doc.document_hash;
+
+        const main = document.createElement('div');
+        main.className = 'kosync-doc-main';
+        const title = document.createElement('div');
+        title.className = 'kosync-doc-title';
+        const hash = document.createElement('span');
+        hash.className = 'kosync-hash';
+        hash.title = doc.document_hash;
+        hash.textContent = shortKosyncHash(doc.document_hash);
+        const status = document.createElement('span');
+        status.className = `kosync-status ${doc.linked_abs_id ? 'linked' : 'unlinked'}`;
+        status.textContent = doc.linked_abs_id ? 'Linked' : 'Needs linking';
+        title.append(hash, status);
+
+        const meta = document.createElement('div');
+        meta.className = 'kosync-meta';
+        [
+            doc.linked_book_title ? `Book: ${doc.linked_book_title}` : null,
+            doc.filename ? `File: ${doc.filename}` : null,
+            doc.device ? `Device: ${doc.device}` : null,
+            doc.device_id ? `Device ID: ${doc.device_id}` : null,
+            `Progress: ${formatKosyncPercent(doc.percentage)}`,
+            doc.last_updated ? `Updated: ${formatKosyncDate(doc.last_updated)}` : null
+        ].filter(Boolean).forEach(text => {
+            const item = document.createElement('span');
+            item.textContent = text;
+            meta.appendChild(item);
+        });
+        main.append(title, meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'kosync-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.textContent = 'Copy';
+        copyBtn.onclick = () => copyKosyncHash(doc.document_hash);
+        actions.appendChild(copyBtn);
+
+        if (doc.linked_abs_id) {
+            const unlinkBtn = document.createElement('button');
+            unlinkBtn.type = 'button';
+            unlinkBtn.textContent = 'Unlink';
+            unlinkBtn.onclick = () => unlinkKosyncDocument(doc.document_hash);
+            actions.appendChild(unlinkBtn);
+        } else {
+            const linkBtn = document.createElement('button');
+            linkBtn.type = 'button';
+            linkBtn.textContent = 'Link';
+            linkBtn.onclick = () => showKosyncLinkPanel(row, doc);
+            actions.appendChild(linkBtn);
+            if (doc.owned_by_current_user) {
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.textContent = 'Delete';
+                deleteBtn.onclick = () => deleteKosyncDocument(doc.document_hash);
+                actions.appendChild(deleteBtn);
+            }
         }
 
-        // Initialise from server-side auto-selects (single-match logic)
-        (function init() {
-            const preSelectedAb = document.querySelector('.book-card.selected');
-            if (preSelectedAb) {
-                selectAudiobook(preSelectedAb);
-            }
-            const preSelectedEb = document.querySelector('.eb-card.selected');
-            if (preSelectedEb) {
-                selectedEbookFilename = preSelectedEb.dataset.value;
-                document.getElementById('selected_ebook_filename').value = selectedEbookFilename;
-                document.getElementById('selected_ebook_display_name').value = preSelectedEb.dataset.displayName || selectedEbookFilename;
-                document.getElementById('selected_ebook_source').value = preSelectedEb.dataset.sourceType || '';
-                document.getElementById('selected_ebook_source_id').value = preSelectedEb.dataset.sourceId || '';
-                document.getElementById('selected_ebook_source_path').value = preSelectedEb.dataset.sourcePath || '';
-            }
-            const preSelectedSt = document.querySelector('.st-card.selected');
-            if (preSelectedSt) {
-                selectedStorytellerUuid = preSelectedSt.dataset.value || '';
-                document.getElementById('selected_storyteller_uuid').value = selectedStorytellerUuid;
-            }
-            updateAddButton();
-        })();
+        row.append(main, actions);
+        return row;
+    }
 
-        function selectAudiobook(element) {
-            document.querySelectorAll('.book-card').forEach(el => {
-                el.classList.remove('selected');
+    const KOSYNC_EXTENSION_TOKENS = new Set(['epub', 'kepub', 'pdf', 'mobi', 'azw', 'azw3', 'fb2', 'cbz', 'txt']);
+    const KOSYNC_LIKELY_MATCH_THRESHOLD = 0.5;
+
+    function kosyncNameTokens(value) {
+        if (!value) return [];
+        return [...new Set(
+            String(value).toLowerCase().split(/[^a-z0-9]+/)
+                .filter(tok => tok && !KOSYNC_EXTENSION_TOKENS.has(tok))
+        )];
+    }
+
+    function kosyncDiceScore(tokensA, tokensB) {
+        if (!tokensA.length || !tokensB.length) return 0;
+        const setB = new Set(tokensB);
+        const shared = tokensA.filter(tok => setB.has(tok)).length;
+        return (2 * shared) / (tokensA.length + tokensB.length);
+    }
+
+    function kosyncMatchScore(doc, book) {
+        const docTokens = kosyncNameTokens(doc.filename);
+        if (!docTokens.length) return 0;
+        return Math.max(
+            kosyncDiceScore(docTokens, kosyncNameTokens(book.ebook_filename)),
+            kosyncDiceScore(docTokens, kosyncNameTokens(book.title))
+        );
+    }
+
+    function showKosyncLinkPanel(row, doc) {
+        const existing = row.querySelector('.kosync-link-panel');
+        if (existing) {
+            existing.remove();
+            return;
+        }
+        document.querySelectorAll('.kosync-link-panel').forEach(el => el.remove());
+        const panel = document.createElement('div');
+        panel.className = 'kosync-link-panel';
+        const select = document.createElement('select');
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = kosyncDocsState.books.length ? 'Select a book' : 'No books available';
+        select.appendChild(placeholder);
+        const scored = kosyncDocsState.books.map(book => ({ book, score: kosyncMatchScore(doc, book) }));
+        const likely = scored.filter(entry => entry.score >= KOSYNC_LIKELY_MATCH_THRESHOLD)
+            .sort((a, b) => b.score - a.score);
+        const rest = scored.filter(entry => entry.score < KOSYNC_LIKELY_MATCH_THRESHOLD);
+        likely.concat(rest).forEach(({ book, score }) => {
+            const option = document.createElement('option');
+            option.value = book.abs_id;
+            const label = book.title || book.ebook_filename || book.abs_id;
+            option.textContent = score >= KOSYNC_LIKELY_MATCH_THRESHOLD ? `★ ${label} — likely match` : label;
+            select.appendChild(option);
+        });
+        if (likely.length && (likely.length === 1 || likely[0].score > likely[1].score)) {
+            select.value = likely[0].book.abs_id;
+        }
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.textContent = 'Link';
+        confirmBtn.onclick = () => linkKosyncDocument(doc.document_hash, select.value);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = () => panel.remove();
+        panel.append(select, confirmBtn, cancelBtn);
+        row.appendChild(panel);
+    }
+
+    async function linkKosyncDocument(hash, absId) {
+        if (!absId) {
+            setKosyncStatus('Choose a book to link.', true);
+            return;
+        }
+        try {
+            const data = await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}/link`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ abs_id: absId })
             });
-            element.classList.add('selected');
-            selectedAudiobookId = element.dataset.audioSource === 'ABS' ? (element.dataset.audioSourceId || '') : '';
-            selectedAudioSource = element.dataset.audioSource || '';
-            document.getElementById('selected_audiobook_id').value = selectedAudiobookId;
-            document.getElementById('selected_audio_source').value = selectedAudioSource;
-            document.getElementById('selected_audio_source_id').value = element.dataset.audioSourceId || '';
-            document.getElementById('selected_audio_title').value = element.dataset.audioTitle || '';
-            document.getElementById('selected_audio_duration').value = element.dataset.audioDuration || '';
-            document.getElementById('selected_audio_provider_book_id').value = element.dataset.audioProviderBookId || '';
-            document.getElementById('selected_audio_provider_file_id').value = element.dataset.audioProviderFileId || '';
-            document.getElementById('selected_audio_cover_url').value = element.dataset.audioCoverUrl || '';
-            updateAddButton();
+            replaceKosyncDocument(data.document);
+        } catch (err) {
+            setKosyncStatus(err.message, true);
         }
+    }
 
-        function selectEbookCard(element, filename, display_name) {
-            document.querySelectorAll('.eb-card').forEach(el => {
-                el.classList.remove('selected');
+    async function unlinkKosyncDocument(hash) {
+        try {
+            const data = await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}/unlink`, {
+                method: 'POST'
             });
-            element.classList.add('selected');
-            selectedEbookFilename = filename;
-            selectedAudioOnly = false;
-            document.getElementById('selected_audio_only').value = '';
-            document.getElementById('selected_ebook_filename').value = filename;
-            document.getElementById('selected_ebook_display_name').value = display_name || filename;
-            document.getElementById('selected_ebook_source').value = element.dataset.sourceType || '';
-            document.getElementById('selected_ebook_source_id').value = element.dataset.sourceId || '';
-            document.getElementById('selected_ebook_source_path').value = element.dataset.sourcePath || '';
-            updateAddButton();
+            replaceKosyncDocument(data.document);
+        } catch (err) {
+            setKosyncStatus(err.message, true);
         }
+    }
 
-        function selectStoryteller(element, uuid) {
-            document.querySelectorAll('.st-card').forEach(el => {
-                el.classList.remove('selected');
+    async function deleteKosyncDocument(hash) {
+        if (!confirm('Delete this unlinked reader document?')) return;
+        try {
+            await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}`, {
+                method: 'DELETE'
             });
-            element.classList.add('selected');
-            selectedStorytellerUuid = uuid;
-            selectedAudioOnly = false;
-            document.getElementById('selected_audio_only').value = '';
-            document.querySelectorAll('.audio-only-card').forEach(el => el.classList.remove('selected'));
-            document.getElementById('selected_storyteller_uuid').value = uuid;
-            updateAddButton();
+            removeKosyncDocument(hash);
+        } catch (err) {
+            setKosyncStatus(err.message, true);
         }
+    }
 
-        function selectAudioOnly(element) {
-            document.querySelectorAll('.eb-card').forEach(el => el.classList.remove('selected'));
-            document.querySelectorAll('.st-card').forEach(el => el.classList.remove('selected'));
-            element.classList.add('selected');
-            selectedAudioOnly = true;
-            selectedEbookFilename = null;
-            selectedStorytellerUuid = null;
-            document.getElementById('selected_audio_only').value = 'true';
-            document.getElementById('selected_ebook_filename').value = '';
-            document.getElementById('selected_ebook_display_name').value = '';
-            document.getElementById('selected_ebook_source').value = '';
-            document.getElementById('selected_ebook_source_id').value = '';
-            document.getElementById('selected_ebook_source_path').value = '';
-            document.getElementById('selected_storyteller_uuid').value = '';
-            updateAddButton();
+    function copyKosyncHash(hash) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(hash).catch(() => {});
         }
+    }
 
-        function updateAddButton() {
-            const btn = document.getElementById('addToQueueBtn');
-            // Valid if a text source is selected, or audio-only is paired with audio.
-            if (selectedEbookFilename || selectedStorytellerUuid || (selectedAudioOnly && selectedAudioSource)) {
-                btn.disabled = false;
-            } else {
-                btn.disabled = true;
-            }
+    function openKosyncSectionFromHash() {
+        const section = document.getElementById('kosync-documents');
+        if (!section || window.location.hash !== '#kosync-documents') return;
+        section.open = true;
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        loadKosyncDocuments(false).catch(err => setKosyncStatus(err.message, true));
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const section = document.getElementById('kosync-documents');
+        if (section) {
+            section.addEventListener('toggle', function () {
+                if (section.open) {
+                    loadKosyncDocuments(false).catch(err => setKosyncStatus(err.message, true));
+                }
+            });
         }
-
-        function openForgeStageModal() {
-            document.getElementById('forgeStageModal').classList.add('open');
-        }
-
-        function closeForgeStageModal() {
-            pendingForgeOnlySubmit = false;
-            document.getElementById('forgeStageModal').classList.remove('open');
-        }
-
-        function chooseForgeStageMode(mode) {
-            const form = document.getElementById('forgeOnlyQueueForm');
-            const stageInput = document.getElementById('forgeOnlyStageMode');
-            const button = document.getElementById('forgeOnlyQueueBtn');
-            if (!form || !stageInput || !button) {
-                closeForgeStageModal();
-                return;
-            }
-            stageInput.value = mode;
-            pendingForgeOnlySubmit = true;
-            document.getElementById('forgeStageModal').classList.remove('open');
-            form.requestSubmit(button);
-        }
-
-        const kosyncDocsState = {
-            documents: [],
-            books: [],
-            filter: 'unlinked',
-            search: '',
-            showAll: false,
-            loaded: false
-        };
-        const KOSYNC_DEFAULT_VISIBLE_LIMIT = 25;
-
-        function shortKosyncHash(hash) {
-            if (!hash) return '';
-            return hash.length > 16 ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : hash;
-        }
-
-        function formatKosyncPercent(value) {
-            const n = Number(value || 0) * 100;
-            return `${n.toFixed(1)}%`;
-        }
-
-        function formatKosyncDate(value) {
-            if (!value) return '';
-            const d = new Date(value);
-            if (Number.isNaN(d.getTime())) return '';
-            return d.toLocaleString();
-        }
-
-        function setKosyncStatus(message, isError) {
-            const status = document.getElementById('kosync-doc-status');
-            if (!status) return;
-            status.textContent = message || '';
-            status.className = isError ? 'kosync-error' : 'kosync-empty';
-            status.style.display = message ? 'block' : 'none';
-        }
-
-        function updateKosyncSummary() {
-            const badge = document.getElementById('kosync-docs-badge');
-            const summary = document.getElementById('kosync-docs-summary');
-            const unlinkedCount = kosyncDocsState.documents.filter(d => !d.linked_abs_id).length;
-            if (badge) {
-                badge.textContent = unlinkedCount > KOSYNC_DEFAULT_VISIBLE_LIMIT ? `${KOSYNC_DEFAULT_VISIBLE_LIMIT}+` : String(unlinkedCount);
-                badge.title = unlinkedCount ? `${unlinkedCount} reader document${unlinkedCount === 1 ? '' : 's'} to review` : '';
-                badge.classList.toggle('hidden', unlinkedCount === 0);
-            }
-            if (summary) {
-                summary.textContent = unlinkedCount
-                    ? `${unlinkedCount} to review`
-                    : 'No current review items';
-            }
-        }
-
-        async function fetchKosyncJson(url, options) {
-            const response = await fetch(url, options || {});
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                throw new Error(data.error || data.message || `Request failed (${response.status})`);
-            }
-            return data;
-        }
-
-        async function loadKosyncDocuments(force) {
-            if (kosyncDocsState.loaded && !force) {
+        const search = document.getElementById('kosync-doc-search');
+        if (search) {
+            search.addEventListener('input', function () {
+                kosyncDocsState.search = search.value || '';
                 renderKosyncDocuments();
-                return;
-            }
-            setKosyncStatus('Loading...', false);
-            const [docsData, booksData] = await Promise.all([
-                fetchKosyncJson('/api/me/kosync-documents'),
-                fetchKosyncJson('/api/me/books')
-            ]);
-            kosyncDocsState.documents = docsData.documents || [];
-            kosyncDocsState.books = booksData.books || [];
-            kosyncDocsState.loaded = true;
-            updateKosyncSummary();
-            renderKosyncDocuments();
-        }
-
-        function documentMatchesKosyncFilter(doc) {
-            if (kosyncDocsState.filter === 'linked' && !doc.linked_abs_id) return false;
-            if (kosyncDocsState.filter === 'unlinked' && doc.linked_abs_id) return false;
-            const query = kosyncDocsState.search.trim().toLowerCase();
-            if (!query) return true;
-            const haystack = [
-                doc.document_hash,
-                doc.device,
-                doc.device_id,
-                doc.linked_book_title,
-                doc.filename,
-                doc.source
-            ].filter(Boolean).join(' ').toLowerCase();
-            return haystack.includes(query);
-        }
-
-        function replaceKosyncDocument(updatedDoc) {
-            const idx = kosyncDocsState.documents.findIndex(d => d.document_hash === updatedDoc.document_hash);
-            if (idx >= 0) {
-                kosyncDocsState.documents[idx] = updatedDoc;
-            }
-            updateKosyncSummary();
-            renderKosyncDocuments();
-        }
-
-        function removeKosyncDocument(hash) {
-            kosyncDocsState.documents = kosyncDocsState.documents.filter(d => d.document_hash !== hash);
-            updateKosyncSummary();
-            renderKosyncDocuments();
-        }
-
-        function renderKosyncDocuments() {
-            const list = document.getElementById('kosync-doc-list');
-            if (!list) return;
-            list.innerHTML = '';
-            const docs = kosyncDocsState.documents.filter(documentMatchesKosyncFilter);
-            const showAllBtn = document.getElementById('kosync-show-all');
-            const shouldLimit = (
-                kosyncDocsState.filter === 'unlinked'
-                && !kosyncDocsState.search.trim()
-                && docs.length > KOSYNC_DEFAULT_VISIBLE_LIMIT
-            );
-            if (showAllBtn) {
-                showAllBtn.classList.toggle('hidden', !shouldLimit);
-                showAllBtn.textContent = kosyncDocsState.showAll ? 'Show Latest' : 'Show All';
-            }
-            if (!docs.length) {
-                setKosyncStatus('No reader documents match this view.', false);
-                return;
-            }
-            const visibleDocs = shouldLimit && !kosyncDocsState.showAll
-                ? docs.slice(0, KOSYNC_DEFAULT_VISIBLE_LIMIT)
-                : docs;
-            if (shouldLimit && !kosyncDocsState.showAll) {
-                setKosyncStatus(
-                    `Showing the newest ${KOSYNC_DEFAULT_VISIBLE_LIMIT} of ${docs.length} reader documents.`,
-                    false
-                );
-            } else {
-                setKosyncStatus('', false);
-            }
-            visibleDocs.forEach(doc => list.appendChild(buildKosyncDocumentRow(doc)));
-        }
-
-        function buildKosyncDocumentRow(doc) {
-            const row = document.createElement('div');
-            row.className = 'kosync-doc-row';
-            row.dataset.hash = doc.document_hash;
-
-            const main = document.createElement('div');
-            main.className = 'kosync-doc-main';
-            const title = document.createElement('div');
-            title.className = 'kosync-doc-title';
-            const hash = document.createElement('span');
-            hash.className = 'kosync-hash';
-            hash.title = doc.document_hash;
-            hash.textContent = shortKosyncHash(doc.document_hash);
-            const status = document.createElement('span');
-            status.className = `kosync-status ${doc.linked_abs_id ? 'linked' : 'unlinked'}`;
-            status.textContent = doc.linked_abs_id ? 'Linked' : 'Needs linking';
-            title.append(hash, status);
-
-            const meta = document.createElement('div');
-            meta.className = 'kosync-meta';
-            [
-                doc.linked_book_title ? `Book: ${doc.linked_book_title}` : null,
-                doc.filename ? `File: ${doc.filename}` : null,
-                doc.device ? `Device: ${doc.device}` : null,
-                doc.device_id ? `Device ID: ${doc.device_id}` : null,
-                `Progress: ${formatKosyncPercent(doc.percentage)}`,
-                doc.last_updated ? `Updated: ${formatKosyncDate(doc.last_updated)}` : null
-            ].filter(Boolean).forEach(text => {
-                const item = document.createElement('span');
-                item.textContent = text;
-                meta.appendChild(item);
             });
-            main.append(title, meta);
-
-            const actions = document.createElement('div');
-            actions.className = 'kosync-actions';
-            const copyBtn = document.createElement('button');
-            copyBtn.type = 'button';
-            copyBtn.textContent = 'Copy';
-            copyBtn.onclick = () => copyKosyncHash(doc.document_hash);
-            actions.appendChild(copyBtn);
-
-            if (doc.linked_abs_id) {
-                const unlinkBtn = document.createElement('button');
-                unlinkBtn.type = 'button';
-                unlinkBtn.textContent = 'Unlink';
-                unlinkBtn.onclick = () => unlinkKosyncDocument(doc.document_hash);
-                actions.appendChild(unlinkBtn);
-            } else {
-                const linkBtn = document.createElement('button');
-                linkBtn.type = 'button';
-                linkBtn.textContent = 'Link';
-                linkBtn.onclick = () => showKosyncLinkPanel(row, doc);
-                actions.appendChild(linkBtn);
-                if (doc.owned_by_current_user) {
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.type = 'button';
-                    deleteBtn.textContent = 'Delete';
-                    deleteBtn.onclick = () => deleteKosyncDocument(doc.document_hash);
-                    actions.appendChild(deleteBtn);
-                }
-            }
-
-            row.append(main, actions);
-            return row;
         }
-
-        const KOSYNC_EXTENSION_TOKENS = new Set(['epub', 'kepub', 'pdf', 'mobi', 'azw', 'azw3', 'fb2', 'cbz', 'txt']);
-        const KOSYNC_LIKELY_MATCH_THRESHOLD = 0.5;
-
-        function kosyncNameTokens(value) {
-            if (!value) return [];
-            return [...new Set(
-                String(value).toLowerCase().split(/[^a-z0-9]+/)
-                    .filter(tok => tok && !KOSYNC_EXTENSION_TOKENS.has(tok))
-            )];
-        }
-
-        function kosyncDiceScore(tokensA, tokensB) {
-            if (!tokensA.length || !tokensB.length) return 0;
-            const setB = new Set(tokensB);
-            const shared = tokensA.filter(tok => setB.has(tok)).length;
-            return (2 * shared) / (tokensA.length + tokensB.length);
-        }
-
-        function kosyncMatchScore(doc, book) {
-            const docTokens = kosyncNameTokens(doc.filename);
-            if (!docTokens.length) return 0;
-            return Math.max(
-                kosyncDiceScore(docTokens, kosyncNameTokens(book.ebook_filename)),
-                kosyncDiceScore(docTokens, kosyncNameTokens(book.title))
-            );
-        }
-
-        function showKosyncLinkPanel(row, doc) {
-            const existing = row.querySelector('.kosync-link-panel');
-            if (existing) {
-                existing.remove();
-                return;
-            }
-            document.querySelectorAll('.kosync-link-panel').forEach(el => el.remove());
-            const panel = document.createElement('div');
-            panel.className = 'kosync-link-panel';
-            const select = document.createElement('select');
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = kosyncDocsState.books.length ? 'Select a book' : 'No books available';
-            select.appendChild(placeholder);
-            const scored = kosyncDocsState.books.map(book => ({ book, score: kosyncMatchScore(doc, book) }));
-            const likely = scored.filter(entry => entry.score >= KOSYNC_LIKELY_MATCH_THRESHOLD)
-                .sort((a, b) => b.score - a.score);
-            const rest = scored.filter(entry => entry.score < KOSYNC_LIKELY_MATCH_THRESHOLD);
-            likely.concat(rest).forEach(({ book, score }) => {
-                const option = document.createElement('option');
-                option.value = book.abs_id;
-                const label = book.title || book.ebook_filename || book.abs_id;
-                option.textContent = score >= KOSYNC_LIKELY_MATCH_THRESHOLD ? `★ ${label} — likely match` : label;
-                select.appendChild(option);
-            });
-            if (likely.length && (likely.length === 1 || likely[0].score > likely[1].score)) {
-                select.value = likely[0].book.abs_id;
-            }
-            const confirmBtn = document.createElement('button');
-            confirmBtn.type = 'button';
-            confirmBtn.textContent = 'Link';
-            confirmBtn.onclick = () => linkKosyncDocument(doc.document_hash, select.value);
-            const cancelBtn = document.createElement('button');
-            cancelBtn.type = 'button';
-            cancelBtn.textContent = 'Cancel';
-            cancelBtn.onclick = () => panel.remove();
-            panel.append(select, confirmBtn, cancelBtn);
-            row.appendChild(panel);
-        }
-
-        async function linkKosyncDocument(hash, absId) {
-            if (!absId) {
-                setKosyncStatus('Choose a book to link.', true);
-                return;
-            }
-            try {
-                const data = await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}/link`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ abs_id: absId })
-                });
-                replaceKosyncDocument(data.document);
-            } catch (err) {
-                setKosyncStatus(err.message, true);
-            }
-        }
-
-        async function unlinkKosyncDocument(hash) {
-            try {
-                const data = await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}/unlink`, {
-                    method: 'POST'
-                });
-                replaceKosyncDocument(data.document);
-            } catch (err) {
-                setKosyncStatus(err.message, true);
-            }
-        }
-
-        async function deleteKosyncDocument(hash) {
-            if (!confirm('Delete this unlinked reader document?')) return;
-            try {
-                await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}`, {
-                    method: 'DELETE'
-                });
-                removeKosyncDocument(hash);
-            } catch (err) {
-                setKosyncStatus(err.message, true);
-            }
-        }
-
-        function copyKosyncHash(hash) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(hash).catch(() => {});
-            }
-        }
-
-        function openKosyncSectionFromHash() {
-            const section = document.getElementById('kosync-documents');
-            if (!section || window.location.hash !== '#kosync-documents') return;
-            section.open = true;
-            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            loadKosyncDocuments(false).catch(err => setKosyncStatus(err.message, true));
-        }
-
-        document.addEventListener('DOMContentLoaded', function () {
-            const section = document.getElementById('kosync-documents');
-            if (section) {
-                section.addEventListener('toggle', function () {
-                    if (section.open) {
-                        loadKosyncDocuments(false).catch(err => setKosyncStatus(err.message, true));
-                    }
-                });
-            }
-            const search = document.getElementById('kosync-doc-search');
-            if (search) {
-                search.addEventListener('input', function () {
-                    kosyncDocsState.search = search.value || '';
-                    renderKosyncDocuments();
-                });
-            }
-            document.querySelectorAll('.kosync-filter button').forEach(btn => {
-                btn.addEventListener('click', function () {
-                    kosyncDocsState.filter = btn.dataset.filter || 'unlinked';
-                    kosyncDocsState.showAll = false;
-                    document.querySelectorAll('.kosync-filter button').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                    renderKosyncDocuments();
-                });
-            });
-            const showAll = document.getElementById('kosync-show-all');
-            if (showAll) {
-                showAll.addEventListener('click', function () {
-                    kosyncDocsState.showAll = !kosyncDocsState.showAll;
-                    renderKosyncDocuments();
-                });
-            }
-            loadKosyncDocuments(false)
-                .then(openKosyncSectionFromHash)
-                .catch(err => setKosyncStatus(err.message, true));
-        });
-        window.addEventListener('hashchange', openKosyncSectionFromHash);
-
-        const forgeStageModal = document.getElementById('forgeStageModal');
-        forgeStageModal.addEventListener('click', (event) => {
-            if (event.target === forgeStageModal) {
-                closeForgeStageModal();
-            }
-        });
-
-        document.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape' && forgeStageModal.classList.contains('open')) {
-                closeForgeStageModal();
-            }
-        });
-
-        document.querySelectorAll('form').forEach((form) => {
-            if (form.querySelector('input[name="action"][value="clear_queue"]')) {
-                return;
-            }
-            if (form.querySelector('input[name="action"][value="remove_from_queue"]')) {
-                return;
-            }
-
-            form.addEventListener('submit', (event) => {
-                const submitter = event.submitter || document.activeElement || getPrimarySubmitter(form);
-                if (form.id === 'forgeOnlyQueueForm' && !pendingForgeOnlySubmit) {
-                    event.preventDefault();
-                    openForgeStageModal();
-                    return;
-                }
-                if (!submitter || !submitter.dataset.primaryAction) {
-                    return;
-                }
-                if (!startBatchSubmitState(submitter)) {
-                    event.preventDefault();
-                }
+        document.querySelectorAll('.kosync-filter button').forEach(btn => {
+            btn.addEventListener('click', function () {
+                kosyncDocsState.filter = btn.dataset.filter || 'unlinked';
+                kosyncDocsState.showAll = false;
+                document.querySelectorAll('.kosync-filter button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                renderKosyncDocuments();
             });
         });
-    </script>
-</body>
+        const showAll = document.getElementById('kosync-show-all');
+        if (showAll) {
+            showAll.addEventListener('click', function () {
+                kosyncDocsState.showAll = !kosyncDocsState.showAll;
+                renderKosyncDocuments();
+            });
+        }
+        loadKosyncDocuments(false)
+            .then(openKosyncSectionFromHash)
+            .catch(err => setKosyncStatus(err.message, true));
+    });
+    window.addEventListener('hashchange', openKosyncSectionFromHash);
 
-</html>
+    const forgeStageModal = document.getElementById('forgeStageModal');
+    forgeStageModal.addEventListener('click', (event) => {
+        if (event.target === forgeStageModal) {
+            closeForgeStageModal();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && forgeStageModal.classList.contains('open')) {
+            closeForgeStageModal();
+        }
+    });
+
+    document.querySelectorAll('form').forEach((form) => {
+        if (form.querySelector('input[name="action"][value="clear_queue"]')) {
+            return;
+        }
+        if (form.querySelector('input[name="action"][value="remove_from_queue"]')) {
+            return;
+        }
+
+        form.addEventListener('submit', (event) => {
+            const submitter = event.submitter || document.activeElement || getPrimarySubmitter(form);
+            if (form.id === 'forgeOnlyQueueForm' && !pendingForgeOnlySubmit) {
+                event.preventDefault();
+                openForgeStageModal();
+                return;
+            }
+            if (!submitter || !submitter.dataset.primaryAction) {
+                return;
+            }
+            if (!startBatchSubmitState(submitter)) {
+                event.preventDefault();
+            }
+        });
+    });
+</script>
+{% endblock %}

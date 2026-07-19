@@ -67,10 +67,7 @@ class BookOrbitAudioSyncClient(SyncClient):
             resolved = self._database_service.resolve_bookorbit_audio_id(self._user_id, book)
             if resolved:
                 return self._coerce_id(resolved)
-            if self._database_service.get_user_bookorbit_link(
-                self._user_id, getattr(book, "abs_id", None)
-            ) is not None:
-                return None
+            return None
         # Legacy fallback: shared Book fields
         return self._coerce_id(
             getattr(book, "audio_provider_book_id", None)

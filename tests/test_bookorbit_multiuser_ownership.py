@@ -12,6 +12,7 @@ Covers:
 
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -120,7 +121,7 @@ class TestUserBookOrbitLinkCRUD(unittest.TestCase):
         self.assertEqual(resolved, "user-specific-ebook")
 
     def test_resolve_bookorbit_ebook_id_falls_back_to_legacy(self):
-        """resolve_bookorbit_ebook_id falls back to legacy Book fields when no link exists."""
+        """A single claimant can use legacy Book fields until startup repair."""
         # Create a Book with BookOrbit ebook source
         book = self.db.save_book(Book(
             abs_id="legacy-book",
@@ -129,7 +130,7 @@ class TestUserBookOrbitLinkCRUD(unittest.TestCase):
             ebook_source_id="legacy-ebook-id",
             sync_mode="ebook_only",
         ))
-        # No per-user link set
+        self.db.link_user_book(self.user_a.id, book.abs_id)
         resolved = self.db.resolve_bookorbit_ebook_id(self.user_a.id, book)
         self.assertEqual(resolved, "legacy-ebook-id")
 
@@ -143,7 +144,7 @@ class TestUserBookOrbitLinkCRUD(unittest.TestCase):
         self.assertEqual(resolved, "user-specific-audio")
 
     def test_resolve_bookorbit_audio_id_falls_back_to_legacy(self):
-        """resolve_bookorbit_audio_id falls back to legacy Book fields when no link exists."""
+        """A single claimant can use legacy audio fields until startup repair."""
         book = self.db.save_book(Book(
             abs_id="legacy-audio-book",
             abs_title="Legacy Audio Book",
@@ -152,6 +153,7 @@ class TestUserBookOrbitLinkCRUD(unittest.TestCase):
             audio_provider_book_id="legacy-provider-id",
             sync_mode="audiobook",
         ))
+        self.db.link_user_book(self.user_a.id, book.abs_id)
         resolved = self.db.resolve_bookorbit_audio_id(self.user_a.id, book)
         # Should prefer audio_provider_book_id over audio_source_id
         self.assertEqual(resolved, "legacy-provider-id")
@@ -195,6 +197,141 @@ class TestUserBookOrbitLinkCRUD(unittest.TestCase):
             ebook_id=None, audio_id=None,
         )
         self.assertIsNone(result)
+
+
+class TestBookOrbitLegacyRepair(unittest.TestCase):
+    """Self-heal coverage for BookOrbit links skipped by the 7.2.0 migration."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.temp_dir, "test_bookorbit_repair.db")
+        self.db = DatabaseService(self.db_path)
+
+    def tearDown(self):
+        self.db.db_manager.close()
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_repair_uses_user_book_claimant_when_book_owner_is_null(self):
+        """A NULL legacy creator is repaired to its sole UserBook claimant."""
+        claimant = self.db.create_user("claimant", "pw", role="user")
+        book = self.db.save_book(Book(
+            abs_id="legacy-null-owner",
+            abs_title="Legacy Null Owner",
+            ebook_source="BookOrbit",
+            ebook_source_id="legacy-ebook-318",
+            audio_source="BookOrbit",
+            audio_source_id="legacy-audio-318",
+            audio_provider_book_id="legacy-provider-318",
+            sync_mode="audiobook",
+            user_id=None,
+        ))
+        self.db.link_user_book(claimant.id, book.abs_id)
+
+        counts = self.db.repair_missing_bookorbit_user_links()
+
+        self.assertEqual(counts["created"], 1)
+        link = self.db.get_user_bookorbit_link(claimant.id, book.abs_id)
+        self.assertEqual(link["ebook_id"], "legacy-ebook-318")
+        self.assertEqual(link["audio_id"], "legacy-provider-318")
+
+    def test_repair_does_not_overwrite_existing_user_link(self):
+        """A valid per-user identity remains authoritative during repair."""
+        claimant = self.db.create_user("existing", "pw", role="user")
+        book = self.db.save_book(Book(
+            abs_id="legacy-existing-link",
+            abs_title="Existing Link",
+            ebook_source="BookOrbit",
+            ebook_source_id="shared-legacy-id",
+            sync_mode="ebook_only",
+        ))
+        self.db.link_user_book(claimant.id, book.abs_id)
+        self.db.set_user_bookorbit_link(
+            claimant.id,
+            book.abs_id,
+            ebook_id="user-specific-id",
+        )
+
+        counts = self.db.repair_missing_bookorbit_user_links()
+
+        self.assertEqual(counts["created"], 0)
+        self.assertEqual(counts["skipped_existing"], 1)
+        link = self.db.get_user_bookorbit_link(claimant.id, book.abs_id)
+        self.assertEqual(link["ebook_id"], "user-specific-id")
+
+    def test_bootstrap_repairs_preexisting_bookorbit_mapping(self):
+        """Normal startup repairs a legacy mapping after orphan assignment."""
+        admin = self.db.create_user("admin", "pw", role="admin")
+        book = self.db.save_book(Book(
+            abs_id="legacy-bootstrap-repair",
+            abs_title="Bootstrap Repair",
+            ebook_source="BookOrbit",
+            ebook_source_id="bootstrap-ebook-id",
+            sync_mode="ebook_only",
+            user_id=None,
+        ))
+
+        from src.db.user_bootstrap import bootstrap_admin_user
+
+        bootstrap_admin_user(self.db)
+
+        link = self.db.get_user_bookorbit_link(admin.id, book.abs_id)
+        self.assertIsNotNone(link)
+        self.assertEqual(link["ebook_id"], "bootstrap-ebook-id")
+
+
+class TestBookOrbitOwnershipMigration(unittest.TestCase):
+    """Alembic repair coverage for databases already stamped at 7.2.0."""
+
+    def test_c2_database_repairs_null_owner_from_user_book_claim(self):
+        """The post-7.2.0 migration fills the link c2 silently skipped."""
+        from alembic import command
+        from alembic.config import Config
+
+        temp_dir = tempfile.mkdtemp()
+        db_path = Path(temp_dir) / "bookorbit_c2_upgrade.db"
+        try:
+            config = Config(str(Path(__file__).parent.parent / "alembic.ini"))
+            config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path.as_posix()}")
+            command.upgrade(config, "c2a4f8d6e1b3")
+
+            with sqlite3.connect(db_path) as connection:
+                cursor = connection.execute(
+                    "INSERT INTO users (username, role, active) VALUES (?, ?, ?)",
+                    ("migration-claimant", "user", 1),
+                )
+                user_id = cursor.lastrowid
+                connection.execute(
+                    """
+                    INSERT INTO books
+                        (abs_id, abs_title, ebook_source, ebook_source_id, user_id)
+                    VALUES (?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        "migration-null-owner",
+                        "Migration Null Owner",
+                        "BookOrbit",
+                        "migration-ebook-id",
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO user_books (user_id, abs_id) VALUES (?, ?)",
+                    (user_id, "migration-null-owner"),
+                )
+
+            command.upgrade(config, "head")
+
+            with sqlite3.connect(db_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT user_id, ebook_id
+                    FROM user_bookorbit_links
+                    WHERE abs_id = ?
+                    """,
+                    ("migration-null-owner",),
+                ).fetchone()
+            self.assertEqual(row, (user_id, "migration-ebook-id"))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestBookOrbitSyncClientPerUser(unittest.TestCase):
@@ -241,14 +378,14 @@ class TestBookOrbitSyncClientPerUser(unittest.TestCase):
         self.assertIsNotNone(info)
 
     def test_falls_back_to_legacy_without_link(self):
-        """Sync client falls back to shared Book fields when no per-user link exists."""
+        """Sync client keeps legacy fallback for its sole claimant."""
         from src.sync_clients.bookorbit_sync_client import BookOrbitSyncClient
 
         mock_client = MagicMock()
         mock_client.get_book_by_id.return_value = {"id": "legacy-ebook-id"}
         mock_parser = MagicMock()
 
-        # No per-user link set
+        self.db.link_user_book(self.user.id, self.book.abs_id)
         sync = BookOrbitSyncClient(
             mock_client, mock_parser,
             database_service=self.db, user_id=self.user.id,
@@ -256,6 +393,25 @@ class TestBookOrbitSyncClientPerUser(unittest.TestCase):
         info = sync._resolve_book_info(self.book)
         mock_client.get_book_by_id.assert_called_with("legacy-ebook-id")
         self.assertIsNotNone(info)
+
+    def test_multi_claimant_book_refuses_shared_legacy_id(self):
+        """A scoped client never borrows a shared ID for a multi-user row."""
+        from src.sync_clients.bookorbit_sync_client import BookOrbitSyncClient
+
+        other = self.db.create_user("other-syncuser", "pw", role="user")
+        self.db.link_user_book(self.user.id, self.book.abs_id)
+        self.db.link_user_book(other.id, self.book.abs_id)
+        mock_client = MagicMock()
+        sync = BookOrbitSyncClient(
+            mock_client,
+            MagicMock(),
+            database_service=self.db,
+            user_id=self.user.id,
+        )
+
+        self.assertIsNone(sync._resolve_book_info(self.book))
+        self.assertFalse(sync.supports_book(self.book))
+        mock_client.get_book_by_id.assert_not_called()
 
     def test_works_without_database_service(self):
         """Sync client works without database_service (backward compat)."""
@@ -313,18 +469,36 @@ class TestBookOrbitAudioSyncClientPerUser(unittest.TestCase):
         self.assertEqual(book_id, "user-audio-id")
 
     def test_falls_back_to_legacy_without_link(self):
-        """Audio sync client falls back to shared Book fields."""
+        """Audio sync client keeps legacy fallback for its sole claimant."""
         from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClient
 
         mock_client = MagicMock()
         mock_parser = MagicMock()
 
+        self.db.link_user_book(self.user.id, self.book.abs_id)
         sync = BookOrbitAudioSyncClient(
             mock_client, mock_parser,
             database_service=self.db, user_id=self.user.id,
         )
         book_id = sync._resolve_book_id(self.book)
         self.assertEqual(book_id, "legacy-provider-id")
+
+    def test_multi_claimant_book_refuses_shared_legacy_id(self):
+        """A scoped audio client never borrows a multi-user shared ID."""
+        from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClient
+
+        other = self.db.create_user("other-audiouser", "pw", role="user")
+        self.db.link_user_book(self.user.id, self.book.abs_id)
+        self.db.link_user_book(other.id, self.book.abs_id)
+        sync = BookOrbitAudioSyncClient(
+            MagicMock(),
+            MagicMock(),
+            database_service=self.db,
+            user_id=self.user.id,
+        )
+
+        self.assertIsNone(sync._resolve_book_id(self.book))
+        self.assertFalse(sync.supports_book(self.book))
 
     def test_works_without_database_service(self):
         """Audio sync client works without database_service (backward compat)."""

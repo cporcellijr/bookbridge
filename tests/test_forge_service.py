@@ -69,6 +69,51 @@ class TestForgeService(unittest.TestCase):
             )
             mock_thread_instance.start.assert_called_once()
 
+    def test_manual_forge_stops_before_staging_when_storyteller_is_unconfigured(self):
+        self.mock_storyteller.is_configured.return_value = False
+
+        with patch.object(self.service, "_copy_audio_files") as copy_audio:
+            self.service._forge_background_task(
+                abs_id="abs-1",
+                text_item={"source": "Local File", "path": "unused.epub"},
+                title="Unavailable Storyteller",
+                author="Author",
+            )
+
+        copy_audio.assert_not_called()
+        self.mock_storyteller.upload_epub.assert_not_called()
+        self.assertFalse(any(
+            call.args and "Storyteller is not configured" in str(call.args[0])
+            for call in self.mock_logger.error.call_args_list
+        ))
+
+    def test_auto_forge_stops_before_staging_when_storyteller_is_unconfigured(self):
+        self.mock_storyteller.is_configured.return_value = False
+        db_book = MagicMock()
+        self.mock_db.get_book.return_value = db_book
+
+        with patch.object(self.service, "_copy_audio_files") as copy_audio:
+            self.service._auto_forge_background_task(
+                abs_id="abs-1",
+                text_item={"source": "Local File", "path": "unused.epub"},
+                title="Unavailable Storyteller",
+                author="Author",
+                original_filename="unused.epub",
+                original_hash="hash",
+            )
+
+        copy_audio.assert_not_called()
+        self.mock_storyteller.upload_epub.assert_not_called()
+        self.assertEqual(db_book.status, "error")
+        self.assertTrue(any(
+            call.kwargs.get("last_error") == "Storyteller is not configured"
+            for call in self.mock_db.update_latest_job.call_args_list
+        ))
+        self.assertFalse(any(
+            call.args and "Storyteller is not configured" in str(call.args[0])
+            for call in self.mock_logger.error.call_args_list
+        ))
+
     def test_start_manual_forge_hardlink_passes_stage_mode_kwargs(self):
         with patch('threading.Thread') as mock_thread_cls:
             mock_thread_instance = MagicMock()

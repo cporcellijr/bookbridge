@@ -65,10 +65,7 @@ class BookOrbitSyncClient(SyncClient):
                 bid = self._coerce_id(resolved)
                 if bid is not None:
                     return self.client.get_book_by_id(bid) or {"id": bid}
-            if self._database_service.get_user_bookorbit_link(
-                self._user_id, getattr(book, "abs_id", None)
-            ) is not None:
-                return None
+            return None
         # Legacy fallback: shared Book fields
         if getattr(book, "ebook_source", None) == "BookOrbit":
             bid = self._coerce_id(getattr(book, "ebook_source_id", None))

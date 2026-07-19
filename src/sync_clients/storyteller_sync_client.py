@@ -67,7 +67,9 @@ class StorytellerSyncClient(SyncClient):
             except Exception as e:
                 logger.debug(f"Storyteller slim EPUB ensure failed for '{storyteller_uuid}': {e}")
 
-        return current
+        if current and not str(current).startswith("storyteller_"):
+            return current
+        return None
 
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
         # [Tri-Link Fix] Strict UUID Sync Only
@@ -76,6 +78,13 @@ class StorytellerSyncClient(SyncClient):
         if not uuid:
             # Strict mode: If no UUID is linked, Storyteller is effectively disabled for this book.
             # We do NOT fallback to filename search or legacy methods.
+            return None
+
+        if not self._resolve_storyteller_epub_filename(book):
+            logger.info(
+                "'%s' Storyteller sync skipped: linked ReadAloud EPUB is unavailable",
+                title_snip,
+            )
             return None
 
         st_pct, st_ts, st_href, st_frag, st_chapter_progress = None, None, None, None, None

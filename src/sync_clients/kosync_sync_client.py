@@ -35,6 +35,18 @@ class KoSyncSyncClient(SyncClient):
         """KoSync participates in both audiobook and ebook sync modes."""
         return {'audiobook', 'ebook'}
 
+    def supports_book(self, book: Book) -> bool:
+        """Exclude audiobook-only mappings and books with invalid doc IDs."""
+        sync_mode = getattr(book, "sync_mode", "audiobook")
+        if sync_mode == "audiobook_only":
+            return False
+
+        doc_id = str(getattr(book, "kosync_doc_id", "") or "").strip()
+        if not doc_id or doc_id.lower() in ("none", "null"):
+            return False
+
+        return super().supports_book(book)
+
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
         ko_id = book.kosync_doc_id
         ko_metadata = {}

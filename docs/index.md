@@ -2,12 +2,11 @@
 
 <!-- markdownlint-disable MD033 -->
 <div align="center">
-
-**The ultimate bridge for cross-platform reading and listening synchronization.**
-
-[Getting Started](getting-started.md){ .md-button .md-button--primary }
-[View on GitHub](https://github.com/cporcellijr/bookbridge){ .md-button }
-
+  <p><strong>The ultimate bridge for cross-platform reading and listening synchronization.</strong></p>
+  <p>
+    <a href="getting-started/" class="md-button md-button--primary">Getting Started</a>
+    <a href="https://github.com/cporcellijr/bookbridge" class="md-button">View on GitHub</a>
+  </p>
 </div>
 <!-- markdownlint-enable MD033 -->
 

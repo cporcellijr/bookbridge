@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch, mock_open
 import shutil
 import os
+import tempfile
 from pathlib import Path
 import sys
 
@@ -91,6 +92,22 @@ class TestTranscriberCacheLogic(unittest.TestCase):
                 self.fail("Bug Reproduced: Download was skipped despite missing audio parts in cache.")
             
             self.assertEqual(mock_requests_get.call_count, 3, "Should download all 3 parts")
+
+    def test_expected_long_audio_split_is_informational(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "long.mp3"
+            audio_path.write_bytes(b"audio")
+            self.transcriber.get_audio_duration.return_value = 2820.0
+
+            with patch("utils.transcriber.logger") as mock_logger, \
+                    patch("utils.transcriber.subprocess.run"):
+                AudioTranscriber.split_audio_file(self.transcriber, audio_path)
+
+        mock_logger.info.assert_any_call("⚠️ File 'long.mp3' is 47.0m — Splitting")
+        self.assertFalse(any(
+            call.args and "File 'long.mp3' is 47.0m" in str(call.args[0])
+            for call in mock_logger.warning.call_args_list
+        ))
 
 if __name__ == '__main__':
     # unittest.main() # Avoid args issue in some environments?

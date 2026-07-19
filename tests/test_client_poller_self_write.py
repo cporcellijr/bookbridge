@@ -40,7 +40,7 @@ def test_storyteller_poller_ignores_nearby_self_echo(monkeypatch):
     sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.778})
 
     poller = ClientPoller(db, sync_manager, {"Storyteller": sync_client})
-    poller._last_known[(None, "Storyteller", "abs-1")] =0.776
+    poller._last_known[(None, "Storyteller", "abs-1")] = 0.776
 
     write_tracker.record_write("Storyteller", "abs-1", 0.776)
     poller._poll_client("Storyteller")
@@ -62,7 +62,7 @@ def test_storyteller_poller_allows_large_jump_during_suppression(monkeypatch):
     sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.85})
 
     poller = ClientPoller(db, sync_manager, {"Storyteller": sync_client})
-    poller._last_known[(None, "Storyteller", "abs-1")] =0.776
+    poller._last_known[(None, "Storyteller", "abs-1")] = 0.776
 
     write_tracker.record_write("Storyteller", "abs-1", 0.776)
     poller._poll_client("Storyteller")
@@ -182,7 +182,7 @@ def _make_settle_poller(monkeypatch, initial_pct):
     sync_client.is_configured.return_value = True
 
     poller = ClientPoller(db, sync_manager, {"Storyteller": sync_client})
-    poller._last_known[(None, "Storyteller", "abs-1")] =initial_pct
+    poller._last_known[(None, "Storyteller", "abs-1")] = initial_pct
     return poller, sync_manager, sync_client
 
 
@@ -269,3 +269,69 @@ def test_settle_wait_ignores_self_echo_without_pending(monkeypatch):
 
     sync_manager.sync_cycle.assert_not_called()
     assert (None, "Storyteller", "abs-1") not in poller._pending_sync
+
+
+# ------------------------------------------------------------------
+# BookFusion settle-wait regression tests — same logic as StoryTeller
+# but exercising the BOOKFUSION_POLL_WAIT_FOR_SETTLE env var and the
+# "BookFusion" client name. The generic _is_settle_wait_enabled plumbing
+# must work identically for every pollable client.
+# ------------------------------------------------------------------
+
+def _make_bookfusion_settle_poller(monkeypatch, initial_pct):
+    _clear_write_tracker()
+    monkeypatch.setattr(client_poller_module.threading, "Thread", _ImmediateThread)
+    monkeypatch.setenv("BOOKFUSION_POLL_WAIT_FOR_SETTLE", "true")
+
+    book = SimpleNamespace(abs_id="abs-1", abs_title="Book 1")
+    db = MagicMock()
+    db.get_books_by_status.return_value = [book]
+
+    sync_manager = MagicMock()
+    sync_client = MagicMock()
+    sync_client.is_configured.return_value = True
+
+    poller = ClientPoller(db, sync_manager, {"BookFusion": sync_client})
+    poller._last_known[(None, "BookFusion", "abs-1")] = initial_pct
+    return poller, sync_manager, sync_client
+
+
+def test_bookfusion_settle_wait_defers_sync_while_position_moves(monkeypatch):
+    """BOOKFUSION_POLL_WAIT_FOR_SETTLE=true: active reading keeps deferring."""
+    poller, sync_manager, sync_client = _make_bookfusion_settle_poller(monkeypatch, 0.50)
+
+    sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.52})
+    poller._poll_client("BookFusion")
+    sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.54})
+    poller._poll_client("BookFusion")
+
+    sync_manager.sync_cycle.assert_not_called()
+    assert (None, "BookFusion", "abs-1") in poller._pending_sync
+
+
+def test_bookfusion_settle_wait_triggers_sync_once_position_settles(monkeypatch):
+    """BOOKFUSION_POLL_WAIT_FOR_SETTLE=true: settled position fires exactly one sync."""
+    poller, sync_manager, sync_client = _make_bookfusion_settle_poller(monkeypatch, 0.50)
+
+    sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.52})
+    poller._poll_client("BookFusion")
+    sync_manager.sync_cycle.assert_not_called()
+
+    poller._poll_client("BookFusion")
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
+    assert (None, "BookFusion", "abs-1") not in poller._pending_sync
+
+    poller._poll_client("BookFusion")
+    sync_manager.sync_cycle.assert_called_once()
+
+
+def test_bookfusion_settle_wait_disabled_keeps_immediate_trigger(monkeypatch):
+    """BOOKFUSION_POLL_WAIT_FOR_SETTLE=false (or absent): sync fires immediately."""
+    poller, sync_manager, sync_client = _make_bookfusion_settle_poller(monkeypatch, 0.50)
+    monkeypatch.setenv("BOOKFUSION_POLL_WAIT_FOR_SETTLE", "false")
+
+    sync_client.get_service_state.return_value = SimpleNamespace(current={"pct": 0.52})
+    poller._poll_client("BookFusion")
+
+    sync_manager.sync_cycle.assert_called_once_with(target_abs_id="abs-1", user_id=None)
+    assert (None, "BookFusion", "abs-1") not in poller._pending_sync

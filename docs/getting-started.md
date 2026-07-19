@@ -180,7 +180,10 @@ Open **My Account → Connect a KOReader device** for a two-step card:
 
 1. **Point KOReader at the bridge.** Copy the sync-server address shown on the card into
    KOReader's **Tools → Progress sync → Custom sync server**, then sign in on the device with
-   the KoSync username/password from My Integrations. This alone gives you progress sync.
+   the KoSync username/password from My Integrations. The suggestion keeps the public HTTPS
+   origin when you use a reverse proxy, or uses the configured KoSync port for direct LAN
+   access. If you opened BookBridge through localhost, replace that host with the server's LAN
+   hostname or IP address before copying. This alone gives you progress sync.
 2. **Install the Bridge Sync plugin** (download on the same card). The plugin delivers books
    from the bridge byte-for-byte — so KOReader progress auto-links with no manual matching —
    and adds reading-stats sync plus highlight and note sync. Unzip it into

@@ -23,7 +23,7 @@ if os.path.exists(TEST_DIR):
     shutil.rmtree(TEST_DIR)
 os.makedirs(TEST_DIR, exist_ok=True)
 
-from src.db.models import KosyncDocument, Book, ReadingSession, Setting, State, HardcoverDetails, UserCredential
+from src.db.models import KosyncDocument, Book, ReadingSession, Setting, State, HardcoverDetails, UserCredential, KosyncUserProgress
 # Initialize DB service with test path
 from src.db.database_service import DatabaseService
 
@@ -241,6 +241,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         with web_server.database_service.get_session() as session:
              session.query(ReadingSession).delete()
              session.query(KosyncDocument).delete()
+             session.query(KosyncUserProgress).delete()
              session.query(Setting).delete()
              session.query(State).delete()
              session.query(HardcoverDetails).delete()
@@ -257,6 +258,11 @@ class TestKosyncEndpoints(unittest.TestCase):
             kosync_server._kosync_open_sessions.clear()
         with kosync_server._kosync_debounce_lock:
             kosync_server._kosync_debounce.clear()
+        # The manifest endpoint serves a module-global prebuilt cache; a real
+        # manifest left there by a prior test or the prebuilder daemon would
+        # otherwise shadow the mocked service in manifest tests (any-order safety).
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
 
     def test_admin_plugin_version_returns_version_without_auth(self):
         """Settings-page version endpoint returns the plugin version, no KOSync auth."""
@@ -361,17 +367,39 @@ class TestKosyncEndpoints(unittest.TestCase):
         # It linked to the existing book rather than auto-creating an ebook-only mapping.
         self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
 
-    def test_get_progress_returns_502_for_missing(self):
-        """Test that GET returns 502 (not 404) for missing document."""
+    def test_get_progress_returns_404_for_missing(self):
+        """Test that GET returns 404 (not 502) for missing document."""
         response = self.client.get(
             '/syncs/progress/' + 'z' * 32,
             headers=self.auth_headers
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 404)
         data = response.get_json()
         self.assertIn('message', data)
         self.assertIn('not found', data['message'].lower())
+
+    def test_get_progress_rejects_placeholder_ids(self):
+        """GET /syncs/progress/<placeholder> must return 404 without discovery."""
+        from src.api import kosync_server as ks
+        from src import web_server
+
+        for placeholder in ("None", "none", "null", "NULL"):
+            with self.assertLogs(ks.logger, level='WARNING') as captured, \
+                 patch.object(ks, '_spawn_user_scoped_thread') as mock_spawn:
+                response = self.client.get(
+                    f'/syncs/progress/{placeholder}',
+                    headers=self.auth_headers
+                )
+
+            self.assertEqual(response.status_code, 404)
+            self.assertIn(
+                f"Invalid or placeholder document ID requested: '{placeholder}'",
+                "\n".join(captured.output),
+            )
+            mock_spawn.assert_not_called()
+            self.assertIsNone(web_server.database_service.get_kosync_document(placeholder))
+
 
     def test_get_progress_returns_full_data(self):
         """Test that GET returns all fields."""
@@ -630,7 +658,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             0.80,
         )
 
-    def test_get_progress_returns_502_when_direct_hash_has_pct_but_empty_progress(self):
+    def test_get_progress_returns_404_when_direct_hash_has_pct_but_empty_progress(self):
         self.client.put(
             '/syncs/progress',
             headers=self.auth_headers,
@@ -648,9 +676,9 @@ class TestKosyncEndpoints(unittest.TestCase):
             headers=self.auth_headers
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 404)
 
-    def test_get_progress_returns_502_when_state_has_pct_but_empty_locator(self):
+    def test_get_progress_returns_404_when_state_has_pct_but_empty_locator(self):
         from src import web_server
 
         book = Book(
@@ -678,7 +706,7 @@ class TestKosyncEndpoints(unittest.TestCase):
             headers=self.auth_headers
         )
 
-        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.status_code, 404)
 
     def test_device_sync_manifest_requires_auth(self):
         response = self.client.get('/koreader/device-sync/manifest')
@@ -717,6 +745,8 @@ class TestKosyncEndpoints(unittest.TestCase):
         container = MagicMock()
         container.koreader_device_sync_service.return_value = service
 
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
         with patch.object(kosync_server, '_container', container):
             response = self.client.get('/koreader/device-sync/manifest', headers=self.auth_headers)
 
@@ -1522,7 +1552,7 @@ class TestKosyncEndpoints(unittest.TestCase):
 
 
     def test_get_progress_unknown_hash_creates_stub(self):
-        """Test that GET for a completely unknown hash returns 502 and creates a stub for background discovery."""
+        """Test that GET for a completely unknown hash returns 404 and creates a stub for background discovery."""
         from src import web_server
 
         # Create a book with a known kosync_doc_id
@@ -1555,13 +1585,13 @@ class TestKosyncEndpoints(unittest.TestCase):
         # First, we need hash_B to be findable. The sibling resolution requires
         # the unknown hash to have a filename in common. Since hash_B is brand new
         # with no filename, it will fall through to Step 4 (background discovery).
-        # So this tests that the 502 + stub creation path works.
+        # So this tests that the 404 + stub creation path works.
         response = self.client.get(
             '/syncs/progress/' + 'b' * 32,
             headers=self.auth_headers
         )
-        # Unknown hash with no filename link returns 502
-        self.assertEqual(response.status_code, 502)
+        # Unknown hash with no filename link returns 404
+        self.assertEqual(response.status_code, 404)
 
         # Clean up
         with web_server.database_service.get_session() as session:
@@ -2672,6 +2702,70 @@ class TestAnnotationExchangeEndpoints(unittest.TestCase):
         ).get_json()["books"][0]
         self.assertEqual(len(remainder["toApply"]["add"]), 5)
         self.assertFalse(remainder["more"])
+
+
+class TestActiveScansAtomicity(unittest.TestCase):
+    """Verify that _active_scans admission is atomic: concurrent duplicate
+    admissions for the same hash yield exactly one scheduled discovery task."""
+
+    def setUp(self):
+        from src.api import kosync_server
+        self._orig_active_scans = kosync_server._active_scans.copy()
+        self._orig_lock = kosync_server._active_scans_lock
+        kosync_server._active_scans.clear()
+
+    def tearDown(self):
+        from src.api import kosync_server
+        kosync_server._active_scans = self._orig_active_scans
+        kosync_server._active_scans_lock = self._orig_lock
+
+    def test_concurrent_admission_yields_one_discovery(self):
+        """Two threads admitting the same hash concurrently must produce exactly
+        one entry in _active_scans, not two."""
+        from src.api import kosync_server
+        import threading
+
+        barrier = threading.Barrier(2)
+        results = []
+
+        def try_admit():
+            barrier.wait()
+            with kosync_server._active_scans_lock:
+                if "same_hash" not in kosync_server._active_scans:
+                    kosync_server._active_scans.add("same_hash")
+                    results.append("admitted")
+                else:
+                    results.append("skipped")
+
+        t1 = threading.Thread(target=try_admit)
+        t2 = threading.Thread(target=try_admit)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        self.assertEqual(len(kosync_server._active_scans), 1)
+        self.assertIn("same_hash", kosync_server._active_scans)
+        self.assertEqual(sorted(results), ["admitted", "skipped"])
+
+    def test_cleanup_allows_re_admission(self):
+        """After a scan completes and removes its hash, a later admission
+        must be permitted."""
+        from src.api import kosync_server
+
+        with kosync_server._active_scans_lock:
+            kosync_server._active_scans.add("hash_a")
+
+        with kosync_server._active_scans_lock:
+            kosync_server._active_scans.discard("hash_a")
+            self.assertNotIn("hash_a", kosync_server._active_scans)
+
+        should_discover = False
+        with kosync_server._active_scans_lock:
+            if "hash_a" not in kosync_server._active_scans:
+                kosync_server._active_scans.add("hash_a")
+                should_discover = True
+        self.assertTrue(should_discover)
 
 
 if __name__ == '__main__':

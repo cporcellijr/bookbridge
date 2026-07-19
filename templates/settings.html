@@ -1,146 +1,9 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
+{% set active_page = 'settings' %}
+{% block title %}Settings - BookBridge{% endblock %}
 
-<head>
-    <meta charset="UTF-8">
-    <title>Settings - BookBridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="icon" type="image/png" href="/static/icon.png">
-    <link rel="apple-touch-icon" href="/static/icon.png">
-    <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-            background: #0a0a0a;
-            color: #ffffff;
-            min-height: 100vh;
-        }
-
-        /* Nav Bar (Matches Index) */
-        .top-nav {
-            background: linear-gradient(180deg, rgba(20, 20, 20, 0.98) 0%, rgba(20, 20, 20, 0.95) 100%);
-            -webkit-backdrop-filter: blur(20px);
-            backdrop-filter: blur(20px);
-            padding: 20px 40px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .logo-section {
-            display: flex;
-            align-items: center;
-            gap: 24px;
-        }
-
-        .logo-section a {
-            text-decoration: none;
-        }
-
-        .logo-section h1 {
-            font-size: 28px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .app-icon {
-            display: block;
-            width: 32px;
-            height: 32px;
-            border-radius: 6px;
-            object-fit: cover;
-        }
-
-        .library-links {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding-left: 20px;
-            border-left: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .nav-icon-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
-            color: rgba(255, 255, 255, 0.6);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            background: rgba(255, 255, 255, 0.03);
-            text-decoration: none;
-        }
-
-        .nav-icon-link:hover {
-            color: #ffffff;
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
-
-        .nav-icon-link svg {
-            width: 20px;
-            height: 20px;
-            stroke-width: 2;
-        }
-
-        .nav-actions {
-            display: flex;
-            gap: 12px;
-        }
-
-        .btn {
-            padding: 8px 16px;
-            background: rgba(255, 255, 255, 0.05);
-            color: #ccc;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 6px;
-            text-decoration: none;
-            font-size: 14px;
-            transition: all 0.2s;
-            cursor: pointer;
-        }
-
-        .btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: #fff;
-        }
-
-        .btn-primary {
-            background: rgba(102, 126, 234, 0.2);
-            color: #667eea;
-            border-color: rgba(102, 126, 234, 0.4);
-        }
-
-        .btn-primary:hover {
-            background: rgba(102, 126, 234, 0.3);
-            border-color: rgba(102, 126, 234, 0.6);
-        }
-
-        .btn-danger {
-            background: rgba(244, 67, 54, 0.1);
-            border-color: rgba(244, 67, 54, 0.3);
-            color: #e57373 !important;
-        }
-
-        .btn-danger:hover {
-            background: rgba(244, 67, 54, 0.2);
-            border-color: rgba(244, 67, 54, 0.5);
-        }
-
+{% block head %}
+<style>
         .cleanup-group {
             display: flex;
             gap: 15px;
@@ -233,7 +96,8 @@
         }
 
         .form-group input,
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             padding: 10px;
             background: rgba(0, 0, 0, 0.3);
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -241,6 +105,12 @@
             color: #fff;
             font-size: 14px;
             width: 100%;
+        }
+
+        .form-group textarea {
+            min-height: 92px;
+            resize: vertical;
+            font-family: inherit;
         }
 
         .form-group select {
@@ -253,7 +123,8 @@
         }
 
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             outline: none;
             border-color: #667eea;
         }
@@ -262,6 +133,49 @@
             font-size: 11px;
             color: rgba(255, 255, 255, 0.3);
             margin-top: -4px;
+        }
+
+        .diagnostics-history {
+            display: grid;
+            gap: 10px;
+        }
+
+        .diagnostics-submission {
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .diagnostics-submission-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            color: rgba(255, 255, 255, 0.55);
+            font-size: 12px;
+        }
+
+        .diagnostics-submission-status {
+            color: #9fb2ff;
+            font-weight: 600;
+        }
+
+        .diagnostics-submission-label {
+            margin-top: 10px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .diagnostics-submission-text {
+            margin-top: 4px;
+            color: rgba(255, 255, 255, 0.82);
+            font-size: 13px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
         }
 
         /* Custom Checkbox */
@@ -487,17 +401,6 @@
 
         .tab-panel.active {
             display: block;
-        }
-
-        /* Embedded logs viewer (Logs tab) */
-        .logs-frame {
-            display: block;
-            width: 100%;
-            height: calc(100vh - 140px);
-            min-height: 640px;
-            border: 0;
-            border-radius: 12px;
-            background: rgba(0, 0, 0, 0.2);
         }
 
         @media (max-width: 760px) {
@@ -764,60 +667,9 @@
             font-weight: 600;
         }
     </style>
-</head>
+{% endblock %}
 
-<body>
-    <div class="top-nav">
-        <div class="logo-section">
-            <a href="/" style="display: flex; align-items: center; gap: 12px; text-decoration: none;">
-                <img src="/static/icon.png" alt="BookBridge" class="app-icon">
-                <h1 style="font-size: 22px; margin: 0;">BookBridge</h1>
-            </a>
-
-            <div class="library-links">
-                {% if abs_server %}
-                <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" title="Audiobookshelf">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if booklore_server %}
-                <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" title="Ebook Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
-
-                {% if shelfmark_url and get_bool('SHELFMARK_ENABLED') %}
-                <a href="/shelfmark" class="nav-icon-link" title="Shelfmark Tool" target="_blank"
-                    rel="noopener noreferrer">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    </svg>
-                </a>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/bookbridge/" class="btn" target="_blank"
-                rel="noopener noreferrer">📚 Docs</a>
-            <a href="/" class="btn">← Dashboard</a>
-            <a href="/logs" class="btn">📊 Logs</a>
-            <a href="{{ url_for('add_book') }}" class="btn">Add / Update Book</a>
-            <a href="/suggestions" class="btn">💡 Suggestions</a>
-        </div>
-    </div>
-
+{% block content %}
     <div class="container">
         {% if message %}
         <div class="flash {% if is_error %}flash-error{% else %}flash-success{% endif %}">
@@ -839,7 +691,6 @@
                 <button type="button" class="settings-tab" data-tab="ai" onclick="showSettingsTab('ai')">🤖 AI</button>
                 <button type="button" class="settings-tab" data-tab="system" onclick="showSettingsTab('system')">🛠️ System</button>
                 <button type="button" class="settings-tab" data-tab="users" onclick="showSettingsTab('users')">👥 Users</button>
-                <button type="button" class="settings-tab" data-tab="logs" onclick="showSettingsTab('logs')">📊 Logs</button>
             </aside>
             <div class="settings-main">
 
@@ -2010,7 +1861,7 @@
                         <div class="form-group" style="align-items: center;">
                             <label>BookFusion Poll Mode</label>
                             <select name="BOOKFUSION_POLL_MODE" id="bookfusion_poll_mode"
-                                    onchange="togglePollSeconds('bookfusion_poll_seconds_row', this.value)">
+                                    onchange="togglePollSeconds('bookfusion_poll_seconds_row', this.value); togglePollSeconds('bookfusion_poll_settle_row', this.value)">
                                 <option value="global" {% if get_val('BOOKFUSION_POLL_MODE', 'global') == 'global' %}selected{% endif %}>Global</option>
                                 <option value="custom" {% if get_val('BOOKFUSION_POLL_MODE') == 'custom' %}selected{% endif %}>Custom</option>
                             </select>
@@ -2021,6 +1872,18 @@
                             <input type="number" name="BOOKFUSION_POLL_SECONDS" min="10"
                                    value="{{ get_val('BOOKFUSION_POLL_SECONDS', '300') }}">
                             <div class="help-text">Recommended: 300s for BookFusion.</div>
+                        </div>
+                        <div class="form-group" id="bookfusion_poll_settle_row"
+                             {% if get_val('BOOKFUSION_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
+                            <label>Wait for Position to Settle</label>
+                            <div class="toggle-switch-wrapper">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" name="BOOKFUSION_POLL_WAIT_FOR_SETTLE"
+                                        {% if get_bool('BOOKFUSION_POLL_WAIT_FOR_SETTLE') %}checked{% endif %}>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="help-text">Hold the sync while the position keeps changing between polls (actively reading); run it once a poll shows no further movement.</div>
                         </div>
                         {% endif %}
 
@@ -2285,15 +2148,6 @@
                                     rel="noopener noreferrer">Deepgram
                                     Models</a>
                             </div>
-                            <div class="alert alert-warning" id="gpu_warning" style="display:none; margin-top:10px;">
-                                <strong>⚠️ NVIDIA GPU Selected:</strong>
-                                <ul style="margin: 5px 0 0 20px; font-size: 0.9em;">
-                                    <li>Ensure <code>INSTALL_GPU: "true"</code> is set in docker-compose.yml (this
-                                        builds the container with CUDA libraries).</li>
-                                    <li>Ensure the <strong>NVIDIA Container Toolkit</strong> is installed on your host
-                                        system (this allows Docker to access your GPU).</li>
-                                </ul>
-                            </div>
                         </div>
                     </div>
 
@@ -2322,13 +2176,17 @@
                         <div class="form-group">
                             <label>Whisper Device</label>
                             <select name="WHISPER_DEVICE">
+                                <option value="auto" {% if get_val('WHISPER_DEVICE')=='auto' %}selected{% endif %}>Auto
+                                    (detect GPU)
+                                </option>
                                 <option value="cpu" {% if get_val('WHISPER_DEVICE')=='cpu' %}selected{% endif %}>CPU
                                 </option>
                                 <option value="cuda" {% if get_val('WHISPER_DEVICE')=='cuda' %}selected{% endif %}>GPU
                                     (NVIDIA)
                                 </option>
                             </select>
-                            <div class="help-text">Use CUDA for NVIDIA GPU. Default is CPU.</div>
+                            <div class="help-text">Auto (default) uses an NVIDIA GPU when one is available, otherwise
+                                CPU. Requires the <code>-cuda</code> image.</div>
                         </div>
                         <div class="form-group">
                             <label>Whisper Compute Type</label>
@@ -2348,6 +2206,52 @@
                             </select>
                             <div class="help-text">Use int8 for CPU, float16 for GPU.</div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Diagnostics -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>Diagnostics</h3>
+                    <div class="toggle-switch-wrapper">
+                        <span class="toggle-label">Enable</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle_diagnostics" name="DIAGNOSTICS_OPT_IN"
+                                onchange="toggleSection('diagnostics_body', this.checked)"
+                                {% if get_bool('DIAGNOSTICS_OPT_IN') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div id="diagnostics_body" class="section-body {% if not get_bool('DIAGNOSTICS_OPT_IN') %}collapsed{% endif %}">
+                    <p style="color:rgba(255,255,255,0.6); font-size:0.85rem; margin:0 0 12px;">
+                        Share anonymous diagnostics to help find and fix bugs faster.
+                        Reports contain scrubbed warning log lines &mdash; never library contents or credentials.
+                    </p>
+                    <input type="hidden" name="DIAGNOSTICS_PROMPTED" value="true">
+                    <div class="form-group full-width">
+                        <label for="diag-problem-message">What went wrong? (optional)</label>
+                        <textarea id="diag-problem-message" maxlength="2000"
+                            placeholder="Tell us what you were doing and what you expected to happen."></textarea>
+                        <div class="help-text">Technical details are included automatically.</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Last automatic report</label>
+                        <div style="padding:8px 12px; background:rgba(255,255,255,0.05); border-radius:6px; font-size:0.85rem; color:rgba(255,255,255,0.65);">
+                            {% set _last = get_val('DIAGNOSTICS_LAST_SENT') %}
+                            {% if _last %}{{ _last }}{% else %}never{% endif %}
+                        </div>
+                    </div>
+                    <div class="form-group full-width">
+                        <button class="btn btn-primary btn-sm" type="button" onclick="_sendDiagnosticsNow(this)">Send bug report</button>
+                        <span id="diag-send-status" role="status" aria-live="polite"
+                            style="margin-left:10px; font-size:0.85rem; color:rgba(255,255,255,0.65);"></span>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Recent submitted reports</label>
+                        <div id="diag-submission-history" class="diagnostics-history" role="status"
+                            aria-live="polite" aria-busy="true">Loading reports...</div>
                     </div>
                 </div>
             </div>
@@ -2432,12 +2336,6 @@
                 </div>
             </div>
         </div><!-- /users panel -->
-
-        <!-- Logs tab (embedded real-time log viewer; iframe loaded lazily on open,
-             unloaded on leave so its live-tail polling only runs while active) -->
-        <div class="tab-panel" data-panel="logs">
-            <iframe id="logsFrame" class="logs-frame" title="Application logs" data-src="/logs?embed=1"></iframe>
-        </div><!-- /logs panel -->
 
             </div><!-- /.settings-main -->
         </div><!-- /.settings-layout -->
@@ -2625,6 +2523,112 @@
                 // For now, we prefer keeping values in UI so user doesn't lose config by accidental toggle
             }
         }
+
+        function _diagnosticsHistoryLine(className, text) {
+            const line = document.createElement('div');
+            line.className = className;
+            line.textContent = text;
+            return line;
+        }
+
+        function _renderDiagnosticsSubmissions(submissions) {
+            const history = document.getElementById('diag-submission-history');
+            if (!history) return;
+            history.textContent = '';
+            history.setAttribute('aria-busy', 'false');
+            if (!Array.isArray(submissions) || submissions.length === 0) {
+                history.appendChild(_diagnosticsHistoryLine('help-text', 'No manual reports submitted yet.'));
+                return;
+            }
+
+            submissions.forEach(function(submission) {
+                const card = document.createElement('div');
+                card.className = 'diagnostics-submission';
+                const header = document.createElement('div');
+                header.className = 'diagnostics-submission-header';
+                let submittedAt = submission.submitted_at || '';
+                if (submittedAt) {
+                    const parsed = new Date(submittedAt);
+                    if (!Number.isNaN(parsed.getTime())) submittedAt = parsed.toLocaleString();
+                }
+                header.appendChild(_diagnosticsHistoryLine('', submittedAt || 'Submitted report'));
+                header.appendChild(_diagnosticsHistoryLine(
+                    'diagnostics-submission-status',
+                    submission.status === 'replied' ? 'Maintainer replied' : 'Report received'
+                ));
+                card.appendChild(header);
+
+                if (submission.user_message) {
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', 'Your note'));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.user_message));
+                }
+                if (submission.response_md) {
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', 'Maintainer response'));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.response_md));
+                }
+                history.appendChild(card);
+            });
+        }
+
+        function _loadDiagnosticsSubmissions() {
+            const history = document.getElementById('diag-submission-history');
+            if (!history) return;
+            history.setAttribute('aria-busy', 'true');
+            fetch('/api/diagnostics/submissions')
+                .then(function(response) {
+                    return response.json().catch(function() { return {}; }).then(function(data) {
+                        if (!response.ok) throw new Error('unavailable');
+                        return data;
+                    });
+                })
+                .then(function(data) { _renderDiagnosticsSubmissions(data.submissions); })
+                .catch(function() {
+                    history.textContent = 'Submitted reports are unavailable right now.';
+                    history.setAttribute('aria-busy', 'false');
+                });
+        }
+
+        function _sendDiagnosticsNow(btn) {
+            const status = document.getElementById('diag-send-status');
+            const message = document.getElementById('diag-problem-message');
+            btn.textContent = 'Sending...';
+            btn.disabled = true;
+            if (status) status.textContent = '';
+            fetch('/api/diagnostics/send-now', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: message ? message.value : ''})
+            })
+                .then(function(response) {
+                    return response.json().catch(function() { return {}; }).then(function(data) {
+                        return {ok: response.ok, status: response.status, data: data};
+                    });
+                })
+                .then(function(result) {
+                    if (result.ok && result.data.sent) {
+                        if (status) status.textContent = 'Report received.';
+                        if (message) message.value = '';
+                        _loadDiagnosticsSubmissions();
+                    } else if (result.status === 429) {
+                        let retry = '';
+                        if (result.data.retry_after_hours) {
+                            retry = ' Try again in about ' + result.data.retry_after_hours + ' hours.';
+                        }
+                        if (status) status.textContent = 'Please wait before sending another report.' + retry;
+                    } else if (status) {
+                        status.textContent = 'Report could not be sent.';
+                    }
+                })
+                .catch(function() {
+                    if (status) status.textContent = 'Report could not be sent.';
+                })
+                .finally(function() {
+                    btn.textContent = 'Send bug report';
+                    btn.disabled = false;
+                });
+        }
+
+        _loadDiagnosticsSubmissions();
 
         function togglePollSeconds(rowId, mode) {
             const row = document.getElementById(rowId);
@@ -2917,7 +2921,7 @@
             if (deviceSelect) {
                 deviceSelect.addEventListener('change', function () {
                     if (this.value === 'cuda') {
-                        alert("To use an NVIDIA GPU, you must modify your docker-compose.yml to include the 'deploy' block with 'capabilities: [gpu]' and ensure the NVIDIA Container Toolkit is installed on your host.");
+                        alert("Forcing GPU requires all three, or transcription will fail:\n\n1. The CUDA image (ghcr.io/cporcellijr/bookbridge:latest-cuda) — the default image has no CUDA libraries.\n2. The NVIDIA Container Toolkit on your host.\n3. A 'deploy' block with 'capabilities: [gpu]' in docker-compose.yml.\n\nAuto detects all three and falls back to CPU instead of failing.");
                     }
                 });
             }
@@ -3025,21 +3029,9 @@
     </script>
     <script>
         // --- Settings sidebar tabs ---
-        const SETTINGS_TABS = ['integrations', 'sync', 'features', 'ai', 'system', 'users', 'logs'];
+        const SETTINGS_TABS = ['integrations', 'sync', 'features', 'ai', 'system', 'users'];
         // Old tab names (bookmarks / external links) map onto the new grouping.
         const LEGACY_TAB_ALIASES = { general: 'integrations', reading_apps: 'integrations', trackers: 'integrations', tools: 'features' };
-
-        // Lazy-load the embedded log viewer on first open; unload it on leave so
-        // its live-tail polling only runs while the Logs tab is active.
-        function syncLogsFrame(name) {
-            const frame = document.getElementById('logsFrame');
-            if (!frame) return;
-            if (name === 'logs') {
-                frame.src = frame.dataset.src;
-            } else if (frame.src && frame.src !== 'about:blank') {
-                frame.src = 'about:blank';
-            }
-        }
 
         function showSettingsTab(name) {
             if (LEGACY_TAB_ALIASES[name]) name = LEGACY_TAB_ALIASES[name];
@@ -3050,11 +3042,10 @@
             document.querySelectorAll('.tab-panel').forEach(function (p) {
                 p.classList.toggle('active', p.dataset.panel === name);
             });
-            // The Users and Logs panels live outside the application form; hide the
-            // form (and its Save bar) while either is showing.
+            // The Users panel lives outside the application form; hide the
+            // form (and its Save bar) while it is showing.
             const form = document.getElementById('settingsForm');
-            if (form) form.style.display = (name === 'users' || name === 'logs') ? 'none' : '';
-            syncLogsFrame(name);
+            if (form) form.style.display = (name === 'users') ? 'none' : '';
             if (history.replaceState) {
                 history.replaceState(null, '', '#' + name);
             } else {
@@ -3093,6 +3084,4 @@
             }
         });
     </script>
-</body>
-
-</html>
+{% endblock %}

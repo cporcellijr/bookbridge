@@ -74,27 +74,39 @@ class UserClientRegistry:
         self._lock = threading.RLock()
 
     def _user_credentials(self, user_id: int) -> dict:
-        """Per-user override dict, limited to recognized per-user keys."""
-        try:
-            stored = self.database_service.get_user_credentials(user_id) or {}
-        except Exception as e:
-            logger.warning("Could not load credentials for user %s: %s", user_id, e)
-            stored = {}
+        """Per-user override dict, limited to recognized per-user keys.
+
+        Raises on database exceptions so the caller can distinguish a transient
+        DB failure from a legitimately empty credential set (which is valid and
+        should be cached).
+        """
+        stored = self.database_service.get_user_credentials(user_id) or {}
         creds = {k: v for k, v in stored.items() if k in PER_USER_CREDENTIAL_KEYS}
-        try:
-            user = self.database_service.get_user(user_id)
-            creds[_ALLOW_GLOBAL_FALLBACK_KEY] = bool(user and getattr(user, "is_admin", False))
-        except Exception as e:
-            logger.warning("Could not load user %s for credential fallback policy: %s", user_id, e)
-            creds[_ALLOW_GLOBAL_FALLBACK_KEY] = False
+        user = self.database_service.get_user(user_id)
+        creds[_ALLOW_GLOBAL_FALLBACK_KEY] = bool(user and getattr(user, "is_admin", False))
         return creds
 
     def get_clients(self, user_id: int) -> UserClients:
-        """Return the cached per-user bundle, building it on first access."""
+        """Return the cached per-user bundle, building it on first access.
+
+        On a transient DB exception the bundle is returned but NOT cached, so
+        a subsequent request re-reads the DB. A legitimately empty credential
+        set is cached normally.
+        """
         with self._lock:
             bundle = self._cache.get(user_id)
             if bundle is None:
-                bundle = self._build(user_id, self._user_credentials(user_id))
+                try:
+                    creds = self._user_credentials(user_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Transient DB error building client bundle for user %s: %s "
+                        "(returning fallback, not caching)",
+                        user_id,
+                        exc,
+                    )
+                    return self._build(user_id, {_ALLOW_GLOBAL_FALLBACK_KEY: False})
+                bundle = self._build(user_id, creds)
                 self._cache[user_id] = bundle
             return bundle
 

@@ -1,1006 +1,952 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Library Suggestions - BookBridge</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: #0a0a0a; color: #fff; }
-        .top-nav { background: rgba(20,20,20,0.95); border-bottom: 1px solid rgba(255,255,255,0.08); padding: 16px 28px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-        .logo-section { display: flex; align-items: center; gap: 20px; }
-        .logo-section a { text-decoration: none; }
-        .logo-section h1 { font-size: 28px; font-weight: 700; background: linear-gradient(135deg,#667eea,#764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-        .library-links { display: flex; align-items: center; gap: 10px; padding-left: 16px; border-left: 1px solid rgba(255,255,255,0.1); }
-        .nav-icon-link { width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.04); text-decoration: none; }
-        .nav-icon-link:hover { background: rgba(255,255,255,0.1); color: #fff; }
-        .nav-icon-link svg { width: 19px; height: 19px; }
-        .nav-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-        .btn { padding: 9px 14px; font-size: 14px; border-radius: 8px; border: 1px solid rgba(102,126,234,0.35); background: rgba(102,126,234,0.16); color: #9fb2ff; text-decoration: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-        .btn:hover { background: rgba(102,126,234,0.28); }
-        .btn:disabled { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
-        .btn-primary { background: rgba(102,126,234,0.28); color: #d9e0ff; border-color: rgba(102,126,234,0.55); }
-        .btn-success { background: linear-gradient(135deg,#4caf50,#3f9744); color: #fff; border: none; }
-        .btn-success:disabled { background: rgba(76,175,80,0.24); color: rgba(255,255,255,0.45); cursor: not-allowed; }
-        .btn-danger { background: rgba(244,67,54,0.16); color: #f17f78; border-color: rgba(244,67,54,0.35); }
-        .btn-muted { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.82); border-color: rgba(255,255,255,0.2); }
-        .btn-small { padding: 5px 10px; font-size: 12px; }
-        .container { max-width: 1800px; margin: 0 auto; padding: 28px 24px 36px; }
-        .page-header h2 { font-size: 32px; margin-bottom: 8px; }
-        .subtitle { color: rgba(255,255,255,0.65); }
-        .toolbar { margin-top: 18px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-        .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-        .toolbar-meta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-        .sort-controls { display: inline-flex; gap: 8px; align-items: center; }
-        .sort-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: rgba(255,255,255,0.66); }
-        .sort-select { padding: 7px 10px; border-radius: 8px; color: #fff; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16); font-size: 13px; }
-        .sort-select option { color: #111; background: #fff; }
-        .count { font-size: 14px; color: rgba(255,255,255,0.7); }
-        .flash-error { margin-top: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(244,67,54,0.35); background: rgba(244,67,54,0.14); color: #ffb3ad; font-size: 14px; }
-        .layout { margin-top: 20px; display: grid; grid-template-columns: minmax(0,1fr) 420px; gap: 20px; align-items: start; }
-        .panel { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; }
-        .panel-head { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; }
-        .panel-head h3 { font-size: 18px; }
-        .left-wrap { position: relative; min-height: 280px; }
-        .scan-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; background: rgba(10,10,10,0.72); border-radius: 0 0 12px 12px; z-index: 10; }
-        .scan-overlay.show { display: flex; }
-        .spinner { width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #9fb2ff; border-radius: 50%; animation: spin .8s linear infinite; }
-        .scan-progress-wrap { width: min(360px, 70%); height: 10px; border-radius: 999px; background: rgba(255,255,255,0.14); overflow: hidden; margin-top: 2px; }
-        .scan-progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#6ea8ff,#8bda9d); transition: width 0.4s ease; }
-        .scan-progress-text { font-size: 13px; color: rgba(255,255,255,0.85); }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .suggestions-list { max-height: calc(100vh - 290px); overflow-y: auto; padding: 12px; display: grid; gap: 10px; }
-        .suggestion-card { border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.04); border-radius: 10px; padding: 10px; cursor: pointer; }
-        .suggestion-card:hover { border-color: rgba(102,126,234,0.5); }
-        .suggestion-card.selected { border-color: rgba(102,126,234,0.85); background: rgba(102,126,234,0.14); }
-        .bulk-actions { display: flex; gap: 8px; margin: 8px 0 4px; flex-wrap: wrap; }
-        .suggestion-select { font-size: 12px; color: rgba(255,255,255,0.7); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
-        .suggestion-card.is-queued { opacity: 0.5; border-color: rgba(76,175,80,0.5); }
-        .suggestion-card.is-queued::before { content: '✓ Queued'; float: right; font-size: 11px; font-weight: 700; color: #81c784; }
-        .suggestion-main { display: grid; grid-template-columns: 54px minmax(0,1fr); gap: 10px; align-items: center; }
-        .cover { width: 54px; height: 54px; border-radius: 8px; object-fit: cover; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15); }
-        .title { font-size: 15px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; }
-        .author { font-size: 12px; color: rgba(255,255,255,0.68); margin-bottom: 3px; }
-        .best-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-        .best { flex: 1; min-width: 0; font-size: 12px; color: rgba(255,255,255,0.78); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .source-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
-        .source-badge.grimmory { background: rgba(76,175,80,0.2); color: #81c784; }
-        .source-badge.bookorbit { background: rgba(0,188,212,0.2); color: #4dd0e1; }
-        .source-badge.abs { background: rgba(102,126,234,0.2); color: #93a5f6; }
-        .source-badge.cwa { background: rgba(255,152,0,0.2); color: #ffb74d; }
-        .source-badge.localfile { background: rgba(156,39,176,0.2); color: #ce93d8; }
-        .source-badge.unknown { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
-        .source-badge.transcript { background: rgba(167,139,250,0.2); color: #a78bfa; }
-        .source-badge.samefolder { background: rgba(45,212,191,0.18); color: #5eead4; }
-        .score { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
-        .card-actions { margin-top: 8px; width: 100%; display: flex; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
-        .card-actions .btn { opacity: 1; border-width: 1px; font-weight: 700; }
-        .card-actions .btn-dismiss { background: rgba(255,255,255,0.2); color: #f3f5ff; border-color: rgba(255,255,255,0.32); }
-        .card-actions .btn-dismiss:hover { background: rgba(255,255,255,0.28); }
-        .card-actions .btn-reject { background: rgba(244,67,54,0.24); color: #ffc8c4; border-color: rgba(244,67,54,0.5); }
-        .card-actions .btn-reject:hover { background: rgba(244,67,54,0.34); }
-        .empty { text-align: center; color: rgba(255,255,255,0.62); padding: 38px 16px; }
-        .queue-panel { position: sticky; top: 92px; max-height: calc(100vh - 110px); overflow: hidden; display: flex; flex-direction: column; }
-        .selection { padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-        .selection h4 { font-size: 16px; margin-bottom: 8px; }
-        .selection-placeholder { color: rgba(255,255,255,0.64); font-size: 14px; }
-        .selection-details.hidden { display: none; }
-        .selected-book { display: grid; grid-template-columns: 50px 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
-        .selected-book img { width: 50px; height: 50px; border-radius: 7px; object-fit: cover; background: rgba(255,255,255,0.1); }
-        .selected-title { font-size: 14px; font-weight: 700; line-height: 1.3; }
-        .selected-author { font-size: 12px; color: rgba(255,255,255,0.68); margin-top: 3px; }
-        .field-label { display: block; margin-bottom: 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: rgba(255,255,255,0.72); }
-        .field-hint { margin-top: -4px; margin-bottom: 8px; font-size: 11px; color: rgba(255,255,255,0.52); }
-        .selection-grid-scroll { max-height: clamp(180px, 24vh, 280px); overflow-y: auto; padding-right: 4px; margin-bottom: 10px; }
-        .selection-grid-scroll::-webkit-scrollbar { width: 8px; }
-        .selection-grid-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 999px; }
-        .selection-grid-scroll::-webkit-scrollbar-thumb { background: rgba(102,126,234,0.32); border-radius: 999px; }
-        .selection-grid-scroll::-webkit-scrollbar-thumb:hover { background: rgba(102,126,234,0.5); }
-        .resource-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 0; align-content: start; }
-        .resource-card { cursor: pointer; border: 2px solid rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden; transition: all 0.25s; background: rgba(255,255,255,0.03); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 8px; text-align: center; gap: 6px; min-height: 122px; position: relative; }
-        .resource-card:hover { border-color: rgba(102,126,234,0.5); transform: translateY(-2px); box-shadow: 0 4px 14px rgba(102,126,234,0.2); }
-        .resource-card.selected { border-color: #667eea; background: rgba(102,126,234,0.15); box-shadow: 0 8px 24px rgba(102,126,234,0.3); }
-        .resource-card.selected::after { content: '✓'; position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; background: #6366f1; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(99,102,241,0.5); }
-        .resource-card.ghost-card { border-style: dashed; background: transparent; }
-        .resource-card.ghost-card:hover { background: rgba(102,126,234,0.06); }
-        .resource-icon { font-size: 26px; line-height: 1; }
-        .resource-title { font-size: 13px; font-weight: 600; color: #fff; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .resource-subtitle { font-size: 11px; color: rgba(255,255,255,0.6); line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .ebook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 0; align-content: start; }
-        .ebook-card { cursor: pointer; border: 2px solid rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden; transition: all 0.25s; background: rgba(255,255,255,0.03); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 8px; text-align: center; gap: 6px; min-height: 122px; position: relative; }
-        .ebook-card:hover { border-color: rgba(102,126,234,0.5); transform: translateY(-2px); box-shadow: 0 4px 14px rgba(102,126,234,0.2); }
-        .ebook-card.selected { border-color: #667eea; background: rgba(102,126,234,0.15); box-shadow: 0 8px 24px rgba(102,126,234,0.3); }
-        .ebook-card.selected::after { content: '✓'; position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; background: #6366f1; color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(99,102,241,0.5); }
-        .ebook-icon { font-size: 26px; line-height: 1; }
-        .ebook-title { font-size: 13px; font-weight: 600; color: #fff; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .ebook-subtitle { font-size: 11px; color: rgba(255,255,255,0.6); line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .ebook-grid-empty { margin-bottom: 10px; font-size: 12px; color: rgba(255,255,255,0.5); }
-        .ebook-grid-empty.hidden { display: none; }
-        .queue-list { padding: 12px 14px; overflow-y: auto; }
-        .queue-item { display: flex; align-items: center; gap: 11px; padding: 9px; margin-bottom: 9px; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; background: rgba(255,255,255,0.05); }
-        .queue-item-cover { width: 40px; height: 60px; border-radius: 4px; object-fit: cover; background: rgba(255,255,255,0.1); }
-        .queue-item-info { flex: 1; min-width: 0; }
-        .queue-item-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 3px; }
-        .queue-item-ebook { font-size: 11px; color: rgba(255,255,255,0.62); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .queue-remove { width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(244,67,54,0.24); color: #f44336; font-size: 16px; cursor: pointer; }
-        .queue-actions { margin-top: 6px; display: grid; gap: 10px; }
-        .w-100 { width: 100%; }
-        .inline-form { display: inline-flex; }
-        .submit-feedback { display: none; align-items: center; gap: 10px; margin-top: 12px; color: rgba(255,255,255,0.72); font-size: 13px; }
-        .submit-feedback.show { display: inline-flex; }
-        .submit-feedback.block.show { display: flex; }
-        .submit-feedback-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #9fb2ff; border-radius: 50%; animation: submit-spin .8s linear infinite; flex-shrink: 0; }
-        @keyframes submit-spin { to { transform: rotate(360deg); } }
-        @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .queue-panel { position: static; max-height: none; } .suggestions-list { max-height: 440px; } .selection-grid-scroll { max-height: none; overflow: visible; padding-right: 0; } }
-        @media (max-width: 920px) {
-            .top-nav { padding: 14px; flex-direction: column; align-items: flex-start; }
-            .logo-section h1 { font-size: 22px; }
-            .container { padding: 20px 14px 28px; }
-            .nav-actions { width: 100%; justify-content: flex-start; }
-        }
-    </style>
-</head>
-<body>
-    <div class="top-nav">
-        <div class="logo-section">
-            <a href="/"><h1>BookBridge</h1></a>
-            <div class="library-links">
-                {% if abs_server %}
-                <a href="{{ abs_server }}" class="nav-icon-link" target="_blank" title="Audiobookshelf">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    </svg>
-                </a>
-                {% endif %}
-                {% if booklore_server %}
-                <a href="{{ booklore_server }}" class="nav-icon-link" target="_blank" title="Ebook Library">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                    </svg>
-                </a>
-                {% endif %}
-                {% if shelfmark_url %}
-                <a href="/shelfmark" class="nav-icon-link" title="Shelfmark Tool" target="_blank"
-                    rel="noopener noreferrer">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    </svg>
-                </a>
-                {% endif %}
-            </div>
+{% extends "base.html" %}
+{% set active_page = 'suggestions' %}
+{% block title %}Suggestions · BookBridge{% endblock %}
+
+{% block head %}
+<style>
+    .suggestions-wrap { max-width: 1800px; margin: 0 auto; padding: 28px 24px 36px; }
+    .page-header h2 { font-size: 32px; margin-bottom: 8px; }
+    .subtitle { color: var(--muted); }
+
+    /* Page-local button variants layered on the shared .btn base */
+    .btn-muted { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.82); border-color: var(--border-strong); }
+    .btn-muted:hover:not(:disabled) { background: rgba(255,255,255,0.14); }
+    .btn-small { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+    .btn-success { background: linear-gradient(135deg,#36d399,#2bb381); color: #fff; border: none; }
+    .btn-success:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(54,211,153,0.3); }
+    /* The queue partial renders bare .btn buttons — give them the soft-indigo default here */
+    .queue-actions .btn:not(.btn-success):not(.btn-danger) { background: rgba(102,126,234,0.16); border: 1px solid rgba(102,126,234,0.35); color: #9fb2ff; }
+    .queue-actions .btn:not(.btn-success):not(.btn-danger):hover { background: rgba(102,126,234,0.28); }
+
+    .toolbar { margin-top: 18px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar-meta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .sort-controls { display: inline-flex; gap: 8px; align-items: center; }
+    .sort-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .sort-select { padding: 7px 10px; border-radius: var(--radius-sm); color: var(--text); background: rgba(255,255,255,0.08); border: 1px solid var(--border-strong); font-family: inherit; font-size: 13px; }
+    .sort-select option { color: #111; background: #fff; }
+    .count { font-size: 14px; color: var(--muted); }
+    .flash-error { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid rgba(255,107,107,0.35); background: rgba(255,107,107,0.14); color: #ffb3ad; font-size: 14px; }
+    .layout { margin-top: 20px; display: grid; grid-template-columns: minmax(0,1fr) 420px; gap: 20px; align-items: start; }
+    /* Shared .panel supplies surface/border/radius; this layout manages its own padding */
+    .layout .panel { padding: 0; }
+    .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .panel-head h3 { font-size: 18px; }
+    .left-wrap { position: relative; min-height: 280px; }
+    .scan-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; background: rgba(10,10,10,0.72); border-radius: 0 0 var(--radius) var(--radius); z-index: 10; }
+    .scan-overlay.show { display: flex; }
+    .spinner { width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.2); border-top-color: #9fb2ff; border-radius: 50%; animation: spin .8s linear infinite; }
+    .scan-progress-wrap { width: min(360px, 70%); height: 10px; border-radius: 999px; background: rgba(255,255,255,0.14); overflow: hidden; margin-top: 2px; }
+    .scan-progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#6ea8ff,#8bda9d); transition: width 0.4s ease; }
+    .scan-progress-text { font-size: 13px; color: rgba(255,255,255,0.85); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .suggestions-list { max-height: calc(100vh - 290px); overflow-y: auto; padding: 12px; display: grid; gap: 10px; }
+    .suggestion-card { border: 1px solid var(--border-strong); background: var(--panel-soft); border-radius: 10px; padding: 10px; cursor: pointer; }
+    .suggestion-card:hover { border-color: rgba(102,126,234,0.5); }
+    .suggestion-card.selected { border-color: rgba(102,126,234,0.85); background: rgba(102,126,234,0.14); }
+    .bulk-actions { display: flex; gap: 8px; margin: 8px 0 4px; padding: 0 12px; flex-wrap: wrap; }
+    .suggestion-select { font-size: 12px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
+    .suggestion-card.is-queued { opacity: 0.5; border-color: rgba(76,175,80,0.5); }
+    .suggestion-card.is-queued::before { content: '✓ Queued'; float: right; font-size: 11px; font-weight: 700; color: #81c784; }
+    .suggestion-main { display: grid; grid-template-columns: 54px minmax(0,1fr); gap: 10px; align-items: center; }
+    .cover { width: 54px; height: 54px; border-radius: 8px; object-fit: cover; background: rgba(255,255,255,0.1); border: 1px solid var(--border-strong); }
+    .title { font-size: 15px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; }
+    .author { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+    .best-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .best { flex: 1; min-width: 0; font-size: 12px; color: rgba(255,255,255,0.78); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .source-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    .source-badge.grimmory { background: rgba(76,175,80,0.2); color: #81c784; }
+    .source-badge.bookorbit { background: rgba(0,188,212,0.2); color: #4dd0e1; }
+    .source-badge.abs { background: rgba(102,126,234,0.2); color: #93a5f6; }
+    .source-badge.cwa { background: rgba(255,152,0,0.2); color: #ffb74d; }
+    .source-badge.localfile { background: rgba(156,39,176,0.2); color: #ce93d8; }
+    .source-badge.unknown { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
+    .source-badge.transcript { background: rgba(167,139,250,0.2); color: #a78bfa; }
+    .source-badge.samefolder { background: rgba(45,212,191,0.18); color: #5eead4; }
+    .score { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
+    .card-actions { margin-top: 8px; width: 100%; display: flex; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
+    .card-actions .btn { opacity: 1; border-width: 1px; font-weight: 700; }
+    .card-actions .btn-dismiss { background: rgba(255,255,255,0.2); color: #f3f5ff; border-color: rgba(255,255,255,0.32); }
+    .card-actions .btn-dismiss:hover { background: rgba(255,255,255,0.28); }
+    .card-actions .btn-reject { background: rgba(255,107,107,0.24); color: #ffc8c4; border-color: rgba(255,107,107,0.5); }
+    .card-actions .btn-reject:hover { background: rgba(255,107,107,0.34); }
+    .empty { text-align: center; color: var(--muted); padding: 38px 16px; }
+    .queue-panel { position: sticky; top: calc(var(--nav-height) + 24px); max-height: calc(100vh - var(--nav-height) - 48px); overflow: hidden; display: flex; flex-direction: column; }
+    .selection { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .selection h4 { font-size: 16px; margin-bottom: 8px; }
+    .selection-placeholder { color: var(--muted); font-size: 14px; }
+    .selection-details.hidden { display: none; }
+    .selected-book { display: grid; grid-template-columns: 50px 1fr; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .selected-book img { width: 50px; height: 50px; border-radius: 7px; object-fit: cover; background: rgba(255,255,255,0.1); }
+    .selected-title { font-size: 14px; font-weight: 700; line-height: 1.3; }
+    .selected-author { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .field-label { display: block; margin-bottom: 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .field-hint { margin-top: -4px; margin-bottom: 8px; font-size: 11px; color: var(--muted-soft); }
+    .selection-grid-scroll { max-height: clamp(180px, 24vh, 280px); overflow-y: auto; padding-right: 4px; margin-bottom: 10px; }
+    .resource-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 0; align-content: start; }
+    .resource-card { cursor: pointer; border: 2px solid var(--border); border-radius: 10px; overflow: hidden; transition: all 0.25s; background: var(--panel-soft); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 8px; text-align: center; gap: 6px; min-height: 122px; position: relative; }
+    .resource-card:hover { border-color: rgba(102,126,234,0.5); transform: translateY(-2px); box-shadow: 0 4px 14px rgba(102,126,234,0.2); }
+    .resource-card.selected { border-color: var(--accent); background: rgba(102,126,234,0.15); box-shadow: 0 8px 24px rgba(102,126,234,0.3); }
+    .resource-card.selected::after { content: '✓'; position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; background: var(--accent); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(99,102,241,0.5); }
+    .resource-card.ghost-card { border-style: dashed; background: transparent; }
+    .resource-card.ghost-card:hover { background: rgba(102,126,234,0.06); }
+    .resource-icon { font-size: 26px; line-height: 1; }
+    .resource-title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .resource-subtitle { font-size: 11px; color: var(--muted); line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ebook-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 0; align-content: start; }
+    .ebook-card { cursor: pointer; border: 2px solid var(--border); border-radius: 10px; overflow: hidden; transition: all 0.25s; background: var(--panel-soft); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 10px 8px; text-align: center; gap: 6px; min-height: 122px; position: relative; }
+    .ebook-card:hover { border-color: rgba(102,126,234,0.5); transform: translateY(-2px); box-shadow: 0 4px 14px rgba(102,126,234,0.2); }
+    .ebook-card.selected { border-color: var(--accent); background: rgba(102,126,234,0.15); box-shadow: 0 8px 24px rgba(102,126,234,0.3); }
+    .ebook-card.selected::after { content: '✓'; position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; background: var(--accent); color: #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; box-shadow: 0 2px 8px rgba(99,102,241,0.5); }
+    .ebook-icon { font-size: 26px; line-height: 1; }
+    .ebook-title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .ebook-subtitle { font-size: 11px; color: var(--muted); line-height: 1.2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ebook-grid-empty { margin-bottom: 10px; font-size: 12px; color: var(--muted-soft); }
+    .ebook-grid-empty.hidden { display: none; }
+    .queue-list { padding: 12px 14px; overflow-y: auto; }
+    .queue-item { display: flex; align-items: center; gap: 11px; padding: 9px; margin-bottom: 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--panel); }
+    .queue-item-cover { width: 40px; height: 60px; border-radius: 4px; object-fit: cover; background: rgba(255,255,255,0.1); }
+    .queue-item-info { flex: 1; min-width: 0; }
+    .queue-item-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 3px; }
+    .queue-item-ebook { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queue-remove { width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(255,107,107,0.24); color: var(--danger); font-size: 16px; cursor: pointer; }
+    .queue-actions { margin-top: 6px; display: grid; gap: 10px; }
+    .w-100 { width: 100%; }
+    .inline-form { display: inline-flex; }
+    .submit-feedback { display: none; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+    .submit-feedback.show { display: inline-flex; }
+    .submit-feedback.block.show { display: flex; }
+    .submit-feedback-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #9fb2ff; border-radius: 50%; animation: submit-spin .8s linear infinite; flex-shrink: 0; }
+    @keyframes submit-spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .queue-panel { position: static; max-height: none; } .suggestions-list { max-height: 440px; } .selection-grid-scroll { max-height: none; overflow: visible; padding-right: 0; } }
+    @media (max-width: 920px) {
+        .suggestions-wrap { padding: 20px 14px 28px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="suggestions-wrap">
+    <div class="page-header">
+        <h2>Library Suggestions</h2>
+        <p class="subtitle">Scan your library to find unmatched audiobook/ebook pairs</p>
+    </div>
+    <div class="toolbar">
+        <div class="toolbar-actions">
+            <form method="POST" action="/suggestions" id="scanForm">
+                <input type="hidden" name="action" value="scan">
+                <button type="submit" class="btn btn-primary" {% if scan_in_progress %}disabled{% endif %}>Scan Library</button>
+            </form>
+            <form method="POST" action="/suggestions" id="scanFullForm">
+                <input type="hidden" name="action" value="scan_full">
+                <button type="submit" class="btn btn-muted" {% if scan_in_progress %}disabled{% endif %}>Full Refresh</button>
+            </form>
         </div>
-        <div class="nav-actions">
-            <a href="https://cporcellijr.github.io/bookbridge/" class="btn" target="_blank" rel="noopener noreferrer">📚 Docs</a>
-            <a href="/" class="btn">← Dashboard</a>
-            <a href="/logs" class="btn">📊 Logs</a>
-            <a href="/settings" class="btn">⚙️ Settings</a>
-            <a href="{{ url_for('add_book') }}" class="btn">Add / Update Book</a>
-            <a href="/suggestions" class="btn btn-primary">💡 Suggestions</a>
+        <div class="toolbar-meta">
+            <div class="sort-controls">
+                <label class="sort-label" for="sortMode">Sort</label>
+                <select id="sortMode" class="sort-select">
+                    <option value="best">Best Match</option>
+                    <option value="az">A-Z</option>
+                </select>
+            </div>
+            <span class="count" id="topCount">Showing {{ suggestions|length }} suggestions</span>
         </div>
     </div>
+    {% if scan_stats %}
+    <div class="count" style="margin-top: 8px;">
+        Last scan: {{ scan_stats.scanned_new or 0 }} new scanned, {{ scan_stats.reused_cached or 0 }} reused from cache
+    </div>
+    {% endif %}
+    {% if scan_error %}
+    <div class="flash-error">Last scan failed: {{ scan_error }}</div>
+    {% endif %}
 
-    <div class="container">
-        <div class="page-header">
-            <h2>Library Suggestions</h2>
-            <p class="subtitle">Scan your library to find unmatched audiobook/ebook pairs</p>
-        </div>
-        <div class="toolbar">
-            <div class="toolbar-actions">
-                <form method="POST" action="/suggestions" id="scanForm">
-                    <input type="hidden" name="action" value="scan">
-                    <button type="submit" class="btn btn-primary" {% if scan_in_progress %}disabled{% endif %}>Scan Library</button>
-                </form>
-                <form method="POST" action="/suggestions" id="scanFullForm">
-                    <input type="hidden" name="action" value="scan_full">
-                    <button type="submit" class="btn btn-muted" {% if scan_in_progress %}disabled{% endif %}>Full Refresh</button>
-                </form>
+    <div class="layout">
+        <div class="panel">
+            <div class="panel-head">
+                <h3>Audiobooks</h3>
+                <span class="count" id="panelCount">{{ suggestions|length }} items</span>
             </div>
-            <div class="toolbar-meta">
-                <div class="sort-controls">
-                    <label class="sort-label" for="sortMode">Sort</label>
-                    <select id="sortMode" class="sort-select">
-                        <option value="best">Best Match</option>
-                        <option value="az">A-Z</option>
-                    </select>
-                </div>
-                <span class="count" id="topCount">Showing {{ suggestions|length }} suggestions</span>
+            {% if suggestions %}
+            <div class="bulk-actions" id="bulkActions">
+                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ Add all exact (<span id="exactCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ Add selected (<span id="selectedCount">0</span>)</button>
             </div>
-        </div>
-        {% if scan_stats %}
-        <div class="count" style="margin-top: 8px;">
-            Last scan: {{ scan_stats.scanned_new or 0 }} new scanned, {{ scan_stats.reused_cached or 0 }} reused from cache
-        </div>
-        {% endif %}
-        {% if scan_error %}
-        <div class="flash-error">Last scan failed: {{ scan_error }}</div>
-        {% endif %}
-
-        <div class="layout">
-            <div class="panel">
-                <div class="panel-head">
-                    <h3>Audiobooks</h3>
-                    <span class="count" id="panelCount">{{ suggestions|length }} items</span>
+            {% endif %}
+            <div class="left-wrap">
+                <div class="scan-overlay {% if scan_in_progress %}show{% endif %}" id="scanOverlay">
+                    <div class="spinner"></div>
+                    <div class="scan-progress-wrap">
+                        <div class="scan-progress-bar" id="scanProgressBar"></div>
+                    </div>
+                    <p class="scan-progress-text" id="scanProgressText">Scanning library... 0%</p>
                 </div>
                 {% if suggestions %}
-                <div class="bulk-actions" id="bulkActions">
-                    <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ Add all exact (<span id="exactCount">0</span>)</button>
-                    <button type="button" class="btn btn-small" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ Add selected (<span id="selectedCount">0</span>)</button>
+                <div class="suggestions-list" id="suggestionsList">
+                    {% for s in suggestions %}
+                    <div class="suggestion-card"
+                         id="suggestion-{{ s.bridge_key or s.abs_id }}"
+                         data-abs-id="{{ s.bridge_key or s.abs_id }}"
+                         data-best-score="{% if s.matches and s.matches|length > 0 %}{{ s.matches[0].score }}{% else %}0{% endif %}"
+                         data-title="{{ s.audio_title or s.abs_title or '' }}"
+                         onclick="selectSuggestion('{{ s.bridge_key or s.abs_id }}')">
+                        <div class="suggestion-main">
+                            <img src="{{ s.audio_cover_url or s.cover_url }}" alt="Cover" class="cover" onerror="this.style.opacity='0.25';">
+                            <div>
+                                <div class="title">{{ s.audio_title or s.abs_title }}</div>
+                                {% if s.audio_author or s.abs_author %}<div class="author">{{ s.audio_author or s.abs_author }}</div>{% endif %}
+                                <div class="score">{% if s.matches and s.matches|length > 0 %}Match {{ s.matches[0].score|round|int }}%{% else %}Match --{% endif %}</div>
+                                {% if s.matches and s.matches|length > 0 %}
+                                <div class="best" title="{{ s.matches[0].display_name }}">Best: {{ s.matches[0].display_name }} ({{ s.matches[0].score|round|int }}%)</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="card-actions">
+                            <label class="suggestion-select" onclick="event.stopPropagation();">
+                                <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> Select
+                            </label>
+                            <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">Dismiss</button>
+                            <form method="POST" action="/suggestions" class="inline-form" onsubmit="event.stopPropagation();">
+                                <input type="hidden" name="action" value="never">
+                                <input type="hidden" name="bridge_key" value="{{ s.bridge_key or s.abs_id }}">
+                                <input type="hidden" name="audio_source" value="{{ s.audio_source or '' }}">
+                                <input type="hidden" name="audio_title" value="{{ s.audio_title or s.abs_title }}">
+                                <input type="hidden" name="audio_author" value="{{ s.audio_author or s.abs_author }}">
+                                <input type="hidden" name="cover_url" value="{{ s.audio_cover_url or s.cover_url }}">
+                                <button type="submit" class="btn btn-small btn-reject" onclick="event.stopPropagation();">Reject</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="empty" id="emptyState">
+                    {% if scan_has_run %}
+                    <p>No suggestions found above 60% confidence.<br>Run another scan after your library changes.</p>
+                    {% else %}
+                    <p>No scan results yet.<br>Click "Scan Library" to begin.</p>
+                    {% endif %}
                 </div>
                 {% endif %}
-                <div class="left-wrap">
-                    <div class="scan-overlay {% if scan_in_progress %}show{% endif %}" id="scanOverlay">
-                        <div class="spinner"></div>
-                        <div class="scan-progress-wrap">
-                            <div class="scan-progress-bar" id="scanProgressBar"></div>
+            </div>
+        </div>
+
+        <div class="panel queue-panel">
+            <div class="panel-head">
+                <h3>Batch Match Queue</h3>
+                <span class="count" id="queueCount">{{ queue|length }} items</span>
+            </div>
+
+            <div class="selection">
+                <h4>Selected Suggestion</h4>
+                <p class="selection-placeholder" id="selectionPlaceholder">Click a suggestion to review and add to queue.</p>
+                <div class="selection-details hidden" id="selectionDetails">
+                    <div class="selected-book">
+                        <img id="selectedCover" src="" alt="Selected">
+                        <div>
+                            <div class="selected-title" id="selectedTitle"></div>
+                            <div class="selected-author" id="selectedAuthor"></div>
                         </div>
-                        <p class="scan-progress-text" id="scanProgressText">Scanning library... 0%</p>
                     </div>
-                    {% if suggestions %}
-                    <div class="suggestions-list" id="suggestionsList">
-                        {% for s in suggestions %}
-                        <div class="suggestion-card"
-                             id="suggestion-{{ s.bridge_key or s.abs_id }}"
-                             data-abs-id="{{ s.bridge_key or s.abs_id }}"
-                             data-best-score="{% if s.matches and s.matches|length > 0 %}{{ s.matches[0].score }}{% else %}0{% endif %}"
-                             data-title="{{ s.audio_title or s.abs_title or '' }}"
-                             onclick="selectSuggestion('{{ s.bridge_key or s.abs_id }}')">
-                            <div class="suggestion-main">
-                                <img src="{{ s.audio_cover_url or s.cover_url }}" alt="Cover" class="cover" onerror="this.style.opacity='0.25';">
-                                <div>
-                                    <div class="title">{{ s.audio_title or s.abs_title }}</div>
-                                    {% if s.audio_author or s.abs_author %}<div class="author">{{ s.audio_author or s.abs_author }}</div>{% endif %}
-                                    <div class="score">{% if s.matches and s.matches|length > 0 %}Match {{ s.matches[0].score|round|int }}%{% else %}Match --{% endif %}</div>
-                                    {% if s.matches and s.matches|length > 0 %}
-                                    <div class="best" title="{{ s.matches[0].display_name }}">Best: {{ s.matches[0].display_name }} ({{ s.matches[0].score|round|int }}%)</div>
-                                    {% endif %}
-                                </div>
-                            </div>
-                            <div class="card-actions">
-                                <label class="suggestion-select" onclick="event.stopPropagation();">
-                                    <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> Select
-                                </label>
-                                <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">Dismiss</button>
-                                <form method="POST" action="/suggestions" class="inline-form" onsubmit="event.stopPropagation();">
-                                    <input type="hidden" name="action" value="never">
-                                    <input type="hidden" name="bridge_key" value="{{ s.bridge_key or s.abs_id }}">
-                                    <input type="hidden" name="audio_source" value="{{ s.audio_source or '' }}">
-                                    <input type="hidden" name="audio_title" value="{{ s.audio_title or s.abs_title }}">
-                                    <input type="hidden" name="audio_author" value="{{ s.audio_author or s.abs_author }}">
-                                    <input type="hidden" name="cover_url" value="{{ s.audio_cover_url or s.cover_url }}">
-                                    <button type="submit" class="btn btn-small btn-reject" onclick="event.stopPropagation();">Reject</button>
-                                </form>
-                            </div>
+                    <form method="POST" action="/suggestions" id="addToQueueForm">
+                        <input type="hidden" name="action" value="add_to_queue">
+                        <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
+                        <input type="hidden" name="audio_source" id="selected_audio_source" value="">
+                        <input type="hidden" name="audio_source_id" id="selected_audio_source_id" value="">
+                        <input type="hidden" name="audio_title" id="selected_audio_title" value="">
+                        <input type="hidden" name="audio_author" id="selected_audio_author" value="">
+                        <input type="hidden" name="audio_cover_url" id="selected_audio_cover_url" value="">
+                        <input type="hidden" name="audio_duration" id="selected_audio_duration" value="">
+                        <input type="hidden" name="audio_provider_book_id" id="selected_audio_provider_book_id" value="">
+                        <input type="hidden" name="audio_provider_file_id" id="selected_audio_provider_file_id" value="">
+                        <input type="hidden" name="ebook_filename" id="selected_ebook_filename">
+                        <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
+                        <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
+                        <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
+                        <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
+                        <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
+                        <label class="field-label" for="storytellerCardGrid">Storyteller (Preferred)</label>
+                        <p class="field-hint">Optional. Choose this to create a tri-link.</p>
+                        <div class="selection-grid-scroll">
+                            <div id="storytellerCardGrid" class="resource-grid"></div>
                         </div>
-                        {% endfor %}
-                    </div>
-                    {% else %}
-                    <div class="empty" id="emptyState">
-                        {% if scan_has_run %}
-                        <p>No suggestions found above 60% confidence.<br>Run another scan after your library changes.</p>
-                        {% else %}
-                        <p>No scan results yet.<br>Click "Scan Library" to begin.</p>
-                        {% endif %}
-                    </div>
-                    {% endif %}
+                        <p id="storytellerGridEmpty" class="ebook-grid-empty hidden"></p>
+                        <label class="field-label" for="ebookCardGrid">Ebook Match</label>
+                        <div class="selection-grid-scroll">
+                            <div id="ebookCardGrid" class="ebook-grid"></div>
+                        </div>
+                        <p id="ebookGridEmpty" class="ebook-grid-empty hidden">No ebook matches available for this suggestion. Storyteller-only queue is allowed.</p>
+                        <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>➕ Add to Queue</button>
+                    </form>
+                    <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
                 </div>
             </div>
 
-            <div class="panel queue-panel">
-                <div class="panel-head">
-                    <h3>Batch Match Queue</h3>
-                    <span class="count" id="queueCount">{{ queue|length }} items</span>
-                </div>
-
-                <div class="selection">
-                    <h4>Selected Suggestion</h4>
-                    <p class="selection-placeholder" id="selectionPlaceholder">Click a suggestion to review and add to queue.</p>
-                    <div class="selection-details hidden" id="selectionDetails">
-                        <div class="selected-book">
-                            <img id="selectedCover" src="" alt="Selected">
-                            <div>
-                                <div class="selected-title" id="selectedTitle"></div>
-                                <div class="selected-author" id="selectedAuthor"></div>
-                            </div>
-                        </div>
-                        <form method="POST" action="/suggestions" id="addToQueueForm">
-                            <input type="hidden" name="action" value="add_to_queue">
-                            <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
-                            <input type="hidden" name="audio_source" id="selected_audio_source" value="">
-                            <input type="hidden" name="audio_source_id" id="selected_audio_source_id" value="">
-                            <input type="hidden" name="audio_title" id="selected_audio_title" value="">
-                            <input type="hidden" name="audio_author" id="selected_audio_author" value="">
-                            <input type="hidden" name="audio_cover_url" id="selected_audio_cover_url" value="">
-                            <input type="hidden" name="audio_duration" id="selected_audio_duration" value="">
-                            <input type="hidden" name="audio_provider_book_id" id="selected_audio_provider_book_id" value="">
-                            <input type="hidden" name="audio_provider_file_id" id="selected_audio_provider_file_id" value="">
-                            <input type="hidden" name="ebook_filename" id="selected_ebook_filename">
-                            <input type="hidden" name="ebook_display_name" id="selected_ebook_display_name" value="">
-                            <input type="hidden" name="ebook_source" id="selected_ebook_source" value="">
-                            <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
-                            <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
-                            <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
-                            <label class="field-label" for="storytellerCardGrid">Storyteller (Preferred)</label>
-                            <p class="field-hint">Optional. Choose this to create a tri-link.</p>
-                            <div class="selection-grid-scroll">
-                                <div id="storytellerCardGrid" class="resource-grid"></div>
-                            </div>
-                            <p id="storytellerGridEmpty" class="ebook-grid-empty hidden"></p>
-                            <label class="field-label" for="ebookCardGrid">Ebook Match</label>
-                            <div class="selection-grid-scroll">
-                                <div id="ebookCardGrid" class="ebook-grid"></div>
-                            </div>
-                            <p id="ebookGridEmpty" class="ebook-grid-empty hidden">No ebook matches available for this suggestion. Storyteller-only queue is allowed.</p>
-                            <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>➕ Add to Queue</button>
-                        </form>
-                        <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
-                    </div>
-                </div>
-
-                <div class="queue-list" id="queueList">
-                    {% include "_match_queue_panel.html" %}
-                </div>
+            <div class="queue-list" id="queueList">
+                {% include "_match_queue_panel.html" %}
             </div>
         </div>
     </div>
+</div>
 
-    <script>
-        let suggestionsData = {{ suggestions|tojson }};
-        let selectedSuggestionId = null;
-        let selectedStorytellerUuid = '';
-        let storytellerFetchToken = 0;
-        const storytellerEnabled = {{ storyteller_enabled|default(false)|tojson }};
-        const scanInProgress = {{ scan_in_progress|tojson }};
-        let fakeScanProgress = 0;
-        let fakeScanTimer = null;
-        let displayedScanProgress = 0;
-        let reportedScanProgress = 0;
-        let suggestionSubmitInFlight = false;
+<script>
+    let suggestionsData = {{ suggestions|tojson }};
+    let selectedSuggestionId = null;
+    let selectedStorytellerUuid = '';
+    let storytellerFetchToken = 0;
+    const storytellerEnabled = {{ storyteller_enabled|default(false)|tojson }};
+    const scanInProgress = {{ scan_in_progress|tojson }};
+    let fakeScanProgress = 0;
+    let fakeScanTimer = null;
+    let displayedScanProgress = 0;
+    let reportedScanProgress = 0;
+    let suggestionSubmitInFlight = false;
 
-        function showSuggestionSubmitFeedback(targetId, message) {
-            const feedback = document.getElementById(targetId);
-            if (!feedback) return;
+    function showSuggestionSubmitFeedback(targetId, message) {
+        const feedback = document.getElementById(targetId);
+        if (!feedback) return;
 
-            if (!message) {
-                feedback.classList.remove('show');
-                feedback.innerHTML = '';
-                return;
-            }
-
-            feedback.classList.add('show');
-            feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+        if (!message) {
+            feedback.classList.remove('show');
+            feedback.innerHTML = '';
+            return;
         }
 
-        function setSuggestionButtonHtml(button, html) {
-            button.innerHTML = html;
+        feedback.classList.add('show');
+        feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+    }
+
+    function setSuggestionButtonHtml(button, html) {
+        button.innerHTML = html;
+    }
+
+    function getSuggestionPrimarySubmitter(form) {
+        return form.querySelector('[data-primary-action]:not([disabled])');
+    }
+
+    function startSuggestionSubmitState(submitter) {
+        if (!submitter || suggestionSubmitInFlight) {
+            return false;
         }
 
-        function getSuggestionPrimarySubmitter(form) {
-            return form.querySelector('[data-primary-action]:not([disabled])');
+        suggestionSubmitInFlight = true;
+        const groupName = submitter.dataset.primaryAction || '';
+        if (groupName) {
+            document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
+                if (!button.dataset.originalHtml) {
+                    button.dataset.originalHtml = button.innerHTML;
+                }
+                button.disabled = true;
+            });
+        } else {
+            submitter.disabled = true;
         }
 
-        function startSuggestionSubmitState(submitter) {
-            if (!submitter || suggestionSubmitInFlight) {
-                return false;
-            }
+        setSuggestionButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
+        showSuggestionSubmitFeedback(
+            submitter.dataset.feedbackTarget || '',
+            submitter.dataset.workingMessage || 'Working...'
+        );
+        return true;
+    }
 
-            suggestionSubmitInFlight = true;
-            const groupName = submitter.dataset.primaryAction || '';
-            if (groupName) {
-                document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
-                    if (!button.dataset.originalHtml) {
-                        button.dataset.originalHtml = button.innerHTML;
-                    }
-                    button.disabled = true;
-                });
-            } else {
-                submitter.disabled = true;
-            }
+    function setScanProgress(percent, label) {
+        const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+        const progressBar = document.getElementById('scanProgressBar');
+        const progressText = document.getElementById('scanProgressText');
+        displayedScanProgress = clamped;
+        if (progressBar) progressBar.style.width = `${clamped}%`;
+        if (progressText) progressText.textContent = label || `Scanning library... ${clamped}%`;
+    }
 
-            setSuggestionButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
-            showSuggestionSubmitFeedback(
-                submitter.dataset.feedbackTarget || '',
-                submitter.dataset.workingMessage || 'Working...'
-            );
-            return true;
-        }
-
-        function setScanProgress(percent, label) {
-            const clamped = Math.max(0, Math.min(100, Math.round(percent)));
-            const progressBar = document.getElementById('scanProgressBar');
-            const progressText = document.getElementById('scanProgressText');
-            displayedScanProgress = clamped;
-            if (progressBar) progressBar.style.width = `${clamped}%`;
-            if (progressText) progressText.textContent = label || `Scanning library... ${clamped}%`;
-        }
-
-        function startFakeScanProgress() {
-            if (fakeScanTimer) return;
-            fakeScanProgress = 2;
+    function startFakeScanProgress() {
+        if (fakeScanTimer) return;
+        fakeScanProgress = 2;
+        setScanProgress(fakeScanProgress);
+        fakeScanTimer = setInterval(() => {
+            if (fakeScanProgress >= 35) return;
+            fakeScanProgress = Math.min(35, fakeScanProgress + 1);
             setScanProgress(fakeScanProgress);
-            fakeScanTimer = setInterval(() => {
-                if (fakeScanProgress >= 35) return;
-                fakeScanProgress = Math.min(35, fakeScanProgress + 1);
-                setScanProgress(fakeScanProgress);
-            }, 900);
+        }, 900);
+    }
+
+    function stopFakeScanProgress(finalLabel) {
+        if (fakeScanTimer) {
+            clearInterval(fakeScanTimer);
+            fakeScanTimer = null;
+        }
+        if (finalLabel) {
+            setScanProgress(100, finalLabel);
+        }
+    }
+
+    function applyBackendProgress(progressData) {
+        if (!progressData || typeof progressData !== 'object') {
+            return;
         }
 
-        function stopFakeScanProgress(finalLabel) {
-            if (fakeScanTimer) {
-                clearInterval(fakeScanTimer);
-                fakeScanTimer = null;
-            }
-            if (finalLabel) {
-                setScanProgress(100, finalLabel);
-            }
+        const rawPercent = Number(progressData.percent);
+        if (!Number.isFinite(rawPercent)) {
+            return;
         }
 
-        function applyBackendProgress(progressData) {
-            if (!progressData || typeof progressData !== 'object') {
-                return;
-            }
+        reportedScanProgress = Math.max(reportedScanProgress, Math.max(0, Math.min(100, rawPercent)));
+        const nextPercent = Math.max(displayedScanProgress, reportedScanProgress);
+        const message = progressData.message
+            ? `${progressData.message} (${Math.round(nextPercent)}%)`
+            : undefined;
+        setScanProgress(nextPercent, message);
+    }
 
-            const rawPercent = Number(progressData.percent);
-            if (!Number.isFinite(rawPercent)) {
-                return;
-            }
+    function pollScanStatus() {
+        fetch('/api/suggestions/scan-status')
+            .then((response) => response.json())
+            .then((data) => {
+                const status = data.status || 'idle';
+                if (status === 'running') {
+                    applyBackendProgress(data.progress || {});
+                }
+                if (status === 'done') {
+                    stopFakeScanProgress('Finalizing results... 100%');
+                    setTimeout(() => { window.location.href = '/suggestions'; }, 350);
+                    return;
+                }
+                if (status === 'error') {
+                    stopFakeScanProgress('Scan failed');
+                    setTimeout(() => { window.location.href = '/suggestions'; }, 350);
+                    return;
+                }
+                if (status === 'idle') {
+                    window.location.href = '/suggestions';
+                    return;
+                }
+                setTimeout(pollScanStatus, 1500);
+            })
+            .catch(() => {
+                setTimeout(pollScanStatus, 2000);
+            });
+    }
 
-            reportedScanProgress = Math.max(reportedScanProgress, Math.max(0, Math.min(100, rawPercent)));
-            const nextPercent = Math.max(displayedScanProgress, reportedScanProgress);
-            const message = progressData.message
-                ? `${progressData.message} (${Math.round(nextPercent)}%)`
-                : undefined;
-            setScanProgress(nextPercent, message);
-        }
+    function setSelectedEbook(filename, displayName, source = '', sourceId = '', sourcePath = '') {
+        const hasSelection = !!filename;
+        document.getElementById('selected_ebook_filename').value = hasSelection ? filename : '';
+        document.getElementById('selected_ebook_display_name').value = hasSelection ? (displayName || filename) : '';
+        document.getElementById('selected_ebook_source').value = hasSelection ? (source || '') : '';
+        document.getElementById('selected_ebook_source_id').value = hasSelection ? (sourceId || '') : '';
+        document.getElementById('selected_ebook_source_path').value = hasSelection ? (sourcePath || '') : '';
+        updateAddButton();
+    }
 
-        function pollScanStatus() {
-            fetch('/api/suggestions/scan-status')
-                .then((response) => response.json())
-                .then((data) => {
-                    const status = data.status || 'idle';
-                    if (status === 'running') {
-                        applyBackendProgress(data.progress || {});
-                    }
-                    if (status === 'done') {
-                        stopFakeScanProgress('Finalizing results... 100%');
-                        setTimeout(() => { window.location.href = '/suggestions'; }, 350);
-                        return;
-                    }
-                    if (status === 'error') {
-                        stopFakeScanProgress('Scan failed');
-                        setTimeout(() => { window.location.href = '/suggestions'; }, 350);
-                        return;
-                    }
-                    if (status === 'idle') {
-                        window.location.href = '/suggestions';
-                        return;
-                    }
-                    setTimeout(pollScanStatus, 1500);
-                })
-                .catch(() => {
-                    setTimeout(pollScanStatus, 2000);
-                });
-        }
+    function clearSelectedEbookCards() {
+        document.querySelectorAll('#ebookCardGrid .ebook-card').forEach((card) => card.classList.remove('selected'));
+    }
 
-        function setSelectedEbook(filename, displayName, source = '', sourceId = '', sourcePath = '') {
-            const hasSelection = !!filename;
-            document.getElementById('selected_ebook_filename').value = hasSelection ? filename : '';
-            document.getElementById('selected_ebook_display_name').value = hasSelection ? (displayName || filename) : '';
-            document.getElementById('selected_ebook_source').value = hasSelection ? (source || '') : '';
-            document.getElementById('selected_ebook_source_id').value = hasSelection ? (sourceId || '') : '';
-            document.getElementById('selected_ebook_source_path').value = hasSelection ? (sourcePath || '') : '';
-            updateAddButton();
-        }
+    function selectEbookCard(element, filename, displayName, source, sourceId, sourcePath) {
+        clearSelectedEbookCards();
+        if (element) element.classList.add('selected');
+        setSelectedEbook(filename, displayName, source, sourceId, sourcePath);
+    }
 
-        function clearSelectedEbookCards() {
-            document.querySelectorAll('#ebookCardGrid .ebook-card').forEach((card) => card.classList.remove('selected'));
-        }
+    function updateAddButton() {
+        const hasAudiobook = !!document.getElementById('selected_audiobook_id').value;
+        const hasEbook = !!document.getElementById('selected_ebook_filename').value;
+        const hasStoryteller = !!document.getElementById('selected_storyteller_uuid').value;
+        document.getElementById('addToQueueBtn').disabled = !(hasAudiobook && (hasEbook || hasStoryteller));
+    }
 
-        function selectEbookCard(element, filename, displayName, source, sourceId, sourcePath) {
-            clearSelectedEbookCards();
-            if (element) element.classList.add('selected');
-            setSelectedEbook(filename, displayName, source, sourceId, sourcePath);
-        }
+    function clearSelectedStorytellerCards() {
+        document.querySelectorAll('#storytellerCardGrid .st-card').forEach((card) => card.classList.remove('selected'));
+    }
 
-        function updateAddButton() {
-            const hasAudiobook = !!document.getElementById('selected_audiobook_id').value;
-            const hasEbook = !!document.getElementById('selected_ebook_filename').value;
-            const hasStoryteller = !!document.getElementById('selected_storyteller_uuid').value;
-            document.getElementById('addToQueueBtn').disabled = !(hasAudiobook && (hasEbook || hasStoryteller));
-        }
+    function selectStoryteller(element, uuid) {
+        clearSelectedStorytellerCards();
+        if (element) element.classList.add('selected');
+        selectedStorytellerUuid = uuid || '';
+        document.getElementById('selected_storyteller_uuid').value = selectedStorytellerUuid;
+        updateAddButton();
+    }
 
-        function clearSelectedStorytellerCards() {
-            document.querySelectorAll('#storytellerCardGrid .st-card').forEach((card) => card.classList.remove('selected'));
-        }
+    function renderStorytellerOptions(suggestion) {
+        const grid = document.getElementById('storytellerCardGrid');
+        const emptyLabel = document.getElementById('storytellerGridEmpty');
+        grid.innerHTML = '';
+        emptyLabel.classList.add('hidden');
+        emptyLabel.textContent = '';
 
-        function selectStoryteller(element, uuid) {
-            clearSelectedStorytellerCards();
-            if (element) element.classList.add('selected');
-            selectedStorytellerUuid = uuid || '';
-            document.getElementById('selected_storyteller_uuid').value = selectedStorytellerUuid;
-            updateAddButton();
-        }
+        const noneCard = document.createElement('div');
+        noneCard.className = 'resource-card st-card ghost-card selected';
+        noneCard.dataset.value = '';
+        noneCard.onclick = () => selectStoryteller(noneCard, '');
+        noneCard.innerHTML = '<div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div><div class="resource-title" style="color: rgba(255,255,255,0.5);">None / Skip</div>';
+        grid.appendChild(noneCard);
+        selectStoryteller(noneCard, '');
 
-        function renderStorytellerOptions(suggestion) {
-            const grid = document.getElementById('storytellerCardGrid');
-            const emptyLabel = document.getElementById('storytellerGridEmpty');
-            grid.innerHTML = '';
-            emptyLabel.classList.add('hidden');
-            emptyLabel.textContent = '';
-
-            const noneCard = document.createElement('div');
-            noneCard.className = 'resource-card st-card ghost-card selected';
-            noneCard.dataset.value = '';
-            noneCard.onclick = () => selectStoryteller(noneCard, '');
-            noneCard.innerHTML = '<div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div><div class="resource-title" style="color: rgba(255,255,255,0.5);">None / Skip</div>';
-            grid.appendChild(noneCard);
-            selectStoryteller(noneCard, '');
-
-            if (!storytellerEnabled) {
-                emptyLabel.textContent = 'Storyteller is not configured.';
-                emptyLabel.classList.remove('hidden');
-                return;
-            }
-
-            const queryParts = [suggestion.audio_title || suggestion.abs_title || '', suggestion.audio_author || suggestion.abs_author || '']
-                .map((s) => (s || '').trim())
-                .filter((s) => !!s);
-            if (!queryParts.length) {
-                emptyLabel.textContent = 'No title/author available to search Storyteller.';
-                emptyLabel.classList.remove('hidden');
-                return;
-            }
-
-            const token = ++storytellerFetchToken;
-            emptyLabel.textContent = 'Searching Storyteller...';
+        if (!storytellerEnabled) {
+            emptyLabel.textContent = 'Storyteller is not configured.';
             emptyLabel.classList.remove('hidden');
+            return;
+        }
 
-            const query = queryParts.join(' ');
-            fetch(`/api/storyteller/search?q=${encodeURIComponent(query)}`)
-                .then((response) => response.json())
-                .then((results) => {
-                    if (token !== storytellerFetchToken) return;
-                    if (!Array.isArray(results) || results.length === 0) {
-                        emptyLabel.textContent = 'No Storyteller matches found.';
-                        emptyLabel.classList.remove('hidden');
-                        return;
-                    }
+        const queryParts = [suggestion.audio_title || suggestion.abs_title || '', suggestion.audio_author || suggestion.abs_author || '']
+            .map((s) => (s || '').trim())
+            .filter((s) => !!s);
+        if (!queryParts.length) {
+            emptyLabel.textContent = 'No title/author available to search Storyteller.';
+            emptyLabel.classList.remove('hidden');
+            return;
+        }
 
-                    emptyLabel.classList.add('hidden');
-                    const parsed = [];
-                    results.forEach((item) => {
-                        const uuid = item?.uuid || item?.id || '';
-                        if (!uuid) return;
-                        const title = (item?.title || 'Untitled').toString();
-                        const subtitle = (item?.subtitle || '').toString();
-                        let authors = '';
-                        if (Array.isArray(item?.authors)) {
-                            authors = item.authors.join(', ');
-                        } else if (typeof item?.authors === 'string') {
-                            authors = item.authors;
-                        }
-                        const has_transcript = !!item?.has_transcript;
-                        parsed.push({ uuid, title, subtitle, authors, has_transcript });
-                    });
+        const token = ++storytellerFetchToken;
+        emptyLabel.textContent = 'Searching Storyteller...';
+        emptyLabel.classList.remove('hidden');
 
-                    parsed.forEach((st) => {
-                        const card = document.createElement('div');
-                        card.className = 'resource-card st-card';
-                        card.dataset.value = st.uuid;
-                        card.onclick = () => selectStoryteller(card, st.uuid);
-
-                        const icon = document.createElement('div');
-                        icon.className = 'resource-icon';
-                        icon.textContent = '⚡';
-
-                        const title = document.createElement('div');
-                        title.className = 'resource-title';
-                        const fullTitle = st.subtitle ? `${st.title}: ${st.subtitle}` : st.title;
-                        title.title = fullTitle;
-                        title.textContent = fullTitle;
-
-                        card.appendChild(icon);
-                        card.appendChild(title);
-
-                        if (st.authors) {
-                            const subtitle = document.createElement('div');
-                            subtitle.className = 'resource-subtitle';
-                            subtitle.textContent = st.authors;
-                            card.appendChild(subtitle);
-                        }
-
-                        if (st.has_transcript) {
-                            const badge = document.createElement('span');
-                            badge.className = 'source-badge transcript';
-                            badge.textContent = 'Transcript';
-                            card.appendChild(badge);
-                        }
-
-                        grid.appendChild(card);
-                    });
-
-                    if (parsed.length === 1) {
-                        const single = grid.querySelector('.st-card:not(.ghost-card)');
-                        if (single) {
-                            selectStoryteller(single, single.dataset.value || '');
-                        }
-                    }
-                })
-                .catch(() => {
-                    if (token !== storytellerFetchToken) return;
-                    emptyLabel.textContent = 'Storyteller search failed.';
+        const query = queryParts.join(' ');
+        fetch(`/api/storyteller/search?q=${encodeURIComponent(query)}`)
+            .then((response) => response.json())
+            .then((results) => {
+                if (token !== storytellerFetchToken) return;
+                if (!Array.isArray(results) || results.length === 0) {
+                    emptyLabel.textContent = 'No Storyteller matches found.';
                     emptyLabel.classList.remove('hidden');
-                });
-        }
-
-        function sourceBadgeClass(source) {
-            const normalized = (source || '').toLowerCase().replace(/\s+/g, '');
-            if (normalized === 'grimmory' || normalized === 'abs' || normalized === 'cwa' || normalized === 'localfile') {
-                return normalized;
-            }
-            return 'unknown';
-        }
-
-        function inferSourceFromFilename(filename) {
-            const name = (filename || '').toLowerCase();
-            if (!name) return '';
-            if (name.includes('_abs.')) return 'ABS';
-            if (name.startsWith('cwa_') || name.includes('_cwa.')) return 'CWA';
-            return '';
-        }
-
-        function applySuggestionSort(mode) {
-            const list = document.getElementById('suggestionsList');
-            if (!list) return;
-
-            const cards = Array.from(list.querySelectorAll('.suggestion-card'));
-            if (cards.length < 2) return;
-
-            if (mode === 'az') {
-                cards.sort((a, b) => {
-                    const titleA = (a.dataset.title || '').trim().toLowerCase();
-                    const titleB = (b.dataset.title || '').trim().toLowerCase();
-                    return titleA.localeCompare(titleB);
-                });
-            } else {
-                cards.sort((a, b) => {
-                    const scoreA = Number.parseFloat(a.dataset.bestScore || '0');
-                    const scoreB = Number.parseFloat(b.dataset.bestScore || '0');
-                    return scoreB - scoreA;
-                });
-            }
-
-            cards.forEach((card) => list.appendChild(card));
-        }
-
-        function clearSelection() {
-            selectedSuggestionId = null;
-            document.querySelectorAll('.suggestion-card').forEach((card) => card.classList.remove('selected'));
-            document.getElementById('selectionDetails').classList.add('hidden');
-            document.getElementById('selectionPlaceholder').style.display = 'block';
-            document.getElementById('selected_audiobook_id').value = '';
-            document.getElementById('selected_audio_source').value = '';
-            document.getElementById('selected_audio_source_id').value = '';
-            document.getElementById('selected_audio_title').value = '';
-            document.getElementById('selected_audio_author').value = '';
-            document.getElementById('selected_audio_cover_url').value = '';
-            document.getElementById('selected_audio_duration').value = '';
-            document.getElementById('selected_audio_provider_book_id').value = '';
-            document.getElementById('selected_audio_provider_file_id').value = '';
-            setSelectedEbook('', '', '', '');
-            selectedStorytellerUuid = '';
-            document.getElementById('selected_storyteller_uuid').value = '';
-            const grid = document.getElementById('ebookCardGrid');
-            if (grid) grid.innerHTML = '';
-            const emptyLabel = document.getElementById('ebookGridEmpty');
-            if (emptyLabel) emptyLabel.classList.add('hidden');
-            const stGrid = document.getElementById('storytellerCardGrid');
-            if (stGrid) stGrid.innerHTML = '';
-            const stEmptyLabel = document.getElementById('storytellerGridEmpty');
-            if (stEmptyLabel) stEmptyLabel.classList.add('hidden');
-            storytellerFetchToken += 1;
-            updateAddButton();
-        }
-
-        function selectSuggestion(suggestionKey) {
-            const suggestion = suggestionsData.find((item) => (item.bridge_key || item.abs_id) === suggestionKey);
-            if (!suggestion || !suggestion.matches || suggestion.matches.length === 0) return;
-
-            selectedSuggestionId = suggestionKey;
-            document.querySelectorAll('.suggestion-card').forEach((card) => card.classList.toggle('selected', card.dataset.absId === suggestionKey));
-
-            document.getElementById('selectionPlaceholder').style.display = 'none';
-            document.getElementById('selectionDetails').classList.remove('hidden');
-            document.getElementById('selected_audiobook_id').value = suggestion.bridge_key || suggestion.abs_id || '';
-            document.getElementById('selected_audio_source').value = suggestion.audio_source || '';
-            document.getElementById('selected_audio_source_id').value = suggestion.audio_source_id || '';
-            document.getElementById('selected_audio_title').value = suggestion.audio_title || suggestion.abs_title || '';
-            document.getElementById('selected_audio_author').value = suggestion.audio_author || suggestion.abs_author || '';
-            document.getElementById('selected_audio_cover_url').value = suggestion.audio_cover_url || suggestion.cover_url || '';
-            document.getElementById('selected_audio_duration').value = suggestion.audio_duration ?? suggestion.duration ?? '';
-            document.getElementById('selected_audio_provider_book_id').value = suggestion.audio_provider_book_id || suggestion.audio_source_id || '';
-            document.getElementById('selected_audio_provider_file_id').value = suggestion.audio_provider_file_id || '';
-            document.getElementById('selectedTitle').textContent = suggestion.audio_title || suggestion.abs_title || '';
-            document.getElementById('selectedAuthor').textContent = suggestion.audio_author || suggestion.abs_author || '';
-            document.getElementById('selectedCover').src = suggestion.audio_cover_url || suggestion.cover_url || '';
-            renderStorytellerOptions(suggestion);
-
-            const matches = [...suggestion.matches].sort((a, b) => (b.score || 0) - (a.score || 0));
-            const grid = document.getElementById('ebookCardGrid');
-            const emptyLabel = document.getElementById('ebookGridEmpty');
-            grid.innerHTML = '';
-
-            matches.forEach((match) => {
-                const ebookFilename = match.ebook_filename || '';
-                const displayName = match.display_name || ebookFilename;
-                const source = match.source || inferSourceFromFilename(ebookFilename);
-                const sourceId = match.source_id || '';
-                const sourcePath = match.source_path || match.path || '';
-                const matchReason = match.match_reason || '';
-                const author = match.author || '';
-                const score = Math.round(match.score || 0);
-
-                const card = document.createElement('div');
-                card.className = 'ebook-card';
-                card.dataset.value = ebookFilename;
-                card.dataset.displayName = displayName;
-                card.dataset.source = source || '';
-                card.dataset.sourceId = sourceId || '';
-                card.dataset.sourcePath = sourcePath || '';
-                card.onclick = () => selectEbookCard(
-                    card,
-                    ebookFilename,
-                    displayName,
-                    source,
-                    sourceId,
-                    sourcePath
-                );
-
-                const icon = document.createElement('div');
-                icon.className = 'ebook-icon';
-                icon.textContent = '\uD83D\uDCD6';
-
-                const title = document.createElement('div');
-                title.className = 'ebook-title';
-                title.title = displayName;
-                title.textContent = displayName;
-
-                const subtitle = document.createElement('div');
-                subtitle.className = 'ebook-subtitle';
-                subtitle.textContent = author || `${score}% match`;
-
-                card.appendChild(icon);
-                card.appendChild(title);
-                card.appendChild(subtitle);
-
-                if (author) {
-                    const confidence = document.createElement('div');
-                    confidence.className = 'ebook-subtitle';
-                    confidence.textContent = `${score}% match`;
-                    card.appendChild(confidence);
+                    return;
                 }
 
-                if (source) {
-                    const badge = document.createElement('span');
-                    badge.className = `source-badge ${sourceBadgeClass(source)}`;
-                    badge.textContent = source;
-                    card.appendChild(badge);
-                }
-
-                if (matchReason === 'same_folder' || matchReason === 'same_folder_ambiguous') {
-                    const folderBadge = document.createElement('span');
-                    folderBadge.className = 'source-badge samefolder';
-                    folderBadge.textContent = matchReason === 'same_folder' ? 'Same folder' : 'Same folder?';
-                    card.appendChild(folderBadge);
-                }
-
-                grid.appendChild(card);
-            });
-
-            if (matches.length > 0) {
                 emptyLabel.classList.add('hidden');
-                const firstCard = grid.querySelector('.ebook-card');
-                if (firstCard) {
-                    selectEbookCard(
-                        firstCard,
-                        firstCard.dataset.value || '',
-                        firstCard.dataset.displayName || '',
-                        firstCard.dataset.source || '',
-                        firstCard.dataset.sourceId || '',
-                        firstCard.dataset.sourcePath || '',
-                    );
+                const parsed = [];
+                results.forEach((item) => {
+                    const uuid = item?.uuid || item?.id || '';
+                    if (!uuid) return;
+                    const title = (item?.title || 'Untitled').toString();
+                    const subtitle = (item?.subtitle || '').toString();
+                    let authors = '';
+                    if (Array.isArray(item?.authors)) {
+                        authors = item.authors.join(', ');
+                    } else if (typeof item?.authors === 'string') {
+                        authors = item.authors;
+                    }
+                    const has_transcript = !!item?.has_transcript;
+                    parsed.push({ uuid, title, subtitle, authors, has_transcript });
+                });
+
+                parsed.forEach((st) => {
+                    const card = document.createElement('div');
+                    card.className = 'resource-card st-card';
+                    card.dataset.value = st.uuid;
+                    card.onclick = () => selectStoryteller(card, st.uuid);
+
+                    const icon = document.createElement('div');
+                    icon.className = 'resource-icon';
+                    icon.textContent = '⚡';
+
+                    const title = document.createElement('div');
+                    title.className = 'resource-title';
+                    const fullTitle = st.subtitle ? `${st.title}: ${st.subtitle}` : st.title;
+                    title.title = fullTitle;
+                    title.textContent = fullTitle;
+
+                    card.appendChild(icon);
+                    card.appendChild(title);
+
+                    if (st.authors) {
+                        const subtitle = document.createElement('div');
+                        subtitle.className = 'resource-subtitle';
+                        subtitle.textContent = st.authors;
+                        card.appendChild(subtitle);
+                    }
+
+                    if (st.has_transcript) {
+                        const badge = document.createElement('span');
+                        badge.className = 'source-badge transcript';
+                        badge.textContent = 'Transcript';
+                        card.appendChild(badge);
+                    }
+
+                    grid.appendChild(card);
+                });
+
+                if (parsed.length === 1) {
+                    const single = grid.querySelector('.st-card:not(.ghost-card)');
+                    if (single) {
+                        selectStoryteller(single, single.dataset.value || '');
+                    }
                 }
-            } else {
-                setSelectedEbook('', '', '', '');
+            })
+            .catch(() => {
+                if (token !== storytellerFetchToken) return;
+                emptyLabel.textContent = 'Storyteller search failed.';
                 emptyLabel.classList.remove('hidden');
-            }
+            });
+    }
+
+    function sourceBadgeClass(source) {
+        const normalized = (source || '').toLowerCase().replace(/\s+/g, '');
+        if (normalized === 'grimmory' || normalized === 'abs' || normalized === 'cwa' || normalized === 'localfile') {
+            return normalized;
         }
+        return 'unknown';
+    }
 
-        function updateVisibleCounts() {
-            const count = document.querySelectorAll('.suggestion-card').length;
-            document.getElementById('topCount').textContent = `Showing ${count} suggestions`;
-            document.getElementById('panelCount').textContent = `${count} items`;
-            updateBulkCounts();
-            if (count === 0 && !document.getElementById('emptyState')) {
-                const wrap = document.querySelector('.left-wrap');
-                const empty = document.createElement('div');
-                empty.className = 'empty';
-                empty.id = 'emptyState';
-                empty.innerHTML = '<p>All current suggestions are hidden.<br>Run Scan Library to refresh.</p>';
-                wrap.appendChild(empty);
-                const list = document.getElementById('suggestionsList');
-                if (list) list.remove();
-            }
-        }
+    function inferSourceFromFilename(filename) {
+        const name = (filename || '').toLowerCase();
+        if (!name) return '';
+        if (name.includes('_abs.')) return 'ABS';
+        if (name.startsWith('cwa_') || name.includes('_cwa.')) return 'CWA';
+        return '';
+    }
 
-        function dismissSuggestion(event, suggestionKey) {
-            event.preventDefault();
-            event.stopPropagation();
-            const card = document.getElementById(`suggestion-${suggestionKey}`);
-            if (card) card.remove();
-            suggestionsData = suggestionsData.filter((item) => (item.bridge_key || item.abs_id) !== suggestionKey);
-            if (selectedSuggestionId === suggestionKey) clearSelection();
-            updateVisibleCounts();
-        }
+    function applySuggestionSort(mode) {
+        const list = document.getElementById('suggestionsList');
+        if (!list) return;
 
-        function handleScanSubmit() {
-            document.getElementById('scanOverlay').classList.add('show');
-            displayedScanProgress = 0;
-            reportedScanProgress = 0;
-            startFakeScanProgress();
-        }
+        const cards = Array.from(list.querySelectorAll('.suggestion-card'));
+        if (cards.length < 2) return;
 
-        document.getElementById('scanForm').addEventListener('submit', handleScanSubmit);
-        document.getElementById('scanFullForm').addEventListener('submit', handleScanSubmit);
-
-        // --- Batch-match queue: async add/remove/clear so the page never reloads and the
-        // scroll position is preserved. process_queue / forge actions navigate away, so
-        // they submit natively but still show the working state. Delegated on .queue-panel
-        // so the handlers survive the queue panel being re-rendered after each mutation.
-        function renderQueueCount() {
-            const count = document.querySelectorAll('#queueList .queue-item').length;
-            const countEl = document.getElementById('queueCount');
-            if (countEl) countEl.textContent = `${count} item${count === 1 ? '' : 's'}`;
-        }
-
-        function markSuggestionQueued(suggestionKey) {
-            const card = suggestionKey ? document.getElementById(`suggestion-${suggestionKey}`) : null;
-            if (card) card.classList.add('is-queued');
-        }
-
-        async function submitQueueMutation(form, action, submitter) {
-            const queuedKey = action === 'add_to_queue' ? selectedSuggestionId : null;
-            if (submitter) submitter.disabled = true;
-            try {
-                const response = await fetch(form.getAttribute('action'), {
-                    method: 'POST',
-                    body: new FormData(form),
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const html = await response.text();
-                const queueList = document.getElementById('queueList');
-                if (queueList) queueList.innerHTML = html;
-                renderQueueCount();
-                if (action === 'add_to_queue') {
-                    markSuggestionQueued(queuedKey);
-                    clearSelection();
-                }
-            } catch (err) {
-                console.error('Queue update failed; reloading to resync.', err);
-                window.location.reload();
-            } finally {
-                if (submitter) submitter.disabled = false;
-            }
-        }
-
-        const queuePanel = document.querySelector('.queue-panel');
-        if (queuePanel) {
-            queuePanel.addEventListener('submit', (event) => {
-                const form = event.target;
-                const actionInput = form.querySelector('input[name="action"]');
-                const action = actionInput ? actionInput.value : '';
-                const submitter = event.submitter || form.querySelector('button[type="submit"]');
-
-                if (action === 'add_to_queue' || action === 'remove_from_queue' || action === 'clear_queue') {
-                    event.preventDefault();
-                    submitQueueMutation(form, action, submitter);
-                } else if (action === 'process_queue' || action === 'forge_and_match_queue') {
-                    // Navigates to the dashboard; show the working state, then submit natively.
-                    if (submitter && !submitter.dataset.primaryAction) {
-                        submitter.dataset.primaryAction = 'queue-actions';
-                        submitter.dataset.workingLabel = 'Processing queue...';
-                        submitter.dataset.workingMessage = 'Processing queued matches and returning to the dashboard...';
-                        submitter.dataset.feedbackTarget = 'queueFeedback';
-                    }
-                    if (submitter && !startSuggestionSubmitState(submitter)) {
-                        event.preventDefault();
-                    }
-                }
+        if (mode === 'az') {
+            cards.sort((a, b) => {
+                const titleA = (a.dataset.title || '').trim().toLowerCase();
+                const titleB = (b.dataset.title || '').trim().toLowerCase();
+                return titleA.localeCompare(titleB);
+            });
+        } else {
+            cards.sort((a, b) => {
+                const scoreA = Number.parseFloat(a.dataset.bestScore || '0');
+                const scoreB = Number.parseFloat(b.dataset.bestScore || '0');
+                return scoreB - scoreA;
             });
         }
 
-        // --- Bulk add: per-card checkboxes ("Add selected") + "Add all exact" (top
-        // match == 100%, i.e. authoritative / same-folder / exact fuzzy). Each posts the
-        // suggestion keys to add_many_to_queue; the server builds the queue items from its
-        // cached suggestions and returns the refreshed queue panel fragment. ---
-        function getExactKeys() {
-            return Array.from(document.querySelectorAll('.suggestion-card:not(.is-queued)'))
-                .filter((card) => parseFloat(card.dataset.bestScore || '0') >= 100)
-                .map((card) => card.dataset.absId)
-                .filter(Boolean);
-        }
+        cards.forEach((card) => list.appendChild(card));
+    }
 
-        function getCheckedKeys() {
-            return Array.from(document.querySelectorAll('.suggestion-check:checked'))
-                .map((cb) => cb.dataset.absId)
-                .filter(Boolean);
-        }
+    function clearSelection() {
+        selectedSuggestionId = null;
+        document.querySelectorAll('.suggestion-card').forEach((card) => card.classList.remove('selected'));
+        document.getElementById('selectionDetails').classList.add('hidden');
+        document.getElementById('selectionPlaceholder').style.display = 'block';
+        document.getElementById('selected_audiobook_id').value = '';
+        document.getElementById('selected_audio_source').value = '';
+        document.getElementById('selected_audio_source_id').value = '';
+        document.getElementById('selected_audio_title').value = '';
+        document.getElementById('selected_audio_author').value = '';
+        document.getElementById('selected_audio_cover_url').value = '';
+        document.getElementById('selected_audio_duration').value = '';
+        document.getElementById('selected_audio_provider_book_id').value = '';
+        document.getElementById('selected_audio_provider_file_id').value = '';
+        setSelectedEbook('', '', '', '');
+        selectedStorytellerUuid = '';
+        document.getElementById('selected_storyteller_uuid').value = '';
+        const grid = document.getElementById('ebookCardGrid');
+        if (grid) grid.innerHTML = '';
+        const emptyLabel = document.getElementById('ebookGridEmpty');
+        if (emptyLabel) emptyLabel.classList.add('hidden');
+        const stGrid = document.getElementById('storytellerCardGrid');
+        if (stGrid) stGrid.innerHTML = '';
+        const stEmptyLabel = document.getElementById('storytellerGridEmpty');
+        if (stEmptyLabel) stEmptyLabel.classList.add('hidden');
+        storytellerFetchToken += 1;
+        updateAddButton();
+    }
 
-        function updateBulkCounts() {
-            const exactCount = getExactKeys().length;
-            const selectedCount = getCheckedKeys().length;
-            const exactCountEl = document.getElementById('exactCount');
-            const selectedCountEl = document.getElementById('selectedCount');
-            if (exactCountEl) exactCountEl.textContent = exactCount;
-            if (selectedCountEl) selectedCountEl.textContent = selectedCount;
-            const exactBtn = document.getElementById('addAllExactBtn');
-            const selectedBtn = document.getElementById('addSelectedBtn');
-            if (exactBtn) exactBtn.disabled = exactCount === 0;
-            if (selectedBtn) selectedBtn.disabled = selectedCount === 0;
-        }
+    function selectSuggestion(suggestionKey) {
+        const suggestion = suggestionsData.find((item) => (item.bridge_key || item.abs_id) === suggestionKey);
+        if (!suggestion || !suggestion.matches || suggestion.matches.length === 0) return;
 
-        async function addManyToQueue(keys) {
-            if (!keys.length) return;
-            const formData = new FormData();
-            formData.append('action', 'add_many_to_queue');
-            keys.forEach((key) => formData.append('bridge_keys', key));
-            try {
-                const response = await fetch('/suggestions', {
-                    method: 'POST',
-                    body: formData,
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' },
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const html = await response.text();
-                const queueList = document.getElementById('queueList');
-                if (queueList) queueList.innerHTML = html;
-                renderQueueCount();
-                keys.forEach((key) => {
-                    markSuggestionQueued(key);
-                    const cb = document.querySelector(`.suggestion-check[data-abs-id="${CSS.escape(key)}"]`);
-                    if (cb) cb.checked = false;
-                });
-                updateBulkCounts();
-            } catch (err) {
-                console.error('Bulk queue add failed; reloading to resync.', err);
-                window.location.reload();
+        selectedSuggestionId = suggestionKey;
+        document.querySelectorAll('.suggestion-card').forEach((card) => card.classList.toggle('selected', card.dataset.absId === suggestionKey));
+
+        document.getElementById('selectionPlaceholder').style.display = 'none';
+        document.getElementById('selectionDetails').classList.remove('hidden');
+        document.getElementById('selected_audiobook_id').value = suggestion.bridge_key || suggestion.abs_id || '';
+        document.getElementById('selected_audio_source').value = suggestion.audio_source || '';
+        document.getElementById('selected_audio_source_id').value = suggestion.audio_source_id || '';
+        document.getElementById('selected_audio_title').value = suggestion.audio_title || suggestion.abs_title || '';
+        document.getElementById('selected_audio_author').value = suggestion.audio_author || suggestion.abs_author || '';
+        document.getElementById('selected_audio_cover_url').value = suggestion.audio_cover_url || suggestion.cover_url || '';
+        document.getElementById('selected_audio_duration').value = suggestion.audio_duration ?? suggestion.duration ?? '';
+        document.getElementById('selected_audio_provider_book_id').value = suggestion.audio_provider_book_id || suggestion.audio_source_id || '';
+        document.getElementById('selected_audio_provider_file_id').value = suggestion.audio_provider_file_id || '';
+        document.getElementById('selectedTitle').textContent = suggestion.audio_title || suggestion.abs_title || '';
+        document.getElementById('selectedAuthor').textContent = suggestion.audio_author || suggestion.abs_author || '';
+        document.getElementById('selectedCover').src = suggestion.audio_cover_url || suggestion.cover_url || '';
+        renderStorytellerOptions(suggestion);
+
+        const matches = [...suggestion.matches].sort((a, b) => (b.score || 0) - (a.score || 0));
+        const grid = document.getElementById('ebookCardGrid');
+        const emptyLabel = document.getElementById('ebookGridEmpty');
+        grid.innerHTML = '';
+
+        matches.forEach((match) => {
+            const ebookFilename = match.ebook_filename || '';
+            const displayName = match.display_name || ebookFilename;
+            const source = match.source || inferSourceFromFilename(ebookFilename);
+            const sourceId = match.source_id || '';
+            const sourcePath = match.source_path || match.path || '';
+            const matchReason = match.match_reason || '';
+            const author = match.author || '';
+            const score = Math.round(match.score || 0);
+
+            const card = document.createElement('div');
+            card.className = 'ebook-card';
+            card.dataset.value = ebookFilename;
+            card.dataset.displayName = displayName;
+            card.dataset.source = source || '';
+            card.dataset.sourceId = sourceId || '';
+            card.dataset.sourcePath = sourcePath || '';
+            card.onclick = () => selectEbookCard(
+                card,
+                ebookFilename,
+                displayName,
+                source,
+                sourceId,
+                sourcePath
+            );
+
+            const icon = document.createElement('div');
+            icon.className = 'ebook-icon';
+            icon.textContent = '📖';
+
+            const title = document.createElement('div');
+            title.className = 'ebook-title';
+            title.title = displayName;
+            title.textContent = displayName;
+
+            const subtitle = document.createElement('div');
+            subtitle.className = 'ebook-subtitle';
+            subtitle.textContent = author || `${score}% match`;
+
+            card.appendChild(icon);
+            card.appendChild(title);
+            card.appendChild(subtitle);
+
+            if (author) {
+                const confidence = document.createElement('div');
+                confidence.className = 'ebook-subtitle';
+                confidence.textContent = `${score}% match`;
+                card.appendChild(confidence);
             }
+
+            if (source) {
+                const badge = document.createElement('span');
+                badge.className = `source-badge ${sourceBadgeClass(source)}`;
+                badge.textContent = source;
+                card.appendChild(badge);
+            }
+
+            if (matchReason === 'same_folder' || matchReason === 'same_folder_ambiguous') {
+                const folderBadge = document.createElement('span');
+                folderBadge.className = 'source-badge samefolder';
+                folderBadge.textContent = matchReason === 'same_folder' ? 'Same folder' : 'Same folder?';
+                card.appendChild(folderBadge);
+            }
+
+            grid.appendChild(card);
+        });
+
+        if (matches.length > 0) {
+            emptyLabel.classList.add('hidden');
+            const firstCard = grid.querySelector('.ebook-card');
+            if (firstCard) {
+                selectEbookCard(
+                    firstCard,
+                    firstCard.dataset.value || '',
+                    firstCard.dataset.displayName || '',
+                    firstCard.dataset.source || '',
+                    firstCard.dataset.sourceId || '',
+                    firstCard.dataset.sourcePath || '',
+                );
+            }
+        } else {
+            setSelectedEbook('', '', '', '');
+            emptyLabel.classList.remove('hidden');
         }
+    }
 
-        function addAllExact() { addManyToQueue(getExactKeys()); }
-        function addSelectedSuggestions() { addManyToQueue(getCheckedKeys()); }
-
+    function updateVisibleCounts() {
+        const count = document.querySelectorAll('.suggestion-card').length;
+        document.getElementById('topCount').textContent = `Showing ${count} suggestions`;
+        document.getElementById('panelCount').textContent = `${count} items`;
         updateBulkCounts();
+        if (count === 0 && !document.getElementById('emptyState')) {
+            const wrap = document.querySelector('.left-wrap');
+            const empty = document.createElement('div');
+            empty.className = 'empty';
+            empty.id = 'emptyState';
+            empty.innerHTML = '<p>All current suggestions are hidden.<br>Run Scan Library to refresh.</p>';
+            wrap.appendChild(empty);
+            const list = document.getElementById('suggestionsList');
+            if (list) list.remove();
+        }
+    }
 
-        const sortModeSelect = document.getElementById('sortMode');
-        if (sortModeSelect) {
-            const savedSortMode = localStorage.getItem('suggestionsSortMode');
-            if (savedSortMode === 'az' || savedSortMode === 'best') {
-                sortModeSelect.value = savedSortMode;
-            }
-            applySuggestionSort(sortModeSelect.value || 'best');
-            sortModeSelect.addEventListener('change', () => {
-                const sortMode = sortModeSelect.value || 'best';
-                localStorage.setItem('suggestionsSortMode', sortMode);
-                applySuggestionSort(sortMode);
+    function dismissSuggestion(event, suggestionKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const card = document.getElementById(`suggestion-${suggestionKey}`);
+        if (card) card.remove();
+        suggestionsData = suggestionsData.filter((item) => (item.bridge_key || item.abs_id) !== suggestionKey);
+        if (selectedSuggestionId === suggestionKey) clearSelection();
+        updateVisibleCounts();
+    }
+
+    function handleScanSubmit() {
+        document.getElementById('scanOverlay').classList.add('show');
+        displayedScanProgress = 0;
+        reportedScanProgress = 0;
+        startFakeScanProgress();
+    }
+
+    document.getElementById('scanForm').addEventListener('submit', handleScanSubmit);
+    document.getElementById('scanFullForm').addEventListener('submit', handleScanSubmit);
+
+    // --- Batch-match queue: async add/remove/clear so the page never reloads and the
+    // scroll position is preserved. process_queue / forge actions navigate away, so
+    // they submit natively but still show the working state. Delegated on .queue-panel
+    // so the handlers survive the queue panel being re-rendered after each mutation.
+    function renderQueueCount() {
+        const count = document.querySelectorAll('#queueList .queue-item').length;
+        const countEl = document.getElementById('queueCount');
+        if (countEl) countEl.textContent = `${count} item${count === 1 ? '' : 's'}`;
+    }
+
+    function markSuggestionQueued(suggestionKey) {
+        const card = suggestionKey ? document.getElementById(`suggestion-${suggestionKey}`) : null;
+        if (card) card.classList.add('is-queued');
+    }
+
+    async function submitQueueMutation(form, action, submitter) {
+        const queuedKey = action === 'add_to_queue' ? selectedSuggestionId : null;
+        if (submitter) submitter.disabled = true;
+        try {
+            const response = await fetch(form.getAttribute('action'), {
+                method: 'POST',
+                body: new FormData(form),
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
             });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const html = await response.text();
+            const queueList = document.getElementById('queueList');
+            if (queueList) queueList.innerHTML = html;
+            renderQueueCount();
+            if (action === 'add_to_queue') {
+                markSuggestionQueued(queuedKey);
+                clearSelection();
+            }
+        } catch (err) {
+            console.error('Queue update failed; reloading to resync.', err);
+            window.location.reload();
+        } finally {
+            if (submitter) submitter.disabled = false;
         }
+    }
 
-        if (scanInProgress) {
-            document.getElementById('scanOverlay').classList.add('show');
-            startFakeScanProgress();
-            pollScanStatus();
+    const queuePanel = document.querySelector('.queue-panel');
+    if (queuePanel) {
+        queuePanel.addEventListener('submit', (event) => {
+            const form = event.target;
+            const actionInput = form.querySelector('input[name="action"]');
+            const action = actionInput ? actionInput.value : '';
+            const submitter = event.submitter || form.querySelector('button[type="submit"]');
+
+            if (action === 'add_to_queue' || action === 'remove_from_queue' || action === 'clear_queue') {
+                event.preventDefault();
+                submitQueueMutation(form, action, submitter);
+            } else if (action === 'process_queue' || action === 'forge_and_match_queue') {
+                // Navigates to the dashboard; show the working state, then submit natively.
+                if (submitter && !submitter.dataset.primaryAction) {
+                    submitter.dataset.primaryAction = 'queue-actions';
+                    submitter.dataset.workingLabel = 'Processing queue...';
+                    submitter.dataset.workingMessage = 'Processing queued matches and returning to the dashboard...';
+                    submitter.dataset.feedbackTarget = 'queueFeedback';
+                }
+                if (submitter && !startSuggestionSubmitState(submitter)) {
+                    event.preventDefault();
+                }
+            }
+        });
+    }
+
+    // --- Bulk add: per-card checkboxes ("Add selected") + "Add all exact" (top
+    // match == 100%, i.e. authoritative / same-folder / exact fuzzy). Each posts the
+    // suggestion keys to add_many_to_queue; the server builds the queue items from its
+    // cached suggestions and returns the refreshed queue panel fragment. ---
+    function getExactKeys() {
+        return Array.from(document.querySelectorAll('.suggestion-card:not(.is-queued)'))
+            .filter((card) => parseFloat(card.dataset.bestScore || '0') >= 100)
+            .map((card) => card.dataset.absId)
+            .filter(Boolean);
+    }
+
+    function getCheckedKeys() {
+        return Array.from(document.querySelectorAll('.suggestion-check:checked'))
+            .map((cb) => cb.dataset.absId)
+            .filter(Boolean);
+    }
+
+    function updateBulkCounts() {
+        const exactCount = getExactKeys().length;
+        const selectedCount = getCheckedKeys().length;
+        const exactCountEl = document.getElementById('exactCount');
+        const selectedCountEl = document.getElementById('selectedCount');
+        if (exactCountEl) exactCountEl.textContent = exactCount;
+        if (selectedCountEl) selectedCountEl.textContent = selectedCount;
+        const exactBtn = document.getElementById('addAllExactBtn');
+        const selectedBtn = document.getElementById('addSelectedBtn');
+        if (exactBtn) exactBtn.disabled = exactCount === 0;
+        if (selectedBtn) selectedBtn.disabled = selectedCount === 0;
+    }
+
+    async function addManyToQueue(keys) {
+        if (!keys.length) return;
+        const formData = new FormData();
+        formData.append('action', 'add_many_to_queue');
+        keys.forEach((key) => formData.append('bridge_keys', key));
+        try {
+            const response = await fetch('/suggestions', {
+                method: 'POST',
+                body: formData,
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const html = await response.text();
+            const queueList = document.getElementById('queueList');
+            if (queueList) queueList.innerHTML = html;
+            renderQueueCount();
+            keys.forEach((key) => {
+                markSuggestionQueued(key);
+                const cb = document.querySelector(`.suggestion-check[data-abs-id="${CSS.escape(key)}"]`);
+                if (cb) cb.checked = false;
+            });
+            updateBulkCounts();
+        } catch (err) {
+            console.error('Bulk queue add failed; reloading to resync.', err);
+            window.location.reload();
         }
-    </script>
-</body>
-</html>
+    }
+
+    function addAllExact() { addManyToQueue(getExactKeys()); }
+    function addSelectedSuggestions() { addManyToQueue(getCheckedKeys()); }
+
+    updateBulkCounts();
+
+    const sortModeSelect = document.getElementById('sortMode');
+    if (sortModeSelect) {
+        const savedSortMode = localStorage.getItem('suggestionsSortMode');
+        if (savedSortMode === 'az' || savedSortMode === 'best') {
+            sortModeSelect.value = savedSortMode;
+        }
+        applySuggestionSort(sortModeSelect.value || 'best');
+        sortModeSelect.addEventListener('change', () => {
+            const sortMode = sortModeSelect.value || 'best';
+            localStorage.setItem('suggestionsSortMode', sortMode);
+            applySuggestionSort(sortMode);
+        });
+    }
+
+    if (scanInProgress) {
+        document.getElementById('scanOverlay').classList.add('show');
+        startFakeScanProgress();
+        pollScanStatus();
+    }
+</script>
+{% endblock %}

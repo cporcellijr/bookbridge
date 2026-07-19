@@ -37,7 +37,14 @@ class TestSettingsComprehensive(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         os.environ['DATA_DIR'] = self.temp_dir
         self.settings_store = {}
-        
+
+        # settings.html extends base.html, so the app's Jinja loader must point
+        # at the real templates directory (create_app defaults to /app/templates).
+        self._orig_template_dir = os.environ.get('TEMPLATE_DIR')
+        self._orig_static_dir = os.environ.get('STATIC_DIR')
+        os.environ['TEMPLATE_DIR'] = str(Path(__file__).parent.parent / 'templates')
+        os.environ['STATIC_DIR'] = str(Path(__file__).parent.parent / 'static')
+
         self.mock_container = MockContainer()
         self.mock_container.mock_database_service.get_all_settings.side_effect = lambda: dict(self.settings_store)
         self.mock_container.mock_database_service.set_setting.side_effect = (
@@ -78,11 +85,13 @@ class TestSettingsComprehensive(unittest.TestCase):
             'INSTANT_SYNC_ENABLED',
             'SHELFMARK_ENABLED',
             'STORYTELLER_NO_EPUB_CACHE',
+            'STORYTELLER_POLL_WAIT_FOR_SETTLE',
             'BOOKLORE_SHELF_WATCH_ENABLED',
             'BOOKORBIT_ENABLED',
             'BOOKORBIT_READING_SESSIONS',
             'BOOKORBIT_SHELF_WATCH_ENABLED',
             'CALIBRE_USE_ABS_IDENTIFIER',
+            'BOOKFUSION_POLL_WAIT_FOR_SETTLE',
         ]
 
     def tearDown(self):
@@ -90,6 +99,14 @@ class TestSettingsComprehensive(unittest.TestCase):
         src.db.migration_utils.initialize_database = self.original_init_db
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+        if self._orig_template_dir is None:
+            os.environ.pop('TEMPLATE_DIR', None)
+        else:
+            os.environ['TEMPLATE_DIR'] = self._orig_template_dir
+        if self._orig_static_dir is None:
+            os.environ.pop('STATIC_DIR', None)
+        else:
+            os.environ['STATIC_DIR'] = self._orig_static_dir
         # Clear env vars
         for key in self.bool_keys:
             if key in os.environ:
@@ -188,6 +205,35 @@ class TestSettingsComprehensive(unittest.TestCase):
             ),
         )
 
+    @patch('src.web_server.restart_server')
+    def test_bookfusion_settle_wait_persists_after_save_and_reload(self, mock_restart):
+        """BOOKFUSION_POLL_WAIT_FOR_SETTLE round-trips through save, DB, and UI."""
+        response = self.client.post('/settings', data={
+            'SYNC_PERIOD_MINS': '5',
+            'BOOKFUSION_ENABLED': 'on',
+            'BOOKFUSION_POLL_MODE': 'custom',
+            'BOOKFUSION_POLL_SECONDS': '300',
+            'BOOKFUSION_POLL_WAIT_FOR_SETTLE': 'on',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Restarting the application', response.data)
+        self.assertEqual(self.settings_store.get('BOOKFUSION_POLL_WAIT_FOR_SETTLE'), 'true')
+
+        os.environ.pop('BOOKFUSION_POLL_WAIT_FOR_SETTLE', None)
+
+        from src.utils.config_loader import ConfigLoader
+        ConfigLoader.load_settings(self.mock_container.mock_database_service)
+
+        html = self._render_settings_template_source()
+        self.assertIn('name="BOOKFUSION_POLL_WAIT_FOR_SETTLE"', html)
+        self.assertRegex(
+            html,
+            re.compile(
+                r'<input type="checkbox" name="BOOKFUSION_POLL_WAIT_FOR_SETTLE"[\s\S]*?checked',
+                re.IGNORECASE,
+            ),
+        )
+
     def test_settings_get_renders_custom_whisper_model_as_text_value(self):
         with patch.dict(os.environ, {'WHISPER_MODEL': 'custom-q5_k_m'}, clear=False):
             html = self._render_settings_template_source()
@@ -240,6 +286,13 @@ class TestSettingsComprehensive(unittest.TestCase):
         self.assertIn(b'Restarting the application', response.data)
         self.mock_container.mock_database_service.set_setting.assert_any_call('WHISPER_MODEL', 'custom-q5_k_m')
         self.assertEqual(os.environ.get('WHISPER_MODEL'), 'custom-q5_k_m')
+
+    def test_diagnostics_endpoint_is_read_only_not_editable(self):
+        html = self._render_settings_template_source()
+        self.assertIsNone(
+            re.search(r'<input[^>]*name="DIAGNOSTICS_ENDPOINT_URL"[^>]*>', html),
+            'DIAGNOSTICS_ENDPOINT_URL must not appear as an editable input',
+        )
 
 if __name__ == '__main__':
     unittest.main()

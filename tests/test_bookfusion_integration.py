@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.api.bookfusion_client import BookFusionClient
+from src.api.bookfusion_client import BookFusionBookNotFound, BookFusionClient
 from src.db.database_service import DatabaseService
 from src.db.models import Book
 from src.sync_clients.bookfusion_sync_client import BookFusionSyncClient
@@ -39,6 +39,80 @@ class _Session:
 
 
 class BookFusionClientTest(unittest.TestCase):
+    def test_reading_position_write_404_identifies_stale_book_link(self):
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([
+            _Resp(404, {"code": "not_found"}, text='{"code":"not_found","message":"Not found"}'),
+        ])
+
+        with self.assertRaises(BookFusionBookNotFound):
+            client.set_reading_position("8906705", {"percentage": 42.5})
+
+    def test_missing_link_skips_highlight_pull_without_warning(self):
+        """A deleted BookFusion book is not an annotation-sync failure."""
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([
+            _Resp(404, {"code": "not_found"}, text='{"code":"not_found","message":"Not found"}'),
+        ])
+
+        with self.assertLogs("src.api.bookfusion_client", level="DEBUG") as captured:
+            result = client.pull_highlights("8906705")
+
+        self.assertEqual(result, (None, None))
+        self.assertTrue(any("BookFusion highlights unavailable for book 8906705 (404)" in line
+                            for line in captured.output))
+        self.assertFalse(any("WARNING" in line for line in captured.output))
+
+    def test_highlight_pull_still_warns_for_server_failure(self):
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([_Resp(500, text="server error")])
+
+        with self.assertLogs("src.api.bookfusion_client", level="WARNING") as captured:
+            result = client.pull_highlights("8906705")
+
+        self.assertEqual(result, (None, None))
+        self.assertTrue(any("BookFusion highlights/search returned 500" in line
+                            for line in captured.output))
+
+    def test_missing_book_skips_highlight_create_without_warning(self):
+        client = BookFusionClient(
+            credentials={
+                "BOOKFUSION_API_URL": "https://bf.example",
+                "BOOKFUSION_ENABLED": "true",
+                "BOOKFUSION_ACCESS_TOKEN": "tok",
+            },
+        )
+        client.session = _Session([_Resp(404, text='{"code":"not_found"}')])
+
+        with self.assertLogs("src.api.bookfusion_client", level="DEBUG") as captured:
+            result = client.create_highlight({"book_id": "8906705", "text": "quote"})
+
+        self.assertIsNone(result)
+        self.assertTrue(any(
+            "BookFusion highlight create unavailable for book 8906705 (404)" in line
+            for line in captured.output
+        ))
+        self.assertFalse(any("BookFusion highlight create returned 404" in line
+                             for line in captured.output))
+
     def test_poll_token_persists_per_user_access_token(self):
         db = MagicMock()
         client = BookFusionClient(
@@ -137,6 +211,24 @@ class BookFusionSyncClientTest(unittest.TestCase):
             {"percentage": 42.5, "page_position_in_book": 0.425},
         )
         record_write.assert_called_once_with("BookFusion", "abs-1", 0.425)
+
+    def test_update_progress_removes_stale_link_after_bookfusion_404(self):
+        api = MagicMock()
+        api.set_reading_position.side_effect = BookFusionBookNotFound("8951594")
+        db = MagicMock()
+        db.resolve_bookfusion_id.return_value = "8951594"
+        db.delete_user_bookfusion_link.return_value = True
+        sync = BookFusionSyncClient(api, ebook_parser=MagicMock(), database_service=db, user_id=7)
+        book = SimpleNamespace(abs_id="abs-1")
+        request = UpdateProgressRequest(LocatorResult(percentage=0.425))
+
+        with patch.object(sync, "_ensure_bf_epub", return_value=None), \
+                patch("src.services.write_tracker.record_write") as record_write:
+            result = sync.update_progress(book, request)
+
+        self.assertFalse(result.success)
+        db.delete_user_bookfusion_link.assert_called_once_with(7, "abs-1")
+        record_write.assert_not_called()
 
     def test_update_progress_sends_spine_anchor_and_cfi(self):
         # Regression: a percentage-only write leaves BookFusion's chapter_index

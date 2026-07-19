@@ -5,6 +5,7 @@ Abstract interface and implementations for transcription services.
 Supports local Whisper and cloud providers like Deepgram.
 """
 
+import importlib.util
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -64,23 +65,39 @@ class LocalWhisperProvider(TranscriptionProvider):
     def get_name(self) -> str:
         return f"LocalWhisper ({self.model_size})"
     
+    def _detect_cuda(self) -> tuple[bool, str]:
+        """
+        Check whether CTranslate2 can actually run on CUDA here.
+        This is dependent on the image that is used (only the image with the -cuda suffix has CUDA libraries)
+        and whether the GPU is visible in the container (via deploy block in the compose file)
+        """
+        if importlib.util.find_spec("nvidia.cudnn") is None:
+            return False, "CUDA libraries not bundled (use the -cuda image tag)"
+
+        try:
+            import ctranslate2 # transitive dependency by faster-whisper
+            device_count = ctranslate2.get_cuda_device_count()
+        except Exception as e:
+            return False, f"CUDA probe failed: {e}"
+
+        if device_count < 1:
+            return False, "no GPU visible to the container"
+
+        return True, f"{device_count} CUDA device(s) available"
+
     def _get_device_config(self) -> tuple[str, str]:
         """Determine device and compute type with auto-detection."""
         device = self.whisper_device
         compute_type = self.whisper_compute_type
         
         if device == 'auto':
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    device = 'cuda'
-                    logger.info(f"🎮 CUDA available: {torch.cuda.get_device_name(0)}")
-                else:
-                    device = 'cpu'
-                    logger.info("💻 CUDA not available, using CPU")
-            except ImportError:
+            cuda_ok, reason = self._detect_cuda()
+            if cuda_ok:
+                device = 'cuda'
+                logger.info(f"🎮 CUDA enabled: {reason}")
+            else:
                 device = 'cpu'
-                logger.info("💻 PyTorch not installed, using CPU")
+                logger.info(f"💻 Using CPU: {reason}")
         
         if compute_type == 'auto':
             compute_type = 'float16' if device == 'cuda' else 'int8'

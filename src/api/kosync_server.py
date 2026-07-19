@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -44,6 +45,22 @@ _manager = None
 _hash_cache = None
 _ebook_dir = None
 _active_scans = set()
+_active_scans_lock = threading.Lock()
+
+# Bounded auto-discovery: cap concurrent + queued unique scans at 16.
+_MAX_CONCURRENT_DISCOVERY = 2
+_MAX_QUEUED_DISCOVERY = 16
+_discovery_executor = ThreadPoolExecutor(
+    max_workers=_MAX_CONCURRENT_DISCOVERY,
+    thread_name_prefix="kosync-discovery",
+)
+_queued_discovery_count = 0
+_queued_discovery_lock = threading.Lock()
+
+_AUTH_FAILURES: dict[tuple[str, str], list[float]] = {}
+_AUTH_FAILURES_LOCK = threading.Lock()
+_AUTH_FAILURE_LIMIT = 5
+_AUTH_FAILURE_WINDOW = 60
 
 # Plugin self-update: resolved from src/api/ -> project root -> plugins/
 _PLUGIN_DIR = Path(__file__).parent.parent.parent / "plugins" / "bridgesync.koplugin"
@@ -913,6 +930,30 @@ def _kosync_creds_match(presented_key: str, stored_secret: str) -> bool:
     return presented_key == stored_secret or presented_key == hash_kosync_key(stored_secret)
 
 
+def _auth_failure_key(username: str) -> tuple[str, str]:
+    return ((username or "").strip().lower(), request.remote_addr or "")
+
+
+def _auth_is_limited(key: tuple[str, str], failed: bool = False) -> bool:
+    now = time.time()
+    with _AUTH_FAILURES_LOCK:
+        recent = [t for t in _AUTH_FAILURES.get(key, []) if now - t < _AUTH_FAILURE_WINDOW]
+        if failed:
+            recent.append(now)
+        if recent:
+            _AUTH_FAILURES[key] = recent
+        else:
+            _AUTH_FAILURES.pop(key, None)
+        return len(recent) >= _AUTH_FAILURE_LIMIT
+
+
+def _kosync_user_may_access_book(book) -> bool:
+    user_id = getattr(g, "kosync_user_id", None)
+    if user_id is None or book is None:
+        return True
+    return bool(_database_service.is_user_linked(user_id, book.abs_id))
+
+
 def authenticate_kosync(username: str, key: str):
     """Authenticate a KOReader (username, key).
 
@@ -958,12 +999,18 @@ def kosync_auth_required(f):
     def decorated_function(*args, **kwargs):
         user = request.headers.get('x-auth-user')
         key = request.headers.get('x-auth-key')
+        failure_key = _auth_failure_key(user)
+        if _auth_is_limited(failure_key):
+            return jsonify({"error": "Too many authentication attempts"}), 429
 
         authenticated, user_id = authenticate_kosync(user, key)
         if not authenticated:
+            _auth_is_limited(failure_key, failed=True)
             logger.warning(f"⚠️ KOSync Integrated Server: Unauthorized access attempt from '{request.remote_addr}' (user: '{user}')")
             return jsonify({"error": "Unauthorized"}), 401
 
+        with _AUTH_FAILURES_LOCK:
+            _AUTH_FAILURES.pop(failure_key, None)
         g.kosync_user_id = user_id
         token = set_current_user_id(user_id)
         try:
@@ -1047,7 +1094,10 @@ def kosync_users_login():
 def kosync_get_progress(doc_id):
     """
     Fetch progress for a specific document.
-    Returns 502 (not 404) if document not found, per kosync-dotnet spec.
+    Returns 404 if document not found. (kosync-dotnet returns 502 here, the original
+    sync server returns 200 + {}; we use 404 because strict clients like Crosspoint
+    treat 5xx as a fatal server error and abort sync, while KOReader treats any
+    non-200 the same. See issue #332.)
 
     Lookup order:
       1. Direct hash match in kosync_documents
@@ -1055,6 +1105,12 @@ def kosync_get_progress(doc_id):
       3. Sibling hash resolution (same book, different epub hash)
       4. Background auto-discovery for completely unknown hashes
     """
+    if not doc_id or doc_id.lower() in ("none", "null"):
+        logger.warning(
+            f"⚠️ KOSync: Invalid or placeholder document ID requested: '{doc_id}'. This cannot be resolved."
+        )
+        return jsonify({"message": "Document not found on server"}), 404
+
     logger.info(f"KOSync: GET progress for doc {doc_id} from {request.remote_addr}")
 
     # Step 1: Direct hash lookup
@@ -1066,10 +1122,14 @@ def kosync_get_progress(doc_id):
         if kosync_doc.linked_abs_id:
             book = _database_service.get_book(kosync_doc.linked_abs_id)
             if book:
+                if not _kosync_user_may_access_book(book):
+                    return jsonify({"message": "Document not found on server"}), 404
                 return _respond_from_book_states(doc_id, book)
 
         resolved_book = _resolve_book_by_sibling_hash(doc_id, existing_doc=kosync_doc)
         if resolved_book:
+            if not _kosync_user_may_access_book(resolved_book):
+                return jsonify({"message": "Document not found on server"}), 404
             _register_hash_for_book(doc_id, resolved_book)
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1117,6 +1177,8 @@ def kosync_get_progress(doc_id):
     # Step 2: Book lookup by kosync_doc_id
     book = _database_service.get_book_by_kosync_id(doc_id)
     if book:
+        if not _kosync_user_may_access_book(book):
+            return jsonify({"message": "Document not found on server"}), 404
         return _respond_from_book_states(doc_id, book)
 
     # Step 3: Sibling hash resolution — find the book via other linked hashes.
@@ -1126,23 +1188,22 @@ def kosync_get_progress(doc_id):
     if kosync_doc is None:
         resolved_book = _resolve_book_by_sibling_hash(doc_id, existing_doc=kosync_doc)
         if resolved_book:
+            if not _kosync_user_may_access_book(resolved_book):
+                return jsonify({"message": "Document not found on server"}), 404
             _register_hash_for_book(doc_id, resolved_book)
             return _respond_from_book_states(doc_id, resolved_book)
 
     # Step 4: Unknown hash — register stub and start background discovery
-    auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
-    if auto_create and doc_id not in _active_scans:
-        _active_scans.add(doc_id)
-        from src.db.models import KosyncDocument as KD
-        stub = KD(document_hash=doc_id, user_id=getattr(g, "kosync_user_id", None))
-        _database_service.save_kosync_document(stub)
-        logger.info(f"🔍 KOSync: Created stub for unknown hash {doc_id}, starting background discovery")
-        _spawn_user_scoped_thread(
-            _run_get_auto_discovery,
-            args=(doc_id,),
-            user_id=getattr(g, "kosync_user_id", None),
-            name=f"kosync-get-discovery-{doc_id[:8]}",
+    if not _is_valid_hex_hash(doc_id):
+        logger.warning(
+            f"⚠️ KOSync: Rejected malformed document ID: '{doc_id}' (GET from {request.remote_addr})"
         )
+        return jsonify({"message": "Document not found on server"}), 404
+    _schedule_auto_discovery(
+        doc_id,
+        user_id=getattr(g, "kosync_user_id", None),
+        source="get",
+    )
 
     logger.warning(
         f"⚠️ KOSync: Document not found: {doc_id} (GET from {request.remote_addr}). "
@@ -1150,7 +1211,7 @@ def kosync_get_progress(doc_id):
         "the library file), link it manually from Add / Update Book -> Reader Documents, or re-deliver "
         "the book via the BridgeSync plugin's 'Sync books' so the hash matches."
     )
-    return jsonify({"message": "Document not found on server"}), 502
+    return jsonify({"message": "Document not found on server"}), 404
 
 
 def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
@@ -1426,6 +1487,10 @@ def kosync_put_progress():
     _flush_stale_kosync_sessions(now_ts)
 
     kosync_doc = _database_service.get_kosync_document(doc_hash)
+    if kosync_doc and kosync_doc.linked_abs_id:
+        linked = _database_service.get_book(kosync_doc.linked_abs_id)
+        if linked and not _kosync_user_may_access_book(linked):
+            return jsonify({"error": "Document not found"}), 404
 
     # Optional "furthest wins" protection
     furthest_wins = os.environ.get('KOSYNC_FURTHEST_WINS', 'true').lower() == 'true'
@@ -1528,125 +1593,22 @@ def kosync_put_progress():
             _register_hash_for_book(doc_hash, linked_book)
 
     if linked_book and not is_internal:
+        if not _kosync_user_may_access_book(linked_book):
+            return jsonify({"error": "Document not found"}), 404
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
 
     # AUTO-DISCOVERY
     if not linked_book:
-        auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
-
-        if auto_create:
-            if doc_hash not in _active_scans:
-                _active_scans.add(doc_hash)
-
-                def run_auto_discovery(doc_hash_val):
-                    try:
-                        from src.db.models import PendingSuggestion
-                        import json
-                        
-                        logger.info(f"🔍 KOSync: Scheduled auto-discovery for unmapped document {doc_hash_val}")
-                        epub_filename = _try_find_epub_by_hash(doc_hash_val)
-
-                        if not epub_filename:
-                            logger.debug(f"Could not auto-match EPUB for KOSync document '{doc_hash_val}'")
-                            return
-
-                        # If this file belongs to an already-mapped book (by filename
-                        # or shared EPUB identifier), link the hash instead of creating
-                        # a duplicate mapping/suggestion.
-                        existing_book = (
-                            _database_service.get_book_by_ebook_filename(epub_filename)
-                            or _resolve_book_by_epub_identifier(epub_filename, doc_id=doc_hash_val)
-                        )
-                        if existing_book:
-                            _register_hash_for_book(doc_hash_val, existing_book)
-                            _database_service.dismiss_suggestion(doc_hash_val)
-                            logger.info(
-                                f"✅ KOSync: Linked '{doc_hash_val}' to existing match "
-                                f"'{existing_book.abs_title}' (auto-discovery)"
-                            )
-                            return
-
-                        title = Path(epub_filename).stem
-                        ebook_meta = {}
-                        try:
-                            ebook_meta = _container.ebook_parser().get_book_metadata(epub_filename) or {}
-                        except Exception as e:
-                            logger.debug(f"Auto-discovery: EPUB metadata read failed: {e}")
-                        if not ebook_meta.get("title"):
-                            ebook_meta["title"] = title
-
-                        # Step 1: Score audiobook candidates against the ebook's title/author.
-                        candidates = _autodiscovery_audiobook_candidates(epub_filename, ebook_meta)
-
-                        # Step 2a: Auto-map when the bridge + Ollama (or an identifier) agree on one exact match.
-                        if candidates and os.environ.get('KOSYNC_AUTO_MAP_ON_AGREEMENT', 'true').lower() == 'true':
-                            chosen, reason = _select_auto_map_candidate(ebook_meta, candidates)
-                            if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason):
-                                return
-
-                        # Step 2b: Otherwise, suggest plausible matches for the user to confirm.
-                        audiobook_matches = [
-                            {
-                                "source": "abs",
-                                "abs_id": c["abs_id"],
-                                "title": c["title"],
-                                "author": c["author"],
-                                "duration": c["duration"],
-                                "confidence": "high" if c["title_sim"] >= 0.85 else "medium",
-                            }
-                            for c in candidates if (c.get("progress_pct") or 0) <= 75
-                        ]
-                        if audiobook_matches:
-                            # Check if suggestion already exists (pending OR dismissed - don't re-suggest)
-                            if not _database_service.suggestion_exists(doc_hash_val):
-                                suggestion = PendingSuggestion(
-                                    source_id=doc_hash_val,
-                                    title=ebook_meta.get("title") or title,
-                                    author=ebook_meta.get("author"),
-                                    cover_url=f"/api/cover-proxy/{audiobook_matches[0]['abs_id']}",
-                                    matches_json=json.dumps(audiobook_matches + [{
-                                        "source": "ebook",
-                                        "filename": epub_filename,
-                                        "confidence": "high"
-                                    }])
-                                )
-                                _database_service.save_pending_suggestion(suggestion)
-                                logger.info(f"💡 Created suggestion for '{title}' - found {len(audiobook_matches)} audiobook match(es)")
-                            return
-
-                        # Step 3: No audiobook found - fall back to ebook-only mapping
-                        logger.info(f"📖 No audiobook match for '{title}' - creating ebook-only mapping")
-                        book_id = f"ebook-{doc_hash_val[:16]}"
-                        book = Book(
-                            abs_id=book_id,
-                            abs_title=title,
-                            ebook_filename=epub_filename,
-                            kosync_doc_id=doc_hash_val,
-                            transcript_file=None,
-                            status='active',
-                            duration=None,
-                            sync_mode='ebook_only'
-                        )
-                        _database_service.save_book(book)
-                        _database_service.link_kosync_document(doc_hash_val, book_id)
-                        _database_service.dismiss_suggestion(doc_hash_val)
-                        logger.info(f"✅ Auto-created ebook-only mapping: {book_id} -> {epub_filename}")
-
-                        if _manager:
-                            _manager.run_sync_for_all_users(target_abs_id=book_id)
-                            
-                    except Exception as e:
-                        logger.error(f"❌ Error in auto-discovery background task: {e}")
-                    finally:
-                        if doc_hash_val in _active_scans:
-                            _active_scans.remove(doc_hash_val)
-
-                _spawn_user_scoped_thread(
-                    run_auto_discovery,
-                    args=(doc_hash,),
-                    user_id=request_user_id,
-                    name=f"kosync-put-discovery-{doc_hash[:8]}",
-                )
+        if not _is_valid_hex_hash(doc_hash):
+            logger.warning(
+                f"⚠️ KOSync: Rejected malformed document ID: '{doc_hash}' (PUT from {request.remote_addr})"
+            )
+        else:
+            _schedule_auto_discovery(
+                doc_hash,
+                user_id=request_user_id,
+                source="put",
+            )
 
     if linked_book:
         # NOTE: We intentionally do NOT update book_states here.
@@ -2778,7 +2740,7 @@ def _respond_from_book_states(doc_id, book):
             return jsonify(response_data), 200
 
     if not states:
-        return jsonify({"message": "Document not found on server"}), 502
+        return jsonify({"message": "Document not found on server"}), 404
 
     latest_state = kosync_state or max(states, key=lambda s: s.last_updated if s.last_updated else 0)
     latest_progress = (latest_state.xpath or latest_state.cfi or "") if hasattr(latest_state, 'xpath') else ""
@@ -2888,7 +2850,75 @@ def _register_hash_for_book(doc_id: str, book):
         logger.info(f"🔗 KOSync: Created and linked new document {doc_id} to '{book.abs_title}'")
 
 
-def _run_get_auto_discovery(doc_id: str):
+def _is_valid_hex_hash(value: str) -> bool:
+    """Return True if value is a 32-character lowercase or uppercase hex string."""
+    if len(value) != 32:
+        return False
+    try:
+        int(value, 16)
+        return True
+    except ValueError:
+        return False
+
+
+def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") -> None:
+    """Attempt to schedule a bounded auto-discovery scan for doc_id.
+
+    Returns immediately if the hash is already being scanned, the queue is full,
+    or AUTO_CREATE_EBOOK_MAPPING is off. Preserves _active_scans dedupe.
+    """
+    global _queued_discovery_count
+    auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
+    if not auto_create:
+        return
+    with _active_scans_lock:
+        if doc_id in _active_scans:
+            return
+    with _queued_discovery_lock:
+        if _queued_discovery_count >= _MAX_QUEUED_DISCOVERY:
+            logger.warning(
+                "KOSync: %s-discovery for %s dropped — discovery queue full (%d/%d)",
+                source, doc_id, _queued_discovery_count, _MAX_QUEUED_DISCOVERY,
+            )
+            return
+
+    # Create stub and register BEFORE submitting so concurrent requests for the
+    # same hash skip immediately.
+    from src.db.models import KosyncDocument as KD
+    existing = _database_service.get_kosync_document(doc_id)
+    if not existing:
+        stub = KD(document_hash=doc_id, user_id=user_id)
+        _database_service.save_kosync_document(stub)
+
+    with _active_scans_lock:
+        if doc_id in _active_scans:
+            return
+        _active_scans.add(doc_id)
+
+    with _queued_discovery_lock:
+        _queued_discovery_count += 1
+
+    def _wrapped():
+        global _queued_discovery_count
+        try:
+            if source == "get":
+                _run_get_auto_discovery(doc_id)
+            else:
+                _run_put_auto_discovery_inner(doc_id, user_id)
+        finally:
+            with _active_scans_lock:
+                _active_scans.discard(doc_id)
+            with _queued_discovery_lock:
+                _queued_discovery_count = max(0, _queued_discovery_count - 1)
+
+    logger.info(
+        "🔍 KOSync: Starting %s background discovery for %s",
+        source, doc_id,
+    )
+    _discovery_executor.submit(_wrapped)
+
+
+def _run_get_auto_discovery(doc_id: str) -> None:
     """Background auto-discovery triggered by GET for an unknown hash.
     Finds the matching epub and links the hash to an existing book."""
     try:
@@ -2919,8 +2949,67 @@ def _run_get_auto_discovery(doc_id: str):
         logger.info(f"🔍 KOSync: GET-discovery found epub '{epub_filename}' but no matching book")
     except Exception as e:
         logger.error(f"❌ Error in GET auto-discovery: {e}")
-    finally:
-        _active_scans.discard(doc_id)
+
+
+def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
+    """Discover and map an EPUB submitted by an authenticated KoSync user."""
+    from src.db.models import Book, PendingSuggestion
+
+    logger.info("KOSync: Scheduled auto-discovery for unmapped document %s", doc_hash_val)
+    epub_filename = _try_find_epub_by_hash(doc_hash_val)
+    if not epub_filename:
+        return
+    existing_book = (
+        _database_service.get_book_by_ebook_filename(epub_filename)
+        or _resolve_book_by_epub_identifier(epub_filename, doc_id=doc_hash_val)
+    )
+    if existing_book:
+        _register_hash_for_book(doc_hash_val, existing_book)
+        _database_service.dismiss_suggestion(doc_hash_val)
+        return
+
+    title = Path(epub_filename).stem
+    try:
+        ebook_meta = _container.ebook_parser().get_book_metadata(epub_filename) or {}
+    except Exception as exc:
+        logger.debug("Auto-discovery: EPUB metadata read failed: %s", exc)
+        ebook_meta = {}
+    ebook_meta.setdefault("title", title)
+    candidates = _autodiscovery_audiobook_candidates(epub_filename, ebook_meta)
+    if candidates and os.environ.get('KOSYNC_AUTO_MAP_ON_AGREEMENT', 'true').lower() == 'true':
+        chosen, reason = _select_auto_map_candidate(ebook_meta, candidates)
+        if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason):
+            return
+    matches = [
+        {
+            "source": "abs", "abs_id": c["abs_id"], "title": c["title"],
+            "author": c["author"], "duration": c["duration"],
+            "confidence": "high" if c["title_sim"] >= 0.85 else "medium",
+        }
+        for c in candidates if (c.get("progress_pct") or 0) <= 75
+    ]
+    if matches:
+        if not _database_service.suggestion_exists(doc_hash_val):
+            matches.append({"source": "ebook", "filename": epub_filename, "confidence": "high"})
+            _database_service.save_pending_suggestion(PendingSuggestion(
+                source_id=doc_hash_val,
+                title=ebook_meta.get("title") or title,
+                author=ebook_meta.get("author"),
+                cover_url=f"/api/cover-proxy/{matches[0]['abs_id']}",
+                matches_json=json.dumps(matches),
+            ))
+        return
+    book_id = f"ebook-{doc_hash_val[:16]}"
+    _database_service.save_book(Book(
+        abs_id=book_id, abs_title=title, ebook_filename=epub_filename,
+        kosync_doc_id=doc_hash_val, status='active', sync_mode='ebook_only',
+    ))
+    _database_service.link_kosync_document(doc_hash_val, book_id)
+    _database_service.dismiss_suggestion(doc_hash_val)
+    if user_id is not None:
+        _database_service.link_user_book(user_id, book_id)
+    if _manager:
+        _manager.run_sync_for_all_users(target_abs_id=book_id)
 
 
 # ---------------- KOSync Document Management API ----------------
@@ -2929,11 +3018,11 @@ def _suppress_empty_progress_response(doc_id: str, percentage: float, progress: 
     safe_progress = progress.strip() if isinstance(progress, str) else ""
     if percentage > 0 and not safe_progress:
         logger.warning(
-            "KOSync: Suppressing response for %s - percentage %.2f%% but no locator available. Returning 502 to prevent page-0 reset.",
+            "KOSync: Suppressing response for %s - percentage %.2f%% but no locator available. Returning 404 to prevent page-0 reset.",
             doc_id,
             percentage * 100.0,
         )
-        return jsonify({"message": "Document not found on server"}), 502
+        return jsonify({"message": "Document not found on server"}), 404
     return None
 
 @kosync_admin_bp.route('/api/kosync-documents', methods=['GET'])

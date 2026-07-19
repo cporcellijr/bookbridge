@@ -58,3 +58,8 @@ tests/test_omni_mcp_server.py
 plans/
 phase1_schema_design.md
 pytest_output.txt
+
+# Retired reports-site artifacts may still exist locally and contain private data.
+reports_site/docs/
+reports_site/site/
+diagnostics_receiver/.env

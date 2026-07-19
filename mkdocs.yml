@@ -8,8 +8,8 @@ repo_url: https://github.com/cporcellijr/bookbridge
 
 theme:
   name: material
-  logo: static/images/logo.png
-  favicon: static/images/favicon.png
+  logo: assets/icon.png
+  favicon: assets/icon.png
   features:
     - navigation.tabs
     - navigation.sections

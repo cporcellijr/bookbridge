@@ -156,6 +156,7 @@ class SyncManager:
         self._sync_lock = threading.Lock()
         self._pending_sync_lock = threading.Lock()
         self._pending_sync_books: set[tuple[int | None, str]] = set()
+        self._replay_worker_running = False
         self._job_thread = None
         self._last_library_sync = 0
         self._suggestion_in_flight: set[str] = set()
@@ -1083,28 +1084,52 @@ class SyncManager:
 
     def _dispatch_pending_syncs(self) -> None:
         with self._pending_sync_lock:
-            # Sort by abs_id (always a str) first; user_id may be None (global
-            # cycle) or int (per-user instant sync), and sorting a mixed set of
-            # those directly raises TypeError — which, because .clear() is below,
-            # would strand the queue and stop every future replay.
-            pending = sorted(
+            if self._replay_worker_running or not self._pending_sync_books:
+                return
+            self._replay_worker_running = True
+            initial = sorted(
                 self._pending_sync_books,
                 key=lambda t: (t[1], t[0] is not None),
             )
             self._pending_sync_books.clear()
 
-        if pending:
-            logger.info(f"⚡ Replaying {len(pending)} queued instant sync(s) deferred during the busy cycle")
-        for user_id, abs_id in pending:
-            logger.info(f"⚡ Replaying queued instant sync for '{abs_id}'")
-            kwargs = {'target_abs_id': abs_id}
-            if user_id is not None:
-                kwargs['user_id'] = user_id
-            threading.Thread(
-                target=self.sync_cycle,
-                kwargs=kwargs,
-                daemon=True,
-            ).start()
+        def _replay_worker():
+            try:
+                pending = initial
+                while True:
+                    if len(pending) > 1:
+                        logger.info(
+                            "⚡ Replaying %d queued instant sync(s) deferred during the busy cycle",
+                            len(pending),
+                        )
+                    for user_id, abs_id in pending:
+                        logger.info("⚡ Replaying queued instant sync for '%s'", abs_id)
+                        kwargs = {'target_abs_id': abs_id}
+                        if user_id is not None:
+                            kwargs['user_id'] = user_id
+                        try:
+                            self.sync_cycle(**kwargs)
+                        except Exception as exc:
+                            logger.error(
+                                "❌ Queued instant sync failed for '%s': %s",
+                                abs_id,
+                                exc,
+                            )
+                    with self._pending_sync_lock:
+                        pending = sorted(
+                            self._pending_sync_books,
+                            key=lambda t: (t[1], t[0] is not None),
+                        )
+                        self._pending_sync_books.clear()
+                        if not pending:
+                            self._replay_worker_running = False
+                            return
+            except Exception as worker_exc:
+                logger.error("❌ Replay worker exited with error: %s", worker_exc)
+                with self._pending_sync_lock:
+                    self._replay_worker_running = False
+
+        threading.Thread(target=_replay_worker, daemon=True).start()
 
     def _resolve_storyteller_locator_from_abs_timestamp(self, book: Book, abs_timestamp: float):
         """
@@ -3131,6 +3156,49 @@ class SyncManager:
                     f"original_epub='{sanitize_log_data(getattr(book, 'original_ebook_filename', None))}'"
                 )
 
+                abs_ebook_locator = None
+                if (
+                    "ABSEbook" in config
+                    and not locator.cfi
+                    and epub
+                    and not str(epub).startswith("storyteller_")
+                    and locator.percentage is not None
+                ):
+                    try:
+                        _full_text, total_len = self._get_cached_ebook_text(epub)
+                        if total_len:
+                            target_offset = locator.match_index
+                            if target_offset is None:
+                                target_offset = int(locator.percentage * total_len)
+                            target_offset = max(0, min(int(target_offset), total_len - 1))
+                            hydrated = self.ebook_parser.get_locator_from_char_offset(
+                                epub, target_offset
+                            )
+                            if hydrated and hydrated.cfi:
+                                hydrated.percentage = locator.percentage
+                                cfi_offset = self.ebook_parser.resolve_cfi_to_index(
+                                    epub, hydrated.cfi
+                                )
+                            else:
+                                cfi_offset = None
+                            if (
+                                cfi_offset is not None
+                                and abs(int(cfi_offset) - target_offset) / total_len <= 0.01
+                                and not self._locator_collapsed_to_start(
+                                    LocatorResult(percentage=cfi_offset / total_len),
+                                    locator.percentage,
+                                )
+                            ):
+                                abs_ebook_locator = hydrated
+                                logger.debug(
+                                    f"'{abs_id}' '{title_snip}' Hydrated missing ABS ebook CFI "
+                                    f"at offset {target_offset} (roundtrip={cfi_offset})"
+                                )
+                    except Exception as exc:
+                        logger.debug(
+                            f"'{abs_id}' '{title_snip}' ABS ebook CFI hydration failed: {exc}"
+                        )
+
                 # Guard: never write a start-of-book (0%) reset that came from a
                 # FAILED locator resolution. When the leader is materially ahead but
                 # the resolved locator collapsed to ~0% — e.g. a KoSync XPath that no
@@ -3174,8 +3242,13 @@ class SyncManager:
                         ):
                             continue
 
+                        target_locator = (
+                            abs_ebook_locator
+                            if client_name == "ABSEbook" and abs_ebook_locator
+                            else locator
+                        )
                         request = UpdateProgressRequest(
-                            locator,
+                            target_locator,
                             txt,
                             previous_location=client_state.previous_pct if client_state else None,
                             credit_listening=(credit_listening_leader and client_name == primary_audio_client),

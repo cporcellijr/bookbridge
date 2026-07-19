@@ -1,0 +1,13 @@
+services:
+  bookbridge-diagnostics:
+    build: .
+    container_name: bookbridge_diagnostics
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:20129:20129"
+    volumes:
+      - ./data:/data
+    environment:
+      - TZ=America/New_York
+      - DIAG_READ_TOKEN=${DIAG_READ_TOKEN:?Set DIAG_READ_TOKEN in diagnostics_receiver/.env}
+      - DIAG_MAX_COMMENTS_PER_DAY=${DIAG_MAX_COMMENTS_PER_DAY:-20}

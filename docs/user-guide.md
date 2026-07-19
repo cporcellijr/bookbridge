@@ -27,7 +27,7 @@ When you start actions like **Create Mapping**, **Forge & Match**, **Add to Queu
 The **Account** page is where you manage your own login and reader-specific setup.
 
 - **My Integrations** lets you save your own service usernames, passwords, tokens, API keys, and per-user sync toggles. The cards here use the same names and order as **Settings -> Integrations**, so it is always clear which side holds what: Settings has the server connection, your Account has your login.
-- **Connect a KOReader device** walks you through pointing KOReader at the bridge (copyable sync-server address) and installing the optional Bridge Sync plugin.
+- **Connect a KOReader device** walks you through pointing KOReader at the bridge (an editable sync-server address that respects public HTTPS and warns when localhost must be replaced with the server's LAN hostname/IP) and installing the optional Bridge Sync plugin.
 - Admins can still manage the same fields for any reader from **Settings -> Users -> (user) -> Integrations**.
 - Shared engine settings, such as service URLs, poll intervals, and daemon behavior, still live in **Settings**.
 - BookFusion can be linked from **My Integrations** with the device-link button; a separate Calibre API key enables uploading local EPUBs to BookFusion.

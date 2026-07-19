@@ -4,7 +4,7 @@ Verifies that _respond_from_book_states correctly handles:
 - Locatorless synced state + equal-percentage sibling with locator → 200 with locator
 - Behind sibling returns the newer synced state (furthest-wins gate)
 - Ahead sibling returns furthest-wins
-- No valid locator anywhere returns defensive 502
+- No valid locator anywhere returns defensive 404
 - No valid locator anywhere but 0% progress still returns the synced state
 """
 
@@ -24,7 +24,7 @@ if os.path.exists(TEST_DIR):
     shutil.rmtree(TEST_DIR)
 os.makedirs(TEST_DIR, exist_ok=True)
 
-from src.db.models import KosyncDocument, Book, State, ReadingSession, Setting, HardcoverDetails, UserCredential
+from src.db.models import KosyncDocument, Book, State, ReadingSession, Setting, HardcoverDetails, UserCredential, KosyncUserProgress
 
 
 class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
@@ -56,6 +56,7 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         with db.get_session() as session:
             session.query(ReadingSession).delete()
             session.query(KosyncDocument).delete()
+            session.query(KosyncUserProgress).delete()
             session.query(State).delete()
             session.query(Setting).delete()
             session.query(HardcoverDetails).delete()
@@ -223,8 +224,8 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         self.assertEqual(data['progress'], "/body/ahead/path")
         self.assertAlmostEqual(float(data['percentage']), 0.90)
 
-    def test_no_valid_locator_returns_502(self):
-        """No valid locator anywhere returns defensive 502."""
+    def test_no_valid_locator_returns_404(self):
+        """No valid locator anywhere returns defensive 404."""
         self._setup_book_with_states(
             kosync_state_pct=1.0,
             kosync_xpath=None,
@@ -239,8 +240,8 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
             headers=self.auth_headers,
         )
 
-        # Should return 502 because no locator exists for positive progress
-        self.assertEqual(response.status_code, 502, response.get_data(as_text=True))
+        # Should return 404 because no locator exists for positive progress
+        self.assertEqual(response.status_code, 404, response.get_data(as_text=True))
 
     def test_no_sibling_exists_returns_synced_state(self):
         """When no sibling exists, the synced state is returned directly."""
@@ -261,8 +262,8 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         self.assertEqual(data['progress'], "/body/p[1]/text().0")
         self.assertAlmostEqual(float(data['percentage']), 0.50)
 
-    def test_synced_state_has_no_locator_no_sibling_returns_502(self):
-        """Synced state at 100% with no locator and no sibling → 502."""
+    def test_synced_state_has_no_locator_no_sibling_returns_404(self):
+        """Synced state at 100% with no locator and no sibling → 404."""
         self._setup_book_with_states(
             kosync_state_pct=1.0,
             kosync_xpath=None,
@@ -275,7 +276,7 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
             headers=self.auth_headers,
         )
 
-        self.assertEqual(response.status_code, 502, response.get_data(as_text=True))
+        self.assertEqual(response.status_code, 404, response.get_data(as_text=True))
 
     def test_zero_percent_synced_state_returns_synced_state(self):
         """Synced state at 0% returns synced state even without locator."""
@@ -291,7 +292,7 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
             headers=self.auth_headers,
         )
 
-        # 0% returns 200 (no 502 because _suppress_empty_progress_response
+        # 0% returns 200 (no 404 because _suppress_empty_progress_response
         # only triggers for percentage > 0 with no locator)
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         data = response.get_json()

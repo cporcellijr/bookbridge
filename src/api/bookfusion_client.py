@@ -22,6 +22,10 @@ _DEFAULT_API_URL = "https://www.bookfusion.com"
 _ACCEPT = "application/json; api_version=10"
 
 
+class BookFusionBookNotFound(Exception):
+    """The linked BookFusion book no longer exists for this user."""
+
+
 class BookFusionClient:
     """Thin wrapper around BookFusion's KOReader user API."""
 
@@ -118,6 +122,8 @@ class BookFusionClient:
 
     def set_reading_position(self, book_id: str | int, payload: dict) -> Optional[dict]:
         resp = self._make_request("POST", f"/api/user/books/{book_id}/reading_position", json_data=payload)
+        if resp is not None and resp.status_code == 404:
+            raise BookFusionBookNotFound(str(book_id))
         if resp is None or resp.status_code not in (200, 201):
             logger.warning(
                 "BookFusion reading_position POST returned %s: %s",
@@ -190,6 +196,9 @@ class BookFusionClient:
         header when present (the API reports pagination via headers), else
         ``None``. A ``None`` highlight list means the request itself failed."""
         resp = self._make_request("POST", "/api/user/highlights/search", json_data={"book_id": book_id})
+        if resp is not None and resp.status_code == 404:
+            logger.debug("BookFusion highlights unavailable for book %s (404)", book_id)
+            return None, None
         if resp is None or resp.status_code != 200:
             logger.warning(
                 "BookFusion highlights/search returned %s: %s",
@@ -214,6 +223,12 @@ class BookFusionClient:
 
     def create_highlight(self, payload: dict) -> Optional[dict]:
         resp = self._make_request("POST", "/api/user/highlights", json_data=payload)
+        if resp is not None and resp.status_code == 404:
+            logger.debug(
+                "BookFusion highlight create unavailable for book %s (404)",
+                payload.get("book_id"),
+            )
+            return None
         if resp is None or resp.status_code not in (200, 201):
             logger.warning("BookFusion highlight create returned %s", getattr(resp, "status_code", "no-response"))
             return None
