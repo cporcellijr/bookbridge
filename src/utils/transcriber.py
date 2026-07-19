@@ -329,7 +329,7 @@ class AudioTranscriber:
         if duration <= target_max_duration_sec:
             return [file_path]
 
-        logger.warning(f"⚠️ File '{file_path.name}' is {duration/60:.1f}m — Splitting")
+        logger.info(f"⚠️ File '{file_path.name}' is {duration/60:.1f}m — Splitting")
         num_parts = math.ceil(duration / target_max_duration_sec)
         segment_duration = duration / num_parts
         new_files = []

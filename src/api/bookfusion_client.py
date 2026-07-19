@@ -22,6 +22,10 @@ _DEFAULT_API_URL = "https://www.bookfusion.com"
 _ACCEPT = "application/json; api_version=10"
 
 
+class BookFusionBookNotFound(Exception):
+    """The linked BookFusion book no longer exists for this user."""
+
+
 class BookFusionClient:
     """Thin wrapper around BookFusion's KOReader user API."""
 
@@ -118,6 +122,8 @@ class BookFusionClient:
 
     def set_reading_position(self, book_id: str | int, payload: dict) -> Optional[dict]:
         resp = self._make_request("POST", f"/api/user/books/{book_id}/reading_position", json_data=payload)
+        if resp is not None and resp.status_code == 404:
+            raise BookFusionBookNotFound(str(book_id))
         if resp is None or resp.status_code not in (200, 201):
             logger.warning(
                 "BookFusion reading_position POST returned %s: %s",

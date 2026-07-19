@@ -52,6 +52,7 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
             cwa_client=MagicMock(),
             kavita_client=MagicMock(),
             epub_cache_dir=self.cache_dir,
+            bookorbit_client=MagicMock(),
         )
 
     def _write_book_file(self, filename: str, content: bytes = b"epub") -> Path:
@@ -278,6 +279,29 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertIsNotNone(resolved)
         self.assertEqual(Path(resolved["path"]), self.cache_dir / "remote.epub")
         self.assertEqual(resolved["content_hash"], "hash-remote")
+
+    def test_manifest_downloads_bookorbit_source_into_epub_cache(self):
+        self.service.bookorbit_client.is_configured.return_value = True
+        self.service.bookorbit_client.download_book.return_value = b"bookorbit-epub"
+
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Jackknife",
+                original_ebook_filename="Jackknife.epub",
+                kosync_doc_id="stale-hash",
+                ebook_source="BookOrbit",
+                ebook_source_id="42",
+                status="active",
+            )
+        )
+
+        manifest = self.service.build_manifest()
+
+        self.assertEqual(len(manifest["books"]), 1)
+        self.assertEqual(manifest["books"][0]["content_hash"], "hash-Jackknife")
+        self.assertEqual((self.cache_dir / "Jackknife.epub").read_bytes(), b"bookorbit-epub")
+        self.service.bookorbit_client.download_book.assert_called_once_with("42")
 
     def test_matching_stored_hash_is_not_rewritten(self):
         self._write_book_file("kavita_187.epub")

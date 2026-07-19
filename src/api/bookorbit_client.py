@@ -40,6 +40,7 @@ _DETAIL_TTL = 3600
 # Login is throttled to 5/min; the JWT lives 15 min. Cache it for 14 min so a
 # normal poll cadence never re-logs-in, and refresh just ahead of expiry.
 _TOKEN_MAX_AGE = 840
+_LOGIN_RETRY_COOLDOWN = 60
 _EBOOK_FORMATS = {"epub", "kepub", "pdf", "cbz", "cbr", "cb7", "mobi", "azw3", "azw", "fb2"}
 _AUDIO_FORMATS = {"m4b", "mp3", "m4a", "opus", "ogg", "flac", "aax", "aac"}
 
@@ -51,6 +52,7 @@ class BookOrbitClient:
         self._token: Optional[str] = None
         self._token_timestamp: float = 0
         self._token_lock = threading.Lock()
+        self._login_retry_after: float = 0
 
         self._book_cache: dict = {}        # id -> light book info
         self._filename_index: dict = {}    # filename.lower() -> id (lazily filled)
@@ -97,6 +99,8 @@ class BookOrbitClient:
     def _get_fresh_token(self) -> Optional[str]:
         if self._token_is_fresh():
             return self._token
+        if time.time() < self._login_retry_after:
+            return self._token
         base_url = self._get_base_url()
         username = self._get_username()
         password = self._get_password()
@@ -104,6 +108,8 @@ class BookOrbitClient:
             return None
         with self._token_lock:
             if self._token_is_fresh():
+                return self._token
+            if time.time() < self._login_retry_after:
                 return self._token
             try:
                 resp = self.session.post(
@@ -114,14 +120,26 @@ class BookOrbitClient:
                 if resp.status_code == 200:
                     data = resp.json()
                     if isinstance(data, dict):
-                        self._token = data.get("accessToken") or data.get("token")
-                        self._token_timestamp = time.time()
-                        return self._token
+                        token = data.get("accessToken") or data.get("token")
+                        if token:
+                            self._token = token
+                            self._token_timestamp = time.time()
+                            self._login_retry_after = 0
+                            return self._token
+                self._login_retry_after = time.time() + _LOGIN_RETRY_COOLDOWN
                 if resp.status_code == 429:
-                    logger.warning("BookOrbit login throttled (429); will reuse cached token")
+                    if self._token:
+                        logger.warning(
+                            "BookOrbit login throttled (429); reusing stale cached token"
+                        )
+                        return self._token
+                    logger.warning(
+                        "BookOrbit login throttled (429); no cached token available"
+                    )
                 else:
                     logger.error("BookOrbit login failed: %s", resp.status_code)
             except Exception as exc:
+                self._login_retry_after = time.time() + _LOGIN_RETRY_COOLDOWN
                 logger.error("BookOrbit login error: %s", exc)
         return None
 

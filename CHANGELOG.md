@@ -60,6 +60,31 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Stale BookFusion links now recover after a confirmed write-time 404.**
+  BookBridge removes only the affected user's obsolete link so it stops retrying
+  a deleted or incorrect BookFusion book and can be linked again cleanly.
+
+- **KOReader managed-folder sync can now serve BookOrbit-sourced EPUBs.**
+  When the original file is not mounted locally, BookBridge downloads the linked
+  BookOrbit ebook into its existing EPUB cache instead of omitting the book.
+
+- **Forge jobs now stop immediately when Storyteller is not configured.**
+  Manual and automatic Forge & Match jobs no longer stage files or attempt a TUS
+  upload that can only fail with a misleading authentication-token warning.
+
+- Expected splitting of long audio for transcription is now logged as routine
+  information rather than a warning requiring review.
+
+- **BookOrbit login failures no longer hammer its rate-limited auth endpoint.**
+  A failed login now pauses further attempts from that client for one minute,
+  and a 429 reuses an existing cached token when available instead of claiming
+  reuse while silently disabling BookOrbit requests.
+
+- **Audiobookshelf instant sync now waits between HTTP-failure retries.** Socket
+  token acquisition applies its existing backoff after 5xx responses as well as
+  connection exceptions, giving short ABS or reverse-proxy outages time to
+  recover before the listener falls back to its supervised restart.
+
 - **KOReader sync server no longer aborts strict clients on books that aren't in
   the library yet.** The built-in sync server now answers "unknown document"
   requests with HTTP 404 instead of 502. KOReader treated both the same way, but

@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Optional
 
-from src.api.bookfusion_client import BookFusionClient
+from src.api.bookfusion_client import BookFusionBookNotFound, BookFusionClient
 from src.db.models import Book, State
 from src.sync_clients.sync_client_interface import (
     ServiceState,
@@ -61,6 +61,22 @@ class BookFusionSyncClient(SyncClient):
 
     def supports_book(self, book: Book) -> bool:
         return bool(self._bookfusion_id(book))
+
+    def _remove_stale_link(self, book: Book, book_id: str) -> None:
+        """Remove a per-user link after BookFusion confirms the book is gone."""
+        if self._db is None or self._user_id is None:
+            return
+        try:
+            removed = self._db.delete_user_bookfusion_link(self._user_id, book.abs_id)
+        except Exception as exc:
+            logger.warning("Could not remove stale BookFusion link for '%s': %s", book.abs_id, exc)
+            return
+        if removed:
+            logger.info(
+                "Removed stale BookFusion link for '%s' after book %s returned 404",
+                book.abs_id,
+                book_id,
+            )
 
     def fetch_bulk_state(self) -> Optional[dict]:
         if not self.client.is_configured():
@@ -193,7 +209,11 @@ class BookFusionSyncClient(SyncClient):
             payload["page_position_in_book"] = anchor["page_position_in_book"]
             if anchor.get("cfi"):
                 payload["cfi"] = anchor["cfi"]
-        result = self.client.set_reading_position(book_id, payload)
+        try:
+            result = self.client.set_reading_position(book_id, payload)
+        except BookFusionBookNotFound:
+            self._remove_stale_link(book, book_id)
+            return SyncResult(pct, False, {"pct": pct})
         success = result is not None
         if success:
             try:

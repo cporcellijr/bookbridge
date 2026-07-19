@@ -34,6 +34,7 @@ class KOReaderDeviceSyncService:
         cwa_client,
         kavita_client=None,
         epub_cache_dir=None,
+        bookorbit_client=None,
     ):
         self.database_service = database_service
         self.ebook_parser = ebook_parser
@@ -42,6 +43,7 @@ class KOReaderDeviceSyncService:
         self.cwa_client = cwa_client
         self.kavita_client = kavita_client
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir is not None else Path("/data/epub_cache")
+        self.bookorbit_client = bookorbit_client
 
     def _get_active_books(self) -> list:
         # Audiobook-only mappings have no ebook file by design, so they're never
@@ -282,6 +284,8 @@ class KOReaderDeviceSyncService:
             logger.warning("KOReader device-sync refused unsafe cache filename '%s'", sanitize_log_data(source_filename))
             return None
 
+        if self._download_from_bookorbit(book, source_filename, cache_path):
+            return cache_path
         if self._download_from_booklore(book, source_filename, cache_path):
             return cache_path
         if self._download_from_abs(book, source_filename, cache_path):
@@ -292,6 +296,31 @@ class KOReaderDeviceSyncService:
             return cache_path
 
         return None
+
+    def _download_from_bookorbit(self, book, source_filename: str, cache_path: Path) -> bool:
+        source_name = str(getattr(book, "ebook_source", "") or "").strip().lower()
+        if source_name != "bookorbit":
+            return False
+        if not self.bookorbit_client or not self.bookorbit_client.is_configured():
+            return False
+
+        book_id = str(getattr(book, "ebook_source_id", "") or "").strip()
+        if not book_id:
+            return False
+
+        try:
+            content = self.bookorbit_client.download_book(book_id)
+            if not content:
+                return False
+            cache_path.write_bytes(content)
+            return cache_path.exists() and cache_path.stat().st_size > 0
+        except Exception as exc:
+            logger.warning(
+                "KOReader device-sync BookOrbit download failed for '%s': %s",
+                sanitize_log_data(source_filename),
+                exc,
+            )
+            return False
 
     def _download_from_booklore(self, book, source_filename: str, cache_path: Path) -> bool:
         if not self.booklore_client or not self.booklore_client.is_configured():

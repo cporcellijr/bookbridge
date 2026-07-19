@@ -196,8 +196,8 @@ class ABSSocketListener:
                     logger.warning(f"⚠️ ABS Socket.IO: /api/me returned {resp.status_code}")
             except Exception as e:
                 logger.warning(f"⚠️ ABS Socket.IO: Token exchange attempt {attempt}/{max_retries} failed — {e}")
-                if attempt < max_retries:
-                    time.sleep(5 * attempt)
+            if attempt < max_retries:
+                time.sleep(5 * attempt)
 
         logger.error("❌ ABS Socket.IO: Could not acquire socket token after retries — listener will not start")
         return None
