@@ -196,6 +196,23 @@ class TestABSDisabledSentinel(unittest.TestCase):
 
 
 class TestABSCollectionCleanup(unittest.TestCase):
+    def test_disabled_client_does_not_call_collection_api(self):
+        with patch.dict(
+            os.environ,
+            {"ABS_SERVER": "disabled", "ABS_KEY": "disabled"},
+            clear=False,
+        ):
+            client = ABSClient()
+            client.session = MagicMock()
+
+            result = client.remove_from_collection(
+                "missing-item", "Synced with KOReader"
+            )
+
+        self.assertFalse(result)
+        client.session.get.assert_not_called()
+        client.session.delete.assert_not_called()
+
     def test_missing_collection_item_is_already_removed(self):
         with patch.dict(
             os.environ,
@@ -203,17 +220,19 @@ class TestABSCollectionCleanup(unittest.TestCase):
             clear=False,
         ):
             client = ABSClient()
-        collections = MagicMock(status_code=200)
-        collections.json.return_value = {
-            "collections": [{"id": "collection-1", "name": "Synced with KOReader"}],
-        }
-        missing = MagicMock(status_code=404, text="Not Found")
-        client.session = MagicMock()
-        client.session.get.return_value = collections
-        client.session.delete.return_value = missing
+            collections = MagicMock(status_code=200)
+            collections.json.return_value = {
+                "collections": [{"id": "collection-1", "name": "Synced with KOReader"}],
+            }
+            missing = MagicMock(status_code=404, text="Not Found")
+            client.session = MagicMock()
+            client.session.get.return_value = collections
+            client.session.delete.return_value = missing
 
-        with self.assertLogs("src.api.api_clients", level="INFO") as captured:
-            result = client.remove_from_collection("missing-item", "Synced with KOReader")
+            with self.assertLogs("src.api.api_clients", level="INFO") as captured:
+                result = client.remove_from_collection(
+                    "missing-item", "Synced with KOReader"
+                )
 
         self.assertTrue(result)
         self.assertFalse(any("Failed to remove item 'missing-item'" in line

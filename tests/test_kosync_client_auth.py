@@ -39,6 +39,13 @@ class _CwaKoSyncHandler(BaseHTTPRequestHandler):
                 "progress": "/body/DocFragment[1]/body/p[1]/text().0",
             })
             return
+        if self.path == "/kosync/syncs/progress/doc-null":
+            self._json_response(200, {
+                "document": "doc-null",
+                "percentage": None,
+                "progress": None,
+            })
+            return
         self._json_response(404, {})
 
     def do_PUT(self) -> None:
@@ -90,6 +97,16 @@ class TestKoSyncClientBasicAuth(unittest.TestCase):
         self.assertTrue(self.client.update_progress("doc-1", 0.5, progress))
         self.assertEqual(_CwaKoSyncHandler.last_put["document"], "doc-1")
         self.assertEqual(_CwaKoSyncHandler.last_put["percentage"], 0.5)
+
+    def test_null_percentage_is_treated_as_no_progress(self) -> None:
+        with self.assertNoLogs("src.api.api_clients", level="ERROR"):
+            percentage, progress, metadata = (
+                self.client.get_progress_with_metadata("doc-null")
+            )
+
+        self.assertIsNone(percentage)
+        self.assertIsNone(progress)
+        self.assertEqual(metadata["document"], "doc-null")
 
 
 if __name__ == "__main__":

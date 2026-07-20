@@ -712,6 +712,8 @@ class ABSClient:
 
     def remove_from_collection(self, item_id, collection_name="abs-kosync"):
         """Remove an audiobook from a collection."""
+        if not self.is_configured():
+            return False
         self._update_session_headers()
         try:
             # Get collection by name
@@ -846,7 +848,10 @@ class KoSyncClient:
             r = self.session.get(url, **self._request_kwargs())
             if r.status_code == 200:
                 data = r.json()
-                pct = float(data.get('percentage', 0))
+                raw_pct = data.get('percentage')
+                if raw_pct is None:
+                    return None, None, data
+                pct = float(raw_pct)
                 # Grab the raw progress string (XPath)
                 xpath = data.get('progress')
                 return pct, xpath, data

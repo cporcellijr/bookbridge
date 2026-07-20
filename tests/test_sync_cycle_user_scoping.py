@@ -243,6 +243,49 @@ class TestSyncCycleUserScoping(unittest.TestCase):
         self.assertIsNot(args[3], global_library_service)
         self.assertIs(args[4], registry.get_clients(2))
 
+    def test_background_retry_preserves_attempt_count(self):
+        class _RetryJobDB:
+            def __init__(self):
+                self.book = _FakeBook("retry-book")
+                self.book.status = "failed_retry_later"
+                self.previous_job = SimpleNamespace(
+                    retry_count=3,
+                    last_attempt=0,
+                )
+                self.saved_job = None
+
+            def get_books_by_status(self, status):
+                if status == "failed_retry_later":
+                    return [self.book]
+                return []
+
+            def get_latest_job(self, abs_id):
+                return self.previous_job
+
+            def get_book_user_ids(self, abs_id):
+                return []
+
+            def save_book(self, book):
+                self.book = book
+
+            def save_job(self, job):
+                self.saved_job = job
+
+        mgr = SyncManager.__new__(SyncManager)
+        mgr._global_sync_clients = {}
+        mgr.user_client_registry = None
+        mgr.library_service = None
+        mgr.database_service = _RetryJobDB()
+        mgr._job_thread = None
+
+        from unittest.mock import patch
+        with patch("src.sync_manager.threading.Thread") as thread_cls, \
+             patch("src.sync_manager.register_worker"):
+            mgr.check_pending_jobs()
+
+        thread_cls.assert_called_once()
+        self.assertEqual(mgr.database_service.saved_job.retry_count, 3)
+
     def test_global_pending_job_uses_claimant_library_service(self):
         class _JobDB:
             def __init__(self):

@@ -2911,8 +2911,9 @@ class BookloreClient:
         return self._get_shelf_id(shelf_name)
     def add_to_shelf(self, ebook_filename, shelf_name=None):
         """Add a book to a shelf, creating the shelf if it doesn't exist."""
-        if not shelf_name:
-             shelf_name = resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "Kobo")
+        shelf_name = (
+            shelf_name or resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "")
+        ).strip() or "Kobo"
 
         try:
             # Find the book
@@ -2952,8 +2953,9 @@ class BookloreClient:
 
     def remove_from_shelf(self, ebook_filename, shelf_name=None):
         """Remove a book from a shelf."""
-        if not shelf_name:
-             shelf_name = resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "Kobo")
+        shelf_name = (
+            shelf_name or resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "")
+        ).strip() or "Kobo"
 
         try:
             # Find the book

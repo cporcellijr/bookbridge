@@ -419,8 +419,12 @@ class AudioTranscriber:
                     progress = json.load(f)
                 # If it looks like a complete run?
                 if progress.get('chunks_completed', 0) > 0 and progress.get('done', False):
-                    logger.info(f"⚡ Resuming from completed local cache for {abs_id}")
-                    return progress.get('transcript', [])
+                    cached_transcript = progress.get('transcript', [])
+                    if cached_transcript:
+                        logger.info(f"⚡ Resuming from completed local cache for {abs_id}")
+                        return cached_transcript
+                    progress_file.unlink()
+                    logger.info(f"Invalidated empty completed transcript cache for {abs_id}")
              except (json.JSONDecodeError, OSError) as e:
                  logger.debug(f"Failed to read progress cache file: {e}")
 
@@ -584,6 +588,10 @@ class AudioTranscriber:
                     progress_callback(chunks_completed / total_chunks)
 
                 gc.collect()
+
+            if not full_transcript:
+                progress_file.unlink(missing_ok=True)
+                raise ValueError("Transcription completed without any segments")
 
             # Clean up cache only on success. Keep `_progress.json` (it holds the finished
             # transcript) so a later re-align can reuse it via the resume check above and

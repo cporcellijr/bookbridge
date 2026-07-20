@@ -7,7 +7,7 @@ import time
 import traceback
 from pathlib import Path
 import schedule
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
 
@@ -74,6 +74,8 @@ if not hasattr(root_logger, '_configured') or not root_logger._configured:
         format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
     )
 logger = logging.getLogger(__name__)
+
+_STATE_FETCH_SLOW_SECONDS = 15.0
 
 # Multi-user: per-cycle override of the active sync-client bundle. Set by
 # sync_cycle when running for a specific user; None => use the global clients.
@@ -888,6 +890,7 @@ class SyncManager:
 
         with ThreadPoolExecutor(max_workers=len(clients_to_use)) as executor:
             futures = {}
+            submitted_at = {}
             for client_name, client in clients_to_use.items():
                 prev_state = prev_states_by_client.get(client_name.lower())
 
@@ -898,11 +901,17 @@ class SyncManager:
                     client.get_service_state, book, prev_state, title_snip, bulk_ctx
                 )
                 futures[future] = client_name
+                submitted_at[future] = time.monotonic()
 
-            done, not_done = wait(futures.keys(), timeout=15)
-
-            for future in done:
+            for future in as_completed(futures):
                 client_name = futures[future]
+                elapsed = time.monotonic() - submitted_at[future]
+                if elapsed > _STATE_FETCH_SLOW_SECONDS:
+                    logger.warning(
+                        "⚠️ '%s' state fetch was slow (%.1fs)",
+                        client_name,
+                        elapsed,
+                    )
                 try:
                     state = future.result()
                     if state is not None:
@@ -918,10 +927,6 @@ class SyncManager:
                         config[client_name] = state
                 except Exception as e:
                     logger.warning(f"⚠️ '{client_name}' state fetch failed: {e}")
-
-            for future in not_done:
-                client_name = futures[future]
-                logger.warning(f"⚠️ '{client_name}' state fetch timed out after 15s")
 
         return config
 
@@ -1517,6 +1522,7 @@ class SyncManager:
 
         # 2. Find ONE pending book/job to start using database service
         target_book = None
+        retry_job = None
         eligible_books = []
         max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
         retry_delay_mins = int(os.getenv("JOB_RETRY_DELAY_MINS", 15))
@@ -1547,6 +1553,7 @@ class SyncManager:
                         eligible_books.append(book)
                         if not target_book:
                             target_book = book
+                            retry_job = job
 
         if not target_book:
             return
@@ -1586,7 +1593,7 @@ class SyncManager:
         job = Job(
             abs_id=target_book.abs_id,
             last_attempt=time.time(),
-            retry_count=0,  # Will be updated on failure
+            retry_count=(retry_job.retry_count or 0) if retry_job else 0,
             last_error=None,
             progress=0.0
         )

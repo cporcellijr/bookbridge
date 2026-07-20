@@ -8,6 +8,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Bugscout reliability fixes.** KoSync null progress is now handled as an empty
+  state; disabled Audiobookshelf cleanup makes no invalid request; blank Grimmory
+  shelf names fall back to `Kobo`; completed slow state fetches are retained; and
+  expected missing Grimmory progress no longer emits warning noise.
+
+- **Background transcription retries now remain bounded.** Retried jobs preserve
+  their attempt count, while an all-empty Whisper result invalidates its completed
+  cache and retries instead of being reused as a successful transcript.
+
 - **External KoSync relays can now use HTTP Basic authentication.** Choose
   **HTTP Basic (Calibre-Web Automated)** in the user's KOReader / KoSync
   integration when targeting CWA's built-in `/kosync` endpoint; classic KoSync

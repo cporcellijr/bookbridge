@@ -66,7 +66,7 @@ class BookloreSyncClient(SyncClient):
             bl_pct, bl_cfi = self.booklore_client.get_progress(epub)
 
         if bl_pct is None:
-            logger.warning("⚠️ Grimmory percentage is None - returning None for service state")
+            logger.debug("Grimmory percentage is None - returning no service state")
             return None
 
         # Get previous BookLore state
