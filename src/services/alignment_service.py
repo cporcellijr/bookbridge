@@ -104,7 +104,7 @@ class AlignmentService:
              logger.warning(f"⚠️ Alignment Size Mismatch: Audio text is {ratio:.2%} of Ebook text size.")
 
         # 2. Normalize & Rebuild
-        # Fix fragmented sentences (Mr. Smith case)
+        # Rejoin fragmented sentences, such as the "Mr. Smith" case.
         # We pass ebook_text to help (though rebuild_fragmented_sentences uses simple heuristics currently)
         rebuilt_segments = self.polisher.rebuild_fragmented_sentences(raw_segments, ebook_text)
         logger.info(f"   Rebuilt segments: {len(raw_segments)} -> {len(rebuilt_segments)}")

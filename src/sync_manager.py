@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/main.py]
 import glob
 import logging
 import os
@@ -56,7 +55,7 @@ from src.utils.transcriber import TranscriptionCancelled
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.progress_metadata import state_metadata_kwargs
 
-# [NEW] Service Imports
+# Service imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import LibraryService
@@ -128,7 +127,7 @@ class SyncManager:
         self.database_service = database_service
         self.storyteller_client = storyteller_client
         
-        # [NEW] Services
+        # Services
         self.alignment_service = alignment_service
         self.library_service = library_service
         self.migration_service = migration_service
@@ -591,7 +590,7 @@ class SyncManager:
             except Exception as e:
                 logger.warning(f"⚠️ '{client_name}' connection failed: {e}")
         
-        # [NEW] Check CWA Integration Status
+        # Check CWA integration status.
         if self.library_service and self.library_service.cwa_client:
             cwa = self.library_service.cwa_client
             if (
@@ -615,7 +614,7 @@ class SyncManager:
         else:
             logger.debug("CWA not available (library_service or cwa_client missing)")
         
-        # [NEW] Check ABS ebook search capability
+        # Check ABS ebook search capability.
         if self.abs_client:
             try:
                 # Just verify methods exist (don't actually search during startup)
@@ -626,12 +625,12 @@ class SyncManager:
             except Exception as e:
                 logger.warning(f"⚠️ ABS ebook check failed: {e}")
 
-        # [NEW] Run one-time migration
+        # Run the one-time migration.
         if self.migration_service:
             logger.info("🔄 Checking for legacy data to migrate...")
             self.migration_service.migrate_legacy_data()
 
-        # [NEW] Cleanup orphaned cache files
+        # Clean up orphaned cache files.
         # DISABLED: Current logic is too aggressive (deletes original_ebook_filename for linked books).
         # We rely on delete_mapping in web_server.py to handle explicit deletions.
 
@@ -1749,7 +1748,7 @@ class SyncManager:
             if not epub_path:
                 epub_path = self._get_local_epub(ebook_filename)
                 
-            # [FIX] Ensure epub_path is a Path object (LibraryService returns str)
+            # LibraryService returns a string, so normalize epub_path to Path.
             if epub_path:
                 epub_path = Path(epub_path)
                 
@@ -1757,11 +1756,11 @@ class SyncManager:
             if not epub_path:
                 raise FileNotFoundError(f"Could not locate or download: {ebook_filename}")
             
-            # [FIX] Ensure epub_path is a Path object (acquire_ebook returns str)
+            # acquire_ebook returns a string, so normalize epub_path to Path.
             if epub_path:
                 epub_path = Path(epub_path)
                 
-                # [NEW] Eagerly calculate and lock KOSync Hash from the ORIGINAL file
+                # Eagerly calculate and lock the KoSync hash from the original file.
                 # This ensures we match what the user has on their device (KoReader)
                 # regardless of what Storyteller does later.
                 try:
@@ -1811,7 +1810,7 @@ class SyncManager:
             else:
                 chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
             
-            # [NEW] Pre-fetch book text for validation/alignment
+            # Pre-fetch book text for validation and alignment.
             # We need this for Validating SMIL OR for Aligning Whisper
             book_text, _ = self.ebook_parser.extract_text_and_map(epub_path)
 
@@ -1902,7 +1901,7 @@ class SyncManager:
             # Step 4: Parse EPUB - ebook_parser caches result, so repeating is cheap.
 
             
-            # [NEW] Step 5: Align and Store using AlignmentService
+            # Align and store using AlignmentService.
             # This is where we commit the result to the DB
             if not storyteller_aligned:
                 logger.info(f"🧠 Aligning transcript ({transcript_source}) using Anchored Alignment...")
@@ -1936,7 +1935,7 @@ class SyncManager:
             book.transcript_file = "DB_MANAGED"
             if transcript_source:
                 book.transcript_source = transcript_source
-            # [FIX] Save the filename so cache cleanup knows this file belongs to a book
+            # Save the filename so cache cleanup knows this file belongs to a book.
             if epub_path:
                 new_filename = epub_path.name
                 
@@ -3835,4 +3834,3 @@ if __name__ == "__main__":
     logger.info("✅ Using dependency injection")
 
     sync_manager.run_daemon()
-# [END FILE]

@@ -35,7 +35,7 @@ async function searchStoryteller() {
 
         resultsDiv.innerHTML = '';
 
-        // [NEW] Always show "None" option to allow unlinking
+        // Always show the "None" option to allow unlinking.
         const noneCard = document.createElement('div');
         noneCard.className = 'st-result-card st-none-option';
         noneCard.style.border = '1px dashed #666';

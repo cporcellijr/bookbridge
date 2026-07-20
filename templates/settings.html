@@ -722,7 +722,6 @@
                     </div>
                 </div>
                 <div class="section-body">
-                    <!-- Moved Checkbox to top -->
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="abs_only_lib" name="ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID" {% if
                             get_bool('ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID') %}checked{% endif %}>
@@ -2348,7 +2347,7 @@
             const select = document.getElementById(selectId);
             const status = document.getElementById(statusId);
 
-            button.innerHTML = 'âŒ› Scanning...';
+            button.innerHTML = '⌛ Scanning...';
             button.disabled = true;
 
             fetch(endpoint)

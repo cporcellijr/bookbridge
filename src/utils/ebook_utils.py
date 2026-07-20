@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/ebook_utils.py]
 """
 Ebook Utilities for abs-kosync-bridge
 
@@ -838,7 +837,7 @@ class EbookParser:
                 return None
             total_len = len(full_text)
 
-            # [NEW] 0. Global Uniqueness Check (The "Anchor" Logic)
+            # Global uniqueness check (the anchor logic)
             # Try to find a 10-word sequence that appears EXACTLY once in the book.
             # This prevents jumping to duplicate phrases (e.g., "Chapter 1" in the ToC vs the actual chapter).
             clean_search = " ".join(search_phrase.split())
@@ -910,7 +909,7 @@ class EbookParser:
                         css_selector = self._generate_css_selector(target_tag)
                         cfi = self._generate_cfi(item['spine_index'] - 1, item['content'], local_index)
 
-                        # FIX: Handle double slashes gracefully
+                        # Handle double slashes gracefully.
                         doc_frag_prefix = f"/body/DocFragment[{item['spine_index']}]"
                         if xpath_str.startswith('//'):
                             final_xpath = doc_frag_prefix + xpath_str[1:] # //id -> /DocFragment/id (or keep // if valid)
@@ -1079,7 +1078,7 @@ class EbookParser:
                 chapter_progress=chapter_progress,
             )
         except Exception as e:
-            logger.error(f"âŒ Error resolving locator from char offset in '{filename}': {e}")
+            logger.error(f"❌ Error resolving locator from char offset in '{filename}': {e}")
             return None
 
     def _normalize_with_map(self, text):

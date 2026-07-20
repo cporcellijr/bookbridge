@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/web_server.py]
 import glob
 import hmac
 import html
@@ -1620,13 +1619,13 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
     if ebook_path:
         return container.ebook_parser().get_kosync_id(ebook_path)
 
-    # [NEW] Check Epub Cache explicitly (if acquired by LibraryService but not meant for /books)
+    # Check the EPUB cache explicitly when LibraryService acquired a file outside /books.
     epub_cache = container.epub_cache_dir()
     cached_path = safe_cache_path(epub_cache, ebook_filename)
     if cached_path and cached_path.exists():
          return container.ebook_parser().get_kosync_id(cached_path)
 
-    # [NEW] On-Demand Fetching
+    # On-demand fetching
     # 0. BookOrbit On-Demand — the library hosts the file via API even when the
     #    shared /books volume isn't mounted. Resolve the book id (passed by the
     #    match flow, else by filename search) and hash the downloaded bytes.
@@ -4380,7 +4379,7 @@ def audiobook_matches_search(ab, search_term):
         return True
 
     # 2. Reverse Search: Title/Author is in Search term (e.g. "Dune" in "Dune Messiah")
-    # FIX: Enforce minimum length to prevent short/empty matches (e.g. "The", "It", "")
+    # Enforce a minimum length to prevent short or empty matches (for example, "The" or "It").
     MIN_LEN = 4
     
     if len(title) >= MIN_LEN and title in search_norm: return True
@@ -5153,7 +5152,7 @@ def match():
 
         booklore_id = None
             
-        # [NEW] Storyteller Tri-Link Logic
+        # Storyteller tri-link logic
         if storyteller_uuid:
             # If Storyteller UUID is selected, we prioritize it
             try:
@@ -5320,7 +5319,7 @@ def match():
         database_service.dismiss_suggestion(abs_id)
         database_service.dismiss_suggestion(kosync_doc_id)
         
-        # [NEW] Robust Dismissal: Check if there's a different hash for this filename (e.g. from device)
+        # Check for a different hash for this filename, such as one reported by a device.
         try:
             device_doc = database_service.get_kosync_doc_by_filename(ebook_filename)
             if device_doc and device_doc.document_hash != kosync_doc_id:
@@ -5715,7 +5714,7 @@ def _process_batch_queue(queue_items):
         database_service.dismiss_suggestion(item['abs_id'])
         database_service.dismiss_suggestion(kosync_doc_id)
 
-        # [NEW] Robust Dismissal
+        # Robust dismissal
         try:
             device_doc = database_service.get_kosync_doc_by_filename(ebook_filename)
             if device_doc and device_doc.document_hash != kosync_doc_id:
@@ -7751,7 +7750,7 @@ def update_hash(abs_id):
         updated = True
     else:
         # Auto-regenerate
-        # [NEW] User Request: If recalculating (empty input), prioritize the standard EPUB (original_ebook_filename)
+        # When recalculating with empty input, prioritize the standard EPUB.
         # over the current filename (which might be a Storyteller artifact).
         target_filename = book.original_ebook_filename or book.ebook_filename
         
@@ -7869,7 +7868,7 @@ def api_storyteller_link(abs_id):
     if not _user_may_modify_book(user, abs_id):
         return _forbidden_book_response(json_response=True)
 
-    # [NEW] Handle explicit unlinking
+    # Handle explicit unlinking.
     if storyteller_uuid == "none" or not storyteller_uuid:
         logger.info(f"🔄 Unlinking Storyteller for '{book.abs_title}'")
         previous_storyteller_uuid = book.storyteller_uuid

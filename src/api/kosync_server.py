@@ -2540,7 +2540,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
             except FileNotFoundError:
                 logger.debug(f"🔍 DB suggested '{doc.filename}' but file is missing — Re-scanning")
         
-        # [NEW] Check if valid linked book exists with original filename
+        # Check for a valid linked book with the original filename.
         if doc and doc.linked_abs_id:
              book = _database_service.get_book(doc.linked_abs_id)
              if book and book.original_ebook_filename:
@@ -3078,7 +3078,7 @@ def api_link_kosync_document(doc_hash):
 
     success = _database_service.link_kosync_document(doc_hash, abs_id)
     if success:
-        # [FIX] Always update the book's KOSync ID to match what we just linked.
+        # Always update the book's KoSync ID to match the link.
         # This handles cases where the book had a "wrong" hash (e.g. from Storyteller artifact)
         # and we want to align it with the actual device hash.
         current_id = book.kosync_doc_id

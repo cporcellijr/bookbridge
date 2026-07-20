@@ -4008,7 +4008,7 @@ class DatabaseService:
             return True
         except Exception as e:
             session.rollback()
-            logger.error(f"âŒ Failed to clear Grimmory cache table: {e}")
+            logger.error(f"❌ Failed to clear Grimmory cache table: {e}")
             return False
         finally:
             session.close()

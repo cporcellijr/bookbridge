@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Cleaned up historical edit markers and damaged text encoding.** User-facing
+  scan status text and Grimmory, Hardcover, database, and ebook-resolution logs
+  now render their intended symbols instead of mojibake; obsolete file-boundary
+  banners and patch-history labels were removed without changing behavior.
+
 - **Bugscout reliability fixes.** KoSync null progress is now handled as an empty
   state; disabled Audiobookshelf cleanup makes no invalid request; blank Grimmory
   shelf names fall back to `Kobo`; completed slow state fetches are retained; and

@@ -1,4 +1,3 @@
-# [START FILE: src/utils/transcription_providers.py]
 # Transcription Providers
 """
 Abstract interface and implementations for transcription services.
@@ -156,18 +155,18 @@ class DeepgramProvider(TranscriptionProvider):
         if not self.api_key:
             raise ValueError("DEEPGRAM_API_KEY not configured")
         
-        # [UPDATED] Simplified import to match new SDK
+        # Import from the current SDK location.
         from deepgram import DeepgramClient
         
         logger.info(f"☁️ Transcribing with {self.get_name()}: {audio_path.name}")
         
-        # [UPDATED] Initialize client simply with API key
+        # Initialize the client with the API key.
         client = DeepgramClient(api_key=self.api_key)
         
         with open(audio_path, "rb") as f:
             buffer_data = f.read()
         
-        # [UPDATED] Removed 'timeout' and 'config' to match the provided API info
+        # Use the API's supported transcription arguments.
         response = client.listen.v1.media.transcribe_file(
             request=buffer_data,
             model=self.model,

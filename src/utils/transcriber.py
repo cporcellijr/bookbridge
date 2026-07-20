@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/transcriber.py]
 """
 Audio Transcriber for abs-kosync-enhanced
 
@@ -39,7 +38,7 @@ class TranscriptionCancelled(Exception):
     """Raised inside a transcription worker when its mapping has been deleted."""
 
 class AudioTranscriber:
-    # [UPDATED] Accepted smil_extractor and polisher as arguments
+    # Accept the SMIL extractor and polisher as dependencies.
     def __init__(self, data_dir, smil_extractor, polisher: Polisher, ollama_client=None):
         self.data_dir = data_dir
         self.ollama_client = ollama_client
@@ -52,7 +51,7 @@ class AudioTranscriber:
         # Unified threshold logic
         self.match_threshold = int(os.environ.get("TRANSCRIPT_MATCH_THRESHOLD", os.environ.get("FUZZY_MATCH_THRESHOLD", 80)))
 
-        # [UPDATED] Use the injected instances
+        # Use the injected instances.
         self.smil_extractor = smil_extractor
         self.polisher = polisher
 
@@ -147,7 +146,7 @@ class AudioTranscriber:
                         logger.warning(f"⚠️ SMIL REJECTED: Coverage too low ({coverage:.1%}). Expected {expected_duration:.0f}s, got {transcript_duration:.0f}s — Falling back to transcriber")
                         return None
 
-            # [NEW] Validate transcript against BOOK TEXT
+            # Validate the transcript against the book text.
             # We require full_book_text for this validation.
             if full_book_text:
                 is_valid, score = self.validate_smil(transcript, full_book_text)
@@ -461,7 +460,7 @@ class AudioTranscriber:
 
             # Phase 1: Download and Normalize (if not resuming)
             if not resuming:
-                # FIX: Check if files exist for ALL parts before skipping
+                # Check that files exist for all parts before skipping.
                 existing_files = sorted(book_cache_dir.glob("part_*_split_*.wav"))
                 
                 # Check coverage: Do we have at least one file for every index in audio_urls?
@@ -1090,5 +1089,4 @@ class AudioTranscriber:
         except Exception as e:
             logger.error(f"❌ {title_prefix}Error searching transcript '{transcript_path}': {e}")
         return None
-# [END FILE]
 

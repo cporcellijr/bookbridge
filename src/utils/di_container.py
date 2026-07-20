@@ -25,10 +25,10 @@ from src.db.database_service import DatabaseService
 from src.utils.ebook_utils import EbookParser
 from src.utils.transcriber import AudioTranscriber
 from src.utils.smil_extractor import SmilExtractor
-from src.utils.polisher import Polisher # [NEW]
-from src.services.alignment_service import AlignmentService # [NEW]
-from src.services.library_service import LibraryService # [NEW]
-from src.services.migration_service import MigrationService # [NEW]
+from src.utils.polisher import Polisher
+from src.services.alignment_service import AlignmentService
+from src.services.library_service import LibraryService
+from src.services.migration_service import MigrationService
 from src.services.forge_service import ForgeService
 from src.services.koreader_device_sync_service import KOReaderDeviceSyncService
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
@@ -143,12 +143,12 @@ class Container(containers.DeclarativeContainer):
         SmilExtractor
     )
 
-    # [NEW] Polisher
+    # Polisher
     polisher = providers.Singleton(
         Polisher
     )
 
-    # [NEW] Services
+    # Services
     alignment_service = providers.Singleton(
         AlignmentService,
         database_service=database_service,
@@ -194,7 +194,7 @@ class Container(containers.DeclarativeContainer):
         AudioTranscriber,
         data_dir,
         smil_extractor,
-        polisher,  # [UPDATED] Injected dependency
+        polisher,
         ollama_client=ollama_client
     )
 
@@ -420,7 +420,7 @@ class Container(containers.DeclarativeContainer):
         database_service=database_service,
         sync_clients=sync_clients,
         
-        # [NEW] Injected Services
+        # Injected services
         alignment_service=alignment_service,
         library_service=library_service,
         migration_service=migration_service,

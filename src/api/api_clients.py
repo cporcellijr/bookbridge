@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/api_clients.py]
 import os
 import requests
 import logging
@@ -835,7 +834,7 @@ class KoSyncClient:
 
     def get_progress(self, doc_id):
         """
-        CRITICAL FIX: Returns TUPLE (percentage, xpath_string)
+        Returns a tuple of (percentage, xpath_string).
         This prevents the 'cannot unpack non-iterable float' crash.
         """
         pct, xpath, _metadata = self.get_progress_with_metadata(doc_id)
@@ -894,4 +893,3 @@ class KoSyncClient:
         except Exception as e:
             logger.error(f"❌ Failed to update KoSync: {e}")
             return False
-# [END FILE]
