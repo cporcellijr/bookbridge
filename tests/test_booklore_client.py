@@ -1066,6 +1066,7 @@ def test_get_audiobook_cover_bytes_uses_plural_endpoint(booklore_client):
 
 def test_add_to_shelf_404_evicts_stale_hydrated_entry(booklore_client):
     booklore_client._process_book_detail(make_detail("gone", title="Gone Book", filename="gone.epub"))
+    booklore_client._cache_timestamp = time.time()
     booklore_client.db.delete_booklore_book.reset_mock()
 
     shelves_response = MagicMock()

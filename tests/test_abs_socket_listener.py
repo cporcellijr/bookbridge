@@ -11,6 +11,18 @@ from unittest.mock import MagicMock, patch, PropertyMock
 from src.services.abs_socket_listener import ABSSocketListener
 
 
+class _ImmediateThread:
+    """Run the supplied target synchronously for deterministic dispatch tests."""
+
+    def __init__(self, target=None, kwargs=None, daemon=None):
+        self._target = target
+        self._kwargs = kwargs or {}
+
+    def start(self):
+        if self._target:
+            self._target(**self._kwargs)
+
+
 class TestABSSocketListenerDebounce(unittest.TestCase):
     """Test the debounce logic in ABSSocketListener."""
 
@@ -22,6 +34,12 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         )
         self.env.start()
         self.addCleanup(self.env.stop)
+        self.thread_patch = patch(
+            "src.services.abs_socket_listener.threading.Thread",
+            _ImmediateThread,
+        )
+        self.thread_patch.start()
+        self.addCleanup(self.thread_patch.stop)
         self.mock_db = MagicMock()
         self.mock_sync = MagicMock()
 
@@ -87,8 +105,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         self.listener._pending["book-3"] = time.time() - 2  # 2s ago, window is 1s
         self.listener._check_and_fire()
 
-        # Give the daemon thread a moment
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_called_once_with(target_abs_id="book-3", user_id=None)
 
     def test_debounce_setting_change_applies_without_recreating_listener(self):
@@ -108,7 +124,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
 
         listener._check_and_fire()
 
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_called_once_with(
             target_abs_id="dynamic-window", user_id=None
         )
@@ -120,14 +135,12 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
 
         self.listener._pending["book-4"] = time.time() - 2
         self.listener._check_and_fire()
-        time.sleep(0.1)
 
         # First fire should have removed from pending
         self.assertEqual(len(self.listener._pending), 0)
 
         # Calling again should do nothing
         self.listener._check_and_fire()
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_called_once()
 
     def test_new_event_after_fire_retriggers(self):
@@ -138,7 +151,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         # First event + fire
         self.listener._pending["book-5"] = time.time() - 2
         self.listener._check_and_fire()
-        time.sleep(0.1)
         self.assertEqual(self.mock_sync.sync_cycle.call_count, 1)
 
         # New event
@@ -148,7 +160,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         # Fire again after window
         self.listener._pending["book-5"] = time.time() - 2
         self.listener._check_and_fire()
-        time.sleep(0.1)
         self.assertEqual(self.mock_sync.sync_cycle.call_count, 2)
 
     def test_handles_nested_data_format(self):
@@ -227,7 +238,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         listener._pending["crawler-carl"] = time.time() - 2
         listener._check_and_fire()
 
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_called_once_with(
             target_abs_id="crawler-carl", user_id=7
         )
@@ -241,7 +251,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         self.listener._pending["owned-book"] = time.time() - 2
         self.listener._check_and_fire()
 
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_called_once_with(
             target_abs_id="owned-book", user_id=3
         )
@@ -261,7 +270,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         self.listener._pending["owned-book"] = time.time() - 2
         self.listener._check_and_fire()
 
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_not_called()
 
     def test_long_debounce_still_suppresses_self_triggered_event(self):
@@ -285,7 +293,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         with self.assertLogs("src.services.abs_socket_listener", level="DEBUG") as logs:
             self.listener._check_and_fire()
 
-        time.sleep(0.1)
         self.mock_sync.sync_cycle.assert_not_called()
         self.assertIn(
             "ABS Socket.IO: Ignoring self-triggered event for 'Slow Debounce'",
@@ -308,7 +315,6 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         self.listener._pending["shared-book"] = time.time() - 2
         self.listener._check_and_fire()
 
-        time.sleep(0.1)
         fired = {
             (c.kwargs["target_abs_id"], c.kwargs["user_id"])
             for c in self.mock_sync.sync_cycle.call_args_list
