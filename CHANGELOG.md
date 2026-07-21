@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **KoSync auto-discovery now recovers when multiple users share one document
+  hash.** A mapping claimed by another user still returns a privacy-preserving
+  404, but BookBridge now verifies the requesting user's EPUB in the background,
+  creates that user's own book claim, and allows the next GET/PUT sync. (#335)
+
 - **Cleaned up historical edit markers and damaged text encoding.** User-facing
   scan status text and Grimmory, Hardcover, database, and ebook-resolution logs
   now render their intended symbols instead of mojibake; obsolete file-boundary
