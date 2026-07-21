@@ -4,7 +4,7 @@
 
 All notable changes to BookBridge will be documented in this file.
 
-## [Unreleased]
+## [7.3.1] - 2026-07-21
 
 ### Security
 
@@ -20,13 +20,19 @@ All notable changes to BookBridge will be documented in this file.
   encryption key at `DATA_DIR/secret.key` (permissions `0600`) and rewrites every
   plaintext credential it finds. Nothing to re-enter, no migration to run.
 
-  Two things worth knowing:
+  Three things worth knowing:
 
   - **Back up `secret.key` with your database.** They live in the same `/data`
-    volume, so a whole-volume backup already captures both. Restoring a database
-    *without* its key makes those credentials unreadable — BookBridge treats them as
-    "not configured" and asks you to re-enter them rather than sending garbage to
-    your services.
+    volume, so a whole-volume backup already captures both. If your routine instead
+    copies `database.db` on its own, that backup is no longer self-sufficient — add
+    the key file to it. Restoring a database *without* its key makes those
+    credentials unreadable; BookBridge treats them as "not configured" and asks you
+    to re-enter them rather than sending garbage to your services, and logs
+    `🔐 Could not decrypt …` naming each affected setting.
+  - **Downgrading after this release costs you your credentials.** Older BookBridge
+    versions do not recognise the encrypted form and will send it to your services
+    as though it were the password. If you roll back, either restore a pre-upgrade
+    database backup or re-enter your credentials in the older version.
   - **Set `BOOKBRIDGE_SECRET_KEY` if you want the key off the volume.** By default
     the key sits next to the database it protects, which defends a leaked database
     file or backup but not a compromised host. Setting that environment variable to
@@ -34,7 +40,12 @@ All notable changes to BookBridge will be documented in this file.
     option: a key stored in the database it encrypts would be pointless.
 
   Usernames, server URLs, library IDs, and enable/disable toggles are intentionally
-  left readable, so an install remains inspectable and supportable. (#336)
+  left readable, so an install remains inspectable and supportable.
+
+  Running from source rather than the published image? Install the new dependency
+  with `pip install -r requirements.txt` — without it BookBridge logs
+  `🔓 Credential encryption UNAVAILABLE` and keeps storing credentials in the clear.
+  (#336)
 
 ### Fixed
 
