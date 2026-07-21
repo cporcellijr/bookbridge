@@ -13,6 +13,7 @@ flask>=3.0,<4
 lxml>=5.0,<6
 defusedxml>=0.7,<1
 dependency-injector>=4.41,<5
+cryptography>=42,<47
 sqlalchemy>=2.0,<3
 alembic>=1.13,<2
 python-socketio[client]>=5.11,<6

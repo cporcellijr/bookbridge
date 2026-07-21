@@ -6,6 +6,36 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- **Stored credentials are now encrypted at rest.** Every password, API token, sync
+  key, and session cookie BookBridge holds — for both per-user accounts and the
+  admin's own global settings — was previously written to `database.db` as the exact
+  plaintext you typed. Anyone with a copy of that file, or of a backup, could read
+  every account the bridge touches. Values are now wrapped with Fernet
+  (AES-128-CBC + HMAC-SHA256) before they are stored, and unwrapped only in memory
+  when a credential is actually used.
+
+  Upgrading is automatic: on first boot after the update, BookBridge generates an
+  encryption key at `DATA_DIR/secret.key` (permissions `0600`) and rewrites every
+  plaintext credential it finds. Nothing to re-enter, no migration to run.
+
+  Two things worth knowing:
+
+  - **Back up `secret.key` with your database.** They live in the same `/data`
+    volume, so a whole-volume backup already captures both. Restoring a database
+    *without* its key makes those credentials unreadable — BookBridge treats them as
+    "not configured" and asks you to re-enter them rather than sending garbage to
+    your services.
+  - **Set `BOOKBRIDGE_SECRET_KEY` if you want the key off the volume.** By default
+    the key sits next to the database it protects, which defends a leaked database
+    file or backup but not a compromised host. Setting that environment variable to
+    any long random string separates the two. It is deliberately not a Settings-page
+    option: a key stored in the database it encrypts would be pointless.
+
+  Usernames, server URLs, library IDs, and enable/disable toggles are intentionally
+  left readable, so an install remains inspectable and supportable. (#336)
+
 ### Fixed
 
 - **KoSync auto-discovery now recovers when multiple users share one document

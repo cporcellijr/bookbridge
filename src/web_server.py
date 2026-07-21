@@ -263,6 +263,12 @@ def setup_dependencies(app, test_container=None):
     # This updates os.environ with values from the database
     if database_service:
         ConfigLoader.bootstrap_config(database_service)
+        # Wrap any credential still stored in plaintext by an older install.
+        # Idempotent; runs before settings are mirrored into os.environ.
+        try:
+            database_service.encrypt_plaintext_secrets()
+        except Exception as e:
+            logger.error(f"❌ Could not encrypt stored credentials: {e}")
         ConfigLoader.load_settings(database_service)
         logger.info("✅ Settings loaded into environment variables")
 
