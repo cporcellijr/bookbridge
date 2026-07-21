@@ -1594,6 +1594,50 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('data-working-label="Processing queue..."', html)
         self.assertIn('data-working-label="Forging + matching..."', html)
         self.assertIn('startBatchSubmitState(submitter)', html)
+        self.assertIn('onclick="selectEbookCard(this)"', html)
+        self.assertNotIn('onclick="selectEbookCard(this,', html)
+
+    def test_add_book_multi_result_with_apostrophe_has_working_ebook_picker(self):
+        """Issue #339: multi-result cards must not interpolate titles into JS."""
+        import src.web_server as ws
+
+        ebooks = [
+            ws.EbookResult(
+                name="The Reader's Copy.epub",
+                title="The Reader's Copy",
+                authors="A. Author",
+                source="BookOrbit",
+                source_id="bo-1",
+            ),
+            ws.EbookResult(
+                name="The Readers Copy.epub",
+                title="The Readers Copy",
+                authors="B. Author",
+                source="BookOrbit",
+                source_id="bo-2",
+            ),
+        ]
+        with patch.object(ws, '_search_audiobooks_with_fallback', return_value=[]), \
+             patch.object(ws, '_search_ebooks_with_fallback', return_value=ebooks), \
+             patch.object(
+                 ws,
+                 '_promote_authoritative_ebook_matches',
+                 side_effect=lambda _audio, candidates: candidates,
+             ):
+            response = self.client.get('/add-book?search=reader')
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-value="The Reader&#39;s Copy.epub"', html)
+        self.assertIn(
+            'data-display-name="The Reader&#39;s Copy - A. Author"', html
+        )
+        self.assertIn('onclick="selectEbookCard(this)"', html)
+        self.assertNotIn('onclick="selectEbookCard(this,', html)
+        self.assertIn("const filename = element.dataset.value || '';", html)
+        self.assertIn(
+            'const display_name = element.dataset.displayName || filename;', html
+        )
 
     def test_suggestions_template_has_submit_feedback_hooks(self):
         html = self._read_template_source('suggestions.html')

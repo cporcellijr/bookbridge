@@ -4,6 +4,16 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Book editions with apostrophes can now be selected from multi-result matching
+  searches.** Add / Update Book no longer breaks the edition card's click handler
+  when a BookOrbit or other library result contains an apostrophe. (#339)
+
+---
+
 ## [7.3.1]
 
 The headline is **your stored credentials are now encrypted**: every password, API token, sync key, and session cookie BookBridge keeps for you is encrypted before it touches the database, alongside fixes for KOReader sync, Calibre-Web Automated relays, and background transcription.
