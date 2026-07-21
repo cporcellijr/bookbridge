@@ -1,0 +1,1495 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The ultimate bridge for cross-platform reading and listening synchronization.">
+      
+      
+        <meta name="author" content="cporcellijr">
+      
+      
+        <link rel="canonical" href="https://cporcellijr.github.io/bookbridge/diagnostics/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/icon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>BookBridge Opt-In Diagnostics - BookBridge</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#bookbridge-opt-in-diagnostics" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="BookBridge" class="md-header__button md-logo" aria-label="BookBridge" data-md-component="logo">
+      
+  <img src="../assets/icon.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BookBridge
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              BookBridge Opt-In Diagnostics
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/cporcellijr/bookbridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    cporcellijr/bookbridge
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../user-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  User Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../configuration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="BookBridge" class="md-nav__button md-logo" aria-label="BookBridge" data-md-component="logo">
+      
+  <img src="../assets/icon.png" alt="logo">
+
+    </a>
+    BookBridge
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/cporcellijr/bookbridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    cporcellijr/bookbridge
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#phase-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#post-payload-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        POST Payload Schema
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="POST Payload Schema">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#field-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#send-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Send Semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#receiver-phase-4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Receiver (Phase 4)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Receiver (Phase 4)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sqlite-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SQLite Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#input-sanitization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input Sanitization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hygiene" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hygiene
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#automated-review-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automated Review Integration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#findings-api-phase-5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Findings API (Phase 5)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Findings API (Phase 5)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#findings-schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Findings Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ranking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ranking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication-tofu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Authentication (TOFU)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#quotas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quotas
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-token-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-Token Gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-bug-reports-and-replies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Bug Reports and Replies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#private-maintainer-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private Maintainer Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="bookbridge-opt-in-diagnostics">BookBridge Opt-In Diagnostics</h1>
+<p>BookBridge can optionally collect anonymised warning/error telemetry and
+POST it to a collector endpoint.  The feature is <strong>opt-in</strong> — nothing is
+sent unless the user explicitly enables it.</p>
+<h2 id="phase-overview">Phase Overview</h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Scope</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Warning collection, PII scrubbing, snapshot/clear API</td>
+<td>Merged</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Payload builder, daily sender, admin send-now endpoint</td>
+<td>This document</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Settings UI toggle</td>
+<td>Planned</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Receiver / collector service</td>
+<td>Planned</td>
+</tr>
+</tbody>
+</table>
+<h2 id="settings">Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIAGNOSTICS_OPT_IN</code></td>
+<td><code>false</code></td>
+<td>Master toggle (<code>true</code>/<code>on</code>/<code>1</code> to enable)</td>
+</tr>
+<tr>
+<td><code>DIAGNOSTICS_PROMPTED</code></td>
+<td><code>""</code></td>
+<td>Has the user been prompted to opt in</td>
+</tr>
+<tr>
+<td><code>DIAGNOSTICS_INSTANCE_ID</code></td>
+<td><code>""</code></td>
+<td>Stable UUID4 hex identifier (auto-generated)</td>
+</tr>
+<tr>
+<td><code>DIAGNOSTICS_ENDPOINT_URL</code></td>
+<td><code>""</code></td>
+<td>Collector POST URL (TBD for Phase 4)</td>
+</tr>
+<tr>
+<td><code>DIAGNOSTICS_LAST_SENT</code></td>
+<td><code>""</code></td>
+<td>ISO-8601 timestamp of last successful send</td>
+</tr>
+<tr>
+<td><code>DIAGNOSTICS_INGEST_TOKEN</code></td>
+<td><code>""</code></td>
+<td>Per-instance auth token (auto-persisted from receiver response)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="post-payload-schema">POST Payload Schema</h2>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;schema&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;instance_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a1b2c3d4e5f6…&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;sent_at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-15T12:00:00+00:00&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;app_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;7.2.0&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;services&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;abs&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;kosync&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;storyteller&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;booklore&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;bookfusion&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;book_orbit&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;cwa&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;hardcover&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;storygraph&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;slash_books&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;total_books&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;window&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;start&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-14T12:00:00+00:00&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;end&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-15T12:00:00+00:00&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;dropped&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;warnings&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;template&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Sync failed after # retries&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Sync failed after 3 retries&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;logger&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;src.sync_manager&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;WARNING&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;first_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-14T12:00:00+00:00&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;last_seen&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-07-15T11:58:00+00:00&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;context&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;2026-07-15 11:58:00 WARNING …&quot;</span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="field-types">Field Types</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schema</code></td>
+<td><code>int</code></td>
+<td>Payload version (currently <code>1</code>)</td>
+</tr>
+<tr>
+<td><code>instance_id</code></td>
+<td><code>string</code></td>
+<td>Stable UUID4 hex per bridge instance</td>
+</tr>
+<tr>
+<td><code>sent_at</code></td>
+<td><code>string</code></td>
+<td>UTC ISO-8601 timestamp of send</td>
+</tr>
+<tr>
+<td><code>app_version</code></td>
+<td><code>string</code></td>
+<td>Bridge version from <code>APP_VERSION</code></td>
+</tr>
+<tr>
+<td><code>services</code></td>
+<td><code>object&lt;string, bool&gt;</code></td>
+<td>Per-service <code>is_configured</code> flags</td>
+</tr>
+<tr>
+<td><code>total_books</code></td>
+<td><code>int \| null</code></td>
+<td>Active book count (<code>null</code> on DB error)</td>
+</tr>
+<tr>
+<td><code>window.start</code></td>
+<td><code>string \| null</code></td>
+<td>Start of the observation window</td>
+</tr>
+<tr>
+<td><code>window.end</code></td>
+<td><code>string \| null</code></td>
+<td>Snapshot taken-at timestamp</td>
+</tr>
+<tr>
+<td><code>dropped</code></td>
+<td><code>int</code></td>
+<td>Warning entries dropped (capacity exceeded)</td>
+</tr>
+<tr>
+<td><code>warnings</code></td>
+<td><code>array&lt;object&gt;</code></td>
+<td>Deduplicated warning entries</td>
+</tr>
+</tbody>
+</table>
+<p>Each warning object contains: <code>template</code>, <code>message</code>, <code>logger</code>, <code>level</code>,
+<code>count</code>, <code>first_seen</code>, <code>last_seen</code>, <code>context</code> (array of scrubbed log
+lines).  All PII (URLs, filesystem paths, long quoted spans) is
+deterministically scrubbed before inclusion.</p>
+<h2 id="send-semantics">Send Semantics</h2>
+<ul>
+<li><strong>Frequency:</strong> at most once per 24 hours; the sender checks
+  <code>DIAGNOSTICS_LAST_SENT</code> before posting.</li>
+<li><strong>Deduplication:</strong> the collector receives deduplicated, template-keyed
+  warnings with occurrence counts — not raw log lines.</li>
+<li><strong>Scrubbing:</strong> all text passes through <code>scrub_diagnostic_text()</code> which
+  replaces URLs, filesystem paths, and long quoted spans with stable
+  hash tokens.</li>
+<li><strong>Idempotency:</strong> on a 2xx response the sender clears the snapshot
+  buffer and records the send time.  On non-2xx or network error the
+  buffer is preserved and the send is retried on the next cycle.</li>
+<li><strong>Heartbeat:</strong> an empty <code>warnings</code> list is still sent — the metadata
+  (instance, version, services, book count) constitutes an intentional
+  heartbeat.</li>
+<li><strong>Admin override:</strong> <code>POST /api/diagnostics/send-now</code> (admin-only)
+  bypasses the 24h guard and forces an immediate send.</li>
+</ul>
+<h2 id="endpoint">Endpoint</h2>
+<p><code>DIAGNOSTICS_ENDPOINT_URL</code> must be set to the collector's POST URL.
+The default is TBD pending Phase 4 receiver implementation.</p>
+<h2 id="receiver-phase-4">Receiver (Phase 4)</h2>
+<p>The diagnostics receiver is a standalone Flask application that accepts
+diagnostic payloads from opted-in BookBridge instances and stores them
+in SQLite for automated and ad-hoc analysis.</p>
+<h3 id="endpoints">Endpoints</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/health</code></td>
+<td>Health check; returns <code>ok</code>, instance count, and batch count</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/diagnostics</code></td>
+<td>Accept a schema-1 diagnostics payload</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/export?since=&lt;ISO&gt;</code></td>
+<td>Export batches (and embedded warnings) since a timestamp</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/summary?days=&lt;n&gt;</code></td>
+<td>Aggregate top warning templates with distinct-instance counts</td>
+</tr>
+</tbody>
+</table>
+<h3 id="sqlite-schema">SQLite Schema</h3>
+<p>Three tables, managed idempotently via <code>CREATE TABLE IF NOT EXISTS</code>:</p>
+<ul>
+<li><strong><code>instances</code></strong> — one row per <code>instance_id</code>; tracks <code>first_seen</code>,
+  <code>last_seen</code>, <code>last_version</code>, <code>last_services_json</code>,
+  <code>last_total_books</code>, <code>token</code> (TOFU auth token), and
+  <code>banned</code> (0/1).  Upserted on every incoming batch.</li>
+<li><strong><code>batches</code></strong> — one row per received payload; stores <code>received_at</code>,
+  <code>sent_at</code>, <code>app_version</code>, <code>services_json</code>, <code>total_books</code>, window
+  bounds, and <code>dropped</code> count.</li>
+<li><strong><code>warnings</code></strong> — one row per deduplicated warning entry within a
+  batch; <code>context</code> arrays are joined by newline into <code>context_text</code>.</li>
+</ul>
+<h3 id="deployment">Deployment</h3>
+<p>The receiver lives in <code>diagnostics_receiver/</code> and runs in its own Docker
+container (<code>bookbridge_diagnostics</code>), built from <code>python:3.12-slim</code> with
+<code>waitress</code> as the WSGI server.  Port <strong>20129</strong>, SQLite data persisted to
+<code>./data/diagnostics.db</code> via a bind mount.</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>diagnostics_receiver
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
+<p>The public <code>DIAGNOSTICS_ENDPOINT_URL</code> that opted-in instances POST to
+is still TBD; when deployed behind a reverse proxy, the URL will point
+at the proxy's external address (port 20129 on the internal network).</p>
+<h3 id="input-sanitization">Input Sanitization</h3>
+<p>All attacker-authored text fields (templates, messages, context lines,
+version strings) are sanitized at ingest before any storage:</p>
+<ul>
+<li><strong>Control characters</strong> (Cc category except <code>\n</code> and <code>\t</code>) are stripped.
+  Line endings are normalised to <code>\n</code>.</li>
+<li><strong>Markdown structure</strong> is neutralised: fences (<code>```</code>) become <code>'''</code>,
+  line-leading <code>#</code> characters are escaped, and markdown link syntax <code>](</code>
+  is broken to <code>] (</code>.</li>
+<li><strong>Length caps</strong> are enforced: template/message 400 chars, logger/level
+  100 chars, context entries 400 chars (max 60 entries), <code>app_version</code>
+  60 chars.</li>
+</ul>
+<p>The triage prompt and digest renderer additionally treat stored text as
+untrusted data and apply their own output-sanitization layer.</p>
+<h3 id="hygiene">Hygiene</h3>
+<p>The receiver includes two configurable hygiene controls:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIAG_RETENTION_DAYS</code></td>
+<td><code>90</code></td>
+<td>Raw <code>warnings</code> and <code>batches</code> rows older than this many days are deleted. Set to <code>0</code> to disable. Findings are never touched.</td>
+</tr>
+<tr>
+<td><code>DIAG_MAX_TEMPLATES_PER_LOGGER</code></td>
+<td><code>100</code></td>
+<td>Maximum distinct finding templates allowed per logger. Excess distinct templates collapse into a single <code>[cardinality-overflow]</code> finding. Set to <code>0</code> to disable.</td>
+</tr>
+</tbody>
+</table>
+<p>Retention cleanup runs at most once per 24 hours on ingest (tracked via a
+<code>meta</code> table key <code>last_cleanup_at</code>).  The cardinality guard is enforced per
+<code>_upsert_finding</code> call and does not affect updates to already-known templates.</p>
+<h3 id="automated-review-integration">Automated Review Integration</h3>
+<p><code>scripts/automated-review/run-diagnostics-scan.ps1</code> fetches the export
+endpoint, captures the JSON snapshot, and feeds it to the read-only
+bugscout agent using the prompt at
+<code>docs/automated-review/prompts/diagnostics-scan.md</code>.  The agent looks
+for fleet-wide warning patterns across opted-in instances and appends
+findings to <code>BUG_REPORT.md</code>.  The scan mirrors the log-scan script in
+structure, state handling, and failure semantics (state is NOT advanced
+on failure so the window is re-scanned).</p>
+<h3 id="findings-api-phase-5">Findings API (Phase 5)</h3>
+<p>The receiver aggregates raw warnings into deduplicated, stateful
+<strong>findings</strong>.  The same bug recurring daily across many instances is one
+row with counts, not endless re-reports.</p>
+<h4 id="findings-schema">Findings Schema</h4>
+<p>Two additional tables (created idempotently):</p>
+<ul>
+<li><strong><code>findings</code></strong> — one row per unique <code>(template, logger, level)</code> key.
+  Tracks <code>category</code> (code-bug / config-issue / docs-gap / environment /
+  unknown), <code>status</code> (open / triaged / fixed / ignored), optional
+  <code>severity</code> (low / medium / high), <code>first_seen</code>, <code>last_seen</code>,
+  <code>total_count</code>, <code>instance_count</code>, <code>app_versions_json</code>, sample
+  message/context, and triage fields (<code>analysis_md</code>, <code>analysis_at</code>,
+  <code>reopened_at</code>).</li>
+<li><strong><code>finding_instances</code></strong> — join table linking findings to the instance
+  IDs that reported them; drives <code>instance_count</code>.</li>
+</ul>
+<h4 id="lifecycle">Lifecycle</h4>
+<ol>
+<li>A new warning arrives → finding created with status <strong>open</strong>.</li>
+<li>Triage sets <code>analysis_md</code> → status auto-promotes to <strong>triaged</strong>.</li>
+<li>Fix verified → manual PATCH to status <strong>fixed</strong>.</li>
+<li>Same warning recurs while fixed → status auto-reopens to <strong>open</strong>
+   (<code>reopened_at</code> stamped).  Status <strong>ignored</strong> is never auto-reopened.</li>
+</ol>
+<h4 id="ranking">Ranking</h4>
+<p><code>instance_count</code> (number of distinct fleet instances reporting the same
+template) is the primary ranking key.  <code>total_count</code> and <code>last_seen</code>
+break ties.</p>
+<h4 id="endpoints_1">Endpoints</h4>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/diagnostics</code></td>
+<td>Store an automatic heartbeat or manual bug report</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/summary</code></td>
+<td>Fleet, finding, and feedback totals</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/findings</code></td>
+<td>List findings (filtered, paginated)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/findings/&lt;id&gt;</code></td>
+<td>Full finding detail, evidence, and linked user feedback</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/findings/&lt;id&gt;</code></td>
+<td>Update status/category/severity/analysis</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/submissions</code></td>
+<td>List manual submissions for the maintainer dashboard</td>
+</tr>
+<tr>
+<td><code>GET</code>, <code>PATCH</code></td>
+<td><code>/api/v1/submissions/&lt;id&gt;</code></td>
+<td>Read a submission or save its maintainer response</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/my/submissions</code></td>
+<td>Instance-scoped manual report history</td>
+</tr>
+</tbody>
+</table>
+<p><strong>GET /api/v1/findings</strong> query parameters:</p>
+<table>
+<thead>
+<tr>
+<th>Param</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td><code>open</code></td>
+<td>Filter by status; <code>all</code> returns every status</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td>(none)</td>
+<td>Filter by category</td>
+</tr>
+<tr>
+<td><code>needs_triage</code></td>
+<td>(none)</td>
+<td>Set <code>1</code> to filter findings needing triage</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td><code>50</code></td>
+<td>Max results (capped at 200)</td>
+</tr>
+</tbody>
+</table>
+<p>Response rows include <code>analysis_md</code> for the private dashboard plus feedback and
+unanswered-feedback counts. Raw evidence remains on the detail endpoint.</p>
+<p><strong>PATCH /api/v1/findings/<id></strong> JSON body fields (all optional):</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Values</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>status</code></td>
+<td><code>open</code>, <code>triaged</code>, <code>fixed</code>, <code>ignored</code></td>
+<td>Update status</td>
+</tr>
+<tr>
+<td><code>category</code></td>
+<td><code>code-bug</code>, <code>config-issue</code>, <code>docs-gap</code>, <code>environment</code>, <code>unknown</code></td>
+<td>Update category</td>
+</tr>
+<tr>
+<td><code>severity</code></td>
+<td><code>low</code>, <code>medium</code>, <code>high</code></td>
+<td>Update severity</td>
+</tr>
+<tr>
+<td><code>analysis_md</code></td>
+<td>string</td>
+<td>Set analysis text; stamps <code>analysis_at</code> and auto-promotes <code>open</code> → <code>triaged</code></td>
+</tr>
+</tbody>
+</table>
+<p>Invalid values return <code>400</code>.</p>
+<h3 id="authentication-tofu">Authentication (TOFU)</h3>
+<p>The receiver uses Trust-On-First-Use (TOFU) per-instance token
+authentication for the ingest endpoint.</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>New instance</strong></td>
+<td>First <code>POST /api/v1/diagnostics</code> auto-registers. The receiver generates a per-instance token (<code>secrets.token_hex(24)</code>), stores it on the <code>instances</code> row, and returns it <strong>once</strong> in the response as <code>"token"</code>.</td>
+</tr>
+<tr>
+<td><strong>Subsequent POSTs</strong></td>
+<td>Must include <code>Authorization: Bearer &lt;token&gt;</code>. Missing or wrong token → <code>401 {"ok": false, "error": "invalid token"}</code>.</td>
+</tr>
+<tr>
+<td><strong>Grandfathering</strong></td>
+<td>An existing instance row with no stored token (pre-upgrade) gets a token issued and returned on its next successful POST, then requires it thereafter.</td>
+</tr>
+<tr>
+<td><strong>Banned</strong></td>
+<td><code>instances.banned = 1</code> → <code>403 {"ok": false, "error": "banned"}</code>, checked before anything else.</td>
+</tr>
+</tbody>
+</table>
+<p>The sender (<code>diagnostics.py</code>) automatically persists the received token
+in the <code>DIAGNOSTICS_INGEST_TOKEN</code> environment variable and database
+setting, so subsequent sends include the header without user
+intervention.</p>
+<h3 id="quotas">Quotas</h3>
+<p>Automatic and manual reports have independent limits:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIAG_MIN_BATCH_INTERVAL_HOURS</code></td>
+<td><code>20</code></td>
+<td>Minimum hours between automatic batches from the same instance. Manual reports neither consume nor reset this interval. Exceeded → <code>429 {"error": "too_frequent", "retry_after_hours": N}</code>. Set to <code>0</code> to disable.</td>
+</tr>
+<tr>
+<td><code>DIAG_NEW_INSTANCES_PER_HOUR</code></td>
+<td><code>50</code></td>
+<td>Maximum new instance registrations per hour (global). Exceeded → <code>429 {"error": "registration_limited"}</code>. Set to <code>0</code> to disable.</td>
+</tr>
+</tbody>
+</table>
+<p>Manual reports are capped at five per instance in a rolling 24-hour window.
+The sixth returns <code>429 {"error": "manual_report_quota_exceeded",
+"retry_after_hours": N}</code>. Quota checks and inserts are serialized so concurrent
+requests cannot race past the cap.</p>
+<h3 id="read-token-gate">Read-Token Gate</h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIAG_READ_TOKEN</code></td>
+<td><strong>required</strong></td>
+<td>Maintainer read and PATCH endpoints require <code>Authorization: Bearer &lt;that token&gt;</code>. Missing configuration fails closed. <code>GET /api/v1/health</code> remains open and ingest uses per-instance tokens.</td>
+</tr>
+</tbody>
+</table>
+<p>The receiver Compose file also requires the variable and binds port 20129 to
+<code>127.0.0.1</code>; expose it through a TLS reverse proxy rather than a public raw
+port.</p>
+<h3 id="manual-bug-reports-and-replies">Manual Bug Reports and Replies</h3>
+<p>When diagnostics are enabled, BookBridge admins see an optional <strong>What went
+wrong?</strong> field and <strong>Send bug report</strong> button under Settings → Diagnostics.
+The written note is stored once on the manual submission; the current scrubbed
+warning snapshot is attached automatically and may produce zero, one, or many
+linked anomalies.</p>
+<p>The same Settings section shows the 50 most recent manual submissions for that
+BookBridge instance. It displays only the submission time, the admin's note,
+whether the report was received or replied to, and the maintainer response. It
+never exposes anomaly analysis, logs, receiver URLs, instance tokens, or reports
+from another installation. All admins on one BookBridge installation share the
+same history; non-admin users cannot send or read reports.</p>
+<p>A maintainer response belongs to the manual submission, not to every finding it
+contains. The receiver only accepts a response when the user included a written
+note. The bridge proxies history server-side with its existing per-instance TOFU
+token, so that credential never reaches the browser.</p>
+<h3 id="private-maintainer-dashboard">Private Maintainer Dashboard</h3>
+<p><code>reports_site/</code> is a dynamic, local-only dashboard at
+<a href="http://localhost:5761">http://localhost:5761</a>. It reads the receiver on demand and shows:</p>
+<ul>
+<li>seven-day fleet totals and the all-time unanswered-feedback backlog;</li>
+<li>clickable active anomalies with Bugscout's Pattern and Suggested next step;</li>
+<li>finding details with Hypothesis, Severity, Category, versions, enabled
+  integrations, and collapsed technical evidence; and</li>
+<li>written user feedback linked to its anomalies, with a response form.</li>
+</ul>
+<p>The service reads the endpoint from
+<code>docs/automated-review/review-state.json</code> and the admin token from
+<code>%USERPROFILE%/.bookbridge/diagnostics-read.key</code>, both server-side. It accepts
+remote receivers over HTTPS only (plain HTTP is allowed only for loopback or
+Docker's local host gateway during development), refuses redirects, rejects
+non-loopback Host headers, disables browser caching, and binds Docker to
+<code>127.0.0.1:5761</code>.</p>
+<p>Start or rebuild it from <code>reports_site/</code> with:</p>
+<div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">compose</span> <span class="n">up</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-build</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
