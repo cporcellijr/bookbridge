@@ -1585,17 +1585,18 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('likely match', add_book_html)
         self.assertIn('`File: ${doc.filename}`', add_book_html)
 
-    def test_batch_match_template_has_submit_feedback_hooks(self):
-        html = self._read_template_source('batch_match.html')
+    def test_batch_match_post_falls_back_to_unified_add_book_view(self):
+        response = self.client.post('/batch-match')
+        html = response.get_data(as_text=True)
 
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<title>Add / Update Book · BookBridge</title>', html)
+        self.assertIn('action="/add-book"', html)
+        self.assertNotIn('action="/batch-match"', html)
+        self.assertIn('id="kosync-documents"', html)
         self.assertIn('id="selectionFeedback"', html)
-        self.assertIn('id="queueFeedback"', html)
         self.assertIn('data-working-label="Adding to queue..."', html)
-        self.assertIn('data-working-label="Processing queue..."', html)
-        self.assertIn('data-working-label="Forging + matching..."', html)
         self.assertIn('startBatchSubmitState(submitter)', html)
-        self.assertIn('onclick="selectEbookCard(this)"', html)
-        self.assertNotIn('onclick="selectEbookCard(this,', html)
 
     def test_add_book_multi_result_with_apostrophe_has_working_ebook_picker(self):
         """Issue #339: multi-result cards must not interpolate titles into JS."""

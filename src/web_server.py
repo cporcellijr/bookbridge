@@ -6049,13 +6049,8 @@ def _process_forge_match_queue(queue_items):
 
 
 
-def _add_book_view(template_name, self_endpoint):
-    """Shared queue-based Add Book / Batch Match view.
-
-    `batch_match()` (legacy `/batch-match`) and `add_book()` (`/add-book`, the unified
-    Add Book page) both delegate here; they differ only in which template renders and
-    which endpoint the in-page queue actions redirect back to.
-    """
+def _add_book_view():
+    """Render and handle the unified queue-based Add Book view."""
     clients = uc()
     if request.method == 'POST':
         action = request.form.get('action')
@@ -6148,14 +6143,14 @@ def _add_book_view(template_name, self_endpoint):
                 })
             # Clear the search box + results after queueing so the user starts the
             # next book from a clean search (drop the preserved `search` term).
-            return redirect(url_for(self_endpoint))
+            return redirect(url_for('add_book'))
         elif action == 'remove_from_queue':
             abs_id = request.form.get('abs_id')
             _match_queue_remove(abs_id)
-            return redirect(url_for(self_endpoint))
+            return redirect(url_for('add_book'))
         elif action == 'clear_queue':
             _match_queue_clear()
-            return redirect(url_for(self_endpoint))
+            return redirect(url_for('add_book'))
         elif action == 'forge_and_match_queue':
             _queue_items = _match_queue_drain()
             _spawn_user_background(_process_forge_match_queue, _queue_items, label="batch-forge-match")
@@ -6188,23 +6183,24 @@ def _add_book_view(template_name, self_endpoint):
             try:
                 storyteller_books = clients.storyteller_client.search_books(search)
             except Exception as e:
-                logger.warning(f"⚠️ Storyteller search failed in batch_match route: {e}")
+                logger.warning(f"⚠️ Storyteller search failed in add_book route: {e}")
 
-    return render_template(template_name, audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books,
-                           queue=_load_match_queue(), search=search, self_endpoint=self_endpoint)
+    return render_template('add_book.html', audiobooks=audiobooks, ebooks=ebooks,
+                           storyteller_books=storyteller_books,
+                           queue=_load_match_queue(), search=search)
 
 
 def batch_match():
-    """Legacy `/batch-match` route; GET folds into the unified Add Book page."""
+    """Preserve legacy `/batch-match` requests through the unified Add Book flow."""
     if request.method == 'GET':
         search = request.args.get('search', '')
         return redirect(url_for('add_book', search=search), code=302)
-    return _add_book_view('batch_match.html', 'batch_match')
+    return _add_book_view()
 
 
 def add_book():
     """Unified `/add-book` page — single, batch, forge, and match in one queue-based flow."""
-    return _add_book_view('add_book.html', 'add_book')
+    return _add_book_view()
 
 
 def _get_suggestions_service():

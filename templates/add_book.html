@@ -907,7 +907,7 @@
     <div class="layout">
         <!-- Selection Area -->
         <div class="selection-area">
-            <form method="GET" action="{{ url_for(self_endpoint) }}" id="searchForm">
+            <form method="GET" action="{{ url_for('add_book') }}" id="searchForm">
                 <input type="text" name="search" placeholder="🔍 Search by title, author, or filename..."
                     class="search-box" value="{{ search }}" autofocus>
                 <button type="submit" class="btn btn-primary" id="searchBtn"
@@ -920,7 +920,7 @@
                 <div id="searchFeedback" class="submit-feedback" aria-live="polite"></div>
             </form>
 
-            <form method="POST" action="{{ url_for(self_endpoint) }}" id="addToQueueForm">
+            <form method="POST" action="{{ url_for('add_book') }}" id="addToQueueForm">
                 <input type="hidden" name="action" value="add_to_queue">
                 <input type="hidden" name="search" value="{{ search }}">
                 <input type="hidden" name="audiobook_id" id="selected_audiobook_id">
@@ -1155,7 +1155,7 @@
                     </p>
                     {% endif %}
                 </div>
-                <form method="POST" action="{{ url_for(self_endpoint) }}" class="d-inline">
+                <form method="POST" action="{{ url_for('add_book') }}" class="d-inline">
                     <input type="hidden" name="action" value="remove_from_queue">
                     <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
                     <button type="submit" class="queue-item-remove">×</button>
@@ -1164,7 +1164,7 @@
             {% endfor %}
 
             <div class="queue-actions">
-                <form method="POST" action="{{ url_for(self_endpoint) }}">
+                <form method="POST" action="{{ url_for('add_book') }}">
                     <input type="hidden" name="action" value="process_queue">
                     <button type="submit" class="btn btn-success w-100"
                         data-primary-action="queue-actions"
@@ -1176,7 +1176,7 @@
                 </form>
 
                 {% if queue_ns.forge_eligible > 0 %}
-                <form method="POST" action="{{ url_for(self_endpoint) }}">
+                <form method="POST" action="{{ url_for('add_book') }}">
                     <input type="hidden" name="action" value="forge_and_match_queue">
                     <button type="submit" class="btn btn-primary w-100"
                         data-primary-action="queue-actions"
@@ -1190,7 +1190,7 @@
                 {% endif %}
 
                 {% if queue|length == 1 and queue_ns.forge_eligible == 1 %}
-                <form method="POST" action="{{ url_for(self_endpoint) }}" id="forgeOnlyQueueForm">
+                <form method="POST" action="{{ url_for('add_book') }}" id="forgeOnlyQueueForm">
                     <input type="hidden" name="action" value="forge_only_queue">
                     <input type="hidden" name="forge_stage_mode" id="forgeOnlyStageMode" value="">
                     <button type="submit" class="btn btn-primary w-100" id="forgeOnlyQueueBtn"
@@ -1208,7 +1208,7 @@
                 <div class="queue-action-note">Forge only is disabled when more than one item is queued.</div>
                 {% endif %}
 
-                <form method="POST" action="{{ url_for(self_endpoint) }}">
+                <form method="POST" action="{{ url_for('add_book') }}">
                     <input type="hidden" name="action" value="clear_queue">
                     <button type="submit" class="btn btn-danger w-100"
                         onclick="return confirm('Clear entire queue?')">
