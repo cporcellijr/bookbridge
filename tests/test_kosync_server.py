@@ -603,6 +603,108 @@ class TestKosyncEndpoints(unittest.TestCase):
         }
         return user, headers
 
+    def _setup_foreign_linked_hash(self, label):
+        """Create a hash-linked book claimed by admin but not by a second user."""
+        from src import web_server
+
+        svc = web_server.database_service
+        reader, headers = self._make_second_kosync_user(label)
+        doc_hash = ("a" if label.endswith("get") else "b") * 32
+        abs_id = f"shared-hash-{label}"
+        filename = f"{label}.epub"
+        svc.save_book(Book(
+            abs_id=abs_id,
+            abs_title="Shared Hash Book",
+            ebook_filename=filename,
+            kosync_doc_id=doc_hash,
+            status="active",
+        ))
+        svc.link_user_book(svc._default_user_id(), abs_id)
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=doc_hash,
+            linked_abs_id=abs_id,
+            filename=filename,
+            user_id=svc._default_user_id(),
+        ))
+        return svc, reader, headers, doc_hash, abs_id, filename
+
+    def test_foreign_linked_hash_get_discovers_claim_for_requesting_user(self):
+        """Issue #335: a shared hash must not permanently dead-end its second user."""
+        from src.api import kosync_server
+
+        svc, reader, headers, doc_hash, abs_id, filename = self._setup_foreign_linked_hash(
+            "issue335-get"
+        )
+        svc.save_state(State(
+            abs_id=abs_id,
+            client_name="kosync",
+            percentage=0.42,
+            xpath="/body/reader-b",
+            timestamp=int(time.time()),
+            last_updated=int(time.time()),
+            user_id=reader.id,
+        ))
+
+        def run_now(callback):
+            callback()
+            return MagicMock()
+
+        expected_log = (
+            f"KOSync: hash {doc_hash} resolved to book {abs_id} but user {reader.id} "
+            "has no UserBook claim; attempting user-scoped auto-discovery"
+        )
+        with (
+            patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+            self.assertLogs("src.api.kosync_server", level="WARNING") as captured,
+        ):
+            first_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=headers)
+
+        self.assertEqual(first_get.status_code, 404)
+        self.assertEqual(first_get.get_json(), {"message": "Document not found on server"})
+        self.assertIn(expected_log, [record.getMessage() for record in captured.records])
+        self.assertTrue(svc.is_user_linked(reader.id, abs_id))
+
+        second_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=headers)
+        self.assertEqual(second_get.status_code, 200, second_get.get_data(as_text=True))
+        self.assertAlmostEqual(second_get.get_json()["percentage"], 0.42)
+        self.assertEqual(second_get.get_json()["progress"], "/body/reader-b")
+
+    def test_foreign_linked_hash_put_discovers_claim_for_requesting_user(self):
+        """Issue #335: PUT discovery must claim a verified existing mapping."""
+        from src.api import kosync_server
+
+        svc, reader, headers, doc_hash, abs_id, filename = self._setup_foreign_linked_hash(
+            "issue335-put"
+        )
+
+        def run_now(callback):
+            callback()
+            return MagicMock()
+
+        payload = {
+            "document": doc_hash,
+            "progress": "/body/reader-b",
+            "percentage": 0.21,
+            "device": "KoboB",
+            "device_id": "B",
+        }
+        with (
+            patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+        ):
+            first_put = self.client.put("/syncs/progress", headers=headers, json=payload)
+
+        self.assertEqual(first_put.status_code, 404)
+        self.assertEqual(first_put.get_json(), {"error": "Document not found"})
+        self.assertTrue(svc.is_user_linked(reader.id, abs_id))
+
+        second_put = self.client.put("/syncs/progress", headers=headers, json=payload)
+        self.assertEqual(second_put.status_code, 200, second_put.get_data(as_text=True))
+        state = svc.get_state(abs_id, "kosync", user_id=reader.id)
+        self.assertAlmostEqual(float(state.percentage), 0.21)
+        self.assertEqual(state.xpath, "/body/reader-b")
+
     def test_unlinked_same_hash_two_users_keep_separate_progress(self):
         """Two users PUTting the same UNLINKED hash each read back their OWN
         position — neither overwrites the other (per-user progress fix)."""

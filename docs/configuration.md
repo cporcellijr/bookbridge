@@ -20,6 +20,45 @@ The Settings sidebar is organized into:
 
 Everything in **Settings** is **server-wide**: connections and engine behavior shared by all readers. Reader-specific accounts, tokens, API keys, and sync toggles live under **Account -> My Integrations** for the signed-in reader — the same service cards, same order — with **Test** buttons to check each login. Admins can manage those same per-reader fields from **Settings -> Users -> Integrations** when they are helping another reader.
 
+### Credential Encryption
+
+Every password, API token, sync key, and session cookie you give BookBridge — both
+the server-wide ones in **Settings** and each reader's own under **My Integrations** —
+is encrypted before it is written to the database. Values are decrypted in memory only
+when a credential is actually used, so a copy of `database.db` on its own does not
+hand over your connected accounts.
+
+This is automatic. On first boot after upgrading, BookBridge generates a key at
+`DATA_DIR/secret.key` (permissions `0600`) and encrypts anything it finds still stored
+in the clear. Nothing to re-enter.
+
+> [!IMPORTANT]
+> **Back up `secret.key` together with your database.** Both live in your `/data`
+> volume, so a whole-volume backup already covers it. Restoring a database *without*
+> its key leaves those credentials unreadable — BookBridge treats them as "not
+> configured" and asks you to re-enter them rather than sending bad values to your
+> services. You will see `🔐 Could not decrypt …` in the log, naming each affected
+> setting.
+
+Usernames, server URLs, library IDs, and enable/disable toggles are deliberately left
+readable, so you can still inspect and troubleshoot an install.
+
+#### Holding the key outside the data volume
+
+By default the key sits beside the database it protects. That defends a leaked
+database file or backup, but not a host someone already has access to. To separate the
+two, set `BOOKBRIDGE_SECRET_KEY` to any long random string:
+
+```yaml
+environment:
+  - BOOKBRIDGE_SECRET_KEY=a-long-random-string-you-keep-safe
+```
+
+BookBridge then uses that instead of the key file. This is one of the very few values
+that is **not** a Settings-page option and never reads from the database — a key
+stored inside the data it encrypts would defeat the purpose. Changing or losing it has
+the same effect as losing `secret.key`.
+
 ### Split-Port Security (Optional)
 
 You can run the admin UI and the KOSync protocol on separate ports:

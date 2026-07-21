@@ -1,106 +1,84 @@
-# Release Notes - 7.3.0
+# Release Notes - 7.3.1
 
-The headline change is **a redesigned interface, opt-in diagnostics, and GPU-accelerated transcription**. BookBridge gets a consistent new look built around a shared design system and a top navigation bar, an optional way to help improve the project by sharing anonymized diagnostics, and CUDA container images that make Whisper transcription dramatically faster on NVIDIA hardware — alongside a round of sync-reliability fixes across Audiobookshelf, KOReader, BookOrbit, and BookFusion.
+The headline change is **credential encryption at rest**. Every password, API token, sync key, and session cookie BookBridge stores for you — your own and every reader's — was previously written to `database.db` as the exact text you typed, so a copy of that file or of a backup exposed every account the bridge touches. Those values are now encrypted before they are stored and decrypted only in memory at the moment a credential is used. This release also fixes KOReader sync for readers who share a book file, adds HTTP Basic support for Calibre-Web Automated's KOSync endpoint, and tightens background transcription retries.
+
+Upgrading is automatic — there is nothing to re-enter and no migration to run — but **please read the Operational Notes below about backups and rollback** before updating.
 
 This release does **not** change the BridgeSync KOReader plugin (still 0.5.4), so no plugin re-download is required. Highlight and note sync continues to require the **BridgeSync plugin from 7.1.0 or newer**; standard KOReader/KOSync progress sync works without it.
 
-## Added
+## Security
 
-- **A redesigned interface.** A shared design system now spans every page: a
-  compact top navigation bar (with Logs promoted to its own tab) replaces the old
-  scattered links, and the dashboard, settings, account, matching, suggestions,
-  forge, logs, stats, and Shelfmark pages are all restyled onto one common base
-  template. The navigation collapses to a swipeable strip on phones, and sign-in
-  and first-run setup share the same look.
-- **Opt-in anonymous diagnostics.** Help improve BookBridge by sharing a small
-  daily diagnostic report: deduplicated warning lines from your sync logs with
-  book titles, file paths, and URLs replaced by anonymous tokens — never your
-  library contents or credentials. Admins are asked once via a dashboard prompt
-  (existing installs see it after upgrading), and the choice can be reviewed
-  anytime under Settings → Diagnostics, which also shows the last automatic send,
-  an optional problem-description box, a "Send bug report" button, and recent
-  replies. Nothing is ever collected or sent unless you opt in.
-- **CUDA container images for GPU transcription.** BookBridge now publishes a
-  `-cuda` image variant alongside the CPU images. Use a `-cuda` tag such as
-  `latest-cuda` or `dev-cuda` on amd64 hosts with an NVIDIA GPU. The image bundles
-  the required CUDA libraries, and automatic Whisper device selection now verifies
-  both those libraries and a GPU passed through to the container before choosing
-  CUDA. Contributed by [@ykpdang](https://github.com/ykpdang). (#320)
-- **BookFusion polling can wait for your reading position to settle.** A new
-  per-poll option holds the sync while your BookFusion position is still moving
-  between polls — meaning you are actively reading — and runs it once a poll shows
-  no further movement, avoiding a burst of intermediate writes mid-chapter.
+- **Stored credentials are now encrypted at rest.** Both stores are covered: each
+  reader's own service accounts under Account → My Integrations, and the
+  server-wide credentials in Settings — including the Audiobookshelf API token,
+  KOSync key, Hardcover token, StoryGraph session cookie, and BookBridge's own web
+  session signing key. Values are wrapped with Fernet (AES-128-CBC + HMAC-SHA256)
+  before they reach the database.
 
-## Changed
+  On first boot after upgrading, BookBridge generates an encryption key at
+  `DATA_DIR/secret.key` with `0600` permissions and rewrites every credential it
+  finds still stored in the clear, logging `🔐 Encrypted N plaintext credential(s)
+  at rest`. Usernames, server URLs, library IDs, and enable/disable toggles are
+  deliberately left readable so an install remains inspectable and supportable.
 
-- **Dashboard service cards and library shortcuts use official artwork.** Service
-  cards and the top library shortcuts now carry official BookOrbit, Shelfmark,
-  KOReader, BookFusion, and Hardcover artwork, and the shared navigation links to
-  the signed-in reader's own configured audiobook and ebook libraries instead of
-  always presenting Audiobookshelf plus every enabled integration.
-- The Account menu's Docs entry now uses a consistent vector icon, and the GitHub
-  Pages logo, favicon, and homepage hero buttons were repaired.
+  Credentials that cannot be decrypted are reported as "not configured" and logged
+  by name, rather than being sent to a service as though they were the password.
+
+  By default the key sits beside the database it protects, which defends a leaked
+  database file or a copied backup but not a compromised host. Set
+  `BOOKBRIDGE_SECRET_KEY` to any long random string to keep the key outside the
+  data volume instead. It is intentionally not a Settings-page option and is never
+  read from the database — a key stored inside the data it encrypts would defeat
+  the purpose. (#336)
 
 ## Fixed
 
-- **Audiobookshelf audiobook progress now reaches your ebooks reliably.** Explicit
-  ABS ebook mappings participate from a 0% baseline before their first read, legacy
-  direct matches resolve the separate ebook item ID, and percentage-only audio
-  positions are converted to a validated EPUB CFI before ABS is updated. Existing
-  mappings self-heal on their next sync cycle without rematching. (#322)
-- **KOReader sync no longer aborts strict e-readers on books that aren't in the
-  library yet.** The built-in sync server now answers unknown-document requests
-  with HTTP 404 instead of 502. KOReader treated both the same, but strict clients
-  (e.g. Crosspoint e-readers) read any 5xx as a fatal error and abandoned the sync;
-  they now recognize 404 as "no remote progress yet" and offer to upload local
-  progress. (#332)
-- **Upgraded multi-user BookOrbit matches now keep each reader's library
-  identity.** The 7.2.0 ownership migration could silently skip legacy rows whose
-  shared book had no creator ID; a follow-up migration and startup repair recover
-  those rows from their user claim, so a scoped client can no longer reuse another
-  reader's BookOrbit ID. Existing installs self-heal after migration and restart.
-  (#318)
-- **BookBridge warns at boot when an admin's saved credentials have drifted from
-  the shared engine copies.** The 7.2.0 per-user credentials move could leave the
-  global settings store and the primary admin's per-user rows divergent with no
-  signal, producing "connection test passes but sync fails" reports. Startup now
-  logs a clear warning per divergent key pointing at Account → Integrations as the
-  reconcile path. (#328)
-- **Unavailable or deleted linked books no longer create false diagnostics or lead
-  sync.** BookFusion highlight pulls quietly skip a saved book that now returns 404
-  without deleting local annotation state, Storyteller books whose linked ReadAloud
-  EPUB cannot be resolved are excluded before leader selection (so a stale UUID
-  can't roll another service back to 0%), and stale BookFusion links recover after
-  a confirmed write-time 404.
-- **BookFusion ReadAloud uploads reject incomplete Storyteller packages.** Before
-  upload and linking, BookBridge verifies that every narration reference in the
-  EPUB's SMIL overlays points to an audio file present in the archive, so a
-  still-processing book can't create a BookFusion copy that later fails on missing
-  audio. Existing incomplete BookFusion copies must be deleted and re-uploaded.
-- **BookOrbit login failures no longer hammer its rate-limited auth endpoint.** A
-  failed login pauses further attempts for one minute, and a 429 reuses an existing
-  cached token when available.
-- **Audiobookshelf instant sync now waits between HTTP-failure retries**, giving
-  short ABS or reverse-proxy outages time to recover before the listener falls back
-  to its supervised restart.
-- **KOReader device setup now suggests a reachable sync-server address**, keeping a
-  reverse-proxied HTTPS origin without exposing the internal KoSync port, warning on
-  loopback addresses, and confirming the Copy button only after the clipboard write
-  succeeds.
-- **Hardened dashboard and KoSync trust boundaries** — Storyteller search results
-  render as text, requests are capped at 8 MiB, unknown-document discovery uses a
-  bounded worker queue, repeated login and KoSync auth failures are throttled, and
-  KoSync document access requires the authenticated reader's book claim.
-- **The diagnostics receiver and sender are hardened for a wider rollout** —
-  trust-on-first-use per-instance ingest tokens, per-instance and global quotas,
-  layered prompt-injection sanitization, and maintainer APIs that fail closed when
-  their read token is missing.
+- **The primary admin can reset Grimmory to all libraries.** Under Account → My
+  Integrations, clear the optional Grimmory Library ID and save once. BookBridge now
+  clears the stale master value too and uses all Grimmory libraries on the next
+  refresh instead of showing `inherits master: 7` and remaining restricted. The
+  optional Audiobookshelf Library ID can be reset the same way. No database repair
+  or second restart is required. (#337)
+- **KOReader sync now recovers when two readers share one document hash.** A book
+  already claimed by another reader still returns a privacy-preserving 404, but
+  BookBridge now verifies the requesting reader's own EPUB in the background,
+  creates that reader's book claim, and allows the next GET/PUT to sync instead of
+  leaving them permanently stuck. (#335)
+- **External KoSync relays can now use HTTP Basic authentication.** Choose
+  **HTTP Basic (Calibre-Web Automated)** in a reader's KOReader / KoSync
+  integration when targeting CWA's built-in `/kosync` endpoint; classic KOSync
+  header authentication remains the default. (#334)
+- **Background transcription retries remain bounded.** Retried jobs preserve their
+  attempt count instead of resetting it, and an all-empty Whisper result now
+  invalidates its completed cache and retries rather than being reused as a
+  successful transcript.
+- **A round of reliability fixes.** KOSync null progress is handled as an empty
+  state, disabled Audiobookshelf cleanup no longer makes an invalid request, blank
+  Grimmory shelf names fall back to `Kobo`, completed slow state fetches are
+  retained, and expected missing Grimmory progress no longer emits warning noise.
+- **Log and status text renders its intended symbols.** Scan status text and
+  Grimmory, Hardcover, database, and ebook-resolution log lines no longer show
+  mojibake; obsolete file-boundary banners and patch-history labels were removed
+  without changing behavior.
 
 ## Operational Notes
 
-Database migrations apply automatically on startup (this release adds a BookOrbit
-user-link repair migration). Anonymous diagnostics are strictly opt-in and off by
-default. The BridgeSync KOReader plugin is unchanged (0.5.4), so no plugin
-re-download is required. To use GPU transcription, switch to a `-cuda` image tag on
-an amd64 host with an NVIDIA GPU passed through to the container. Restart BookBridge
-after updating.
+No database migration is required for this release, and the BridgeSync KOReader
+plugin is unchanged (0.5.4), so no plugin re-download is needed. Restart BookBridge
+after updating. Three points specific to credential encryption:
+
+- **Add `secret.key` to your backups.** It lives in the same `/data` volume as the
+  database, so a whole-volume backup already captures it. If your routine copies
+  `database.db` on its own, that backup is no longer self-sufficient — a database
+  restored without its key leaves those credentials unreadable and prompts you to
+  re-enter them.
+- **Rolling back to an earlier version costs your credentials.** Older BookBridge
+  builds do not recognise the encrypted form and will send it to your services as
+  the password. If you need to downgrade, restore a pre-upgrade database backup or
+  re-enter your credentials in the older version.
+- **Building from source rather than pulling the published image?** This release
+  adds `cryptography` to `requirements.txt`, so rebuild
+  (`docker compose up -d --build`) or run `pip install -r requirements.txt`. A plain
+  restart against the old dependencies logs `🔓 Credential encryption UNAVAILABLE`
+  and keeps storing credentials in the clear. Users of the published `latest` /
+  `dev` images simply pull the new image; the dependency is already in it.

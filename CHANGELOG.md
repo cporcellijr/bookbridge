@@ -4,6 +4,82 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [7.3.1] - 2026-07-21
+
+### Security
+
+- **Stored credentials are now encrypted at rest.** Every password, API token, sync
+  key, and session cookie BookBridge holds — for both per-user accounts and the
+  admin's own global settings — was previously written to `database.db` as the exact
+  plaintext you typed. Anyone with a copy of that file, or of a backup, could read
+  every account the bridge touches. Values are now wrapped with Fernet
+  (AES-128-CBC + HMAC-SHA256) before they are stored, and unwrapped only in memory
+  when a credential is actually used.
+
+  Upgrading is automatic: on first boot after the update, BookBridge generates an
+  encryption key at `DATA_DIR/secret.key` (permissions `0600`) and rewrites every
+  plaintext credential it finds. Nothing to re-enter, no migration to run.
+
+  Three things worth knowing:
+
+  - **Back up `secret.key` with your database.** They live in the same `/data`
+    volume, so a whole-volume backup already captures both. If your routine instead
+    copies `database.db` on its own, that backup is no longer self-sufficient — add
+    the key file to it. Restoring a database *without* its key makes those
+    credentials unreadable; BookBridge treats them as "not configured" and asks you
+    to re-enter them rather than sending garbage to your services, and logs
+    `🔐 Could not decrypt …` naming each affected setting.
+  - **Downgrading after this release costs you your credentials.** Older BookBridge
+    versions do not recognise the encrypted form and will send it to your services
+    as though it were the password. If you roll back, either restore a pre-upgrade
+    database backup or re-enter your credentials in the older version.
+  - **Set `BOOKBRIDGE_SECRET_KEY` if you want the key off the volume.** By default
+    the key sits next to the database it protects, which defends a leaked database
+    file or backup but not a compromised host. Setting that environment variable to
+    any long random string separates the two. It is deliberately not a Settings-page
+    option: a key stored in the database it encrypts would be pointless.
+
+  Usernames, server URLs, library IDs, and enable/disable toggles are intentionally
+  left readable, so an install remains inspectable and supportable.
+
+  Running from source rather than the published image? Install the new dependency
+  with `pip install -r requirements.txt` — without it BookBridge logs
+  `🔓 Credential encryption UNAVAILABLE` and keeps storing credentials in the clear.
+  (#336)
+
+### Fixed
+
+- **The primary admin can now reset Grimmory to all libraries.** Clearing the
+  optional Grimmory Library ID removes the stale master restriction instead of
+  immediately inheriting it again, and the running client uses the unfiltered
+  library scan on its next refresh. The optional Audiobookshelf Library ID can be
+  cleared the same way. Existing affected installs should clear the field and save
+  once after upgrading; no database repair is required. (#337)
+
+- **KoSync auto-discovery now recovers when multiple users share one document
+  hash.** A mapping claimed by another user still returns a privacy-preserving
+  404, but BookBridge now verifies the requesting user's EPUB in the background,
+  creates that user's own book claim, and allows the next GET/PUT sync. (#335)
+
+- **Cleaned up historical edit markers and damaged text encoding.** User-facing
+  scan status text and Grimmory, Hardcover, database, and ebook-resolution logs
+  now render their intended symbols instead of mojibake; obsolete file-boundary
+  banners and patch-history labels were removed without changing behavior.
+
+- **Bugscout reliability fixes.** KoSync null progress is now handled as an empty
+  state; disabled Audiobookshelf cleanup makes no invalid request; blank Grimmory
+  shelf names fall back to `Kobo`; completed slow state fetches are retained; and
+  expected missing Grimmory progress no longer emits warning noise.
+
+- **Background transcription retries now remain bounded.** Retried jobs preserve
+  their attempt count, while an all-empty Whisper result invalidates its completed
+  cache and retries instead of being reused as a successful transcript.
+
+- **External KoSync relays can now use HTTP Basic authentication.** Choose
+  **HTTP Basic (Calibre-Web Automated)** in the user's KOReader / KoSync
+  integration when targeting CWA's built-in `/kosync` endpoint; classic KoSync
+  header authentication remains the default. (#334)
+
 ## [7.3.0] - 2026-07-19
 
 ### Added

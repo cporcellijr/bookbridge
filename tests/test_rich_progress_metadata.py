@@ -206,6 +206,20 @@ class TestGrimmoryCapture(unittest.TestCase):
         self.assertEqual(state.current["pct"], 0.5)
         self.assertNotIn("service_updated_at", state.current)
 
+    def test_sync_client_treats_missing_percentage_as_expected_empty_state(self):
+        from src.sync_clients.booklore_sync_client import BookloreSyncClient
+        bl = MagicMock()
+        bl.get_progress_rich.return_value = {"pct": None, "cfi": None}
+        client = BookloreSyncClient(bl, MagicMock())
+        book = MagicMock(original_ebook_filename="x.epub", ebook_filename="x.epub")
+
+        with self.assertNoLogs(
+            "src.sync_clients.booklore_sync_client", level="WARNING"
+        ):
+            state = client.get_service_state(book, prev_state=None)
+
+        self.assertIsNone(state)
+
 
 class TestBookOrbitCapture(unittest.TestCase):
     def _client(self, payload):

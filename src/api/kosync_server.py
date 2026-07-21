@@ -954,6 +954,23 @@ def _kosync_user_may_access_book(book) -> bool:
     return bool(_database_service.is_user_linked(user_id, book.abs_id))
 
 
+def _defer_kosync_book_access(doc_id: str, book, *, source: str):
+    """Keep a foreign mapping private while discovery verifies the user's copy."""
+    user_id = getattr(g, "kosync_user_id", None)
+    logger.warning(
+        "KOSync: hash %s resolved to book %s but user %s has no UserBook claim; "
+        "attempting user-scoped auto-discovery",
+        doc_id,
+        book.abs_id,
+        user_id,
+    )
+    if _is_valid_hex_hash(doc_id):
+        _schedule_auto_discovery(doc_id, user_id=user_id, source=source)
+    if source == "get":
+        return jsonify({"message": "Document not found on server"}), 404
+    return jsonify({"error": "Document not found"}), 404
+
+
 def authenticate_kosync(username: str, key: str):
     """Authenticate a KOReader (username, key).
 
@@ -1123,13 +1140,13 @@ def kosync_get_progress(doc_id):
             book = _database_service.get_book(kosync_doc.linked_abs_id)
             if book:
                 if not _kosync_user_may_access_book(book):
-                    return jsonify({"message": "Document not found on server"}), 404
+                    return _defer_kosync_book_access(doc_id, book, source="get")
                 return _respond_from_book_states(doc_id, book)
 
         resolved_book = _resolve_book_by_sibling_hash(doc_id, existing_doc=kosync_doc)
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
-                return jsonify({"message": "Document not found on server"}), 404
+                return _defer_kosync_book_access(doc_id, resolved_book, source="get")
             _register_hash_for_book(doc_id, resolved_book)
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1178,7 +1195,7 @@ def kosync_get_progress(doc_id):
     book = _database_service.get_book_by_kosync_id(doc_id)
     if book:
         if not _kosync_user_may_access_book(book):
-            return jsonify({"message": "Document not found on server"}), 404
+            return _defer_kosync_book_access(doc_id, book, source="get")
         return _respond_from_book_states(doc_id, book)
 
     # Step 3: Sibling hash resolution — find the book via other linked hashes.
@@ -1189,7 +1206,7 @@ def kosync_get_progress(doc_id):
         resolved_book = _resolve_book_by_sibling_hash(doc_id, existing_doc=kosync_doc)
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
-                return jsonify({"message": "Document not found on server"}), 404
+                return _defer_kosync_book_access(doc_id, resolved_book, source="get")
             _register_hash_for_book(doc_id, resolved_book)
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1490,7 +1507,7 @@ def kosync_put_progress():
     if kosync_doc and kosync_doc.linked_abs_id:
         linked = _database_service.get_book(kosync_doc.linked_abs_id)
         if linked and not _kosync_user_may_access_book(linked):
-            return jsonify({"error": "Document not found"}), 404
+            return _defer_kosync_book_access(doc_hash, linked, source="put")
 
     # Optional "furthest wins" protection
     furthest_wins = os.environ.get('KOSYNC_FURTHEST_WINS', 'true').lower() == 'true'
@@ -1594,7 +1611,7 @@ def kosync_put_progress():
 
     if linked_book and not is_internal:
         if not _kosync_user_may_access_book(linked_book):
-            return jsonify({"error": "Document not found"}), 404
+            return _defer_kosync_book_access(doc_hash, linked_book, source="put")
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
 
     # AUTO-DISCOVERY
@@ -2540,7 +2557,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
             except FileNotFoundError:
                 logger.debug(f"🔍 DB suggested '{doc.filename}' but file is missing — Re-scanning")
         
-        # [NEW] Check if valid linked book exists with original filename
+        # Check for a valid linked book with the original filename.
         if doc and doc.linked_abs_id:
              book = _database_service.get_book(doc.linked_abs_id)
              if book and book.original_ebook_filename:
@@ -2902,7 +2919,7 @@ def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") 
         global _queued_discovery_count
         try:
             if source == "get":
-                _run_get_auto_discovery(doc_id)
+                _run_get_auto_discovery(doc_id, user_id)
             else:
                 _run_put_auto_discovery_inner(doc_id, user_id)
         finally:
@@ -2918,9 +2935,9 @@ def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") 
     _discovery_executor.submit(_wrapped)
 
 
-def _run_get_auto_discovery(doc_id: str) -> None:
+def _run_get_auto_discovery(doc_id: str, user_id=None) -> None:
     """Background auto-discovery triggered by GET for an unknown hash.
-    Finds the matching epub and links the hash to an existing book."""
+    Finds the matching epub and links the hash to an existing book and user."""
     try:
         logger.info(f"🔍 KOSync: Background discovery (GET) for {doc_id}...")
         epub_filename = _try_find_epub_by_hash(doc_id)
@@ -2943,6 +2960,8 @@ def _run_get_auto_discovery(doc_id: str) -> None:
         )
         if book:
             _database_service.link_kosync_document(doc_id, book.abs_id)
+            if user_id is not None:
+                _database_service.link_user_book(user_id, book.abs_id)
             logger.info(f"✅ KOSync: GET-discovery linked {doc_id} to '{book.abs_title}'")
             return
 
@@ -2965,6 +2984,8 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
     )
     if existing_book:
         _register_hash_for_book(doc_hash_val, existing_book)
+        if user_id is not None:
+            _database_service.link_user_book(user_id, existing_book.abs_id)
         _database_service.dismiss_suggestion(doc_hash_val)
         return
 
@@ -3078,7 +3099,7 @@ def api_link_kosync_document(doc_hash):
 
     success = _database_service.link_kosync_document(doc_hash, abs_id)
     if success:
-        # [FIX] Always update the book's KOSync ID to match what we just linked.
+        # Always update the book's KoSync ID to match the link.
         # This handles cases where the book had a "wrong" hash (e.g. from Storyteller artifact)
         # and we want to align it with the actual device hash.
         current_id = book.kosync_doc_id

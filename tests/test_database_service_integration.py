@@ -4,6 +4,7 @@ Unit tests for the database service, including migration testing.
 
 import unittest
 import logging
+import pytest
 import os
 import json
 import tempfile
@@ -1274,6 +1275,7 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
                 migration_db_service.db_manager.close()
 
 
+@pytest.mark.real_database_migrations
 class TestLegacyDatabaseMigration(unittest.TestCase):
     """
     Tests that simulate a pre-Alembic (legacy) database to verify the stamp-on-upgrade

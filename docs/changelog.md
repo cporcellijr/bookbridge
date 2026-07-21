@@ -4,6 +4,34 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.3.1]
+
+The headline is **your stored credentials are now encrypted**: every password, API token, sync key, and session cookie BookBridge keeps for you is encrypted before it touches the database, alongside fixes for KOReader sync, Calibre-Web Automated relays, and background transcription.
+
+### Security
+
+- **Stored credentials are now encrypted at rest.** Everything you give BookBridge — your own service accounts and every reader's — used to sit in `database.db` as the exact text you typed, so anyone with a copy of that file or a backup could read every account the bridge touches. Those values are now encrypted, and decrypted only in memory at the moment a credential is actually used.
+
+  Upgrading handles itself: on first boot BookBridge creates an encryption key at `DATA_DIR/secret.key` and encrypts anything it finds still in the clear. Nothing to re-enter, no migration to run. Usernames, server URLs, library IDs, and on/off toggles stay readable so your install remains easy to inspect and support.
+
+  **Back up `secret.key` alongside your database.** Both live in your `/data` volume, so a whole-volume backup already covers it — but if you back up only the `.db` file, add the key to that routine. A database restored without its key leaves those credentials unreadable and asks you to re-enter them. For the same reason, rolling back to an older BookBridge after upgrading means restoring a pre-upgrade backup or re-entering your credentials.
+
+  If you would rather keep the key outside the data volume, set `BOOKBRIDGE_SECRET_KEY` to a long random string. See [Configuration](configuration.md#credential-encryption).
+
+### Fixed
+
+- **The primary admin can reset Grimmory to all libraries.** Clear the optional
+  Grimmory Library ID and save once to remove an old master restriction instead of
+  inheriting it again. The optional Audiobookshelf Library ID resets the same way.
+  (#337)
+- **KOReader sync recovers when two readers share the same book file.** A book already claimed by another reader no longer leaves you stuck — BookBridge verifies your own copy in the background, creates your claim, and lets the next sync through. (#335)
+- **Calibre-Web Automated's built-in KOSync endpoint now works as a relay.** Pick **HTTP Basic (Calibre-Web Automated)** in your KOReader / KoSync integration; classic KOSync authentication stays the default. (#334)
+- **Background transcription retries stay bounded**, and a silent (all-empty) transcription result is retried instead of being cached and reused as a success.
+- **A round of reliability fixes**: empty KOReader progress is handled cleanly, blank Grimmory shelf names fall back to `Kobo`, slow-but-successful state fetches are kept, and expected missing Grimmory progress no longer fills your log with warnings.
+- **Log and status text renders correctly**, replacing garbled characters across scan status, Grimmory, Hardcover, database, and ebook-resolution messages.
+
+---
+
 ## [7.3.0]
 
 The headline is **a redesigned interface, opt-in diagnostics, and GPU-accelerated transcription**: BookBridge gets a consistent new look built around a top navigation bar, an optional way to help improve the project by sharing anonymized diagnostics, and CUDA container images for faster Whisper transcription — alongside a round of sync-reliability fixes.

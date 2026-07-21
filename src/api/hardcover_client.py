@@ -1,4 +1,3 @@
-﻿# [START FILE: abs-kosync-enhanced/hardcover_client.py]
 """
 Hardcover.app GraphQL API Client
 
@@ -161,7 +160,7 @@ class HardcoverClient:
 
     def get_user_book(self, book_id):
         """Fetch the user's specific entry (UserBook) for a generic book_id."""
-        # FIX: Prevent crash if book_id is None
+        # Avoid querying when book_id is missing.
         if not book_id:
             return None
 
@@ -189,7 +188,7 @@ class HardcoverClient:
                     return books[0]
 
         except Exception as e:
-            logger.error(f"âŒ Error fetching user book: {e}")
+            logger.error(f"❌ Error fetching user book: {e}")
 
         return None
 
@@ -625,7 +624,7 @@ class HardcoverClient:
                 else:
                     return None
             except Exception as e:
-                logger.error(f"âŒ resolve_book_from_input error (id): {e}")
+                logger.error(f"❌ resolve_book_from_input error (id): {e}")
                 return None
         else:
             # Treat as slug
@@ -738,7 +737,7 @@ class HardcoverClient:
         if result and result.get("insert_user_book"):
             error = result["insert_user_book"].get("error")
             if error:
-                logger.error(f"âŒ Hardcover update_status error: {error}")
+                logger.error(f"❌ Hardcover update_status error: {error}")
             return result["insert_user_book"].get("user_book")
         return None
 
@@ -966,12 +965,12 @@ class HardcoverClient:
             if not started_at_val and should_start:
                 started_at_val = today
                 logger.info(
-                    f"ðŸ”„ Hardcover: Setting started_at to '{today}' (Progress: {current_percentage:.1%})"
+                    f"🔄 Hardcover: Setting started_at to '{today}' (Progress: {current_percentage:.1%})"
                 )
 
             if is_finished and not finished_at_val:
                 finished_at_val = today
-                logger.info(f"ðŸ”„ Hardcover: Setting finished_at to '{today}'")
+                logger.info(f"🔄 Hardcover: Setting finished_at to '{today}'")
 
             # Use progress_seconds for audiobooks, progress_pages for page-based editions
             if audio_seconds and audio_seconds > 0:
@@ -1144,6 +1143,3 @@ class HardcoverClient:
             logger.error("❌ Hardcover update_private_notes error: %s", payload["error"])
             return False
         return bool(payload.get("id"))
-
-
-# [END FILE]

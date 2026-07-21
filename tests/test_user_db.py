@@ -3,6 +3,8 @@ import tempfile
 import shutil
 import unittest
 
+import pytest
+
 from src.db.database_service import DatabaseService
 from src.db.user_bootstrap import bootstrap_admin_user, create_initial_admin_user
 from src.db.models import Book, State
@@ -52,6 +54,12 @@ class TestUserDb(unittest.TestCase):
         fetched = self.svc.get_user(u.id)
         self.assertIsNotNone(fetched.password_hash)
         self.assertNotEqual(fetched.password_hash, "plaintext")
+
+    @pytest.mark.production_password_hash
+    def test_production_password_hash_uses_scrypt(self):
+        u = self.svc.create_user("secure", "secret")
+        self.assertTrue(u.password_hash.startswith("scrypt:"))
+        self.assertIsNotNone(self.svc.verify_user_credentials("secure", "secret"))
 
     def test_set_user_password(self):
         u = self.svc.create_user("dave", "old")

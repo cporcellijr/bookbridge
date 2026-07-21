@@ -106,6 +106,31 @@ def test_list_books_on_shelf_request_failure_returns_empty(client):
     assert books == []
 
 
+def test_add_to_shelf_uses_default_when_setting_is_blank(client):
+    with patch.dict(os.environ, {"BOOKLORE_SHELF_NAME": ""}, clear=False), \
+         patch.object(client, 'find_book_by_filename', return_value={'id': 'b1'}), \
+         patch.object(client, '_get_or_create_shelf_id', return_value='shelf-1') as resolve_shelf, \
+         patch.object(client, '_make_request', return_value=_Resp({}, status_code=204)):
+        ok = client.add_to_shelf('book.epub')
+
+    assert ok is True
+    resolve_shelf.assert_called_once_with('Kobo')
+
+
+def test_remove_from_shelf_uses_default_when_setting_is_blank(client):
+    with patch.dict(os.environ, {"BOOKLORE_SHELF_NAME": ""}, clear=False), \
+         patch.object(client, 'find_book_by_filename', return_value={'id': 'b1'}), \
+         patch.object(client, '_make_request') as mock_req, \
+         patch.object(client, '_parse_json_response', return_value=[
+             {'id': 'shelf-1', 'name': 'Kobo'},
+         ]):
+        mock_req.side_effect = [_Resp([]), _Resp({}, status_code=204)]
+        ok = client.remove_from_shelf('book.epub')
+
+    assert ok is True
+    assert mock_req.call_args_list[1].args[2]['shelvesToUnassign'] == ['shelf-1']
+
+
 # --------------------------------------------------------------------------
 # move_between_shelves
 # --------------------------------------------------------------------------

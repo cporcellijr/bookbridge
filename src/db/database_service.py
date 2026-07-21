@@ -41,6 +41,7 @@ from .models import (
     UserBookOrbitLink,
     Base,
 )
+from src.utils import secret_store
 from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -154,37 +155,57 @@ class DatabaseService:
             session.close()
 
     # Setting operations
+    @staticmethod
+    def _store_value(key: str, value) -> Optional[str]:
+        """Coerce a value for storage, encrypting it when ``key`` is a secret."""
+        stored = str(value) if value is not None else None
+        if stored is not None and secret_store.is_secret_key(key):
+            return secret_store.encrypt(stored)
+        return stored
+
+    @staticmethod
+    def _read_value(key: str, value) -> Optional[str]:
+        """Reverse of :meth:`_store_value`. Legacy plaintext passes through."""
+        if secret_store.is_encrypted(value):
+            return secret_store.decrypt(value, label=key)
+        return value
+
     def get_setting(self, key: str, default: str = None) -> Optional[str]:
         """Get a setting value by key."""
         with self.get_session() as session:
             setting = session.query(Setting).filter(Setting.key == key).first()
             if setting:
-                return setting.value
+                return self._read_value(key, setting.value)
             return default
 
     def set_setting(self, key: str, value: str) -> Setting:
-        """Set a setting value."""
+        """Set a setting value. Secret keys are encrypted at rest; the returned
+        (detached) row carries the plaintext the caller passed in."""
+        plain = str(value) if value is not None else None
+        stored_value = self._store_value(key, value)
         with self.get_session() as session:
             existing = session.query(Setting).filter(Setting.key == key).first()
             if existing:
-                existing.value = str(value) if value is not None else None
+                existing.value = stored_value
                 session.flush()
                 session.refresh(existing)
                 session.expunge(existing)
+                existing.value = plain
                 return existing
             else:
-                new_setting = Setting(key=key, value=str(value) if value is not None else None)
+                new_setting = Setting(key=key, value=stored_value)
                 session.add(new_setting)
                 session.flush()
                 session.refresh(new_setting)
                 session.expunge(new_setting)
+                new_setting.value = plain
                 return new_setting
 
     def get_all_settings(self) -> dict:
         """Get all settings as a dictionary."""
         with self.get_session() as session:
             settings = session.query(Setting).all()
-            return {s.key: s.value for s in settings}
+            return {s.key: self._read_value(s.key, s.value) for s in settings}
 
     def get_json_setting(self, key: str, default=None):
         """Get a JSON setting value, returning default on missing or invalid JSON."""
@@ -343,17 +364,20 @@ class DatabaseService:
             cred = session.query(UserCredential).filter(
                 UserCredential.user_id == user_id, UserCredential.key == key
             ).first()
-            return cred.value if cred else default
+            return self._read_value(key, cred.value) if cred else default
 
     def get_user_credentials(self, user_id: int) -> dict:
         with self.get_session() as session:
             creds = session.query(UserCredential).filter(
                 UserCredential.user_id == user_id
             ).all()
-            return {c.key: c.value for c in creds}
+            return {c.key: self._read_value(c.key, c.value) for c in creds}
 
     def set_user_credential(self, user_id: int, key: str, value: str) -> UserCredential:
-        value_str = str(value) if value is not None else None
+        """Store a per-user credential. Secret keys are encrypted at rest; the
+        returned (detached) row carries the plaintext the caller passed in."""
+        plain = str(value) if value is not None else None
+        value_str = self._store_value(key, value)
         with self.get_session() as session:
             existing = session.query(UserCredential).filter(
                 UserCredential.user_id == user_id, UserCredential.key == key
@@ -363,13 +387,39 @@ class DatabaseService:
                 session.flush()
                 session.refresh(existing)
                 session.expunge(existing)
+                existing.value = plain
                 return existing
             cred = UserCredential(user_id=user_id, key=key, value=value_str)
             session.add(cred)
             session.flush()
             session.refresh(cred)
             session.expunge(cred)
+            cred.value = plain
             return cred
+
+    def encrypt_plaintext_secrets(self) -> int:
+        """Wrap any secret still sitting in plaintext, in both credential stores.
+
+        Idempotent and additive: already-wrapped values and non-secret keys are
+        left alone, so this is safe to run on every boot. Returns the number of
+        rows rewritten. No-op when encryption is unavailable.
+        """
+        if not secret_store.available():
+            return 0
+
+        rewritten = 0
+        secret_keys = secret_store.secret_keys()
+        with self.get_session() as session:
+            for model in (Setting, UserCredential):
+                rows = session.query(model).filter(model.key.in_(secret_keys)).all()
+                for row in rows:
+                    if not row.value or secret_store.is_encrypted(row.value):
+                        continue
+                    row.value = secret_store.encrypt(row.value)
+                    rewritten += 1
+        if rewritten:
+            logger.info(f"🔐 Encrypted {rewritten} plaintext credential(s) at rest")
+        return rewritten
 
     def delete_user_credential(self, user_id: int, key: str) -> bool:
         with self.get_session() as session:
@@ -4008,7 +4058,7 @@ class DatabaseService:
             return True
         except Exception as e:
             session.rollback()
-            logger.error(f"âŒ Failed to clear Grimmory cache table: {e}")
+            logger.error(f"❌ Failed to clear Grimmory cache table: {e}")
             return False
         finally:
             session.close()

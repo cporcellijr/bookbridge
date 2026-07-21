@@ -130,7 +130,7 @@ class ABSSyncClient(SyncClient):
         if not book or abs_ts is None:
             return None
             
-        # [NEW] DB Managed (Unified Architecture)
+        # Database-managed alignment
         if book.transcript_file == "DB_MANAGED" and self.alignment_service:
             # Inverse lookup: Time -> Char -> Text
             char_offset = self.alignment_service.get_char_for_time(book.abs_id, abs_ts)
@@ -190,11 +190,11 @@ class ABSSyncClient(SyncClient):
             }
             return SyncResult(final_ts, result.get("success", False), updated_state)
 
-        # [FIX] Route DB_MANAGED books to AlignmentService, Legacy books to Transcriber
+        # Route database-managed books to AlignmentService and legacy books to Transcriber.
         ts_for_text = None
         
         if book.transcript_file == "DB_MANAGED" and self.alignment_service:
-            # New Path: Use Database Alignment
+            # Use database alignment.
             # We use the match_index (character offset) found by the EbookParser
             char_index = request.locator_result.match_index
             if char_index is not None:

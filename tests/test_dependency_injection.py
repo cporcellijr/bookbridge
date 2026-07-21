@@ -111,13 +111,12 @@ def test_dependency_injection():
         print(f"[OK] Configured sync clients: {', '.join(configured_clients)}")
 
         print("\n[PASS] All tests passed! Dependency injection is working correctly.")
-        return True
 
     except Exception as e:
         print(f"\n[FAIL] Test failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
     finally:
         # Close database connection to prevent file locks
@@ -146,5 +145,4 @@ def test_dependency_injection():
 
 
 if __name__ == '__main__':
-    success = test_dependency_injection()
-    exit(0 if success else 1)
+    test_dependency_injection()

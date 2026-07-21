@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/storyteller_api.py]
 import base64
 import logging
 import mimetypes
@@ -1061,4 +1060,3 @@ class StorytellerAPIClient:
 
 def create_storyteller_client():
     return StorytellerAPIClient()
-# [END FILE]

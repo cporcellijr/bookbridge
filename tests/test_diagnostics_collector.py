@@ -133,6 +133,45 @@ class TestMakeTemplate(unittest.TestCase):
         tpl = _make_template("Error code 404 at line 42")
         self.assertEqual(tpl, "Error code # at line #")
 
+    def test_http_failure_statuses_remain_distinct(self):
+        unauthorized = _make_template("Failed to fetch all progress: 401")
+        unavailable = _make_template("Failed to fetch all progress: 502")
+
+        self.assertEqual(unauthorized, "Failed to fetch all progress: 401")
+        self.assertEqual(unavailable, "Failed to fetch all progress: 502")
+
+    def test_book_titles_collapse_for_shared_transcript_failure(self):
+        first = _make_template(
+            "❌ Antes de que los cuelguen: "
+            "Failed to generate transcript from both SMIL and Whisper."
+        )
+        second = _make_template(
+            "❌ El talento oscuro: "
+            "Failed to generate transcript from both SMIL and Whisper."
+        )
+
+        self.assertEqual(
+            first,
+            "<book>: Failed to generate transcript from both SMIL and Whisper.",
+        )
+        self.assertEqual(first, second)
+
+    def test_hardcover_no_match_titles_collapse_after_scrubbing(self):
+        first = _make_template(scrub_diagnostic_text(
+            "\u26a0\ufe0f Hardcover: No match found for 'False Gods'"
+        ))
+        second = _make_template(scrub_diagnostic_text(
+            "\u26a0\ufe0f Hardcover: No match found for "
+            "'The Extremely Long Librarian\'s Journey'"
+        ))
+
+        self.assertEqual(first, "Hardcover: No match found for '<book>'")
+        self.assertEqual(first, second)
+        self.assertEqual(
+            _make_template("Hardcover: API request returned 503"),
+            "Hardcover: API request returned 503",
+        )
+
 
 class TestDiagnosticsHandler(unittest.TestCase):
     """Tests for DiagnosticsLogHandler core behaviour."""
@@ -168,6 +207,28 @@ class TestDiagnosticsHandler(unittest.TestCase):
             entry = list(handler._entries.values())[0]
             self.assertEqual(entry['count'], 2)
             self.assertIn('#', entry['template'])
+
+    def test_book_specific_transcript_failures_share_one_entry(self):
+        os.environ['DIAGNOSTICS_OPT_IN'] = 'true'
+        handler = self._make_handler()
+        suffix = "Failed to generate transcript from both SMIL and Whisper."
+
+        self._test_logger.error(f"❌ First Book: {suffix}")
+        self._test_logger.error(f"❌ Second Book: {suffix}")
+
+        with handler._lock:
+            self.assertEqual(len(handler._entries), 1)
+            self.assertEqual(next(iter(handler._entries.values()))['count'], 2)
+
+    def test_different_http_statuses_create_separate_entries(self):
+        os.environ['DIAGNOSTICS_OPT_IN'] = 'true'
+        handler = self._make_handler()
+
+        self._test_logger.warning("Failed to fetch all progress: 401")
+        self._test_logger.warning("Failed to fetch all progress: 502")
+
+        with handler._lock:
+            self.assertEqual(len(handler._entries), 2)
 
     # -- opt-in gating -------------------------------------------------
 

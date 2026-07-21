@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/web_server.py]
 import glob
 import hmac
 import html
@@ -51,7 +50,7 @@ from src.db.models import State
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.utils.storyteller_transcript import StorytellerTranscript
-from src.utils.kosync_headers import hash_kosync_key, kosync_auth_headers
+from src.utils.kosync_headers import kosync_request_kwargs
 
 def _reconfigure_logging():
     """Force update of root logger level based on env var."""
@@ -264,6 +263,12 @@ def setup_dependencies(app, test_container=None):
     # This updates os.environ with values from the database
     if database_service:
         ConfigLoader.bootstrap_config(database_service)
+        # Wrap any credential still stored in plaintext by an older install.
+        # Idempotent; runs before settings are mirrored into os.environ.
+        try:
+            database_service.encrypt_plaintext_secrets()
+        except Exception as e:
+            logger.error(f"❌ Could not encrypt stored credentials: {e}")
         ConfigLoader.load_settings(database_service)
         logger.info("✅ Settings loaded into environment variables")
 
@@ -1114,9 +1119,9 @@ def _apply_user_integrations(user_id):
     if primary_admin_id is not None and user_id == primary_admin_id:
         for key in _ENGINE_MIRROR_KEYS:
             val = database_service.get_user_credential(user_id, key)
-            # Only mirror real values: a blank text field would otherwise clobber a
-            # configured global value with '' and defeat os.environ.get(key, default).
-            if val:
+            # Blank optional library IDs deliberately remove the global filter;
+            # other blanks keep the configured value/default they inherit.
+            if val or (val == '' and key in {'ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'}):
                 database_service.set_setting(key, val)
                 os.environ[key] = val
 
@@ -1172,7 +1177,10 @@ _USER_TEST_SERVICES = {
 
 _TEST_CONNECTION_FIELDS = {
     'abs': ['ABS_SERVER', 'ABS_KEY'],
-    'kosync': ['KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY'],
+    'kosync': [
+        'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY',
+        'KOSYNC_AUTH_METHOD',
+    ],
     'storyteller': ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
     'booklore': ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
     'bookorbit': ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
@@ -1617,13 +1625,13 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
     if ebook_path:
         return container.ebook_parser().get_kosync_id(ebook_path)
 
-    # [NEW] Check Epub Cache explicitly (if acquired by LibraryService but not meant for /books)
+    # Check the EPUB cache explicitly when LibraryService acquired a file outside /books.
     epub_cache = container.epub_cache_dir()
     cached_path = safe_cache_path(epub_cache, ebook_filename)
     if cached_path and cached_path.exists():
          return container.ebook_parser().get_kosync_id(cached_path)
 
-    # [NEW] On-Demand Fetching
+    # On-demand fetching
     # 0. BookOrbit On-Demand — the library hosts the file via API even when the
     #    shared /books volume isn't mounted. Resolve the book id (passed by the
     #    match flow, else by filename search) and hash the downloaded bytes.
@@ -4377,7 +4385,7 @@ def audiobook_matches_search(ab, search_term):
         return True
 
     # 2. Reverse Search: Title/Author is in Search term (e.g. "Dune" in "Dune Messiah")
-    # FIX: Enforce minimum length to prevent short/empty matches (e.g. "The", "It", "")
+    # Enforce a minimum length to prevent short or empty matches (for example, "The" or "It").
     MIN_LEN = 4
     
     if len(title) >= MIN_LEN and title in search_norm: return True
@@ -5150,7 +5158,7 @@ def match():
 
         booklore_id = None
             
-        # [NEW] Storyteller Tri-Link Logic
+        # Storyteller tri-link logic
         if storyteller_uuid:
             # If Storyteller UUID is selected, we prioritize it
             try:
@@ -5317,7 +5325,7 @@ def match():
         database_service.dismiss_suggestion(abs_id)
         database_service.dismiss_suggestion(kosync_doc_id)
         
-        # [NEW] Robust Dismissal: Check if there's a different hash for this filename (e.g. from device)
+        # Check for a different hash for this filename, such as one reported by a device.
         try:
             device_doc = database_service.get_kosync_doc_by_filename(ebook_filename)
             if device_doc and device_doc.document_hash != kosync_doc_id:
@@ -5712,7 +5720,7 @@ def _process_batch_queue(queue_items):
         database_service.dismiss_suggestion(item['abs_id'])
         database_service.dismiss_suggestion(kosync_doc_id)
 
-        # [NEW] Robust Dismissal
+        # Robust dismissal
         try:
             device_doc = database_service.get_kosync_doc_by_filename(ebook_filename)
             if device_doc and device_doc.document_hash != kosync_doc_id:
@@ -7748,7 +7756,7 @@ def update_hash(abs_id):
         updated = True
     else:
         # Auto-regenerate
-        # [NEW] User Request: If recalculating (empty input), prioritize the standard EPUB (original_ebook_filename)
+        # When recalculating with empty input, prioritize the standard EPUB.
         # over the current filename (which might be a Storyteller artifact).
         target_filename = book.original_ebook_filename or book.ebook_filename
         
@@ -7866,7 +7874,7 @@ def api_storyteller_link(abs_id):
     if not _user_may_modify_book(user, abs_id):
         return _forbidden_book_response(json_response=True)
 
-    # [NEW] Handle explicit unlinking
+    # Handle explicit unlinking.
     if storyteller_uuid == "none" or not storyteller_uuid:
         logger.info(f"🔄 Unlinking Storyteller for '{book.abs_title}'")
         previous_storyteller_uuid = book.storyteller_uuid
@@ -9408,6 +9416,7 @@ def _run_test_connection(service: str, payload: dict):
             _normalize_test_url(data.get('KOSYNC_SERVER')),
             _coerce_test_str(data.get('KOSYNC_USER')),
             _coerce_test_str(data.get('KOSYNC_KEY')),
+            _coerce_test_str(data.get('KOSYNC_AUTH_METHOD')) or 'kosync',
         ),
         'storyteller': lambda data: _test_storyteller(
             _coerce_test_bool(data.get('STORYTELLER_ENABLED')),
@@ -10042,20 +10051,26 @@ def _test_abs(url: str, token: str) -> dict:
     return {"ok": False, "message": f"Server returned {r.status_code}"}
 
 
-def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
+def _test_kosync(
+    enabled: bool,
+    url: str,
+    user: str,
+    key: str,
+    auth_method: str = 'kosync',
+) -> dict:
     if not enabled or not url:
         return {"ok": False, "message": "KOSync not configured or disabled"}
     if not user or not key:
         return {"ok": False, "message": "Missing username or password"}
 
-    headers = kosync_auth_headers(user, hash_kosync_key(key))
+    request_kwargs = kosync_request_kwargs(user, key, auth_method)
     healthcheck_status = None
     healthcheck_error = None
     try:
         healthcheck = requests.get(
             _build_test_url(url, "healthcheck"),
-            headers=headers,
             timeout=5,
+            **request_kwargs,
         )
         healthcheck_status = healthcheck.status_code
     except Exception as e:
@@ -10083,7 +10098,11 @@ def _test_kosync(enabled: bool, url: str, user: str, key: str) -> dict:
             ),
         }
 
-    auth = requests.get(_build_test_url(url, "users/auth"), headers=headers, timeout=5)
+    auth = requests.get(
+        _build_test_url(url, "users/auth"),
+        timeout=5,
+        **request_kwargs,
+    )
     if auth.status_code == 200:
         if healthcheck_status not in (None, 200):
             return {

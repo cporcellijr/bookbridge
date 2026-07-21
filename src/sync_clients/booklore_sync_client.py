@@ -49,7 +49,7 @@ class BookloreSyncClient(SyncClient):
         return bool(target)
 
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
-        # FIX: Use original filename if available (Tri-Link), otherwise standard filename
+        # Prefer the original filename for tri-links, then fall back to the standard filename.
         epub = self._resolve_epub_filename(book)
 
         # Rich read when available (adds href + Grimmory's own lastReadTime and
@@ -66,7 +66,7 @@ class BookloreSyncClient(SyncClient):
             bl_pct, bl_cfi = self.booklore_client.get_progress(epub)
 
         if bl_pct is None:
-            logger.warning("⚠️ Grimmory percentage is None - returning None for service state")
+            logger.debug("Grimmory percentage is None - returning no service state")
             return None
 
         # Get previous BookLore state
@@ -107,7 +107,7 @@ class BookloreSyncClient(SyncClient):
         return None
 
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
-        # FIX: Use original filename for updates too
+        # Prefer the original filename for updates too.
         epub = self._resolve_epub_filename(book)
         pct = request.locator_result.percentage
         success = self.booklore_client.update_progress(epub, pct, request.locator_result)

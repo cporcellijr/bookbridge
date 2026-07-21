@@ -130,7 +130,7 @@ class Book(Base):
     ebook_filename = Column(String(500))
     ebook_source = Column(String(32), nullable=True)
     ebook_source_id = Column(String(255), nullable=True)
-    original_ebook_filename = Column(String(500))  # NEW COLUMN
+    original_ebook_filename = Column(String(500))
     kosync_doc_id = Column(String(255), index=True)
     transcript_file = Column(String(500))
     status = Column(String(50), default='active')
@@ -139,7 +139,7 @@ class Book(Base):
     transcript_source = Column(String(32), nullable=True)  # 'storyteller', 'smil', 'whisper'
     storyteller_uuid = Column(String(36), index=True, nullable=True)
     bookfusion_id = Column(String(255), nullable=True, index=True)
-    abs_ebook_item_id = Column(String(255), nullable=True)  # New ID to track ebook item separately
+    abs_ebook_item_id = Column(String(255), nullable=True)  # Tracks the ebook item separately.
     series_name = Column(String(500), nullable=True, index=True)
     series_sequence = Column(Float, nullable=True)
     # Multi-user: the user who created this match. The catalog row is shared at
@@ -161,7 +161,7 @@ class Book(Base):
                  audio_duration: float = None, audio_provider_book_id: str = None,
                  audio_provider_file_id: str = None,
                  ebook_source: str = None, ebook_source_id: str = None,
-                 original_ebook_filename: str = None,  # NEW ARGUMENT
+                 original_ebook_filename: str = None,
                  kosync_doc_id: str = None, transcript_file: str = None,
                  status: str = 'active', duration: float = None, sync_mode: str = 'audiobook',
                  transcript_source: str = None,
@@ -180,7 +180,7 @@ class Book(Base):
         self.ebook_filename = ebook_filename
         self.ebook_source = ebook_source
         self.ebook_source_id = ebook_source_id
-        self.original_ebook_filename = original_ebook_filename  # NEW FIELD
+        self.original_ebook_filename = original_ebook_filename
         self.kosync_doc_id = kosync_doc_id
         self.transcript_file = transcript_file
         self.status = status

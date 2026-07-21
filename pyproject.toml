@@ -36,6 +36,10 @@ packages = []
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["data"]
+markers = [
+    "production_password_hash: exercise Werkzeug's production password-hash default",
+    "real_database_migrations: run real Alembic initialization instead of cloning the test schema",
+]
 
 [tool.coverage.run]
 source = ["src"]

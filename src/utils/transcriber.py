@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/transcriber.py]
 """
 Audio Transcriber for abs-kosync-enhanced
 
@@ -39,7 +38,7 @@ class TranscriptionCancelled(Exception):
     """Raised inside a transcription worker when its mapping has been deleted."""
 
 class AudioTranscriber:
-    # [UPDATED] Accepted smil_extractor and polisher as arguments
+    # Accept the SMIL extractor and polisher as dependencies.
     def __init__(self, data_dir, smil_extractor, polisher: Polisher, ollama_client=None):
         self.data_dir = data_dir
         self.ollama_client = ollama_client
@@ -52,7 +51,7 @@ class AudioTranscriber:
         # Unified threshold logic
         self.match_threshold = int(os.environ.get("TRANSCRIPT_MATCH_THRESHOLD", os.environ.get("FUZZY_MATCH_THRESHOLD", 80)))
 
-        # [UPDATED] Use the injected instances
+        # Use the injected instances.
         self.smil_extractor = smil_extractor
         self.polisher = polisher
 
@@ -147,7 +146,7 @@ class AudioTranscriber:
                         logger.warning(f"⚠️ SMIL REJECTED: Coverage too low ({coverage:.1%}). Expected {expected_duration:.0f}s, got {transcript_duration:.0f}s — Falling back to transcriber")
                         return None
 
-            # [NEW] Validate transcript against BOOK TEXT
+            # Validate the transcript against the book text.
             # We require full_book_text for this validation.
             if full_book_text:
                 is_valid, score = self.validate_smil(transcript, full_book_text)
@@ -419,8 +418,12 @@ class AudioTranscriber:
                     progress = json.load(f)
                 # If it looks like a complete run?
                 if progress.get('chunks_completed', 0) > 0 and progress.get('done', False):
-                    logger.info(f"⚡ Resuming from completed local cache for {abs_id}")
-                    return progress.get('transcript', [])
+                    cached_transcript = progress.get('transcript', [])
+                    if cached_transcript:
+                        logger.info(f"⚡ Resuming from completed local cache for {abs_id}")
+                        return cached_transcript
+                    progress_file.unlink()
+                    logger.info(f"Invalidated empty completed transcript cache for {abs_id}")
              except (json.JSONDecodeError, OSError) as e:
                  logger.debug(f"Failed to read progress cache file: {e}")
 
@@ -457,7 +460,7 @@ class AudioTranscriber:
 
             # Phase 1: Download and Normalize (if not resuming)
             if not resuming:
-                # FIX: Check if files exist for ALL parts before skipping
+                # Check that files exist for all parts before skipping.
                 existing_files = sorted(book_cache_dir.glob("part_*_split_*.wav"))
                 
                 # Check coverage: Do we have at least one file for every index in audio_urls?
@@ -584,6 +587,10 @@ class AudioTranscriber:
                     progress_callback(chunks_completed / total_chunks)
 
                 gc.collect()
+
+            if not full_transcript:
+                progress_file.unlink(missing_ok=True)
+                raise ValueError("Transcription completed without any segments")
 
             # Clean up cache only on success. Keep `_progress.json` (it holds the finished
             # transcript) so a later re-align can reuse it via the resume check above and
@@ -1082,5 +1089,4 @@ class AudioTranscriber:
         except Exception as e:
             logger.error(f"❌ {title_prefix}Error searching transcript '{transcript_path}': {e}")
         return None
-# [END FILE]
 

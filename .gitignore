@@ -63,3 +63,7 @@ pytest_output.txt
 reports_site/docs/
 reports_site/site/
 diagnostics_receiver/.env
+
+# Credential-encryption key (never commit; lives in DATA_DIR at runtime)
+secret.key
+**/secret.key

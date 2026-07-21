@@ -1,4 +1,3 @@
-# [START FILE: src/utils/smil_extractor.py]
 import json
 import logging
 import re
@@ -417,7 +416,7 @@ class SmilExtractor:
                 elif current_audio_src is None:
                     current_audio_src = audio_src
                 elif audio_src != current_audio_src:
-                    # NEW PART Detected
+                    # A new part was detected.
                     logger.info(f"   🔄 Audio source changed at {Path(smil_path).name} ({current_audio_src} -> {audio_src}). Stacking.")
                     
                     # Update cumulative duration with the length of the *previous* part
@@ -666,4 +665,3 @@ if __name__ == '__main__':
         print("Usage: python smil_extractor.py <epub_file>")
         sys.exit(1)
     extract_transcript_from_epub(sys.argv[1])
-# [END FILE]

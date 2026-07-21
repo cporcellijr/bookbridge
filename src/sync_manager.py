@@ -1,4 +1,3 @@
-# [START FILE: abs-kosync-enhanced/main.py]
 import glob
 import logging
 import os
@@ -7,7 +6,7 @@ import time
 import traceback
 from pathlib import Path
 import schedule
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
 
@@ -56,7 +55,7 @@ from src.utils.transcriber import TranscriptionCancelled
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.progress_metadata import state_metadata_kwargs
 
-# [NEW] Service Imports
+# Service imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import LibraryService
@@ -74,6 +73,8 @@ if not hasattr(root_logger, '_configured') or not root_logger._configured:
         format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
     )
 logger = logging.getLogger(__name__)
+
+_STATE_FETCH_SLOW_SECONDS = 15.0
 
 # Multi-user: per-cycle override of the active sync-client bundle. Set by
 # sync_cycle when running for a specific user; None => use the global clients.
@@ -126,7 +127,7 @@ class SyncManager:
         self.database_service = database_service
         self.storyteller_client = storyteller_client
         
-        # [NEW] Services
+        # Services
         self.alignment_service = alignment_service
         self.library_service = library_service
         self.migration_service = migration_service
@@ -589,7 +590,7 @@ class SyncManager:
             except Exception as e:
                 logger.warning(f"⚠️ '{client_name}' connection failed: {e}")
         
-        # [NEW] Check CWA Integration Status
+        # Check CWA integration status.
         if self.library_service and self.library_service.cwa_client:
             cwa = self.library_service.cwa_client
             if (
@@ -613,7 +614,7 @@ class SyncManager:
         else:
             logger.debug("CWA not available (library_service or cwa_client missing)")
         
-        # [NEW] Check ABS ebook search capability
+        # Check ABS ebook search capability.
         if self.abs_client:
             try:
                 # Just verify methods exist (don't actually search during startup)
@@ -624,12 +625,12 @@ class SyncManager:
             except Exception as e:
                 logger.warning(f"⚠️ ABS ebook check failed: {e}")
 
-        # [NEW] Run one-time migration
+        # Run the one-time migration.
         if self.migration_service:
             logger.info("🔄 Checking for legacy data to migrate...")
             self.migration_service.migrate_legacy_data()
 
-        # [NEW] Cleanup orphaned cache files
+        # Clean up orphaned cache files.
         # DISABLED: Current logic is too aggressive (deletes original_ebook_filename for linked books).
         # We rely on delete_mapping in web_server.py to handle explicit deletions.
 
@@ -888,6 +889,7 @@ class SyncManager:
 
         with ThreadPoolExecutor(max_workers=len(clients_to_use)) as executor:
             futures = {}
+            submitted_at = {}
             for client_name, client in clients_to_use.items():
                 prev_state = prev_states_by_client.get(client_name.lower())
 
@@ -898,11 +900,17 @@ class SyncManager:
                     client.get_service_state, book, prev_state, title_snip, bulk_ctx
                 )
                 futures[future] = client_name
+                submitted_at[future] = time.monotonic()
 
-            done, not_done = wait(futures.keys(), timeout=15)
-
-            for future in done:
+            for future in as_completed(futures):
                 client_name = futures[future]
+                elapsed = time.monotonic() - submitted_at[future]
+                if elapsed > _STATE_FETCH_SLOW_SECONDS:
+                    logger.warning(
+                        "⚠️ '%s' state fetch was slow (%.1fs)",
+                        client_name,
+                        elapsed,
+                    )
                 try:
                     state = future.result()
                     if state is not None:
@@ -918,10 +926,6 @@ class SyncManager:
                         config[client_name] = state
                 except Exception as e:
                     logger.warning(f"⚠️ '{client_name}' state fetch failed: {e}")
-
-            for future in not_done:
-                client_name = futures[future]
-                logger.warning(f"⚠️ '{client_name}' state fetch timed out after 15s")
 
         return config
 
@@ -1517,6 +1521,7 @@ class SyncManager:
 
         # 2. Find ONE pending book/job to start using database service
         target_book = None
+        retry_job = None
         eligible_books = []
         max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
         retry_delay_mins = int(os.getenv("JOB_RETRY_DELAY_MINS", 15))
@@ -1547,6 +1552,7 @@ class SyncManager:
                         eligible_books.append(book)
                         if not target_book:
                             target_book = book
+                            retry_job = job
 
         if not target_book:
             return
@@ -1586,7 +1592,7 @@ class SyncManager:
         job = Job(
             abs_id=target_book.abs_id,
             last_attempt=time.time(),
-            retry_count=0,  # Will be updated on failure
+            retry_count=(retry_job.retry_count or 0) if retry_job else 0,
             last_error=None,
             progress=0.0
         )
@@ -1742,7 +1748,7 @@ class SyncManager:
             if not epub_path:
                 epub_path = self._get_local_epub(ebook_filename)
                 
-            # [FIX] Ensure epub_path is a Path object (LibraryService returns str)
+            # LibraryService returns a string, so normalize epub_path to Path.
             if epub_path:
                 epub_path = Path(epub_path)
                 
@@ -1750,11 +1756,11 @@ class SyncManager:
             if not epub_path:
                 raise FileNotFoundError(f"Could not locate or download: {ebook_filename}")
             
-            # [FIX] Ensure epub_path is a Path object (acquire_ebook returns str)
+            # acquire_ebook returns a string, so normalize epub_path to Path.
             if epub_path:
                 epub_path = Path(epub_path)
                 
-                # [NEW] Eagerly calculate and lock KOSync Hash from the ORIGINAL file
+                # Eagerly calculate and lock the KoSync hash from the original file.
                 # This ensures we match what the user has on their device (KoReader)
                 # regardless of what Storyteller does later.
                 try:
@@ -1804,7 +1810,7 @@ class SyncManager:
             else:
                 chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
             
-            # [NEW] Pre-fetch book text for validation/alignment
+            # Pre-fetch book text for validation and alignment.
             # We need this for Validating SMIL OR for Aligning Whisper
             book_text, _ = self.ebook_parser.extract_text_and_map(epub_path)
 
@@ -1895,7 +1901,7 @@ class SyncManager:
             # Step 4: Parse EPUB - ebook_parser caches result, so repeating is cheap.
 
             
-            # [NEW] Step 5: Align and Store using AlignmentService
+            # Align and store using AlignmentService.
             # This is where we commit the result to the DB
             if not storyteller_aligned:
                 logger.info(f"🧠 Aligning transcript ({transcript_source}) using Anchored Alignment...")
@@ -1929,7 +1935,7 @@ class SyncManager:
             book.transcript_file = "DB_MANAGED"
             if transcript_source:
                 book.transcript_source = transcript_source
-            # [FIX] Save the filename so cache cleanup knows this file belongs to a book
+            # Save the filename so cache cleanup knows this file belongs to a book.
             if epub_path:
                 new_filename = epub_path.name
                 
@@ -3828,4 +3834,3 @@ if __name__ == "__main__":
     logger.info("✅ Using dependency injection")
 
     sync_manager.run_daemon()
-# [END FILE]

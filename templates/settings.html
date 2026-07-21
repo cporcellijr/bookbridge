@@ -722,7 +722,6 @@
                     </div>
                 </div>
                 <div class="section-body">
-                    <!-- Moved Checkbox to top -->
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="abs_only_lib" name="ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID" {% if
                             get_bool('ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID') %}checked{% endif %}>
@@ -2348,7 +2347,7 @@
             const select = document.getElementById(selectId);
             const status = document.getElementById(statusId);
 
-            button.innerHTML = 'âŒ› Scanning...';
+            button.innerHTML = '⌛ Scanning...';
             button.disabled = true;
 
             fetch(endpoint)
@@ -2447,7 +2446,10 @@
 
         const TEST_CONNECTION_FIELDS = {
             abs: ['ABS_SERVER', 'ABS_KEY'],
-            kosync: ['KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY'],
+            kosync: [
+                'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY',
+                'KOSYNC_AUTH_METHOD'
+            ],
             storyteller: ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
             booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
             bookorbit: ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],

@@ -1,10 +1,12 @@
-# [START FILE: abs-kosync-enhanced/api_clients.py]
 import os
 import requests
 import logging
 import time
 
-from src.utils.kosync_headers import hash_kosync_key, kosync_auth_headers
+from src.utils.kosync_headers import (
+    hash_kosync_key,
+    kosync_request_kwargs,
+)
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.user_config import resolve_setting
 
@@ -709,6 +711,8 @@ class ABSClient:
 
     def remove_from_collection(self, item_id, collection_name="abs-kosync"):
         """Remove an audiobook from a collection."""
+        if not self.is_configured():
+            return False
         self._update_session_headers()
         try:
             # Get collection by name
@@ -772,6 +776,13 @@ class KoSyncClient:
             return ""
         return hash_kosync_key(key)
 
+    def _request_kwargs(self) -> dict:
+        return kosync_request_kwargs(
+            self.user,
+            self._cfg("KOSYNC_KEY", ""),
+            self._cfg("KOSYNC_AUTH_METHOD", "kosync"),
+        )
+
     def is_configured(self):
         enabled_val = str(self._cfg("KOSYNC_ENABLED", "")).lower()
         if enabled_val == 'false':
@@ -788,9 +799,9 @@ class KoSyncClient:
             
         is_local = self._is_local_server()
         url = f"{self.base_url}/healthcheck"
-        headers = kosync_auth_headers(self.user, self.auth_token)
+        request_kwargs = self._request_kwargs()
         try:
-            r = self.session.get(url, timeout=5, headers=headers)
+            r = self.session.get(url, timeout=5, **request_kwargs)
             if r.status_code == 200:
                 # First-run visible INFO, otherwise DEBUG
                 first_run_marker = '/data/.first_run_done'
@@ -808,7 +819,7 @@ class KoSyncClient:
                 return True
             # Fallback check
             url_sync = f"{self.base_url}/syncs/progress/test-connection"
-            r = self.session.get(url_sync, headers=headers, timeout=5)
+            r = self.session.get(url_sync, timeout=5, **request_kwargs)
             if r.status_code == 200:
                 return True
             logger.error(f"❌ KoSync connection failed (Response: {r.status_code})")
@@ -823,7 +834,7 @@ class KoSyncClient:
 
     def get_progress(self, doc_id):
         """
-        CRITICAL FIX: Returns TUPLE (percentage, xpath_string)
+        Returns a tuple of (percentage, xpath_string).
         This prevents the 'cannot unpack non-iterable float' crash.
         """
         pct, xpath, _metadata = self.get_progress_with_metadata(doc_id)
@@ -831,13 +842,15 @@ class KoSyncClient:
 
     def get_progress_with_metadata(self, doc_id):
         """Return percentage, progress locator, and bridge-specific response metadata."""
-        headers = kosync_auth_headers(self.user, self.auth_token)
         url = f"{self.base_url}/syncs/progress/{doc_id}"
         try:
-            r = self.session.get(url, headers=headers)
+            r = self.session.get(url, **self._request_kwargs())
             if r.status_code == 200:
                 data = r.json()
-                pct = float(data.get('percentage', 0))
+                raw_pct = data.get('percentage')
+                if raw_pct is None:
+                    return None, None, data
+                pct = float(raw_pct)
                 # Grab the raw progress string (XPath)
                 xpath = data.get('progress')
                 return pct, xpath, data
@@ -849,8 +862,9 @@ class KoSyncClient:
     def update_progress(self, doc_id, percentage, xpath=None):
         if not self.is_configured(): return False
 
-        headers = {
-            **kosync_auth_headers(self.user, self.auth_token),
+        request_kwargs = self._request_kwargs()
+        request_kwargs["headers"] = {
+            **request_kwargs["headers"],
             "content-type": "application/json",
         }
         url = f"{self.base_url}/syncs/progress"
@@ -869,7 +883,7 @@ class KoSyncClient:
             payload["timestamp"] = int(time.time())
             payload["force"] = True
         try:
-            r = self.session.put(url, headers=headers, json=payload, timeout=10)
+            r = self.session.put(url, json=payload, timeout=10, **request_kwargs)
             if r.status_code in (200, 202, 201, 204):
                 logger.debug(f"   📡 KoSync Updated: {percentage:.1%} with progress '{progress_val}' for doc {doc_id}")
                 return True
@@ -879,4 +893,3 @@ class KoSyncClient:
         except Exception as e:
             logger.error(f"❌ Failed to update KoSync: {e}")
             return False
-# [END FILE]

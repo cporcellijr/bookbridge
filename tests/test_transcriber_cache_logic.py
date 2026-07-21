@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import MagicMock, patch, mock_open
 import shutil
@@ -108,6 +109,76 @@ class TestTranscriberCacheLogic(unittest.TestCase):
             call.args and "File 'long.mp3' is 47.0m" in str(call.args[0])
             for call in mock_logger.warning.call_args_list
         ))
+
+    def test_completed_empty_cache_is_invalidated_and_retranscribed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            transcriber = AudioTranscriber(
+                data_dir,
+                self.mock_smil_extractor,
+                self.mock_polisher,
+            )
+            source = data_dir / "source.mp3"
+            source.write_bytes(b"audio")
+            cache_dir = data_dir / "audio_cache" / "empty-cache"
+            cache_dir.mkdir(parents=True)
+            (cache_dir / "_progress.json").write_text(json.dumps({
+                "chunks_completed": 1,
+                "cumulative_duration": 10.0,
+                "transcript": [],
+                "done": True,
+            }), encoding="utf-8")
+
+            normalized = cache_dir / "part_000.wav"
+            provider = MagicMock()
+            provider.transcribe.return_value = [
+                {"start": 0.0, "end": 1.0, "text": "hello"},
+            ]
+            transcriber.normalize_audio_to_wav = MagicMock(
+                side_effect=lambda _path: normalized
+            )
+            transcriber.split_audio_file = MagicMock(return_value=[normalized])
+            transcriber.get_audio_duration = MagicMock(return_value=10.0)
+
+            with patch("utils.transcriber.get_transcription_provider", return_value=provider):
+                transcript = transcriber.process_audio(
+                    "empty-cache",
+                    [{"local_path": str(source), "ext": ".mp3"}],
+                )
+
+        self.assertEqual(transcript[0]["text"], "hello")
+        provider.transcribe.assert_called_once()
+
+    def test_all_empty_chunks_fail_and_remove_completed_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            transcriber = AudioTranscriber(
+                data_dir,
+                self.mock_smil_extractor,
+                self.mock_polisher,
+            )
+            source = data_dir / "source.mp3"
+            source.write_bytes(b"audio")
+            cache_dir = data_dir / "audio_cache" / "silent-book"
+            normalized = cache_dir / "part_000.wav"
+            provider = MagicMock()
+            provider.transcribe.return_value = []
+            transcriber.normalize_audio_to_wav = MagicMock(
+                side_effect=lambda _path: normalized
+            )
+            transcriber.split_audio_file = MagicMock(return_value=[normalized])
+            transcriber.get_audio_duration = MagicMock(return_value=10.0)
+
+            with patch("utils.transcriber.get_transcription_provider", return_value=provider):
+                with self.assertRaisesRegex(
+                    ValueError, "Transcription completed without any segments"
+                ):
+                    transcriber.process_audio(
+                        "silent-book",
+                        [{"local_path": str(source), "ext": ".mp3"}],
+                    )
+
+            self.assertFalse((cache_dir / "_progress.json").exists())
 
 if __name__ == '__main__':
     # unittest.main() # Avoid args issue in some environments?

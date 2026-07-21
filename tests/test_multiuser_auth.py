@@ -315,6 +315,7 @@ class TestMultiUserAuth(unittest.TestCase):
             'BOOKFUSION_ENABLED': 'on',
             'BOOKFUSION_ANNOTATION_SYNC': 'on',
             'KOSYNC_ENABLED': 'on',
+            'KOSYNC_AUTH_METHOD': 'basic',
             'KOSYNC_USER': 'alice-ko',
             'KOSYNC_KEY': '',
         })
@@ -324,6 +325,7 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(self.svc.get_user_credential(alice.id, 'BOOKFUSION_ANNOTATION_SYNC'), 'true')
         self.assertEqual(self.svc.get_user_credential(alice.id, 'BOOKFUSION_ACCESS_TOKEN'), 'existing-token')
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_ENABLED'), 'true')
+        self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_AUTH_METHOD'), 'basic')
         self.assertEqual(self.svc.get_user_credential(alice.id, 'KOSYNC_USER'), 'alice-ko')
         self.mock_container.mock_user_client_registry.invalidate.assert_called_with(alice.id)
 
@@ -536,6 +538,30 @@ class TestMultiUserAuth(unittest.TestCase):
         self.svc.set_user_credential(target.id, 'STORYTELLER_USER', 'olduser')
         self.client.post(self._ipath(target.id), data={'STORYTELLER_USER': ''})
         self.assertEqual(self.svc.get_user_credential(target.id, 'STORYTELLER_USER'), '')
+
+    def test_primary_admin_can_clear_master_library_ids(self):
+        """Blank library IDs remove the primary admin's master filters."""
+        admin = self.svc.get_user_by_username('admin')
+        for key in ('ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'):
+            self.svc.set_user_credential(admin.id, key, '7')
+            self.svc.set_setting(key, '7')
+        self._login()
+
+        with patch.dict(os.environ, {
+            'ABS_LIBRARY_ID': '7',
+            'BOOKLORE_LIBRARY_ID': '7',
+        }, clear=False):
+            response = self.client.post(
+                '/account/integrations',
+                data={'ABS_LIBRARY_ID': '', 'BOOKLORE_LIBRARY_ID': ''},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            for key in ('ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'):
+                self.assertEqual(self.svc.get_user_credential(admin.id, key), '')
+                self.assertEqual(self.svc.get_setting(key), '')
+                self.assertEqual(os.environ[key], '')
+            self.assertNotIn(b'inherits master: 7', response.data)
 
     @patch('src.web_server.requests.post')
     def test_user_integration_test_uses_saved_secret_when_form_blank(self, mock_post):

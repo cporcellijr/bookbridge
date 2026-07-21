@@ -1829,6 +1829,37 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mock_get.call_count, 2)
 
     @patch('src.web_server.requests.get')
+    def test_test_connection_kosync_supports_cwa_basic_auth(self, mock_get):
+        def fake_get(url, headers=None, auth=None, timeout=None):
+            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT})
+            self.assertEqual(auth, ('reader', 'cwa-password'))
+            self.assertEqual(timeout, 5)
+            if url == 'https://cwa.example/kosync/healthcheck':
+                return _http_response(404)
+            if url == 'https://cwa.example/kosync/users/auth':
+                return _http_response(200)
+            raise AssertionError(f'Unexpected URL {url}')
+
+        mock_get.side_effect = fake_get
+
+        response = self.client.post(
+            '/api/test-connection/kosync',
+            json={
+                'KOSYNC_ENABLED': True,
+                'KOSYNC_SERVER': 'https://cwa.example/kosync',
+                'KOSYNC_USER': 'reader',
+                'KOSYNC_KEY': 'cwa-password',
+                'KOSYNC_AUTH_METHOD': 'basic',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertIn('credentials are valid', data['message'])
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch('src.web_server.requests.get')
     def test_test_connection_kosync_auth_success_overrides_healthcheck_403(self, mock_get):
         def fake_get(url, headers=None, timeout=None):
             self.assertEqual(headers['x-auth-user'], 'reader')

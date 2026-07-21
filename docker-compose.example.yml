@@ -30,6 +30,16 @@ services:
       - LOG_LEVEL=INFO
       # - KOSYNC_PORT=5758 # Optional: enable split-port mode
 
+      # === Credential encryption ===
+      # Stored passwords, API tokens and sync keys are encrypted at rest. By default
+      # the key is generated at DATA_DIR/secret.key (0600) on first boot — back it up
+      # together with your database, since restoring one without the other means
+      # re-entering those credentials.
+      # Set this to keep the key outside the data volume instead (any long random
+      # string). It is read from this environment only and is deliberately not a
+      # Settings-page option: a key stored in the database it encrypts is pointless.
+      # - BOOKBRIDGE_SECRET_KEY=change-me-to-a-long-random-string
+
       # === OPTIONAL: Initial Configuration ===
       # It is recommended to configure these in the Web UI, but you can bootstrap them here.
 

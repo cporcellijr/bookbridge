@@ -28,3 +28,19 @@ def kosync_auth_headers(user: str, hashed_key: str) -> dict:
         "x-auth-key": hashed_key,
         "accept": KOSYNC_ACCEPT,
     }
+
+
+def kosync_request_kwargs(
+    user: str,
+    plain_key: str,
+    auth_method: str = "kosync",
+) -> dict:
+    """Build requests-compatible authentication arguments for a KoSync server."""
+    if str(auth_method).strip().lower() == "basic":
+        return {
+            "headers": {"accept": KOSYNC_ACCEPT},
+            "auth": (user, plain_key),
+        }
+
+    hashed_key = hash_kosync_key(plain_key) if plain_key else ""
+    return {"headers": kosync_auth_headers(user, hashed_key)}

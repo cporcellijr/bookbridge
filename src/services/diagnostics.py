@@ -32,6 +32,15 @@ logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r'https?://[^\s"\'<>]+')
 _QUOTED_SINGLE = re.compile(r"'([^']{12,})'")
 _QUOTED_DOUBLE = re.compile(r'"([^"]{12,})"')
+_TRANSCRIPT_FAILURE_SUFFIX = \
+    ": Failed to generate transcript from both SMIL and Whisper."
+_HTTP_STATUS_RE = re.compile(
+    r"(?i)(?:\b(?:HTTP|returned|status)\b\s*[:=]?\s*|"
+    r"\bFailed to fetch all progress:\s*)([45]\d{2})\b"
+)
+_HARDCOVER_NO_MATCH_RE = re.compile(
+    r"^(?:\S+\s+)?Hardcover: No match found for '.+'$"
+)
 
 
 def _sha1_prefix(text: str, length: int = 8) -> str:
@@ -96,9 +105,22 @@ def scrub_diagnostic_text(text: str) -> str:
 
 
 def _make_template(message: str) -> str:
-    """Create a deduplication template: digits → '#', whitespace collapsed."""
-    collapsed_digits = re.sub(r'\d+', '#', message)
-    return re.sub(r'\s+', ' ', collapsed_digits).strip()
+    """Create a stable warning template without erasing semantic HTTP codes."""
+    normalized = re.sub(r'\s+', ' ', message).strip()
+    if normalized.endswith(_TRANSCRIPT_FAILURE_SUFFIX):
+        return f"<book>{_TRANSCRIPT_FAILURE_SUFFIX}"
+    if _HARDCOVER_NO_MATCH_RE.fullmatch(normalized):
+        return "Hardcover: No match found for '<book>'"
+
+    parts = []
+    last_end = 0
+    for match in _HTTP_STATUS_RE.finditer(normalized):
+        status_start, status_end = match.span(1)
+        parts.append(re.sub(r'\d+', '#', normalized[last_end:status_start]))
+        parts.append(match.group(1))
+        last_end = status_end
+    parts.append(re.sub(r'\d+', '#', normalized[last_end:]))
+    return ''.join(parts)
 
 
 def _truncate(text: str, limit: int = 400) -> str:
