@@ -99,7 +99,6 @@ class BookloreClient:
         self.legacy_cache_file = Path(os.environ.get("DATA_DIR", "/data")) / "booklore_cache.json"
 
         # Load cache from DB (and migrate if needed)
-        self.target_library_id = resolve_setting(credentials, "BOOKLORE_LIBRARY_ID")
         self._server_side_filter_supported = None
         # Whether the server exposes the paginated /api/v1/books/page endpoint.
         # None = unprobed; True = paginate; False = fall back to flat /api/v1/books.
@@ -108,6 +107,11 @@ class BookloreClient:
             self._load_cache()
         else:
             logger.debug("Grimmory: client not configured; skipping cached library load")
+
+    @property
+    def target_library_id(self) -> Optional[str]:
+        """Return the current optional Grimmory library restriction."""
+        return resolve_setting(self._creds, "BOOKLORE_LIBRARY_ID")
 
     def _load_cache(self):
         """Load cache from DB, migrating legacy JSON if needed."""

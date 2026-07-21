@@ -49,6 +49,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The primary admin can now reset Grimmory to all libraries.** Clearing the
+  optional Grimmory Library ID removes the stale master restriction instead of
+  immediately inheriting it again, and the running client uses the unfiltered
+  library scan on its next refresh. The optional Audiobookshelf Library ID can be
+  cleared the same way. Existing affected installs should clear the field and save
+  once after upgrading; no database repair is required. (#337)
+
 - **KoSync auto-discovery now recovers when multiple users share one document
   hash.** A mapping claimed by another user still returns a privacy-preserving
   404, but BookBridge now verifies the requesting user's EPUB in the background,

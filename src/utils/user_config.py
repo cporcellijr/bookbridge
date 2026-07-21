@@ -111,7 +111,7 @@ PER_USER_FIELD_GROUPS = [
         ("BOOKLORE_USER", "Username", "text"),
         ("BOOKLORE_PASSWORD", "Password", "secret"),
         ("BOOKLORE_SHELF_NAME", "Shelf name (synced books moved here)", "text"),
-        ("BOOKLORE_LIBRARY_ID", "Library ID (optional)", "text"),
+        ("BOOKLORE_LIBRARY_ID", "Library ID (optional; blank uses all libraries)", "text"),
         ("BOOKLORE_ANNOTATION_SYNC", "Highlight sync", "bool"),
     ]),
     ("BookFusion", [

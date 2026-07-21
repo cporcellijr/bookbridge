@@ -33,6 +33,12 @@ This release does **not** change the BridgeSync KOReader plugin (still 0.5.4), s
 
 ## Fixed
 
+- **The primary admin can reset Grimmory to all libraries.** Under Account → My
+  Integrations, clear the optional Grimmory Library ID and save once. BookBridge now
+  clears the stale master value too and uses all Grimmory libraries on the next
+  refresh instead of showing `inherits master: 7` and remaining restricted. The
+  optional Audiobookshelf Library ID can be reset the same way. No database repair
+  or second restart is required. (#337)
 - **KOReader sync now recovers when two readers share one document hash.** A book
   already claimed by another reader still returns a privacy-preserving 404, but
   BookBridge now verifies the requesting reader's own EPUB in the background,

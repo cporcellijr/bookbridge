@@ -1174,20 +1174,36 @@ def test_refresh_book_cache_uses_server_side_library_filter_when_supported(mock_
         "DATA_DIR": "/tmp/data"
     }):
         client = BookloreClient(database_service=mock_db)
+        books = [make_list_book("filtered-1", title="Filtered Book", library_id="target-lib")]
+        client._make_request = MagicMock(side_effect=[MockResponse(books)])
+        client._get_fresh_token = MagicMock(return_value="token")
+        client._fetch_book_detail = MagicMock(
+            return_value=make_detail("filtered-1", title="Filtered Book", filename="filtered-book.epub", library_id="target-lib")
+        )
 
-    books = [make_list_book("filtered-1", title="Filtered Book", library_id="target-lib")]
-    client._make_request = MagicMock(side_effect=[MockResponse(books)])
-    client._get_fresh_token = MagicMock(return_value="token")
-    client._fetch_book_detail = MagicMock(
-        return_value=make_detail("filtered-1", title="Filtered Book", filename="filtered-book.epub", library_id="target-lib")
-    )
+        assert client._refresh_book_cache() is True
+        first_endpoint = client._make_request.call_args_list[0][0][1]
+        assert first_endpoint == "/api/v1/libraries/target-lib/book"
+        assert client._make_request.call_count == 1
+        assert client._server_side_filter_supported is True
+        assert list(client._book_cache.keys()) == ["filtered-book.epub"]
 
-    assert client._refresh_book_cache() is True
-    first_endpoint = client._make_request.call_args_list[0][0][1]
-    assert first_endpoint == "/api/v1/libraries/target-lib/book"
-    assert client._make_request.call_count == 1
-    assert client._server_side_filter_supported is True
-    assert list(client._book_cache.keys()) == ["filtered-book.epub"]
+
+def test_library_filter_updates_when_runtime_setting_is_cleared(mock_db):
+    with patch.dict(os.environ, {
+        "BOOKLORE_SERVER": "http://mock-booklore",
+        "BOOKLORE_USER": "testuser",
+        "BOOKLORE_PASSWORD": "testpass",
+        "BOOKLORE_LIBRARY_ID": "7",
+        "DATA_DIR": "/tmp/data",
+    }):
+        client = BookloreClient(database_service=mock_db)
+        assert client._build_books_endpoint(0, 200, True) == "/api/v1/libraries/7/book"
+
+        os.environ["BOOKLORE_LIBRARY_ID"] = ""
+
+        assert client.target_library_id == ""
+        assert client._build_books_endpoint(0, 200, True) == "/api/v1/books/page?page=0&size=200"
 
 
 def test_refresh_book_cache_falls_back_when_server_side_library_filter_is_ignored(mock_db):
@@ -1199,24 +1215,23 @@ def test_refresh_book_cache_falls_back_when_server_side_library_filter_is_ignore
         "DATA_DIR": "/tmp/data"
     }):
         client = BookloreClient(database_service=mock_db)
+        mixed_page = [
+            make_list_book("target-1", title="Target Book", library_id="target-lib"),
+            make_list_book("other-1", title="Other Book", library_id="other-lib"),
+        ]
+        client._make_request = MagicMock(side_effect=[MockResponse(mixed_page), MockResponse({"content": mixed_page})])
+        client._get_fresh_token = MagicMock(return_value="token")
+        client._fetch_book_detail = MagicMock(
+            return_value=make_detail("target-1", title="Target Book", filename="target-book.epub", library_id="target-lib")
+        )
 
-    mixed_page = [
-        make_list_book("target-1", title="Target Book", library_id="target-lib"),
-        make_list_book("other-1", title="Other Book", library_id="other-lib"),
-    ]
-    client._make_request = MagicMock(side_effect=[MockResponse(mixed_page), MockResponse({"content": mixed_page})])
-    client._get_fresh_token = MagicMock(return_value="token")
-    client._fetch_book_detail = MagicMock(
-        return_value=make_detail("target-1", title="Target Book", filename="target-book.epub", library_id="target-lib")
-    )
-
-    assert client._refresh_book_cache() is True
-    first_endpoint = client._make_request.call_args_list[0][0][1]
-    second_endpoint = client._make_request.call_args_list[1][0][1]
-    assert first_endpoint == "/api/v1/libraries/target-lib/book"
-    assert second_endpoint == "/api/v1/books/page?page=0&size=200"
-    assert client._server_side_filter_supported is False
-    assert list(client._book_cache.keys()) == ["target-book.epub"]
+        assert client._refresh_book_cache() is True
+        first_endpoint = client._make_request.call_args_list[0][0][1]
+        second_endpoint = client._make_request.call_args_list[1][0][1]
+        assert first_endpoint == "/api/v1/libraries/target-lib/book"
+        assert second_endpoint == "/api/v1/books/page?page=0&size=200"
+        assert client._server_side_filter_supported is False
+        assert list(client._book_cache.keys()) == ["target-book.epub"]
 
 
 def test_upsert_lightweight_entry_preserves_nested_summary_fields(booklore_client):

@@ -20,6 +20,10 @@ The headline is **your stored credentials are now encrypted**: every password, A
 
 ### Fixed
 
+- **The primary admin can reset Grimmory to all libraries.** Clear the optional
+  Grimmory Library ID and save once to remove an old master restriction instead of
+  inheriting it again. The optional Audiobookshelf Library ID resets the same way.
+  (#337)
 - **KOReader sync recovers when two readers share the same book file.** A book already claimed by another reader no longer leaves you stuck — BookBridge verifies your own copy in the background, creates your claim, and lets the next sync through. (#335)
 - **Calibre-Web Automated's built-in KOSync endpoint now works as a relay.** Pick **HTTP Basic (Calibre-Web Automated)** in your KOReader / KoSync integration; classic KOSync authentication stays the default. (#334)
 - **Background transcription retries stay bounded**, and a silent (all-empty) transcription result is retried instead of being cached and reused as a success.

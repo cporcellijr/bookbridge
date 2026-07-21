@@ -539,6 +539,30 @@ class TestMultiUserAuth(unittest.TestCase):
         self.client.post(self._ipath(target.id), data={'STORYTELLER_USER': ''})
         self.assertEqual(self.svc.get_user_credential(target.id, 'STORYTELLER_USER'), '')
 
+    def test_primary_admin_can_clear_master_library_ids(self):
+        """Blank library IDs remove the primary admin's master filters."""
+        admin = self.svc.get_user_by_username('admin')
+        for key in ('ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'):
+            self.svc.set_user_credential(admin.id, key, '7')
+            self.svc.set_setting(key, '7')
+        self._login()
+
+        with patch.dict(os.environ, {
+            'ABS_LIBRARY_ID': '7',
+            'BOOKLORE_LIBRARY_ID': '7',
+        }, clear=False):
+            response = self.client.post(
+                '/account/integrations',
+                data={'ABS_LIBRARY_ID': '', 'BOOKLORE_LIBRARY_ID': ''},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            for key in ('ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'):
+                self.assertEqual(self.svc.get_user_credential(admin.id, key), '')
+                self.assertEqual(self.svc.get_setting(key), '')
+                self.assertEqual(os.environ[key], '')
+            self.assertNotIn(b'inherits master: 7', response.data)
+
     @patch('src.web_server.requests.post')
     def test_user_integration_test_uses_saved_secret_when_form_blank(self, mock_post):
         target = self.svc.create_user('caitlin', 'pw', role='user')

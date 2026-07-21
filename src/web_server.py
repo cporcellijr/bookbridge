@@ -1119,9 +1119,9 @@ def _apply_user_integrations(user_id):
     if primary_admin_id is not None and user_id == primary_admin_id:
         for key in _ENGINE_MIRROR_KEYS:
             val = database_service.get_user_credential(user_id, key)
-            # Only mirror real values: a blank text field would otherwise clobber a
-            # configured global value with '' and defeat os.environ.get(key, default).
-            if val:
+            # Blank optional library IDs deliberately remove the global filter;
+            # other blanks keep the configured value/default they inherit.
+            if val or (val == '' and key in {'ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'}):
                 database_service.set_setting(key, val)
                 os.environ[key] = val
 
