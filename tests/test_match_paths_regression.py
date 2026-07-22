@@ -648,6 +648,45 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(mock_audio_only.call_count, 2)
         self.mock_container.mock_forge_service.start_manual_forge.assert_not_called()
 
+    def test_forge_only_completes_bookfusion_shelf_watch_approval(self):
+        # Forge only saves a real mapping on its BookFusion branch, so a shelf-watch
+        # approval behind it is finished and the watch-shelf copy must move — matching
+        # the batch and forge-match processors. The main forge path creates no mapping
+        # and leaves the suggestion pending, so it deliberately does not move anything.
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "ab-1" else None
+        )
+
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ), patch(
+            "src.web_server._create_or_update_bookfusion_progress_mapping",
+            return_value=(Mock(abs_id="ab-1"), None, None),
+        ):
+            web_server._process_forge_only_queue([
+                {
+                    "abs_id": "ab-1",
+                    "abs_title": "Regression Book",
+                    "audio_source": "ABS",
+                    "audio_source_id": "ab-1",
+                    "ebook_filename": "bookfusion.epub",
+                    "ebook_source": "BookFusion",
+                    "ebook_source_id": "bf-77",
+                }
+            ])
+
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next", "Kobo"
+        )
+        self.mock_container.mock_forge_service.start_manual_forge.assert_not_called()
+
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-forge-1")
     def test_batch_match_add_and_forge_queue_stages_without_storyteller(self, _mock_kosync):
         add_response = self.client.post(

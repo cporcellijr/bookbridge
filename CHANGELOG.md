@@ -15,9 +15,11 @@ All notable changes to BookBridge will be documented in this file.
 - **Matching queues are now consistent and private per user.** Add Book and
   Suggestions share one atomic background processor, including BookOrbit hashes,
   ownership claims, suggestion dismissal, and shelf-watch completion for direct,
-  Forge & Match, audio-only, and ebook-only approvals. If the recorded shelf move
-  fails, the standard source-aware shelf fallback is now attempted; a failed
-  destination add never removes the watch-shelf copy. Queue items are stamped to the
+  Forge & Match, Forge only, audio-only, and ebook-only approvals. If the recorded
+  shelf move fails, the standard source-aware shelf fallback is now attempted; a
+  failed destination add never removes the watch-shelf copy. **A Grimmory shelf move
+  can no longer lose a book:** it previously cleared the old shelf first, so if the
+  new shelf couldn't be written the book ended up on neither. Queue items are stamped to the
   acting user, so another user can no longer view, remove, clear, or process them.
   Pre-upgrade unowned queue items remain available only to the primary admin.
   Deleting a user removes their queued work, and malformed explicit queue owners

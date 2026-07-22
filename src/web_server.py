@@ -5529,6 +5529,11 @@ def _process_forge_only_queue(queue_items, forge_stage_mode=None):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                # This branch saved a mapping, so a shelf-watch approval behind it is
+                # complete and its watch-shelf copy must move — same as the batch and
+                # forge-match processors. The main forge path below creates no mapping
+                # and leaves the suggestion pending, so it deliberately does not.
+                _complete_shelf_watch_approval(_queue_item_shelf_watch_metadata(item))
             continue
         # Forge-only requires audio + a standard ebook (never a Storyteller edition).
         if not audio_source or item.get('storyteller_uuid') or not item.get('ebook_filename'):
