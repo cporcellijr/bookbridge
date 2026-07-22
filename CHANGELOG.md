@@ -25,6 +25,13 @@ All notable changes to BookBridge will be documented in this file.
   Deleting a user removes their queued work, and malformed explicit queue owners
   are discarded on the next queue rewrite.
 
+- **BookBridge can create Grimmory shelves again.** Shelving a book to a shelf that
+  didn't exist yet silently did nothing: the request included icon fields that
+  newer Grimmory builds reject outright, so the shelf was never created and the
+  book was never filed. BookBridge now retries without the icon details, so your
+  configured Kobo and Up Next shelves are created on first use as intended. If your
+  shelves already existed you were unaffected.
+
 ## [7.3.1] - 2026-07-21
 
 ### Security

@@ -176,3 +176,44 @@ def test_move_between_shelves_missing_args(client):
     assert client.move_between_shelves('', 'a', 'b') is False
     assert client.move_between_shelves('x', '', 'b') is False
     assert client.move_between_shelves('x', 'a', '') is False
+
+
+# --------------------------------------------------------------------------
+# shelf creation (Grimmory builds disagree about the create payload)
+# --------------------------------------------------------------------------
+
+def test_create_shelf_keeps_icon_metadata_when_accepted(client):
+    with patch.object(client, '_make_request', return_value=_Resp({'id': 7}, 201)) as req:
+        resp = client._create_shelf('Kobo')
+    assert resp.status_code == 201
+    req.assert_called_once_with(
+        'POST', '/api/v1/shelves', {'name': 'Kobo', 'icon': '📚', 'iconType': 'PRIME_NG'}
+    )
+
+
+def test_create_shelf_retries_without_icon_metadata_on_rejection(client):
+    # Observed live: this Grimmory build answers 400 "Request body is missing or
+    # malformed." whenever `iconType` is present, so shelf auto-creation never
+    # worked. The name-only retry is what every build accepts.
+    responses = [_Resp({'message': 'Request body is missing or malformed.'}, 400),
+                 _Resp({'id': 13, 'name': 'Kobo'}, 201)]
+    with patch.object(client, '_make_request', side_effect=responses) as req:
+        resp = client._create_shelf('Kobo')
+    assert resp.status_code == 201
+    assert [c.args[2] for c in req.call_args_list] == [
+        {'name': 'Kobo', 'icon': '📚', 'iconType': 'PRIME_NG'},
+        {'name': 'Kobo'},
+    ]
+
+
+def test_create_shelf_returns_none_when_every_form_fails(client):
+    with patch.object(client, '_make_request', return_value=_Resp({'message': 'nope'}, 500)) as req:
+        assert client._create_shelf('Kobo') is None
+    assert req.call_count == 2
+
+
+def test_get_or_create_shelf_id_resolves_after_icon_retry(client):
+    responses = [_Resp({'message': 'malformed'}, 400), _Resp({'id': 13, 'name': 'Kobo'}, 201)]
+    with patch.object(client, '_get_shelf_id', return_value=None), \
+         patch.object(client, '_make_request', side_effect=responses):
+        assert client._get_or_create_shelf_id('Kobo') == 13

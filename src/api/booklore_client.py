@@ -2861,27 +2861,48 @@ class BookloreClient:
             return None
         return target_shelf.get("id")
 
+    def _create_shelf(self, shelf_name: str) -> Optional[requests.Response]:
+        """POST a new shelf, degrading to a name-only body if the server rejects
+        the icon metadata.
+
+        Grimmory builds disagree about this payload: some accept `icon`/`iconType`,
+        others reject the entire body with 400 when `iconType` is present. Sending
+        the richer form first keeps the shelf icon where it is supported.
+        """
+        attempts = (
+            {"name": shelf_name, "icon": "📚", "iconType": "PRIME_NG"},
+            {"name": shelf_name},
+        )
+        response = None
+        for index, body in enumerate(attempts):
+            response = self._make_request("POST", "/api/v1/shelves", body)
+            # Use `is None` here: requests.Response.__bool__ returns False for >=400
+            # status codes, which would cause us to mis-report a real 4xx error as
+            # "No response" with the truthiness check.
+            if response is not None and response.status_code in (200, 201):
+                return response
+            if index + 1 < len(attempts):
+                logger.debug(
+                    "Grimmory: shelf create for '%s' rejected (status=%s); retrying without icon metadata",
+                    shelf_name,
+                    response.status_code if response is not None else "No response",
+                )
+
+        logger.error(
+            "❌ Failed to create Grimmory shelf '%s' (status=%s, body=%s)",
+            shelf_name,
+            response.status_code if response is not None else "No response",
+            self._response_text_preview(response, limit=500) if response is not None else "<unavailable>",
+        )
+        return None
+
     def _get_or_create_shelf_id(self, shelf_name):
         shelf_id = self._get_shelf_id(shelf_name)
         if shelf_id:
             return shelf_id
 
-        create_body = {
-            "name": shelf_name,
-            "icon": "📚",
-            "iconType": "PRIME_NG"
-        }
-        create_response = self._make_request("POST", "/api/v1/shelves", create_body)
-        # Use `is None` here: requests.Response.__bool__ returns False for >=400
-        # status codes, which would cause us to mis-report a real 4xx error as
-        # "No response" with the truthiness check.
-        if create_response is None or create_response.status_code not in (200, 201):
-            logger.error(
-                "❌ Failed to create Grimmory shelf '%s' (status=%s, body=%s)",
-                shelf_name,
-                create_response.status_code if create_response is not None else "No response",
-                self._response_text_preview(create_response, limit=500) if create_response is not None else "<unavailable>",
-            )
+        create_response = self._create_shelf(shelf_name)
+        if create_response is None:
             return None
 
         created_payload = self._parse_json_response(
@@ -2893,6 +2914,7 @@ class BookloreClient:
             return target_shelf.get("id")
 
         return self._get_shelf_id(shelf_name)
+
     def add_to_shelf(self, ebook_filename, shelf_name=None):
         """Add a book to a shelf, creating the shelf if it doesn't exist."""
         shelf_name = (
