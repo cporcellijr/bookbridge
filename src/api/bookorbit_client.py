@@ -1081,16 +1081,33 @@ class BookOrbitClient:
                 return col.get("id")
         return None
 
+    @staticmethod
+    def _response_text_preview(response, limit: int = 300) -> str:
+        try:
+            return (response.text or "")[:limit]
+        except Exception:
+            return "<unavailable>"
+
     def ensure_shelf_exists(self, name: str, icon: str = "bookmark") -> Optional[int]:
         cid = self._get_collection_id(name)
         if cid is not None:
             return cid
         resp = self._make_request("POST", "/api/v1/collections", {"name": name, "icon": icon})
-        if resp and resp.status_code in (200, 201):
+        # Use `is not None`: requests.Response.__bool__ is False for >=400 status
+        # codes, so a truthiness check would report a real 4xx as "No response".
+        if resp is not None and resp.status_code in (200, 201):
             data = self._parse_json(resp)
-            if isinstance(data, dict):
+            if isinstance(data, dict) and data.get("id") is not None:
                 return data.get("id")
-        logger.error("BookOrbit: failed to create collection '%s'", name)
+        # Include the status and body: BookOrbit requires the `icon` field here
+        # (a name-only body is a 400), so a future payload-contract change is only
+        # diagnosable if the rejection detail reaches the log.
+        logger.error(
+            "BookOrbit: failed to create collection '%s' (status=%s, body=%s)",
+            name,
+            resp.status_code if resp is not None else "No response",
+            self._response_text_preview(resp) if resp is not None else "<unavailable>",
+        )
         return None
 
     def list_books_on_shelf(self, shelf_name: str) -> list:

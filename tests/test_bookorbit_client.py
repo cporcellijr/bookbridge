@@ -184,6 +184,40 @@ def test_get_collection_id_case_insensitive(client):
         assert client._get_collection_id("Missing") is None
 
 
+def test_ensure_shelf_exists_reuses_existing_collection(client):
+    with patch.object(client, '_get_collection_id', return_value=5), \
+         patch.object(client, '_make_request') as req:
+        assert client.ensure_shelf_exists("Kobo") == 5
+    req.assert_not_called()
+
+
+def test_ensure_shelf_exists_creates_with_icon_field(client):
+    # Verified live: BookOrbit REJECTS a name-only body with 400 and requires
+    # `icon`, the mirror image of Grimmory (which rejects `iconType`). Neither
+    # client's payload may be "harmonised" with the other.
+    captured = {}
+    with patch.object(client, '_get_collection_id', return_value=None), \
+         patch.object(client, '_make_request',
+                      side_effect=lambda m, e, p=None: captured.update(endpoint=e, payload=p)
+                      or _Resp({"id": 7}, status_code=201)):
+        assert client.ensure_shelf_exists("Kobo") == 7
+    assert captured["endpoint"] == "/api/v1/collections"
+    assert captured["payload"] == {"name": "Kobo", "icon": "bookmark"}
+
+
+def test_ensure_shelf_exists_logs_status_and_body_on_failure(client, caplog):
+    resp = _Resp(status_code=400)
+    resp.text = '{"message":"Request body is missing or malformed."}'
+    with patch.object(client, '_get_collection_id', return_value=None), \
+         patch.object(client, '_make_request', return_value=resp), \
+         caplog.at_level("ERROR"):
+        assert client.ensure_shelf_exists("Kobo") is None
+    # A bare "failed to create collection" is undiagnosable; the rejection detail
+    # is what makes a future payload-contract change visible.
+    assert "status=400" in caplog.text
+    assert "missing or malformed" in caplog.text
+
+
 def test_add_to_shelf_posts_book_id(client):
     captured = {}
     with patch.object(client, 'ensure_shelf_exists', return_value=5), \
