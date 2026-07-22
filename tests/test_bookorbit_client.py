@@ -218,6 +218,26 @@ def test_ensure_shelf_exists_logs_status_and_body_on_failure(client, caplog):
     assert "missing or malformed" in caplog.text
 
 
+def test_move_between_shelves_treats_case_variant_names_as_one_shelf(client):
+    # `_get_collection_id` resolves names case-insensitively, so "Kobo" and "kobo"
+    # are the SAME collection. A case-sensitive equality guard fell through to
+    # add-then-remove against that single collection, which left the book on
+    # NEITHER shelf while still returning True.
+    calls = []
+
+    def _req(method, endpoint, payload=None):
+        calls.append((method, endpoint))
+        return _Resp({"id": 2}, status_code=200)
+
+    with patch.object(client, 'get_all_shelves', return_value=[{"id": 2, "name": "Kobo"}]), \
+         patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
+         patch.object(client, '_make_request', side_effect=_req):
+        assert client.move_between_shelves("B.epub", "Kobo", "kobo") is True
+        assert client.move_between_shelves("B.epub", " Kobo ", "Kobo") is True
+    # The DELETE is the damaging call; neither leg may run for a same-shelf move.
+    assert calls == []
+
+
 def test_add_to_shelf_posts_book_id(client):
     captured = {}
     with patch.object(client, 'ensure_shelf_exists', return_value=5), \

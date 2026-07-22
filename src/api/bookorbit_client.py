@@ -1072,12 +1072,22 @@ class BookOrbitClient:
         data = self._parse_json(resp)
         return data if isinstance(data, list) else []
 
+    @staticmethod
+    def _shelf_key(name: str) -> str:
+        """Collection-name identity as BookOrbit resolves it.
+
+        Every name comparison must go through this: BookOrbit matches collections
+        case-insensitively, so any caller that compares raw names can decide two
+        spellings are different shelves while the server treats them as one.
+        """
+        return (name or "").strip().lower()
+
     def _get_collection_id(self, name: str) -> Optional[int]:
         if not name:
             return None
-        target = name.strip().lower()
+        target = self._shelf_key(name)
         for col in self.get_all_shelves():
-            if isinstance(col, dict) and (col.get("name") or "").strip().lower() == target:
+            if isinstance(col, dict) and self._shelf_key(col.get("name")) == target:
                 return col.get("id")
         return None
 
@@ -1194,7 +1204,10 @@ class BookOrbitClient:
     def move_between_shelves(self, ebook_filename: str, from_shelf: str, to_shelf: str) -> bool:
         if not ebook_filename or not from_shelf or not to_shelf:
             return False
-        if from_shelf == to_shelf:
+        # Compare on the resolved key, not the raw string: "Kobo" and "kobo" are one
+        # collection to BookOrbit, so a case-sensitive guard fell through to
+        # add-then-remove against that single collection and unshelved the book.
+        if self._shelf_key(from_shelf) == self._shelf_key(to_shelf):
             return True
         book_id = self._resolve_book_id_for_filename(ebook_filename)
         if book_id is None:
