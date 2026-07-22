@@ -5336,25 +5336,6 @@ def match():
 
         return redirect(url_for('index'))
 
-    search = request.args.get('search', '').strip().lower()
-    audiobooks, ebooks, storyteller_books = [], [], []
-    if search:
-        audiobooks = _search_audiobooks_with_fallback(search)
-
-        # Use new search method
-        ebooks = _search_ebooks_with_fallback(search)
-        ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
-
-        # Search Storyteller
-        if uc().storyteller_client.is_configured():
-            try:
-                storyteller_books = uc().storyteller_client.search_books(search)
-            except Exception as e:
-                logger.warning(f"⚠️ Storyteller search failed in match route: {e}")
-
-    return render_template('match.html', audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books, search=search)
-
-
 def _create_ebook_only_mapping_from_queue_item(item):
     """Create an ebook-only / storyteller-only mapping (no audio) from a queue item.
 

@@ -1554,14 +1554,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('class="book-grid collapsible-book-grid" id="not-started-grid"', html)
         self.assertNotIn('No books syncing yet', html)
 
-    def test_match_template_has_submit_feedback_hooks(self):
-        html = self._read_template_source('match.html')
+    def test_match_get_redirects_to_add_book_with_search(self):
+        response = self.client.get('/match?search=reader')
 
-        self.assertIn('id="submitFeedback"', html)
-        self.assertIn('data-working-label="Creating mapping..."', html)
-        self.assertIn('data-modal-label="Opening forge options..."', html)
-        self.assertIn('previewMatchSubmit(', html)
-        self.assertIn('mappingForm.requestSubmit(forgeBtn);', html)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith('/add-book?search=reader'))
 
     def test_kosync_document_review_lives_on_add_update_book(self):
         index_html = self._read_template_source('index.html')
@@ -1654,13 +1651,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         panel = self._read_template_source('_match_queue_panel.html')
         self.assertIn('id="queueFeedback"', panel)
 
-    def test_forge_template_has_submit_feedback_hooks(self):
-        html = self._read_template_source('forge.html')
+    def test_forge_get_redirects_to_add_book(self):
+        response = self.client.get('/forge')
 
-        self.assertIn('previewForgeState(', html)
-        self.assertIn('Opening forge options...', html)
-        self.assertIn('forgeRequestInFlight = true;', html)
-        self.assertIn("btn.textContent = 'Forging edition...';", html)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith('/add-book'))
 
     def test_clear_progress_endpoint_clean_di(self):
         """Test clear progress endpoint with clean dependency injection."""
