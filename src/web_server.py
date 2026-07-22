@@ -6085,6 +6085,111 @@ def _process_forge_match_queue(queue_items):
             database_service.dismiss_suggestion(kosync_doc_id)
 
 
+def _queue_item_from_match_form(clients) -> "dict | None":
+    """Build one canonical match-queue item from the submitted selection."""
+    submitted_key = (request.form.get('audiobook_id') or '').strip()
+    audio_source = (
+        request.form.get('audio_source')
+        or _audio_source_from_bridge_key(submitted_key)
+    ).strip() or None
+    audio_source_id = (
+        request.form.get('audio_source_id') or submitted_key or ''
+    ).strip() or None
+    if audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
+        prefix = f"{audio_source.lower()}:"
+        if audio_source_id.lower().startswith(prefix):
+            audio_source_id = audio_source_id.split(':', 1)[1].strip() or None
+
+    audio_title = (request.form.get('audio_title') or '').strip() or None
+    audio_cover_url = (request.form.get('audio_cover_url') or '').strip() or None
+    audio_provider_book_id = (
+        request.form.get('audio_provider_book_id') or audio_source_id or ''
+    ).strip() or None
+    audio_provider_file_id = (
+        request.form.get('audio_provider_file_id') or ''
+    ).strip() or None
+    audio_duration = _parse_audio_duration(request.form.get('audio_duration'))
+    ebook_filename = request.form.get('ebook_filename', '')
+    ebook_display_name = request.form.get('ebook_display_name', ebook_filename)
+    ebook_source = (
+        request.form.get('ebook_source') or request.form.get('source_type') or ''
+    ).strip() or None
+    ebook_source_id = (
+        request.form.get('ebook_source_id') or request.form.get('source_id') or ''
+    ).strip() or None
+    ebook_source_path = (
+        request.form.get('ebook_source_path') or request.form.get('source_path') or ''
+    ).strip() or None
+    storyteller_uuid = request.form.get('storyteller_uuid', '') or ''
+    audio_only = (request.form.get('audio_only') or '').strip().lower() in {
+        'true', '1', 'yes', 'on'
+    }
+
+    bridge_key = None
+    if audio_source == 'ABS' and audio_source_id:
+        selected_ab = None
+        if not audio_title or audio_duration is None:
+            audiobooks = get_audiobooks_conditionally() or []
+            selected_ab = next(
+                (
+                    audiobook for audiobook in audiobooks
+                    if str(audiobook.get('id')) == audio_source_id
+                ),
+                None,
+            )
+        bridge_key = _build_bridge_key(audio_source, audio_source_id)
+        audio_title = audio_title or (
+            manager.get_abs_title(selected_ab) if selected_ab else audio_source_id
+        )
+        if audio_duration is None and selected_ab:
+            audio_duration = manager.get_duration(selected_ab)
+        audio_cover_url = audio_cover_url or (
+            f"{clients.abs_client.base_url}/api/items/{audio_source_id}/cover"
+            f"?token={clients.abs_client.token}"
+        )
+    elif audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
+        bridge_key = _build_bridge_key(audio_source, audio_source_id)
+        audio_title = audio_title or (
+            f"{_audio_source_display_name(audio_source)} {audio_source_id}"
+        )
+    elif not audio_source and (ebook_filename or storyteller_uuid):
+        ebook_key = (storyteller_uuid or ebook_filename).strip()
+        if ebook_key:
+            bridge_key = f"ebook:{ebook_key}"
+            audio_source_id = None
+            audio_title = ebook_display_name or (
+                Path(ebook_filename).stem if ebook_filename else 'Ebook'
+            )
+            audio_duration = None
+            audio_cover_url = None
+            audio_provider_book_id = None
+            audio_provider_file_id = None
+
+    if not bridge_key or not (ebook_filename or storyteller_uuid or audio_only):
+        return None
+    return {
+        'bridge_key': bridge_key,
+        'abs_id': bridge_key,
+        'audio_source': audio_source,
+        'audio_source_id': audio_source_id,
+        'audio_title': audio_title,
+        'abs_title': audio_title,
+        'audio_duration': audio_duration,
+        'duration': audio_duration,
+        'audio_cover_url': audio_cover_url,
+        'cover_url': audio_cover_url,
+        'audio_provider_book_id': audio_provider_book_id,
+        'audio_provider_file_id': audio_provider_file_id,
+        'ebook_filename': ebook_filename,
+        'ebook_display_name': ebook_display_name,
+        'ebook_source': ebook_source,
+        'ebook_source_id': ebook_source_id,
+        'ebook_source_path': ebook_source_path,
+        'storyteller_uuid': storyteller_uuid,
+        'audio_only': audio_only and not (ebook_filename or storyteller_uuid),
+    }
+
+
 
 def _add_book_view():
     """Render and handle the unified queue-based Add Book view."""
@@ -6092,92 +6197,9 @@ def _add_book_view():
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'add_to_queue':
-            abs_id = request.form.get('audiobook_id')
-            audio_source = (request.form.get('audio_source') or ('ABS' if abs_id else '')).strip() or None
-            audio_source_id = (request.form.get('audio_source_id') or abs_id or '').strip() or None
-            audio_title = (request.form.get('audio_title') or '').strip() or None
-            audio_cover_url = (request.form.get('audio_cover_url') or '').strip() or None
-            audio_provider_book_id = (request.form.get('audio_provider_book_id') or audio_source_id or '').strip() or None
-            audio_provider_file_id = (request.form.get('audio_provider_file_id') or '').strip() or None
-            audio_duration = _parse_audio_duration(request.form.get('audio_duration'))
-            ebook_filename = request.form.get('ebook_filename', '')
-            ebook_display_name = request.form.get('ebook_display_name', ebook_filename)
-            ebook_source = (request.form.get('ebook_source') or request.form.get('source_type') or '').strip() or None
-            ebook_source_id = (request.form.get('ebook_source_id') or request.form.get('source_id') or '').strip() or None
-            ebook_source_path = (request.form.get('ebook_source_path') or request.form.get('source_path') or '').strip() or None
-            storyteller_uuid = request.form.get('storyteller_uuid', '')
-            audio_only = (request.form.get('audio_only') or '').strip().lower() in (
-                'true', '1', 'yes', 'on'
-            )
-            selected_ab = None
-            if audio_source == 'ABS' and abs_id and (not audio_title or audio_duration is None):
-                # Only re-resolve against ABS when the submitted card didn't already
-                # carry a title/duration. get_audiobooks_conditionally() returns a
-                # differently-shaped list than the AudioResult records the card was
-                # rendered from, so this lookup is a best-effort enrichment, never a
-                # hard requirement for queuing (see below).
-                audiobooks = get_audiobooks_conditionally()
-                selected_ab = next((ab for ab in audiobooks if ab['id'] == abs_id), None)
-            selected_audio = None
-            if audio_source == 'ABS' and abs_id:
-                # Trust the already-submitted title/duration/cover from the rendered
-                # card first; a prior version hard-required re-resolving `abs_id`
-                # here and silently dropped the whole submission (no queue item, no
-                # error) whenever that lookup missed -- e.g. every audio-only
-                # submission with no ebook to otherwise validate the request.
-                selected_audio = {
-                    'bridge_key': abs_id,
-                    'audio_source': 'ABS',
-                    'audio_source_id': abs_id,
-                    'audio_title': audio_title or (manager.get_abs_title(selected_ab) if selected_ab else abs_id),
-                    'audio_duration': audio_duration if audio_duration is not None else (
-                        manager.get_duration(selected_ab) if selected_ab else None
-                    ),
-                    'audio_cover_url': audio_cover_url or f"{clients.abs_client.base_url}/api/items/{abs_id}/cover?token={clients.abs_client.token}",
-                    'audio_provider_book_id': audio_provider_book_id or abs_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-            elif audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
-                selected_audio = {
-                    'bridge_key': _build_bridge_key(audio_source, audio_source_id),
-                    'audio_source': audio_source,
-                    'audio_source_id': audio_source_id,
-                    'audio_title': audio_title or f"{_audio_source_display_name(audio_source)} {audio_source_id}",
-                    'audio_duration': audio_duration,
-                    'audio_cover_url': audio_cover_url,
-                    'audio_provider_book_id': audio_provider_book_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-            elif not audio_source and (ebook_filename or storyteller_uuid):
-                # No audio selected: ebook-only / storyteller-only item (match only).
-                _eb_key = (storyteller_uuid or ebook_filename or '').strip()
-                if _eb_key:
-                    selected_audio = {
-                        'bridge_key': f"ebook:{_eb_key}",
-                        'audio_source': None,
-                        'audio_source_id': None,
-                        'audio_title': ebook_display_name or (Path(ebook_filename).stem if ebook_filename else 'Ebook'),
-                        'audio_duration': None,
-                        'audio_cover_url': None,
-                        'audio_provider_book_id': None,
-                        'audio_provider_file_id': None,
-                    }
-
-            if selected_audio and (ebook_filename or storyteller_uuid or audio_only):
-                _match_queue_add({
-                    **selected_audio,
-                    "abs_id": selected_audio['bridge_key'],
-                    "abs_title": selected_audio['audio_title'],
-                    "ebook_filename": ebook_filename,
-                    "ebook_display_name": ebook_display_name,
-                    "ebook_source": ebook_source,
-                    "ebook_source_id": ebook_source_id,
-                    "ebook_source_path": ebook_source_path,
-                    "storyteller_uuid": storyteller_uuid,
-                    "audio_only": audio_only and not (ebook_filename or storyteller_uuid),
-                    "duration": selected_audio['audio_duration'],
-                    "cover_url": selected_audio['audio_cover_url'],
-                })
+            queue_item = _queue_item_from_match_form(clients)
+            if queue_item:
+                _match_queue_add(queue_item)
             # Clear the search box + results after queueing so the user starts the
             # next book from a clean search (drop the preserved `search` term).
             return redirect(url_for('add_book'))
@@ -6864,77 +6886,9 @@ def suggestions_page():
             return redirect(url_for('suggestions'))
 
         elif action == 'add_to_queue':
-            bridge_key = (request.form.get('audiobook_id') or '').strip()
-            audio_source = (
-                request.form.get('audio_source')
-                or _audio_source_from_bridge_key(bridge_key)
-            ).strip() or None
-            audio_source_id = (request.form.get('audio_source_id') or bridge_key).strip() or None
-            audio_title = (request.form.get('audio_title') or '').strip() or None
-            audio_cover_url = (request.form.get('audio_cover_url') or '').strip() or None
-            audio_provider_book_id = (request.form.get('audio_provider_book_id') or audio_source_id or '').strip() or None
-            audio_provider_file_id = (request.form.get('audio_provider_file_id') or '').strip() or None
-            audio_duration = _parse_audio_duration(request.form.get('audio_duration'))
-            ebook_filename = request.form.get('ebook_filename', '')
-            ebook_display_name = request.form.get('ebook_display_name', ebook_filename)
-            ebook_source = (request.form.get('ebook_source') or '').strip() or None
-            ebook_source_id = (request.form.get('ebook_source_id') or '').strip() or None
-            ebook_source_path = (request.form.get('ebook_source_path') or request.form.get('source_path') or '').strip() or None
-            storyteller_uuid = request.form.get('storyteller_uuid', '')
-            selected_audio = None
-            if audio_source == 'ABS' and audio_source_id:
-                selected_ab = None
-                if not audio_title or audio_duration is None:
-                    abs_client = uc().abs_client
-                    abs_items = abs_client.get_all_audiobooks()
-                    selected_ab = next((ab for ab in abs_items if str(ab.get('id')) == audio_source_id), None)
-                else:
-                    abs_client = uc().abs_client
-
-                resolved_title = audio_title or (manager.get_abs_title(selected_ab) if selected_ab else '') or audio_source_id
-                resolved_duration = audio_duration if audio_duration is not None else (
-                    manager.get_duration(selected_ab) if selected_ab else None
-                )
-                resolved_cover = (
-                    audio_cover_url
-                    or f"{abs_client.base_url}/api/items/{audio_source_id}/cover?token={abs_client.token}"
-                )
-                selected_audio = {
-                    'bridge_key': bridge_key or audio_source_id,
-                    'audio_source': 'ABS',
-                    'audio_source_id': audio_source_id,
-                    'audio_title': resolved_title,
-                    'audio_duration': resolved_duration,
-                    'audio_cover_url': resolved_cover,
-                    'audio_provider_book_id': audio_provider_book_id or audio_source_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-            elif audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
-                selected_audio = {
-                    'bridge_key': bridge_key or _build_bridge_key(audio_source, audio_source_id),
-                    'audio_source': audio_source,
-                    'audio_source_id': audio_source_id,
-                    'audio_title': audio_title or f"{_audio_source_display_name(audio_source)} {audio_source_id}",
-                    'audio_duration': audio_duration,
-                    'audio_cover_url': audio_cover_url,
-                    'audio_provider_book_id': audio_provider_book_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-
-            if selected_audio and (ebook_filename or storyteller_uuid):
-                _match_queue_add({
-                    **selected_audio,
-                    "abs_id": selected_audio['bridge_key'],
-                    "abs_title": selected_audio['audio_title'],
-                    "ebook_filename": ebook_filename,
-                    "ebook_display_name": ebook_display_name,
-                    "ebook_source": ebook_source,
-                    "ebook_source_id": ebook_source_id,
-                    "ebook_source_path": ebook_source_path,
-                    "storyteller_uuid": storyteller_uuid,
-                    "duration": selected_audio['audio_duration'],
-                    "cover_url": selected_audio['audio_cover_url'],
-                })
+            queue_item = _queue_item_from_match_form(uc())
+            if queue_item:
+                _match_queue_add(queue_item)
             return _match_queue_response()
 
         elif action == 'remove_from_queue':

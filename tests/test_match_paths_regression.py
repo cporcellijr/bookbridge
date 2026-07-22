@@ -846,6 +846,7 @@ class TestMatchPathsRegression(unittest.TestCase):
     def test_suggestions_queue_add_clear_xhr_returns_panel_fragment(self):
         # An XHR add/clear returns the re-rendered queue panel fragment (200) instead of a
         # redirect, so the page swaps it in place without reloading (preserving scroll).
+        self.mock_container.mock_abs_client.get_all_audiobooks.reset_mock()
         add_response = self.client.post(
             "/suggestions",
             data={
@@ -862,7 +863,11 @@ class TestMatchPathsRegression(unittest.TestCase):
         body = add_response.get_data(as_text=True)
         self.assertIn("Regression Book", body)
         self.assertIn("Match All", body)
-        self.assertEqual(len(web_server._load_match_queue()), 1)
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["abs_title"], "Regression Book")
+        self.assertEqual(queue[0]["duration"], 3600)
+        self.mock_container.mock_abs_client.get_all_audiobooks.assert_called_once_with()
 
         clear_response = self.client.post(
             "/suggestions",
@@ -872,6 +877,39 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(clear_response.status_code, 200)
         self.assertIn("Queue is empty", clear_response.get_data(as_text=True))
         self.assertEqual(web_server._load_match_queue(), [])
+
+    def test_match_form_aliases_and_ebook_only_work_across_routes(self):
+        cases = (
+            (51, "/add-book", {
+                "audiobook_id": "ab-alias",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-alias",
+                "audio_title": "Alias Audio",
+                "audio_duration": "90",
+                "ebook_filename": "alias.epub",
+                "source_type": "BookOrbit",
+                "source_id": "bo-alias",
+                "source_path": "/books/alias.epub",
+            }, "ab-alias"),
+            (52, "/suggestions", {
+                "ebook_filename": "ebook-only.epub",
+                "ebook_display_name": "Ebook Only",
+                "source_type": "BookLore",
+                "source_id": "bl-ebook-only",
+                "source_path": "/books/ebook-only.epub",
+            }, "ebook:ebook-only.epub"),
+        )
+        for user_id, endpoint, form_data, expected_id in cases:
+            with self.subTest(endpoint=endpoint):
+                self._post_as_user(
+                    user_id, endpoint, {"action": "add_to_queue", **form_data}
+                )
+                item = self._load_queue_as_user(user_id)[0]
+                self.assertEqual(item["abs_id"], expected_id)
+                self.assertEqual(item["ebook_source"], form_data["source_type"])
+                self.assertEqual(item["ebook_source_id"], form_data["source_id"])
+                self.assertEqual(item["ebook_source_path"], form_data["source_path"])
+        self.assertIsNone(self._load_queue_as_user(52)[0]["audio_source"])
 
     def test_suggestions_add_many_to_queue_bulk(self):
         # Bulk add posts suggestion keys; the server builds each queue item from its
@@ -1169,7 +1207,6 @@ class TestMatchPathsRegression(unittest.TestCase):
             {
                 "action": "add_to_queue",
                 "audiobook_id": "booklore:42",
-                "audio_source": "BookLore",
                 "audio_source_id": "42",
                 "audio_title": "BookLore Regression",
                 "audio_cover_url": "/api/booklore/audiobook-cover/42",
