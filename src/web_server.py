@@ -6594,7 +6594,16 @@ def _read_match_queue_unlocked() -> list:
     items = raw.get('items', []) if isinstance(raw, dict) else raw
     if not isinstance(items, list):
         return []
-    return [item for item in items if isinstance(item, dict)]
+    valid_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        owner_id = item.get('user_id')
+        if owner_id is not None and _normalize_match_queue_user_id(owner_id) is None:
+            logger.warning("Discarding match queue item with malformed owner id")
+            continue
+        valid_items.append(item)
+    return valid_items
 
 
 def _write_match_queue_unlocked(items: list) -> None:

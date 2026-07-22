@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import shutil
@@ -1263,6 +1264,45 @@ class TestMultiUserAuth(unittest.TestCase):
         reg = self.svc.create_user("queue-reg", "pw", role="user")
         items = [
             {"bridge_key": "legacy", "abs_id": "legacy"},
+            {"bridge_key": "legacy-null", "abs_id": "legacy-null", "user_id": None},
+            {"bridge_key": "admin", "abs_id": "admin", "user_id": admin.id},
+            {"bridge_key": "regular", "abs_id": "regular", "user_id": reg.id},
+            {"bridge_key": "malformed", "abs_id": "malformed", "user_id": "bad"},
+        ]
+
+        with patch.object(web_server, "DATA_DIR", Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            with patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["legacy", "legacy-null", "admin"],
+                )
+            with patch.object(web_server, "get_current_user_id", return_value=reg.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["regular"],
+                )
+            with patch.object(web_server, "get_current_user_id", return_value=None):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["legacy", "legacy-null"],
+                )
+            with patch.object(self.svc, "_default_user_id", side_effect=RuntimeError("db unavailable")), \
+                 patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["admin"],
+                )
+
+    def test_match_queue_rewrite_purges_malformed_owner_and_preserves_other_user(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username("admin")
+        reg = self.svc.create_user("queue-reg", "pw", role="user")
+        items = [
+            {"bridge_key": "legacy", "abs_id": "legacy"},
             {"bridge_key": "admin", "abs_id": "admin", "user_id": admin.id},
             {"bridge_key": "regular", "abs_id": "regular", "user_id": reg.id},
             {"bridge_key": "malformed", "abs_id": "malformed", "user_id": "bad"},
@@ -1277,22 +1317,11 @@ class TestMultiUserAuth(unittest.TestCase):
                     [item["bridge_key"] for item in web_server._load_match_queue()],
                     ["legacy", "admin"],
                 )
-            with patch.object(web_server, "get_current_user_id", return_value=reg.id):
-                self.assertEqual(
-                    [item["bridge_key"] for item in web_server._load_match_queue()],
-                    ["regular"],
-                )
-            with patch.object(web_server, "get_current_user_id", return_value=None):
-                self.assertEqual(
-                    [item["bridge_key"] for item in web_server._load_match_queue()],
-                    ["legacy"],
-                )
-            with patch.object(self.svc, "_default_user_id", side_effect=RuntimeError("db unavailable")), \
-                 patch.object(web_server, "get_current_user_id", return_value=admin.id):
-                self.assertEqual(
-                    [item["bridge_key"] for item in web_server._load_match_queue()],
-                    ["admin"],
-                )
+                web_server._match_queue_clear()
+
+            queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
+            persisted = json.loads(queue_file.read_text(encoding="utf-8"))["items"]
+            self.assertEqual([item["bridge_key"] for item in persisted], ["regular"])
 
     def test_match_queue_mutations_preserve_other_users(self):
         import src.web_server as web_server
