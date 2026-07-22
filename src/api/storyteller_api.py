@@ -1056,7 +1056,3 @@ class StorytellerAPIClient:
         }
         filetype = mime_map.get(ext) or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
         return self._tus_upload_file(file_path, book_uuid, filetype=filetype, relative_path=relative_path)
-
-
-def create_storyteller_client():
-    return StorytellerAPIClient()

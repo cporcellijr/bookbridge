@@ -184,6 +184,60 @@ def test_get_collection_id_case_insensitive(client):
         assert client._get_collection_id("Missing") is None
 
 
+def test_ensure_shelf_exists_reuses_existing_collection(client):
+    with patch.object(client, '_get_collection_id', return_value=5), \
+         patch.object(client, '_make_request') as req:
+        assert client.ensure_shelf_exists("Kobo") == 5
+    req.assert_not_called()
+
+
+def test_ensure_shelf_exists_creates_with_icon_field(client):
+    # Verified live: BookOrbit REJECTS a name-only body with 400 and requires
+    # `icon`, the mirror image of Grimmory (which rejects `iconType`). Neither
+    # client's payload may be "harmonised" with the other.
+    captured = {}
+    with patch.object(client, '_get_collection_id', return_value=None), \
+         patch.object(client, '_make_request',
+                      side_effect=lambda m, e, p=None: captured.update(endpoint=e, payload=p)
+                      or _Resp({"id": 7}, status_code=201)):
+        assert client.ensure_shelf_exists("Kobo") == 7
+    assert captured["endpoint"] == "/api/v1/collections"
+    assert captured["payload"] == {"name": "Kobo", "icon": "bookmark"}
+
+
+def test_ensure_shelf_exists_logs_status_and_body_on_failure(client, caplog):
+    resp = _Resp(status_code=400)
+    resp.text = '{"message":"Request body is missing or malformed."}'
+    with patch.object(client, '_get_collection_id', return_value=None), \
+         patch.object(client, '_make_request', return_value=resp), \
+         caplog.at_level("ERROR"):
+        assert client.ensure_shelf_exists("Kobo") is None
+    # A bare "failed to create collection" is undiagnosable; the rejection detail
+    # is what makes a future payload-contract change visible.
+    assert "status=400" in caplog.text
+    assert "missing or malformed" in caplog.text
+
+
+def test_move_between_shelves_treats_case_variant_names_as_one_shelf(client):
+    # `_get_collection_id` resolves names case-insensitively, so "Kobo" and "kobo"
+    # are the SAME collection. A case-sensitive equality guard fell through to
+    # add-then-remove against that single collection, which left the book on
+    # NEITHER shelf while still returning True.
+    calls = []
+
+    def _req(method, endpoint, payload=None):
+        calls.append((method, endpoint))
+        return _Resp({"id": 2}, status_code=200)
+
+    with patch.object(client, 'get_all_shelves', return_value=[{"id": 2, "name": "Kobo"}]), \
+         patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
+         patch.object(client, '_make_request', side_effect=_req):
+        assert client.move_between_shelves("B.epub", "Kobo", "kobo") is True
+        assert client.move_between_shelves("B.epub", " Kobo ", "Kobo") is True
+    # The DELETE is the damaging call; neither leg may run for a same-shelf move.
+    assert calls == []
+
+
 def test_add_to_shelf_posts_book_id(client):
     captured = {}
     with patch.object(client, 'ensure_shelf_exists', return_value=5), \
@@ -198,13 +252,34 @@ def test_add_to_shelf_posts_book_id(client):
 def test_move_between_shelves_adds_then_removes(client):
     calls = []
     with patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
-         patch.object(client, 'ensure_shelf_exists', return_value=9), \
-         patch.object(client, '_get_collection_id', return_value=3), \
-         patch.object(client, '_make_request', side_effect=lambda m, e, p=None: calls.append((m, e, p)) or _Resp(status_code=204)):
+         patch.object(client, 'add_book_id_to_shelf', side_effect=lambda *args: calls.append(args) or True), \
+         patch.object(client, 'remove_book_id_from_shelf', side_effect=lambda *args: calls.append(args) or True):
         ok = client.move_between_shelves("Book.epub", "Up Next", "Kobo")
     assert ok is True
-    assert ("POST", "/api/v1/collections/9/books", {"bookIds": [42]}) in calls
-    assert ("DELETE", "/api/v1/collections/3/books", {"bookIds": [42]}) in calls
+    assert calls == [(42, "Kobo"), (42, "Up Next")]
+
+
+def test_move_between_shelves_same_shelf_is_a_noop(client):
+    with patch.object(client, '_resolve_book_id_for_filename') as resolve:
+        assert client.move_between_shelves("Book.epub", "Kobo", "Kobo") is True
+    resolve.assert_not_called()
+
+
+def test_move_between_shelves_stops_when_destination_add_fails(client):
+    with patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
+         patch.object(client, 'add_book_id_to_shelf', return_value=False) as add, \
+         patch.object(client, 'remove_book_id_from_shelf') as remove:
+        assert client.move_between_shelves("Book.epub", "Up Next", "Kobo") is False
+    add.assert_called_once_with(42, "Kobo")
+    remove.assert_not_called()
+
+
+def test_move_between_shelves_reports_source_remove_failure(client):
+    with patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
+         patch.object(client, 'add_book_id_to_shelf', return_value=True), \
+         patch.object(client, 'remove_book_id_from_shelf', return_value=False) as remove:
+        assert client.move_between_shelves("Book.epub", "Up Next", "Kobo") is False
+    remove.assert_called_once_with(42, "Up Next")
 
 
 # ---- reading sessions ----

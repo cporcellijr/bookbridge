@@ -385,8 +385,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         from src import web_server
 
         for placeholder in ("None", "none", "null", "NULL"):
-            with self.assertLogs(ks.logger, level='WARNING') as captured, \
-                 patch.object(ks, '_spawn_user_scoped_thread') as mock_spawn:
+            with self.assertLogs(ks.logger, level='WARNING') as captured:
                 response = self.client.get(
                     f'/syncs/progress/{placeholder}',
                     headers=self.auth_headers
@@ -397,7 +396,6 @@ class TestKosyncEndpoints(unittest.TestCase):
                 f"Invalid or placeholder document ID requested: '{placeholder}'",
                 "\n".join(captured.output),
             )
-            mock_spawn.assert_not_called()
             self.assertIsNone(web_server.database_service.get_kosync_document(placeholder))
 
 

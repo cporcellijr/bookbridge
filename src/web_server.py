@@ -1381,12 +1381,15 @@ def _apply_user_admin_action(form):
             elif target.role == 'admin' and _active_admin_count() <= 1:
                 error = "Can't delete the last active admin"
             else:
-                database_service.delete_user(uid)
-                try:
-                    container.user_client_registry().invalidate(uid)
-                except Exception:
-                    pass
-                message = f"Deleted '{target.username}'"
+                if database_service.delete_user(uid):
+                    _clear_match_queue_for_user_id(uid)
+                    try:
+                        container.user_client_registry().invalidate(uid)
+                    except Exception:
+                        pass
+                    message = f"Deleted '{target.username}'"
+                else:
+                    error = "User not found"
     except Exception as e:
         error = f"Action failed: {e}"
     return message, error
@@ -1818,13 +1821,19 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=Non
     use_id = is_bookorbit and ebook_source_id and hasattr(client, "add_book_id_to_shelf")
     try:
         if use_id:
-            client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
+            added = client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
         else:
-            client.add_to_shelf(shelf_filename, kobo_shelf)
+            added = client.add_to_shelf(shelf_filename, kobo_shelf)
     except Exception as e:
         logger.warning(
             f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}"
         )
+        return
+    if not added:
+        logger.warning(
+            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}'"
+        )
+        return
 
     if watch_enabled and watch_shelf and watch_shelf != kobo_shelf:
         try:
@@ -1836,6 +1845,23 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=Non
             logger.warning(
                 f"⚠️ Failed to remove '{sanitize_log_data(shelf_filename)}' from watch shelf '{watch_shelf}': {e}"
             )
+
+
+def _shelve_saved_ebook(book) -> None:
+    """Shelve a saved mapping's original ebook through its owning library."""
+    if not book:
+        return
+    shelf_filename = (
+        getattr(book, 'original_ebook_filename', None)
+        or getattr(book, 'ebook_filename', None)
+    )
+    if not shelf_filename or _is_storyteller_artifact_filename(shelf_filename):
+        return
+    _shelve_matched_ebook(
+        shelf_filename,
+        getattr(book, 'ebook_source', None),
+        getattr(book, 'ebook_source_id', None),
+    )
 
 
 def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original_ebook_filename=None):
@@ -2173,17 +2199,6 @@ def _upsert_storyteller_mapping(
             uc().storyteller_client.add_to_collection_by_uuid(selected_storyteller_uuid)
         except Exception as st_err:
             logger.warning(f"Failed to add Storyteller UUID to collection: {st_err}")
-
-    shelf_filename = saved_book.original_ebook_filename or saved_book.ebook_filename
-    if (
-        shelf_filename
-        and not _is_storyteller_artifact_filename(shelf_filename)
-        and uc().booklore_client.is_configured()
-    ):
-        try:
-            uc().booklore_client.add_to_shelf(shelf_filename)
-        except Exception as bl_err:
-            logger.warning(f"Failed to add Grimmory shelf entry for '{shelf_filename}': {bl_err}")
 
     if getattr(saved_book, "sync_mode", "audiobook") == "ebook_only":
         logger.info("Skipping ABS collection side effects for ebook-only mapping '%s'", saved_book.abs_id)
@@ -3949,6 +3964,62 @@ def _shelf_watch_clients_for(meta: dict):
     )
 
 
+def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
+    """Detach shelf-watch origin metadata before mapping helpers dismiss it."""
+    keys = []
+    for raw_key in (item.get('bridge_key'), item.get('abs_id')):
+        key = str(raw_key or '').strip()
+        if key and key not in keys:
+            keys.append(key)
+
+    for key in keys:
+        try:
+            pending = database_service.get_pending_suggestion(key)
+        except Exception as exc:
+            logger.warning("Shelf-watch approval lookup failed for '%s': %s", key, exc)
+            continue
+        if pending and getattr(pending, 'origin', None) == 'shelf_watch':
+            metadata = pending.origin_metadata or {}
+            return dict(metadata) if isinstance(metadata, dict) else None
+    return None
+
+
+def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False) -> bool:
+    """Finish the recorded shelf-watch move without failing a saved mapping."""
+    if not meta:
+        return False
+    filename = meta.get('grimmory_filename')
+    if not filename:
+        return False
+    try:
+        library_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
+        if not library_client or not library_client.is_configured():
+            return False
+        if watch_shelf == kobo_shelf:
+            return True
+        if remove_only:
+            success = library_client.remove_from_shelf(filename, watch_shelf)
+            action = f"remove from '{watch_shelf}'"
+        else:
+            success = library_client.move_between_shelves(filename, watch_shelf, kobo_shelf)
+            action = f"move from '{watch_shelf}' to '{kobo_shelf}'"
+        if success is False:
+            logger.warning(
+                "Shelf-watch approval failed to %s for '%s'",
+                action,
+                sanitize_log_data(filename),
+            )
+            return False
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Shelf-watch approval failed for '%s': %s",
+            sanitize_log_data(filename),
+            exc,
+        )
+        return False
+
+
 def _format_dashboard_last_sync(latest_update_time):
     if latest_update_time <= 0:
         return "Never"
@@ -5050,6 +5121,7 @@ def match():
             logger.info("Match: ebook-only mapping ready for '%s'", sanitize_log_data(saved_book.abs_id))
             if saved_book:
                 _claim_book_for_current_user(saved_book.abs_id)
+                _shelve_saved_ebook(saved_book)
             return redirect(url_for('index'))
 
         # [NEW ACTION] Forge & Match (supports both ABS and Grimmory audiobooks)
@@ -5336,25 +5408,6 @@ def match():
 
         return redirect(url_for('index'))
 
-    search = request.args.get('search', '').strip().lower()
-    audiobooks, ebooks, storyteller_books = [], [], []
-    if search:
-        audiobooks = _search_audiobooks_with_fallback(search)
-
-        # Use new search method
-        ebooks = _search_ebooks_with_fallback(search)
-        ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
-
-        # Search Storyteller
-        if uc().storyteller_client.is_configured():
-            try:
-                storyteller_books = uc().storyteller_client.search_books(search)
-            except Exception as e:
-                logger.warning(f"⚠️ Storyteller search failed in match route: {e}")
-
-    return render_template('match.html', audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books, search=search)
-
-
 def _create_ebook_only_mapping_from_queue_item(item):
     """Create an ebook-only / storyteller-only mapping (no audio) from a queue item.
 
@@ -5392,6 +5445,7 @@ def _create_ebook_only_mapping_from_queue_item(item):
         logger.warning("⚠️ Add Book (ebook-only) skipped '%s': %s", sanitize_log_data(title), err_msg)
     elif saved_book:
         _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+    return saved_book if not err_msg else None
 
 
 def _create_audio_only_mapping_from_queue_item(item):
@@ -5418,6 +5472,7 @@ def _create_audio_only_mapping_from_queue_item(item):
         )
     elif saved_book:
         _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+    return saved_book if not err_msg else None
 
 
 def _record_forge_match_job(abs_id: str, progress: float = 0.0, last_error: str = None):
@@ -5474,6 +5529,11 @@ def _process_forge_only_queue(queue_items, forge_stage_mode=None):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                # This branch saved a mapping, so a shelf-watch approval behind it is
+                # complete and its watch-shelf copy must move — same as the batch and
+                # forge-match processors. The main forge path below creates no mapping
+                # and leaves the suggestion pending, so it deliberately does not.
+                _complete_shelf_watch_approval(_queue_item_shelf_watch_metadata(item))
             continue
         # Forge-only requires audio + a standard ebook (never a Storyteller edition).
         if not audio_source or item.get('storyteller_uuid') or not item.get('ebook_filename'):
@@ -5554,12 +5614,16 @@ def _process_batch_queue(queue_items):
     from src.db.models import Book
     clients = uc()
     for item in queue_items:
+        shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only.
-            _create_ebook_only_mapping_from_queue_item(item)
+            saved_book = _create_ebook_only_mapping_from_queue_item(item)
+            if saved_book and not _complete_shelf_watch_approval(shelf_watch_meta):
+                _shelve_saved_ebook(saved_book)
             continue
         if item.get('audio_only'):
-            _create_audio_only_mapping_from_queue_item(item)
+            if _create_audio_only_mapping_from_queue_item(item):
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         audio_source = item.get('audio_source') or 'ABS'
         if _normalize_text_source_type(item.get('ebook_source')) == "BookFusion" and item.get('ebook_source_id'):
@@ -5583,6 +5647,7 @@ def _process_batch_queue(queue_items):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         if audio_source in _LIBRARY_AUDIO_SOURCES:
             saved_book, err_msg, _err_code = _create_or_update_library_audio_mapping(
@@ -5608,6 +5673,7 @@ def _process_batch_queue(queue_items):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                _complete_shelf_watch_approval(shelf_watch_meta, remove_only=True)
             continue
 
         ebook_filename = item['ebook_filename']
@@ -5709,7 +5775,7 @@ def _process_batch_queue(queue_items):
         if not str(item['abs_id']).startswith('booklore:'):
             clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
         shelf_filename = original_ebook_filename or ebook_filename
-        if shelf_filename:
+        if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
             _shelve_matched_ebook(shelf_filename, item.get('ebook_source'),
                                   item.get('ebook_source_id'))
         if clients.storyteller_client.is_configured():
@@ -5737,12 +5803,16 @@ def _process_forge_match_queue(queue_items):
     from src.db.models import Book
     clients = uc()
     for item in queue_items:
+        shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if item.get('audio_only'):
-            _create_audio_only_mapping_from_queue_item(item)
+            if _create_audio_only_mapping_from_queue_item(item):
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only (nothing to forge).
-            _create_ebook_only_mapping_from_queue_item(item)
+            saved_book = _create_ebook_only_mapping_from_queue_item(item)
+            if saved_book and not _complete_shelf_watch_approval(shelf_watch_meta):
+                _shelve_saved_ebook(saved_book)
             continue
         audio_source = item.get('audio_source') or 'ABS'
         storyteller_uuid = item.get('storyteller_uuid', '')
@@ -5767,6 +5837,7 @@ def _process_forge_match_queue(queue_items):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
 
         # If Storyteller is selected, keep the current direct-match path.
@@ -5795,6 +5866,7 @@ def _process_forge_match_queue(queue_items):
                     )
                 elif saved_book:
                     _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                    _complete_shelf_watch_approval(shelf_watch_meta, remove_only=True)
                 continue
 
             ebook_filename = item['ebook_filename']
@@ -5886,9 +5958,11 @@ def _process_forge_match_queue(queue_items):
 
             if not str(item['abs_id']).startswith('booklore:'):
                 clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
-            if clients.booklore_client.is_configured():
-                shelf_filename = original_ebook_filename or ebook_filename
-                _shelve_matched_ebook(shelf_filename)
+            shelf_filename = original_ebook_filename or ebook_filename
+            if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
+                _shelve_matched_ebook(
+                    shelf_filename, item.get('ebook_source'), item.get('ebook_source_id')
+                )
             if clients.storyteller_client.is_configured() and book.storyteller_uuid:
                 clients.storyteller_client.add_to_collection_by_uuid(book.storyteller_uuid)
 
@@ -6043,119 +6117,137 @@ def _process_forge_match_queue(queue_items):
                 **_client_bundle_kwargs(clients),
             )
 
+        _complete_shelf_watch_approval(shelf_watch_meta)
         database_service.dismiss_suggestion(forge_id)
         if kosync_doc_id:
             database_service.dismiss_suggestion(kosync_doc_id)
 
 
+def _queue_item_from_match_form(clients) -> "dict | None":
+    """Build one canonical match-queue item from the submitted selection."""
+    submitted_key = (request.form.get('audiobook_id') or '').strip()
+    audio_source = (
+        request.form.get('audio_source')
+        or _audio_source_from_bridge_key(submitted_key)
+    ).strip() or None
+    audio_source_id = (
+        request.form.get('audio_source_id') or submitted_key or ''
+    ).strip() or None
+    if audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
+        prefix = f"{audio_source.lower()}:"
+        if audio_source_id.lower().startswith(prefix):
+            audio_source_id = audio_source_id.split(':', 1)[1].strip() or None
 
-def _add_book_view(template_name, self_endpoint):
-    """Shared queue-based Add Book / Batch Match view.
+    audio_title = (request.form.get('audio_title') or '').strip() or None
+    audio_cover_url = (request.form.get('audio_cover_url') or '').strip() or None
+    audio_provider_book_id = (
+        request.form.get('audio_provider_book_id') or audio_source_id or ''
+    ).strip() or None
+    audio_provider_file_id = (
+        request.form.get('audio_provider_file_id') or ''
+    ).strip() or None
+    audio_duration = _parse_audio_duration(request.form.get('audio_duration'))
+    ebook_filename = request.form.get('ebook_filename', '')
+    ebook_display_name = request.form.get('ebook_display_name', ebook_filename)
+    ebook_source = (
+        request.form.get('ebook_source') or request.form.get('source_type') or ''
+    ).strip() or None
+    ebook_source_id = (
+        request.form.get('ebook_source_id') or request.form.get('source_id') or ''
+    ).strip() or None
+    ebook_source_path = (
+        request.form.get('ebook_source_path') or request.form.get('source_path') or ''
+    ).strip() or None
+    storyteller_uuid = request.form.get('storyteller_uuid', '') or ''
+    audio_only = (request.form.get('audio_only') or '').strip().lower() in {
+        'true', '1', 'yes', 'on'
+    }
 
-    `batch_match()` (legacy `/batch-match`) and `add_book()` (`/add-book`, the unified
-    Add Book page) both delegate here; they differ only in which template renders and
-    which endpoint the in-page queue actions redirect back to.
-    """
+    bridge_key = None
+    if audio_source == 'ABS' and audio_source_id:
+        selected_ab = None
+        if not audio_title or audio_duration is None:
+            audiobooks = get_audiobooks_conditionally() or []
+            selected_ab = next(
+                (
+                    audiobook for audiobook in audiobooks
+                    if str(audiobook.get('id')) == audio_source_id
+                ),
+                None,
+            )
+        bridge_key = _build_bridge_key(audio_source, audio_source_id)
+        audio_title = audio_title or (
+            manager.get_abs_title(selected_ab) if selected_ab else audio_source_id
+        )
+        if audio_duration is None and selected_ab:
+            audio_duration = manager.get_duration(selected_ab)
+        audio_cover_url = audio_cover_url or (
+            f"{clients.abs_client.base_url}/api/items/{audio_source_id}/cover"
+            f"?token={clients.abs_client.token}"
+        )
+    elif audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
+        bridge_key = _build_bridge_key(audio_source, audio_source_id)
+        audio_title = audio_title or (
+            f"{_audio_source_display_name(audio_source)} {audio_source_id}"
+        )
+    elif not audio_source and (ebook_filename or storyteller_uuid):
+        ebook_key = (storyteller_uuid or ebook_filename).strip()
+        if ebook_key:
+            bridge_key = f"ebook:{ebook_key}"
+            audio_source_id = None
+            audio_title = ebook_display_name or (
+                Path(ebook_filename).stem if ebook_filename else 'Ebook'
+            )
+            audio_duration = None
+            audio_cover_url = None
+            audio_provider_book_id = None
+            audio_provider_file_id = None
+
+    if not bridge_key or not (ebook_filename or storyteller_uuid or audio_only):
+        return None
+    return {
+        'bridge_key': bridge_key,
+        'abs_id': bridge_key,
+        'audio_source': audio_source,
+        'audio_source_id': audio_source_id,
+        'audio_title': audio_title,
+        'abs_title': audio_title,
+        'audio_duration': audio_duration,
+        'duration': audio_duration,
+        'audio_cover_url': audio_cover_url,
+        'cover_url': audio_cover_url,
+        'audio_provider_book_id': audio_provider_book_id,
+        'audio_provider_file_id': audio_provider_file_id,
+        'ebook_filename': ebook_filename,
+        'ebook_display_name': ebook_display_name,
+        'ebook_source': ebook_source,
+        'ebook_source_id': ebook_source_id,
+        'ebook_source_path': ebook_source_path,
+        'storyteller_uuid': storyteller_uuid,
+        'audio_only': audio_only and not (ebook_filename or storyteller_uuid),
+    }
+
+
+
+def _add_book_view():
+    """Render and handle the unified queue-based Add Book view."""
     clients = uc()
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'add_to_queue':
-            abs_id = request.form.get('audiobook_id')
-            audio_source = (request.form.get('audio_source') or ('ABS' if abs_id else '')).strip() or None
-            audio_source_id = (request.form.get('audio_source_id') or abs_id or '').strip() or None
-            audio_title = (request.form.get('audio_title') or '').strip() or None
-            audio_cover_url = (request.form.get('audio_cover_url') or '').strip() or None
-            audio_provider_book_id = (request.form.get('audio_provider_book_id') or audio_source_id or '').strip() or None
-            audio_provider_file_id = (request.form.get('audio_provider_file_id') or '').strip() or None
-            audio_duration = _parse_audio_duration(request.form.get('audio_duration'))
-            ebook_filename = request.form.get('ebook_filename', '')
-            ebook_display_name = request.form.get('ebook_display_name', ebook_filename)
-            ebook_source = (request.form.get('ebook_source') or request.form.get('source_type') or '').strip() or None
-            ebook_source_id = (request.form.get('ebook_source_id') or request.form.get('source_id') or '').strip() or None
-            ebook_source_path = (request.form.get('ebook_source_path') or request.form.get('source_path') or '').strip() or None
-            storyteller_uuid = request.form.get('storyteller_uuid', '')
-            audio_only = (request.form.get('audio_only') or '').strip().lower() in (
-                'true', '1', 'yes', 'on'
-            )
-            selected_ab = None
-            if audio_source == 'ABS' and abs_id and (not audio_title or audio_duration is None):
-                # Only re-resolve against ABS when the submitted card didn't already
-                # carry a title/duration. get_audiobooks_conditionally() returns a
-                # differently-shaped list than the AudioResult records the card was
-                # rendered from, so this lookup is a best-effort enrichment, never a
-                # hard requirement for queuing (see below).
-                audiobooks = get_audiobooks_conditionally()
-                selected_ab = next((ab for ab in audiobooks if ab['id'] == abs_id), None)
-            selected_audio = None
-            if audio_source == 'ABS' and abs_id:
-                # Trust the already-submitted title/duration/cover from the rendered
-                # card first; a prior version hard-required re-resolving `abs_id`
-                # here and silently dropped the whole submission (no queue item, no
-                # error) whenever that lookup missed -- e.g. every audio-only
-                # submission with no ebook to otherwise validate the request.
-                selected_audio = {
-                    'bridge_key': abs_id,
-                    'audio_source': 'ABS',
-                    'audio_source_id': abs_id,
-                    'audio_title': audio_title or (manager.get_abs_title(selected_ab) if selected_ab else abs_id),
-                    'audio_duration': audio_duration if audio_duration is not None else (
-                        manager.get_duration(selected_ab) if selected_ab else None
-                    ),
-                    'audio_cover_url': audio_cover_url or f"{clients.abs_client.base_url}/api/items/{abs_id}/cover?token={clients.abs_client.token}",
-                    'audio_provider_book_id': audio_provider_book_id or abs_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-            elif audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
-                selected_audio = {
-                    'bridge_key': _build_bridge_key(audio_source, audio_source_id),
-                    'audio_source': audio_source,
-                    'audio_source_id': audio_source_id,
-                    'audio_title': audio_title or f"{_audio_source_display_name(audio_source)} {audio_source_id}",
-                    'audio_duration': audio_duration,
-                    'audio_cover_url': audio_cover_url,
-                    'audio_provider_book_id': audio_provider_book_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-            elif not audio_source and (ebook_filename or storyteller_uuid):
-                # No audio selected: ebook-only / storyteller-only item (match only).
-                _eb_key = (storyteller_uuid or ebook_filename or '').strip()
-                if _eb_key:
-                    selected_audio = {
-                        'bridge_key': f"ebook:{_eb_key}",
-                        'audio_source': None,
-                        'audio_source_id': None,
-                        'audio_title': ebook_display_name or (Path(ebook_filename).stem if ebook_filename else 'Ebook'),
-                        'audio_duration': None,
-                        'audio_cover_url': None,
-                        'audio_provider_book_id': None,
-                        'audio_provider_file_id': None,
-                    }
-
-            if selected_audio and (ebook_filename or storyteller_uuid or audio_only):
-                _match_queue_add({
-                    **selected_audio,
-                    "abs_id": selected_audio['bridge_key'],
-                    "abs_title": selected_audio['audio_title'],
-                    "ebook_filename": ebook_filename,
-                    "ebook_display_name": ebook_display_name,
-                    "ebook_source": ebook_source,
-                    "ebook_source_id": ebook_source_id,
-                    "ebook_source_path": ebook_source_path,
-                    "storyteller_uuid": storyteller_uuid,
-                    "audio_only": audio_only and not (ebook_filename or storyteller_uuid),
-                    "duration": selected_audio['audio_duration'],
-                    "cover_url": selected_audio['audio_cover_url'],
-                })
+            queue_item = _queue_item_from_match_form(clients)
+            if queue_item:
+                _match_queue_add(queue_item)
             # Clear the search box + results after queueing so the user starts the
             # next book from a clean search (drop the preserved `search` term).
-            return redirect(url_for(self_endpoint))
+            return redirect(url_for('add_book'))
         elif action == 'remove_from_queue':
             abs_id = request.form.get('abs_id')
             _match_queue_remove(abs_id)
-            return redirect(url_for(self_endpoint))
+            return redirect(url_for('add_book'))
         elif action == 'clear_queue':
             _match_queue_clear()
-            return redirect(url_for(self_endpoint))
+            return redirect(url_for('add_book'))
         elif action == 'forge_and_match_queue':
             _queue_items = _match_queue_drain()
             _spawn_user_background(_process_forge_match_queue, _queue_items, label="batch-forge-match")
@@ -6188,23 +6280,24 @@ def _add_book_view(template_name, self_endpoint):
             try:
                 storyteller_books = clients.storyteller_client.search_books(search)
             except Exception as e:
-                logger.warning(f"⚠️ Storyteller search failed in batch_match route: {e}")
+                logger.warning(f"⚠️ Storyteller search failed in add_book route: {e}")
 
-    return render_template(template_name, audiobooks=audiobooks, ebooks=ebooks, storyteller_books=storyteller_books,
-                           queue=_load_match_queue(), search=search, self_endpoint=self_endpoint)
+    return render_template('add_book.html', audiobooks=audiobooks, ebooks=ebooks,
+                           storyteller_books=storyteller_books,
+                           queue=_load_match_queue(), search=search)
 
 
 def batch_match():
-    """Legacy `/batch-match` route; GET folds into the unified Add Book page."""
+    """Preserve legacy `/batch-match` requests through the unified Add Book flow."""
     if request.method == 'GET':
         search = request.args.get('search', '')
         return redirect(url_for('add_book', search=search), code=302)
-    return _add_book_view('batch_match.html', 'batch_match')
+    return _add_book_view()
 
 
 def add_book():
     """Unified `/add-book` page — single, batch, forge, and match in one queue-based flow."""
-    return _add_book_view('add_book.html', 'add_book')
+    return _add_book_view()
 
 
 def _get_suggestions_service():
@@ -6526,7 +6619,16 @@ def _read_match_queue_unlocked() -> list:
     items = raw.get('items', []) if isinstance(raw, dict) else raw
     if not isinstance(items, list):
         return []
-    return [item for item in items if isinstance(item, dict)]
+    valid_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        owner_id = item.get('user_id')
+        if owner_id is not None and _normalize_match_queue_user_id(owner_id) is None:
+            logger.warning("Discarding match queue item with malformed owner id")
+            continue
+        valid_items.append(item)
+    return valid_items
 
 
 def _write_match_queue_unlocked(items: list) -> None:
@@ -6546,47 +6648,149 @@ def _write_match_queue_unlocked(items: list) -> None:
             pass
 
 
-def _load_match_queue() -> list:
-    """Return the persisted batch-match queue items."""
+def _normalize_match_queue_user_id(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        try:
+            user_id = int(value.strip())
+        except (TypeError, ValueError):
+            return None
+        return user_id if user_id > 0 else None
+    return None
+
+
+def _match_queue_scope() -> tuple:
+    """Return the acting user id and whether legacy unowned items are visible."""
+    user_id = get_current_user_id()
+    if user_id is None:
+        return None, True
+    try:
+        primary_user_id = database_service._default_user_id()
+    except Exception as exc:
+        logger.warning("Could not resolve legacy match-queue owner: %s", exc)
+        return user_id, False
+    normalized_user_id = _normalize_match_queue_user_id(user_id)
+    normalized_primary_id = _normalize_match_queue_user_id(primary_user_id)
+    return user_id, (
+        normalized_user_id is not None
+        and normalized_user_id == normalized_primary_id
+    )
+
+
+def _match_queue_item_visible(item: dict, user_id, include_legacy: bool) -> bool:
+    owner_id = item.get('user_id')
+    if owner_id is None:
+        return include_legacy
+    if user_id is None:
+        return False
+    normalized_owner_id = _normalize_match_queue_user_id(owner_id)
+    normalized_user_id = _normalize_match_queue_user_id(user_id)
+    return (
+        normalized_owner_id is not None
+        and normalized_owner_id == normalized_user_id
+    )
+
+
+def _match_queue_stamp(item: dict, user_id) -> dict:
+    scoped_item = dict(item)
+    scoped_item['user_id'] = user_id
+    return scoped_item
+
+
+def _clear_match_queue_for_user_id(user_id) -> None:
+    """Remove persisted queue items belonging to a successfully deleted user."""
+    normalized_user_id = _normalize_match_queue_user_id(user_id)
+    if normalized_user_id is None:
+        return
     with MATCH_QUEUE_LOCK:
-        return _read_match_queue_unlocked()
+        _write_match_queue_unlocked([
+            item for item in _read_match_queue_unlocked()
+            if _normalize_match_queue_user_id(item.get('user_id')) != normalized_user_id
+        ])
+
+
+def _load_match_queue() -> list:
+    """Return only the acting user's persisted batch-match queue items."""
+    user_id, include_legacy = _match_queue_scope()
+    with MATCH_QUEUE_LOCK:
+        return [
+            item for item in _read_match_queue_unlocked()
+            if _match_queue_item_visible(item, user_id, include_legacy)
+        ]
 
 
 def _save_match_queue(items: list) -> None:
-    """Replace the persisted batch-match queue with the given items."""
+    """Replace the acting user's queue while preserving every other user's items."""
+    user_id, include_legacy = _match_queue_scope()
+    replacements = [
+        _match_queue_stamp(item, user_id)
+        for item in items if isinstance(item, dict)
+    ]
     with MATCH_QUEUE_LOCK:
-        _write_match_queue_unlocked(items)
+        preserved = [
+            item for item in _read_match_queue_unlocked()
+            if not _match_queue_item_visible(item, user_id, include_legacy)
+        ]
+        _write_match_queue_unlocked(preserved + replacements)
 
 
 def _match_queue_add(item: dict) -> bool:
-    """Append an item unless its bridge_key is already queued. Returns True if added."""
+    """Append an actor-owned item unless its bridge key is already in that scope."""
+    user_id, include_legacy = _match_queue_scope()
+    scoped_item = _match_queue_stamp(item, user_id)
     with MATCH_QUEUE_LOCK:
         items = _read_match_queue_unlocked()
-        bridge_key = item.get('bridge_key')
-        if bridge_key and any(existing.get('bridge_key') == bridge_key for existing in items):
+        bridge_key = scoped_item.get('bridge_key')
+        if bridge_key and any(
+            existing.get('bridge_key') == bridge_key
+            and _match_queue_item_visible(existing, user_id, include_legacy)
+            for existing in items
+        ):
             return False
-        items.append(item)
+        items.append(scoped_item)
         _write_match_queue_unlocked(items)
         return True
 
 
 def _match_queue_remove(abs_id) -> None:
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        items = [item for item in _read_match_queue_unlocked() if item.get('abs_id') != abs_id]
+        items = [
+            item for item in _read_match_queue_unlocked()
+            if not (
+                item.get('abs_id') == abs_id
+                and _match_queue_item_visible(item, user_id, include_legacy)
+            )
+        ]
         _write_match_queue_unlocked(items)
 
 
 def _match_queue_clear() -> None:
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        _write_match_queue_unlocked([])
+        preserved = [
+            item for item in _read_match_queue_unlocked()
+            if not _match_queue_item_visible(item, user_id, include_legacy)
+        ]
+        _write_match_queue_unlocked(preserved)
 
 
 def _match_queue_drain() -> list:
-    """Return all queued items and clear the queue atomically."""
+    """Atomically drain only the acting user's queued items."""
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        items = _read_match_queue_unlocked()
-        _write_match_queue_unlocked([])
-        return items
+        drained = []
+        preserved = []
+        for item in _read_match_queue_unlocked():
+            if _match_queue_item_visible(item, user_id, include_legacy):
+                drained.append(item)
+            else:
+                preserved.append(item)
+        _write_match_queue_unlocked(preserved)
+        return drained
 
 
 def _match_queue_response():
@@ -6745,77 +6949,9 @@ def suggestions_page():
             return redirect(url_for('suggestions'))
 
         elif action == 'add_to_queue':
-            bridge_key = (request.form.get('audiobook_id') or '').strip()
-            audio_source = (
-                request.form.get('audio_source')
-                or _audio_source_from_bridge_key(bridge_key)
-            ).strip() or None
-            audio_source_id = (request.form.get('audio_source_id') or bridge_key).strip() or None
-            audio_title = (request.form.get('audio_title') or '').strip() or None
-            audio_cover_url = (request.form.get('audio_cover_url') or '').strip() or None
-            audio_provider_book_id = (request.form.get('audio_provider_book_id') or audio_source_id or '').strip() or None
-            audio_provider_file_id = (request.form.get('audio_provider_file_id') or '').strip() or None
-            audio_duration = _parse_audio_duration(request.form.get('audio_duration'))
-            ebook_filename = request.form.get('ebook_filename', '')
-            ebook_display_name = request.form.get('ebook_display_name', ebook_filename)
-            ebook_source = (request.form.get('ebook_source') or '').strip() or None
-            ebook_source_id = (request.form.get('ebook_source_id') or '').strip() or None
-            ebook_source_path = (request.form.get('ebook_source_path') or request.form.get('source_path') or '').strip() or None
-            storyteller_uuid = request.form.get('storyteller_uuid', '')
-            selected_audio = None
-            if audio_source == 'ABS' and audio_source_id:
-                selected_ab = None
-                if not audio_title or audio_duration is None:
-                    abs_client = uc().abs_client
-                    abs_items = abs_client.get_all_audiobooks()
-                    selected_ab = next((ab for ab in abs_items if str(ab.get('id')) == audio_source_id), None)
-                else:
-                    abs_client = uc().abs_client
-
-                resolved_title = audio_title or (manager.get_abs_title(selected_ab) if selected_ab else '') or audio_source_id
-                resolved_duration = audio_duration if audio_duration is not None else (
-                    manager.get_duration(selected_ab) if selected_ab else None
-                )
-                resolved_cover = (
-                    audio_cover_url
-                    or f"{abs_client.base_url}/api/items/{audio_source_id}/cover?token={abs_client.token}"
-                )
-                selected_audio = {
-                    'bridge_key': bridge_key or audio_source_id,
-                    'audio_source': 'ABS',
-                    'audio_source_id': audio_source_id,
-                    'audio_title': resolved_title,
-                    'audio_duration': resolved_duration,
-                    'audio_cover_url': resolved_cover,
-                    'audio_provider_book_id': audio_provider_book_id or audio_source_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-            elif audio_source in _LIBRARY_AUDIO_SOURCES and audio_source_id:
-                selected_audio = {
-                    'bridge_key': bridge_key or _build_bridge_key(audio_source, audio_source_id),
-                    'audio_source': audio_source,
-                    'audio_source_id': audio_source_id,
-                    'audio_title': audio_title or f"{_audio_source_display_name(audio_source)} {audio_source_id}",
-                    'audio_duration': audio_duration,
-                    'audio_cover_url': audio_cover_url,
-                    'audio_provider_book_id': audio_provider_book_id,
-                    'audio_provider_file_id': audio_provider_file_id,
-                }
-
-            if selected_audio and (ebook_filename or storyteller_uuid):
-                _match_queue_add({
-                    **selected_audio,
-                    "abs_id": selected_audio['bridge_key'],
-                    "abs_title": selected_audio['audio_title'],
-                    "ebook_filename": ebook_filename,
-                    "ebook_display_name": ebook_display_name,
-                    "ebook_source": ebook_source,
-                    "ebook_source_id": ebook_source_id,
-                    "ebook_source_path": ebook_source_path,
-                    "storyteller_uuid": storyteller_uuid,
-                    "duration": selected_audio['audio_duration'],
-                    "cover_url": selected_audio['audio_cover_url'],
-                })
+            queue_item = _queue_item_from_match_form(uc())
+            if queue_item:
+                _match_queue_add(queue_item)
             return _match_queue_response()
 
         elif action == 'remove_from_queue':
@@ -6845,209 +6981,9 @@ def suggestions_page():
             return redirect(url_for('index'))
 
         elif action == 'process_queue':
-            from src.db.models import Book
-
-            clients = uc()
-            for item in _load_match_queue():
-                audio_source = item.get('audio_source') or 'ABS'
-                if _normalize_text_source_type(item.get('ebook_source')) == "BookFusion" and item.get('ebook_source_id'):
-                    saved_book, err_msg, _err_code = _create_or_update_bookfusion_progress_mapping(
-                        audio_source=audio_source,
-                        audio_source_id=item.get('audio_source_id') or item.get('abs_id'),
-                        audio_title=item.get('audio_title') or item.get('abs_title'),
-                        audio_cover_url=item.get('audio_cover_url') or item.get('cover_url'),
-                        audio_duration=_parse_audio_duration(item.get('audio_duration') or item.get('duration')),
-                        audio_provider_book_id=item.get('audio_provider_book_id'),
-                        audio_provider_file_id=item.get('audio_provider_file_id'),
-                        bookfusion_id=item.get('ebook_source_id'),
-                        bookfusion_title=item.get('ebook_display_name') or item.get('ebook_filename'),
-                        storyteller_uuid=item.get('storyteller_uuid'),
-                    )
-                    if err_msg:
-                        logger.warning(
-                            "Suggestions skipped BookFusion link for '%s': %s",
-                            sanitize_log_data(item.get('audio_title') or item.get('abs_title') or item.get('abs_id')),
-                            err_msg,
-                        )
-                    elif saved_book:
-                        _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
-                    continue
-                if audio_source in _LIBRARY_AUDIO_SOURCES:
-                    saved_book, err_msg, _err_code = _create_or_update_library_audio_mapping(
-                        audio_source=audio_source,
-                        audio_source_id=item.get('audio_source_id'),
-                        audio_title=item.get('audio_title'),
-                        audio_cover_url=item.get('audio_cover_url'),
-                        audio_duration=_parse_audio_duration(item.get('audio_duration')),
-                        audio_provider_book_id=item.get('audio_provider_book_id'),
-                        audio_provider_file_id=item.get('audio_provider_file_id'),
-                        ebook_filename=item.get('ebook_filename'),
-                        ebook_source=item.get('ebook_source'),
-                        ebook_source_id=item.get('ebook_source_id'),
-                        storyteller_uuid=item.get('storyteller_uuid'),
-                        ebook_source_path=item.get('ebook_source_path'),
-                    )
-                    if err_msg:
-                        logger.warning(
-                            "Suggestions skipped %s audiobook '%s': %s",
-                            _audio_source_display_name(audio_source),
-                            sanitize_log_data(item.get('audio_title') or item.get('audio_source_id')),
-                            err_msg,
-                        )
-                    elif saved_book:
-                        # Approving a shelf-watch suggestion needs the Up Next
-                        # leg of the shelf move; _create_or_update_library_audio_mapping
-                        # only adds to Kobo, it does not remove from Up Next.
-                        try:
-                            sw_pending = database_service.get_pending_suggestion(item.get('audio_source_id') or saved_book.abs_id)
-                        except Exception:
-                            sw_pending = None
-                        if (
-                            sw_pending
-                            and getattr(sw_pending, 'origin', None) == 'shelf_watch'
-                        ):
-                            try:
-                                meta = sw_pending.origin_metadata or {}
-                                lib_client, watch_shelf, _kobo = _shelf_watch_clients_for(meta)
-                                grimmory_filename = meta.get('grimmory_filename')
-                                if grimmory_filename and lib_client and lib_client.is_configured():
-                                    lib_client.remove_from_shelf(grimmory_filename, watch_shelf)
-                            except Exception as bl_err:
-                                logger.warning(f"Shelf-watch approval Up Next removal failed: {bl_err}")
-                    continue
-
-                ebook_filename = item['ebook_filename']
-                storyteller_uuid = item.get('storyteller_uuid', '')
-                original_ebook_filename = item['ebook_filename']
-                duration = item['duration']
-                booklore_id = None
-                kosync_doc_id = None
-
-                if storyteller_uuid:
-                    # Storyteller Tri-Link Logic (mirrors match POST handler)
-                    try:
-                        logger.info(f"Batch Match: Using Storyteller Artifact '{storyteller_uuid}' for '{item['abs_title']}'")
-
-                        target_filename, _target_path = _download_storyteller_artifact(
-                            storyteller_uuid,
-                            item.get('abs_title'),
-                            original_ebook_filename=ebook_filename,
-                        )
-                        if target_filename:
-                            original_ebook_filename = ebook_filename
-                            ebook_filename = target_filename
-
-                            kosync_doc_id = _compute_storyteller_trilink_kosync_id(
-                                original_ebook_filename,
-                                target_filename,
-                                "Batch Match Tri-Link",
-                            )
-                        else:
-                            logger.warning(f"Failed to obtain Storyteller artifact '{storyteller_uuid}' for '{item['abs_title']}', skipping")
-                            continue
-                    except Exception as e:
-                        logger.error(f"Storyteller Tri-Link failed for '{item['abs_title']}': {e}")
-                        continue
-                else:
-                    if clients.booklore_client.is_configured():
-                        book = clients.booklore_client.find_book_by_filename(ebook_filename)
-                        if book:
-                            booklore_id = book.get('id')
-
-                    kosync_doc_id = get_kosync_id_for_ebook(
-                        ebook_filename,
-                        booklore_id,
-                        source_path=item.get('ebook_source_path'),
-                    )
-
-                if not kosync_doc_id:
-                    logger.warning(f"Could not compute KOSync ID for {sanitize_log_data(ebook_filename)}, skipping")
-                    continue
-
-                current_book_entry = database_service.get_book(item['abs_id'])
-                if current_book_entry and current_book_entry.kosync_doc_id:
-                    logger.info(f"Preserving existing hash '{current_book_entry.kosync_doc_id}' for '{item['abs_id']}' instead of new hash '{kosync_doc_id}'")
-                    kosync_doc_id = current_book_entry.kosync_doc_id
-
-                item_details = clients.abs_client.get_item_details(item['abs_id'])
-                chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
-                storyteller_manifest = ingest_storyteller_transcripts(
-                    item['abs_id'],
-                    item.get('abs_title', ''),
-                    chapters
-                )
-                transcript_source = _storyteller_transcript_source(storyteller_uuid, storyteller_manifest)
-
-                book = Book(
-                    abs_id=item['abs_id'],
-                    abs_title=item['abs_title'],
-                    audio_source="ABS",
-                    audio_source_id=item['abs_id'],
-                    audio_title=item['abs_title'],
-                    audio_cover_url=item.get('cover_url'),
-                    audio_duration=duration,
-                    audio_provider_book_id=item['abs_id'],
-                    ebook_filename=ebook_filename,
-                    kosync_doc_id=kosync_doc_id,
-                    transcript_file=storyteller_manifest,
-                    status="pending",
-                    duration=duration,
-                    transcript_source=transcript_source,
-                    storyteller_uuid=storyteller_uuid or None,
-                    original_ebook_filename=original_ebook_filename,
-                    ebook_source=item.get('ebook_source'),
-                    ebook_source_id=item.get('ebook_source_id'),
-                )
-
-                database_service.save_book(book)
-
-                _enqueue_tracker_automatch(clients.sync_clients, book)
-
-                if not str(item['abs_id']).startswith('booklore:'):
-                    clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
-
-                # If this suggestion originated from the shelf-watch flow, do a full
-                # shelf MOVE (Up Next -> Kobo) rather than just an add. The origin
-                # metadata carries the Grimmory filename which is the canonical key
-                # for shelf operations even if the user picked a different ebook
-                # source during approval.
-                shelf_watch_pending = None
-                try:
-                    shelf_watch_pending = database_service.get_pending_suggestion(item['abs_id'])
-                except Exception:
-                    shelf_watch_pending = None
-                if (
-                    shelf_watch_pending
-                    and getattr(shelf_watch_pending, 'origin', None) == 'shelf_watch'
-                ):
-                    try:
-                        meta = shelf_watch_pending.origin_metadata or {}
-                        lib_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
-                        grimmory_filename = meta.get('grimmory_filename')
-                        if grimmory_filename and lib_client and lib_client.is_configured():
-                            lib_client.move_between_shelves(
-                                grimmory_filename, watch_shelf, kobo_shelf,
-                            )
-                    except Exception as bl_err:
-                        logger.warning(f"Shelf-watch approval move failed: {bl_err}")
-                elif clients.booklore_client.is_configured():
-                    shelf_filename = original_ebook_filename or ebook_filename
-                    clients.booklore_client.add_to_shelf(shelf_filename, user_setting("BOOKLORE_SHELF_NAME", "Kobo"))
-                if clients.storyteller_client.is_configured():
-                    if book.storyteller_uuid:
-                        clients.storyteller_client.add_to_collection_by_uuid(book.storyteller_uuid)
-
-                database_service.dismiss_suggestion(item['abs_id'])
-                database_service.dismiss_suggestion(kosync_doc_id)
-
-                try:
-                    device_doc = database_service.get_kosync_doc_by_filename(ebook_filename)
-                    if device_doc and device_doc.document_hash != kosync_doc_id:
-                        database_service.dismiss_suggestion(device_doc.document_hash)
-                except Exception:
-                    pass
-
-            _match_queue_clear()
+            _queue_items = _match_queue_drain()
+            _spawn_user_background(_process_batch_queue, _queue_items, label="batch-match-process")
+            flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
     scan_in_progress = False
@@ -7928,6 +7864,7 @@ def api_storyteller_link(abs_id):
         if err_msg:
             return jsonify({"error": err_msg}), err_code
 
+        _shelve_saved_ebook(saved_book)
         return jsonify({"message": "Book linked successfully", "filename": saved_book.ebook_filename}), 200
     except Exception as e:
         logger.error(f"❌ Error linking Storyteller book for '{abs_id}': {e}")

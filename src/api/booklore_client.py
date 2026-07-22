@@ -2375,26 +2375,6 @@ class BookloreClient:
         logger.error(f"Grimmory update failed: {last_status}")
         return False
 
-    def get_recent_activity(self, min_progress=0.01):
-        if not self._has_cached_books() and not self._is_refresh_on_cooldown(): self._refresh_book_cache()
-        results = []
-        for filename, book in self._snapshot_book_cache_items():
-            progress = 0
-            if book.get('epubProgress'):
-                progress = (book['epubProgress'].get('percentage') or 0) / 100.0
-            elif book.get('pdfProgress'):
-                progress = (book['pdfProgress'].get('percentage') or 0) / 100.0
-            elif book.get('cbxProgress'):
-                progress = (book['cbxProgress'].get('percentage') or 0) / 100.0
-            if progress >= min_progress:
-                results.append({
-                    "id": book['id'],
-                    "filename": book['fileName'],
-                    "progress": progress,
-                    "source": "BOOKLORE"
-                })
-        return results
-
     def create_reading_session(
         self,
         book_id: int,
@@ -2881,27 +2861,48 @@ class BookloreClient:
             return None
         return target_shelf.get("id")
 
+    def _create_shelf(self, shelf_name: str) -> Optional[requests.Response]:
+        """POST a new shelf, degrading to a name-only body if the server rejects
+        the icon metadata.
+
+        Grimmory builds disagree about this payload: some accept `icon`/`iconType`,
+        others reject the entire body with 400 when `iconType` is present. Sending
+        the richer form first keeps the shelf icon where it is supported.
+        """
+        attempts = (
+            {"name": shelf_name, "icon": "📚", "iconType": "PRIME_NG"},
+            {"name": shelf_name},
+        )
+        response = None
+        for index, body in enumerate(attempts):
+            response = self._make_request("POST", "/api/v1/shelves", body)
+            # Use `is None` here: requests.Response.__bool__ returns False for >=400
+            # status codes, which would cause us to mis-report a real 4xx error as
+            # "No response" with the truthiness check.
+            if response is not None and response.status_code in (200, 201):
+                return response
+            if index + 1 < len(attempts):
+                logger.debug(
+                    "Grimmory: shelf create for '%s' rejected (status=%s); retrying without icon metadata",
+                    shelf_name,
+                    response.status_code if response is not None else "No response",
+                )
+
+        logger.error(
+            "❌ Failed to create Grimmory shelf '%s' (status=%s, body=%s)",
+            shelf_name,
+            response.status_code if response is not None else "No response",
+            self._response_text_preview(response, limit=500) if response is not None else "<unavailable>",
+        )
+        return None
+
     def _get_or_create_shelf_id(self, shelf_name):
         shelf_id = self._get_shelf_id(shelf_name)
         if shelf_id:
             return shelf_id
 
-        create_body = {
-            "name": shelf_name,
-            "icon": "📚",
-            "iconType": "PRIME_NG"
-        }
-        create_response = self._make_request("POST", "/api/v1/shelves", create_body)
-        # Use `is None` here: requests.Response.__bool__ returns False for >=400
-        # status codes, which would cause us to mis-report a real 4xx error as
-        # "No response" with the truthiness check.
-        if create_response is None or create_response.status_code not in (200, 201):
-            logger.error(
-                "❌ Failed to create Grimmory shelf '%s' (status=%s, body=%s)",
-                shelf_name,
-                create_response.status_code if create_response is not None else "No response",
-                self._response_text_preview(create_response, limit=500) if create_response is not None else "<unavailable>",
-            )
+        create_response = self._create_shelf(shelf_name)
+        if create_response is None:
             return None
 
         created_payload = self._parse_json_response(
@@ -2913,6 +2914,7 @@ class BookloreClient:
             return target_shelf.get("id")
 
         return self._get_shelf_id(shelf_name)
+
     def add_to_shelf(self, ebook_filename, shelf_name=None):
         """Add a book to a shelf, creating the shelf if it doesn't exist."""
         shelf_name = (
@@ -3081,10 +3083,11 @@ class BookloreClient:
             return []
 
     def move_between_shelves(self, ebook_filename, from_shelf, to_shelf):
-        """Atomically remove a book from one shelf and add it to another.
+        """Add a book to one shelf, then remove it from another.
 
-        Returns True only if both legs succeed. If the remove leg fails, the add
-        leg is skipped so the book is not left on both shelves.
+        The destination add runs first: if it fails the book keeps its place on
+        the source shelf, whereas removing first can leave it on neither shelf.
+        Returns True only if both legs succeed.
         """
         if not ebook_filename or not from_shelf or not to_shelf:
             logger.warning("Grimmory: move_between_shelves called with missing arguments")
@@ -3092,16 +3095,16 @@ class BookloreClient:
         if from_shelf == to_shelf:
             logger.debug(f"Grimmory: move_between_shelves no-op ('{from_shelf}' == '{to_shelf}')")
             return True
-        if not self.remove_from_shelf(ebook_filename, from_shelf):
+        if not self.add_to_shelf(ebook_filename, to_shelf):
             logger.warning(
-                f"Grimmory: move_between_shelves aborted - remove from '{from_shelf}' failed for "
+                f"Grimmory: move_between_shelves aborted - add to '{to_shelf}' failed for "
                 f"{sanitize_log_data(ebook_filename)}"
             )
             return False
-        if not self.add_to_shelf(ebook_filename, to_shelf):
-            logger.error(
-                f"Grimmory: move_between_shelves left book off both shelves - remove from "
-                f"'{from_shelf}' succeeded but add to '{to_shelf}' failed for "
+        if not self.remove_from_shelf(ebook_filename, from_shelf):
+            logger.warning(
+                f"Grimmory: move_between_shelves left book on both shelves - add to "
+                f"'{to_shelf}' succeeded but remove from '{from_shelf}' failed for "
                 f"{sanitize_log_data(ebook_filename)}"
             )
             return False

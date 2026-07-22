@@ -18,6 +18,7 @@ class TestShelveMatchedEbook(unittest.TestCase):
     def setUp(self):
         self.booklore = Mock()
         self.booklore.is_configured.return_value = True
+        self.booklore.add_to_shelf.return_value = True
         container = Mock()
         container.booklore_client.return_value = self.booklore
 
@@ -74,6 +75,37 @@ class TestShelveMatchedEbook(unittest.TestCase):
 
         self.booklore.add_to_shelf.assert_not_called()
         self.booklore.remove_from_shelf.assert_not_called()
+
+    def test_does_not_remove_watch_shelf_when_destination_add_fails(self):
+        self.booklore.add_to_shelf.return_value = False
+        with patch.dict(os.environ, {
+            "BOOKLORE_SHELF_WATCH_ENABLED": "true",
+            "BOOKLORE_SHELF_WATCH_NAME": "Up Next",
+        }):
+            web_server._shelve_matched_ebook("book.epub")
+
+        self.booklore.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+        self.booklore.remove_from_shelf.assert_not_called()
+
+    def test_does_not_remove_watch_shelf_when_destination_add_raises(self):
+        self.booklore.add_to_shelf.side_effect = RuntimeError("destination unavailable")
+        with patch.dict(os.environ, {
+            "BOOKLORE_SHELF_WATCH_ENABLED": "true",
+            "BOOKLORE_SHELF_WATCH_NAME": "Up Next",
+        }):
+            web_server._shelve_matched_ebook("book.epub")
+
+        self.booklore.remove_from_shelf.assert_not_called()
+
+    def test_remove_only_same_shelf_is_a_successful_noop(self):
+        metadata = {"grimmory_filename": "book.epub"}
+        with patch.object(
+            web_server, "_shelf_watch_clients_for", return_value=(self.booklore, "Kobo", "Kobo")
+        ):
+            self.assertTrue(web_server._complete_shelf_watch_approval(metadata, remove_only=True))
+
+        self.booklore.remove_from_shelf.assert_not_called()
+        self.booklore.move_between_shelves.assert_not_called()
 
 
 if __name__ == "__main__":

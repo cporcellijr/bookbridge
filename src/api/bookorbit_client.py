@@ -1072,25 +1072,52 @@ class BookOrbitClient:
         data = self._parse_json(resp)
         return data if isinstance(data, list) else []
 
+    @staticmethod
+    def _shelf_key(name: str) -> str:
+        """Collection-name identity as BookOrbit resolves it.
+
+        Every name comparison must go through this: BookOrbit matches collections
+        case-insensitively, so any caller that compares raw names can decide two
+        spellings are different shelves while the server treats them as one.
+        """
+        return (name or "").strip().lower()
+
     def _get_collection_id(self, name: str) -> Optional[int]:
         if not name:
             return None
-        target = name.strip().lower()
+        target = self._shelf_key(name)
         for col in self.get_all_shelves():
-            if isinstance(col, dict) and (col.get("name") or "").strip().lower() == target:
+            if isinstance(col, dict) and self._shelf_key(col.get("name")) == target:
                 return col.get("id")
         return None
+
+    @staticmethod
+    def _response_text_preview(response, limit: int = 300) -> str:
+        try:
+            return (response.text or "")[:limit]
+        except Exception:
+            return "<unavailable>"
 
     def ensure_shelf_exists(self, name: str, icon: str = "bookmark") -> Optional[int]:
         cid = self._get_collection_id(name)
         if cid is not None:
             return cid
         resp = self._make_request("POST", "/api/v1/collections", {"name": name, "icon": icon})
-        if resp and resp.status_code in (200, 201):
+        # Use `is not None`: requests.Response.__bool__ is False for >=400 status
+        # codes, so a truthiness check would report a real 4xx as "No response".
+        if resp is not None and resp.status_code in (200, 201):
             data = self._parse_json(resp)
-            if isinstance(data, dict):
+            if isinstance(data, dict) and data.get("id") is not None:
                 return data.get("id")
-        logger.error("BookOrbit: failed to create collection '%s'", name)
+        # Include the status and body: BookOrbit requires the `icon` field here
+        # (a name-only body is a 400), so a future payload-contract change is only
+        # diagnosable if the rejection detail reaches the log.
+        logger.error(
+            "BookOrbit: failed to create collection '%s' (status=%s, body=%s)",
+            name,
+            resp.status_code if resp is not None else "No response",
+            self._response_text_preview(resp) if resp is not None else "<unavailable>",
+        )
         return None
 
     def list_books_on_shelf(self, shelf_name: str) -> list:
@@ -1175,17 +1202,16 @@ class BookOrbitClient:
         return bool(resp and resp.status_code in (200, 201, 204))
 
     def move_between_shelves(self, ebook_filename: str, from_shelf: str, to_shelf: str) -> bool:
+        if not ebook_filename or not from_shelf or not to_shelf:
+            return False
+        # Compare on the resolved key, not the raw string: "Kobo" and "kobo" are one
+        # collection to BookOrbit, so a case-sensitive guard fell through to
+        # add-then-remove against that single collection and unshelved the book.
+        if self._shelf_key(from_shelf) == self._shelf_key(to_shelf):
+            return True
         book_id = self._resolve_book_id_for_filename(ebook_filename)
         if book_id is None:
             return False
-        to_cid = self.ensure_shelf_exists(to_shelf)
-        if to_cid is not None:
-            self._make_request(
-                "POST", f"/api/v1/collections/{to_cid}/books", {"bookIds": [int(book_id)]}
-            )
-        from_cid = self._get_collection_id(from_shelf)
-        if from_cid is not None:
-            self._make_request(
-                "DELETE", f"/api/v1/collections/{from_cid}/books", {"bookIds": [int(book_id)]}
-            )
-        return to_cid is not None
+        if not self.add_book_id_to_shelf(book_id, to_shelf):
+            return False
+        return self.remove_book_id_from_shelf(book_id, from_shelf)

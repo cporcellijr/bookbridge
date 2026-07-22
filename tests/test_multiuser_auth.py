@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import shutil
@@ -630,6 +631,41 @@ class TestMultiUserAuth(unittest.TestCase):
         self.client.post('/admin/users', data={'action': 'delete', 'user_id': str(uid)})
         self.assertIsNotNone(self.svc.get_user(uid))  # not deleted
 
+    def test_admin_delete_user_purges_queue_and_prevents_id_reuse_inheritance(self):
+        import src.web_server as web_server
+
+        other = self.svc.create_user('queue-other', 'pw', role='user')
+        target = self.svc.create_user('queue-target', 'pw', role='user')
+        items = [
+            {'bridge_key': 'legacy-missing', 'abs_id': 'legacy-missing'},
+            {'bridge_key': 'legacy-null', 'abs_id': 'legacy-null', 'user_id': None},
+            {'bridge_key': 'other', 'abs_id': 'other', 'user_id': other.id},
+            {'bridge_key': 'target', 'abs_id': 'target', 'user_id': target.id},
+        ]
+
+        with patch.object(web_server, 'DATA_DIR', Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            self._login()
+            response = self.client.post(
+                '/admin/users', data={'action': 'delete', 'user_id': str(target.id)}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNone(self.svc.get_user(target.id))
+
+            queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
+            payload = json.loads(queue_file.read_text(encoding='utf-8'))
+            self.assertEqual(
+                [item['bridge_key'] for item in payload['items']],
+                ['legacy-missing', 'legacy-null', 'other'],
+            )
+
+            replacement = self.svc.create_user('queue-replacement', 'pw', role='user')
+            self.assertEqual(replacement.id, target.id)
+            with patch.object(web_server, 'get_current_user_id', return_value=replacement.id):
+                self.assertEqual(web_server._load_match_queue(), [])
+
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
@@ -1232,6 +1268,156 @@ class TestMultiUserAuth(unittest.TestCase):
         # The admin's book is untouched.
         self.assertIsNotNone(self.svc.get_book("admin-book"))
         self.assertEqual(self.svc.get_book_user_ids("admin-book"), [admin.id])
+
+    def test_match_queue_stamps_owner_and_deduplicates_per_user(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username("admin")
+        reg = self.svc.create_user("queue-reg", "pw", role="user")
+        item = {"bridge_key": "shared-key", "abs_id": "shared-key", "user_id": 999}
+
+        with patch.object(web_server, "DATA_DIR", Path(self.tmp)):
+            with patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                self.assertTrue(web_server._match_queue_add(item))
+                self.assertFalse(web_server._match_queue_add(item))
+                self.assertEqual(web_server._load_match_queue()[0]["user_id"], admin.id)
+
+            with patch.object(web_server, "get_current_user_id", return_value=reg.id):
+                self.assertTrue(web_server._match_queue_add(item))
+                reg_items = web_server._load_match_queue()
+
+            self.assertEqual(len(reg_items), 1)
+            self.assertEqual(reg_items[0]["user_id"], reg.id)
+            with web_server.MATCH_QUEUE_LOCK:
+                raw_items = web_server._read_match_queue_unlocked()
+            self.assertEqual([entry["user_id"] for entry in raw_items], [admin.id, reg.id])
+
+    def test_match_queue_legacy_items_are_primary_only(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username("admin")
+        reg = self.svc.create_user("queue-reg", "pw", role="user")
+        items = [
+            {"bridge_key": "legacy", "abs_id": "legacy"},
+            {"bridge_key": "legacy-null", "abs_id": "legacy-null", "user_id": None},
+            {"bridge_key": "admin", "abs_id": "admin", "user_id": admin.id},
+            {"bridge_key": "regular", "abs_id": "regular", "user_id": reg.id},
+            {"bridge_key": "malformed", "abs_id": "malformed", "user_id": "bad"},
+        ]
+
+        with patch.object(web_server, "DATA_DIR", Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            with patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["legacy", "legacy-null", "admin"],
+                )
+            with patch.object(web_server, "get_current_user_id", return_value=reg.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["regular"],
+                )
+            with patch.object(web_server, "get_current_user_id", return_value=None):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["legacy", "legacy-null"],
+                )
+            with patch.object(self.svc, "_default_user_id", side_effect=RuntimeError("db unavailable")), \
+                 patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["admin"],
+                )
+
+    def test_match_queue_rewrite_purges_malformed_owner_and_preserves_other_user(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username("admin")
+        reg = self.svc.create_user("queue-reg", "pw", role="user")
+        items = [
+            {"bridge_key": "legacy", "abs_id": "legacy"},
+            {"bridge_key": "admin", "abs_id": "admin", "user_id": admin.id},
+            {"bridge_key": "regular", "abs_id": "regular", "user_id": reg.id},
+            {"bridge_key": "malformed", "abs_id": "malformed", "user_id": "bad"},
+        ]
+
+        with patch.object(web_server, "DATA_DIR", Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            with patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._load_match_queue()],
+                    ["legacy", "admin"],
+                )
+                web_server._match_queue_clear()
+
+            queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
+            persisted = json.loads(queue_file.read_text(encoding="utf-8"))["items"]
+            self.assertEqual([item["bridge_key"] for item in persisted], ["regular"])
+
+    def test_match_queue_rewrite_purges_invalid_explicit_owner_ids(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username('admin')
+        items = [
+            {'bridge_key': 'zero', 'abs_id': 'zero', 'user_id': 0},
+            {'bridge_key': 'negative', 'abs_id': 'negative', 'user_id': -1},
+            {'bridge_key': 'unicode', 'abs_id': 'unicode', 'user_id': '\N{SUPERSCRIPT TWO}'},
+            {'bridge_key': 'overlong', 'abs_id': 'overlong', 'user_id': '9' * 5000},
+        ]
+
+        with patch.object(web_server, 'DATA_DIR', Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            with patch.object(web_server, 'get_current_user_id', return_value=admin.id):
+                web_server._match_queue_clear()
+
+            queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
+            payload = json.loads(queue_file.read_text(encoding='utf-8'))
+            self.assertEqual(payload['items'], [])
+
+    def test_match_queue_mutations_preserve_other_users(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username("admin")
+        reg = self.svc.create_user("queue-reg", "pw", role="user")
+        initial = [
+            {"bridge_key": "legacy", "abs_id": "legacy"},
+            {"bridge_key": "admin", "abs_id": "admin", "user_id": admin.id},
+            {"bridge_key": "reg-1", "abs_id": "reg-1", "user_id": reg.id},
+            {"bridge_key": "reg-2", "abs_id": "reg-2", "user_id": reg.id},
+        ]
+
+        with patch.object(web_server, "DATA_DIR", Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(initial)
+
+            with patch.object(web_server, "get_current_user_id", return_value=reg.id):
+                web_server._match_queue_remove("reg-1")
+                web_server._save_match_queue([
+                    {"bridge_key": "reg-3", "abs_id": "reg-3", "user_id": admin.id}
+                ])
+                self.assertEqual(web_server._load_match_queue()[0]["user_id"], reg.id)
+                web_server._match_queue_clear()
+                self.assertTrue(web_server._match_queue_add(
+                    {"bridge_key": "reg-4", "abs_id": "reg-4"}
+                ))
+
+            with patch.object(web_server, "get_current_user_id", return_value=admin.id):
+                drained = web_server._match_queue_drain()
+                self.assertEqual([item["bridge_key"] for item in drained], ["legacy", "admin"])
+
+            with patch.object(web_server, "get_current_user_id", return_value=reg.id):
+                self.assertEqual(
+                    [item["bridge_key"] for item in web_server._match_queue_drain()],
+                    ["reg-4"],
+                )
+            with web_server.MATCH_QUEUE_LOCK:
+                self.assertEqual(web_server._read_match_queue_unlocked(), [])
 
     def test_kosync_blueprint_is_exempt_from_web_login(self):
         # Device sync endpoint must NOT be redirected to the web login page.

@@ -1554,14 +1554,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('class="book-grid collapsible-book-grid" id="not-started-grid"', html)
         self.assertNotIn('No books syncing yet', html)
 
-    def test_match_template_has_submit_feedback_hooks(self):
-        html = self._read_template_source('match.html')
+    def test_match_get_redirects_to_add_book_with_search(self):
+        response = self.client.get('/match?search=reader')
 
-        self.assertIn('id="submitFeedback"', html)
-        self.assertIn('data-working-label="Creating mapping..."', html)
-        self.assertIn('data-modal-label="Opening forge options..."', html)
-        self.assertIn('previewMatchSubmit(', html)
-        self.assertIn('mappingForm.requestSubmit(forgeBtn);', html)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith('/add-book?search=reader'))
 
     def test_kosync_document_review_lives_on_add_update_book(self):
         index_html = self._read_template_source('index.html')
@@ -1585,15 +1582,60 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('likely match', add_book_html)
         self.assertIn('`File: ${doc.filename}`', add_book_html)
 
-    def test_batch_match_template_has_submit_feedback_hooks(self):
-        html = self._read_template_source('batch_match.html')
+    def test_batch_match_post_falls_back_to_unified_add_book_view(self):
+        response = self.client.post('/batch-match')
+        html = response.get_data(as_text=True)
 
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<title>Add / Update Book · BookBridge</title>', html)
+        self.assertIn('action="/add-book"', html)
+        self.assertNotIn('action="/batch-match"', html)
+        self.assertIn('id="kosync-documents"', html)
         self.assertIn('id="selectionFeedback"', html)
-        self.assertIn('id="queueFeedback"', html)
         self.assertIn('data-working-label="Adding to queue..."', html)
-        self.assertIn('data-working-label="Processing queue..."', html)
-        self.assertIn('data-working-label="Forging + matching..."', html)
         self.assertIn('startBatchSubmitState(submitter)', html)
+
+    def test_add_book_multi_result_with_apostrophe_has_working_ebook_picker(self):
+        """Issue #339: multi-result cards must not interpolate titles into JS."""
+        import src.web_server as ws
+
+        ebooks = [
+            ws.EbookResult(
+                name="The Reader's Copy.epub",
+                title="The Reader's Copy",
+                authors="A. Author",
+                source="BookOrbit",
+                source_id="bo-1",
+            ),
+            ws.EbookResult(
+                name="The Readers Copy.epub",
+                title="The Readers Copy",
+                authors="B. Author",
+                source="BookOrbit",
+                source_id="bo-2",
+            ),
+        ]
+        with patch.object(ws, '_search_audiobooks_with_fallback', return_value=[]), \
+             patch.object(ws, '_search_ebooks_with_fallback', return_value=ebooks), \
+             patch.object(
+                 ws,
+                 '_promote_authoritative_ebook_matches',
+                 side_effect=lambda _audio, candidates: candidates,
+             ):
+            response = self.client.get('/add-book?search=reader')
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-value="The Reader&#39;s Copy.epub"', html)
+        self.assertIn(
+            'data-display-name="The Reader&#39;s Copy - A. Author"', html
+        )
+        self.assertIn('onclick="selectEbookCard(this)"', html)
+        self.assertNotIn('onclick="selectEbookCard(this,', html)
+        self.assertIn("const filename = element.dataset.value || '';", html)
+        self.assertIn(
+            'const display_name = element.dataset.displayName || filename;', html
+        )
 
     def test_suggestions_template_has_submit_feedback_hooks(self):
         html = self._read_template_source('suggestions.html')
@@ -1609,13 +1651,11 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         panel = self._read_template_source('_match_queue_panel.html')
         self.assertIn('id="queueFeedback"', panel)
 
-    def test_forge_template_has_submit_feedback_hooks(self):
-        html = self._read_template_source('forge.html')
+    def test_forge_get_redirects_to_add_book(self):
+        response = self.client.get('/forge')
 
-        self.assertIn('previewForgeState(', html)
-        self.assertIn('Opening forge options...', html)
-        self.assertIn('forgeRequestInFlight = true;', html)
-        self.assertIn("btn.textContent = 'Forging edition...';", html)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response.location.endswith('/add-book'))
 
     def test_clear_progress_endpoint_clean_di(self):
         """Test clear progress endpoint with clean dependency injection."""

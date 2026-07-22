@@ -135,29 +135,32 @@ def test_remove_from_shelf_uses_default_when_setting_is_blank(client):
 # move_between_shelves
 # --------------------------------------------------------------------------
 
-def test_move_between_shelves_calls_both_legs(client):
-    with patch.object(client, 'remove_from_shelf', return_value=True) as mock_rm, \
-         patch.object(client, 'add_to_shelf', return_value=True) as mock_add:
+def test_move_between_shelves_adds_then_removes(client):
+    calls = []
+    with patch.object(client, 'add_to_shelf', side_effect=lambda *a: calls.append(('add',) + a) or True), \
+         patch.object(client, 'remove_from_shelf', side_effect=lambda *a: calls.append(('remove',) + a) or True):
         ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
     assert ok is True
-    mock_rm.assert_called_once_with('book.epub', 'Up Next')
+    assert calls == [('add', 'book.epub', 'Kobo'), ('remove', 'book.epub', 'Up Next')]
+
+
+def test_move_between_shelves_keeps_source_when_destination_add_fails(client):
+    # The source shelf is the book's only remaining home if the add fails, so the
+    # remove leg must not run — otherwise the book lands on neither shelf.
+    with patch.object(client, 'add_to_shelf', return_value=False) as mock_add, \
+         patch.object(client, 'remove_from_shelf') as mock_rm:
+        ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
+    assert ok is False
     mock_add.assert_called_once_with('book.epub', 'Kobo')
+    mock_rm.assert_not_called()
 
 
-def test_move_between_shelves_remove_failure_short_circuits(client):
-    with patch.object(client, 'remove_from_shelf', return_value=False) as mock_rm, \
-         patch.object(client, 'add_to_shelf') as mock_add:
+def test_move_between_shelves_reports_source_remove_failure(client):
+    with patch.object(client, 'add_to_shelf', return_value=True), \
+         patch.object(client, 'remove_from_shelf', return_value=False) as mock_rm:
         ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
     assert ok is False
-    mock_rm.assert_called_once()
-    mock_add.assert_not_called()
-
-
-def test_move_between_shelves_add_failure_returns_false(client):
-    with patch.object(client, 'remove_from_shelf', return_value=True), \
-         patch.object(client, 'add_to_shelf', return_value=False):
-        ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
-    assert ok is False
+    mock_rm.assert_called_once_with('book.epub', 'Up Next')
 
 
 def test_move_between_shelves_same_shelf_noop(client):
@@ -173,3 +176,44 @@ def test_move_between_shelves_missing_args(client):
     assert client.move_between_shelves('', 'a', 'b') is False
     assert client.move_between_shelves('x', '', 'b') is False
     assert client.move_between_shelves('x', 'a', '') is False
+
+
+# --------------------------------------------------------------------------
+# shelf creation (Grimmory builds disagree about the create payload)
+# --------------------------------------------------------------------------
+
+def test_create_shelf_keeps_icon_metadata_when_accepted(client):
+    with patch.object(client, '_make_request', return_value=_Resp({'id': 7}, 201)) as req:
+        resp = client._create_shelf('Kobo')
+    assert resp.status_code == 201
+    req.assert_called_once_with(
+        'POST', '/api/v1/shelves', {'name': 'Kobo', 'icon': '📚', 'iconType': 'PRIME_NG'}
+    )
+
+
+def test_create_shelf_retries_without_icon_metadata_on_rejection(client):
+    # Observed live: this Grimmory build answers 400 "Request body is missing or
+    # malformed." whenever `iconType` is present, so shelf auto-creation never
+    # worked. The name-only retry is what every build accepts.
+    responses = [_Resp({'message': 'Request body is missing or malformed.'}, 400),
+                 _Resp({'id': 13, 'name': 'Kobo'}, 201)]
+    with patch.object(client, '_make_request', side_effect=responses) as req:
+        resp = client._create_shelf('Kobo')
+    assert resp.status_code == 201
+    assert [c.args[2] for c in req.call_args_list] == [
+        {'name': 'Kobo', 'icon': '📚', 'iconType': 'PRIME_NG'},
+        {'name': 'Kobo'},
+    ]
+
+
+def test_create_shelf_returns_none_when_every_form_fails(client):
+    with patch.object(client, '_make_request', return_value=_Resp({'message': 'nope'}, 500)) as req:
+        assert client._create_shelf('Kobo') is None
+    assert req.call_count == 2
+
+
+def test_get_or_create_shelf_id_resolves_after_icon_retry(client):
+    responses = [_Resp({'message': 'malformed'}, 400), _Resp({'id': 13, 'name': 'Kobo'}, 201)]
+    with patch.object(client, '_get_shelf_id', return_value=None), \
+         patch.object(client, '_make_request', side_effect=responses):
+        assert client._get_or_create_shelf_id('Kobo') == 13

@@ -20,6 +20,7 @@ class MockContainer:
         self.mock_sync_manager = Mock()
         self.mock_abs_client = Mock()
         self.mock_booklore_client = Mock()
+        self.mock_bookorbit_client = Mock()
         self.mock_storyteller_client = Mock()
         self.mock_storygraph_client = Mock()
         self.mock_database_service = Mock()
@@ -36,6 +37,7 @@ class MockContainer:
         self.mock_database_service.ignore_suggestion.return_value = True
         self.mock_database_service.get_book.return_value = None
         self.mock_database_service.get_book_by_kosync_id.return_value = None
+        self.mock_database_service.get_pending_suggestion.return_value = None
 
         # Default manager behavior
         self.mock_sync_manager.abs_client = self.mock_abs_client
@@ -64,6 +66,9 @@ class MockContainer:
         # Default booklore behavior
         self.mock_booklore_client.is_configured.return_value = True
         self.mock_booklore_client.find_book_by_filename.return_value = {"id": "bl-1"}
+        self.mock_bookorbit_client.is_configured.return_value = True
+        self.mock_bookorbit_client.remove_from_shelf.return_value = True
+        self.mock_bookorbit_client.move_between_shelves.return_value = True
 
         # Default storyteller behavior
         self.mock_storyteller_client.is_configured.return_value = False
@@ -82,6 +87,9 @@ class MockContainer:
 
     def booklore_client(self):
         return self.mock_booklore_client
+
+    def bookorbit_client(self):
+        return self.mock_bookorbit_client
 
     def storyteller_client(self):
         return self.mock_storyteller_client
@@ -173,6 +181,20 @@ class TestMatchPathsRegression(unittest.TestCase):
             }
         }
 
+    def _post_as_user(self, user_id, path, data):
+        token = web_server.set_current_user_id(user_id)
+        try:
+            return self.client.post(path, data=data)
+        finally:
+            web_server.reset_current_user_id(token)
+
+    def _load_queue_as_user(self, user_id):
+        token = web_server.set_current_user_id(user_id)
+        try:
+            return web_server._load_match_queue()
+        finally:
+            web_server.reset_current_user_id(token)
+
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_creates_mapping(self, _mock_kosync):
         response = self.client.post(
@@ -245,6 +267,25 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.original_ebook_filename, "ebook-source.epub")
         self.assertEqual(saved_book.ebook_filename, "storyteller_story-uuid-with-original.epub")
         self.assertEqual(saved_book.kosync_doc_id, "abcdef1234567890abcdef1234567890")
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-bookorbit-ebook-only")
+    def test_match_route_ebook_only_bookorbit_shelves_by_id(self, _mock_kosync):
+        self.mock_container.mock_bookorbit_client.add_book_id_to_shelf.return_value = True
+
+        response = self.client.post(
+            "/match",
+            data={
+                "ebook_filename": "bookorbit-source.epub",
+                "ebook_source": "BookOrbit",
+                "ebook_source_id": "bo-17",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.mock_container.mock_bookorbit_client.add_book_id_to_shelf.assert_called_once_with(
+            "bo-17", "Kobo"
+        )
+        self.mock_container.mock_booklore_client.add_to_shelf.assert_not_called()
 
     def test_match_route_rejects_ebook_only_without_text_source(self):
         response = self.client.post("/match", data={})
@@ -560,6 +601,38 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(queue[0]["ebook_filename"], "")
 
     @patch("src.web_server._create_audio_only_mapping_from_queue_item")
+    def test_suggestions_drains_shared_audio_only_queue(self, mock_audio_only):
+        self.client.post(
+            "/add-book",
+            data={
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-1",
+                "audio_title": "Regression Book",
+                "audio_duration": "3600",
+                "audio_only": "true",
+            },
+        )
+
+        with patch.object(
+            web_server, "_match_queue_drain", wraps=web_server._match_queue_drain
+        ) as mock_drain, patch.object(
+            web_server,
+            "_spawn_user_background",
+            side_effect=lambda fn, *args, **_kwargs: fn(*args),
+        ) as mock_spawn:
+            response = self.client.post("/suggestions", data={"action": "process_queue"})
+
+        self.assertEqual(response.status_code, 302)
+        mock_drain.assert_called_once_with()
+        self.assertIs(mock_spawn.call_args.args[0], web_server._process_batch_queue)
+        self.assertEqual(mock_spawn.call_args.kwargs["label"], "batch-match-process")
+        mock_audio_only.assert_called_once()
+        self.assertTrue(mock_audio_only.call_args.args[0]["audio_only"])
+        self.assertEqual(web_server._load_match_queue(), [])
+
+    @patch("src.web_server._create_audio_only_mapping_from_queue_item")
     def test_forge_queue_actions_route_audio_only_items_without_forging(self, mock_audio_only):
         item = {
             "audio_only": True,
@@ -573,6 +646,45 @@ class TestMatchPathsRegression(unittest.TestCase):
         web_server._process_forge_only_queue([item])
 
         self.assertEqual(mock_audio_only.call_count, 2)
+        self.mock_container.mock_forge_service.start_manual_forge.assert_not_called()
+
+    def test_forge_only_completes_bookfusion_shelf_watch_approval(self):
+        # Forge only saves a real mapping on its BookFusion branch, so a shelf-watch
+        # approval behind it is finished and the watch-shelf copy must move — matching
+        # the batch and forge-match processors. The main forge path creates no mapping
+        # and leaves the suggestion pending, so it deliberately does not move anything.
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "ab-1" else None
+        )
+
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ), patch(
+            "src.web_server._create_or_update_bookfusion_progress_mapping",
+            return_value=(Mock(abs_id="ab-1"), None, None),
+        ):
+            web_server._process_forge_only_queue([
+                {
+                    "abs_id": "ab-1",
+                    "abs_title": "Regression Book",
+                    "audio_source": "ABS",
+                    "audio_source_id": "ab-1",
+                    "ebook_filename": "bookfusion.epub",
+                    "ebook_source": "BookFusion",
+                    "ebook_source_id": "bf-77",
+                }
+            ])
+
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next", "Kobo"
+        )
         self.mock_container.mock_forge_service.start_manual_forge.assert_not_called()
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-batch-forge-1")
@@ -792,6 +904,7 @@ class TestMatchPathsRegression(unittest.TestCase):
     def test_suggestions_queue_add_clear_xhr_returns_panel_fragment(self):
         # An XHR add/clear returns the re-rendered queue panel fragment (200) instead of a
         # redirect, so the page swaps it in place without reloading (preserving scroll).
+        self.mock_container.mock_abs_client.get_all_audiobooks.reset_mock()
         add_response = self.client.post(
             "/suggestions",
             data={
@@ -808,7 +921,11 @@ class TestMatchPathsRegression(unittest.TestCase):
         body = add_response.get_data(as_text=True)
         self.assertIn("Regression Book", body)
         self.assertIn("Match All", body)
-        self.assertEqual(len(web_server._load_match_queue()), 1)
+        queue = web_server._load_match_queue()
+        self.assertEqual(len(queue), 1)
+        self.assertEqual(queue[0]["abs_title"], "Regression Book")
+        self.assertEqual(queue[0]["duration"], 3600)
+        self.mock_container.mock_abs_client.get_all_audiobooks.assert_called_once_with()
 
         clear_response = self.client.post(
             "/suggestions",
@@ -818,6 +935,39 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(clear_response.status_code, 200)
         self.assertIn("Queue is empty", clear_response.get_data(as_text=True))
         self.assertEqual(web_server._load_match_queue(), [])
+
+    def test_match_form_aliases_and_ebook_only_work_across_routes(self):
+        cases = (
+            (51, "/add-book", {
+                "audiobook_id": "ab-alias",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-alias",
+                "audio_title": "Alias Audio",
+                "audio_duration": "90",
+                "ebook_filename": "alias.epub",
+                "source_type": "BookOrbit",
+                "source_id": "bo-alias",
+                "source_path": "/books/alias.epub",
+            }, "ab-alias"),
+            (52, "/suggestions", {
+                "ebook_filename": "ebook-only.epub",
+                "ebook_display_name": "Ebook Only",
+                "source_type": "BookLore",
+                "source_id": "bl-ebook-only",
+                "source_path": "/books/ebook-only.epub",
+            }, "ebook:ebook-only.epub"),
+        )
+        for user_id, endpoint, form_data, expected_id in cases:
+            with self.subTest(endpoint=endpoint):
+                self._post_as_user(
+                    user_id, endpoint, {"action": "add_to_queue", **form_data}
+                )
+                item = self._load_queue_as_user(user_id)[0]
+                self.assertEqual(item["abs_id"], expected_id)
+                self.assertEqual(item["ebook_source"], form_data["source_type"])
+                self.assertEqual(item["ebook_source_id"], form_data["source_id"])
+                self.assertEqual(item["ebook_source_path"], form_data["source_path"])
+        self.assertIsNone(self._load_queue_as_user(52)[0]["audio_source"])
 
     def test_suggestions_add_many_to_queue_bulk(self):
         # Bulk add posts suggestion keys; the server builds each queue item from its
@@ -1066,45 +1216,55 @@ class TestMatchPathsRegression(unittest.TestCase):
             self.assertEqual(updated_state.get("scan_cache_no_match_abs_ids", []), [])
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-suggestions-1")
-    def test_suggestions_queue_add_and_process(self, _mock_kosync):
-        add_response = self.client.post(
+    def test_suggestions_queue_processes_bookorbit_ebook_and_claims_user(self, _mock_kosync):
+        self.mock_container.mock_database_service.get_kosync_doc_by_filename.return_value = Mock(
+            document_hash="device-hash"
+        )
+        add_response = self._post_as_user(
+            41,
             "/suggestions",
-            data={
+            {
                 "action": "add_to_queue",
                 "audiobook_id": "ab-1",
                 "ebook_filename": "suggested.epub",
                 "ebook_display_name": "Suggested Book",
+                "ebook_source": "BookOrbit",
+                "ebook_source_id": "bo-17",
                 "ebook_source_path": "/books/Author/Suggested/suggested.epub",
             },
         )
         self.assertEqual(add_response.status_code, 302)
 
-        queue = web_server._load_match_queue()
+        queue = self._load_queue_as_user(41)
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["abs_id"], "ab-1")
 
-        process_response = self.client.post(
-            "/suggestions",
-            data={"action": "process_queue"},
+        process_response = self._post_as_user(
+            41, "/suggestions", {"action": "process_queue"}
         )
         self.assertEqual(process_response.status_code, 302)
-        self.assertTrue(process_response.location.endswith("/"))
 
         self.mock_container.mock_database_service.save_book.assert_called_once()
         self.assertEqual(
             _mock_kosync.call_args.kwargs.get("source_path"),
             "/books/Author/Suggested/suggested.epub",
         )
-        self.assertEqual(web_server._load_match_queue(), [])
+        self.assertEqual(_mock_kosync.call_args.kwargs.get("bookorbit_id"), "bo-17")
+        self.mock_container.mock_database_service.link_user_book.assert_called_once_with(41, "ab-1")
+        dismissed = {
+            call.args[0]
+            for call in self.mock_container.mock_database_service.dismiss_suggestion.call_args_list
+        }
+        self.assertEqual(dismissed, {"ab-1", "hash-suggestions-1", "device-hash"})
+        self.assertEqual(self._load_queue_as_user(41), [])
 
-    @patch("src.web_server._create_or_update_library_audio_mapping", return_value=(Mock(abs_id="booklore:42"), None, None))
-    def test_suggestions_queue_add_and_process_booklore_audio(self, _mock_booklore_mapping):
-        add_response = self.client.post(
+    def test_library_audio_captures_bookorbit_shelf_origin_before_mapping(self):
+        add_response = self._post_as_user(
+            42,
             "/suggestions",
-            data={
+            {
                 "action": "add_to_queue",
                 "audiobook_id": "booklore:42",
-                "audio_source": "BookLore",
                 "audio_source_id": "42",
                 "audio_title": "BookLore Regression",
                 "audio_cover_url": "/api/booklore/audiobook-cover/42",
@@ -1120,17 +1280,41 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        queue = web_server._load_match_queue()
+        queue = self._load_queue_as_user(42)
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["abs_id"], "booklore:42")
         self.assertEqual(queue[0]["audio_source"], "BookLore")
 
-        process_response = self.client.post("/suggestions", data={"action": "process_queue"})
-        self.assertEqual(process_response.status_code, 302)
-        self.assertTrue(process_response.location.endswith("/"))
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        events = []
 
-        _mock_booklore_mapping.assert_called_once()
-        call_kwargs = _mock_booklore_mapping.call_args.kwargs
+        def lookup_pending(key):
+            events.append(f"lookup:{key}")
+            return pending if key == "booklore:42" else None
+
+        def save_mapping(**_kwargs):
+            events.append("mapping")
+            pending.origin = "dismissed"
+            return Mock(abs_id="booklore:42"), None, None
+
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = lookup_pending
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ), patch(
+            "src.web_server._create_or_update_library_audio_mapping",
+            side_effect=save_mapping,
+        ) as mock_mapping:
+            self._post_as_user(42, "/suggestions", {"action": "process_queue"})
+
+        self.assertEqual(events[:2], ["lookup:booklore:42", "mapping"])
+        mock_mapping.assert_called_once()
+        call_kwargs = mock_mapping.call_args.kwargs
         self.assertEqual(call_kwargs["audio_source_id"], "42")
         self.assertEqual(call_kwargs["audio_title"], "BookLore Regression")
         self.assertEqual(call_kwargs["ebook_filename"], "booklore-suggested.epub")
@@ -1138,8 +1322,274 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(call_kwargs["ebook_source_id"], "6798")
         self.assertEqual(call_kwargs["ebook_source_path"], "/books/BookLore/booklore-suggested.epub")
 
+        self.mock_container.mock_bookorbit_client.remove_from_shelf.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next"
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_not_called()
+        self.mock_container.mock_database_service.link_user_book.assert_called_once_with(
+            42, "booklore:42"
+        )
         self.mock_container.mock_database_service.save_book.assert_not_called()
-        self.assertEqual(web_server._load_match_queue(), [])
+        self.assertEqual(self._load_queue_as_user(42), [])
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-forge-shelf-watch")
+    def test_forge_queue_completes_bookorbit_shelf_watch_before_dismissal(self, _mock_kosync):
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        events = []
+
+        def lookup_pending(key):
+            events.append(f"lookup:{key}")
+            return pending if key == "ab-1" and pending.origin == "shelf_watch" else None
+
+        def dismiss_suggestion(key):
+            events.append(f"dismiss:{key}")
+            pending.origin = "dismissed"
+
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = lookup_pending
+        self.mock_container.mock_database_service.dismiss_suggestion.side_effect = dismiss_suggestion
+        self.mock_container.mock_forge_service.start_auto_forge_match.side_effect = (
+            lambda **_kwargs: events.append("forge")
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.side_effect = (
+            lambda *_args: events.append("move") or True
+        )
+
+        item = {
+            "abs_id": "ab-1",
+            "abs_title": "Regression Book",
+            "audio_source": "ABS",
+            "audio_source_id": "ab-1",
+            "ebook_filename": "source.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+            "duration": 3600,
+        }
+
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ):
+            web_server._process_forge_match_queue([item])
+
+        self.assertEqual(events[:3], ["lookup:ab-1", "forge", "move"])
+        self.assertLess(events.index("move"), events.index("dismiss:ab-1"))
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next", "Kobo"
+        )
+
+    def test_forge_queue_library_audio_removes_shelf_watch_source_after_mapping(self):
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "booklore:42" else None
+        )
+
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ), patch(
+            "src.web_server._create_or_update_library_audio_mapping",
+            return_value=(Mock(abs_id="booklore:42"), None, None),
+        ):
+            web_server._process_forge_match_queue([
+                {
+                    "abs_id": "booklore:42",
+                    "audio_source": "BookLore",
+                    "audio_source_id": "42",
+                    "audio_title": "BookLore Regression",
+                    "ebook_filename": "source.epub",
+                    "ebook_source": "BookLore",
+                    "ebook_source_id": "6798",
+                    "storyteller_uuid": "story-42",
+                }
+            ])
+
+        self.mock_container.mock_bookorbit_client.remove_from_shelf.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next"
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_not_called()
+
+    def test_early_queue_mappings_complete_shelf_watch_approval_after_success(self):
+        metadata = {
+            "source_name": "BookOrbit",
+            "grimmory_filename": "bookorbit-origin.epub",
+        }
+        cases = (
+            (
+                web_server._process_batch_queue,
+                {"audio_source": "ABS", "audio_only": True, "abs_id": "ab-1"},
+                "_create_audio_only_mapping_from_queue_item",
+            ),
+            (
+                web_server._process_forge_match_queue,
+                {"audio_source": "ABS", "audio_only": True, "abs_id": "ab-1"},
+                "_create_audio_only_mapping_from_queue_item",
+            ),
+            (
+                web_server._process_batch_queue,
+                {"ebook_filename": "ebook-only.epub"},
+                "_create_ebook_only_mapping_from_queue_item",
+            ),
+            (
+                web_server._process_forge_match_queue,
+                {"ebook_filename": "ebook-only.epub"},
+                "_create_ebook_only_mapping_from_queue_item",
+            ),
+        )
+
+        for processor, item, mapping_name in cases:
+            with patch(
+                "src.web_server._queue_item_shelf_watch_metadata", return_value=metadata
+            ), patch(
+                f"src.web_server.{mapping_name}", return_value=Mock(abs_id="saved")
+            ) as mock_mapping, patch(
+                "src.web_server._complete_shelf_watch_approval"
+            ) as mock_complete, patch(
+                "src.web_server._shelve_saved_ebook"
+            ) as mock_shelve:
+                mock_complete.return_value = True
+                processor([item])
+
+            mock_mapping.assert_called_once_with(item)
+            mock_complete.assert_called_once_with(metadata)
+            mock_shelve.assert_not_called()
+
+    def test_ebook_only_queues_fall_back_after_failed_shelf_watch_completion(self):
+        metadata = {
+            "source_name": "BookOrbit",
+            "grimmory_filename": "bookorbit-origin.epub",
+        }
+        item = {
+            "ebook_filename": "ebook-only.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+        }
+        for processor in (web_server._process_batch_queue, web_server._process_forge_match_queue):
+            with patch(
+                "src.web_server._queue_item_shelf_watch_metadata", return_value=metadata
+            ), patch(
+                "src.web_server._create_ebook_only_mapping_from_queue_item",
+                return_value=Mock(abs_id="saved"),
+            ) as mock_mapping, patch(
+                "src.web_server._complete_shelf_watch_approval", return_value=False
+            ) as mock_complete, patch(
+                "src.web_server._shelve_saved_ebook"
+            ) as mock_shelve:
+                processor([item])
+
+            mock_mapping.assert_called_once_with(item)
+            mock_complete.assert_called_once_with(metadata)
+            mock_shelve.assert_called_once_with(mock_mapping.return_value)
+
+    def test_failed_ebook_only_queue_mapping_does_not_shelve(self):
+        item = {
+            "ebook_filename": "ebook-only.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+        }
+        for processor in (web_server._process_batch_queue, web_server._process_forge_match_queue):
+            with patch(
+                "src.web_server._queue_item_shelf_watch_metadata", return_value={"grimmory_filename": "origin.epub"}
+            ), patch(
+                "src.web_server._create_ebook_only_mapping_from_queue_item", return_value=None
+            ) as mock_mapping, patch(
+                "src.web_server._complete_shelf_watch_approval"
+            ) as mock_complete, patch(
+                "src.web_server._shelve_saved_ebook"
+            ) as mock_shelve:
+                processor([item])
+
+            mock_mapping.assert_called_once_with(item)
+            mock_complete.assert_not_called()
+            mock_shelve.assert_not_called()
+
+    @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-shelf-fallback")
+    def test_batch_queue_falls_back_when_shelf_watch_move_fails(self, _mock_kosync, _mock_ingest):
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "ab-1" else None
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.return_value = False
+        item = {
+            "abs_id": "ab-1",
+            "abs_title": "Regression Book",
+            "audio_source": "ABS",
+            "audio_source_id": "ab-1",
+            "ebook_filename": "source.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+            "duration": 3600,
+        }
+
+        with patch("src.web_server._shelve_matched_ebook") as mock_shelve:
+            web_server._process_batch_queue([item])
+
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_called_once_with(
+            "bookorbit-origin.epub", "Up Next", "Kobo"
+        )
+        mock_shelve.assert_called_once_with("source.epub", "BookOrbit", "bo-17")
+
+    @patch(
+        "src.web_server._create_or_update_bookfusion_progress_mapping",
+        return_value=(Mock(abs_id="ab-1"), None, None),
+    )
+    def test_suggestions_bookfusion_preserves_audio_fields_and_claims_user(self, mock_mapping):
+        self._post_as_user(
+            43,
+            "/suggestions",
+            {
+                "action": "add_to_queue",
+                "audiobook_id": "ab-1",
+                "audio_source": "ABS",
+                "audio_source_id": "ab-1",
+                "audio_title": "BookFusion Audio",
+                "audio_cover_url": "/covers/ab-1",
+                "audio_duration": "4321.5",
+                "audio_provider_book_id": "provider-book-1",
+                "audio_provider_file_id": "provider-file-1",
+                "ebook_filename": "bookfusion.epub",
+                "ebook_display_name": "BookFusion Edition",
+                "ebook_source": "BookFusion",
+                "ebook_source_id": "bf-77",
+                "storyteller_uuid": "story-bf-1",
+            },
+        )
+
+        self._post_as_user(43, "/suggestions", {"action": "process_queue"})
+
+        self.assertEqual(
+            mock_mapping.call_args.kwargs,
+            {
+                "audio_source": "ABS",
+                "audio_source_id": "ab-1",
+                "audio_title": "BookFusion Audio",
+                "audio_cover_url": "/covers/ab-1",
+                "audio_duration": 4321.5,
+                "audio_provider_book_id": "provider-book-1",
+                "audio_provider_file_id": "provider-file-1",
+                "bookfusion_id": "bf-77",
+                "bookfusion_title": "BookFusion Edition",
+                "storyteller_uuid": "story-bf-1",
+            },
+        )
+        self.mock_container.mock_database_service.link_user_book.assert_called_once_with(43, "ab-1")
+        self.assertEqual(self._load_queue_as_user(43), [])
 
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-suggestions-story-1")

@@ -14,21 +14,6 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-class TranscriptionSegment:
-    """Represents a single transcription segment with timing."""
-    def __init__(self, start: float, end: float, text: str):
-        self.start = start
-        self.end = end
-        self.text = text
-    
-    def to_dict(self) -> dict:
-        return {
-            "start": self.start,
-            "end": self.end,
-            "text": self.text
-        }
-
-
 class TranscriptionProvider(ABC):
     """Abstract base class for transcription providers."""
     

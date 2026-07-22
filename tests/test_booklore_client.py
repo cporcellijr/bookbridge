@@ -1152,10 +1152,18 @@ def test_add_to_shelf_logs_create_failure_details(booklore_client, caplog):
     shelves_response = MagicMock()
     shelves_response.status_code = 200
     shelves_response.json.return_value = []
-    create_response = MagicMock()
-    create_response.status_code = 500
-    create_response.text = "server exploded"
-    booklore_client._make_request = MagicMock(side_effect=[shelves_response, create_response])
+
+    def _failed_create():
+        resp = MagicMock()
+        resp.status_code = 500
+        resp.text = "server exploded"
+        return resp
+
+    # Shelf creation is attempted twice: the icon-bearing body, then the name-only
+    # fallback for builds that reject `iconType`. Only after both fail do we log.
+    booklore_client._make_request = MagicMock(
+        side_effect=[shelves_response, _failed_create(), _failed_create()]
+    )
 
     with caplog.at_level("ERROR"):
         ok = booklore_client.add_to_shelf("fail.epub", shelf_name="Kobo")
@@ -1163,6 +1171,11 @@ def test_add_to_shelf_logs_create_failure_details(booklore_client, caplog):
     assert ok is False
     assert "status=500" in caplog.text
     assert "server exploded" in caplog.text
+    create_bodies = [c[0][2] for c in booklore_client._make_request.call_args_list[1:]]
+    assert create_bodies == [
+        {"name": "Kobo", "icon": "📚", "iconType": "PRIME_NG"},
+        {"name": "Kobo"},
+    ]
 
 
 def test_refresh_book_cache_uses_server_side_library_filter_when_supported(mock_db):

@@ -4,6 +4,34 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Book editions with apostrophes can now be selected from multi-result matching
+  searches.** The Add / Update Book picker now reads each edition's existing card
+  metadata instead of embedding its filename and title in inline JavaScript. (#339)
+
+- **Matching queues are now consistent and private per user.** Add Book and
+  Suggestions share one atomic background processor, including BookOrbit hashes,
+  ownership claims, suggestion dismissal, and shelf-watch completion for direct,
+  Forge & Match, Forge only, audio-only, and ebook-only approvals. If the recorded
+  shelf move fails, the standard source-aware shelf fallback is now attempted; a
+  failed destination add never removes the watch-shelf copy. **A Grimmory shelf move
+  can no longer lose a book:** it previously cleared the old shelf first, so if the
+  new shelf couldn't be written the book ended up on neither. Queue items are stamped to the
+  acting user, so another user can no longer view, remove, clear, or process them.
+  Pre-upgrade unowned queue items remain available only to the primary admin.
+  Deleting a user removes their queued work, and malformed explicit queue owners
+  are discarded on the next queue rewrite.
+
+- **BookBridge can create Grimmory shelves again.** Shelving a book to a shelf that
+  didn't exist yet silently did nothing: the request included icon fields that
+  newer Grimmory builds reject outright, so the shelf was never created and the
+  book was never filed. BookBridge now retries without the icon details, so your
+  configured Kobo and Up Next shelves are created on first use as intended. If your
+  shelves already existed you were unaffected.
+
 ## [7.3.1] - 2026-07-21
 
 ### Security

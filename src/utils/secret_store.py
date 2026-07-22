@@ -163,12 +163,6 @@ def available() -> bool:
     return _get_fernet() is not None
 
 
-def unavailable_reason() -> Optional[str]:
-    """Why encryption is off, or None when it is working."""
-    _get_fernet()
-    return _unavailable_reason
-
-
 def reset_cache() -> None:
     """Drop the cached key so the next call re-resolves it. For tests and for
     re-reading a key file that was replaced at runtime."""
