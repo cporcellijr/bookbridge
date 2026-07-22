@@ -1381,12 +1381,15 @@ def _apply_user_admin_action(form):
             elif target.role == 'admin' and _active_admin_count() <= 1:
                 error = "Can't delete the last active admin"
             else:
-                database_service.delete_user(uid)
-                try:
-                    container.user_client_registry().invalidate(uid)
-                except Exception:
-                    pass
-                message = f"Deleted '{target.username}'"
+                if database_service.delete_user(uid):
+                    _clear_match_queue_for_user_id(uid)
+                    try:
+                        container.user_client_registry().invalidate(uid)
+                    except Exception:
+                        pass
+                    message = f"Deleted '{target.username}'"
+                else:
+                    error = "User not found"
     except Exception as e:
         error = f"Action failed: {e}"
     return message, error
@@ -6641,12 +6644,16 @@ def _write_match_queue_unlocked(items: list) -> None:
 
 
 def _normalize_match_queue_user_id(value):
-    if isinstance(value, bool):
+    if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int):
-        return value
+        return value if value > 0 else None
     if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
+        try:
+            user_id = int(value.strip())
+        except (TypeError, ValueError):
+            return None
+        return user_id if user_id > 0 else None
     return None
 
 
@@ -6686,6 +6693,18 @@ def _match_queue_stamp(item: dict, user_id) -> dict:
     scoped_item = dict(item)
     scoped_item['user_id'] = user_id
     return scoped_item
+
+
+def _clear_match_queue_for_user_id(user_id) -> None:
+    """Remove persisted queue items belonging to a successfully deleted user."""
+    normalized_user_id = _normalize_match_queue_user_id(user_id)
+    if normalized_user_id is None:
+        return
+    with MATCH_QUEUE_LOCK:
+        _write_match_queue_unlocked([
+            item for item in _read_match_queue_unlocked()
+            if _normalize_match_queue_user_id(item.get('user_id')) != normalized_user_id
+        ])
 
 
 def _load_match_queue() -> list:

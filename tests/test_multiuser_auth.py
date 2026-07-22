@@ -631,6 +631,41 @@ class TestMultiUserAuth(unittest.TestCase):
         self.client.post('/admin/users', data={'action': 'delete', 'user_id': str(uid)})
         self.assertIsNotNone(self.svc.get_user(uid))  # not deleted
 
+    def test_admin_delete_user_purges_queue_and_prevents_id_reuse_inheritance(self):
+        import src.web_server as web_server
+
+        other = self.svc.create_user('queue-other', 'pw', role='user')
+        target = self.svc.create_user('queue-target', 'pw', role='user')
+        items = [
+            {'bridge_key': 'legacy-missing', 'abs_id': 'legacy-missing'},
+            {'bridge_key': 'legacy-null', 'abs_id': 'legacy-null', 'user_id': None},
+            {'bridge_key': 'other', 'abs_id': 'other', 'user_id': other.id},
+            {'bridge_key': 'target', 'abs_id': 'target', 'user_id': target.id},
+        ]
+
+        with patch.object(web_server, 'DATA_DIR', Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            self._login()
+            response = self.client.post(
+                '/admin/users', data={'action': 'delete', 'user_id': str(target.id)}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertIsNone(self.svc.get_user(target.id))
+
+            queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
+            payload = json.loads(queue_file.read_text(encoding='utf-8'))
+            self.assertEqual(
+                [item['bridge_key'] for item in payload['items']],
+                ['legacy-missing', 'legacy-null', 'other'],
+            )
+
+            replacement = self.svc.create_user('queue-replacement', 'pw', role='user')
+            self.assertEqual(replacement.id, target.id)
+            with patch.object(web_server, 'get_current_user_id', return_value=replacement.id):
+                self.assertEqual(web_server._load_match_queue(), [])
+
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
@@ -1322,6 +1357,28 @@ class TestMultiUserAuth(unittest.TestCase):
             queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
             persisted = json.loads(queue_file.read_text(encoding="utf-8"))["items"]
             self.assertEqual([item["bridge_key"] for item in persisted], ["regular"])
+
+    def test_match_queue_rewrite_purges_invalid_explicit_owner_ids(self):
+        import src.web_server as web_server
+
+        admin = self.svc.get_user_by_username('admin')
+        items = [
+            {'bridge_key': 'zero', 'abs_id': 'zero', 'user_id': 0},
+            {'bridge_key': 'negative', 'abs_id': 'negative', 'user_id': -1},
+            {'bridge_key': 'unicode', 'abs_id': 'unicode', 'user_id': '\N{SUPERSCRIPT TWO}'},
+            {'bridge_key': 'overlong', 'abs_id': 'overlong', 'user_id': '9' * 5000},
+        ]
+
+        with patch.object(web_server, 'DATA_DIR', Path(self.tmp)):
+            with web_server.MATCH_QUEUE_LOCK:
+                web_server._write_match_queue_unlocked(items)
+
+            with patch.object(web_server, 'get_current_user_id', return_value=admin.id):
+                web_server._match_queue_clear()
+
+            queue_file = Path(self.tmp) / web_server.MATCH_QUEUE_FILE_NAME
+            payload = json.loads(queue_file.read_text(encoding='utf-8'))
+            self.assertEqual(payload['items'], [])
 
     def test_match_queue_mutations_preserve_other_users(self):
         import src.web_server as web_server
