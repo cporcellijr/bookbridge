@@ -135,29 +135,32 @@ def test_remove_from_shelf_uses_default_when_setting_is_blank(client):
 # move_between_shelves
 # --------------------------------------------------------------------------
 
-def test_move_between_shelves_calls_both_legs(client):
-    with patch.object(client, 'remove_from_shelf', return_value=True) as mock_rm, \
-         patch.object(client, 'add_to_shelf', return_value=True) as mock_add:
+def test_move_between_shelves_adds_then_removes(client):
+    calls = []
+    with patch.object(client, 'add_to_shelf', side_effect=lambda *a: calls.append(('add',) + a) or True), \
+         patch.object(client, 'remove_from_shelf', side_effect=lambda *a: calls.append(('remove',) + a) or True):
         ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
     assert ok is True
-    mock_rm.assert_called_once_with('book.epub', 'Up Next')
+    assert calls == [('add', 'book.epub', 'Kobo'), ('remove', 'book.epub', 'Up Next')]
+
+
+def test_move_between_shelves_keeps_source_when_destination_add_fails(client):
+    # The source shelf is the book's only remaining home if the add fails, so the
+    # remove leg must not run — otherwise the book lands on neither shelf.
+    with patch.object(client, 'add_to_shelf', return_value=False) as mock_add, \
+         patch.object(client, 'remove_from_shelf') as mock_rm:
+        ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
+    assert ok is False
     mock_add.assert_called_once_with('book.epub', 'Kobo')
+    mock_rm.assert_not_called()
 
 
-def test_move_between_shelves_remove_failure_short_circuits(client):
-    with patch.object(client, 'remove_from_shelf', return_value=False) as mock_rm, \
-         patch.object(client, 'add_to_shelf') as mock_add:
+def test_move_between_shelves_reports_source_remove_failure(client):
+    with patch.object(client, 'add_to_shelf', return_value=True), \
+         patch.object(client, 'remove_from_shelf', return_value=False) as mock_rm:
         ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
     assert ok is False
-    mock_rm.assert_called_once()
-    mock_add.assert_not_called()
-
-
-def test_move_between_shelves_add_failure_returns_false(client):
-    with patch.object(client, 'remove_from_shelf', return_value=True), \
-         patch.object(client, 'add_to_shelf', return_value=False):
-        ok = client.move_between_shelves('book.epub', 'Up Next', 'Kobo')
-    assert ok is False
+    mock_rm.assert_called_once_with('book.epub', 'Up Next')
 
 
 def test_move_between_shelves_same_shelf_noop(client):

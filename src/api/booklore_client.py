@@ -3061,10 +3061,11 @@ class BookloreClient:
             return []
 
     def move_between_shelves(self, ebook_filename, from_shelf, to_shelf):
-        """Atomically remove a book from one shelf and add it to another.
+        """Add a book to one shelf, then remove it from another.
 
-        Returns True only if both legs succeed. If the remove leg fails, the add
-        leg is skipped so the book is not left on both shelves.
+        The destination add runs first: if it fails the book keeps its place on
+        the source shelf, whereas removing first can leave it on neither shelf.
+        Returns True only if both legs succeed.
         """
         if not ebook_filename or not from_shelf or not to_shelf:
             logger.warning("Grimmory: move_between_shelves called with missing arguments")
@@ -3072,16 +3073,16 @@ class BookloreClient:
         if from_shelf == to_shelf:
             logger.debug(f"Grimmory: move_between_shelves no-op ('{from_shelf}' == '{to_shelf}')")
             return True
-        if not self.remove_from_shelf(ebook_filename, from_shelf):
+        if not self.add_to_shelf(ebook_filename, to_shelf):
             logger.warning(
-                f"Grimmory: move_between_shelves aborted - remove from '{from_shelf}' failed for "
+                f"Grimmory: move_between_shelves aborted - add to '{to_shelf}' failed for "
                 f"{sanitize_log_data(ebook_filename)}"
             )
             return False
-        if not self.add_to_shelf(ebook_filename, to_shelf):
-            logger.error(
-                f"Grimmory: move_between_shelves left book off both shelves - remove from "
-                f"'{from_shelf}' succeeded but add to '{to_shelf}' failed for "
+        if not self.remove_from_shelf(ebook_filename, from_shelf):
+            logger.warning(
+                f"Grimmory: move_between_shelves left book on both shelves - add to "
+                f"'{to_shelf}' succeeded but remove from '{from_shelf}' failed for "
                 f"{sanitize_log_data(ebook_filename)}"
             )
             return False
