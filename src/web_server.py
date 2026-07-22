@@ -5774,6 +5774,7 @@ def _process_forge_match_queue(queue_items):
     from src.db.models import Book
     clients = uc()
     for item in queue_items:
+        shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if item.get('audio_only'):
             _create_audio_only_mapping_from_queue_item(item)
             continue
@@ -5804,6 +5805,7 @@ def _process_forge_match_queue(queue_items):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
 
         # If Storyteller is selected, keep the current direct-match path.
@@ -5832,6 +5834,7 @@ def _process_forge_match_queue(queue_items):
                     )
                 elif saved_book:
                     _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                    _complete_shelf_watch_approval(shelf_watch_meta, remove_only=True)
                 continue
 
             ebook_filename = item['ebook_filename']
@@ -5923,7 +5926,9 @@ def _process_forge_match_queue(queue_items):
 
             if not str(item['abs_id']).startswith('booklore:'):
                 clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
-            if clients.booklore_client.is_configured():
+            if shelf_watch_meta:
+                _complete_shelf_watch_approval(shelf_watch_meta)
+            elif clients.booklore_client.is_configured():
                 shelf_filename = original_ebook_filename or ebook_filename
                 _shelve_matched_ebook(shelf_filename)
             if clients.storyteller_client.is_configured() and book.storyteller_uuid:
@@ -6080,6 +6085,7 @@ def _process_forge_match_queue(queue_items):
                 **_client_bundle_kwargs(clients),
             )
 
+        _complete_shelf_watch_approval(shelf_watch_meta)
         database_service.dismiss_suggestion(forge_id)
         if kosync_doc_id:
             database_service.dismiss_suggestion(kosync_doc_id)

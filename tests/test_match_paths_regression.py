@@ -1274,6 +1274,92 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.mock_container.mock_database_service.save_book.assert_not_called()
         self.assertEqual(self._load_queue_as_user(42), [])
 
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-forge-shelf-watch")
+    def test_forge_queue_completes_bookorbit_shelf_watch_before_dismissal(self, _mock_kosync):
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        events = []
+
+        def lookup_pending(key):
+            events.append(f"lookup:{key}")
+            return pending if key == "ab-1" and pending.origin == "shelf_watch" else None
+
+        def dismiss_suggestion(key):
+            events.append(f"dismiss:{key}")
+            pending.origin = "dismissed"
+
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = lookup_pending
+        self.mock_container.mock_database_service.dismiss_suggestion.side_effect = dismiss_suggestion
+        self.mock_container.mock_forge_service.start_auto_forge_match.side_effect = (
+            lambda **_kwargs: events.append("forge")
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.side_effect = (
+            lambda *_args: events.append("move") or True
+        )
+
+        item = {
+            "abs_id": "ab-1",
+            "abs_title": "Regression Book",
+            "audio_source": "ABS",
+            "audio_source_id": "ab-1",
+            "ebook_filename": "source.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+            "duration": 3600,
+        }
+
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ):
+            web_server._process_forge_match_queue([item])
+
+        self.assertEqual(events[:3], ["lookup:ab-1", "forge", "move"])
+        self.assertLess(events.index("move"), events.index("dismiss:ab-1"))
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next", "Kobo"
+        )
+
+    def test_forge_queue_library_audio_removes_shelf_watch_source_after_mapping(self):
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "booklore:42" else None
+        )
+
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ), patch(
+            "src.web_server._create_or_update_library_audio_mapping",
+            return_value=(Mock(abs_id="booklore:42"), None, None),
+        ):
+            web_server._process_forge_match_queue([
+                {
+                    "abs_id": "booklore:42",
+                    "audio_source": "BookLore",
+                    "audio_source_id": "42",
+                    "audio_title": "BookLore Regression",
+                    "ebook_filename": "source.epub",
+                    "ebook_source": "BookLore",
+                    "ebook_source_id": "6798",
+                    "storyteller_uuid": "story-42",
+                }
+            ])
+
+        self.mock_container.mock_bookorbit_client.remove_from_shelf.assert_called_once_with(
+            "bookorbit-origin.epub", "Reading Next"
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_not_called()
+
     @patch(
         "src.web_server._create_or_update_bookfusion_progress_mapping",
         return_value=(Mock(abs_id="ab-1"), None, None),
