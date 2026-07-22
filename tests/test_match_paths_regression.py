@@ -1396,10 +1396,60 @@ class TestMatchPathsRegression(unittest.TestCase):
             ) as mock_mapping, patch(
                 "src.web_server._complete_shelf_watch_approval"
             ) as mock_complete:
+                mock_complete.return_value = True
                 processor([item])
 
             mock_mapping.assert_called_once_with(item)
             mock_complete.assert_called_once_with(metadata)
+
+    def test_ebook_only_queues_fall_back_after_failed_shelf_watch_completion(self):
+        metadata = {
+            "source_name": "BookOrbit",
+            "grimmory_filename": "bookorbit-origin.epub",
+        }
+        item = {
+            "ebook_filename": "ebook-only.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+        }
+        for processor in (web_server._process_batch_queue, web_server._process_forge_match_queue):
+            with patch(
+                "src.web_server._queue_item_shelf_watch_metadata", return_value=metadata
+            ), patch(
+                "src.web_server._create_ebook_only_mapping_from_queue_item",
+                return_value=Mock(abs_id="saved"),
+            ) as mock_mapping, patch(
+                "src.web_server._complete_shelf_watch_approval", return_value=False
+            ) as mock_complete, patch(
+                "src.web_server._shelve_matched_ebook"
+            ) as mock_shelve:
+                processor([item])
+
+            mock_mapping.assert_called_once_with(item)
+            mock_complete.assert_called_once_with(metadata)
+            mock_shelve.assert_called_once_with("ebook-only.epub", "BookOrbit", "bo-17")
+
+    def test_failed_ebook_only_queue_mapping_does_not_shelve(self):
+        item = {
+            "ebook_filename": "ebook-only.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+        }
+        for processor in (web_server._process_batch_queue, web_server._process_forge_match_queue):
+            with patch(
+                "src.web_server._queue_item_shelf_watch_metadata", return_value={"grimmory_filename": "origin.epub"}
+            ), patch(
+                "src.web_server._create_ebook_only_mapping_from_queue_item", return_value=None
+            ) as mock_mapping, patch(
+                "src.web_server._complete_shelf_watch_approval"
+            ) as mock_complete, patch(
+                "src.web_server._shelve_matched_ebook"
+            ) as mock_shelve:
+                processor([item])
+
+            mock_mapping.assert_called_once_with(item)
+            mock_complete.assert_not_called()
+            mock_shelve.assert_not_called()
 
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-shelf-fallback")

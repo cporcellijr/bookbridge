@@ -5595,7 +5595,11 @@ def _process_batch_queue(queue_items):
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only.
             if _create_ebook_only_mapping_from_queue_item(item):
-                _complete_shelf_watch_approval(shelf_watch_meta)
+                shelf_filename = (item.get('ebook_filename') or '').strip()
+                if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
+                    _shelve_matched_ebook(
+                        shelf_filename, item.get('ebook_source'), item.get('ebook_source_id')
+                    )
             continue
         if item.get('audio_only'):
             if _create_audio_only_mapping_from_queue_item(item):
@@ -5787,7 +5791,11 @@ def _process_forge_match_queue(queue_items):
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only (nothing to forge).
             if _create_ebook_only_mapping_from_queue_item(item):
-                _complete_shelf_watch_approval(shelf_watch_meta)
+                shelf_filename = (item.get('ebook_filename') or '').strip()
+                if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
+                    _shelve_matched_ebook(
+                        shelf_filename, item.get('ebook_source'), item.get('ebook_source_id')
+                    )
             continue
         audio_source = item.get('audio_source') or 'ABS'
         storyteller_uuid = item.get('storyteller_uuid', '')
