@@ -181,6 +181,20 @@ class TestMatchPathsRegression(unittest.TestCase):
             }
         }
 
+    def _post_as_user(self, user_id, path, data):
+        token = web_server.set_current_user_id(user_id)
+        try:
+            return self.client.post(path, data=data)
+        finally:
+            web_server.reset_current_user_id(token)
+
+    def _load_queue_as_user(self, user_id):
+        token = web_server.set_current_user_id(user_id)
+        try:
+            return web_server._load_match_queue()
+        finally:
+            web_server.reset_current_user_id(token)
+
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_creates_mapping(self, _mock_kosync):
         response = self.client.post(
@@ -1110,9 +1124,10 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.mock_container.mock_database_service.get_kosync_doc_by_filename.return_value = Mock(
             document_hash="device-hash"
         )
-        add_response = self.client.post(
+        add_response = self._post_as_user(
+            41,
             "/suggestions",
-            data={
+            {
                 "action": "add_to_queue",
                 "audiobook_id": "ab-1",
                 "ebook_filename": "suggested.epub",
@@ -1124,18 +1139,13 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        queue = web_server._load_match_queue()
+        queue = self._load_queue_as_user(41)
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["abs_id"], "ab-1")
 
-        token = web_server.set_current_user_id(41)
-        try:
-            process_response = self.client.post(
-                "/suggestions",
-                data={"action": "process_queue"},
-            )
-        finally:
-            web_server.reset_current_user_id(token)
+        process_response = self._post_as_user(
+            41, "/suggestions", {"action": "process_queue"}
+        )
         self.assertEqual(process_response.status_code, 302)
 
         self.mock_container.mock_database_service.save_book.assert_called_once()
@@ -1150,12 +1160,13 @@ class TestMatchPathsRegression(unittest.TestCase):
             for call in self.mock_container.mock_database_service.dismiss_suggestion.call_args_list
         }
         self.assertEqual(dismissed, {"ab-1", "hash-suggestions-1", "device-hash"})
-        self.assertEqual(web_server._load_match_queue(), [])
+        self.assertEqual(self._load_queue_as_user(41), [])
 
     def test_library_audio_captures_bookorbit_shelf_origin_before_mapping(self):
-        add_response = self.client.post(
+        add_response = self._post_as_user(
+            42,
             "/suggestions",
-            data={
+            {
                 "action": "add_to_queue",
                 "audiobook_id": "booklore:42",
                 "audio_source": "BookLore",
@@ -1174,7 +1185,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.assertEqual(add_response.status_code, 302)
 
-        queue = web_server._load_match_queue()
+        queue = self._load_queue_as_user(42)
         self.assertEqual(len(queue), 1)
         self.assertEqual(queue[0]["abs_id"], "booklore:42")
         self.assertEqual(queue[0]["audio_source"], "BookLore")
@@ -1198,19 +1209,13 @@ class TestMatchPathsRegression(unittest.TestCase):
             return Mock(abs_id="booklore:42"), None, None
 
         self.mock_container.mock_database_service.get_pending_suggestion.side_effect = lookup_pending
-        token = web_server.set_current_user_id(42)
-        try:
-            with patch.dict(
-                os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
-            ), patch(
-                "src.web_server._create_or_update_library_audio_mapping",
-                side_effect=save_mapping,
-            ) as mock_mapping:
-                self.client.post(
-                    "/suggestions", data={"action": "process_queue"}
-                )
-        finally:
-            web_server.reset_current_user_id(token)
+        with patch.dict(
+            os.environ, {"BOOKORBIT_SHELF_WATCH_NAME": "Reading Next"}, clear=False
+        ), patch(
+            "src.web_server._create_or_update_library_audio_mapping",
+            side_effect=save_mapping,
+        ) as mock_mapping:
+            self._post_as_user(42, "/suggestions", {"action": "process_queue"})
 
         self.assertEqual(events[:2], ["lookup:booklore:42", "mapping"])
         mock_mapping.assert_called_once()
@@ -1230,16 +1235,17 @@ class TestMatchPathsRegression(unittest.TestCase):
             42, "booklore:42"
         )
         self.mock_container.mock_database_service.save_book.assert_not_called()
-        self.assertEqual(web_server._load_match_queue(), [])
+        self.assertEqual(self._load_queue_as_user(42), [])
 
     @patch(
         "src.web_server._create_or_update_bookfusion_progress_mapping",
         return_value=(Mock(abs_id="ab-1"), None, None),
     )
     def test_suggestions_bookfusion_preserves_audio_fields_and_claims_user(self, mock_mapping):
-        self.client.post(
+        self._post_as_user(
+            43,
             "/suggestions",
-            data={
+            {
                 "action": "add_to_queue",
                 "audiobook_id": "ab-1",
                 "audio_source": "ABS",
@@ -1257,13 +1263,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
 
-        token = web_server.set_current_user_id(43)
-        try:
-            self.client.post(
-                "/suggestions", data={"action": "process_queue"}
-            )
-        finally:
-            web_server.reset_current_user_id(token)
+        self._post_as_user(43, "/suggestions", {"action": "process_queue"})
 
         self.assertEqual(
             mock_mapping.call_args.kwargs,
@@ -1281,7 +1281,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
         self.mock_container.mock_database_service.link_user_book.assert_called_once_with(43, "ab-1")
-        self.assertEqual(web_server._load_match_queue(), [])
+        self.assertEqual(self._load_queue_as_user(43), [])
 
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-suggestions-story-1")

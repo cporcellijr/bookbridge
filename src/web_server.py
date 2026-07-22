@@ -6579,47 +6579,133 @@ def _write_match_queue_unlocked(items: list) -> None:
             pass
 
 
+def _normalize_match_queue_user_id(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _match_queue_scope() -> tuple:
+    """Return the acting user id and whether legacy unowned items are visible."""
+    user_id = get_current_user_id()
+    if user_id is None:
+        return None, True
+    try:
+        primary_user_id = database_service._default_user_id()
+    except Exception as exc:
+        logger.warning("Could not resolve legacy match-queue owner: %s", exc)
+        return user_id, False
+    normalized_user_id = _normalize_match_queue_user_id(user_id)
+    normalized_primary_id = _normalize_match_queue_user_id(primary_user_id)
+    return user_id, (
+        normalized_user_id is not None
+        and normalized_user_id == normalized_primary_id
+    )
+
+
+def _match_queue_item_visible(item: dict, user_id, include_legacy: bool) -> bool:
+    owner_id = item.get('user_id')
+    if owner_id is None:
+        return include_legacy
+    if user_id is None:
+        return False
+    normalized_owner_id = _normalize_match_queue_user_id(owner_id)
+    normalized_user_id = _normalize_match_queue_user_id(user_id)
+    return (
+        normalized_owner_id is not None
+        and normalized_owner_id == normalized_user_id
+    )
+
+
+def _match_queue_stamp(item: dict, user_id) -> dict:
+    scoped_item = dict(item)
+    scoped_item['user_id'] = user_id
+    return scoped_item
+
+
 def _load_match_queue() -> list:
-    """Return the persisted batch-match queue items."""
+    """Return only the acting user's persisted batch-match queue items."""
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        return _read_match_queue_unlocked()
+        return [
+            item for item in _read_match_queue_unlocked()
+            if _match_queue_item_visible(item, user_id, include_legacy)
+        ]
 
 
 def _save_match_queue(items: list) -> None:
-    """Replace the persisted batch-match queue with the given items."""
+    """Replace the acting user's queue while preserving every other user's items."""
+    user_id, include_legacy = _match_queue_scope()
+    replacements = [
+        _match_queue_stamp(item, user_id)
+        for item in items if isinstance(item, dict)
+    ]
     with MATCH_QUEUE_LOCK:
-        _write_match_queue_unlocked(items)
+        preserved = [
+            item for item in _read_match_queue_unlocked()
+            if not _match_queue_item_visible(item, user_id, include_legacy)
+        ]
+        _write_match_queue_unlocked(preserved + replacements)
 
 
 def _match_queue_add(item: dict) -> bool:
-    """Append an item unless its bridge_key is already queued. Returns True if added."""
+    """Append an actor-owned item unless its bridge key is already in that scope."""
+    user_id, include_legacy = _match_queue_scope()
+    scoped_item = _match_queue_stamp(item, user_id)
     with MATCH_QUEUE_LOCK:
         items = _read_match_queue_unlocked()
-        bridge_key = item.get('bridge_key')
-        if bridge_key and any(existing.get('bridge_key') == bridge_key for existing in items):
+        bridge_key = scoped_item.get('bridge_key')
+        if bridge_key and any(
+            existing.get('bridge_key') == bridge_key
+            and _match_queue_item_visible(existing, user_id, include_legacy)
+            for existing in items
+        ):
             return False
-        items.append(item)
+        items.append(scoped_item)
         _write_match_queue_unlocked(items)
         return True
 
 
 def _match_queue_remove(abs_id) -> None:
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        items = [item for item in _read_match_queue_unlocked() if item.get('abs_id') != abs_id]
+        items = [
+            item for item in _read_match_queue_unlocked()
+            if not (
+                item.get('abs_id') == abs_id
+                and _match_queue_item_visible(item, user_id, include_legacy)
+            )
+        ]
         _write_match_queue_unlocked(items)
 
 
 def _match_queue_clear() -> None:
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        _write_match_queue_unlocked([])
+        preserved = [
+            item for item in _read_match_queue_unlocked()
+            if not _match_queue_item_visible(item, user_id, include_legacy)
+        ]
+        _write_match_queue_unlocked(preserved)
 
 
 def _match_queue_drain() -> list:
-    """Return all queued items and clear the queue atomically."""
+    """Atomically drain only the acting user's queued items."""
+    user_id, include_legacy = _match_queue_scope()
     with MATCH_QUEUE_LOCK:
-        items = _read_match_queue_unlocked()
-        _write_match_queue_unlocked([])
-        return items
+        drained = []
+        preserved = []
+        for item in _read_match_queue_unlocked():
+            if _match_queue_item_visible(item, user_id, include_legacy):
+                drained.append(item)
+            else:
+                preserved.append(item)
+        _write_match_queue_unlocked(preserved)
+        return drained
 
 
 def _match_queue_response():
