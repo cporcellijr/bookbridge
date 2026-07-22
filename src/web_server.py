@@ -3949,6 +3949,57 @@ def _shelf_watch_clients_for(meta: dict):
     )
 
 
+def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
+    """Detach shelf-watch origin metadata before mapping helpers dismiss it."""
+    keys = []
+    for raw_key in (item.get('bridge_key'), item.get('abs_id')):
+        key = str(raw_key or '').strip()
+        if key and key not in keys:
+            keys.append(key)
+
+    for key in keys:
+        try:
+            pending = database_service.get_pending_suggestion(key)
+        except Exception as exc:
+            logger.warning("Shelf-watch approval lookup failed for '%s': %s", key, exc)
+            continue
+        if pending and getattr(pending, 'origin', None) == 'shelf_watch':
+            metadata = pending.origin_metadata or {}
+            return dict(metadata) if isinstance(metadata, dict) else None
+    return None
+
+
+def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False) -> None:
+    """Finish the recorded shelf-watch move without failing a saved mapping."""
+    if not meta:
+        return
+    filename = meta.get('grimmory_filename')
+    if not filename:
+        return
+    try:
+        library_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
+        if not library_client or not library_client.is_configured():
+            return
+        if remove_only:
+            success = library_client.remove_from_shelf(filename, watch_shelf)
+            action = f"remove from '{watch_shelf}'"
+        else:
+            success = library_client.move_between_shelves(filename, watch_shelf, kobo_shelf)
+            action = f"move from '{watch_shelf}' to '{kobo_shelf}'"
+        if success is False:
+            logger.warning(
+                "Shelf-watch approval failed to %s for '%s'",
+                action,
+                sanitize_log_data(filename),
+            )
+    except Exception as exc:
+        logger.warning(
+            "Shelf-watch approval failed for '%s': %s",
+            sanitize_log_data(filename),
+            exc,
+        )
+
+
 def _format_dashboard_last_sync(latest_update_time):
     if latest_update_time <= 0:
         return "Never"
@@ -5535,6 +5586,7 @@ def _process_batch_queue(queue_items):
     from src.db.models import Book
     clients = uc()
     for item in queue_items:
+        shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only.
             _create_ebook_only_mapping_from_queue_item(item)
@@ -5564,6 +5616,7 @@ def _process_batch_queue(queue_items):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         if audio_source in _LIBRARY_AUDIO_SOURCES:
             saved_book, err_msg, _err_code = _create_or_update_library_audio_mapping(
@@ -5589,6 +5642,7 @@ def _process_batch_queue(queue_items):
                 )
             elif saved_book:
                 _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+                _complete_shelf_watch_approval(shelf_watch_meta, remove_only=True)
             continue
 
         ebook_filename = item['ebook_filename']
@@ -5690,7 +5744,9 @@ def _process_batch_queue(queue_items):
         if not str(item['abs_id']).startswith('booklore:'):
             clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
         shelf_filename = original_ebook_filename or ebook_filename
-        if shelf_filename:
+        if shelf_watch_meta:
+            _complete_shelf_watch_approval(shelf_watch_meta)
+        elif shelf_filename:
             _shelve_matched_ebook(shelf_filename, item.get('ebook_source'),
                                   item.get('ebook_source_id'))
         if clients.storyteller_client.is_configured():
@@ -6822,209 +6878,9 @@ def suggestions_page():
             return redirect(url_for('index'))
 
         elif action == 'process_queue':
-            from src.db.models import Book
-
-            clients = uc()
-            for item in _load_match_queue():
-                audio_source = item.get('audio_source') or 'ABS'
-                if _normalize_text_source_type(item.get('ebook_source')) == "BookFusion" and item.get('ebook_source_id'):
-                    saved_book, err_msg, _err_code = _create_or_update_bookfusion_progress_mapping(
-                        audio_source=audio_source,
-                        audio_source_id=item.get('audio_source_id') or item.get('abs_id'),
-                        audio_title=item.get('audio_title') or item.get('abs_title'),
-                        audio_cover_url=item.get('audio_cover_url') or item.get('cover_url'),
-                        audio_duration=_parse_audio_duration(item.get('audio_duration') or item.get('duration')),
-                        audio_provider_book_id=item.get('audio_provider_book_id'),
-                        audio_provider_file_id=item.get('audio_provider_file_id'),
-                        bookfusion_id=item.get('ebook_source_id'),
-                        bookfusion_title=item.get('ebook_display_name') or item.get('ebook_filename'),
-                        storyteller_uuid=item.get('storyteller_uuid'),
-                    )
-                    if err_msg:
-                        logger.warning(
-                            "Suggestions skipped BookFusion link for '%s': %s",
-                            sanitize_log_data(item.get('audio_title') or item.get('abs_title') or item.get('abs_id')),
-                            err_msg,
-                        )
-                    elif saved_book:
-                        _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
-                    continue
-                if audio_source in _LIBRARY_AUDIO_SOURCES:
-                    saved_book, err_msg, _err_code = _create_or_update_library_audio_mapping(
-                        audio_source=audio_source,
-                        audio_source_id=item.get('audio_source_id'),
-                        audio_title=item.get('audio_title'),
-                        audio_cover_url=item.get('audio_cover_url'),
-                        audio_duration=_parse_audio_duration(item.get('audio_duration')),
-                        audio_provider_book_id=item.get('audio_provider_book_id'),
-                        audio_provider_file_id=item.get('audio_provider_file_id'),
-                        ebook_filename=item.get('ebook_filename'),
-                        ebook_source=item.get('ebook_source'),
-                        ebook_source_id=item.get('ebook_source_id'),
-                        storyteller_uuid=item.get('storyteller_uuid'),
-                        ebook_source_path=item.get('ebook_source_path'),
-                    )
-                    if err_msg:
-                        logger.warning(
-                            "Suggestions skipped %s audiobook '%s': %s",
-                            _audio_source_display_name(audio_source),
-                            sanitize_log_data(item.get('audio_title') or item.get('audio_source_id')),
-                            err_msg,
-                        )
-                    elif saved_book:
-                        # Approving a shelf-watch suggestion needs the Up Next
-                        # leg of the shelf move; _create_or_update_library_audio_mapping
-                        # only adds to Kobo, it does not remove from Up Next.
-                        try:
-                            sw_pending = database_service.get_pending_suggestion(item.get('audio_source_id') or saved_book.abs_id)
-                        except Exception:
-                            sw_pending = None
-                        if (
-                            sw_pending
-                            and getattr(sw_pending, 'origin', None) == 'shelf_watch'
-                        ):
-                            try:
-                                meta = sw_pending.origin_metadata or {}
-                                lib_client, watch_shelf, _kobo = _shelf_watch_clients_for(meta)
-                                grimmory_filename = meta.get('grimmory_filename')
-                                if grimmory_filename and lib_client and lib_client.is_configured():
-                                    lib_client.remove_from_shelf(grimmory_filename, watch_shelf)
-                            except Exception as bl_err:
-                                logger.warning(f"Shelf-watch approval Up Next removal failed: {bl_err}")
-                    continue
-
-                ebook_filename = item['ebook_filename']
-                storyteller_uuid = item.get('storyteller_uuid', '')
-                original_ebook_filename = item['ebook_filename']
-                duration = item['duration']
-                booklore_id = None
-                kosync_doc_id = None
-
-                if storyteller_uuid:
-                    # Storyteller Tri-Link Logic (mirrors match POST handler)
-                    try:
-                        logger.info(f"Batch Match: Using Storyteller Artifact '{storyteller_uuid}' for '{item['abs_title']}'")
-
-                        target_filename, _target_path = _download_storyteller_artifact(
-                            storyteller_uuid,
-                            item.get('abs_title'),
-                            original_ebook_filename=ebook_filename,
-                        )
-                        if target_filename:
-                            original_ebook_filename = ebook_filename
-                            ebook_filename = target_filename
-
-                            kosync_doc_id = _compute_storyteller_trilink_kosync_id(
-                                original_ebook_filename,
-                                target_filename,
-                                "Batch Match Tri-Link",
-                            )
-                        else:
-                            logger.warning(f"Failed to obtain Storyteller artifact '{storyteller_uuid}' for '{item['abs_title']}', skipping")
-                            continue
-                    except Exception as e:
-                        logger.error(f"Storyteller Tri-Link failed for '{item['abs_title']}': {e}")
-                        continue
-                else:
-                    if clients.booklore_client.is_configured():
-                        book = clients.booklore_client.find_book_by_filename(ebook_filename)
-                        if book:
-                            booklore_id = book.get('id')
-
-                    kosync_doc_id = get_kosync_id_for_ebook(
-                        ebook_filename,
-                        booklore_id,
-                        source_path=item.get('ebook_source_path'),
-                    )
-
-                if not kosync_doc_id:
-                    logger.warning(f"Could not compute KOSync ID for {sanitize_log_data(ebook_filename)}, skipping")
-                    continue
-
-                current_book_entry = database_service.get_book(item['abs_id'])
-                if current_book_entry and current_book_entry.kosync_doc_id:
-                    logger.info(f"Preserving existing hash '{current_book_entry.kosync_doc_id}' for '{item['abs_id']}' instead of new hash '{kosync_doc_id}'")
-                    kosync_doc_id = current_book_entry.kosync_doc_id
-
-                item_details = clients.abs_client.get_item_details(item['abs_id'])
-                chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
-                storyteller_manifest = ingest_storyteller_transcripts(
-                    item['abs_id'],
-                    item.get('abs_title', ''),
-                    chapters
-                )
-                transcript_source = _storyteller_transcript_source(storyteller_uuid, storyteller_manifest)
-
-                book = Book(
-                    abs_id=item['abs_id'],
-                    abs_title=item['abs_title'],
-                    audio_source="ABS",
-                    audio_source_id=item['abs_id'],
-                    audio_title=item['abs_title'],
-                    audio_cover_url=item.get('cover_url'),
-                    audio_duration=duration,
-                    audio_provider_book_id=item['abs_id'],
-                    ebook_filename=ebook_filename,
-                    kosync_doc_id=kosync_doc_id,
-                    transcript_file=storyteller_manifest,
-                    status="pending",
-                    duration=duration,
-                    transcript_source=transcript_source,
-                    storyteller_uuid=storyteller_uuid or None,
-                    original_ebook_filename=original_ebook_filename,
-                    ebook_source=item.get('ebook_source'),
-                    ebook_source_id=item.get('ebook_source_id'),
-                )
-
-                database_service.save_book(book)
-
-                _enqueue_tracker_automatch(clients.sync_clients, book)
-
-                if not str(item['abs_id']).startswith('booklore:'):
-                    clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
-
-                # If this suggestion originated from the shelf-watch flow, do a full
-                # shelf MOVE (Up Next -> Kobo) rather than just an add. The origin
-                # metadata carries the Grimmory filename which is the canonical key
-                # for shelf operations even if the user picked a different ebook
-                # source during approval.
-                shelf_watch_pending = None
-                try:
-                    shelf_watch_pending = database_service.get_pending_suggestion(item['abs_id'])
-                except Exception:
-                    shelf_watch_pending = None
-                if (
-                    shelf_watch_pending
-                    and getattr(shelf_watch_pending, 'origin', None) == 'shelf_watch'
-                ):
-                    try:
-                        meta = shelf_watch_pending.origin_metadata or {}
-                        lib_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
-                        grimmory_filename = meta.get('grimmory_filename')
-                        if grimmory_filename and lib_client and lib_client.is_configured():
-                            lib_client.move_between_shelves(
-                                grimmory_filename, watch_shelf, kobo_shelf,
-                            )
-                    except Exception as bl_err:
-                        logger.warning(f"Shelf-watch approval move failed: {bl_err}")
-                elif clients.booklore_client.is_configured():
-                    shelf_filename = original_ebook_filename or ebook_filename
-                    clients.booklore_client.add_to_shelf(shelf_filename, user_setting("BOOKLORE_SHELF_NAME", "Kobo"))
-                if clients.storyteller_client.is_configured():
-                    if book.storyteller_uuid:
-                        clients.storyteller_client.add_to_collection_by_uuid(book.storyteller_uuid)
-
-                database_service.dismiss_suggestion(item['abs_id'])
-                database_service.dismiss_suggestion(kosync_doc_id)
-
-                try:
-                    device_doc = database_service.get_kosync_doc_by_filename(ebook_filename)
-                    if device_doc and device_doc.document_hash != kosync_doc_id:
-                        database_service.dismiss_suggestion(device_doc.document_hash)
-                except Exception:
-                    pass
-
-            _match_queue_clear()
+            _queue_items = _match_queue_drain()
+            _spawn_user_background(_process_batch_queue, _queue_items, label="batch-match-process")
+            flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
     scan_in_progress = False
