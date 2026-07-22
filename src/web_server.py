@@ -1844,6 +1844,23 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=Non
             )
 
 
+def _shelve_saved_ebook(book) -> None:
+    """Shelve a saved mapping's original ebook through its owning library."""
+    if not book:
+        return
+    shelf_filename = (
+        getattr(book, 'original_ebook_filename', None)
+        or getattr(book, 'ebook_filename', None)
+    )
+    if not shelf_filename or _is_storyteller_artifact_filename(shelf_filename):
+        return
+    _shelve_matched_ebook(
+        shelf_filename,
+        getattr(book, 'ebook_source', None),
+        getattr(book, 'ebook_source_id', None),
+    )
+
+
 def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original_ebook_filename=None):
     """Resolve a Storyteller artifact path.
 
@@ -2179,17 +2196,6 @@ def _upsert_storyteller_mapping(
             uc().storyteller_client.add_to_collection_by_uuid(selected_storyteller_uuid)
         except Exception as st_err:
             logger.warning(f"Failed to add Storyteller UUID to collection: {st_err}")
-
-    shelf_filename = saved_book.original_ebook_filename or saved_book.ebook_filename
-    if (
-        shelf_filename
-        and not _is_storyteller_artifact_filename(shelf_filename)
-        and uc().booklore_client.is_configured()
-    ):
-        try:
-            uc().booklore_client.add_to_shelf(shelf_filename)
-        except Exception as bl_err:
-            logger.warning(f"Failed to add Grimmory shelf entry for '{shelf_filename}': {bl_err}")
 
     if getattr(saved_book, "sync_mode", "audiobook") == "ebook_only":
         logger.info("Skipping ABS collection side effects for ebook-only mapping '%s'", saved_book.abs_id)
@@ -5112,6 +5118,7 @@ def match():
             logger.info("Match: ebook-only mapping ready for '%s'", sanitize_log_data(saved_book.abs_id))
             if saved_book:
                 _claim_book_for_current_user(saved_book.abs_id)
+                _shelve_saved_ebook(saved_book)
             return redirect(url_for('index'))
 
         # [NEW ACTION] Forge & Match (supports both ABS and Grimmory audiobooks)
@@ -5602,12 +5609,9 @@ def _process_batch_queue(queue_items):
         shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only.
-            if _create_ebook_only_mapping_from_queue_item(item):
-                shelf_filename = (item.get('ebook_filename') or '').strip()
-                if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
-                    _shelve_matched_ebook(
-                        shelf_filename, item.get('ebook_source'), item.get('ebook_source_id')
-                    )
+            saved_book = _create_ebook_only_mapping_from_queue_item(item)
+            if saved_book and not _complete_shelf_watch_approval(shelf_watch_meta):
+                _shelve_saved_ebook(saved_book)
             continue
         if item.get('audio_only'):
             if _create_audio_only_mapping_from_queue_item(item):
@@ -5798,12 +5802,9 @@ def _process_forge_match_queue(queue_items):
             continue
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only (nothing to forge).
-            if _create_ebook_only_mapping_from_queue_item(item):
-                shelf_filename = (item.get('ebook_filename') or '').strip()
-                if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
-                    _shelve_matched_ebook(
-                        shelf_filename, item.get('ebook_source'), item.get('ebook_source_id')
-                    )
+            saved_book = _create_ebook_only_mapping_from_queue_item(item)
+            if saved_book and not _complete_shelf_watch_approval(shelf_watch_meta):
+                _shelve_saved_ebook(saved_book)
             continue
         audio_source = item.get('audio_source') or 'ABS'
         storyteller_uuid = item.get('storyteller_uuid', '')
@@ -7839,6 +7840,7 @@ def api_storyteller_link(abs_id):
         if err_msg:
             return jsonify({"error": err_msg}), err_code
 
+        _shelve_saved_ebook(saved_book)
         return jsonify({"message": "Book linked successfully", "filename": saved_book.ebook_filename}), 200
     except Exception as e:
         logger.error(f"❌ Error linking Storyteller book for '{abs_id}': {e}")

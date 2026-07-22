@@ -268,6 +268,25 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.ebook_filename, "storyteller_story-uuid-with-original.epub")
         self.assertEqual(saved_book.kosync_doc_id, "abcdef1234567890abcdef1234567890")
 
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-bookorbit-ebook-only")
+    def test_match_route_ebook_only_bookorbit_shelves_by_id(self, _mock_kosync):
+        self.mock_container.mock_bookorbit_client.add_book_id_to_shelf.return_value = True
+
+        response = self.client.post(
+            "/match",
+            data={
+                "ebook_filename": "bookorbit-source.epub",
+                "ebook_source": "BookOrbit",
+                "ebook_source_id": "bo-17",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.mock_container.mock_bookorbit_client.add_book_id_to_shelf.assert_called_once_with(
+            "bo-17", "Kobo"
+        )
+        self.mock_container.mock_booklore_client.add_to_shelf.assert_not_called()
+
     def test_match_route_rejects_ebook_only_without_text_source(self):
         response = self.client.post("/match", data={})
         self.assertEqual(response.status_code, 400)
@@ -1395,12 +1414,15 @@ class TestMatchPathsRegression(unittest.TestCase):
                 f"src.web_server.{mapping_name}", return_value=Mock(abs_id="saved")
             ) as mock_mapping, patch(
                 "src.web_server._complete_shelf_watch_approval"
-            ) as mock_complete:
+            ) as mock_complete, patch(
+                "src.web_server._shelve_saved_ebook"
+            ) as mock_shelve:
                 mock_complete.return_value = True
                 processor([item])
 
             mock_mapping.assert_called_once_with(item)
             mock_complete.assert_called_once_with(metadata)
+            mock_shelve.assert_not_called()
 
     def test_ebook_only_queues_fall_back_after_failed_shelf_watch_completion(self):
         metadata = {
@@ -1421,13 +1443,13 @@ class TestMatchPathsRegression(unittest.TestCase):
             ) as mock_mapping, patch(
                 "src.web_server._complete_shelf_watch_approval", return_value=False
             ) as mock_complete, patch(
-                "src.web_server._shelve_matched_ebook"
+                "src.web_server._shelve_saved_ebook"
             ) as mock_shelve:
                 processor([item])
 
             mock_mapping.assert_called_once_with(item)
             mock_complete.assert_called_once_with(metadata)
-            mock_shelve.assert_called_once_with("ebook-only.epub", "BookOrbit", "bo-17")
+            mock_shelve.assert_called_once_with(mock_mapping.return_value)
 
     def test_failed_ebook_only_queue_mapping_does_not_shelve(self):
         item = {
@@ -1443,7 +1465,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             ) as mock_mapping, patch(
                 "src.web_server._complete_shelf_watch_approval"
             ) as mock_complete, patch(
-                "src.web_server._shelve_matched_ebook"
+                "src.web_server._shelve_saved_ebook"
             ) as mock_shelve:
                 processor([item])
 
