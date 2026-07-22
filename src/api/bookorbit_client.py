@@ -1175,17 +1175,13 @@ class BookOrbitClient:
         return bool(resp and resp.status_code in (200, 201, 204))
 
     def move_between_shelves(self, ebook_filename: str, from_shelf: str, to_shelf: str) -> bool:
+        if not ebook_filename or not from_shelf or not to_shelf:
+            return False
+        if from_shelf == to_shelf:
+            return True
         book_id = self._resolve_book_id_for_filename(ebook_filename)
         if book_id is None:
             return False
-        to_cid = self.ensure_shelf_exists(to_shelf)
-        if to_cid is not None:
-            self._make_request(
-                "POST", f"/api/v1/collections/{to_cid}/books", {"bookIds": [int(book_id)]}
-            )
-        from_cid = self._get_collection_id(from_shelf)
-        if from_cid is not None:
-            self._make_request(
-                "DELETE", f"/api/v1/collections/{from_cid}/books", {"bookIds": [int(book_id)]}
-            )
-        return to_cid is not None
+        if not self.add_book_id_to_shelf(book_id, to_shelf):
+            return False
+        return self.remove_book_id_from_shelf(book_id, from_shelf)

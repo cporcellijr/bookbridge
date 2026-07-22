@@ -155,11 +155,21 @@ class ForgeService:
             if self.bookorbit_client and self.bookorbit_client.is_configured():
                 ebook_source_id = getattr(book, 'ebook_source_id', None)
                 if ebook_source_id and hasattr(self.bookorbit_client, 'add_book_id_to_shelf'):
-                    self.bookorbit_client.add_book_id_to_shelf(ebook_source_id)
+                    added = self.bookorbit_client.add_book_id_to_shelf(ebook_source_id)
                 else:
-                    self.bookorbit_client.add_to_shelf(shelf_filename)
+                    added = self.bookorbit_client.add_to_shelf(shelf_filename)
+                if added is False:
+                    logger.warning(
+                        "Auto-Forge: failed to add '%s' to the BookOrbit shelf",
+                        shelf_filename,
+                    )
         elif self.booklore_client and self.booklore_client.is_configured():
-            self.booklore_client.add_to_shelf(shelf_filename)
+            added = self.booklore_client.add_to_shelf(shelf_filename)
+            if added is False:
+                logger.warning(
+                    "Auto-Forge: failed to add '%s' to the Grimmory shelf",
+                    shelf_filename,
+                )
 
     def _automatch_progress_trackers(self, book) -> None:
         """Run Hardcover/StoryGraph auto-match after a successful forge,

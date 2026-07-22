@@ -198,13 +198,34 @@ def test_add_to_shelf_posts_book_id(client):
 def test_move_between_shelves_adds_then_removes(client):
     calls = []
     with patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
-         patch.object(client, 'ensure_shelf_exists', return_value=9), \
-         patch.object(client, '_get_collection_id', return_value=3), \
-         patch.object(client, '_make_request', side_effect=lambda m, e, p=None: calls.append((m, e, p)) or _Resp(status_code=204)):
+         patch.object(client, 'add_book_id_to_shelf', side_effect=lambda *args: calls.append(args) or True), \
+         patch.object(client, 'remove_book_id_from_shelf', side_effect=lambda *args: calls.append(args) or True):
         ok = client.move_between_shelves("Book.epub", "Up Next", "Kobo")
     assert ok is True
-    assert ("POST", "/api/v1/collections/9/books", {"bookIds": [42]}) in calls
-    assert ("DELETE", "/api/v1/collections/3/books", {"bookIds": [42]}) in calls
+    assert calls == [(42, "Kobo"), (42, "Up Next")]
+
+
+def test_move_between_shelves_same_shelf_is_a_noop(client):
+    with patch.object(client, '_resolve_book_id_for_filename') as resolve:
+        assert client.move_between_shelves("Book.epub", "Kobo", "Kobo") is True
+    resolve.assert_not_called()
+
+
+def test_move_between_shelves_stops_when_destination_add_fails(client):
+    with patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
+         patch.object(client, 'add_book_id_to_shelf', return_value=False) as add, \
+         patch.object(client, 'remove_book_id_from_shelf') as remove:
+        assert client.move_between_shelves("Book.epub", "Up Next", "Kobo") is False
+    add.assert_called_once_with(42, "Kobo")
+    remove.assert_not_called()
+
+
+def test_move_between_shelves_reports_source_remove_failure(client):
+    with patch.object(client, '_resolve_book_id_for_filename', return_value=42), \
+         patch.object(client, 'add_book_id_to_shelf', return_value=True), \
+         patch.object(client, 'remove_book_id_from_shelf', return_value=False) as remove:
+        assert client.move_between_shelves("Book.epub", "Up Next", "Kobo") is False
+    remove.assert_called_once_with(42, "Up Next")
 
 
 # ---- reading sessions ----

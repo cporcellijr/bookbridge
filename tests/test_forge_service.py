@@ -1280,6 +1280,22 @@ class TestShelveForgedEbook(unittest.TestCase):
         self.mock_bookorbit.add_to_shelf.assert_not_called()
         self.mock_booklore.add_to_shelf.assert_not_called()
 
+    def test_logs_when_forge_shelf_add_returns_false(self):
+        self.mock_bookorbit.is_configured.return_value = True
+        self.mock_booklore.is_configured.return_value = True
+        self.mock_bookorbit.add_book_id_to_shelf.return_value = False
+        self.mock_bookorbit.add_to_shelf.return_value = False
+        self.mock_booklore.add_to_shelf.return_value = False
+
+        with patch("src.services.forge_service.logger") as mock_logger:
+            self.service._shelve_forged_ebook(
+                self._book(ebook_source="BookOrbit", ebook_source_id="42"), "book.epub"
+            )
+            self.service._shelve_forged_ebook(self._book(ebook_source="BookOrbit"), "book.epub")
+            self.service._shelve_forged_ebook(self._book(ebook_source="BookLore"), "book.epub")
+
+        self.assertEqual(mock_logger.warning.call_count, 3)
+
 
 class TestForgeAutomatchProgressTrackers(unittest.TestCase):
     def _service(self, sync_clients):

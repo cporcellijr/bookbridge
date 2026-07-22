@@ -1818,13 +1818,19 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=Non
     use_id = is_bookorbit and ebook_source_id and hasattr(client, "add_book_id_to_shelf")
     try:
         if use_id:
-            client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
+            added = client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
         else:
-            client.add_to_shelf(shelf_filename, kobo_shelf)
+            added = client.add_to_shelf(shelf_filename, kobo_shelf)
     except Exception as e:
         logger.warning(
             f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}"
         )
+        return
+    if not added:
+        logger.warning(
+            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}'"
+        )
+        return
 
     if watch_enabled and watch_shelf and watch_shelf != kobo_shelf:
         try:
@@ -3980,6 +3986,8 @@ def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False) -> 
         library_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
         if not library_client or not library_client.is_configured():
             return False
+        if watch_shelf == kobo_shelf:
+            return True
         if remove_only:
             success = library_client.remove_from_shelf(filename, watch_shelf)
             action = f"remove from '{watch_shelf}'"

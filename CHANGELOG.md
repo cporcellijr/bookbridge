@@ -16,10 +16,10 @@ All notable changes to BookBridge will be documented in this file.
   Suggestions share one atomic background processor, including BookOrbit hashes,
   ownership claims, suggestion dismissal, and shelf-watch completion for direct,
   Forge & Match, audio-only, and ebook-only approvals. If the recorded shelf move
-  fails, the standard source-aware shelf fallback is now attempted. Queue items are
-  stamped to the acting user, so another user can no longer view, remove, clear, or
-  process them. Pre-upgrade unowned queue items remain available only to the primary
-  admin.
+  fails, the standard source-aware shelf fallback is now attempted; a failed
+  destination add never removes the watch-shelf copy. Queue items are stamped to the
+  acting user, so another user can no longer view, remove, clear, or process them.
+  Pre-upgrade unowned queue items remain available only to the primary admin.
 
 ## [7.3.1] - 2026-07-21
 
