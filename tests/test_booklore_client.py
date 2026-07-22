@@ -1159,10 +1159,10 @@ def test_add_to_shelf_logs_create_failure_details(booklore_client, caplog):
         resp.text = "server exploded"
         return resp
 
-    # Shelf creation is attempted twice: the icon-bearing body, then the name-only
-    # fallback for builds that reject `iconType`. Only after both fail do we log.
+    # Server failures are ambiguous, so do not retry this non-idempotent POST.
+    # The name-only fallback is reserved for the known 400 payload rejection.
     booklore_client._make_request = MagicMock(
-        side_effect=[shelves_response, _failed_create(), _failed_create()]
+        side_effect=[shelves_response, _failed_create()]
     )
 
     with caplog.at_level("ERROR"):
@@ -1174,7 +1174,6 @@ def test_add_to_shelf_logs_create_failure_details(booklore_client, caplog):
     create_bodies = [c[0][2] for c in booklore_client._make_request.call_args_list[1:]]
     assert create_bodies == [
         {"name": "Kobo", "icon": "📚", "iconType": "PRIME_NG"},
-        {"name": "Kobo"},
     ]
 
 

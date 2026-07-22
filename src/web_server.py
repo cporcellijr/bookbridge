@@ -1835,7 +1835,11 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=Non
         )
         return
 
-    if watch_enabled and watch_shelf and watch_shelf != kobo_shelf:
+    same_shelf = (
+        client._shelf_key(watch_shelf) == client._shelf_key(kobo_shelf)
+        if is_bookorbit else watch_shelf == kobo_shelf
+    )
+    if watch_enabled and watch_shelf and not same_shelf:
         try:
             if use_id:
                 client.remove_book_id_from_shelf(ebook_source_id, watch_shelf)
@@ -6649,16 +6653,25 @@ def _write_match_queue_unlocked(items: list) -> None:
 
 
 def _normalize_match_queue_user_id(value):
+    max_user_id = (1 << 63) - 1
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str) and value.strip().isdigit():
+        return value if 0 < value <= max_user_id else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if (
+            not stripped
+            or len(stripped) > 19
+            or not stripped.isascii()
+            or not stripped.isdecimal()
+        ):
+            return None
         try:
-            user_id = int(value.strip())
+            user_id = int(stripped)
         except (TypeError, ValueError):
             return None
-        return user_id if user_id > 0 else None
+        return user_id if 0 < user_id <= max_user_id else None
     return None
 
 

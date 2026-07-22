@@ -8,6 +8,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Shelf and matching-queue edge cases no longer leak or remove work.** BookOrbit
+  now recognizes case-variant configured shelf names in every shelving path, so a
+  book cannot be added to and then removed from the same collection. Persisted
+  queue owners accept only positive ASCII SQLite user IDs, preventing Unicode
+  numeric lookalikes from inheriting another user's queue. Grimmory retries shelf
+  creation without icon metadata only for the known 400 compatibility response,
+  avoiding duplicate non-idempotent requests after ambiguous server failures.
+
 - **Book editions with apostrophes can now be selected from multi-result matching
   searches.** The Add / Update Book picker now reads each edition's existing card
   metadata instead of embedding its filename and title in inline JavaScript. (#339)

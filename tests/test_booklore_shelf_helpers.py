@@ -206,10 +206,10 @@ def test_create_shelf_retries_without_icon_metadata_on_rejection(client):
     ]
 
 
-def test_create_shelf_returns_none_when_every_form_fails(client):
+def test_create_shelf_does_not_retry_ambiguous_server_failure(client):
     with patch.object(client, '_make_request', return_value=_Resp({'message': 'nope'}, 500)) as req:
         assert client._create_shelf('Kobo') is None
-    assert req.call_count == 2
+    assert req.call_count == 1
 
 
 def test_get_or_create_shelf_id_resolves_after_icon_retry(client):

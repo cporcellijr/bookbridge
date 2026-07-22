@@ -1366,7 +1366,22 @@ class TestMultiUserAuth(unittest.TestCase):
             {'bridge_key': 'zero', 'abs_id': 'zero', 'user_id': 0},
             {'bridge_key': 'negative', 'abs_id': 'negative', 'user_id': -1},
             {'bridge_key': 'unicode', 'abs_id': 'unicode', 'user_id': '\N{SUPERSCRIPT TWO}'},
+            {
+                'bridge_key': 'arabic-indic',
+                'abs_id': 'arabic-indic',
+                'user_id': '\N{ARABIC-INDIC DIGIT ONE}',
+            },
+            {
+                'bridge_key': 'fullwidth',
+                'abs_id': 'fullwidth',
+                'user_id': '\N{FULLWIDTH DIGIT ONE}',
+            },
             {'bridge_key': 'overlong', 'abs_id': 'overlong', 'user_id': '9' * 5000},
+            {
+                'bridge_key': 'sqlite-overflow',
+                'abs_id': 'sqlite-overflow',
+                'user_id': str(1 << 63),
+            },
         ]
 
         with patch.object(web_server, 'DATA_DIR', Path(self.tmp)):

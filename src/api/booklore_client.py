@@ -2869,24 +2869,25 @@ class BookloreClient:
         others reject the entire body with 400 when `iconType` is present. Sending
         the richer form first keeps the shelf icon where it is supported.
         """
-        attempts = (
+        response = self._make_request(
+            "POST", "/api/v1/shelves",
             {"name": shelf_name, "icon": "📚", "iconType": "PRIME_NG"},
-            {"name": shelf_name},
         )
-        response = None
-        for index, body in enumerate(attempts):
-            response = self._make_request("POST", "/api/v1/shelves", body)
-            # Use `is None` here: requests.Response.__bool__ returns False for >=400
-            # status codes, which would cause us to mis-report a real 4xx error as
-            # "No response" with the truthiness check.
+        # Use `is None` here: requests.Response.__bool__ returns False for >=400
+        # status codes, which would cause us to mis-report a real 4xx error as
+        # "No response" with the truthiness check.
+        if response is not None and response.status_code in (200, 201):
+            return response
+        if response is not None and response.status_code == 400:
+            logger.debug(
+                "Grimmory: shelf create for '%s' rejected (status=400); retrying without icon metadata",
+                shelf_name,
+            )
+            response = self._make_request(
+                "POST", "/api/v1/shelves", {"name": shelf_name}
+            )
             if response is not None and response.status_code in (200, 201):
                 return response
-            if index + 1 < len(attempts):
-                logger.debug(
-                    "Grimmory: shelf create for '%s' rejected (status=%s); retrying without icon metadata",
-                    shelf_name,
-                    response.status_code if response is not None else "No response",
-                )
 
         logger.error(
             "❌ Failed to create Grimmory shelf '%s' (status=%s, body=%s)",
