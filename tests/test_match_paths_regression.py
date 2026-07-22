@@ -1360,6 +1360,80 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         self.mock_container.mock_bookorbit_client.move_between_shelves.assert_not_called()
 
+    def test_early_queue_mappings_complete_shelf_watch_approval_after_success(self):
+        metadata = {
+            "source_name": "BookOrbit",
+            "grimmory_filename": "bookorbit-origin.epub",
+        }
+        cases = (
+            (
+                web_server._process_batch_queue,
+                {"audio_source": "ABS", "audio_only": True, "abs_id": "ab-1"},
+                "_create_audio_only_mapping_from_queue_item",
+            ),
+            (
+                web_server._process_forge_match_queue,
+                {"audio_source": "ABS", "audio_only": True, "abs_id": "ab-1"},
+                "_create_audio_only_mapping_from_queue_item",
+            ),
+            (
+                web_server._process_batch_queue,
+                {"ebook_filename": "ebook-only.epub"},
+                "_create_ebook_only_mapping_from_queue_item",
+            ),
+            (
+                web_server._process_forge_match_queue,
+                {"ebook_filename": "ebook-only.epub"},
+                "_create_ebook_only_mapping_from_queue_item",
+            ),
+        )
+
+        for processor, item, mapping_name in cases:
+            with patch(
+                "src.web_server._queue_item_shelf_watch_metadata", return_value=metadata
+            ), patch(
+                f"src.web_server.{mapping_name}", return_value=Mock(abs_id="saved")
+            ) as mock_mapping, patch(
+                "src.web_server._complete_shelf_watch_approval"
+            ) as mock_complete:
+                processor([item])
+
+            mock_mapping.assert_called_once_with(item)
+            mock_complete.assert_called_once_with(metadata)
+
+    @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-shelf-fallback")
+    def test_batch_queue_falls_back_when_shelf_watch_move_fails(self, _mock_kosync, _mock_ingest):
+        pending = Mock(
+            origin="shelf_watch",
+            origin_metadata={
+                "source_name": "BookOrbit",
+                "grimmory_filename": "bookorbit-origin.epub",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "ab-1" else None
+        )
+        self.mock_container.mock_bookorbit_client.move_between_shelves.return_value = False
+        item = {
+            "abs_id": "ab-1",
+            "abs_title": "Regression Book",
+            "audio_source": "ABS",
+            "audio_source_id": "ab-1",
+            "ebook_filename": "source.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "bo-17",
+            "duration": 3600,
+        }
+
+        with patch("src.web_server._shelve_matched_ebook") as mock_shelve:
+            web_server._process_batch_queue([item])
+
+        self.mock_container.mock_bookorbit_client.move_between_shelves.assert_called_once_with(
+            "bookorbit-origin.epub", "Up Next", "Kobo"
+        )
+        mock_shelve.assert_called_once_with("source.epub", "BookOrbit", "bo-17")
+
     @patch(
         "src.web_server._create_or_update_bookfusion_progress_mapping",
         return_value=(Mock(abs_id="ab-1"), None, None),

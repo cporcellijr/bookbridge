@@ -3969,17 +3969,17 @@ def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
     return None
 
 
-def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False) -> None:
+def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False) -> bool:
     """Finish the recorded shelf-watch move without failing a saved mapping."""
     if not meta:
-        return
+        return False
     filename = meta.get('grimmory_filename')
     if not filename:
-        return
+        return False
     try:
         library_client, watch_shelf, kobo_shelf = _shelf_watch_clients_for(meta)
         if not library_client or not library_client.is_configured():
-            return
+            return False
         if remove_only:
             success = library_client.remove_from_shelf(filename, watch_shelf)
             action = f"remove from '{watch_shelf}'"
@@ -3992,12 +3992,15 @@ def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False) -> 
                 action,
                 sanitize_log_data(filename),
             )
+            return False
+        return True
     except Exception as exc:
         logger.warning(
             "Shelf-watch approval failed for '%s': %s",
             sanitize_log_data(filename),
             exc,
         )
+        return False
 
 
 def _format_dashboard_last_sync(latest_update_time):
@@ -5424,6 +5427,7 @@ def _create_ebook_only_mapping_from_queue_item(item):
         logger.warning("⚠️ Add Book (ebook-only) skipped '%s': %s", sanitize_log_data(title), err_msg)
     elif saved_book:
         _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+    return saved_book if not err_msg else None
 
 
 def _create_audio_only_mapping_from_queue_item(item):
@@ -5450,6 +5454,7 @@ def _create_audio_only_mapping_from_queue_item(item):
         )
     elif saved_book:
         _claim_book_for_user_id(get_current_user_id(), saved_book.abs_id)
+    return saved_book if not err_msg else None
 
 
 def _record_forge_match_job(abs_id: str, progress: float = 0.0, last_error: str = None):
@@ -5589,10 +5594,12 @@ def _process_batch_queue(queue_items):
         shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only.
-            _create_ebook_only_mapping_from_queue_item(item)
+            if _create_ebook_only_mapping_from_queue_item(item):
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         if item.get('audio_only'):
-            _create_audio_only_mapping_from_queue_item(item)
+            if _create_audio_only_mapping_from_queue_item(item):
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         audio_source = item.get('audio_source') or 'ABS'
         if _normalize_text_source_type(item.get('ebook_source')) == "BookFusion" and item.get('ebook_source_id'):
@@ -5744,9 +5751,7 @@ def _process_batch_queue(queue_items):
         if not str(item['abs_id']).startswith('booklore:'):
             clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
         shelf_filename = original_ebook_filename or ebook_filename
-        if shelf_watch_meta:
-            _complete_shelf_watch_approval(shelf_watch_meta)
-        elif shelf_filename:
+        if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
             _shelve_matched_ebook(shelf_filename, item.get('ebook_source'),
                                   item.get('ebook_source_id'))
         if clients.storyteller_client.is_configured():
@@ -5776,11 +5781,13 @@ def _process_forge_match_queue(queue_items):
     for item in queue_items:
         shelf_watch_meta = _queue_item_shelf_watch_metadata(item)
         if item.get('audio_only'):
-            _create_audio_only_mapping_from_queue_item(item)
+            if _create_audio_only_mapping_from_queue_item(item):
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         if not item.get('audio_source'):
             # No audio: ebook-only / storyteller-only item — match only (nothing to forge).
-            _create_ebook_only_mapping_from_queue_item(item)
+            if _create_ebook_only_mapping_from_queue_item(item):
+                _complete_shelf_watch_approval(shelf_watch_meta)
             continue
         audio_source = item.get('audio_source') or 'ABS'
         storyteller_uuid = item.get('storyteller_uuid', '')
@@ -5926,11 +5933,11 @@ def _process_forge_match_queue(queue_items):
 
             if not str(item['abs_id']).startswith('booklore:'):
                 clients.abs_client.add_to_collection(item['abs_id'], user_setting("ABS_COLLECTION_NAME", "Synced with KOReader"))
-            if shelf_watch_meta:
-                _complete_shelf_watch_approval(shelf_watch_meta)
-            elif clients.booklore_client.is_configured():
-                shelf_filename = original_ebook_filename or ebook_filename
-                _shelve_matched_ebook(shelf_filename)
+            shelf_filename = original_ebook_filename or ebook_filename
+            if not _complete_shelf_watch_approval(shelf_watch_meta) and shelf_filename:
+                _shelve_matched_ebook(
+                    shelf_filename, item.get('ebook_source'), item.get('ebook_source_id')
+                )
             if clients.storyteller_client.is_configured() and book.storyteller_uuid:
                 clients.storyteller_client.add_to_collection_by_uuid(book.storyteller_uuid)
 
