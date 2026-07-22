@@ -36,19 +36,6 @@ _PRINT_FORMAT_MAP = (
 )
 
 
-def _get_text_excluding_title_links(node) -> str:
-    texts = []
-    for string in node.strings:
-        parent = getattr(string, 'parent', None)
-        if parent and parent.name == 'a' and (parent.get('href') or '').startswith('/books/'):
-            continue
-        text = string.strip()
-        if text:
-            texts.append(text)
-    return ' '.join(texts)
-
-
-
 def _parse_audio_seconds(text: str) -> Optional[int]:
     if not text:
         return None

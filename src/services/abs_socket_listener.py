@@ -16,7 +16,7 @@ import time
 import requests
 import socketio
 
-from src.services.write_tracker import record_write, is_own_write as _tracker_is_own_write
+from src.services.write_tracker import is_own_write as _tracker_is_own_write
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +24,8 @@ _DEFAULT_DEBOUNCE_SECONDS = 30
 _SELF_WRITE_SLACK_SECONDS = 60
 
 # ---------------------------------------------------------------------------
-# Write-suppression tracker — delegates to the shared write_tracker module.
-# Backward-compatible wrappers kept so abs_sync_client import still works.
+# ABS-specific write-suppression wrapper around the shared tracker.
 # ---------------------------------------------------------------------------
-
-
-def record_abs_write(abs_id: str, user_id=None) -> None:
-    """Call after BookBridge successfully pushes progress to ABS."""
-    record_write('ABS', abs_id, user_id=user_id)
 
 
 def is_own_write(abs_id: str, suppression_window: int = 60, user_id=None) -> bool:

@@ -5,7 +5,6 @@ import tempfile
 import time
 import os
 import html
-import re
 import uuid
 from pathlib import Path
 from urllib.parse import urljoin
@@ -115,9 +114,6 @@ class ForgeService:
             "local file": "Local File",
         }
         return source_map.get(normalized.lower(), normalized)
-
-    def _should_cleanup_staged_sources(self, stage_mode: str) -> bool:
-        return self._normalize_stage_mode(stage_mode) == DEFAULT_STAGE_MODE
 
     def _for_client_bundle(self, client_bundle=None):
         """Return a worker service using the supplied per-user clients.
@@ -257,61 +253,6 @@ class ForgeService:
         logger.info(f"{context}: Copied local source '{src_path.name}'")
         return "copy"
 
-    def _cleanup_staged_sources(
-        self,
-        course_dir: Path,
-        staged_epub_path: Path = None,
-        preserve_paths=None,
-        context: str = "Forge"
-    ) -> int:
-        """
-        Remove staged source audio/EPUB while preserving Storyteller output artifacts.
-        """
-        if not course_dir:
-            return 0
-
-        course_dir = Path(course_dir)
-        if not course_dir.exists():
-            return 0
-
-        preserve_resolved = set()
-        for path in preserve_paths or []:
-            if not path:
-                continue
-            preserve_resolved.add(self._safe_resolve(Path(path)))
-
-        deleted = 0
-        failed = 0
-
-        for file_path in course_dir.rglob("*"):
-            if not file_path.is_file():
-                continue
-            if self._safe_resolve(file_path) in preserve_resolved:
-                continue
-            if file_path.suffix.lower() in AUDIO_EXTENSIONS:
-                try:
-                    file_path.unlink()
-                    deleted += 1
-                except Exception as cleanup_err:
-                    failed += 1
-                    logger.debug(f"{context}: Failed to delete source audio '{file_path}': {cleanup_err}")
-
-        if staged_epub_path:
-            staged_epub_path = Path(staged_epub_path)
-            if (
-                staged_epub_path.exists()
-                and self._safe_resolve(staged_epub_path) not in preserve_resolved
-            ):
-                try:
-                    staged_epub_path.unlink()
-                    deleted += 1
-                except Exception as cleanup_err:
-                    failed += 1
-                    logger.debug(f"{context}: Failed to delete staged epub '{staged_epub_path}': {cleanup_err}")
-
-        logger.info(f"{context}: Cleanup complete - deleted {deleted} source file(s), failed {failed}.")
-        return deleted
-
     @staticmethod
     def _extract_original_filename(text_item, fallback_filename=None):
         """
@@ -326,42 +267,6 @@ class ForgeService:
             or text_item.get('filename')
         )
         return original_name or fallback_filename
-
-    @staticmethod
-    def _normalize_storyteller_title(value: str) -> str:
-        """Normalize titles for exact identity matching without fuzzy fallback."""
-        text = str(value or "").strip().lower()
-        text = re.sub(r"[^\w\s]", " ", text)
-        text = re.sub(r"_+", " ", text)
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
-
-    def _find_processed_epub(self, course_dir: Path):
-        """
-        Find Storyteller-produced EPUB artifacts in the staged course directory.
-        Prefers latest modified candidate for robustness across naming variants.
-        """
-        candidates = {}
-        try:
-            for pattern in ("*readaloud*.epub", "*synced*.epub"):
-                for p in course_dir.rglob(pattern):
-                    if p.is_file():
-                        candidates[str(p)] = p
-
-            for p in course_dir.rglob("*.epub"):
-                if p.is_file() and "synced" in str(p.parent).lower():
-                    candidates[str(p)] = p
-        except Exception:
-            return None
-
-        if not candidates:
-            return None
-
-        return sorted(
-            candidates.values(),
-            key=lambda x: x.stat().st_mtime if x.exists() else 0,
-            reverse=True
-        )[0]
 
     @staticmethod
     def _storyteller_link_ready(link_info) -> bool:

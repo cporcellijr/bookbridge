@@ -2375,26 +2375,6 @@ class BookloreClient:
         logger.error(f"Grimmory update failed: {last_status}")
         return False
 
-    def get_recent_activity(self, min_progress=0.01):
-        if not self._has_cached_books() and not self._is_refresh_on_cooldown(): self._refresh_book_cache()
-        results = []
-        for filename, book in self._snapshot_book_cache_items():
-            progress = 0
-            if book.get('epubProgress'):
-                progress = (book['epubProgress'].get('percentage') or 0) / 100.0
-            elif book.get('pdfProgress'):
-                progress = (book['pdfProgress'].get('percentage') or 0) / 100.0
-            elif book.get('cbxProgress'):
-                progress = (book['cbxProgress'].get('percentage') or 0) / 100.0
-            if progress >= min_progress:
-                results.append({
-                    "id": book['id'],
-                    "filename": book['fileName'],
-                    "progress": progress,
-                    "source": "BOOKLORE"
-                })
-        return results
-
     def create_reading_session(
         self,
         book_id: int,

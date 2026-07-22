@@ -5,7 +5,6 @@ import threading
 import time
 import traceback
 from pathlib import Path
-import schedule
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
@@ -3811,26 +3810,3 @@ class SyncManager:
             logger.error(error_msg)
             logger.error(traceback.format_exc())
             raise RuntimeError(error_msg) from e
-
-    def run_daemon(self):
-        """Legacy method - daemon is now run from web_server.py"""
-        logger.warning("⚠️ run_daemon() called — daemon should be started from web_server.py instead")
-        schedule.every(int(os.getenv("SYNC_PERIOD_MINS", 5))).minutes.do(self.sync_cycle)
-        schedule.every(1).minutes.do(self.check_pending_jobs)
-        logger.info("🚀 Daemon started")
-        self.sync_cycle()
-        while True:
-            schedule.run_pending()
-            time.sleep(30)
-
-if __name__ == "__main__":
-    # This is only used for standalone testing - production uses web_server.py
-    logger.info("🚀 Running sync manager in standalone mode (for testing)")
-
-    from src.utils.di_container import create_container
-    di_container = create_container()
-    # Try to use dependency injection, fall back to legacy if there are issues
-    sync_manager = di_container.sync_manager()
-    logger.info("✅ Using dependency injection")
-
-    sync_manager.run_daemon()

@@ -675,30 +675,6 @@ class HardcoverClient:
             "title": book.get("title"),
         }
 
-    def find_user_book(self, book_id: int) -> Optional[Dict]:
-        """Find existing user_book with read info."""
-        query = """
-        query ($bookId: Int!, $userId: Int!) {
-            user_books(where: { book_id: { _eq: $bookId }, user_id: { _eq: $userId }}) {
-                id
-                status_id
-                edition_id
-                user_book_reads(order_by: {id: desc}, limit: 1) {
-                    id
-                    started_at
-                    finished_at
-                    progress_pages
-                    progress_seconds
-                }
-            }
-        }
-        """
-
-        result = self.query(query, {"bookId": book_id, "userId": self.get_user_id()})
-        if result and result.get("user_books") and len(result["user_books"]) > 0:
-            return result["user_books"][0]
-        return None
-
     def update_status(
         self, book_id: int, status_id: int, edition_id: int = None
     ) -> Optional[Dict]:

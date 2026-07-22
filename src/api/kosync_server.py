@@ -507,26 +507,6 @@ def _get_koreader_device_sync_service():
         return None
 
 
-def _spawn_user_scoped_thread(target, args=(), user_id=None, name=None) -> None:
-    """Spawn a daemon thread that runs ``target`` with the KoSync device's user
-    bound as the ambient user.
-
-    contextvars are NOT inherited by newly-created threads, so a raw
-    ``threading.Thread`` running auto-discovery resolves ``get_current_user_id()``
-    to ``None`` on the worker and mis-attributes any ``save_book`` /
-    ``link_kosync_document`` to the default admin. Rebinding the id inside the
-    worker keeps the auto-created mapping owned by the reader who triggered it.
-    """
-    def runner():
-        token = set_current_user_id(user_id)
-        try:
-            target(*args)
-        finally:
-            reset_current_user_id(token)
-
-    threading.Thread(target=runner, daemon=True, name=name).start()
-
-
 def _record_kosync_event(abs_id: str, title: str, user_id=None) -> None:
     """Record a KoSync PUT event for debounced sync triggering.
 

@@ -355,57 +355,6 @@ class HardcoverSyncClient(SyncClient):
             )
         return added
 
-    def set_manual_match(self, book_abs_id: str, input_str: str) -> bool:
-        """
-        Manually match an ABS book to a Hardcover book via URL, ID, or Slug.
-        """
-        if not self.hardcover_client.is_configured():
-            logger.error("❌ Hardcover client not configured")
-            return False
-
-        # Resolve the input string to a Hardcover book
-        match = self.hardcover_client.resolve_book_from_input(input_str)
-        if not match:
-            logger.error(f"❌ Could not resolve Hardcover book from '{input_str}'")
-            return False
-
-        # Try to get existing metadata from ABS for completeness
-        isbn = None
-        asin = None
-
-        if self.abs_client:
-            try:
-                item = self.abs_client.get_item_details(book_abs_id)
-                if item:
-                    meta = item.get('media', {}).get('metadata', {})
-                    isbn = meta.get('isbn')
-                    asin = meta.get('asin')
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to fetch ABS details during manual match: {e}")
-
-        # Create/Update HardcoverDetails
-        details = HardcoverDetails(
-            abs_id=book_abs_id,
-            hardcover_book_id=match['book_id'],
-            hardcover_slug=match.get('slug'),
-            hardcover_edition_id=match.get('edition_id'),
-            hardcover_pages=match.get('pages'),
-            hardcover_audio_seconds=match.get('audio_seconds'),
-            isbn=isbn,
-            asin=asin,
-            matched_by='manual'
-        )
-
-        self.database_service.save_hardcover_details(details)
-        logger.info(f"✅ Manually matched ABS {book_abs_id} to Hardcover {match['book_id']} ({match.get('title')})")
-
-        # Trigger an initial status update to ensure it's tracked
-        self.hardcover_client.update_status(match['book_id'], 1, match.get('edition_id'))
-        book = self.database_service.get_book(book_abs_id) if self.database_service else None
-        if book:
-            self._sync_grimmory_shelves_to_hardcover_lists(book, details)
-        return True
-
     def get_text_from_current_state(self, book: Book, state: ServiceState) -> Optional[str]:
         """
         Hardcover doesn't provide text content, so return None.
