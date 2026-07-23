@@ -238,6 +238,28 @@ class TestABSCollectionCleanup(unittest.TestCase):
         self.assertFalse(any("Failed to remove item 'missing-item'" in line
                              for line in captured.output))
 
+    def test_absent_collection_at_cleanup_logs_debug_not_warning(self):
+        """A missing collection during delete/unlink cleanup is a normal no-op and
+        must not warn (diagnostics finding 541)."""
+        with patch.dict(
+            os.environ,
+            {"ABS_SERVER": "http://abs.example", "ABS_KEY": "token"},
+            clear=False,
+        ):
+            client = ABSClient()
+            collections = MagicMock(status_code=200)
+            collections.json.return_value = {"collections": [{"id": "c1", "name": "Other"}]}
+            client.session = MagicMock()
+            client.session.get.return_value = collections
+
+            with self.assertLogs("src.api.api_clients", level="DEBUG") as captured:
+                result = client.remove_from_collection("item-x", "Synced with KOReader")
+
+        self.assertFalse(result)
+        self.assertTrue(any("not found, cannot remove" in line for line in captured.output))
+        self.assertFalse(any(line.startswith("WARNING") for line in captured.output))
+        client.session.delete.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

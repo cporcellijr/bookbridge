@@ -726,7 +726,10 @@ class ABSClient:
             target_collection = next((c for c in collections if c.get('name') == collection_name), None)
 
             if not target_collection:
-                logger.warning(f"⚠️ Collection '{collection_name}' not found, cannot remove item '{item_id}'")
+                # Only reached from delete/unlink cleanup, where a missing collection
+                # is a normal no-op (the collection was never created, or was removed
+                # in ABS) — not a problem worth a warning.
+                logger.debug(f"⚠️ Collection '{collection_name}' not found, cannot remove item '{item_id}'")
                 return False
 
             # Remove from collection
