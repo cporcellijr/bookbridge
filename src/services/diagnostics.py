@@ -41,6 +41,9 @@ _HTTP_STATUS_RE = re.compile(
 _HARDCOVER_NO_MATCH_RE = re.compile(
     r"^(?:\S+\s+)?Hardcover: No match found for '.+'$"
 )
+# Matches scrub placeholder tokens: t:<8hex>, path:<8hex><ext>, url:<8hex>
+# Captures the prefix (t|path|url) so we can collapse the hash to a single #.
+_SCRUB_TOKEN_RE = re.compile(r'\b(t|path|url):[0-9a-f]{8}')
 
 
 def _sha1_prefix(text: str, length: int = 8) -> str:
@@ -111,6 +114,15 @@ def _make_template(message: str) -> str:
         return f"<book>{_TRANSCRIPT_FAILURE_SUFFIX}"
     if _HARDCOVER_NO_MATCH_RE.fullmatch(normalized):
         return "Hardcover: No match found for '<book>'"
+
+    # Collapse scrub placeholder tokens (t:<hash>, path:<hash><ext>, url:<hash>)
+    # to a single canonical form (t:#, path:#<ext>, url:#) so that distinct
+    # per-value hashes don't create distinct templates and exhaust the 500-cap.
+    # This must run BEFORE the digit-collapse loop below, otherwise the hex
+    # hash gets partially mangled and remains distinct per value.
+    # Only the 8-hex hash is matched, so a path's trailing extension (".epub")
+    # stays in the surrounding text and survives as "path:#.epub".
+    normalized = _SCRUB_TOKEN_RE.sub(lambda m: f"{m.group(1)}:#", normalized)
 
     parts = []
     last_end = 0

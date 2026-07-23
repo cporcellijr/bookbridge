@@ -172,6 +172,75 @@ class TestMakeTemplate(unittest.TestCase):
             "Hardcover: API request returned 503",
         )
 
+    # -- scrub-token collapse tests (diagnostics finding 630) -------------
+
+    def test_quoted_doc_id_collapse_same_template(self):
+        """Two KoSync-style messages with different doc_ids produce same template."""
+        # Realistic 32-hex doc_ids (KoSync format) - each >= 12 chars so scrubbed to t:<hash>
+        msg1 = "Error fetching KoSync progress for doc 'a1b2c3d4e5f678901234567890abcdef': timeout"
+        msg2 = "Error fetching KoSync progress for doc 'fedcba09876543210fedcba098765432': timeout"
+
+        scrubbed1 = scrub_diagnostic_text(msg1)
+        scrubbed2 = scrub_diagnostic_text(msg2)
+        tpl1 = _make_template(scrubbed1)
+        tpl2 = _make_template(scrubbed2)
+
+        self.assertEqual(tpl1, tpl2)
+        # Verify the template contains the collapsed t:# form
+        self.assertIn("t:#", tpl1)
+        # And the rest of the message shape is preserved
+        self.assertIn("Error fetching KoSync progress for doc", tpl1)
+        self.assertIn("timeout", tpl1)
+
+    def test_filesystem_path_collapse_same_template(self):
+        """Two messages differing only in filesystem path produce same template.
+
+        The path must be whitespace-free: scrub tokenizes on whitespace, so only a
+        space-free token with >= 2 separators becomes a single ``path:<hash><ext>``.
+        """
+        msg1 = "Failed to open /srv/library/alpha/book.epub for reading"
+        msg2 = "Failed to open /srv/library/omega/story.epub for reading"
+
+        scrubbed1 = scrub_diagnostic_text(msg1)
+        scrubbed2 = scrub_diagnostic_text(msg2)
+        tpl1 = _make_template(scrubbed1)
+        tpl2 = _make_template(scrubbed2)
+
+        self.assertEqual(tpl1, tpl2)
+        # Path extension preserved after collapse
+        self.assertIn("path:#.epub", tpl1)
+
+    def test_url_collapse_same_template(self):
+        """Two messages differing only in URL produce same template."""
+        msg1 = "Sync request to https://abs-server-1.local/api/sync failed"
+        msg2 = "Sync request to https://abs-server-2.local/api/sync failed"
+
+        scrubbed1 = scrub_diagnostic_text(msg1)
+        scrubbed2 = scrub_diagnostic_text(msg2)
+        tpl1 = _make_template(scrubbed1)
+        tpl2 = _make_template(scrubbed2)
+
+        self.assertEqual(tpl1, tpl2)
+        self.assertIn("url:#", tpl1)
+
+    def test_http_status_preserved_after_scrub_token_collapse(self):
+        """HTTP status codes remain distinct in templates despite scrub-token collapse."""
+        msg1 = "Error fetching KoSync progress for doc 'a1b2c3d4e5f678901234567890abcdef': HTTP 401"
+        msg2 = "Error fetching KoSync progress for doc 'fedcba09876543210fedcba098765432': HTTP 502"
+
+        scrubbed1 = scrub_diagnostic_text(msg1)
+        scrubbed2 = scrub_diagnostic_text(msg2)
+        tpl1 = _make_template(scrubbed1)
+        tpl2 = _make_template(scrubbed2)
+
+        # Different HTTP statuses must yield different templates (regression guard)
+        self.assertNotEqual(tpl1, tpl2)
+        self.assertIn("401", tpl1)
+        self.assertIn("502", tpl2)
+        # But the doc_id hashes are collapsed
+        self.assertIn("t:#", tpl1)
+        self.assertIn("t:#", tpl2)
+
 
 class TestDiagnosticsHandler(unittest.TestCase):
     """Tests for DiagnosticsLogHandler core behaviour."""
