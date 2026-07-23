@@ -74,6 +74,53 @@ class TestStorygraphClient(unittest.TestCase):
             })
             self.assertFalse(client.is_configured())
 
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_expired_session_warns_once_and_stops_writing(self, mock_get, mock_post):
+        """An expired session cookie must not emit a 'HTTP 302' warning for every
+        book on every cycle (diagnostics finding 639, 3,566 occurrences). The
+        book page is public (200 + CSRF) but the write POST redirects to sign-in."""
+        mock_get.return_value = Mock(
+            status_code=200,
+            text='<meta name="csrf-token" content="tok123">',
+            headers={},
+        )
+        mock_post.return_value = Mock(status_code=302, headers={"Location": "/users/sign_in"})
+
+        with patch("src.api.storygraph_client.logger") as mock_logger:
+            self.assertFalse(self.client.update_progress("book-1", 0.5))
+            self.assertFalse(self.client.update_progress("book-2", 0.5))
+
+        # Only the first write reaches the network; the breaker short-circuits the rest.
+        self.assertEqual(mock_post.call_count, 1)
+        session_warnings = [
+            c for c in mock_logger.warning.call_args_list if "session expired" in str(c)
+        ]
+        self.assertEqual(len(session_warnings), 1)
+        self.assertFalse(
+            any("HTTP 302" in str(c) for c in mock_logger.warning.call_args_list)
+        )
+
+    @patch("src.api.storygraph_client.requests.post")
+    @patch("src.api.storygraph_client.requests.get")
+    def test_reauthentication_clears_the_breaker(self, mock_get, mock_post):
+        """Saving a fresh session cookie changes the fingerprint, so writes resume."""
+        mock_get.return_value = Mock(
+            status_code=200,
+            text='<meta name="csrf-token" content="tok123">',
+            headers={},
+        )
+        mock_post.return_value = Mock(status_code=302, headers={"Location": "/users/sign_in"})
+
+        self.assertFalse(self.client.update_progress("book-1", 0.5))  # trips breaker
+        self.assertFalse(self.client.update_progress("book-2", 0.5))  # short-circuited
+        self.assertEqual(mock_post.call_count, 1)
+
+        with patch.dict(os.environ, {"STORYGRAPH_SESSION_COOKIE": "fresh-session"}, clear=False):
+            self.assertFalse(self.client.update_progress("book-3", 0.5))
+        # The new cookie fingerprint no longer matches the breaker, so the write is retried.
+        self.assertEqual(mock_post.call_count, 2)
+
     def test_parse_community_reviews_rating_confirmed_shape(self):
         html = """
         <h3>Community Reviews</h3>

@@ -80,6 +80,12 @@ class StorygraphClient:
         self.base_url = os.environ.get("STORYGRAPH_BASE_URL", "https://app.thestorygraph.com").rstrip("/")
         self.timeout = 12
         self.user_id = "storygraph_user"
+        # Circuit breaker: the session cookie fingerprint for which StoryGraph last
+        # answered a write with a sign-in redirect (expired session). While it matches
+        # the current cookie, progress writes short-circuit so an expired login does not
+        # emit a "HTTP 302" warning for every book on every sync cycle. Saving a fresh
+        # cookie changes the fingerprint and clears the breaker automatically.
+        self._auth_expired_cookie: Optional[str] = None
 
     def _session_cookie(self) -> str:
         return (resolve_setting(self._creds, "STORYGRAPH_SESSION_COOKIE") or "").strip()
@@ -157,6 +163,17 @@ class StorygraphClient:
             return False
         location = (resp.headers.get("Location") or resp.headers.get("location") or "").lower()
         return "/users/sign_in" in location
+
+    def _note_auth_expired(self, cookie_fingerprint: str, resp) -> None:
+        """Trip the auth circuit breaker on a sign-in redirect, warning only once."""
+        if not self._is_sign_in_redirect(resp):
+            return
+        if self._auth_expired_cookie == cookie_fingerprint:
+            return
+        self._auth_expired_cookie = cookie_fingerprint
+        logger.warning(
+            "StoryGraph session expired — re-authenticate in Settings to resume progress sync"
+        )
 
     @staticmethod
     def _extract_book_num_of_pages(html: str) -> str:
@@ -669,8 +686,15 @@ class StorygraphClient:
         if not book_id:
             return False
 
+        # Skip the write entirely while the session is known-expired; a stale login
+        # otherwise produces a "HTTP 302" warning for every book on every cycle.
+        cookie_fingerprint = self._session_cookie()
+        if cookie_fingerprint and self._auth_expired_cookie == cookie_fingerprint:
+            return False
+
         page = self._request(f"/books/{book_id}", allow_redirects=False)
         if not page or page.status_code != 200 or self._is_sign_in_redirect(page):
+            self._note_auth_expired(cookie_fingerprint, page)
             return False
 
         csrf = self._extract_csrf(page.text)
@@ -705,6 +729,11 @@ class StorygraphClient:
         )
 
         ok = bool(resp and resp.status_code in (200, 204, 302, 303) and not self._is_sign_in_redirect(resp))
-        if not ok and resp is not None:
-            logger.warning("StoryGraph progress update failed: HTTP %s", resp.status_code)
+        if ok:
+            self._auth_expired_cookie = None
+        elif resp is not None:
+            if self._is_sign_in_redirect(resp):
+                self._note_auth_expired(cookie_fingerprint, resp)
+            else:
+                logger.warning("StoryGraph progress update failed: HTTP %s", resp.status_code)
         return ok
