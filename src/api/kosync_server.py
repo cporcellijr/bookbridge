@@ -494,7 +494,8 @@ def init_kosync_server(database_service, container, manager, ebook_dir=None):
     _manager = manager
     _ebook_dir = ebook_dir
     _kosync_device_session_registry = None
-    _start_manifest_prebuilder()
+    # Prebuilder is started lazily on first manifest request so idle installs
+    # that don't use device-sync never hash the library (ref #342).
 
 
 def _get_koreader_device_sync_service():
@@ -1666,6 +1667,8 @@ def koreader_device_sync_manifest():
     build and primes the cache so subsequent requests are instant.
     """
     global _manifest_cache
+    # Prebuilder is started lazily on first manifest request so idle installs
+    # that don't use device-sync never hash the library (ref #342).
     _start_manifest_prebuilder()
 
     user_id = getattr(g, "kosync_user_id", None)

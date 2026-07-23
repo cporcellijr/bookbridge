@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -472,4 +473,57 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         # Relinks when pointing elsewhere.
         self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-2"))
         self.assertEqual(self.db.get_kosync_document("h1").linked_abs_id, "abs-2")
+
+    def test_content_hash_not_recomputed_when_ebook_unchanged(self):
+        """Regression for #342: the 60s prebuilder loop must not re-hash
+        unchanged ebook files. The mtime/size cache should serve the second
+        build_manifest() call without calling get_kosync_id again."""
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Cached Book",
+                original_ebook_filename="kavita_187.epub",
+                kosync_doc_id="hash-1",
+                status="active",
+            )
+        )
+
+        self.service.build_manifest()
+        self.service.build_manifest()
+
+        self.assertEqual(
+            self.service.ebook_parser.get_kosync_id.call_count,
+            1,
+            "Second manifest build should be served from mtime cache (issue #342)",
+        )
+
+    def test_content_hash_recomputed_when_ebook_changes(self):
+        """A changed ebook file (different size) must be re-hashed on the next
+        manifest build."""
+        path = self._write_book_file("changing.epub", content=b"epub-v1")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Changing Book",
+                original_ebook_filename="changing.epub",
+                kosync_doc_id="hash-1",
+                status="active",
+            )
+        )
+
+        self.service.build_manifest()
+
+        # Rewrite with clearly different content AND different size to guarantee
+        # a cache miss regardless of mtime granularity.
+        path.write_bytes(b"epub-v2-much-longer-body")
+        os.utime(path, None)  # bump mtime
+
+        self.service.build_manifest()
+
+        self.assertEqual(
+            self.service.ebook_parser.get_kosync_id.call_count,
+            2,
+            "Changed file (different size) must be re-hashed",
+        )
 

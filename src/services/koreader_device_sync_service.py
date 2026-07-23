@@ -3,6 +3,7 @@ import json
 import logging
 import mimetypes
 import re
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -44,6 +45,8 @@ class KOReaderDeviceSyncService:
         self.kavita_client = kavita_client
         self.epub_cache_dir = Path(epub_cache_dir) if epub_cache_dir is not None else Path("/data/epub_cache")
         self.bookorbit_client = bookorbit_client
+        self._content_hash_cache: dict[str, tuple[float, int, str]] = {}
+        self._content_hash_cache_lock = threading.Lock()
 
     def _get_active_books(self) -> list:
         # Audiobook-only mappings have no ebook file by design, so they're never
@@ -164,6 +167,38 @@ class KOReaderDeviceSyncService:
         value = str(getattr(book, "kosync_doc_id", "") or "").strip()
         return value or None
 
+    def _content_hash_for_path(self, source_path: Path) -> Optional[str]:
+        """Return cached content hash for ``source_path`` if mtime and size match, else compute and cache."""
+        signature = None
+        try:
+            stat = source_path.stat()
+            signature = (stat.st_mtime, stat.st_size)
+        except OSError:
+            pass
+
+        path_str = str(source_path)
+        if signature is not None:
+            with self._content_hash_cache_lock:
+                cached = self._content_hash_cache.get(path_str)
+                if cached and cached[0] == signature[0] and cached[1] == signature[1]:
+                    return cached[2]
+
+        try:
+            content_hash = self.ebook_parser.get_kosync_id(source_path)
+        except Exception as e:
+            logger.warning(
+                "KOReader device-sync could not compute content hash for '%s': %s",
+                sanitize_log_data(source_path.name),
+                e,
+            )
+            return None
+
+        content_hash = str(content_hash or "").strip()
+        if signature is not None and content_hash:
+            with self._content_hash_cache_lock:
+                self._content_hash_cache[path_str] = (signature[0], signature[1], content_hash)
+        return content_hash
+
     def _resolve_download_artifact(self, book) -> Optional[dict]:
         source_filename = self._select_source_filename(book)
         if not source_filename:
@@ -178,17 +213,7 @@ class KOReaderDeviceSyncService:
             )
             return None
 
-        try:
-            content_hash = self.ebook_parser.get_kosync_id(source_path)
-        except Exception as e:
-            logger.warning(
-                "KOReader device-sync could not compute content hash for '%s': %s",
-                sanitize_log_data(source_filename),
-                e,
-            )
-            return None
-
-        content_hash = str(content_hash or "").strip()
+        content_hash = self._content_hash_for_path(source_path)
         if not content_hash:
             logger.warning(
                 "KOReader device-sync could not compute a non-empty content hash for '%s'",

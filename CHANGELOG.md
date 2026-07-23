@@ -8,6 +8,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Your book files are no longer read constantly when nothing is happening.** A
+  background task that prepares the optional KOReader managed-folder sync list was
+  re-reading (hashing) every book in your library once a minute, forever — even on
+  installs that never use that feature and even when you hadn't opened a book in days.
+  That kept hard drives from ever spinning down. BookBridge now only builds that list
+  when a KOReader device actually requests it, and it remembers each book's hash until
+  the file itself changes, so unchanged files are never re-read. Idle installs now
+  leave your disks alone. (#342)
+
 - **Shelf and matching-queue edge cases no longer leak or remove work.** BookOrbit
   now recognizes case-variant configured shelf names in every shelving path, so a
   book cannot be added to and then removed from the same collection. Persisted

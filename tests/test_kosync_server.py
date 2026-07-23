@@ -2265,6 +2265,85 @@ class TestKosyncEndpoints(unittest.TestCase):
         with kosync_server._kosync_open_sessions_lock:
             self.assertFalse(kosync_server._kosync_open_sessions)
 
+    def test_init_kosync_server_does_not_start_prebuilder(self):
+        """Regression for #342 — the prebuilder must not start at init or idle
+        installs churn the disk hashing every ebook every 60s."""
+        from src.api import kosync_server
+
+        # Snapshot the five module globals init_kosync_server touches
+        saved_db = kosync_server._database_service
+        saved_container = kosync_server._container
+        saved_manager = kosync_server._manager
+        saved_ebook_dir = kosync_server._ebook_dir
+        saved_registry = kosync_server._kosync_device_session_registry
+
+        try:
+            with patch.object(kosync_server, "_start_manifest_prebuilder") as start_mock:
+                kosync_server.init_kosync_server(
+                    saved_db, saved_container, saved_manager, saved_ebook_dir
+                )
+                start_mock.assert_not_called()
+        finally:
+            # Restore all five globals so the suite passes in any order
+            # (failure mode #17: module-global leakage).
+            kosync_server._database_service = saved_db
+            kosync_server._container = saved_container
+            kosync_server._manager = saved_manager
+            kosync_server._ebook_dir = saved_ebook_dir
+            kosync_server._kosync_device_session_registry = saved_registry
+
+    def test_manifest_endpoint_starts_prebuilder_lazily(self):
+        """Proving the prebuilder starts lazily on real device-sync use."""
+        from src.api import kosync_server
+        from src import web_server
+        from src.db.models import Book
+
+        # Save an active book so it survives per-user scoping (mirrors
+        # test_device_sync_manifest_returns_service_payload setup).
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        svc.save_book(Book(
+            abs_id="abs-lazy",
+            abs_title="Lazy Manifest",
+            ebook_filename="lazy.epub",
+            status="active",
+            user_id=admin_id,
+        ))
+
+        service = MagicMock()
+        service.build_manifest.return_value = {
+            "generated_at": 1,
+            "revision": "lazy-rev",
+            "delete_mode": "mirror",
+            "books": [
+                {
+                    "abs_id": "abs-lazy",
+                    "title": "Lazy Manifest",
+                    "filename": "lazy.epub",
+                    "content_hash": "hash-lazy",
+                    "download_path": "/koreader/device-sync/books/abs-lazy/download",
+                    "size": 4,
+                }
+            ],
+        }
+        container = MagicMock()
+        container.koreader_device_sync_service.return_value = service
+
+        # Reset manifest cache so the endpoint has to build inline
+        with kosync_server._manifest_cache_lock:
+            kosync_server._manifest_cache = None
+
+        with (
+            patch.object(kosync_server, "_start_manifest_prebuilder") as start_mock,
+            patch.object(kosync_server, "_container", container),
+        ):
+            response = self.client.get(
+                "/koreader/device-sync/manifest", headers=self.auth_headers
+            )
+
+        self.assertEqual(response.status_code, 200)
+        start_mock.assert_called()  # prebuilder starts lazily on real use
+
 
 class TestKosyncAuthStubs(unittest.TestCase):
     """Security regression: the KOReader login/create stubs must not disclose
