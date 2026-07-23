@@ -168,6 +168,11 @@ class AudioTranscriber:
 
     def _get_cached_transcript(self, path):
         """Load transcript with LRU caching."""
+        # A book that has never been transcribed (or whose transcription failed)
+        # resolves to a None path. Return quietly instead of letting open(None)
+        # raise a TypeError that gets logged as a spurious transcript-load error.
+        if path is None:
+            return None
         path_str = str(path)
         if path_str in self._transcript_cache:
             self._transcript_cache.move_to_end(path_str)

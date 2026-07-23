@@ -180,6 +180,30 @@ class TestTranscriberCacheLogic(unittest.TestCase):
 
             self.assertFalse((cache_dir / "_progress.json").exists())
 
+class TestTranscriberNonePathGuard(unittest.TestCase):
+    """A book with no transcript yet resolves to a None path. Looking it up must
+    return None quietly instead of letting ``open(None)`` raise a TypeError that
+    gets logged as a transcript-load error. Regression for the diagnostics finding:
+    ``❌ Error loading transcript 'None': expected str, bytes or os.PathLike
+    object, not NoneType``."""
+
+    def setUp(self):
+        self.transcriber = AudioTranscriber(Path("/tmp/mock_data"), MagicMock(), MagicMock())
+
+    def test_cached_lookup_none_path_returns_none_without_error(self):
+        with patch("utils.transcriber.logger") as mock_logger:
+            result = self.transcriber._get_cached_transcript(None)
+        self.assertIsNone(result)
+        mock_logger.error.assert_not_called()
+
+    def test_public_lookups_none_path_return_none_without_error(self):
+        with patch("utils.transcriber.logger") as mock_logger:
+            self.assertIsNone(self.transcriber.get_text_at_time(None, 10.0))
+            self.assertIsNone(self.transcriber.get_previous_segment_text(None, 10.0))
+            self.assertIsNone(self.transcriber.find_time_for_text(None, "some text"))
+        mock_logger.error.assert_not_called()
+
+
 if __name__ == '__main__':
     # unittest.main() # Avoid args issue in some environments?
     # Just standard main is fine for pytest discovery
