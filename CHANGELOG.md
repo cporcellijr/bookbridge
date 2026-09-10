@@ -59,11 +59,13 @@ All notable changes to BookBridge will be documented in this file.
   instead of transcribing the audio and matching the transcript back. That removes two
   approximations — invented per-word timings and sparse n-gram anchors — for denser,
   more accurate positions on char-precise readers (BookOrbit, ABS ebook, Grimmory).
-  It's **opt-in**: enable *Use CTC forced alignment* under Settings → Transcription and
-  run the new <code>-ctc</code> image (it bundles the heavier torch/torchaudio; the
-  standard image is unchanged and CTC stays inert there). When on, CTC becomes the
-  preferred backend and the Whisper/lexical pipeline remains the automatic fallback.
-  Existing books adopt it via **Remap**.
+  It's **opt-in, and not included in any published image**: torch/torchaudio are large,
+  so *Use CTC forced alignment* under Settings → Transcription only takes effect on a
+  self-built <code>-ctc</code> image (<code>INSTALL_CTC=true</code>). On the standard and
+  <code>-cuda</code> images the setting is inert and the Whisper/lexical pipeline runs
+  exactly as before. It also effectively needs an NVIDIA GPU — on CPU it is workable
+  only for short books. Where it does run, CTC becomes the preferred backend with
+  Whisper/lexical as the automatic fallback, and existing books adopt it via **Remap**.
 
   Books of any length are handled by aligning in chapter-sized pieces; large unspoken
   passages inside a book are detected and set aside rather than being given narration
