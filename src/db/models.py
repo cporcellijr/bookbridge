@@ -548,19 +548,27 @@ class BookAlignment(Base):
     # anchor_density, density_spread, backwards_fraction) for diagnostics. NULL
     # alongside `quality_score` for the same reason.
     quality_detail = Column(Text, nullable=True)
+    # JSON-encoded list of `{char_start, char_end, ts_start, ts_end}` placements
+    # (issue #426 phase 1), one per ebook section independently fit to the audio
+    # timeline so out-of-order narration (e.g. an EPUB's acknowledgements spined
+    # first but narrated last) doesn't force every anchor into one global
+    # monotonic chain. NULL = flat monotonic map, legacy path — every map built
+    # before this shipped, and every map without out-of-order narration.
+    segments_json = Column(Text, nullable=True)
 
     # Relationship
     book = relationship("Book", back_populates="alignment")
 
     def __init__(self, abs_id: str, alignment_map_json: str, align_method: str = None,
                  total_chars: int = None, quality_score: float = None,
-                 quality_detail: str = None):
+                 quality_detail: str = None, segments_json: str = None):
         self.abs_id = abs_id
         self.alignment_map_json = alignment_map_json
         self.align_method = align_method
         self.total_chars = total_chars
         self.quality_score = quality_score
         self.quality_detail = quality_detail
+        self.segments_json = segments_json
 
 
 class BookAlignmentBackup(Base):
@@ -579,14 +587,22 @@ class BookAlignmentBackup(Base):
     alignment_map_json = Column(Text, nullable=False)
     align_method = Column(String(32), nullable=True)
     total_chars = Column(Integer, nullable=True)
+    # JSON-encoded segment placement index, mirroring `BookAlignment.segments_json`
+    # (issue #426 phase 1). Travels with `alignment_map_json` as one inseparable
+    # unit: the two describe the same map, and restoring one without the other
+    # pairs a map's flat points with a different map's segment boundaries,
+    # silently mis-resolving every lookup. NULL for a flat monotonic map, same
+    # as the live column.
+    segments_json = Column(Text, nullable=True)
     backed_up_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     def __init__(self, abs_id: str, alignment_map_json: str, align_method: str = None,
-                 total_chars: int = None):
+                 total_chars: int = None, segments_json: str = None):
         self.abs_id = abs_id
         self.alignment_map_json = alignment_map_json
         self.align_method = align_method
         self.total_chars = total_chars
+        self.segments_json = segments_json
 
 
 class ReadingSessionBuffer(Base):

@@ -19,6 +19,7 @@ from src.utils.time_utils import utcnow
 
 from src.db.models import BookAlignment, BookAlignmentBackup
 from src.services import map_quality
+from src.services.segment_fit import Segment
 from src.utils.config_loader import env_truthy
 from src.utils.ebook_utils import LRUCache
 from src.utils.polisher import Polisher
@@ -32,6 +33,103 @@ _CTC_UNNARRATED_MIN_TIMING_RATIO = 0.25
 # Slack over the audio-shortfall budget, for density-estimate error.
 _CTC_UNNARRATED_BUDGET_MARGIN = 1.5
 _LEXICAL_ANCHOR_WORDS = 12
+
+
+# ---------------------------------------------------------------------------
+# Segment-aware map lookups (issue #426 phase 1)
+#
+# `alignment_map_json` stays one flat list sorted by `char`, exactly as it has
+# always been. When `segments_json` is present, that flat list is no longer
+# assumed globally sorted by `ts` too -- narration order can differ from spine
+# order, so only *within* one segment does `ts` still ascend with `char`. These
+# module-level helpers are pure (no DB, no `self`) so the classmethod lookup
+# they support stays independently testable; see
+# `docs/PLAN_OUT_OF_ORDER_NARRATION.md`, "Why the LIS is not simply wrong".
+# ---------------------------------------------------------------------------
+
+def _segment_for_char(segments: List[Dict], char: int) -> Optional[Dict]:
+    """The one segment whose half-open ``[char_start, char_end)`` contains
+    ``char``, or ``None`` when it falls in a gap between segments (or before
+    the first / after the last). Segments are char-disjoint by construction
+    (`segment_fit.fit_segments`), so at most one can match."""
+    for segment in segments:
+        if segment['char_start'] <= char < segment['char_end']:
+            return segment
+    return None
+
+
+def _segment_for_ts(segments: List[Dict], ts: float) -> Optional[Dict]:
+    """The one segment whose half-open ``[ts_start, ts_end)`` contains
+    ``ts``, or ``None`` when it falls in audio with no matching text (e.g.
+    opening/closing credits). Segments are ts-disjoint by construction, so
+    at most one can match."""
+    for segment in segments:
+        if segment['ts_start'] <= ts < segment['ts_end']:
+            return segment
+    return None
+
+
+def _nearest_segment_edge_ts(char: int, segments: List[Dict]) -> float:
+    """The timestamp of whichever segment edge is char-nearest to ``char``,
+    without interpolating.
+
+    Two callers, both from `get_time_for_text`: when ``char`` lands *inside*
+    a segment but the map's own bracketing points came from two different
+    segments (sparse data straddling the boundary), the nearest edge is one
+    of that segment's own two edges. When ``char`` lands in a gap between
+    segments, it is the edge of whichever neighbouring segment is closer.
+    Interpolating across the boundary instead of clamping here is exactly
+    what produced "22% of the text inside 23 seconds" (see the plan doc).
+    """
+    containing = _segment_for_char(segments, char)
+    if containing is not None:
+        distance_to_start = char - containing['char_start']
+        distance_to_end = containing['char_end'] - char
+        return containing['ts_start'] if distance_to_start <= distance_to_end else containing['ts_end']
+
+    best_ts: Optional[float] = None
+    best_distance: Optional[int] = None
+    for segment in segments:
+        for edge_char, edge_ts in ((segment['char_start'], segment['ts_start']),
+                                    (segment['char_end'], segment['ts_end'])):
+            distance = abs(char - edge_char)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_ts = edge_ts
+    return best_ts
+
+
+def _nearest_segment_edge_char(ts: float, segments: List[Dict]) -> int:
+    """The char of whichever segment edge is ts-nearest to ``ts`` -- the
+    ts-domain mirror of `_nearest_segment_edge_ts`. Used by
+    `AlignmentService._interpolate_char_for_time` when a timestamp falls in
+    no segment's ``[ts_start, ts_end)`` (audio with no matching text)."""
+    best_char: Optional[int] = None
+    best_distance: Optional[float] = None
+    for segment in segments:
+        for edge_ts, edge_char in ((segment['ts_start'], segment['char_start']),
+                                    (segment['ts_end'], segment['char_end'])):
+            distance = abs(ts - edge_ts)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_char = edge_char
+    return best_char
+
+
+def _segments_to_json(segments: List[Segment]) -> str:
+    """Serialize `Segment`s for storage: only the four fields the lookups
+    need (`char_start`, `char_end`, `ts_start`, `ts_end`). `inliers` and
+    `residual` are fit diagnostics, not lookup data, and are dropped."""
+    return json.dumps([
+        {
+            "char_start": segment.char_start,
+            "char_end": segment.char_end,
+            "ts_start": segment.ts_start,
+            "ts_end": segment.ts_end,
+        }
+        for segment in segments
+    ])
+
 
 class AlignmentService:
     # Max chars of a window sent to the embedder (~1000 tokens, safely under
@@ -59,6 +157,12 @@ class AlignmentService:
         # Ebook lengths keyed by abs_id. Tiny scalars, unlike the map blobs, so a
         # plain dict is fine; invalidated alongside the map in _save_alignment.
         self._total_chars_cache: Dict[str, Optional[int]] = {}
+        # Segment placement index keyed by abs_id; see _get_segments. A plain
+        # dict, not an LRUCache, because "no segments" (None) is itself a
+        # frequent, valid, cacheable answer -- unlike _alignment_cache, where a
+        # missing DB row is deliberately never cached, here a dict is required
+        # to tell "not yet loaded" apart from "loaded, and there are none".
+        self._segments_cache: Dict[str, Optional[List[Dict]]] = {}
         # Lazily-built CTC forced aligner (holds a heavy cached model). Only ever
         # instantiated on the -ctc image when CTC alignment is requested.
         self._forced_aligner = None
@@ -512,12 +616,13 @@ class AlignmentService:
         alignment = self._get_alignment(abs_id)
         if not alignment:
             return None
-        
+
         map_points = alignment
-        
+        segments = self._get_segments(abs_id)
+
         # 2. Resolve offset
         target_offset = char_offset_hint
-        
+
         if target_offset is None:
             # Note: For now, KOSync always provides an offset or we calculate it.
             return None
@@ -549,12 +654,23 @@ class AlignmentService:
                 right = mid - 1
         
         p1 = map_points[floor_idx]
-        
+
         # Ceiling is next point
         if floor_idx + 1 < len(map_points):
             p2 = map_points[floor_idx + 1]
         else:
             return p1['ts']
+
+        # Segment-aware clamp (issue #426 phase 1): never interpolate across a
+        # segment boundary. If the bracketing points came from two different
+        # segments (sparse data straddling one), or neither belongs to any
+        # segment (the target is in a gap), clamp to the nearest segment edge
+        # instead of blending two different sections of the audio timeline.
+        if segments:
+            p1_segment = _segment_for_char(segments, self._point_char(p1))
+            p2_segment = _segment_for_char(segments, self._point_char(p2))
+            if p1_segment is None or p1_segment is not p2_segment:
+                return _nearest_segment_edge_ts(target_offset, segments)
 
         # Linear Interpolation
         p1_char = self._point_char(p1)
@@ -576,14 +692,59 @@ class AlignmentService:
         alignment = self._get_alignment(abs_id)
         if not alignment:
             return None
-        return self._interpolate_char_for_time(alignment, timestamp)
+        segments = self._get_segments(abs_id)
+        return self._interpolate_char_for_time(alignment, timestamp, segments)
 
     @classmethod
-    def _interpolate_char_for_time(cls, map_points: List[Dict], timestamp: float) -> Optional[int]:
-        """Interpolate the character offset for a timestamp within a loaded map."""
+    def _interpolate_char_for_time(cls, map_points: List[Dict], timestamp: float,
+                                   segments: Optional[List[Dict]] = None) -> Optional[int]:
+        """Interpolate the character offset for a timestamp within a loaded map.
+
+        `segments` is the per-book segment index (issue #426 phase 1). When
+        supplied and non-empty, the flat list is no longer assumed globally
+        ts-sorted -- only within one segment does `ts` ascend with `char` --
+        so `timestamp` is first placed into the one segment whose
+        `[ts_start, ts_end)` contains it (segments are ts-disjoint by
+        construction), and the search is restricted to that segment's own
+        char slice of `map_points`, where the flat binary search is valid
+        again. A timestamp inside no segment (audio with no matching text,
+        e.g. credits) resolves to the nearest segment edge instead of
+        searching the (for this purpose, wrongly ordered) full list.
+
+        `segments=None` or `[]` reproduces today's single flat-list binary
+        search unchanged -- the compatibility guarantee for every map stored
+        before this shipped (`segments_json IS NULL`).
+        """
         if not map_points:
             return None
+        if not segments:
+            return cls._interpolate_within(map_points, timestamp)
 
+        segment = _segment_for_ts(segments, timestamp)
+        if segment is None:
+            return _nearest_segment_edge_char(timestamp, segments)
+
+        segment_points = [point for point in map_points
+                         if segment['char_start'] <= cls._point_char(point) < segment['char_end']]
+        if not segment_points:
+            # A placed segment with no matching flat-map points isn't expected
+            # from any real producer, but degrade to its own edge rather than
+            # fall through to a full-list search that assumes an ordering this
+            # map no longer has.
+            return _nearest_segment_edge_char(timestamp, [segment])
+        return cls._interpolate_within(segment_points, timestamp)
+
+    @classmethod
+    def _interpolate_within(cls, map_points: List[Dict], timestamp: float) -> Optional[int]:
+        """Binary-search `map_points` by `ts` and linearly interpolate `char`.
+
+        Assumes `ts` ascends across `map_points` -- true for the whole flat
+        map when no segments exist, and true within one segment's own char
+        slice when they do (see `_interpolate_char_for_time`). This is the
+        exact body of `_interpolate_char_for_time` from before segment
+        awareness (issue #426 phase 1), factored out so both callers share
+        one implementation instead of drifting apart.
+        """
         target_ts = timestamp
 
         # Binary search for interval
@@ -654,7 +815,8 @@ class AlignmentService:
         if total_chars <= 0:
             return None
 
-        char = self._interpolate_char_for_time(alignment, timestamp)
+        segments = self._get_segments(abs_id)
+        char = self._interpolate_char_for_time(alignment, timestamp, segments)
         if char is None:
             return None
 
@@ -1207,10 +1369,12 @@ class AlignmentService:
 
     def _save_alignment(self, abs_id: str, alignment_map: List[Dict], align_method: str = None,
                         total_chars: Optional[int] = None,
-                        quality: Optional[map_quality.MapQuality] = None):
+                        quality: Optional[map_quality.MapQuality] = None,
+                        segments: Optional[List[Segment]] = None):
         """Upsert alignment to SQLite."""
         quality_score = quality.score if quality is not None else None
         quality_detail = map_quality.quality_detail_json(quality) if quality is not None else None
+        segments_json = _segments_to_json(segments) if segments is not None else None
         with self.database_service.get_session() as session:
             json_blob = json.dumps(alignment_map)
 
@@ -1230,17 +1394,26 @@ class AlignmentService:
                 if quality is not None:
                     existing.quality_score = quality_score
                     existing.quality_detail = quality_detail
+                # Same discipline again for segments (issue #426 phase 1): a
+                # caller that doesn't know segment placements -- every caller
+                # before phase 2 wires `fit_segments` in, and the unanchored
+                # Storyteller path after -- must not wipe a previously placed
+                # segment index.
+                if segments is not None:
+                    existing.segments_json = segments_json
                 existing.last_updated = utcnow()
             else:
                 new_align = BookAlignment(abs_id=abs_id, alignment_map_json=json_blob,
                                           align_method=align_method, total_chars=total_chars,
-                                          quality_score=quality_score, quality_detail=quality_detail)
+                                          quality_score=quality_score, quality_detail=quality_detail,
+                                          segments_json=segments_json)
                 session.add(new_align)
 
             # Context manager handles commit
             logger.info(f"   💾 Saved alignment for {abs_id} to DB.")
         self._alignment_cache.delete(abs_id)
         self._total_chars_cache.pop(abs_id, None)
+        self._segments_cache.pop(abs_id, None)
 
     def _backup_alignment(self, abs_id: str) -> bool:
         """Copy a book's current stored map into the backup table before it is
@@ -1254,6 +1427,7 @@ class AlignmentService:
                 backup.alignment_map_json = current.alignment_map_json
                 backup.align_method = current.align_method
                 backup.total_chars = current.total_chars
+                backup.segments_json = current.segments_json
                 backup.backed_up_at = utcnow()
             else:
                 session.add(BookAlignmentBackup(
@@ -1261,6 +1435,7 @@ class AlignmentService:
                     alignment_map_json=current.alignment_map_json,
                     align_method=current.align_method,
                     total_chars=current.total_chars,
+                    segments_json=current.segments_json,
                 ))
         return True
 
@@ -1280,6 +1455,7 @@ class AlignmentService:
                 current.alignment_map_json = backup.alignment_map_json
                 current.align_method = backup.align_method
                 current.total_chars = backup.total_chars
+                current.segments_json = backup.segments_json
                 current.last_updated = utcnow()
             else:
                 session.add(BookAlignment(
@@ -1287,9 +1463,11 @@ class AlignmentService:
                     alignment_map_json=backup.alignment_map_json,
                     align_method=backup.align_method,
                     total_chars=backup.total_chars,
+                    segments_json=backup.segments_json,
                 ))
         self._alignment_cache.delete(abs_id)
         self._total_chars_cache.pop(abs_id, None)
+        self._segments_cache.pop(abs_id, None)
         logger.info(
             "↩️ Restored previous alignment for %s (method '%s')", abs_id, method or "unknown",
         )
@@ -1363,6 +1541,41 @@ class AlignmentService:
                 self._alignment_cache.put(abs_id, alignment)
                 return alignment
             return None
+
+    def _get_segments(self, abs_id: str) -> Optional[List[Dict]]:
+        """Cached segment placement index for one book's map (issue #426
+        phase 1) -- the `[{char_start, char_end, ts_start, ts_end}, ...]`
+        list from `segments_json`, or None when it's NULL (the flat
+        monotonic legacy path).
+
+        Unlike `_alignment_cache` (an `LRUCache`, where "not yet cached" and
+        "cached as nothing" are both just absence, since a missing DB row is
+        deliberately never cached there), "no segments" is itself a
+        frequent, valid, repeatedly-asked answer here -- every map without
+        out-of-order narration has one -- so it must be cached too, or every
+        lookup on a NULL-segments book pays a DB round-trip it would
+        otherwise skip. A plain dict that distinguishes "key absent" from
+        "value is None" does that, mirroring `_total_chars_cache`. Invalidated
+        alongside `_alignment_cache` in `_save_alignment` and
+        `restore_previous_alignment` -- the only two sites that write
+        `book_alignments` rows.
+
+        The stored column is always `None` or a JSON string; anything else
+        (a test double standing in for the row, a corrupt value) degrades to
+        `None` rather than raising, the same spirit as
+        `_get_alignment_total_chars`'s defensive coercion.
+        """
+        if abs_id in self._segments_cache:
+            return self._segments_cache[abs_id]
+        with self.database_service.get_session() as session:
+            entry = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
+            if entry is None:
+                return None
+            raw = entry.segments_json
+            segments = json.loads(raw) if isinstance(raw, str) and raw else None
+            self._segments_cache[abs_id] = segments
+            return segments
+
     def get_book_duration(self, abs_id: str) -> Optional[float]:
         """Get the total duration of the book from its alignment map."""
         alignment = self._get_alignment(abs_id)
