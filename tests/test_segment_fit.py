@@ -11,6 +11,9 @@ The two headline cases are real books, with numbers taken from
   mapped char 3,000 to 10.7s: 12.3 hours wrong.
 """
 
+import itertools
+import json
+import os
 import unittest
 from typing import Dict, List, Tuple
 
@@ -19,6 +22,12 @@ from src.services.segment_fit import Segment, fit_segments
 
 # Real measured narration speed for Tress, used to build realistic fixtures.
 CHARS_PER_SEC = 13.8
+
+# Real candidate anchors captured from AlignmentService._filter_monotonic_lis
+# for Tress of the Emerald Sea, plus the four boundaries where seam bleed
+# dropped a correctly-fit segment (issue #426). See the fixture's own `note`.
+_TRESS_SEAM_FIXTURE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "tress_seam_anchors.json")
 
 
 def make_anchors(char_start: int, char_end: int, ts_start: float, ts_end: float,
@@ -268,6 +277,306 @@ class TestRobustness(unittest.TestCase):
         result = fit_segments(anchors, [(0, 100000)], 100000)
         self.assertEqual(len(result), 1)
         self.assertAlmostEqual(result[0].ts_end, 100000 / CHARS_PER_SEC, delta=30.0)
+
+
+class TestTressRealFixtureRegression(unittest.TestCase):
+    """The regression test that matters: real candidate anchors captured from
+    the live pipeline for Tress of the Emerald Sea, including the seam that
+    dropped the acknowledgements entirely (issue #426). This is the point of
+    the whole feature — assert the segment is present, not merely that a
+    count is high.
+    """
+
+    def test_acknowledgements_boundary_is_placed_near_ground_truth(self):
+        with open(_TRESS_SEAM_FIXTURE, encoding="utf-8") as f:
+            fixture = json.load(f)
+
+        anchors = fixture["anchors"]
+        boundaries = [tuple(b) for b in fixture["boundaries"]]
+        total_chars = fixture["total_chars"]
+
+        result = fit_segments(anchors, boundaries, total_chars)
+
+        ack_boundary = (1604, 6179)
+        placed = [s for s in result if (s.char_start, s.char_end) == ack_boundary]
+        self.assertEqual(len(placed), 1,
+                          "the acknowledgements boundary [1604, 6179] must be placed, "
+                          f"got segments: {result}")
+        # Ground truth from the M4B cue sheet: 44415.0-44694.1s.
+        self.assertLess(abs(placed[0].ts_start - 44415.0), 30.0,
+                        f"acknowledgements ts_start {placed[0].ts_start} not near 44415.0s")
+
+    def test_all_four_real_boundaries_place_and_stay_disjoint(self):
+        """Every boundary in the fixture is a real, correctly-fit segment
+        (verified in isolation against the real anchors); none should be
+        dropped as a seam-bleed false positive."""
+        with open(_TRESS_SEAM_FIXTURE, encoding="utf-8") as f:
+            fixture = json.load(f)
+        anchors = fixture["anchors"]
+        boundaries = [tuple(b) for b in fixture["boundaries"]]
+        total_chars = fixture["total_chars"]
+
+        result = fit_segments(anchors, boundaries, total_chars)
+
+        self.assertEqual(len(result), len(boundaries),
+                         f"expected all {len(boundaries)} real boundaries placed, got {result}")
+        segment_fit._assert_disjoint(result)
+
+    def test_no_returned_pair_overlaps_in_ts_by_even_a_fraction_of_a_second(self):
+        """The invariant `_assert_disjoint` already enforces, re-checked
+        explicitly and exhaustively over every pair on real data, with a
+        failure message that names the offending pair instead of just
+        tripping an assert buried inside `fit_segments`. This is the
+        regression test for the 12-pair-overlap bug: `_ts_conflicts` used to
+        let an overlap through whenever it failed the 2%-of-shorter-segment
+        fractional gate, even though the absolute-seconds floor was cleared
+        (measured on the full 81-boundary book: up to 9.64s over a ~583s
+        segment, comfortably real but only 1.65% of the shorter segment)."""
+        with open(_TRESS_SEAM_FIXTURE, encoding="utf-8") as f:
+            fixture = json.load(f)
+        anchors = fixture["anchors"]
+        boundaries = [tuple(b) for b in fixture["boundaries"]]
+        total_chars = fixture["total_chars"]
+
+        result = fit_segments(anchors, boundaries, total_chars)
+        self.assertGreater(len(result), 1, "need at least two placed segments to test overlap")
+
+        for first, second in itertools.combinations(result, 2):
+            overlap = segment_fit._ts_overlap_seconds(first, second)
+            self.assertLessEqual(overlap, 0.0,
+                                 f"segments overlap by {overlap:.3f}s: {first} vs {second}")
+
+
+class TestSeamBleedTrimming(unittest.TestCase):
+    """Overlap small relative to the shorter segment is ordinary least-squares
+    seam bleed (measured on Tress: 2.6%-6.3% of the shorter segment's own
+    duration) — both segments must survive, trimmed to the midpoint of the
+    disputed span."""
+
+    def test_seam_bleed_trims_both_segments_and_keeps_both(self):
+        # 10s overlap over a 300s shorter segment = 3.33%, comparable to the
+        # largest real Tress seam (6.3%) and well under
+        # `_SEAM_BLEED_MAX_OVERLAP_FRACTION` (15%).
+        earlier = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=300.0,
+                          inliers=50, residual=1.0)
+        later = Segment(char_start=100, char_end=200, ts_start=290.0, ts_end=600.0,
+                        inliers=40, residual=1.0)
+
+        result = segment_fit._resolve_conflicts([earlier, later])
+
+        self.assertEqual(len(result), 2, "both segments must survive a seam-bleed conflict")
+        by_char = sorted(result, key=lambda s: s.char_start)
+        midpoint = (earlier.ts_end + later.ts_start) / 2.0
+        self.assertEqual(by_char[0].ts_end, midpoint)
+        self.assertEqual(by_char[1].ts_start, midpoint)
+        # Char ranges are untouched by trimming — only ts moves.
+        self.assertEqual(by_char[0].char_start, 0)
+        self.assertEqual(by_char[0].char_end, 100)
+        self.assertEqual(by_char[1].char_start, 100)
+        self.assertEqual(by_char[1].char_end, 200)
+        segment_fit._assert_disjoint(result)
+
+    def test_trim_to_seam_midpoint_shared_edge_is_midpoint_of_overlap(self):
+        """Direct unit test of the trim helper against the real Tress
+        acknowledgements/postscript seam numbers."""
+        winner = Segment(char_start=610678, char_end=615320, ts_start=44153.9,
+                         ts_end=44413.1, inliers=495, residual=0.71)
+        ack = Segment(char_start=1604, char_end=6179, ts_start=44404.5,
+                     ts_end=44683.2, inliers=275, residual=4.56)
+
+        trimmed = segment_fit._trim_to_seam_midpoint(winner, ack)
+        self.assertIsNotNone(trimmed)
+        trimmed_winner, trimmed_ack = trimmed
+        expected_midpoint = (44413.1 + 44404.5) / 2.0
+        self.assertAlmostEqual(trimmed_winner.ts_end, expected_midpoint)
+        self.assertAlmostEqual(trimmed_ack.ts_start, expected_midpoint)
+        self.assertEqual(trimmed_winner.ts_start, winner.ts_start)
+        self.assertEqual(trimmed_ack.ts_end, ack.ts_end)
+
+    def test_trim_to_seam_midpoint_accepts_either_argument_order(self):
+        earlier = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=300.0,
+                          inliers=50, residual=1.0)
+        later = Segment(char_start=100, char_end=200, ts_start=290.0, ts_end=600.0,
+                        inliers=40, residual=1.0)
+        forward = segment_fit._trim_to_seam_midpoint(earlier, later)
+        backward = segment_fit._trim_to_seam_midpoint(later, earlier)
+        self.assertEqual(forward, backward)
+
+
+class TestGenuineCollisionStillDropsTheWeaker(unittest.TestCase):
+    """Overlap large relative to the shorter segment is a genuine collision —
+    one segment substantially claiming another's audio — and today's
+    drop-the-weaker behaviour must still apply. `_is_stronger` itself is
+    intentionally untouched by this fix."""
+
+    def test_large_partial_overlap_drops_the_weaker_segment(self):
+        # 50s overlap over a 300s shorter segment = 16.7%, just above
+        # `_SEAM_BLEED_MAX_OVERLAP_FRACTION` (15%): a genuine collision.
+        weak = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=300.0,
+                      inliers=50, residual=1.0)
+        strong = Segment(char_start=100, char_end=200, ts_start=250.0, ts_end=550.0,
+                         inliers=80, residual=0.5)
+
+        result = segment_fit._resolve_conflicts([weak, strong])
+
+        self.assertEqual(len(result), 1, "a genuine collision must still drop the weaker segment")
+        self.assertIs(result[0], strong)
+
+    def test_full_overlap_between_two_full_fit_segments_still_resolves_to_one(self):
+        """Unchanged coverage of the pre-existing behaviour this fix must not
+        disturb: two segments claiming the exact same audio window."""
+        total = 200000
+        strong = make_anchors(0, 100000, 1000.0, 8246.0, 400)
+        weak = make_anchors(100000, 200000, 1000.0, 8246.0, 20)
+        result = fit_segments(strong + weak, [(0, 100000), (100000, 200000)], total)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].char_start, 0)
+
+
+class TestTrimNeverInverts(unittest.TestCase):
+    """Trimming must never produce an inverted or zero-length segment; a
+    disputed span that would require that is a genuine collision, not
+    bleed."""
+
+    def test_full_containment_refuses_to_trim(self):
+        earlier = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=1000.0,
+                          inliers=50, residual=1.0)
+        later = Segment(char_start=100, char_end=200, ts_start=400.0, ts_end=600.0,
+                        inliers=20, residual=1.0)
+        self.assertIsNone(segment_fit._trim_to_seam_midpoint(earlier, later))
+
+    def test_midpoint_exactly_on_an_edge_refuses_to_trim(self):
+        """Boundary case: the midpoint lands exactly on `later.ts_end` (not
+        just past it) — still must refuse rather than emit a zero-length
+        `later` segment."""
+        earlier = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=1000.0,
+                          inliers=50, residual=1.0)
+        later = Segment(char_start=100, char_end=200, ts_start=200.0, ts_end=600.0,
+                        inliers=50, residual=1.0)
+        # midpoint = (1000 + 200) / 2 = 600 == later.ts_end exactly.
+        trimmed = segment_fit._trim_to_seam_midpoint(earlier, later)
+        self.assertIsNone(trimmed)
+
+    def test_resolve_conflicts_falls_back_to_dropping_weaker_when_trim_would_invert(self):
+        """`_is_seam_bleed` currently guarantees `_trim_to_seam_midpoint` never
+        returns None for anything it classifies as bleed: inverting the trim
+        needs an overlap of at least 2x the shorter segment's own duration
+        (a >=200% overlap fraction), far above
+        `_SEAM_BLEED_MAX_OVERLAP_FRACTION` (15%) — so this fallback branch in
+        `_resolve_conflicts` cannot be reached by any real fit today. Widen
+        the threshold here (restored in `finally`) to exercise the branch
+        directly and prove it still degrades safely to genuine-collision
+        handling instead of ever emitting an inverted segment.
+        """
+        earlier = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=1000.0,
+                          inliers=50, residual=1.0)
+        later = Segment(char_start=100, char_end=200, ts_start=400.0, ts_end=600.0,
+                        inliers=90, residual=0.5)
+        original_fraction = segment_fit._SEAM_BLEED_MAX_OVERLAP_FRACTION
+        segment_fit._SEAM_BLEED_MAX_OVERLAP_FRACTION = 3.0
+        try:
+            self.assertTrue(segment_fit._is_seam_bleed(earlier, later),
+                            "widened threshold must classify full containment as bleed")
+            self.assertIsNone(segment_fit._trim_to_seam_midpoint(earlier, later))
+            result = segment_fit._resolve_conflicts([earlier, later])
+        finally:
+            segment_fit._SEAM_BLEED_MAX_OVERLAP_FRACTION = original_fraction
+
+        self.assertEqual(len(result), 1)
+        self.assertIs(result[0], later, "later wins on inliers (90 > 50)")
+        for seg in result:
+            self.assertLess(seg.ts_start, seg.ts_end, "no inverted or zero-length segment")
+
+
+class TestSubFractionalOverlapNowTrimmed(unittest.TestCase):
+    """The exact shape that slipped through the deleted `_ts_conflicts` gate:
+    an overlap large enough in absolute seconds (> the old 5.0s floor) but
+    below the old 2%-of-shorter-segment fractional floor, so the old AND-of-
+    both-thresholds gate called it "not a conflict" and left both segments
+    overlapping. Measured on the real 81-boundary book: up to 9.64s over a
+    ~583s segment (1.65%). This must now be trimmed like any other bleed."""
+
+    def test_overlap_below_old_fractional_gate_is_trimmed_not_ignored(self):
+        earlier = Segment(char_start=0, char_end=1000, ts_start=0.0, ts_end=583.0,
+                          inliers=60, residual=1.0)
+        later = Segment(char_start=1000, char_end=2000, ts_start=573.36, ts_end=1273.36,
+                        inliers=55, residual=1.0)
+
+        overlap = segment_fit._ts_overlap_seconds(earlier, later)
+        shortest = min(earlier.ts_end - earlier.ts_start, later.ts_end - later.ts_start)
+        # Confirms this fixture actually reproduces the reported gap: clears
+        # the old 5.0s absolute floor but falls short of the old 2% fractional
+        # floor - the old `_ts_conflicts` would have returned False here.
+        self.assertGreater(overlap, 5.0)
+        self.assertLess(overlap / shortest, 0.02)
+
+        result = segment_fit._resolve_conflicts([earlier, later])
+
+        self.assertEqual(len(result), 2, "both segments must survive - this is bleed, not collision")
+        by_char = sorted(result, key=lambda s: s.char_start)
+        midpoint = (earlier.ts_end + later.ts_start) / 2.0
+        self.assertEqual(by_char[0].ts_end, midpoint)
+        self.assertEqual(by_char[1].ts_start, midpoint)
+        segment_fit._assert_disjoint(result)
+
+
+class TestChainOfBleedingSeamsAllResolve(unittest.TestCase):
+    """A chain of four consecutive segments, each bleeding into the next by
+    5s, all trim correctly and end up strictly disjoint. `_resolve_conflicts`
+    only ever compares a candidate against `kept[-1]`; this is the shape most
+    likely to expose a bug if that were ever insufficient - trimming
+    `kept[-1]` against the third segment could, in principle, reopen a
+    conflict with the second. It does not: see the invariant argument in
+    `_resolve_conflicts`'s own docstring."""
+
+    def test_four_consecutive_bleeding_seams_trim_to_a_fully_disjoint_chain(self):
+        a = Segment(char_start=0, char_end=1000, ts_start=0.0, ts_end=300.0,
+                    inliers=60, residual=1.0)
+        b = Segment(char_start=1000, char_end=2000, ts_start=295.0, ts_end=620.0,
+                    inliers=55, residual=1.0)
+        c = Segment(char_start=2000, char_end=3000, ts_start=615.0, ts_end=940.0,
+                    inliers=50, residual=1.0)
+        d = Segment(char_start=3000, char_end=4000, ts_start=935.0, ts_end=1260.0,
+                    inliers=45, residual=1.0)
+
+        result = segment_fit._resolve_conflicts([a, b, c, d])
+
+        self.assertEqual(len(result), 4, "all four segments must survive - every seam is bleed")
+        by_char = sorted(result, key=lambda s: s.char_start)
+        # Each seam trims to the midpoint of its own disputed span, and nothing
+        # about resolving seam B-C or C-D disturbs the already-settled A-B seam.
+        self.assertEqual(by_char[0].ts_end, 297.5)
+        self.assertEqual(by_char[1].ts_start, 297.5)
+        self.assertEqual(by_char[1].ts_end, 617.5)
+        self.assertEqual(by_char[2].ts_start, 617.5)
+        self.assertEqual(by_char[2].ts_end, 937.5)
+        self.assertEqual(by_char[3].ts_start, 937.5)
+        segment_fit._assert_disjoint(result)
+        for first, second in itertools.combinations(result, 2):
+            self.assertLessEqual(segment_fit._ts_overlap_seconds(first, second), 0.0)
+
+
+class TestAssertDisjointHasNoTolerance(unittest.TestCase):
+    """`_assert_disjoint` must reject ANY positive ts overlap, not just a
+    "material" one. The deleted `_ts_conflicts` gate (and its constants,
+    `_TS_CONFLICT_MIN_SECONDS`/`_TS_CONFLICT_MIN_FRACTION`) would have let an
+    overlap this small through silently - this is what "true disjointness,
+    no tolerance" means in practice."""
+
+    def test_tiny_ts_overlap_below_every_old_threshold_still_raises(self):
+        first = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=100.0,
+                        inliers=50, residual=1.0)
+        second = Segment(char_start=100, char_end=200, ts_start=99.999, ts_end=200.0,
+                         inliers=50, residual=1.0)
+        with self.assertRaises(AssertionError):
+            segment_fit._assert_disjoint([first, second])
+
+    def test_exact_touch_is_allowed(self):
+        first = Segment(char_start=0, char_end=100, ts_start=0.0, ts_end=100.0,
+                        inliers=50, residual=1.0)
+        second = Segment(char_start=100, char_end=200, ts_start=100.0, ts_end=200.0,
+                         inliers=50, residual=1.0)
+        segment_fit._assert_disjoint([first, second])  # must not raise
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ imports or calls it yet. Wiring it in behind a setting is Phase 2 of the plan.
 """
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 # RANSAC iterations per boundary. Fixed and modest: a chapter-sized candidate
@@ -76,13 +76,30 @@ _MIN_INLIER_FRACTION = 0.5
 _MIN_CHARS_PER_SEC = 2.0
 _MAX_CHARS_PER_SEC = 60.0
 
-# Two placed segments conflict only when they share materially the same audio.
-# Both thresholds must be exceeded: an absolute floor absorbs least-squares
-# noise at a seam where one section abuts the next, and the fractional term
-# keeps that floor from swallowing a genuine collision between two very short
-# segments. See `_ts_conflicts`.
-_TS_CONFLICT_MIN_SECONDS = 5.0
-_TS_CONFLICT_MIN_FRACTION = 0.02
+# Above this fraction of the shorter segment's own duration, an overlap
+# stops being ordinary seam bleed and becomes a genuine collision (one
+# segment substantially claiming another's audio).
+#
+# Calibrated against real seam bleed measured on Tress of the Emerald Sea
+# (`tests/fixtures/tress_seam_anchors.json`; issue #426) by running
+# `fit_segments` over the book's real 81 non-empty spine boundaries with
+# real candidate anchors - not synthetic data. Every dropped/winner pair at
+# a true seam:
+#
+#   dropped chars   1604-  6179 (278.7s) vs winner  610678-615320 (259.2s): overlap  8.6s = 3.32%
+#   dropped chars  94908- 97344 (158.5s) vs winner   97345-106088 (617.1s): overlap 10.0s = 6.31%  <- largest
+#   dropped chars 173221-176660 (269.4s) vs winner  163584-173220 (710.5s): overlap  8.7s = 3.23%
+#   dropped chars 541259-544753 (243.1s) vs winner  531973-541258 (690.3s): overlap  6.3s = 2.59%
+#
+# The largest real bleed fraction is 6.31%. This threshold sits more than
+# double that with real margin, so ordinary least-squares seam noise
+# (hundreds-of-seconds segments bleeding a few seconds at their shared edge)
+# is never misclassified as a collision, while staying far below the
+# near-total overlap a genuine collision produces (see
+# `test_stronger_fit_survives_and_invariant_holds`, a 100%-overlap case).
+# The synthetic 7ms bleed this module was originally calibrated against is
+# not representative of real data and must not be used to set this value.
+_SEAM_BLEED_MAX_OVERLAP_FRACTION = 0.15
 
 
 @dataclass(frozen=True)
@@ -250,25 +267,42 @@ def _ts_overlap_seconds(first: Segment, second: Segment) -> float:
     return min(first.ts_end, second.ts_end) - max(first.ts_start, second.ts_start)
 
 
-def _ts_conflicts(first: Segment, second: Segment) -> bool:
-    """True when two segments claim *materially* the same audio.
+def _is_seam_bleed(first: Segment, second: Segment) -> bool:
+    """True when the overlap between two overlapping segments is ordinary
+    least-squares seam bleed rather than a genuine collision: small relative
+    to the shorter of the two segments (see `_SEAM_BLEED_MAX_OVERLAP_FRACTION`
+    for the real measurements this threshold is calibrated against).
 
-    Consecutive sections of a correctly narrated book abut in time - chapter N
-    ends exactly where N+1 begins - so an exact-touch test would call every
-    seam a conflict. Segment bounds come from a least-squares fit and carry
-    sub-second noise, which is enough to make abutting segments overlap by
-    milliseconds; treating that as two segments competing for the same audio
-    drops a good placement at every seam (measured: a clean four-novella book
-    losing two of its four segments to 7ms overlaps). A conflict therefore
-    requires an overlap that is large in absolute terms *and* relative to the
-    shorter of the two segments.
+    Callers are expected to have already established the two segments
+    overlap at all (a positive `_ts_overlap_seconds`); a non-positive or
+    degenerate overlap is defensively treated as not-bleed here.
     """
     overlap = _ts_overlap_seconds(first, second)
     if overlap <= 0:
         return False
     shortest = min(first.ts_end - first.ts_start, second.ts_end - second.ts_start)
-    return (overlap > _TS_CONFLICT_MIN_SECONDS
-            and overlap > _TS_CONFLICT_MIN_FRACTION * shortest)
+    if shortest <= 0:
+        return False
+    return overlap <= _SEAM_BLEED_MAX_OVERLAP_FRACTION * shortest
+
+
+def _trim_to_seam_midpoint(first: Segment, second: Segment) -> Optional[Tuple[Segment, Segment]]:
+    """Resolve seam bleed between two overlapping segments by trimming both
+    to the midpoint of their disputed span: the later segment's `ts_start`
+    and the earlier segment's `ts_end` both become the midpoint of
+    `[earlier.ts_end, later.ts_start]`. Both segments survive; disjointness
+    is restored by construction.
+
+    Accepts the two segments in either order and determines which is
+    earlier/later by `ts_start`. Returns `None` - defer to genuine-collision
+    handling instead - when trimming would invert or zero out either
+    segment; that is not something ordinary seam bleed should ever produce.
+    """
+    earlier, later = (first, second) if first.ts_start <= second.ts_start else (second, first)
+    midpoint = (earlier.ts_end + later.ts_start) / 2.0
+    if midpoint <= earlier.ts_start or midpoint >= later.ts_end:
+        return None
+    return replace(earlier, ts_end=midpoint), replace(later, ts_start=midpoint)
 
 
 def _is_stronger(candidate: Segment, incumbent: Segment) -> bool:
@@ -286,15 +320,51 @@ def _resolve_conflicts(segments: List[Segment]) -> List[Segment]:
     Processes segments in ``ts_start`` order (ties broken, in order, by more
     inliers then lower residual then lower ``char_start``, purely for
     determinism). Each candidate is compared against the last currently kept
-    segment; on overlap the weaker of the two is dropped (see `_is_stronger`).
-    A candidate that wins keeps checking against whatever it now sits next to
-    — a cascading pop — since demoting one neighbour can expose another.
+    segment, and *any* positive overlap (`_ts_overlap_seconds` > 0) is
+    examined - exact touch is fine (consecutive sections of a correctly
+    narrated book abut in time) but every real overlap must be resolved, not
+    just ones that clear some "is this material" threshold. Two kinds of
+    resolution apply, in order:
+
+    1. **Seam bleed** (`_is_seam_bleed`): the overlap is small relative to
+       the shorter segment - ordinary least-squares error at a seam between
+       two consecutive, correctly-narrated sections, not real competition
+       for the same audio. Both segments are trimmed to the midpoint of the
+       disputed span (`_trim_to_seam_midpoint`) and both survive.
+    2. **Genuine collision**: the overlap is large relative to the shorter
+       segment (or trimming would invert/zero one of them), meaning one
+       segment is substantially claiming another's audio. The weaker of the
+       two is dropped (see `_is_stronger`). A candidate that wins keeps
+       checking against whatever it now sits next to — a cascading pop —
+       since demoting one neighbour can expose another.
+
+    Only ``kept[-1]`` is ever compared against ``current`` - `kept[-2]` and
+    earlier are never rechecked here. That is still sound: `ordered` is
+    sorted by each segment's *original* `ts_start`, so whichever of the two
+    segments a trim classifies as "earlier" always has `ts_start` less than
+    or equal to the other's - a trim never changes the earlier segment's
+    `ts_start` (only its `ts_end` shrinks), and never changes which segment
+    the earlier/later roles fall to, because a trim always leaves the pair
+    touching exactly and the loop exits immediately after, before either
+    segment could be trimmed a second time in this pass. So `kept[-1]`'s
+    `ts_start` is invariant under trimming, and the disjointness already
+    established against `kept[-2]` (when `kept[-1]` was appended) survives.
+    A pop only ever falls back to an earlier, already-disjoint element for
+    the same reason. Trimming therefore cannot introduce a new conflict with
+    any other kept segment; only the pair directly in dispute needs
+    rechecking, which the `while` loop does - this holds for a chain of any
+    length, one seam at a time.
     """
     ordered = sorted(segments, key=lambda seg: (seg.ts_start, -seg.inliers, seg.residual, seg.char_start))
     kept: List[Segment] = []
     for segment in ordered:
         current: Optional[Segment] = segment
-        while current is not None and kept and _ts_conflicts(kept[-1], current):
+        while current is not None and kept and _ts_overlap_seconds(kept[-1], current) > 0:
+            if _is_seam_bleed(kept[-1], current):
+                trimmed = _trim_to_seam_midpoint(kept[-1], current)
+                if trimmed is not None:
+                    kept[-1], current = trimmed
+                    continue
             if _is_stronger(current, kept[-1]):
                 kept.pop()
             else:
@@ -306,14 +376,16 @@ def _resolve_conflicts(segments: List[Segment]) -> List[Segment]:
 
 def _assert_disjoint(segments: List[Segment]) -> None:
     """Verify the invariant every downstream consumer relies on: placed
-    segments are pairwise disjoint in char AND in ts. A violation here is a
-    bug in this module, not a normal data outcome."""
+    segments are pairwise disjoint in char AND truly disjoint in ts (exact
+    touch allowed, no tolerance - `_resolve_conflicts` resolves every
+    positive overlap, so nothing less strict is honest here). A violation
+    here is a bug in this module, not a normal data outcome."""
     for i in range(len(segments)):
         for j in range(i + 1, len(segments)):
             first, second = segments[i], segments[j]
             assert first.char_end <= second.char_start or second.char_end <= first.char_start, \
                 f"char overlap between segments {first} and {second}"
-            assert not _ts_conflicts(first, second), \
+            assert first.ts_end <= second.ts_start or second.ts_end <= first.ts_start, \
                 f"ts overlap between segments {first} and {second}"
 
 
