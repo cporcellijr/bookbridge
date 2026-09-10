@@ -265,7 +265,9 @@ seam boundaries. That left a genuinely excellent map scoring only +0.0281
 above the realign threshold: fragile enough that a slightly worse book would
 fall below it and get flagged for a pointless re-alignment.
 
-**What shipped:**
+**What shipped** (the `max` aggregation below was later measured to be
+scale-dependent and replaced — see "Phase 3 corrected" further down; the rest of
+this list still stands)**:**
 - `map_quality.score_map` gained an optional `segments` parameter. When
   supplied (non-empty), `density_spread` is computed independently over each
   segment's own char slice and aggregated with **`max`** — one badly-paced
@@ -309,6 +311,124 @@ free — was not touched by this pass. `AlignmentService.align_forced_and_store`
 still passes the flat lexical map's `boundaries`, not the segment index, to
 `ForcedAligner.align`. Scope for this pass was the scorer and the
 persistence clamp only.
+
+### Phase 3 corrected: `max`-of-per-segment was scale-dependent (2026-09-10)
+
+**The `max` aggregation above was wrong, and this section supersedes it.** The
+diagnosis of seam contamination was right; the remedy changed the *statistical
+scale* the metric runs at, which is a second bug the first one hid.
+
+`_density_spread` cuts a map into `_DENSITY_SLICE_COUNT` (20) equal-anchor-count
+slices. Its band (`_DENSITY_SPREAD_GOOD` 2.0, `_DENSITY_SPREAD_BAD` 10.0, weight
+0.45) is calibrated for whole-map runs, where one slice holds thousands of anchors
+across hundreds of seconds. Run per segment on a finely-spined EPUB, a slice holds
+about **nine anchors across about five seconds** — a scale at which local narration
+jitter and transcript timing artifacts, not pacing, dominate the statistic. `max`
+then gives the single worst artifact anywhere in the book a veto over 45% of the
+score, with no weighting by how much of the book that segment covers.
+
+**Measured on The Terminal Man** (`5b9770d6…`, a 237-document EPUB, 226 placed
+segments): flat-scored the segmented map is **0.9926**; segment-scored it is
+**0.5426**. It is the better map on every scale-independent axis — max gap fraction
+0.0342 → 0.0053, whole-map `density_spread` 1.414 → 1.106, 186 more retained
+anchors. The per-segment spreads are *tight* — median 1.548, p90 2.112 — with one
+value at **70.796**. That segment covers 0.36% of the book, and one of its slices
+holds nine anchors spanning 59 chars in **0.08 seconds**: a transcript artifact on
+a book whose transcript carries `0 measured, 57328 estimated` word timings.
+
+**This is not the max-of-N-noisy-estimates effect it resembles.** The proof is
+independent of segmentation entirely: 355 undisputed **in-order** stored maps,
+unchanged, re-measured with `k` equal char slices as synthetic segments. Maps whose
+density sub-score falls below 0.5 — k=1: **0**, k=5: 20, k=20: 64, k=50: **117**,
+k=226: 76. The map never changes; only how it is measured. The 60-point floor added
+earlier does not address this, because 60 points is still only three per slice.
+
+It already affects shipped books: Tress's live segmented map measures **2.262**
+under this metric (whole-map 1.092), past `_DENSITY_SPREAD_GOOD` and losing score;
+Dearest measures 1.910.
+
+**What replaced it.** `_segment_aware_density_spread` keeps whole-map 20-slice
+granularity and builds each slice's rate by summing consecutive point deltas,
+skipping any pair that does not lie wholly inside one placed segment. That removes
+seam contamination — Phase 3's actual goal — without moving the scale.
+
+- **Telescoping equivalence:** `Σ(c[i+1] − c[i]) == c_last − c_first`, so when no
+  pair is skipped this reproduces `_density_spread` *exactly*, not approximately
+  (verified to 1e-9 on six real maps). The compatibility guarantee for the stored
+  non-segmented maps therefore holds by construction, not by a branch.
+- Four Past Midnight segmented **5.394 → 1.201** (the `max` version gave 1.327, so
+  the replacement does the seam job at least as well); The Terminal Man 70.796 →
+  1.060; Tress 2.262 → 1.048; Dearest 1.910 → 1.064.
+- **Negative control:** Four Past Midnight's broken LIS map stays at **11.386**
+  (score 0.2000). It does not launder a genuinely bad map.
+- Across the 355-map granularity sweep: median 1.13 → 1.08, and **zero** maps fall
+  below half density score at any `k`.
+
+A badly-paced segment still lowers the score — now in proportion to how much of the
+book it covers, which is the property the `max` version was missing. Segments
+arrive sorted by `ts_start` (not by char), so membership is resolved by bisect over
+a char-sorted copy; `_segment_slice_points` and `_SEGMENT_MIN_POINTS_FOR_DENSITY`
+are gone with the per-segment path they served.
+
+### Scope limit found in the wild: narration that interleaves endnotes (2026-09-10)
+
+A full-library sweep found 15 of 324 books (4.6%) narrated out of spine order. One,
+**Eaters of the Dead**, is a genuine regression under segmentation, and it is worth
+recording because it is the plan's stated scope limit meeting a real book.
+
+It places only **22 of 84** boundaries. Of the 62 unplaced, 24 hold too few
+candidates — and **38 pass their own RANSAC fit and are then dropped by
+`_resolve_conflicts`**. Every one of the 38 lies in chars 261k–291k (Crichton's
+endnote apparatus) and fits to audio sitting *inside* a main-body chapter's range:
+chars 268299–272954 (537 inliers) fits ts 9301–9601, inside the chapter spanning
+chars 101095–132503 at ts 8039–10460. The audiobook narrates the footnotes
+**inline, where they are referenced**, so chapter and endnote genuinely share the
+same audio. Conflict resolution is behaving correctly — the model simply cannot
+express "both, alternating," which is finer than the chapter granularity this plan
+declares as its limit.
+
+Cost, measured with held-out candidate anchors (see "Arbitrating two maps" below):
+`cov@30s` **0.908 → 0.803**, p90 error **0.59 s → 294.57 s**, while gross errors
+(0.092 vs 0.088) and worst case (5.34 h both) are a wash. Segmentation degrades a
+tenth of the book by minutes and fixes nothing. Note both maps are ~9% grossly
+wrong: this book is broken either way, and 12.5% of its char space ends up with no
+segment coverage, so lookups there clamp to a segment edge.
+
+**No gate was added.** Three signals separate it cleanly from every book
+segmentation helps — boundaries placed 26% vs ≥95%; anchors retained versus the LIS
+0.807 vs 0.977–1.042 across all 15 out-of-order books; placed char coverage 0.874
+vs ≥0.960. But that is one negative example, and a gate calibrated on n=1 is a
+guess wearing a threshold. Documented as a known limit instead; revisit if a second
+interleaved-narration book turns up.
+
+### Arbitrating two maps: held-out candidate-anchor agreement (2026-09-10)
+
+`map_quality.score_map` inspects a map's own internal shape and never compares it
+against positional evidence, so it **cannot see out-of-order damage** — it reported
+"LIS wins" on Tress while that LIS map was provably 12.3 hours wrong. Scoring two
+maps with it to pick a winner is circular. The non-circular substitute:
+
+Split the candidate anchors by index parity over the char-sorted list, rebuild each
+map from the **even** half only, and grade both on the **odd** half — predicting ts
+with `get_time_for_text`'s exact semantics, segment clamp included. Neither map has
+seen the evaluation set.
+
+Validated against the four books whose truth was already established positionally,
+*before* being trusted on any unknown book:
+
+| book | LIS `cov@30s` / gross / worst | segmented |
+|---|---|---|
+| Four Past Midnight | 0.487 / 0.513 / **23.4 h** | 0.971 / 0.018 / 0.56 h |
+| Tress | 0.996 / 0.004 / 12.4 h | 1.000 / 0.000 / 0.08 h |
+| Dearest | 0.999 / 0.001 / 8.4 h | 1.000 / 0.000 / 0.01 h |
+| Animals (control) | 1.000 / 0.000 | identical — inert |
+| The Terminal Man | 0.995 / 0.005 / **7.2 h** | 1.000 / 0.000 / 0.008 h |
+| Eaters of the Dead | **0.908** / 0.092 / 5.34 h | 0.803 / 0.088 / 5.34 h |
+
+Honest limits: the evaluation anchors come from the same n-gram matcher, so a
+section with no unique 12-grams is invisible to both maps; false anchors penalise a
+correct map, so read the median and the gross fraction, never the mean; and it
+compares anchor *selection*, not the full production pipeline.
 
 ### Known limitation / future work: CTC is segment-unaware (2026-09-10)
 
