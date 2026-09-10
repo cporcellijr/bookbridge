@@ -54,7 +54,7 @@ def alignment(tmp_path):
 def test_measured_map_is_marked_lexical_timed(alignment):
     segment = _timed_segment()
     text = "Front matter\n\n" + segment["text"]
-    _map, method = alignment._generate_alignment_map_with_method([segment], text)
+    _map, method, _map_segments = alignment._generate_alignment_map_with_method([segment], text)
     assert method == "lexical_timed"
 
 
@@ -62,7 +62,7 @@ def test_estimated_map_is_marked_lexical(alignment):
     segment = _timed_segment()
     segment.pop("words")
     text = "Front matter\n\n" + segment["text"]
-    _map, method = alignment._generate_alignment_map_with_method([segment], text)
+    _map, method, _map_segments = alignment._generate_alignment_map_with_method([segment], text)
     assert method == "lexical"
 
 

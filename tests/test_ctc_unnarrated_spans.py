@@ -182,7 +182,7 @@ def test_real_lexical_ngram_preserves_all_twelve_narrated_words(service):
     text = left + " " + skipped + " ".join(words[500:])
     segments = [{"start": i * 0.2, "end": (i + 1) * 0.2, "text": word}
                 for i, word in enumerate(words)]
-    prior, method = service._generate_alignment_map_with_method(segments, text)
+    prior, method, _map_segments = service._generate_alignment_map_with_method(segments, text)
     assert method == "lexical"
     spans = service._detect_unnarrated_spans(prior, text)
     assert spans == [(len(left), len(left) + 1 + len(skipped))]

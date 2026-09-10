@@ -2864,6 +2864,31 @@
                         </div>
                     </div>
                     </details>
+
+                    <!-- Segmented alignment maps: fits each EPUB spine chapter to the audio
+                         independently instead of one global monotonic filter, so a book whose
+                         narration order differs from its spine order (issue #426) still places
+                         every chapter correctly. Only changes anything for books that are
+                         actually out of order; every other book's map is unaffected. -->
+                    <details class="advanced-sub full-width">
+                        <summary>Advanced · Experimental — Segmented alignment (out-of-order narration)</summary>
+                    <div class="form-group full-width" style="align-items: center;">
+                        <label>Segmented Alignment Maps</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="ALIGNMENT_SEGMENTED_MAPS"
+                                {% if get_bool('ALIGNMENT_SEGMENTED_MAPS') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="help-text"><strong>Experimental &mdash; leave off unless a book's
+                            audiobook narrates its sections in a different order than the EPUB spines
+                            them</strong> (e.g. a short-story or novella collection spined 2-4-3-1 but
+                            narrated 1-2-3-4, or acknowledgements that open the ebook but close the
+                            audiobook). When on, re-aligning such a book fits each EPUB chapter to the
+                            audio independently instead of forcing every anchor into one global
+                            increasing sequence, so out-of-order chapters are placed correctly instead
+                            of dropped. Books that are already in order are unaffected either way.</div>
+                    </div>
+                    </details>
                 </div>
             </div>
 

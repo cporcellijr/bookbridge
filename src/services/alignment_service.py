@@ -19,7 +19,7 @@ from src.utils.time_utils import utcnow
 
 from src.db.models import BookAlignment, BookAlignmentBackup
 from src.services import map_quality
-from src.services.segment_fit import Segment
+from src.services.segment_fit import Segment, fit_segments, select_anchors
 from src.utils.config_loader import env_truthy
 from src.utils.ebook_utils import LRUCache
 from src.utils.polisher import Polisher
@@ -249,14 +249,16 @@ class AlignmentService:
             return False
 
         # 3. Anchored Alignment
-        alignment_map, align_method = self._generate_alignment_map_with_method(rebuilt_segments, ebook_text, abs_id=abs_id)
+        alignment_map, align_method, map_segments = self._generate_alignment_map_with_method(
+            rebuilt_segments, ebook_text, abs_id=abs_id, spine_chapters=spine_chapters)
 
         if not alignment_map:
             logger.error("   ❌ Failed to generate alignment map.")
             return False
 
         # 4. Store to Database
-        self._publish_map(abs_id, alignment_map, align_method, total_chars=ebook_len)
+        self._publish_map(abs_id, alignment_map, align_method, total_chars=ebook_len,
+                          segments=map_segments)
         # A vetoed write still leaves a valid, better incumbent map in place — only a
         # genuinely missing/invalid map is a caller-visible failure (sync_manager marks
         # the job failed_permanent and deletes the audio cache after retries exhaust).
@@ -266,6 +268,15 @@ class AlignmentService:
     def ctc_enabled() -> bool:
         """Whether CTC forced alignment is switched on (read per call)."""
         return AlignmentService._env_true("CTC_ENABLED", "false")
+
+    @staticmethod
+    def segmented_maps_enabled() -> bool:
+        """Whether per-chapter segment placement (issue #426 phase 2) replaces the
+        global monotonic LIS filter for books whose narration order differs from
+        their spine order. Read per call — never cache at import or in __init__.
+        Uses `env_truthy` (not `_env_true`) so the settings-UI checkbox's "on"
+        spelling is honored, not just "true"."""
+        return env_truthy("ALIGNMENT_SEGMENTED_MAPS", "false")
 
     @time_execution
     def align_forced_and_store(self, abs_id: str, audio_path: str, ebook_text: str,
@@ -564,7 +575,8 @@ class AlignmentService:
                     
             if segments:
                 rebuilt_segments = self.polisher.rebuild_fragmented_sentences(segments, ebook_text)
-                alignment_map, align_method = self._generate_alignment_map_with_method(rebuilt_segments, ebook_text, abs_id=abs_id)
+                alignment_map, align_method, _map_segments = self._generate_alignment_map_with_method(
+                    rebuilt_segments, ebook_text, abs_id=abs_id)
                 if alignment_map:
                     if self._publish_map(abs_id, alignment_map, align_method, total_chars=len(ebook_text)):
                         logger.info(f"AlignmentService: Anchored Storyteller map stored for {abs_id} ({len(alignment_map)} points)")
@@ -858,7 +870,7 @@ class AlignmentService:
 
     def _generate_alignment_map(self, segments: List[Dict], full_text: str) -> List[Dict]:
         """Thin wrapper preserving the list-returning contract for callers/tests."""
-        alignment_map, _method = self._generate_alignment_map_with_method(segments, full_text)
+        alignment_map, _method, _map_segments = self._generate_alignment_map_with_method(segments, full_text)
         return alignment_map
 
     def _timed_segment_tokens(self, segment: Dict) -> List[Dict]:
@@ -888,15 +900,25 @@ class AlignmentService:
             return []
         return tokens
 
-    def _generate_alignment_map_with_method(self, segments: List[Dict], full_text: str,
-                                            abs_id: Optional[str] = None) -> Tuple[List[Dict], str]:
+    def _generate_alignment_map_with_method(
+            self, segments: List[Dict], full_text: str, abs_id: Optional[str] = None,
+            spine_chapters: Optional[List[Dict]] = None,
+    ) -> Tuple[List[Dict], str, Optional[List[Segment]]]:
         """
-        Core Anchored Alignment Algorithm (Two-Pass), returning (map, method).
+        Core Anchored Alignment Algorithm (Two-Pass), returning (map, method, map_segments).
         Pass 1: High confidence (N=12) global search.
         Pass 2: Backfill start gap (N=6) if first anchor is late.
         method: 'lexical' (n-gram anchors), 'llm_anchor' (embedding rescue), or 'linear'.
         abs_id: optional book identifier, used only for the out-of-order-block
         diagnostic warning (issue #426); omitted from all other behavior.
+        spine_chapters: optional EPUB spine chapter dicts (``{'start', 'end'}`` char
+        offsets), used only to build boundaries for per-chapter segment placement
+        (issue #426 phase 2, gated by `segmented_maps_enabled()`). ``None`` or empty
+        keeps today's single global-LIS behavior. `map_segments` (the third return
+        value) is ``None`` unless segment placement actually ran AND found the
+        narration out of spine order; a caller persists it via `_save_alignment`'s
+        `segments` parameter, and must not persist a `None` over a previously
+        placed index (see `_save_alignment`'s "None must not wipe" discipline).
         """
         def _build_linear_fallback_map(reason: str) -> List[Dict]:
             end_ts = 0.0
@@ -917,12 +939,13 @@ class AlignmentService:
                 {"char": len(full_text), "ts": max(0.0, end_ts)},
             ]
 
-        def _fallback(reason: str) -> Tuple[List[Dict], str]:
+        def _fallback(reason: str) -> Tuple[List[Dict], str, None]:
             # Embedding anchor rescue fires only here — when lexical anchoring fails.
+            # Never a segmented map — segments require successful lexical anchoring.
             rescue = self._embedding_anchor_rescue(segments, full_text)
             if rescue:
-                return rescue, "llm_anchor"
-            return _build_linear_fallback_map(reason), "linear"
+                return rescue, "llm_anchor", None
+            return _build_linear_fallback_map(reason), "linear", None
 
         # 1. Tokenize Transcript
         transcript_words = []
@@ -1001,15 +1024,63 @@ class AlignmentService:
 
         # 3. PASS 1: Global Search (N=12)
         anchors = _find_anchors(transcript_words, book_words, n_size=_LEXICAL_ANCHOR_WORDS)
-        
+
         # Sort by character position
         anchors.sort(key=lambda x: x['char'])
-        
-        # Filter Monotonic (Global) — Longest Increasing Subsequence
-        valid_anchors = self._filter_monotonic_lis(anchors)
-        logger.info(f"   📊 Monotonic LIS filter: {len(anchors)} candidates -> {len(valid_anchors)} valid")
-        if len(anchors) > len(valid_anchors):
-            logger.info(f"      📊 Dropped {len(anchors) - len(valid_anchors)} non-monotonic anchors")
+
+        # Segmented placement (issue #426 phase 2): fit each EPUB spine chapter to
+        # the audio independently instead of forcing every candidate anchor into
+        # one global increasing sequence. Gated so it can only ever take over from
+        # the LIS below when it is actually needed: a book whose narration order
+        # already matches its spine order is fully served by the LIS, so this
+        # deliberately emits no segments for it (`map_segments` stays None,
+        # `segments_json` stays NULL) — the flag can never change a map that was
+        # already correct. See docs/PLAN_OUT_OF_ORDER_NARRATION.md.
+        map_segments: Optional[List[Segment]] = None
+        use_segmented = False
+        if self.segmented_maps_enabled() and spine_chapters:
+            boundaries = [(c['start'], c['end']) for c in spine_chapters if c['end'] > c['start']]
+            if boundaries:
+                placements = fit_segments(anchors, boundaries, total_chars=len(full_text))
+                if placements:
+                    # fit_segments already returns its result sorted by ts_start;
+                    # compare that order against the same segments sorted by
+                    # char_start to detect whether narration order actually
+                    # differs from spine order.
+                    by_char_start = sorted(placements, key=lambda seg: seg.char_start)
+                    if placements != by_char_start:
+                        use_segmented = True
+                        map_segments = placements
+                        logger.info(
+                            "🧩 Alignment: segmented placement for %s — %d/%d spine boundaries "
+                            "placed, narration order differs from spine order; using per-segment "
+                            "anchors instead of the global LIS",
+                            abs_id or "unknown", len(placements), len(boundaries),
+                        )
+                    else:
+                        logger.info(
+                            "🧩 Alignment: segmented placement for %s — %d/%d spine boundaries "
+                            "placed but narration order matches spine order; keeping the global LIS",
+                            abs_id or "unknown", len(placements), len(boundaries),
+                        )
+                else:
+                    logger.info(
+                        "🧩 Alignment: segmented placement for %s found no placeable spine "
+                        "boundaries (of %d candidates); keeping the global LIS",
+                        abs_id or "unknown", len(boundaries),
+                    )
+
+        if use_segmented:
+            # Segmented replacement for the global LIS: retained anchors come
+            # from the per-segment placements instead.
+            valid_anchors = select_anchors(anchors, map_segments)
+            logger.info(f"   📊 Segmented filter: {len(anchors)} candidates -> {len(valid_anchors)} valid")
+        else:
+            # Filter Monotonic (Global) — Longest Increasing Subsequence
+            valid_anchors = self._filter_monotonic_lis(anchors)
+            logger.info(f"   📊 Monotonic LIS filter: {len(anchors)} candidates -> {len(valid_anchors)} valid")
+            if len(anchors) > len(valid_anchors):
+                logger.info(f"      📊 Dropped {len(anchors) - len(valid_anchors)} non-monotonic anchors")
 
         # Diagnostics only (issue #426) — a large run of anchors the LIS could not
         # chain onto the retained subsequence is the signature of an EPUB spine
@@ -1042,7 +1113,14 @@ class AlignmentService:
         # 4. PASS 2: Backfill Start (N=6) "Work Backwards"
         # If the first anchor is significantly into the book, try to recover the intro.
         # Threshold: First anchor is > 1000 chars in AND > 30 seconds in
-        if valid_anchors and valid_anchors[0]['char'] > 1000 and valid_anchors[0]['ts'] > 30.0:
+        # Skipped for the segmented path (issue #426 phase 2): `first['t_idx']` is
+        # the anchor's position in audio-chronological order, not char order, so
+        # for a segment placed late in the audio (e.g. front-matter narrated last)
+        # this "late start" heuristic is backwards — it would slice almost the
+        # *entire* transcript as "before the intro" and search it for garbage
+        # early anchors instead of skipping cleanly.
+        if (not use_segmented and valid_anchors
+                and valid_anchors[0]['char'] > 1000 and valid_anchors[0]['ts'] > 30.0):
             first = valid_anchors[0]
             logger.info(f"   🔄 Late start detected (Char: {first['char']}, TS: {first['ts']:.1f}s) — Attempting backfill")
 
@@ -1072,18 +1150,30 @@ class AlignmentService:
         if not valid_anchors:
             return _fallback("no unique anchors found with N=12/N=6")
 
-        # Force 0,0 if still missing (Linear Interpolation fallback)
-        if valid_anchors[0]['char'] > 0:
-            final_map.append({"char": 0, "ts": 0.0})
-            
-        final_map.extend(valid_anchors)
-        
-        # Force End
-        last = valid_anchors[-1]
-        if last['char'] < len(full_text):
-            # Safe check for segments
-            end_ts = segments[-1]['end'] if segments else last['ts']
-            final_map.append({"char": len(full_text), "ts": end_ts})
+        if use_segmented:
+            # No global 0.0/end_ts padding here: those force a single flat-map
+            # slope from the very start/end of the *book* to the very start/end
+            # of the *audio*, which is exactly the cross-segment interpolation
+            # this feature exists to stop (a segment's own char_start/char_end
+            # need not be narrated anywhere near ts 0 or the audio's end). The
+            # lookup helpers (`get_time_for_text`/`_interpolate_char_for_time`)
+            # already clamp to the nearest retained anchor for chars outside
+            # `valid_anchors`' own range, which is correct because that anchor is
+            # guaranteed to belong to the same (correct) segment.
+            final_map.extend(valid_anchors)
+        else:
+            # Force 0,0 if still missing (Linear Interpolation fallback)
+            if valid_anchors[0]['char'] > 0:
+                final_map.append({"char": 0, "ts": 0.0})
+
+            final_map.extend(valid_anchors)
+
+            # Force End
+            last = valid_anchors[-1]
+            if last['char'] < len(full_text):
+                # Safe check for segments
+                end_ts = segments[-1]['end'] if segments else last['ts']
+                final_map.append({"char": len(full_text), "ts": end_ts})
 
         logger.info(f"   ⚓ Anchored Alignment: Found {len(valid_anchors)} anchors (Total).")
 
@@ -1095,7 +1185,7 @@ class AlignmentService:
         if transcript_words and timed_word_count >= 0.5 * len(transcript_words):
             method = "lexical_timed"
 
-        return final_map, method
+        return final_map, method, map_segments
 
     # --- Embedding-assisted alignment (optional, gated; fires only when lexical fails) ---
 
@@ -1308,8 +1398,14 @@ class AlignmentService:
 
     def _publish_map(self, abs_id: str, alignment_map: List[Dict], align_method: str,
                      total_chars: Optional[int] = None,
-                     exclude_spans: Optional[List[Tuple[int, int]]] = None) -> bool:
+                     exclude_spans: Optional[List[Tuple[int, int]]] = None,
+                     segments: Optional[List[Segment]] = None) -> bool:
         """Store `alignment_map` unless doing so would regress a materially better incumbent.
+
+        `segments` (issue #426 phase 2) is the per-chapter placement index to
+        persist alongside the map, or `None` to leave any existing index
+        untouched — see `_save_alignment`'s "None must not wipe" discipline;
+        only `align_and_store` ever supplies a non-`None` value.
 
         Every alignment write funnels through this seam (issue #426). Previously only
         the CTC path backed up and checked anything before overwriting the stored map,
@@ -1364,7 +1460,7 @@ class AlignmentService:
 
         self._backup_alignment(abs_id)
         self._save_alignment(abs_id, alignment_map, align_method, total_chars=total_chars,
-                             quality=challenger_quality)
+                             quality=challenger_quality, segments=segments)
         return True
 
     def _save_alignment(self, abs_id: str, alignment_map: List[Dict], align_method: str = None,

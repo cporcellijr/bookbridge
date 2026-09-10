@@ -426,3 +426,40 @@ def fit_segments(anchors: List[Dict], boundaries: List[Tuple[int, int]],
     resolved.sort(key=lambda seg: seg.ts_start)
     _assert_disjoint(resolved)
     return resolved
+
+
+def select_anchors(anchors: List[Dict], placements: List[Segment]) -> List[Dict]:
+    """The segmented replacement for `_filter_monotonic_lis`'s output.
+
+    A `Segment` records only its fit's summary (`inliers`, `residual`), not the
+    inlier points themselves, so this re-derives them: for each placement, take
+    the candidate anchors whose char falls in its own `[char_start, char_end)`
+    range and whose ts sits within tolerance of the line implied by the
+    segment's own two edges (`(char_start, ts_start)` to `(char_end, ts_end)`).
+
+    That implied line is not always exactly the line `_fit_boundary` found —
+    `_resolve_conflicts` may have trimmed `ts_start`/`ts_end` to a seam
+    midpoint, which changes the slope implied by the two edges alone. Reusing
+    `_inlier_tolerance` (the same tolerance RANSAC's own consensus step uses)
+    rather than a tighter one absorbs that drift; the tolerance already scales
+    with the line's own predicted span, so this holds for short and long
+    segments alike.
+
+    Placements are pairwise disjoint in char by construction (`fit_segments`
+    asserts it), so no anchor can be claimed by more than one placement.
+
+    Returns the retained anchors, sorted by char, ready to stand in for
+    `_filter_monotonic_lis`'s output.
+    """
+    retained: List[Dict] = []
+    for placement in placements:
+        a, b = _line_through(placement.char_start, placement.ts_start,
+                             placement.char_end, placement.ts_end)
+        tolerance = _inlier_tolerance(a, placement.char_start, placement.char_end)
+        for anchor in anchors:
+            char = _anchor_char(anchor)
+            if placement.char_start <= char < placement.char_end:
+                if abs(a * char + b - _anchor_ts(anchor)) <= tolerance:
+                    retained.append(anchor)
+    retained.sort(key=_anchor_char)
+    return retained

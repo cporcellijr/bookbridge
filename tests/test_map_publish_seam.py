@@ -60,7 +60,7 @@ def test_align_and_store_does_not_clobber_a_good_ctc_map_with_a_worse_lexical_re
     # relative to the CTC map already on file.
     worse_lexical = [{"char": c, "ts": c / 100.0} for c in range(0, 1001, 200)]
     service._generate_alignment_map_with_method = (
-        lambda segments, full_text, abs_id=None: (worse_lexical, "lexical"))
+        lambda segments, full_text, abs_id=None, spine_chapters=None: (worse_lexical, "lexical", None))
 
     result = service.align_and_store("book", [{"start": 0.0, "end": 1.0, "text": "x"}], text)
 

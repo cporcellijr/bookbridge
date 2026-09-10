@@ -18,7 +18,7 @@ import unittest
 from typing import Dict, List, Tuple
 
 from src.services import segment_fit
-from src.services.segment_fit import Segment, fit_segments
+from src.services.segment_fit import Segment, fit_segments, select_anchors
 
 # Real measured narration speed for Tress, used to build realistic fixtures.
 CHARS_PER_SEC = 13.8
@@ -235,6 +235,37 @@ class TestConflictResolution(unittest.TestCase):
                                 or second.char_end <= first.char_start)
                 self.assertTrue(first.ts_end <= second.ts_start
                                 or second.ts_end <= first.ts_start)
+
+
+class TestSelectAnchors(unittest.TestCase):
+    """`select_anchors` re-derives a placement's inliers, since `Segment` keeps
+    only their count. The tolerance filter is what makes it a re-derivation
+    rather than "everything in the char range"."""
+
+    def test_outliers_inside_the_char_range_are_not_retained(self):
+        good = make_anchors(0, 100000, 0.0, 7246.0, 50)
+        # Same char range, but pointing at audio 5+ hours away: duplicate n-gram
+        # matches from elsewhere in the book. Dropping the tolerance check would
+        # sweep every one of these into the map.
+        outliers = [{"char": c, "ts": 40000.0} for c in range(500, 100000, 2000)]
+        placement = Segment(char_start=0, char_end=100000, ts_start=0.0,
+                            ts_end=7246.0, inliers=50, residual=0.1)
+
+        kept = select_anchors(good + outliers, [placement])
+
+        self.assertLess(len(kept), len(good) + len(outliers),
+                        "outliers must not be retained")
+        self.assertTrue(all(abs(a["ts"] - 40000.0) > 1.0 for a in kept),
+                        "no far-off-line anchor may survive")
+        self.assertEqual(kept, sorted(kept, key=lambda a: a["char"]))
+
+    def test_retained_anchors_come_only_from_placed_ranges(self):
+        inside = make_anchors(0, 50000, 0.0, 3623.0, 40)
+        outside = make_anchors(60000, 100000, 4300.0, 7246.0, 40)
+        placement = Segment(char_start=0, char_end=50000, ts_start=0.0,
+                            ts_end=3623.0, inliers=40, residual=0.1)
+        kept = select_anchors(inside + outside, [placement])
+        self.assertTrue(all(a["char"] < 50000 for a in kept))
 
 
 class TestDeterminism(unittest.TestCase):
