@@ -375,6 +375,29 @@ already fixed.
 | Quality scorer rejects the improved map | Measured false: `is_regression` already accepts the segmented map without Phase 3 (see Phase 3 above). Phase 3 shipped anyway, for scoring accuracy, not to unblock this. |
 | Reordering *within* a chapter | Out of scope. Chapter granularity is the stated limit |
 
+## Per-segment CTC chunking: considered and declined
+
+Recorded 2026-09-10 so it is not re-proposed blind. CTC stands down on segmented
+books (the phase 4 guard) because `_interp_ts` assumes char and ts ascend together.
+Teaching CTC to chunk per segment would lift that restriction.
+
+Measured anchor density says it is not worth it:
+
+| map | method | chars per anchor |
+|---|---|---|
+| Four Past Midnight, segmented | lexical | 8.2 |
+| Four Past Midnight, old CTC map | ctc | 7.1 |
+| Dearest, segmented | lexical_timed | 7.6 |
+| Animals (in-order control) | ctc | 5.7 |
+
+An English word averages about 5 characters, so both backends already anchor below
+word granularity; the CTC onset advantage was separately measured at ~1 char. The
+entire gain is interpolation distance falling from ~8 chars to ~6, on three books
+whose positions are already correct — against restructuring the chunking code that
+every earlier CTC defect in this issue lived in.
+
+The guard is therefore the permanent answer, not a placeholder.
+
 ## Scope check before starting
 
 **1 of 372 maps on the primary install.** This is a correctness fix for a rare
