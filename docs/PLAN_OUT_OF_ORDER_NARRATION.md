@@ -66,6 +66,36 @@ Three consequences for this plan:
    `density_spread` 1.199, `backwards_fraction` 0.0 - every metric healthy while
    1% of the book is 12 hours wrong. See the scorer gap in Phase 3.
 
+### Validated on real Four Past Midnight anchors (2026-09-10)
+
+The case the plan was written for, measured end to end on real data rather than a
+synthetic permutation. Captured the actual candidate anchors by intercepting the
+LIS filter (`bookorbit:5417`, 1,602,700 chars, 14 non-empty spine boundaries,
+201,898 candidates) and ran `fit_segments` over them:
+
+| | global LIS (today) | segment fitting |
+|---|---|---|
+| anchors retained | 97,706 (**48.4%**) | 195,905 (**97.0%**) |
+| boundaries placed | - | 12 of 14 |
+| ts-overlapping pairs | - | 0, `_assert_disjoint` passes |
+
+The recovered narration order is a genuine permutation: chars 1,105,949-1,602,591
+are narrated first, then 11,947-333,320, then 677,136-1,105,948, with
+333,321-677,135 last. The two unplaced boundaries are front matter and a 108-char
+tail - correctly rejected. Its stored CTC map scores **0.323**, the worst on the
+install, which is the broken-map signature this work exists to remove.
+
+**Known blemish, not yet fixed:** the first placed segment reports
+`ts_start = -175.1`. That is the fitted line extrapolated below zero at
+`char_start`, and it is *meaningful* - the audio opens with ~175s of credits that
+have no ebook text - but a negative timestamp has no business being persisted.
+Clamping is not free: `select_anchors` derives its line from the segment's own two
+edges, so clamping an edge skews that line. Not reachable from `get_progress_for_time`
+(which divides char, not ts), so it is latent rather than live. Resolve it in Phase 3.
+
+Residuals here run 12-48s against Tress's 0.7-5s, which is proportionate: these
+segments are 100k+ chars and 7,000+ seconds long, so 40s is about 0.5%.
+
 ### Why the LIS is not simply wrong
 
 Both public lookups binary-search **the same list**:
