@@ -210,7 +210,15 @@ class TestNullSegmentsJsonUnchanged(unittest.TestCase):
         naive = p1['ts'] + (p2['ts'] - p1['ts']) * ((99 - p1['char']) / (p2['char'] - p1['char']))
         self.assertEqual(ts, naive)
 
-    def test_save_alignment_does_not_wipe_a_stored_segments_json(self):
+    def test_save_alignment_clears_segments_when_the_map_is_replaced(self):
+        """Segments describe the map they were stored with, and this method
+        always replaces the map, so a caller supplying none must CLEAR them.
+
+        `total_chars` and `quality` get the opposite treatment on purpose --
+        those are measurements a caller may legitimately not have, so None
+        preserves them. Carrying segments forward instead would pair one map's
+        flat points with another map's boundaries.
+        """
         session = self.mock_db.get_session()
         session.__enter__.return_value = session
         existing = BookAlignment(
@@ -222,7 +230,37 @@ class TestNullSegmentsJsonUnchanged(unittest.TestCase):
         service = AlignmentService(self.mock_db, Polisher())
         service._save_alignment("book", [{"char": 0, "ts": 0.0}], "lexical")
 
-        self.assertEqual(existing.segments_json, json.dumps(SEGMENTS))
+        self.assertIsNone(existing.segments_json)
+
+    def test_ctc_overwriting_a_segmented_lexical_map_does_not_keep_its_segments(self):
+        """The concrete corrupt-pairing route (issue #426).
+
+        An out-of-order book stores segments from the lexical stage; the CTC
+        upgrade then overwrites the map and passes no segments. If those
+        survived, every lookup would apply the lexical map's boundaries to
+        CTC's points.
+        """
+        session = self.mock_db.get_session()
+        session.__enter__.return_value = session
+        existing = BookAlignment(abs_id="book", alignment_map_json="[]")
+        session.query.return_value.filter_by.return_value.first.return_value = existing
+        service = AlignmentService(self.mock_db, Polisher())
+
+        lexical_segments = [
+            Segment(char_start=0, char_end=100, ts_start=500.0, ts_end=600.0,
+                    inliers=40, residual=0.1),
+            Segment(char_start=100, char_end=200, ts_start=0.0, ts_end=500.0,
+                    inliers=40, residual=0.1),
+        ]
+        service._save_alignment("book", [{"char": 0, "ts": 500.0}], "lexical",
+                                segments=lexical_segments)
+        self.assertIsNotNone(existing.segments_json)
+
+        # CTC upgrade: a different, denser map, and no segments.
+        service._save_alignment("book", [{"char": 0, "ts": 0.0}], "ctc")
+
+        self.assertIsNone(existing.segments_json,
+                          "CTC's map must not inherit the lexical stage's segments")
 
     def test_save_alignment_writes_segments_when_supplied(self):
         session = self.mock_db.get_session()

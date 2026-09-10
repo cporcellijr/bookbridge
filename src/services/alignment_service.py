@@ -1515,13 +1515,20 @@ class AlignmentService:
                 if quality is not None:
                     existing.quality_score = quality_score
                     existing.quality_detail = quality_detail
-                # Same discipline again for segments (issue #426 phase 1): a
-                # caller that doesn't know segment placements -- every caller
-                # before phase 2 wires `fit_segments` in, and the unanchored
-                # Storyteller path after -- must not wipe a previously placed
-                # segment index.
-                if segments is not None:
-                    existing.segments_json = segments_json
+                # Segments are NOT metadata and get the OPPOSITE discipline
+                # (issue #426). `total_chars` and `quality` describe a map a
+                # caller may legitimately not have measured, so a None there
+                # preserves what is stored. `segments_json` describes *this*
+                # map's own layout, and this method always replaces
+                # `alignment_map_json`, so carrying a previous map's segments
+                # forward would pair one map's flat points with another map's
+                # segment boundaries -- silently mis-resolving every lookup.
+                # The concrete route: an out-of-order book stores segments from
+                # the lexical stage, then the CTC upgrade overwrites the map
+                # without any (`_publish_map` at the 'ctc' call site passes
+                # none). Always write them, so map and segments are replaced
+                # together or not at all.
+                existing.segments_json = segments_json
                 existing.last_updated = utcnow()
             else:
                 new_align = BookAlignment(abs_id=abs_id, alignment_map_json=json_blob,
