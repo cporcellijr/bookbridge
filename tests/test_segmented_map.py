@@ -266,6 +266,62 @@ class TestNullSegmentsJsonUnchanged(unittest.TestCase):
         )
 
 
+class TestSegmentsToJsonClamp(unittest.TestCase):
+    """Issue #426 phase 3: a segment's fitted line can extrapolate below zero
+    at its own `char_start` (real Four Past Midnight data: -175.1s, meaning
+    the audio opens with ~175s of credits that have no matching ebook text).
+    That is meaningful, but a negative audio timestamp must never be
+    persisted. The clamp is asymmetric on purpose: it applies only at the
+    `_segments_to_json` persistence boundary, never to the in-memory
+    `Segment` itself, because `select_anchors` derives its own line from the
+    segment's own two edges and clamping there would skew that line's slope.
+    """
+
+    def setUp(self):
+        self.mock_db = MagicMock()
+
+    def test_negative_ts_start_is_clamped_to_zero_on_persistence(self):
+        session = self.mock_db.get_session()
+        session.__enter__.return_value = session
+        existing = BookAlignment(abs_id="book", alignment_map_json="[]")
+        session.query.return_value.filter_by.return_value.first.return_value = existing
+
+        service = AlignmentService(self.mock_db, Polisher())
+        segment = Segment(char_start=0, char_end=1000, ts_start=-175.1, ts_end=200.0,
+                          inliers=50, residual=1.0)
+        service._save_alignment("book", [{"char": 0, "ts": 0.0}], "lexical",
+                                segments=[segment])
+
+        stored = json.loads(existing.segments_json)
+        self.assertEqual(stored, [{"char_start": 0, "char_end": 1000,
+                                   "ts_start": 0.0, "ts_end": 200.0}])
+
+    def test_in_memory_segment_is_left_unclamped(self):
+        """The asymmetry itself: persisting a negative `ts_start` must not
+        mutate the `Segment` object the caller still holds (and, by
+        extension, whatever line `select_anchors` derived from it earlier
+        in the same call)."""
+        segment = Segment(char_start=0, char_end=1000, ts_start=-175.1, ts_end=200.0,
+                          inliers=50, residual=1.0)
+
+        from src.services.alignment_service import _segments_to_json
+        stored = json.loads(_segments_to_json([segment]))
+
+        self.assertEqual(segment.ts_start, -175.1)
+        self.assertEqual(stored[0]["ts_start"], 0.0)
+
+    def test_non_negative_ts_start_is_unaffected(self):
+        """Falsification guard: a healthy, already-non-negative `ts_start`
+        must round-trip exactly, not just "not go negative"."""
+        segment = Segment(char_start=0, char_end=1000, ts_start=42.5, ts_end=200.0,
+                          inliers=50, residual=1.0)
+
+        from src.services.alignment_service import _segments_to_json
+        stored = json.loads(_segments_to_json([segment]))
+
+        self.assertEqual(stored[0]["ts_start"], 42.5)
+
+
 class TestSegmentsCacheInvalidation(unittest.TestCase):
     """`_get_segments` must be invalidated everywhere `_alignment_cache` is."""
 

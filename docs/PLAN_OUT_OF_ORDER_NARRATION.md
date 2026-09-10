@@ -241,26 +241,74 @@ contract (§5), so add a suffix, never rewrite the prefix.
 
 ---
 
-## Phase 3 — Optional: segment-aware quality, and CTC windows
+## Phase 3 — Segment-aware quality (done; the veto premise was false)
 
-`map_quality._density_spread` (line 166) and `max_gap_fraction` (line 112) measure across the whole map
-and would score a *correctly* segmented reordered book as damaged. Make both
-segment-aware (compute per segment, aggregate) once Phase 2 lands, or the
-regression veto in `_publish_map` will refuse the improved map.
+**Implemented 2026-09-10. The stated premise above was checked against real
+data and found false — it is corrected here, not implemented as written.**
+The plan said the regression veto would refuse the improved segmented map
+unless Phase 3 landed first. Measured directly:
+`is_regression(incumbent=LIS map, challenger=segmented map)` returns **False**
+on the real Four Past Midnight maps (201,898 candidate anchors, 14 spine
+boundaries) — the segmented map (0.7781) clears the LIS map (0.2000) and the
+0.75 realign threshold with no Phase-3 change at all. There is no ordering
+hazard, and Phase 3 did not need to land before, with, or after any Phase 2
+default flip.
 
-Note the ordering hazard: **Phase 3 must land with or before Phase 2's default
-flip**, never after.
+The real problem was narrower and still worth fixing: `density_spread`
+(`map_quality._density_spread`) measures across the whole map, so it charges
+a *correctly* segmented reordered book for the `ts` discontinuities at its
+own segment seams — real audio structure, not measurement error. Scored
+per-segment instead, the same Four Past Midnight map is excellent everywhere
+(per-segment `density_spread` max 1.327, median 1.146 across the 12 placed
+segments) against a whole-map figure of 5.394 — a ~4x inflation purely from
+seam boundaries. That left a genuinely excellent map scoring only +0.0281
+above the realign threshold: fragile enough that a slightly worse book would
+fall below it and get flagged for a pointless re-alignment.
 
-**Separate scorer gap this run exposed, worth fixing on its own merits.**
-`max_gap_fraction` measures the largest **char** gap; nothing measures the largest
-**time** gap. Tress parked for 279 s while advancing 237 chars and every metric
-stayed healthy. A `max_time_gap_fraction` companion metric would have flagged it
-instantly, and would catch any book where the audio runs on without text -
-independent of whether the segmented map ever ships.
+**What shipped:**
+- `map_quality.score_map` gained an optional `segments` parameter. When
+  supplied (non-empty), `density_spread` is computed independently over each
+  segment's own char slice and aggregated with **`max`** — one badly-paced
+  segment still drags the score down; averaging would let it hide behind
+  the others (`_segment_aware_density_spread`, `_segment_bounds`,
+  `_segment_slice_points`). `segments=None` (or `[]`) is byte-identical to
+  the pre-Phase-3 code path — the compatibility guarantee for the 372
+  already-stored, non-segmented maps.
+- `max_gap_fraction` deliberately stays whole-map — **not** made
+  segment-aware. Verified directly: per-segment gap fractions (0.002-0.02)
+  agree with the whole-map figure (0.0221) on the real data, because placed
+  segments tile the char space contiguously and a char gap is real
+  regardless of which segment it falls in. Making it segment-aware would
+  have been churn with no behavioral difference.
+- `AlignmentService._publish_map` threads each side's own segments into its
+  own `score_map` call — the challenger's `segments` argument, and the
+  incumbent's via `_get_segments(abs_id)` — never each other's, since the
+  two maps can disagree on whether they're segmented at all.
+- `AlignmentService._segments_to_json` clamps `ts_start` to 0 at the
+  persistence boundary (real Four Past Midnight data: -175.1s for the first
+  placed segment, meaning ~175s of opening credits with no matching ebook
+  text). The in-memory `Segment` stays unclamped: `select_anchors` derives
+  its line from the segment's own two edges, and clamping there would skew
+  that line's slope.
 
-Separately, per-segment audio windows are exactly the chunk bounds
-`ForcedAligner._chunked_word_times` already wants, so CTC on reordered books
-improves for free.
+**Investigated and deliberately NOT built: `max_time_gap_fraction`.** The
+plan proposed this metric because Tress parked for 279s while advancing 237
+chars (0.85 chars/sec) with every other metric healthy. Verified directly on
+real data: segmentation removes that stall entirely — the acknowledgements
+segment now covers that same audio at 16.7 chars/sec once it is placed at
+its correct position instead of interpolated across a 12-hour gap. The
+metric would guard a symptom that segmentation already eliminates as a side
+effect, so it would be built to catch nothing. Left unbuilt (same trap as
+the guard shipped and then deleted earlier in this work for being provably
+inert) — this note is the record of why, should the question come up again.
+
+**Not done, still future work if ever prioritized:** the plan's other Phase
+3 idea — feeding per-segment audio windows into
+`ForcedAligner._chunked_word_times` so CTC on reordered books improves for
+free — was not touched by this pass. `AlignmentService.align_forced_and_store`
+still passes the flat lexical map's `boundaries`, not the segment index, to
+`ForcedAligner.align`. Scope for this pass was the scorer and the
+persistence clamp only.
 
 ---
 
@@ -271,7 +319,7 @@ improves for free.
 | Binary search over a non-monotonic list returns wrong positions **silently** | Phase 1 lands before any producer writes segments; NULL means the old path |
 | RANSAC non-determinism churns maps and defeats the regression veto | Fixed seed; determinism test in Phase 0 acceptance |
 | A wrong segment fit claims another segment's audio | Conflict resolution plus the asserted ts-disjointness invariant |
-| Quality scorer rejects the improved map | Phase 3 before the default flip |
+| Quality scorer rejects the improved map | Measured false: `is_regression` already accepts the segmented map without Phase 3 (see Phase 3 above). Phase 3 shipped anyway, for scoring accuracy, not to unblock this. |
 | Reordering *within* a chapter | Out of scope. Chapter granularity is the stated limit |
 
 ## Scope check before starting

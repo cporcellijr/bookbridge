@@ -209,14 +209,106 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _segment_bounds(segment) -> Tuple[int, int]:
+    """``(char_start, char_end)`` from one segment, accepting either a plain
+    dict (as stored in ``segments_json`` / returned by
+    ``AlignmentService._get_segments``) or an attribute-bearing object such
+    as ``segment_fit.Segment`` (a challenger's in-memory placements, passed
+    straight through by ``AlignmentService._publish_map``). Callers should
+    never have to convert one shape into the other just to score -- this
+    module stays independent of `segment_fit` (see the module docstring),
+    so it duck-types instead of importing `Segment` for an isinstance check.
+    """
+    if isinstance(segment, dict):
+        return int(segment['char_start']), int(segment['char_end'])
+    return int(segment.char_start), int(segment.char_end)
+
+
+def _segment_slice_points(sorted_points: List[Tuple[int, float]],
+                          char_start: int, char_end: int) -> List[Tuple[int, float]]:
+    """The contiguous slice of ``sorted_points`` (sorted by char, original --
+    pre-exclusion-collapse -- coordinates) whose char falls in the half-open
+    ``[char_start, char_end)`` range. Bisects on the ``(char, ts)`` tuples
+    directly: pairing each bound with ``-inf`` as the ts half of the search
+    key lands `bisect_left` at the first real point whose char is >= the
+    bound, regardless of what ts that point carries."""
+    lo = bisect.bisect_left(sorted_points, (char_start, float('-inf')))
+    hi = bisect.bisect_left(sorted_points, (char_end, float('-inf')))
+    return sorted_points[lo:hi]
+
+
+def _segment_aware_density_spread(sorted_points: List[Tuple[int, float]], segments: List,
+                                  exclude_spans: Optional[List[Tuple[int, int]]]) -> float:
+    """Segment-aware `density_spread` (issue #426 phase 3): run `_density_spread`
+    independently over each segment's own char slice of ``sorted_points`` --
+    resolved in original, pre-exclusion-collapse char coordinates, since that
+    is the space segment boundaries are always defined in -- then aggregate
+    the per-segment values with `max`, so one badly-paced segment still drags
+    the score down even when every other segment is excellent.
+
+    This is not the same axis whole-map `_density_spread` measures. Segments
+    can (and correctly do) abut or jump discontinuously in `ts` at their own
+    seams -- that is real audio structure for a book whose narration order
+    differs from its spine order, not measurement error -- and scoring that
+    discontinuity as part of one undivided run inflates the whole-map figure
+    by a factor that has nothing to do with how evenly-paced the narration
+    actually is. Measured on the real Four Past Midnight segmented map:
+    whole-map `density_spread` 5.394 vs a max-of-per-segment 1.327 (median
+    1.146 across the 12 placed segments) -- the whole-map number is ~4x
+    inflated purely by seam discontinuities that a segmented map's own metric
+    must not punish.
+
+    A segment with too few points to measure (`_density_spread` returns
+    `inf`) is skipped rather than folded into the aggregate as "badly paced"
+    -- `inf` means unmeasurable, not poorly paced, and a short trailing
+    segment should not by itself zero out an otherwise excellent score. If
+    every segment is unmeasurable this still returns `inf`, matching the
+    whole-map degenerate case in `_density_spread` itself.
+    """
+    spreads = []
+    for segment in segments:
+        char_start, char_end = _segment_bounds(segment)
+        points = _segment_slice_points(sorted_points, char_start, char_end)
+        if len(points) < 2:
+            continue
+        chars = _collapse_excluded([char for char, _ in points], exclude_spans)
+        segment_collapsed = list(zip(chars, (ts for _, ts in points)))
+        spread = _density_spread(segment_collapsed)
+        if math.isfinite(spread):
+            spreads.append(spread)
+    if not spreads:
+        return float('inf')
+    return max(spreads)
+
+
 def score_map(alignment_map: Optional[List[Dict]],
-              exclude_spans: Optional[List[Tuple[int, int]]] = None) -> MapQuality:
+              exclude_spans: Optional[List[Tuple[int, int]]] = None,
+              segments: Optional[List] = None) -> MapQuality:
     """Score an alignment map's positional reliability on several independent
     axes, then combine them into a single 0.0-1.0 `score` (higher is better).
 
     Safe on degenerate input: ``None``, an empty list, and a single-point map all
     return a `MapQuality` with `score` 0.0 and `max_gap_fraction` 1.0 rather than
     raising.
+
+    `segments` (issue #426 phase 3), when supplied non-empty, makes
+    `density_spread` segment-aware: computed independently over each
+    segment's own char slice and aggregated with `max` (see
+    `_segment_aware_density_spread`) instead of over the whole map in one
+    run. Each entry may be a plain dict with `char_start`/`char_end` keys or
+    any object exposing those as attributes (`segment_fit.Segment`) --
+    callers pass whichever shape they already have.
+
+    `max_gap_fraction` deliberately stays whole-map even when `segments` is
+    supplied -- placed segments tile the char space contiguously, so a char
+    gap is a real gap regardless of which segment it falls in. Measured on
+    Four Past Midnight: per-segment gap fractions (0.002-0.02) agree with the
+    whole-map figure (0.0221); making this metric segment-aware would be
+    churn with no behavioral difference.
+
+    `segments=None` (or an empty list) reproduces today's whole-map score
+    exactly -- this is the compatibility guarantee for the 372 already-stored
+    maps that predate segmentation and carry no segment index at all.
     """
     if not alignment_map:
         return MapQuality(anchors=0, span_chars=0, max_gap_fraction=1.0,
@@ -238,7 +330,8 @@ def score_map(alignment_map: Optional[List[Dict]],
 
     span_chars = chars[-1] - chars[0]
     anchor_density = 1000.0 * anchors / span_chars if span_chars > 0 else 0.0
-    spread = _density_spread(collapsed_points)
+    spread = (_segment_aware_density_spread(sorted_points, segments, exclude_spans)
+              if segments else _density_spread(collapsed_points))
 
     backwards = sum(1 for i in range(len(sorted_points) - 1)
                     if sorted_points[i + 1][1] < sorted_points[i][1])

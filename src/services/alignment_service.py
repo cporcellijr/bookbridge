@@ -119,12 +119,28 @@ def _nearest_segment_edge_char(ts: float, segments: List[Dict]) -> int:
 def _segments_to_json(segments: List[Segment]) -> str:
     """Serialize `Segment`s for storage: only the four fields the lookups
     need (`char_start`, `char_end`, `ts_start`, `ts_end`). `inliers` and
-    `residual` are fit diagnostics, not lookup data, and are dropped."""
+    `residual` are fit diagnostics, not lookup data, and are dropped.
+
+    `ts_start` is clamped to 0 here, at the persistence boundary, only
+    (issue #426 phase 3). A segment's fitted line can extrapolate below zero
+    at its own `char_start` -- real Four Past Midnight data: -175.1s for the
+    first placed segment, meaning the audio opens with ~175s of credits that
+    have no matching ebook text. That negative value is meaningful, but a
+    negative audio timestamp has no business being persisted and read back
+    by lookups that treat `ts` as a real position. The in-memory `Segment`
+    this function receives is deliberately left unclamped:
+    `segment_fit.select_anchors` (and, before that, `_fit_boundary`'s own
+    residual/inlier accounting) derives its line from the segment's own two
+    edges, `(char_start, ts_start)` to `(char_end, ts_end)` -- clamping
+    `ts_start` there would change the slope of that line and skew which
+    anchors are retained. Every caller reaches this function only after that
+    work is already done, so clamping exclusively here is safe.
+    """
     return json.dumps([
         {
             "char_start": segment.char_start,
             "char_end": segment.char_end,
-            "ts_start": segment.ts_start,
+            "ts_start": max(0.0, segment.ts_start),
             "ts_end": segment.ts_end,
         }
         for segment in segments
@@ -1407,6 +1423,14 @@ class AlignmentService:
         untouched — see `_save_alignment`'s "None must not wipe" discipline;
         only `align_and_store` ever supplies a non-`None` value.
 
+        Scoring (issue #426 phase 3): the challenger is scored with its own
+        `segments` and the incumbent with whatever segment index is already
+        stored for `abs_id` (`_get_segments`) — never each other's. The two
+        maps can disagree on whether they're segmented at all (a fresh
+        segmented re-align challenging a legacy flat incumbent, or vice
+        versa), so mixing them up would score at least one side against a
+        segment index it doesn't structurally match.
+
         Every alignment write funnels through this seam (issue #426). Previously only
         the CTC path backed up and checked anything before overwriting the stored map,
         so re-aligning a book that already had a good CTC map was silently destroyed by
@@ -1425,8 +1449,9 @@ class AlignmentService:
         Returns True when the map was stored, False when the write was vetoed as a
         regression — the existing map is left untouched and no backup is taken.
         """
-        challenger_quality = map_quality.score_map(alignment_map, exclude_spans)
+        challenger_quality = map_quality.score_map(alignment_map, exclude_spans, segments=segments)
         incumbent = self._get_alignment(abs_id)
+        incumbent_segments = self._get_segments(abs_id)
         incumbent_method = self.database_service.get_alignment_method(abs_id) or ""
         incumbent_total_chars = self._get_alignment_total_chars(abs_id)
 
@@ -1445,7 +1470,7 @@ class AlignmentService:
             or (total_chars is not None and incumbent_total_chars is None)
         )
         if not skip_veto:
-            incumbent_quality = map_quality.score_map(incumbent, exclude_spans)
+            incumbent_quality = map_quality.score_map(incumbent, exclude_spans, segments=incumbent_segments)
             if map_quality.is_regression(incumbent_quality, challenger_quality):
                 logger.warning(
                     "🚫 Map publish vetoed for %s — challenger '%s' scores %.3f "

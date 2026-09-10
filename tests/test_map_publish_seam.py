@@ -17,6 +17,7 @@ from src.db.database_service import DatabaseService
 from src.db.models import BookAlignment
 from src.services import map_quality
 from src.services.alignment_service import AlignmentService
+from src.services.segment_fit import Segment
 from src.utils.polisher import Polisher
 
 
@@ -256,3 +257,102 @@ def test_publish_map_does_not_write_a_score_on_the_veto_path(service):
     row = _row(service, "book")
     assert row.quality_score == good_quality.score
     assert row.align_method == "ctc"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #426 phase 3: incumbent and challenger are each scored with their OWN
+# segments, never each other's.
+#
+# The reordered fixture below (four independently-placed, perfectly-paced
+# segments -- see tests/test_map_quality.py::TestSegmentAwareDensitySpread for
+# the same construction and its measured numbers) scores ~0.938 with its own
+# segments but only ~0.488 scored blind (no segments at all). A mediocre plain
+# map, deliberately tuned to score ~0.622, sits strictly between those two
+# numbers -- so which way the veto falls is a direct, decisive tell for
+# whether `_publish_map` fetched and used the right side's segment index.
+# --------------------------------------------------------------------------- #
+
+def _reordered_segmented_fixture():
+    """Four chapter-sized, disjoint char ranges, each perfectly evenly paced
+    on its own but independently placed in `ts` and not aligned to the
+    whole-map 20-slice partition. Returns `(flat_map, segments)` where
+    `segments` are `Segment` dataclass instances (the shape a challenger
+    passes to `_publish_map`; `_save_alignment` converts them to dicts for
+    storage, which is also the shape `_get_segments` later returns for an
+    incumbent)."""
+    segment_defs = [
+        (0, 50000, 12.0, 187, 44415.0),
+        (50000, 50000, 14.0, 211, 500.0),
+        (100000, 50000, 16.0, 197, 90000.0),
+        (150000, 50000, 13.0, 203, 9000.0),
+    ]
+    flat_map: List[Dict] = []
+    segments: List[Segment] = []
+    for char_start, span, rate, n, ts0 in segment_defs:
+        points = [{"char": char_start + int(span * i / n),
+                   "ts": ts0 + int(span * i / n) / rate}
+                  for i in range(n)]
+        flat_map.extend(points)
+        segments.append(Segment(char_start=char_start, char_end=char_start + span,
+                                ts_start=points[0]["ts"], ts_end=points[-1]["ts"],
+                                inliers=len(points), residual=0.0))
+    flat_map.sort(key=lambda p: p["char"])
+    return flat_map, segments
+
+
+def _mediocre_plain_map(total_chars: int = 200000) -> List[Dict]:
+    """Scores ~0.622 -- strictly between the reordered fixture's blind
+    (~0.488) and segment-aware (~0.938) scores."""
+    base = [{"char": c, "ts": c / 50.0} for c in range(0, total_chars + 1, 4000)]
+    lo, hi = int(total_chars * 0.4), int(total_chars * 0.4) + int(total_chars * 0.2)
+    return [p for p in base if not (lo < p["char"] < hi)]
+
+
+def test_publish_map_scores_incumbent_with_its_own_stored_segments(service):
+    """A challenger that would only be a regression against the incumbent's
+    real, segment-aware score (~0.938) -- not against how the incumbent
+    would score blind (~0.488) -- must still be vetoed. This fails if
+    `_publish_map` stops fetching `self._get_segments(abs_id)` for the
+    incumbent (or drops it on the floor instead of passing it to
+    `score_map`): the incumbent would then score ~0.488, the mediocre
+    challenger (~0.622) would no longer look like a regression, and the
+    genuinely-better incumbent would be destroyed.
+    """
+    reordered_map, segments = _reordered_segmented_fixture()
+    service._save_alignment("book", reordered_map, "ctc", total_chars=200000,
+                            segments=segments)
+
+    mediocre_challenger = _mediocre_plain_map()
+    result = service._publish_map("book", mediocre_challenger, "lexical", total_chars=200000)
+
+    assert result is False
+    assert service.database_service.get_alignment_method("book") == "ctc"
+    assert service._get_alignment("book") == reordered_map
+
+
+def test_publish_map_scores_challenger_with_its_own_segments_not_incumbents(service):
+    """The mirror case: a challenger that is a genuine improvement only once
+    scored with its OWN segments (~0.938, vs ~0.488 scored blind) must be
+    accepted against a mediocre plain incumbent (~0.622) that has no
+    segments of its own. This fails if `_publish_map` stops passing its
+    `segments` argument through to the challenger's `score_map` call: the
+    challenger would then score ~0.488, look like a regression against the
+    ~0.622 incumbent, and be wrongly vetoed.
+    """
+    mediocre_incumbent = _mediocre_plain_map()
+    service._save_alignment("book", mediocre_incumbent, "lexical", total_chars=200000)
+    assert service._get_segments("book") is None
+
+    reordered_challenger, segments = _reordered_segmented_fixture()
+    result = service._publish_map("book", reordered_challenger, "ctc", total_chars=200000,
+                                  segments=segments)
+
+    assert result is True
+    assert service.database_service.get_alignment_method("book") == "ctc"
+    assert service._get_alignment("book") == reordered_challenger
+    stored_segments = service._get_segments("book")
+    assert stored_segments == [
+        {"char_start": s.char_start, "char_end": s.char_end,
+         "ts_start": s.ts_start, "ts_end": s.ts_end}
+        for s in segments
+    ]
