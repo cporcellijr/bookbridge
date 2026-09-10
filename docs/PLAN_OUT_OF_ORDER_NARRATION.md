@@ -339,6 +339,32 @@ materially larger change than this guard, and remains open scope.
 
 ---
 
+## Known refinement: sparsely-anchored segments clamp instead of interpolating
+
+Found in the live Dearest run (2026-09-10). A placed segment carries a fitted
+line, but lookups inside it still use only the flat map's own anchors. When a
+segment is sparsely anchored the two disagree.
+
+Dearest's displaced block spans chars 2-1,807 and is placed at ts
+30,361.6-30,465.1 - the correct audio window. But the n-gram matcher found only
+**32 anchors** in it, covering chars 311-614 and ts 30,379-30,397. So a reverse
+lookup above ts 30,396.6 clamps to char 614, when the fitted line puts ts 30,450
+at char ~1,543: a **~930-char error**, roughly a minute of narration, over 0.4%
+of the book. Forward lookups outside 311-614 likewise return the segment's
+clamped edges rather than interpolated positions.
+
+This is sparse candidate data, not a fault in the placement: a 1,805-char
+section yields few 12-word n-grams unique on both sides. The placement itself is
+right, and the block went from **8.4 hours** wrong to ~1 minute wrong.
+
+**The fix, when it is worth doing:** inside a placed segment, bound
+interpolation by the segment's own `(char_start, ts_start)` and
+`(char_end, ts_end)` rather than by its outermost anchor - the fitted line is
+already stored and is better evidence than "nearest anchor" out at the edges.
+Deliberately not done in this pass: it changes interpolation semantics for every
+segmented book, and the residual it removes is small next to what segmentation
+already fixed.
+
 ## Risks
 
 | Risk | Mitigation |
