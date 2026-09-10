@@ -50,6 +50,19 @@ _WEIGHT_ORDER = 0.10
 _DENSITY_SLICE_COUNT = 20
 _MIN_VALID_DENSITY_SLICES = 4
 
+# Minimum points a single segment needs before `_segment_aware_density_spread`
+# will trust its own `_density_spread` result at all -- 3 points per
+# `_DENSITY_SLICE_COUNT` slice, expressed against that constant so the
+# relationship stays explicit rather than a bare literal. Below this floor the
+# equal-anchor-count slicing `_density_spread` relies on is measuring noise,
+# not pacing: on a real 419,333-char, 60-segment book ("Dearest"), a 165-char
+# segment with 16 points sliced into 20 slices produced a non-finite
+# (unmeasurable) density_spread, and small-but-not-quite-that-tiny segments
+# below this floor produced finite-but-meaningless ones that still inflated
+# the max-aggregated score -- together dragging a map that was objectively
+# MORE correct after remapping from 0.9758 down to 0.9099.
+_SEGMENT_MIN_POINTS_FOR_DENSITY = _DENSITY_SLICE_COUNT * 3
+
 # Default margin for `is_regression`: a challenger must score more than this far
 # below the incumbent to be vetoed, so a book does not churn on measurement noise
 # between two near-equivalent maps across repeated re-align cycles.
@@ -238,7 +251,8 @@ def _segment_slice_points(sorted_points: List[Tuple[int, float]],
 
 
 def _segment_aware_density_spread(sorted_points: List[Tuple[int, float]], segments: List,
-                                  exclude_spans: Optional[List[Tuple[int, int]]]) -> float:
+                                  exclude_spans: Optional[List[Tuple[int, int]]],
+                                  whole_map_collapsed_points: List[Tuple[int, float]]) -> float:
     """Segment-aware `density_spread` (issue #426 phase 3): run `_density_spread`
     independently over each segment's own char slice of ``sorted_points`` --
     resolved in original, pre-exclusion-collapse char coordinates, since that
@@ -258,27 +272,36 @@ def _segment_aware_density_spread(sorted_points: List[Tuple[int, float]], segmen
     inflated purely by seam discontinuities that a segmented map's own metric
     must not punish.
 
-    A segment with too few points to measure (`_density_spread` returns
-    `inf`) is skipped rather than folded into the aggregate as "badly paced"
-    -- `inf` means unmeasurable, not poorly paced, and a short trailing
-    segment should not by itself zero out an otherwise excellent score. If
-    every segment is unmeasurable this still returns `inf`, matching the
-    whole-map degenerate case in `_density_spread` itself.
+    A segment needs at least `_SEGMENT_MIN_POINTS_FOR_DENSITY` of its own
+    points before its `_density_spread` is trusted at all -- fewer than that
+    and the equal-anchor-count slicing is measuring noise, not pacing (see
+    that constant's own comment for the real numbers this was calibrated
+    against). A segment that clears the floor but still comes back
+    non-finite (`_density_spread` returns `inf` when even 20+ points don't
+    yield enough valid slices) is likewise skipped rather than folded into
+    the aggregate as "badly paced" -- `inf` means unmeasurable, not poorly
+    paced, and a short segment should not by itself zero out an otherwise
+    excellent score.
+
+    If no segment qualifies at all, this falls back to the whole-map
+    `_density_spread` (over `whole_map_collapsed_points`) rather than
+    returning `inf` -- a book made of only tiny segments must still get a
+    real score, not an unconditionally worst-possible one.
     """
     spreads = []
     for segment in segments:
         char_start, char_end = _segment_bounds(segment)
         points = _segment_slice_points(sorted_points, char_start, char_end)
-        if len(points) < 2:
+        if len(points) < _SEGMENT_MIN_POINTS_FOR_DENSITY:
             continue
         chars = _collapse_excluded([char for char, _ in points], exclude_spans)
         segment_collapsed = list(zip(chars, (ts for _, ts in points)))
         spread = _density_spread(segment_collapsed)
         if math.isfinite(spread):
             spreads.append(spread)
-    if not spreads:
-        return float('inf')
-    return max(spreads)
+    if spreads:
+        return max(spreads)
+    return _density_spread(whole_map_collapsed_points)
 
 
 def score_map(alignment_map: Optional[List[Dict]],
@@ -297,7 +320,10 @@ def score_map(alignment_map: Optional[List[Dict]],
     `_segment_aware_density_spread`) instead of over the whole map in one
     run. Each entry may be a plain dict with `char_start`/`char_end` keys or
     any object exposing those as attributes (`segment_fit.Segment`) --
-    callers pass whichever shape they already have.
+    callers pass whichever shape they already have. A segment with fewer than
+    `_SEGMENT_MIN_POINTS_FOR_DENSITY` of its own points, or whose spread comes
+    back non-finite, is excluded from that aggregate rather than propagated;
+    if every segment is excluded this falls back to the whole-map spread.
 
     `max_gap_fraction` deliberately stays whole-map even when `segments` is
     supplied -- placed segments tile the char space contiguously, so a char
@@ -330,7 +356,7 @@ def score_map(alignment_map: Optional[List[Dict]],
 
     span_chars = chars[-1] - chars[0]
     anchor_density = 1000.0 * anchors / span_chars if span_chars > 0 else 0.0
-    spread = (_segment_aware_density_spread(sorted_points, segments, exclude_spans)
+    spread = (_segment_aware_density_spread(sorted_points, segments, exclude_spans, collapsed_points)
               if segments else _density_spread(collapsed_points))
 
     backwards = sum(1 for i in range(len(sorted_points) - 1)

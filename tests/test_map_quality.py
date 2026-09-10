@@ -13,7 +13,14 @@ wrong implementations.
 import unittest
 from typing import Dict, List
 
-from src.services.map_quality import MapQuality, is_regression, score_map
+import math
+
+from src.services.map_quality import (
+    MapQuality,
+    _SEGMENT_MIN_POINTS_FOR_DENSITY,
+    is_regression,
+    score_map,
+)
 
 _ANCHORS_PER_GROUP = 10
 
@@ -284,6 +291,126 @@ class TestSegmentAwareDensitySpread(unittest.TestCase):
         baseline = score_map(amap)
         self.assertEqual(baseline, score_map(amap, segments=None))
         self.assertEqual(baseline, score_map(amap, segments=[]))
+
+
+class TestSegmentDensityFloorAndFallback(unittest.TestCase):
+    """A live production remap ("Dearest", 419,333 chars, 60 segments)
+    dragged an objectively-improved map's score from 0.9758 down to 0.9099:
+    the max-aggregation in `_segment_aware_density_spread` had no floor on
+    how few points a segment could contribute with, so a 165-char/16-point
+    segment (and other small-but-not-quite-that-tiny ones) polluted the max
+    with unmeasurable or meaningless per-segment spreads. `_density_spread`
+    slices into `_DENSITY_SLICE_COUNT` (20) equal-anchor-count slices --
+    below `_SEGMENT_MIN_POINTS_FOR_DENSITY` (3 points/slice = 60) that
+    slicing cannot mean anything.
+    """
+
+    @staticmethod
+    def _shifted_dense_map(char_start: int, span_chars: int, char_step: int,
+                           rate: float, ts_start: float = 0.0) -> List[Dict]:
+        """Same fixture helper as `TestSegmentAwareDensitySpread` (duplicated
+        rather than shared across classes, matching this file's existing
+        per-class-scoped `@staticmethod` helper style)."""
+        return [{"char": char_start + c, "ts": ts_start + c / rate}
+                for c in range(0, span_chars, char_step)]
+
+    def test_tiny_segment_below_floor_does_not_affect_aggregate(self):
+        """A segment with fewer than `_SEGMENT_MIN_POINTS_FOR_DENSITY` points
+        is excluded from the max-aggregate outright -- even though its own
+        few points, taken at face value, describe a wildly erratic pace that
+        would (if trusted) dominate the max. A large, evenly-paced segment
+        alongside it must still score well, unaffected by the tiny one's
+        presence."""
+        good = self._shifted_dense_map(0, 100000, 100, 15.0)
+        tiny_n = _SEGMENT_MIN_POINTS_FOR_DENSITY - 1
+        # Quadratic char->ts spacing: a genuinely erratic pace, not just a
+        # small evenly-paced sample -- if this were trusted it would report
+        # a huge spread, not merely a noisy-but-similar one.
+        tiny = [{"char": 100000 + i, "ts": 100000.0 + (i ** 2) / 10.0} for i in range(tiny_n)]
+
+        segments = [{"char_start": 0, "char_end": 100000},
+                    {"char_start": 100000, "char_end": 100000 + tiny_n}]
+        combined = sorted(good + tiny, key=lambda p: p["char"])
+
+        segmented = score_map(combined, segments=segments)
+        good_alone = score_map(good)
+
+        self.assertAlmostEqual(segmented.density_spread, good_alone.density_spread, places=6)
+        self.assertGreater(segmented.score, 0.9)
+
+    def test_non_finite_segment_spread_is_discarded_not_propagated(self):
+        """A segment that clears the point-count floor but still comes back
+        non-finite from `_density_spread` (here: enough points, but `ts`
+        never advances, so no slice yields a usable rate) must not
+        contribute `inf` to the aggregate -- the resulting score must stay
+        finite and reflect only the genuinely measurable segment."""
+        good = self._shifted_dense_map(0, 100000, 100, 15.0)
+        flat_n = _SEGMENT_MIN_POINTS_FOR_DENSITY + 10
+        flat_ts = [{"char": 100000 + i, "ts": 500000.0} for i in range(flat_n)]
+
+        segments = [{"char_start": 0, "char_end": 100000},
+                    {"char_start": 100000, "char_end": 100000 + flat_n}]
+        combined = sorted(good + flat_ts, key=lambda p: p["char"])
+
+        segmented = score_map(combined, segments=segments)
+        good_alone = score_map(good)
+
+        self.assertTrue(math.isfinite(segmented.density_spread))
+        self.assertTrue(math.isfinite(segmented.score))
+        self.assertAlmostEqual(segmented.density_spread, good_alone.density_spread, places=6)
+        self.assertGreater(segmented.score, 0.9)
+
+    def test_one_badly_paced_large_segment_still_drags_score_down(self):
+        """The floor must not neuter `max` aggregation: a LARGE segment
+        (comfortably above `_SEGMENT_MIN_POINTS_FOR_DENSITY`) that is
+        genuinely badly paced still has to drag the score down, proving the
+        floor excludes only unmeasurable segments, not real bad ones. Same
+        seam-reset construction as
+        `TestSegmentAwareDensitySpread.test_one_bad_segment_among_good_ones_still_lowers_the_score`
+        (each segment's own `ts` independently starts near 0 at its own
+        `char_start`, the real RANSAC-fit shape): whole-map scoring dilutes
+        the bad segment's anomaly into one of only 20 global slices and
+        misses it; segment-aware scoring isolates it."""
+        good = [TestSegmentAwareDensitySpread._shifted_dense_map(offset, 100000, 100, 15.0)
+                for offset in (0, 100000, 200000)]
+        bad_rates = [3.0] + [15.0] * 19
+        bad = TestSegmentAwareDensitySpread._shifted_grouped_map(300000, [100] * 20, bad_rates)
+        self.assertGreaterEqual(len(bad), _SEGMENT_MIN_POINTS_FOR_DENSITY)
+
+        segments = [{"char_start": s, "char_end": s + 100000} for s in (0, 100000, 200000)]
+        segments.append({"char_start": 300000, "char_end": 300000 + sum([100] * 20)})
+
+        combined = sorted([point for group in good for point in group] + bad,
+                          key=lambda p: p["char"])
+
+        whole = score_map(combined)
+        segmented = score_map(combined, segments=segments)
+
+        self.assertLess(segmented.score, whole.score - 0.1)
+        bad_alone = score_map(bad).density_spread
+        self.assertAlmostEqual(segmented.density_spread, bad_alone, places=4)
+
+    def test_all_tiny_segments_fall_back_to_whole_map_scoring(self):
+        """A book made entirely of tiny (sub-floor) segments must still get
+        a real score: falling back to whole-map `_density_spread` rather
+        than returning `inf` when no segment qualifies for the aggregate."""
+        tiny_n = _SEGMENT_MIN_POINTS_FOR_DENSITY - 1
+        segments = []
+        combined = []
+        cursor = 0
+        for i in range(5):
+            points = [{"char": cursor + c, "ts": i * 10000.0 + c / 15.0} for c in range(tiny_n)]
+            combined.extend(points)
+            segments.append({"char_start": cursor, "char_end": cursor + tiny_n})
+            cursor += tiny_n + 1000
+
+        combined.sort(key=lambda p: p["char"])
+        whole = score_map(combined)
+        segmented = score_map(combined, segments=segments)
+
+        self.assertTrue(math.isfinite(segmented.density_spread))
+        self.assertEqual(whole.density_spread, segmented.density_spread)
+        self.assertEqual(whole.score, segmented.score)
 
 
 class TestBackwardsFraction(unittest.TestCase):
