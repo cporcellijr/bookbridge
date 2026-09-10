@@ -321,6 +321,26 @@ class AlignmentService:
             )
             return False
 
+        # Segment-placement guard (issue #426): a book whose stored map already
+        # has segments was narrated out of spine order and placed by segment
+        # fitting, not the global monotonic chain. `_chunked_word_times` derives
+        # each chunk's audio window from the incumbent map's char->ts anchors,
+        # which is only valid when char and ts both ascend together -- exactly
+        # what a reordered book's map does not do across its segment boundaries.
+        # CTC has no segment awareness, so it would window itself against a
+        # non-monotonic mapping and overwrite a good segmented map with a worse
+        # one (Four Past Midnight: 0.9690 segmented -> 0.3230 CTC). Refuse here
+        # and let the caller keep the segmented map -- per-segment CTC chunking
+        # is real future work, not this guard.
+        if self._get_segments(abs_id):
+            logger.info(
+                "⚙️ CTC: %s is narrated out of spine order (its stored map is "
+                "segmented) -- CTC cannot chunk across segment boundaries, so "
+                "the existing segmented map is kept and this CTC pass is refused",
+                abs_id,
+            )
+            return False
+
         if self._forced_aligner is None:
             self._forced_aligner = ForcedAligner()
 

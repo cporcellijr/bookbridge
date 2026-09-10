@@ -310,6 +310,33 @@ still passes the flat lexical map's `boundaries`, not the segment index, to
 `ForcedAligner.align`. Scope for this pass was the scorer and the
 persistence clamp only.
 
+### Known limitation / future work: CTC is segment-unaware (2026-09-10)
+
+CTC was re-enabled globally while still blind to segments. Measured on Four
+Past Midnight (`bookorbit:5417`): with segmented placement on and CTC off, it
+scored **0.9690** with 12 persisted segments, correct in both lookup
+directions. Its previous CTC map scored **0.3230**. The gap is
+`_chunked_word_times`: it derives each chunk's audio window from the
+incumbent lexical map's char->ts anchors, and for a reordered book that
+mapping is not monotonic across segment boundaries, so the windows are
+wrong — CTC then overwrites the good segmented map with its own worse one.
+
+**Interim answer, shipped:** a guard in `align_forced_and_store`
+(`AlignmentService._get_segments(abs_id)` non-empty) refuses the CTC pass
+outright and returns `False` — its documented "cannot run, caller falls back
+to the lexical pipeline" contract — so the caller keeps the existing
+segmented map untouched. A brand-new book (no stored map yet) has no
+segments to find, so this never blocks a first alignment; only the
+upgrade/remap path on an already-segmented book is refused. This is
+deliberately not a fix: it trades a rare book's CTC upgrade for keeping the
+good map it already has.
+
+**Eventual fix, not built:** teach `_chunked_word_times` (or a new
+segment-aware sibling) to decode and align each placed segment's own audio
+range independently, using that segment's own char->ts edges as its window
+instead of the flat map's. That is real per-segment CTC chunking, a
+materially larger change than this guard, and remains open scope.
+
 ---
 
 ## Risks

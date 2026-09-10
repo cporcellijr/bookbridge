@@ -535,6 +535,107 @@ class TestBackupRestoreCarriesSegments(unittest.TestCase):
         self.assertIsNone(segments_json)
 
 
+class TestCTCGuardRefusesOnSegmentedBooks(unittest.TestCase):
+    """Issue #426: CTC is segment-unaware. `_chunked_word_times` derives each
+    chunk's audio window from the incumbent lexical map's char->ts anchors,
+    which only produces correct windows when char and ts both ascend
+    together across the *whole* map -- exactly what an out-of-order-narrated
+    book's segmented map does NOT do across its segment boundaries. With CTC
+    re-enabled globally, `align_forced_and_store` must refuse outright on any
+    book whose stored map already has segments (measured in production: Four
+    Past Midnight's 0.9690 segmented map vs. the 0.3230 CTC map that would
+    otherwise replace it -- see docs/PLAN_OUT_OF_ORDER_NARRATION.md), while
+    leaving both the ordinary non-segmented upgrade path and the brand-new-
+    book path unchanged. Real temp SQLite DB, mirroring
+    `TestBackupRestoreCarriesSegments` above -- `_get_segments` is itself
+    DB-backed and cached, so a mock would not exercise the
+    NULL-vs-missing-row distinction the third test below depends on."""
+
+    def setUp(self):
+        from src.db.database_service import DatabaseService
+
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_service = DatabaseService(str(Path(self.temp_dir) / "ctc_guard.db"))
+        self.service = AlignmentService(self.db_service, Polisher())
+
+    def tearDown(self):
+        self.db_service.db_manager.close()
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_refuses_and_never_touches_the_aligner_when_segments_exist(self):
+        """The load-bearing case. Must fail if the guard is removed, or
+        moved after the decode/model-load work it exists to skip."""
+        from unittest.mock import patch as mock_patch
+
+        from src.utils.forced_aligner import ForcedAligner
+
+        segments = [Segment(**s, inliers=50, residual=0.5) for s in SEGMENTS]
+        self.service._save_alignment("reordered-book", FLAT_MAP, "lexical",
+                                     total_chars=300, segments=segments)
+        self.assertIsNone(self.service._forced_aligner)
+
+        with mock_patch.object(ForcedAligner, "is_available", return_value=True),              mock_patch.object(ForcedAligner, "_load") as load,              mock_patch.object(ForcedAligner, "align") as align,              self.assertLogs("src.services.alignment_service", level="INFO") as logs:
+            ok = self.service.align_forced_and_store(
+                "reordered-book", ["/a.m4b"], "x" * 300,
+            )
+
+        self.assertFalse(ok)
+        align.assert_not_called()
+        load.assert_not_called()
+        self.assertIsNone(
+            self.service._forced_aligner,
+            "the aligner must never be constructed once the guard fires",
+        )
+        self.assertTrue(
+            any("out of spine order" in message for message in logs.output),
+            f"expected a decision log naming out-of-order narration, got: {logs.output}",
+        )
+        # The good segmented map must survive untouched.
+        self.assertEqual(self.db_service.get_alignment_method("reordered-book"), "lexical")
+        self.assertEqual(self.service._get_segments("reordered-book"), SEGMENTS)
+
+    def test_proceeds_normally_when_the_stored_map_has_no_segments(self):
+        """A book with a plain (non-segmented) prior map is unaffected --
+        CTC upgrades it exactly as it did before this guard existed."""
+        from unittest.mock import patch as mock_patch
+
+        from src.utils.forced_aligner import ForcedAligner
+
+        text = "x" * 300
+        prior = [{"char": 0, "ts": 0.0}, {"char": 300, "ts": 30.0}]
+        self.service._save_alignment("plain-book", prior, "lexical", total_chars=300)
+        self.assertIsNone(self.service._get_segments("plain-book"))
+
+        fake_map = [{"char": c, "ts": c / 10.0} for c in range(0, 301, 10)]
+        with mock_patch.object(ForcedAligner, "is_available", return_value=True),              mock_patch.object(ForcedAligner, "align", return_value=fake_map) as align:
+            ok = self.service.align_forced_and_store("plain-book", ["/a.m4b"], text)
+
+        self.assertTrue(ok)
+        align.assert_called_once()
+        self.assertEqual(self.db_service.get_alignment_method("plain-book"), "ctc")
+
+    def test_brand_new_book_with_no_alignment_row_still_reaches_ctc(self):
+        """No `book_alignments` row exists at all yet -- `_get_segments`
+        returns None (not an empty list) for a missing row, and the first
+        CTC attempt on a new book must still proceed. This is the path the
+        guard's placement must not break."""
+        from unittest.mock import patch as mock_patch
+
+        from src.utils.forced_aligner import ForcedAligner
+
+        text = "x" * 300
+        self.assertIsNone(self.service._get_segments("new-book"))
+
+        fake_map = [{"char": c, "ts": c / 10.0} for c in range(0, 301, 10)]
+        with mock_patch.object(ForcedAligner, "is_available", return_value=True),              mock_patch.object(ForcedAligner, "align", return_value=fake_map) as align:
+            ok = self.service.align_forced_and_store("new-book", ["/a.m4b"], text)
+
+        self.assertTrue(ok)
+        align.assert_called_once()
+        self.assertEqual(self.db_service.get_alignment_method("new-book"), "ctc")
+
+
 class TestSegmentsMigrationAppliesToHead(unittest.TestCase):
     """The `segments_json` migration applies base -> head on a fresh temp
     SQLite, additively (mirrors tests/test_alignment_quality_migration.py)."""
