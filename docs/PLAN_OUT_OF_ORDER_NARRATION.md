@@ -27,6 +27,45 @@ Four Past Midnight (EPUB spines the four novellas 2-4-3-1, audio narrates
 missing from the audio — every novella is narrated. The anchors were correct and
 unusable only because a single global monotonic chain cannot hold them.
 
+### Validated on a second, milder book: Tress of the Emerald Sea
+
+Run 2026-09-10 (`bookorbit:5849`, 618,629 chars, 12.45 h audio, `align_method=ctc`,
+**quality 0.986**). This is the upstream author's own example and it reproduces the
+same defect at 1/60th the scale, with the M4B cue sheet as exact ground truth.
+
+The EPUB spines `ack.xhtml` at index 6 (chars 1,598-6,173); the audio narrates
+Acknowledgments at **44,415.0-44,694.1 s**, second-to-last. The LIS dropped **611
+of 73,632** candidates (0.83%) - almost exactly the anchor count that 4,575 chars
+of acknowledgements generates.
+
+Both directions are wrong, and they are **the same event seen from two sides**:
+
+| Direction | Map says | Truth | Error |
+|---|---|---|---|
+| char 3,000 (mid-ack) | **10.7 s** | 44,415 s | **12.3 hours** |
+| ts 44,415-44,694 s (ack audio) | chars 615,043-615,280 | chars 1,598-6,173 | stalls at **0.85 chars/s** vs 13.8 book-wide |
+
+The second row is what looked like a `with_star=False` weakness (audio with no
+text). It is not: the audio *does* have matching text, 600 k chars away. **Correct
+segment placement fixes both rows at once** - the phantom-audio symptom is
+downstream of the misplacement, not independent of it. Genuinely text-less audio
+(Opening/Closing Credits, ~60 s total here) remains a separate, minor question.
+
+Three consequences for this plan:
+
+1. **Chapter metadata is ground truth and a free boundary search.** The `.cue`
+   listed all 77 audio sections with timestamps; BookOrbit reported the same as 77
+   markers. Where audio chapter titles exist, matching them to spine titles places
+   segments directly - RANSAC is the fallback for books without usable metadata,
+   not the primary mechanism. This is cheaper and more reliable than the post's
+   approach for the large fraction of audiobooks that carry chapter marks.
+2. **Tress is the regression fixture.** Small, real, with known-correct answers
+   from the cue sheet: the ack segment must land at 44,415 s, and the tail stall
+   must disappear.
+3. **The quality score cannot see this.** 0.986, `max_gap_fraction` 0.010,
+   `density_spread` 1.199, `backwards_fraction` 0.0 - every metric healthy while
+   1% of the book is 12 hours wrong. See the scorer gap in Phase 3.
+
 ### Why the LIS is not simply wrong
 
 Both public lookups binary-search **the same list**:
@@ -81,6 +120,11 @@ in the style of `map_quality.py`.
 def fit_segments(anchors: List[Dict], boundaries: List[Tuple[int, int]],
                  total_chars: int) -> List[Segment]
 ```
+
+**Try chapter metadata first.** When the audio exposes chapter marks (M4B/cue,
+BookOrbit markers, ABS chapters) and their titles can be matched to spine section
+titles, that placement is authoritative - skip RANSAC for those segments. Fall
+through to the fit below for unmatched segments and for books with no marks.
 
 For each `(char_start, char_end)` boundary:
 
@@ -176,6 +220,13 @@ regression veto in `_publish_map` will refuse the improved map.
 
 Note the ordering hazard: **Phase 3 must land with or before Phase 2's default
 flip**, never after.
+
+**Separate scorer gap this run exposed, worth fixing on its own merits.**
+`max_gap_fraction` measures the largest **char** gap; nothing measures the largest
+**time** gap. Tress parked for 279 s while advancing 237 chars and every metric
+stayed healthy. A `max_time_gap_fraction` companion metric would have flagged it
+instantly, and would catch any book where the audio runs on without text -
+independent of whether the segmented map ever ships.
 
 Separately, per-segment audio windows are exactly the chunk bounds
 `ForcedAligner._chunked_word_times` already wants, so CTC on reordered books
