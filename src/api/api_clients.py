@@ -551,11 +551,96 @@ class ABSClient:
             logger.debug("ABS item_exists error for item %s: %s", item_id, e, exc_info=True)
             return None
 
+    @staticmethod
+    def _positive_number(value) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    def _completion_duration(self, abs_id: str, progress: dict | None = None) -> float | None:
+        """Resolve the authoritative ABS duration used for a completion sync."""
+        duration = self._positive_number((progress or {}).get("duration"))
+        if duration is not None:
+            return duration
+
+        details = self.get_item_details(abs_id) or {}
+        media = details.get("media") or {}
+        return self._positive_number(media.get("duration"))
+
+    @staticmethod
+    def _session_update_succeeded(result) -> bool:
+        return isinstance(result, dict) and bool(result.get("success"))
+
+    def _refresh_finished_progress_event(self, abs_id: str) -> None:
+        """Best-effort session sync of an already-finished item at its current position.
+
+        Audiobookshelf's direct progress endpoint emits ``user_updated`` while
+        playback-session sync emits ``user_item_progress_updated``. Some clients
+        subscribe only to the latter. Re-syncing the unchanged currentTime after
+        the explicit finished flag is set carries that flag through the normal
+        progress event without adding listening time or moving the position.
+        """
+        progress = self.get_progress(abs_id)
+        if not progress or not progress.get("isFinished"):
+            logger.warning(
+                "⚠️ ABS completion was not readable as finished after direct update; "
+                "skipping session refresh for '%s'",
+                abs_id,
+            )
+            return
+
+        try:
+            current_time = float(progress.get("currentTime"))
+        except (TypeError, ValueError):
+            logger.warning(
+                "⚠️ ABS completion has no usable currentTime; skipping session refresh for '%s'",
+                abs_id,
+            )
+            return
+
+        result = self.update_progress(abs_id, current_time, 0.0)
+        if not self._session_update_succeeded(result):
+            logger.warning(
+                "⚠️ ABS item '%s' was marked finished, but the follow-up session refresh failed",
+                abs_id,
+            )
+
     def mark_finished(self, abs_id):
-        """Mark an ABS item as finished."""
+        """Mark an ABS item finished and notify session-progress subscribers."""
         if not self.is_configured():
             logger.error("❌ Cannot mark ABS item finished: ABS is not configured")
             return False
+
+        # Prefer the same playback-session path as ordinary progress writes. ABS
+        # emits user_item_progress_updated for this path, which keeps official and
+        # third-party clients current without polling. A zero timeListened value is
+        # deliberate: completion propagated from reading is not listening time.
+        progress = self.get_progress(abs_id)
+        duration = self._completion_duration(abs_id, progress)
+        if duration is not None:
+            session_result = self.update_progress(abs_id, duration, 0.0)
+            if self._session_update_succeeded(session_result):
+                confirmed = self.get_progress(abs_id)
+                if confirmed and confirmed.get("isFinished"):
+                    logger.info(f"✅ Marked ABS item as finished via session sync: {abs_id}")
+                    return True
+                logger.debug(
+                    "ABS session reached the end for '%s' but did not set isFinished; "
+                    "falling back to an explicit progress update",
+                    abs_id,
+                )
+            else:
+                logger.warning(
+                    "⚠️ ABS session-based completion failed for '%s'; falling back to an explicit progress update",
+                    abs_id,
+                )
+        else:
+            logger.warning(
+                "⚠️ ABS item '%s' has no usable duration; falling back to an explicit progress update",
+                abs_id,
+            )
 
         self._update_session_headers()
         url = f"{self.base_url}/api/me/progress/{abs_id}"
@@ -565,6 +650,12 @@ class ABSClient:
             r = self.session.patch(url, json=payload, timeout=self.timeout)
             if r.status_code in (200, 204):
                 logger.info(f"✅ Marked ABS item as finished: {abs_id}")
+                # If the session path could not establish completion (for example
+                # a library configured to mark finished at exactly 100%), the
+                # explicit PATCH is authoritative. Refresh the unchanged position
+                # through a session so clients that only consume
+                # user_item_progress_updated receive the finished flag as well.
+                self._refresh_finished_progress_event(abs_id)
                 return True
 
             logger.error(f"❌ Failed to mark ABS item finished: {r.status_code} - {sanitize_log_data(r.text)}")
