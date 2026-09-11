@@ -700,18 +700,32 @@ class SyncManager:
         def _within_tolerance(offset, char_error, label: str) -> bool:
             """True when `offset` round-trips close enough to `target_offset`.
 
-            This locator is written to EBOOK clients (xpath to KoSync, CFI to
-            Grimmory/BookOrbit), so the reader's eye lands at a text position and
-            characters are the unit that decides acceptance — unchanged.
+            This locator has TWO kinds of consumer, which is what makes the
+            asymmetry below the right one. It is written to ebook clients (xpath
+            to KoSync, CFI to Grimmory/BookOrbit), and it is also the thing
+            BookLoreAudio and BookOrbitAudio re-derive a timestamp from, via
+            `match_index` and `get_time_for_text`.
 
-            Audio time is a VETO only, never a licence. A segmented map
-            (out-of-order narration, #426) makes char->time discontinuous at
-            segment seams: two offsets a couple of characters apart can be hours
-            apart in audio, and writing that locator would strand every audio
-            follower derived from it. So a character-close locator is still
-            rejected when it lands across a seam. The converse is deliberately
-            NOT allowed — a locator thousands of characters away is wrong for the
-            reader no matter how close it happens to be in audio time.
+            Characters decide ACCEPTANCE, because the reader's eye lands at a
+            text position — unchanged. Audio time is a VETO only, never a
+            licence. A segmented map (out-of-order narration, #426) makes
+            char->time discontinuous at segment seams: two offsets a couple of
+            characters apart can be hours apart in audio, and an audio follower
+            re-deriving from that locator would be stranded there. So a
+            character-close locator is still rejected when it lands across a
+            seam. The converse is deliberately NOT allowed — a locator thousands
+            of characters away is wrong for the reader no matter how close it
+            happens to be in audio time.
+
+            Refusing is cheap on both sides, which is why a veto here is safe:
+            xpath falls back to percent-only and KoSync is a percentage protocol
+            anyway, while CFI falls back to regeneration from `target_offset`,
+            which is character-exact by construction.
+
+            Contrast `_hydrate_cfi_locator`, which is character-judged with no
+            time veto at all: its output reaches only `_CFI_DEPENDENT_CLIENTS`,
+            no audio follower ever sees it, and its only fallback is the bare
+            percentage a Kobo-backed device ignores (#364).
             """
             if offset is None:
                 return False

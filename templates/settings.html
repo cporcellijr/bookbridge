@@ -2071,10 +2071,13 @@
                         <label>Locator Round-Trip Tolerance (Seconds)</label>
                         <input type="number" min="0" name="LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"
                             value="{{ get_val('LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS') or '30' }}">
-                        <small>When a book has an alignment map, a rebuilt CFI/xpath is judged by how far its
-                            round-trip lands on the audio timeline, not by character distance — a normal snap is a
-                            few seconds, while a segment seam (out-of-order narration) can be minutes to hours for
-                            only a couple of characters. Books with no alignment map keep the character-based
+                        <small>When a book has an alignment map, a rebuilt xpath/CFI that is character-close can
+                            still be refused if its round-trip lands far away on the audio timeline — the signature
+                            of a segment seam in an out-of-order narration, where a couple of characters can be
+                            hours apart. Ordinary chapter joins measure up to ~28s, real seams start around ~38s,
+                            so the default sits between them; lower it much and correct locators start being
+                            refused. Audio time can only refuse a locator here, never approve a
+                            character-distant one. Books with no alignment map keep the character-based
                             check.</small>
                     </div>
                     <div class="checkbox-wrapper full-width">

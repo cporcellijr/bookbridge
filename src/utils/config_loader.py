@@ -181,10 +181,20 @@ DEFAULT_CONFIG = {
     'SYNC_DELTA_KOSYNC_WORDS': '400',
     'SYNC_FRESHNESS_GUARDS': 'true',
     'SYNC_ROLLBACK_VETO_SECONDS': '600',
-    # A normal locator round-trip snap is single-digit seconds; a segment seam
-    # (out-of-order narration, issue #426) can be minutes to hours for a char
-    # delta of only a couple of characters — 30s comfortably clears the former
-    # while still catching the latter.
+    # 30s rests on two independent bounds, not on "seams are large".
+    #
+    # Measured: across every segmented book in a real 375-map library, 1,496
+    # one- and two-character steps over fitted segment edges. The largest step
+    # that stays inside in-order narration is 27.7s; the smallest step that
+    # crosses into out-of-order narration is 37.7s. 30s separates them — but
+    # the gap is only 1.4x wide, so this is a fitted threshold, not a roomy one.
+    # Ordinary fitted edges really do reach 16-27s (chapter joins, credits),
+    # so a materially lower value would start refusing correct locators.
+    #
+    # Derived: SYNC_DELTA_ABS_SECONDS defaults to 60s — the smallest audio
+    # movement the system acts on at all. At half of that, a round-trip error
+    # this admits is by construction beneath the noise floor of anything the
+    # sync pipeline would treat as movement.
     'LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS': '30',
     'KOREADER_SESSION_GAP_MINUTES': '30',
     'READING_SESSION_MERGE_MINUTES': '5',
