@@ -108,6 +108,72 @@ class TestCWASyncClient(unittest.TestCase):
         )
         self.assertFalse(self.client.supports_book(book))
 
+    # -- _resolve_search_hints / _resolve_uuid (issue #427 follow-up: search
+    # by an ordered chain of terms, select by id — a numeric Calibre id
+    # matches no title, so the OPDS search must use title-shaped terms
+    # instead. Measured against a live CWA library: the filename-derived term
+    # and abs_title resolved different, complementary halves of a 6-book
+    # sample, so filename comes FIRST — abs_title is the AUDIOBOOK title and
+    # carries "(Unabridged)"-style decoration CWA's ebook catalog lacks.) --
+
+    def test_resolve_search_hints_orders_filename_before_abs_title(self):
+        book = Book(
+            abs_id='test-5',
+            abs_title='Dungeon Crawler Carl (Unabridged)',
+            ebook_filename='cwa_Dungeon_Crawler_Carl.epub',
+            ebook_source='CWA',
+            ebook_source_id='1519',
+            status='active',
+        )
+        self.assertEqual(
+            self.client._resolve_search_hints(book),
+            ['Dungeon Crawler Carl', 'Dungeon Crawler Carl (Unabridged)'],
+        )
+
+    def test_resolve_search_hints_dedupes_when_filename_and_title_match(self):
+        book = Book(
+            abs_id='test-5b',
+            abs_title='Dungeon Crawler Carl',
+            ebook_filename='cwa_Dungeon_Crawler_Carl.epub',
+            ebook_source='CWA',
+            ebook_source_id='1519',
+            status='active',
+        )
+        self.assertEqual(
+            self.client._resolve_search_hints(book), ['Dungeon Crawler Carl']
+        )
+
+    def test_resolve_search_hints_includes_abs_title_when_filename_missing(self):
+        book = Book(
+            abs_id='test-6',
+            abs_title='Dungeon Crawler Carl',
+            ebook_filename=None,
+            ebook_source='CWA',
+            ebook_source_id='1519',
+            status='active',
+        )
+        self.assertEqual(self.client._resolve_search_hints(book), ['Dungeon Crawler Carl'])
+
+    def test_resolve_search_hints_returns_empty_list_with_nothing_to_derive_from(self):
+        book = Book(
+            abs_id='test-7',
+            abs_title='',
+            ebook_filename=None,
+            ebook_source='CWA',
+            ebook_source_id='1519',
+            status='active',
+        )
+        self.assertEqual(self.client._resolve_search_hints(book), [])
+
+    def test_resolve_uuid_forwards_search_hints_to_sync_api(self):
+        # #427: the caller already has the whole Book; withholding the hint
+        # chain is what left a numeric-id book unresolvable.
+        self.mock_sync_api.resolve_book_uuid.return_value = 'test-uuid'
+        self.client._resolve_uuid(self.test_book)
+        self.mock_sync_api.resolve_book_uuid.assert_called_once_with(
+            '42', search_hints=['test-book', 'Test Book']
+        )
+
     # -- get_service_state --
 
     def test_get_service_state_success(self):

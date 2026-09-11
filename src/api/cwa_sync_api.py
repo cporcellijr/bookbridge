@@ -5,6 +5,7 @@ Calibre-Web Automated's Kobo sync endpoints.
 
 import os
 import logging
+from typing import Sequence
 from urllib.parse import urlparse
 
 import requests
@@ -229,7 +230,15 @@ class CWASyncApi:
             )
             return None
 
-    def resolve_book_uuid(self, calibre_id: str) -> str | None:
+    def resolve_book_uuid(self, calibre_id: str, search_hints: Sequence[str] | None = None) -> str | None:
+        """Resolve a stored CWA book identifier to its Calibre UUID.
+
+        ``search_hints`` is forwarded unchanged to ``CWAClient.get_book_uuid``
+        as its ordered OPDS search-term fallback chain, so a numeric Calibre id
+        — which matches nothing when searched for itself — can still be
+        resolved by searching on each hint in turn and selecting by id.
+        Optional so existing callers that pass nothing keep today's behavior.
+        """
         if not self._cwa_client:
             return None
-        return self._cwa_client.get_book_uuid(calibre_id)
+        return self._cwa_client.get_book_uuid(calibre_id, search_hints=search_hints)

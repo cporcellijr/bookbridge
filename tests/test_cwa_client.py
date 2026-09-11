@@ -3,6 +3,7 @@ import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.parse import quote
 from src.api.cwa_client import CWAClient
 
 class TestCWAClient(unittest.TestCase):
@@ -128,11 +129,137 @@ class TestCWAClient(unittest.TestCase):
 
     @patch('requests.Session.get')
     def test_get_book_uuid_matches_numeric_download_id(self, mock_get):
-        # When the stored id is the numeric Calibre id, match it against the
-        # download link even though the entry is not first in the feed.
+        # A numeric stored id never searches for itself (a bare number
+        # matches no title on a real server), so a hint drives the search;
+        # the numeric id then selects the entry, even though it is not first
+        # in the feed.
         self._mock_search(mock_get, self._SERIES_FEED)
-        uuid = self.client.get_book_uuid('505')
+        uuid = self.client.get_book_uuid('505', search_hints=['Dungeon Crawler Carl'])
         self.assertEqual(uuid, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
+
+    # -- get_book_uuid search_hints (issue #427 follow-up: a numeric id
+    # matches no title, so a numeric key can never resolve unless the search
+    # itself uses one of an ORDERED chain of hint terms, with the id then
+    # only *selecting* among the results. The chain exists because no single
+    # hint source resolved every real book: measured against a live CWA
+    # library, a filename-derived term and the audiobook title resolved
+    # different, complementary halves of a 6-book sample.) --
+
+    # A series feed where the wanted book ("Dungeon Crawler Carl", numeric
+    # Calibre id 1519 — this is the exact #427 report) is listed third,
+    # behind two series siblings with different numeric ids.
+    _SERIES_FEED_WITH_NUMERIC_TARGET = """<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>Dungeon Crawler Carl: The Gate of the Feral Gods</title>
+            <id>urn:uuid:11111111-1111-1111-1111-111111111111</id>
+            <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                  href="/opds/download/1501/epub/" />
+        </entry>
+        <entry>
+            <title>Dungeon Crawler Carl: The Butcher's Masquerade</title>
+            <id>urn:uuid:22222222-2222-2222-2222-222222222222</id>
+            <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                  href="/opds/download/1505/epub/" />
+        </entry>
+        <entry>
+            <title>Dungeon Crawler Carl</title>
+            <id>urn:uuid:d02f40b4-873a-4d04-8c56-ffcf3033979d</id>
+            <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                  href="/opds/download/1519/epub/" />
+        </entry>
+    </feed>
+    """
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_searches_by_title_hint_and_selects_by_numeric_id(self, mock_get):
+        # The #427 scenario: '1519' is a numeric Calibre id, not a title, so a
+        # search FOR '1519' returns nothing on a real server. With a title
+        # hint the search term must be the title; the numeric id then selects
+        # the right entry even though two series siblings are listed first.
+        self._mock_search(mock_get, self._SERIES_FEED_WITH_NUMERIC_TARGET)
+        uuid = self.client.get_book_uuid('1519', search_hints=['Dungeon Crawler Carl'])
+        self.assertEqual(uuid, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
+
+        requested_url = mock_get.call_args[0][0]
+        self.assertIn(quote('Dungeon Crawler Carl'), requested_url)
+        self.assertNotIn('1519', requested_url)
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_nonnumeric_key_is_searched_first_without_a_hint(self, mock_get):
+        # Pins the 6-of-6 measured behavior: a non-numeric (slug) key is
+        # ALWAYS the first search term, and resolves on its own — no hint is
+        # ever needed for it. Only one request is made.
+        self._mock_search(mock_get, self._SERIES_FEED)
+        uuid = self.client.get_book_uuid(
+            'Dungeon_Crawler_Carl', search_hints=['a hint that must never be needed']
+        )
+        self.assertEqual(uuid, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
+
+        self.assertEqual(mock_get.call_count, 1)
+        first_requested_url = mock_get.call_args_list[0][0][0]
+        self.assertIn(quote('Dungeon_Crawler_Carl'), first_requested_url)
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_numeric_key_with_no_matching_candidate_returns_none(self, mock_get):
+        # A numeric key that matches no candidate's numeric id must not
+        # silently fall back to a slug guess or the first result, even when
+        # a title hint drove the search.
+        self._mock_search(mock_get, self._SERIES_FEED_WITH_NUMERIC_TARGET)
+        uuid = self.client.get_book_uuid('9999', search_hints=['Dungeon Crawler Carl'])
+        self.assertIsNone(uuid)
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_numeric_key_never_searches_the_number_itself(self, mock_get):
+        # A numeric key must never be used as a search term (a bare number
+        # matches nothing on a real CWA server); only the hints are searched.
+        # The correct entry (numeric id '1519') is selected even though two
+        # series siblings are listed ahead of it.
+        self._mock_search(mock_get, self._SERIES_FEED_WITH_NUMERIC_TARGET)
+        uuid = self.client.get_book_uuid(
+            '1519', search_hints=['first hint', 'Dungeon Crawler Carl']
+        )
+        self.assertEqual(uuid, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
+
+        for call in mock_get.call_args_list:
+            self.assertNotIn('1519', call[0][0])
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_falls_back_to_second_hint_when_first_has_no_match(self, mock_get):
+        # The FIRST hint's search returns a feed with no confident match (no
+        # entry's numeric id is '1519'); the SECOND hint's search returns the
+        # right book. Both searches must happen, in that order, and the
+        # second book's uuid wins.
+        self.client.search_template = 'http://cwa:8083/opds/search/{searchTerms}'
+        resp_no_match = MagicMock(status_code=200, text=self._SERIES_FEED)
+        resp_match = MagicMock(status_code=200, text=self._SERIES_FEED_WITH_NUMERIC_TARGET)
+        mock_get.side_effect = [resp_no_match, resp_match]
+
+        uuid = self.client.get_book_uuid(
+            '1519', search_hints=['filename term', 'Dungeon Crawler Carl']
+        )
+
+        self.assertEqual(uuid, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
+        self.assertEqual(mock_get.call_count, 2)
+        first_url = mock_get.call_args_list[0][0][0]
+        second_url = mock_get.call_args_list[1][0][0]
+        self.assertIn(quote('filename term'), first_url)
+        self.assertIn(quote('Dungeon Crawler Carl'), second_url)
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_all_hint_terms_failing_is_not_cached(self, mock_get):
+        # Every hint term fails to resolve a numeric key. The failure must
+        # not be cached — a second call repeats the searches rather than
+        # serving a stale None or guessing a wrong book.
+        self._mock_search(mock_get, self._SERIES_FEED)
+        hints = ['a hint matching nothing in the feed']
+
+        first = self.client.get_book_uuid('1519', search_hints=hints)
+        second = self.client.get_book_uuid('1519', search_hints=hints)
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(mock_get.call_count, 2)
 
     # -- _parse_opds id extraction (issue #427 defect 1: regex asymmetry) --
 
