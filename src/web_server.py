@@ -3581,6 +3581,7 @@ def _create_or_update_library_audio_mapping(
                 bookorbit_client=uc().bookorbit_client,
                 booklore_client=uc().booklore_client,
                 kavita_client=uc().kavita_client,
+                ebook_parser=container.ebook_parser(),
             )
             if resolution.name:
                 target_book.series_name = resolution.name
@@ -10720,6 +10721,7 @@ def _series_backfill_clients() -> dict:
         "bookorbit_client": container.bookorbit_client(),
         "booklore_client": container.booklore_client(),
         "kavita_client": container.kavita_client(),
+        "ebook_parser": container.ebook_parser(),
     }
 
 
@@ -10811,7 +10813,7 @@ def api_series_backfill():
 
     columns = (
         "SELECT abs_id, abs_title, audio_source, audio_source_id, "
-        "ebook_source, ebook_source_id, series_name, series_sequence FROM books"
+        "ebook_source, ebook_source_id, ebook_filename, series_name, series_sequence FROM books"
     )
     query = columns if refresh else (
         columns + " WHERE series_name IS NULL OR series_name = ''"
@@ -10829,7 +10831,7 @@ def api_series_backfill():
     failed = 0
 
     for (abs_id, abs_title, audio_source, audio_source_id,
-         ebook_source, ebook_source_id, stored_name, stored_seq) in rows:
+         ebook_source, ebook_source_id, ebook_filename, stored_name, stored_seq) in rows:
         book_row = SimpleNamespace(
             abs_id=abs_id,
             abs_title=abs_title,
@@ -10837,6 +10839,7 @@ def api_series_backfill():
             audio_source_id=audio_source_id,
             ebook_source=ebook_source,
             ebook_source_id=ebook_source_id,
+            ebook_filename=ebook_filename,
         )
         try:
             resolution = resolve_series_details(book_row, force_refresh=refresh, **clients)

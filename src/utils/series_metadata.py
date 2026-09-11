@@ -6,8 +6,11 @@ mapping creation, so every writer of ``books.series_name`` /
 """
 
 import logging
+import os
 import re
+import zipfile
 from typing import Any, NamedTuple, Optional, Tuple
+from xml.etree import ElementTree
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +148,122 @@ def extract_series_from_title(title: str) -> SeriesTuple:
     return None, None
 
 
+_CONTAINER_NAMESPACE = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
+_CALIBRE_SERIES_META = "calibre:series"
+_CALIBRE_SERIES_INDEX_META = "calibre:series_index"
+_EPUB3_COLLECTION_PROPERTY = "belongs-to-collection"
+_EPUB3_GROUP_POSITION_PROPERTY = "group-position"
+
+
+def _locate_opf_path(zf: zipfile.ZipFile) -> Optional[str]:
+    """Return the archive-relative path to the EPUB's package (OPF) document.
+
+    Reads ``META-INF/container.xml`` for the declared rootfile; falls back to
+    the first ``*.opf`` member when the container manifest is missing, empty,
+    or unparseable, since some hand-rolled or re-packaged EPUBs omit it.
+    """
+    opf_path = ""
+    try:
+        container_xml = zf.read("META-INF/container.xml")
+        container_tree = ElementTree.fromstring(container_xml)
+        rootfile_el = container_tree.find(".//c:rootfile", _CONTAINER_NAMESPACE)
+        if rootfile_el is not None:
+            opf_path = (rootfile_el.get("full-path") or "").strip()
+    except (KeyError, ElementTree.ParseError):
+        opf_path = ""
+    if opf_path:
+        return opf_path
+    for name in zf.namelist():
+        if name.lower().endswith(".opf"):
+            return name
+    return None
+
+
+def _local_tag(element: ElementTree.Element) -> str:
+    """Return an element's tag without its XML namespace, if any."""
+    tag = element.tag
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def _extract_calibre_series_from_opf(opf_tree: ElementTree.Element) -> SeriesTuple:
+    """Return (series_name, series_sequence) from calibre:series ``<meta>`` elements.
+
+    Matches both namespaced OPF ``meta`` elements and bare ones, since some
+    EPUB writers (including some Calibre plugin output) omit the ``opf:``
+    namespace prefix.
+    """
+    name = None
+    raw_seq = None
+    for meta_el in opf_tree.iter():
+        if _local_tag(meta_el) != "meta":
+            continue
+        meta_name = (meta_el.get("name") or "").strip()
+        if meta_name == _CALIBRE_SERIES_META:
+            content = (meta_el.get("content") or "").strip()
+            if content:
+                name = content
+        elif meta_name == _CALIBRE_SERIES_INDEX_META:
+            raw_seq = meta_el.get("content")
+    return name, _coerce_sequence(raw_seq)
+
+
+def _extract_epub3_collection_from_opf(opf_tree: ElementTree.Element) -> SeriesTuple:
+    """Return (series_name, series_sequence) from EPUB3 collection ``<meta>`` properties.
+
+    Secondary form, used when no Calibre ``calibre:series`` meta is present.
+    """
+    name = None
+    raw_seq = None
+    for meta_el in opf_tree.iter():
+        if _local_tag(meta_el) != "meta":
+            continue
+        prop = (meta_el.get("property") or "").strip()
+        if prop == _EPUB3_COLLECTION_PROPERTY and meta_el.text:
+            name = meta_el.text.strip() or None
+        elif prop == _EPUB3_GROUP_POSITION_PROPERTY and meta_el.text:
+            raw_seq = meta_el.text
+    return name, _coerce_sequence(raw_seq)
+
+
+def extract_series_from_epub(epub_path: Any) -> SeriesTuple:
+    """Return (series_name, series_sequence) read from an EPUB's own OPF metadata.
+
+    Fallback for libraries (e.g. CWA/Calibre-Web) whose API/OPDS surface
+    carries no series data at all, so the bridge reads the ``calibre:series``
+    /``calibre:series_index`` ``<meta>`` elements Calibre writes into the EPUB
+    itself. Falls back to the EPUB3 ``belongs-to-collection``/
+    ``group-position`` form when no Calibre meta is present.
+
+    Never raises: a missing, corrupt, or non-EPUB file yields (None, None),
+    logged at debug (this runs during match/backfill, over many books, so an
+    occasional bad file is expected, not exceptional).
+    """
+    try:
+        with zipfile.ZipFile(epub_path, "r") as zf:
+            opf_path = _locate_opf_path(zf)
+            if not opf_path:
+                return None, None
+            try:
+                opf_content = zf.read(opf_path)
+            except KeyError:
+                return None, None
+            try:
+                opf_tree = ElementTree.fromstring(opf_content)
+            except ElementTree.ParseError:
+                return None, None
+
+            name, sequence = _extract_calibre_series_from_opf(opf_tree)
+            if name:
+                return name, sequence
+            return _extract_epub3_collection_from_opf(opf_tree)
+    except (zipfile.BadZipFile, OSError, ElementTree.ParseError) as e:
+        logger.debug("Series resolve: could not read EPUB %s: %s", epub_path, e)
+        return None, None
+    except Exception as e:
+        logger.debug("Series resolve: unexpected error reading EPUB %s: %s", epub_path, e)
+        return None, None
+
+
 def _client_for_source(source_name: Any, clients: dict) -> Optional[Any]:
     """Return the configured library client hosting *source_name*, or None."""
     if not isinstance(source_name, str):
@@ -189,17 +308,25 @@ def resolve_series_details(
     bookorbit_client: Any = None,
     booklore_client: Any = None,
     kavita_client: Any = None,
+    ebook_parser: Any = None,
     force_refresh: bool = False,
 ) -> SeriesResolution:
     """Resolve *book*'s series, reporting which source answered.
 
-    Tries ABS, then the audio library, then the ebook library, then a title
-    heuristic, stopping at the first source that yields a name. *book* is
-    duck-typed on ``abs_id``/``abs_title``/``audio_source``/``audio_source_id``/
-    ``ebook_source``/``ebook_source_id``, so ORM rows and lightweight namespaces
-    both work. Remote lookup failures are logged and skipped, never raised, and
-    leave ``service_answered`` False so callers can tell "this book has no
-    series" apart from "nobody could tell us".
+    Tries ABS, then the audio library, then the ebook library, then the
+    book's own EPUB file, then a title heuristic, stopping at the first
+    source that yields a name. The EPUB step sits before the title heuristic
+    but after every library client: its OPF metadata is authoritative
+    (written by Calibre/an editor), while the title heuristic is a guess, so
+    the EPUB must win when both could answer. It exists for services with no
+    API path to series data at all (e.g. CWA, whose OPDS feed carries none),
+    reading the ``calibre:series`` meta the ebook file already carries on
+    disk instead. *book* is duck-typed on ``abs_id``/``abs_title``/
+    ``audio_source``/``audio_source_id``/``ebook_source``/``ebook_source_id``/
+    ``ebook_filename``, so ORM rows and lightweight namespaces both work.
+    Remote lookup failures are logged and skipped, never raised, and leave
+    ``service_answered`` False so callers can tell "this book has no series"
+    apart from "nobody could tell us".
     """
     abs_id = getattr(book, "abs_id", None)
     abs_title = getattr(book, "abs_title", None)
@@ -251,6 +378,24 @@ def resolve_series_details(
                 exc_info=True,
             )
 
+    if ebook_parser is not None:
+        ebook_filename = getattr(book, "ebook_filename", None)
+        if ebook_filename:
+            try:
+                epub_path = ebook_parser.resolve_book_path(ebook_filename)
+            except FileNotFoundError:
+                epub_path = None
+            except Exception as e:
+                logger.warning(
+                    f"Series resolve: could not resolve ebook path for '{ebook_filename}': {e}",
+                    exc_info=True,
+                )
+                epub_path = None
+            if epub_path is not None and os.path.exists(epub_path):
+                name, sequence = extract_series_from_epub(epub_path)
+                if name:
+                    return SeriesResolution(name, sequence, "epub", True)
+
     if abs_title:
         name, sequence = extract_series_from_title(abs_title)
         if name:
@@ -266,6 +411,7 @@ def resolve_series_for_book(
     bookorbit_client: Any = None,
     booklore_client: Any = None,
     kavita_client: Any = None,
+    ebook_parser: Any = None,
     force_refresh: bool = False,
 ) -> SeriesTuple:
     """Return (series_name, series_sequence) for *book* from the best source available."""
@@ -275,6 +421,7 @@ def resolve_series_for_book(
         bookorbit_client=bookorbit_client,
         booklore_client=booklore_client,
         kavita_client=kavita_client,
+        ebook_parser=ebook_parser,
         force_refresh=force_refresh,
     )
     return resolution.name, resolution.sequence

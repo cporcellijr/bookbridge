@@ -17,6 +17,7 @@ from xml.etree import ElementTree
 
 import requests
 
+from src.utils.series_metadata import _extract_calibre_series_from_opf
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -495,21 +496,14 @@ def extract_epub_metadata(epub_path: str) -> dict:
                     tags.append(subject_el.text.strip())
             result["tags"] = tags
 
-            # Series from OPF metadata (meta elements with name="calibre:series" etc.)
-            # Also check for opf:role="aut" creator ordering — already in document order.
-            # For series, look in the OPF metadata section for calibre meta elements.
-            series_meta = {}
-            for meta_el in opf_tree.findall(".//{http://www.idpf.org/2007/opf}meta"):
-                name = meta_el.get("name", "").strip()
-                content = meta_el.get("content", "").strip()
-                if name == "calibre:series":
-                    series_meta["title"] = content
-                elif name == "calibre:series_index":
-                    try:
-                        series_meta["index"] = float(content)
-                    except (ValueError, TypeError):
-                        pass
-            if series_meta.get("title"):
+            # Series from OPF metadata (calibre:series / calibre:series_index meta
+            # elements) — shared with the series-resolution fallback so the two
+            # never drift apart on what counts as a series meta element.
+            series_title, series_index = _extract_calibre_series_from_opf(opf_tree)
+            if series_title:
+                series_meta = {"title": series_title}
+                if series_index is not None:
+                    series_meta["index"] = series_index
                 result["series"] = [series_meta]
 
     except zipfile.BadZipFile as exc:

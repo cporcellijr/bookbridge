@@ -117,6 +117,7 @@ class BookMappingService:
                 bookorbit_client=bookorbit,
                 booklore_client=booklore,
                 kavita_client=kavita,
+                ebook_parser=self.ebook_parser,
             )
         except Exception as e:
             logger.warning(
@@ -399,6 +400,7 @@ class BookMappingService:
                 audio_source_id=None,
                 ebook_source=ebook_source,
                 ebook_source_id=ebook_source_id or booklore_ebook_id,
+                ebook_filename=ebook_filename,
             ),
             user_id=user_id,
         )
