@@ -285,12 +285,22 @@ class ABSSyncClient(SyncClient):
         if ts_for_text is not None:
             response = self.abs_client.get_progress(book.abs_id)
             abs_ts = response.get('currentTime') if response is not None else None
-            if abs_ts is not None and ts_for_text < abs_ts:
+            if abs_ts is not None and ts_for_text < abs_ts and not request.allow_rewind:
                 logger.info(f"🔄 '{book_title}' Not updating ABS progress — target timestamp {ts_for_text:.2f}s is before current ABS position {abs_ts:.2f}s")
                 return SyncResult(abs_ts, True, {
                     'ts': abs_ts,
                     'pct': self._abs_to_percentage(abs_ts, book) or 0,
                 }, skipped=True)
+            if abs_ts is not None and ts_for_text < abs_ts and request.allow_rewind:
+                # Refusing a backward write is right for a stale position and wrong
+                # for a reader who deliberately went back. `allow_rewind` is set only
+                # where the bridge corroborated the rewind — the reader kept reading
+                # from the new point — so honouring it here is what stops the ebook
+                # side moving while ABS stays ahead (issue #215 / #391).
+                logger.info(
+                    f"↩️ '{book_title}' Writing ABS backward to {ts_for_text:.2f}s from "
+                    f"{abs_ts:.2f}s — the bridge corroborated this rewind"
+                )
 
             prev_ts = abs_ts if abs_ts is not None else 0.0
             time_listened = (ts_for_text - prev_ts) if request.credit_listening else 0.0

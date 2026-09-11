@@ -586,3 +586,68 @@ def test_target_audio_ts_withheld_when_normalization_fell_back_to_percentage():
 
     abs_client.update_progress.assert_called_once()
     assert abs_client.update_progress.call_args[0][1].target_audio_ts is None
+
+
+def test_abs_honours_a_corroborated_rewind_backward_write():
+    """A corroborated rewind must reach ABS (#215 / #391).
+
+    ABS refuses any backward write by default, which is right for a stale position
+    and wrong for a deliberate rewind: without this the rewind wins leader selection
+    and is then silently dropped at the write, leaving the ebook side moved back and
+    ABS still ahead — and the next cycle drags the reader forward again.
+    """
+    from src.sync_clients.abs_sync_client import ABSSyncClient
+
+    client = ABSSyncClient.__new__(ABSSyncClient)
+    client.abs_client = MagicMock()
+    client.abs_client.get_progress.return_value = {"currentTime": 9000.0}
+    client.transcriber = MagicMock()
+    client.alignment_service = MagicMock()
+    client._abs_to_percentage = MagicMock(return_value=0.20)
+    client._update_abs_progress_with_offset = MagicMock(return_value=({"success": True}, 4000.0))
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Rewind Book", transcript_file="DB_MANAGED",
+        duration=30000, ebook_filename="book.epub",
+    )
+    request = UpdateProgressRequest(
+        LocatorResult(percentage=0.13, match_index=1000),
+        "anchor text",
+        target_audio_ts=4000.0,      # behind ABS's 9000s
+        allow_rewind=True,
+    )
+
+    result = client.update_progress(book, request)
+
+    assert getattr(result, "skipped", False) is not True, "the rewind must not be skipped"
+    client._update_abs_progress_with_offset.assert_called_once()
+    assert client._update_abs_progress_with_offset.call_args[0][1] == 4000.0
+
+
+def test_abs_still_refuses_an_unapproved_backward_write():
+    """The guard itself is unchanged for every other case."""
+    from src.sync_clients.abs_sync_client import ABSSyncClient
+
+    client = ABSSyncClient.__new__(ABSSyncClient)
+    client.abs_client = MagicMock()
+    client.abs_client.get_progress.return_value = {"currentTime": 9000.0}
+    client.transcriber = MagicMock()
+    client.alignment_service = MagicMock()
+    client._abs_to_percentage = MagicMock(return_value=0.30)
+    client._update_abs_progress_with_offset = MagicMock()
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Rewind Book", transcript_file="DB_MANAGED",
+        duration=30000, ebook_filename="book.epub",
+    )
+    request = UpdateProgressRequest(
+        LocatorResult(percentage=0.13, match_index=1000),
+        "anchor text",
+        target_audio_ts=4000.0,
+        allow_rewind=False,
+    )
+
+    result = client.update_progress(book, request)
+
+    assert result.skipped is True
+    client._update_abs_progress_with_offset.assert_not_called()

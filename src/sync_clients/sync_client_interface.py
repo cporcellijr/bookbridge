@@ -59,6 +59,12 @@ class UpdateProgressRequest:
     # written is the same one the leader decision was made on. None whenever
     # the leader IS the audio client, or no normalized position was available.
     target_audio_ts: Optional[float] = None
+    # This cycle's leader is a rewind the bridge deliberately approved (issue #215).
+    # Audio clients refuse a backward write by default, which is right for a stale
+    # position and wrong for a reader who went back on purpose: the rewind wins leader
+    # selection and is then silently dropped at the write, leaving the ebook side moved
+    # and the audio side ahead. Set only on the corroborated paths, never on a guess.
+    allow_rewind: bool = False
 
 @dataclass
 class SyncResult:

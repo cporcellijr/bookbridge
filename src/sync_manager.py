@@ -3679,6 +3679,9 @@ class SyncManager:
                                 rewind_trusted = False
 
                         if rewind_trusted:
+                            # Audio clients refuse a backward write unless told this
+                            # rewind was approved; the dispatch loop reads it back.
+                            config[changed_client].current["_approved_rewind"] = True
                             logger.info(
                                 f"↩️ '{abs_id}' '{title_snip}' Keeping '{changed_client}' as leader: "
                                 f"corroborated rewind {max_other_ts - changed_ts:.1f}s behind its max peer "
@@ -3807,6 +3810,7 @@ class SyncManager:
                     if corroborated_rewind:
                         rewind_name, rewind_ts, rewind_peer_ts, rewind_evidence = corroborated_rewind
                         selected_normalized_candidates = {rewind_name: rewind_ts}
+                        config[rewind_name].current["_approved_rewind"] = True
                         logger.info(
                             f"↩️ '{abs_id}' '{title_snip}' Keeping '{rewind_name}' as leader: "
                             f"corroborated rewind {rewind_peer_ts - rewind_ts:.1f}s behind its max peer "
@@ -4842,6 +4846,12 @@ class SyncManager:
                             # lets it skip re-fetching state it just had.
                             current_state=client_state,
                             target_audio_ts=target_audio_ts,
+                            # Set by `_determine_leader` only on the corroborated
+                            # rewind paths. Without it an audio client drops the
+                            # write and the reader is left split: ebook moved back,
+                            # audio still ahead, and the next cycle drags them
+                            # forward again (issue #215 / #391).
+                            allow_rewind=bool(leader_state.current.get("_approved_rewind")),
                         )
                         result = client.update_progress(book, request)
                         results[client_name] = result
