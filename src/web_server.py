@@ -4026,6 +4026,7 @@ def settings():
             'DIAGNOSTICS_OPT_IN',
             'WHISPER_CPP_SEND_ORIGINAL',
             'CTC_ENABLED',
+            'ALIGNMENT_SEGMENTED_MAPS',
             'CONTENT_MATCH_GUARD',
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',
             'REMOTE_AUTH_ENABLED',

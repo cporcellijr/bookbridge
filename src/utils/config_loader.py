@@ -157,6 +157,7 @@ ALL_SETTINGS = [
     'WHISPER_DEVICE', 'WHISPER_COMPUTE_TYPE',
     'TRANSCRIPTION_PROVIDER', 'DEEPGRAM_API_KEY', 'DEEPGRAM_MODEL', 'WHISPER_CPP_URL', 'WHISPER_CPP_TIMEOUT', 'WHISPER_CPP_SEND_ORIGINAL', 'WHISPER_CPP_CHUNK_MINUTES',
     'CTC_ENABLED', 'CTC_MODEL', 'CTC_DEVICE',
+    'ALIGNMENT_SEGMENTED_MAPS',
     'CONTENT_MATCH_GUARD', 'CONTENT_MATCH_MIN_OVERLAP',
     'AUDIO_SPLIT_DURATION_MINUTES',
     'SMIL_VALIDATION_THRESHOLD', 'TRANSCRIPT_MIN_COVERAGE',
@@ -195,6 +196,11 @@ DEFAULT_CONFIG = {
     'CTC_ENABLED': 'false',
     'CTC_MODEL': 'mms_fa',
     'CTC_DEVICE': 'auto',
+    # Per-chapter RANSAC segment placement (issue #426 phase 2), replacing the global
+    # monotonic LIS filter only for books whose narration order genuinely differs from
+    # spine order. See docs/PLAN_OUT_OF_ORDER_NARRATION.md and
+    # AlignmentService.segmented_maps_enabled().
+    'ALIGNMENT_SEGMENTED_MAPS': 'false',
     # Non-LLM content-match guard (issue #426): n-gram overlap fallback used when the
     # embedding path (OLLAMA_ALIGN_CONTENT_GUARD) is unavailable. See
     # AlignmentService._verify_content_match / map_quality.transcript_text_overlap for

@@ -39,7 +39,7 @@ def test_align_and_store_success(service, mock_db):
     # Mock lower-level alignment logic (tested separately in test_generate_alignment_map)
     # We only want to verify the storage flow here
     service._generate_alignment_map_with_method = MagicMock(
-        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical')
+        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical', None)
     )
 
     # Ensure DB query returns None (Simulate no existing record)
@@ -399,10 +399,11 @@ def test_anchor_rescue_builds_map_when_lexical_fails(mock_db):
     service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), _topic_book_text()
         )
     assert method == "llm_anchor"
+    assert map_segments is None
     assert len(alignment_map) >= 2
     chars = [p["char"] for p in alignment_map]
     assert chars == sorted(chars)  # monotonic in char
@@ -413,10 +414,11 @@ def test_anchor_rescue_noop_when_disabled(mock_db):
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
         mp.setenv("OLLAMA_ALIGN_ANCHOR_RESCUE", "false")
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), _topic_book_text()
         )
     assert method == "linear"
+    assert map_segments is None
     assert alignment_map == [
         {"char": 0, "ts": 0.0},
         {"char": len(_topic_book_text()), "ts": 20.0},
@@ -445,7 +447,7 @@ def test_anchor_rescue_caps_embedded_window_length(mock_db):
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
         mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, _map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), long_text
         )
     assert method == "llm_anchor"
@@ -471,7 +473,7 @@ def test_anchor_rescue_noop_without_client(mock_db):
     service = AlignmentService(mock_db, Polisher(), ollama_client=None)
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
-        _map, method = service._generate_alignment_map_with_method(
+        _map, method, _map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), _topic_book_text()
         )
     assert method == "linear"
@@ -628,7 +630,7 @@ def test_align_and_store_records_ebook_length(mock_db):
 
     service = AlignmentService(mock_db, Polisher())
     service._generate_alignment_map_with_method = MagicMock(
-        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical')
+        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical', None)
     )
 
     assert service.align_and_store("test_id", [{'start': 0.0, 'end': 1.0, 'text': "Alice"}], ebook_text)

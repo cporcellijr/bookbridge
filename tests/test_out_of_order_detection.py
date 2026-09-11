@@ -310,7 +310,7 @@ def test_permuted_book_logs_out_of_order_warning(service, caplog):
         segments.extend(block_segments)
 
     with caplog.at_level("INFO", logger="src.services.alignment_service"):
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, _map_segments = service._generate_alignment_map_with_method(
             segments, full_text, abs_id="four-past-midnight")
 
     assert method == "lexical"
@@ -332,7 +332,7 @@ def test_monotone_book_does_not_log_out_of_order_warning(service, caplog):
         segments.extend(block_segments)
 
     with caplog.at_level("INFO", logger="src.services.alignment_service"):
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, _map_segments = service._generate_alignment_map_with_method(
             segments, full_text, abs_id="monotone-book")
 
     assert method == "lexical"

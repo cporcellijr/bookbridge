@@ -13,7 +13,13 @@ wrong implementations.
 import unittest
 from typing import Dict, List
 
-from src.services.map_quality import MapQuality, is_regression, score_map
+import math
+
+from src.services.map_quality import (
+    MapQuality,
+    is_regression,
+    score_map,
+)
 
 _ANCHORS_PER_GROUP = 10
 
@@ -149,6 +155,304 @@ class TestDensitySpreadDiscriminates(unittest.TestCase):
         quality = score_map(amap)
 
         self.assertAlmostEqual(quality.density_spread, baseline_rate / slow_rate, places=2)
+
+
+class TestSegmentAwareDensitySpread(unittest.TestCase):
+    """Issue #426 phase 3 (reworked in phase 3b — see
+    `_segment_aware_density_spread`'s docstring for the full rationale). A
+    segmented, out-of-order-narration map is correctly discontinuous in `ts`
+    at its own seams — real audio structure, not measurement error — and
+    scoring that discontinuity as one undivided run inflates whole-map
+    `density_spread` with nothing to do with how evenly-paced the narration
+    itself is (measured on the real Four Past Midnight segmented map:
+    whole-map 5.394 vs 1.201 once seams are excluded). The rework keeps
+    whole-map `_DENSITY_SLICE_COUNT` slice granularity — unlike the original
+    phase-3 version, which re-sliced each segment's own (much smaller) char
+    range independently and aggregated with `max()`, handing a single small
+    segment's local artifact a veto over the entire score (measured on the
+    real "The Terminal Man": a segment covering 0.36% of the book drove the
+    reported spread to 70.796). `max_gap_fraction` deliberately stays
+    whole-map (segments tile the char space contiguously, so a char gap is
+    real regardless of which segment it falls in) — every test below pins
+    that it is unaffected by `segments`.
+    """
+
+    @staticmethod
+    def _shifted_dense_map(char_start: int, span_chars: int, char_step: int,
+                           rate: float, ts_start: float = 0.0) -> List[Dict]:
+        """An evenly-paced map over `span_chars` chars, strictly within the
+        half-open `[char_start, char_start + span_chars)` — half-open so two
+        adjacent shifted maps never both land a point on the shared boundary
+        char (which would leak one map's point into the other's segment
+        slice and corrupt the per-segment computation)."""
+        return [{"char": char_start + c, "ts": ts_start + c / rate}
+                for c in range(0, span_chars, char_step)]
+
+    @staticmethod
+    def _shifted_grouped_map(char_start: int, chars_per_group: List[int],
+                             rates: List[float], ts_start: float = 0.0) -> List[Dict]:
+        """`_grouped_map`, offset onto `char_start` — see its docstring."""
+        points: List[Dict] = []
+        char_cursor = 0.0
+        ts_cursor = ts_start
+        for chars, rate in zip(chars_per_group, rates):
+            char_step = chars / _ANCHORS_PER_GROUP
+            ts_step = char_step / rate
+            for _ in range(_ANCHORS_PER_GROUP):
+                char_cursor += char_step
+                ts_cursor += ts_step
+                points.append({"char": char_start + round(char_cursor), "ts": ts_cursor})
+        return points
+
+    def test_segmented_scoring_beats_whole_map_on_a_reordered_fixture(self):
+        """Four chapter-sized segments, each perfectly evenly paced on its
+        own but independently placed in `ts` (unrelated offsets — the real
+        shape of segments RANSAC-fit to wherever their own audio actually
+        landed, not a tidy back-to-back concatenation) and deliberately
+        *not* aligned to the whole-map's own 20-slice partition (187/211/
+        197/203 points per segment, none a clean fraction of the 798-point
+        total). Scored as one undivided run, the seam that lands inside a
+        single slice with a huge, unrelated `ts` jump blows whole-map
+        `density_spread` up past 50; scored segment-aware, the seam pairs
+        are excluded from every slice they would otherwise contaminate and
+        the spread drops to a small residual (not exactly 1.0: a handful of
+        the 20 whole-map slices straddle a segment boundary that doesn't
+        land on a slice cut, so those slices blend two individually-perfect
+        but differently-paced segments' own partial contributions — still
+        two orders of magnitude below the whole-map figure).
+        """
+        segment_defs = [
+            (0, 50000, 12.0, 187, 44415.0),
+            (50000, 50000, 14.0, 211, 500.0),
+            (100000, 50000, 16.0, 197, 90000.0),
+            (150000, 50000, 13.0, 203, 9000.0),
+        ]
+        segments: List[Dict] = []
+        combined: List[Dict] = []
+        for char_start, span, rate, n, ts0 in segment_defs:
+            points = [{"char": char_start + int(span * i / n),
+                       "ts": ts0 + int(span * i / n) / rate}
+                      for i in range(n)]
+            segments.append({"char_start": char_start, "char_end": char_start + span,
+                             "ts_start": points[0]["ts"], "ts_end": points[-1]["ts"]})
+            combined.extend(points)
+        combined.sort(key=lambda p: p["char"])
+
+        whole = score_map(combined)
+        segmented = score_map(combined, segments=segments)
+
+        # Requirement: max_gap_fraction is untouched by `segments`.
+        self.assertEqual(whole.max_gap_fraction, segmented.max_gap_fraction)
+
+        self.assertGreater(whole.density_spread, 50.0)
+        self.assertLess(segmented.density_spread, 1.3)
+        # Exact value for this fixture, pinned so a regression toward the
+        # old max-of-per-segment ~1.0 (or back toward the whole-map ~121.8)
+        # is caught precisely rather than just bounded.
+        self.assertAlmostEqual(segmented.density_spread, 32 / 27, places=9)
+        self.assertGreater(segmented.score, whole.score + 0.3)
+
+    def test_material_fraction_bad_segment_lowers_the_score_materially(self):
+        """A badly-paced segment now moves the score in proportion to how
+        much of the book it covers, not by unconditional veto regardless of
+        size (see the module-level rationale in
+        `_segment_aware_density_spread`). Here the 'bad' segment is 25% of
+        the anchors (1,000 of 4,000) and — unlike a single localized
+        artifact — is genuinely differently paced throughout its own span (a
+        uniform 3 chars/sec against the rest of the book's uniform 15).
+        Large enough that several of the whole-map's 20 slices fall entirely
+        within it, the mismatch is not diluted away."""
+        good = [self._shifted_dense_map(offset, 100000, 100, 15.0)
+                for offset in (0, 100000, 200000)]
+        bad = self._shifted_dense_map(300000, 100000, 100, 3.0, ts_start=1_000_000.0)
+        self.assertEqual(len(bad), 1000)
+
+        segments = [{"char_start": s, "char_end": s + 100000} for s in (0, 100000, 200000)]
+        segments.append({"char_start": 300000, "char_end": 400000})
+
+        combined = sorted([point for group in good for point in group] + bad,
+                          key=lambda p: p["char"])
+
+        good_only = score_map([point for group in good for point in group])
+        segmented = score_map(combined, segments=segments)
+
+        self.assertAlmostEqual(segmented.density_spread, 5.0, places=6)
+        self.assertLess(segmented.score, good_only.score - 0.1)
+
+    def test_tiny_fraction_bad_segment_does_not_collapse_the_score(self):
+        """The actual #426 phase-3 bug, reproduced synthetically. On the real
+        "The Terminal Man" segmented map, a single placed segment covering
+        only 0.36% of the book contained one 20-slice window of 9 anchors
+        spanning 59 chars in 0.08 seconds — a transcript timing artifact, not
+        a pacing defect. Scored in isolation (the old per-segment `max()`
+        approach), that artifact drove the segment's own `_density_spread`
+        to 70.796 and the whole map's score down to 0.5426, even though
+        every other segment — and every other axis — was excellent.
+
+        This fixture reproduces the same shape at a smaller scale: ten
+        evenly-paced 2,000-point chapters (rate 15 chars/sec) plus one
+        180-point chapter that is itself evenly paced except for a single
+        9-point burst (59 chars in 0.08s) — under 0.9% of the book's
+        anchors. The regression this pins: the burst must be diluted across
+        the full anchor population like any other axis, not isolated into
+        its own tiny, noise-dominated statistical sample.
+        """
+        good: List[Dict] = []
+        for i in range(10):
+            good.extend(self._shifted_dense_map(i * 200000, 200000, 100, 15.0,
+                                                ts_start=i * 20000.0))
+
+        tiny_start_char = 2_000_000
+        tiny: List[Dict] = []
+        char_cursor = float(tiny_start_char)
+        ts_cursor = 500_000.0
+        for _ in range(81):
+            char_cursor += 100
+            ts_cursor += 100 / 15.0
+            tiny.append({"char": char_cursor, "ts": ts_cursor})
+        burst_char_step, burst_ts_step = 59 / 9, 0.08 / 9
+        for _ in range(9):
+            char_cursor += burst_char_step
+            ts_cursor += burst_ts_step
+            tiny.append({"char": char_cursor, "ts": ts_cursor})
+        for _ in range(90):
+            char_cursor += 100
+            ts_cursor += 100 / 15.0
+            tiny.append({"char": char_cursor, "ts": ts_cursor})
+
+        segments = [{"char_start": i * 200000, "char_end": i * 200000 + 200000}
+                   for i in range(10)]
+        segments.append({"char_start": tiny_start_char, "char_end": int(char_cursor) + 1})
+
+        combined = sorted(good + tiny, key=lambda p: p["char"])
+        self.assertLess(len(tiny) / len(combined), 0.01)
+
+        whole = score_map(combined)
+        segmented = score_map(combined, segments=segments)
+
+        # Never segment-aware at all, the naive whole-map metric collapses on
+        # this same burst -- this is why segmentation exists in the first
+        # place.
+        self.assertLess(whole.score, 0.6)
+
+        # The point of this test: segmentation must not OVER-correct and
+        # isolate the burst into its own tiny, noise-dominated sample either.
+        self.assertGreater(segmented.score, 0.99)
+        self.assertLess(segmented.density_spread, 1.1)
+
+    def test_segments_none_reproduces_todays_score_exactly(self):
+        """Compatibility guarantee: omitting `segments` (or passing an empty
+        list) must be byte-identical to today's whole-map scoring, on a
+        fixture already exercised elsewhere in this file."""
+        amap = _dense_map(100000, 100, 100.0)
+        baseline = score_map(amap)
+        self.assertEqual(baseline, score_map(amap, segments=None))
+        self.assertEqual(baseline, score_map(amap, segments=[]))
+
+    def test_telescoping_equivalence_when_no_slice_pair_crosses_a_seam(self):
+        """Compatibility guarantee for the phase-3b rewrite: when every
+        point-to-point pair inside every one of the 20 whole-map slices
+        belongs to the same segment (here, trivially: one segment spans
+        every point), summing consecutive deltas telescopes to exactly the
+        same per-slice totals `_density_spread` computes directly from each
+        slice's first and last point — so `density_spread` comes back
+        (to floating-point precision) identical to the unsegmented
+        computation on the same, deliberately non-uniform, fixture
+        `TestDensitySpreadDiscriminates` uses."""
+        chars_per_group = [50000] + [2750] * 18 + [500]
+        uneven_rates = [3.0] + [15.0] * 18 + [59.0]
+        amap = _grouped_map(chars_per_group, uneven_rates)
+
+        whole = score_map(amap)
+        one_big_segment = [{"char_start": 0, "char_end": amap[-1]["char"] + 1}]
+        segmented = score_map(amap, segments=one_big_segment)
+
+        self.assertAlmostEqual(segmented.density_spread, whole.density_spread, places=9)
+
+    def test_unsegmented_points_between_two_segments_do_not_contaminate_a_slice(self):
+        """A char range genuinely outside every placed segment (a stretch
+        `segment_fit` could not fit to any audio) must never contribute to
+        the aggregate — even when two such unsegmented points sit right next
+        to each other. The `seg_of[i] is None` check exists specifically for
+        that adjacent-None case: the ordinary `seg_of[i] != seg_of[i + 1]`
+        seam check alone would treat two unsegmented neighbors as "the same
+        segment" (``None == None``) and wrongly count the pair."""
+        good_a = self._shifted_dense_map(0, 100000, 100, 15.0, ts_start=0.0)
+        # 10 unsegmented points at a wildly different rate -- NOT covered by
+        # either segment below.
+        gap_ts0 = good_a[-1]["ts"] + 100.0 / 15.0
+        gap = self._shifted_dense_map(100000, 100, 10, 1000.0, ts_start=gap_ts0)
+        good_b_ts0 = gap[-1]["ts"] + 100.0 / 15.0
+        good_b = self._shifted_dense_map(100100, 100000, 100, 15.0, ts_start=good_b_ts0)
+
+        segments = [{"char_start": 0, "char_end": 100000},
+                   {"char_start": 100100, "char_end": 200100}]
+        combined = sorted(good_a + gap + good_b, key=lambda p: p["char"])
+
+        segmented = score_map(combined, segments=segments)
+
+        # Both real segments are individually perfect (rate 15 throughout);
+        # if the unsegmented gap's own internal pairs leaked into the
+        # aggregate this would move measurably off 1.0.
+        self.assertAlmostEqual(segmented.density_spread, 1.0, places=6)
+
+    def test_falls_back_to_whole_map_density_spread_when_every_pair_is_a_seam(self):
+        """When every single point is its own placed segment, every
+        consecutive pair is a cross-segment seam and gets skipped -- zero
+        slices ever produce a usable rate. This must fall back to
+        `_density_spread` of the same (whole-map) collapsed points, the same
+        "a book must still get a real score, never an unconditionally
+        worst-possible one" discipline `_density_spread` itself applies --
+        not raise (``median([])``) or silently return 0 or `inf`."""
+        chars_per_group = [50000] + [2750] * 18 + [500]
+        uneven_rates = [3.0] + [15.0] * 18 + [59.0]
+        amap = _grouped_map(chars_per_group, uneven_rates)
+
+        one_point_segments = [{"char_start": point["char"], "char_end": point["char"] + 1}
+                              for point in amap]
+
+        whole = score_map(amap)
+        segmented = score_map(amap, segments=one_point_segments)
+
+        self.assertTrue(math.isfinite(segmented.density_spread))
+        self.assertEqual(segmented.density_spread, whole.density_spread)
+        self.assertEqual(segmented.score, whole.score)
+
+    def test_segment_input_order_does_not_affect_the_result(self):
+        """`segment_fit.fit_segments` (and `segments_json`) order segments by
+        `ts_start`, not `char_start`, though they are pairwise disjoint in
+        char. Scoring must sort its own copy by char and resolve membership
+        with `bisect` rather than trust the caller's order -- passing the
+        same segments in `ts_start` order (which, for this fixture, is NOT
+        char order) must produce the identical result as passing them in
+        char order."""
+        segment_defs = [
+            (0, 50000, 12.0, 187, 44415.0),
+            (50000, 50000, 14.0, 211, 500.0),
+            (100000, 50000, 16.0, 197, 90000.0),
+            (150000, 50000, 13.0, 203, 9000.0),
+        ]
+        segments_in_char_order: List[Dict] = []
+        combined: List[Dict] = []
+        for char_start, span, rate, n, ts0 in segment_defs:
+            points = [{"char": char_start + int(span * i / n),
+                       "ts": ts0 + int(span * i / n) / rate}
+                      for i in range(n)]
+            segments_in_char_order.append({
+                "char_start": char_start, "char_end": char_start + span,
+                "ts_start": points[0]["ts"], "ts_end": points[-1]["ts"],
+            })
+            combined.extend(points)
+        combined.sort(key=lambda p: p["char"])
+
+        segments_in_ts_order = sorted(segments_in_char_order, key=lambda seg: seg["ts_start"])
+        self.assertNotEqual([seg["char_start"] for seg in segments_in_ts_order],
+                           [seg["char_start"] for seg in segments_in_char_order])
+
+        by_char_order = score_map(combined, segments=segments_in_char_order)
+        by_ts_order = score_map(combined, segments=segments_in_ts_order)
+
+        self.assertEqual(by_char_order.density_spread, by_ts_order.density_spread)
 
 
 class TestBackwardsFraction(unittest.TestCase):

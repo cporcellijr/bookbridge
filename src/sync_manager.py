@@ -2540,7 +2540,7 @@ class SyncManager:
             else:
                 ensure_active()
                 success = self.alignment_service.align_and_store(
-                    abs_id, raw_transcript, book_text, chapters
+                    abs_id, raw_transcript, book_text, spine_chapters
                 )
                 # A new book has no prior map, so the CTC attempt above could not chunk a
                 # long book. Now that transcription built a lexical map, reuse it as chunk
