@@ -1682,7 +1682,25 @@ def kosync_put_progress():
         if request_user_id is None or doc_user_id in (None, request_user_id):
             baseline = kosync_doc
     baseline_pct = float(baseline.percentage) if baseline and baseline.percentage else 0
-    same_device = bool(baseline and baseline.device_id and baseline.device_id == device_id)
+    baseline_device = getattr(baseline, "device", None)
+    baseline_device_id = getattr(baseline, "device_id", None)
+    same_device = bool(baseline and baseline_device_id and baseline_device_id == device_id)
+
+    # Furthest-wins exists to stop one DEVICE from regressing another. When the
+    # position it is defending was never claimed by a real device — no device_id
+    # recorded, or BookBridge's own sync-bot write-back — there is no peer to
+    # protect and the guard degenerates into the bridge blocking the user from
+    # their own reader.
+    #
+    # That case is a deadlock, not an edge case: a device's identity is only
+    # recorded when a PUT is ACCEPTED, but a backward PUT is only accepted from an
+    # already-recorded device. So a reader that has only ever RECEIVED positions —
+    # which is every reader the bridge has pushed to and that has not yet pushed a
+    # forward position of its own — can never rewind, and the user's deliberate
+    # rewind is rejected against an echo of our own write (issue #215).
+    baseline_unclaimed = not baseline_device_id or _is_internal_kosync_device(
+        baseline_device, baseline_device_id
+    )
 
     if (
         furthest_wins
@@ -1693,11 +1711,19 @@ def kosync_put_progress():
     ):
         new_pct = float(percentage)
         if new_pct < baseline_pct - 0.0001:
-            logger.info(f"KOSync: Ignored progress from '{device}' for doc {doc_hash} (user has higher: {baseline_pct:.2f}% vs new {new_pct:.2f}%)")
-            return jsonify({
-                "document": doc_hash,
-                "timestamp": int(baseline.timestamp.timestamp()) if baseline and baseline.timestamp else int(now.timestamp())
-            }), 200
+            if baseline_unclaimed:
+                logger.info(
+                    f"KOSync: Allowing rewind from '{device}' for doc {doc_hash} "
+                    f"({baseline_pct:.2%} -> {new_pct:.2%}): the higher position was never "
+                    f"claimed by another device (stored device_id="
+                    f"{baseline_device_id or 'none'}), so furthest-wins has no peer to defend"
+                )
+            else:
+                logger.info(f"KOSync: Ignored progress from '{device}' for doc {doc_hash} (user has higher: {baseline_pct:.2f}% vs new {new_pct:.2f}%)")
+                return jsonify({
+                    "document": doc_hash,
+                    "timestamp": int(baseline.timestamp.timestamp()) if baseline and baseline.timestamp else int(now.timestamp())
+                }), 200
 
     if kosync_doc is None:
         kosync_doc = KosyncDocument(

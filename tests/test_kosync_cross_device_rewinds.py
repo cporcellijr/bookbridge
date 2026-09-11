@@ -122,6 +122,64 @@ class TestKoSyncCrossDeviceRewinds:
         assert db.saved == [(0.30, "reader-a")]
         assert db.user_progress_updates[0][1] == 0.30
 
+    def test_rewind_is_allowed_when_the_higher_position_was_never_claimed(self):
+        """The #215 deadlock, live-diagnosed on a real install.
+
+        A device's identity is only recorded when a PUT is ACCEPTED, but a backward
+        PUT is only accepted from an already-recorded device. So a reader that has
+        only ever RECEIVED positions from BookBridge can never rewind: its rewind is
+        judged against an echo of our own write-back, with no device_id attached.
+        Measured on the developer's library: 424 of 479 linked documents had no
+        device_id at all, so this was nearly every book.
+
+        Furthest-wins defends one DEVICE against another. With nobody claiming the
+        higher position there is no peer to defend, so it must not fire."""
+        db = _FakeDatabase(percentage=0.50, device_id=None)
+        db.doc.device = None
+
+        _response, status = self._put(
+            db,
+            percentage=0.25,
+            device_id="reader-b",
+            furthest_wins="true",
+        )
+
+        assert status == 200
+        assert float(db.doc.percentage) == 0.25
+        assert db.saved == [(0.25, "reader-b")]
+        assert db.user_progress_updates[0][1] == 0.25
+
+    def test_rewind_is_allowed_when_the_higher_position_is_our_own_sync_bot(self):
+        """Same shape, but the write-back did stamp the internal device id."""
+        db = _FakeDatabase(percentage=0.50, device_id="abs-sync-bot")
+        db.doc.device = "abs-sync-bot"
+
+        _response, status = self._put(
+            db,
+            percentage=0.25,
+            device_id="reader-b",
+            furthest_wins="true",
+        )
+
+        assert status == 200
+        assert float(db.doc.percentage) == 0.25
+
+    def test_a_real_peer_device_still_blocks_a_rewind(self):
+        """The protection itself is unchanged: once another real device has claimed
+        the position, furthest-wins still defends it."""
+        db = _FakeDatabase(percentage=0.50, device_id="reader-a")
+
+        _response, status = self._put(
+            db,
+            percentage=0.25,
+            device_id="reader-b",
+            furthest_wins="true",
+        )
+
+        assert status == 200
+        assert float(db.doc.percentage) == 0.50
+        assert db.saved == []
+
     def test_opt_in_accepts_backward_put_from_different_device(self):
         db = _FakeDatabase(percentage=0.50, device_id="reader-a")
 
