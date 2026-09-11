@@ -20,6 +20,13 @@ All notable changes to BookBridge will be documented in this file.
   you from a different device pulling you backwards; you no longer have to give that up to
   have your own rewinds respected.
 
+  The same reasoning protects you in the other direction. If an app reports a position that
+  suddenly jumps backwards and then goes quiet — which happens when a player reports a stale
+  position — BookBridge no longer pushes that straight out to everything else. It waits a few
+  minutes to see whether you are actually reading or listening from there. If you are, it
+  follows you; if the app simply stays quiet, the position is accepted anyway, so a book is
+  never left stuck.
+
 - **Catch a wrong ebook/audiobook pairing without needing an LLM (#426).** BookBridge
   already refused to align content that clearly didn't match, but that check ran only
   when Ollama was configured and reachable — so on most installs it never ran at all,

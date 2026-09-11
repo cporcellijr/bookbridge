@@ -424,7 +424,96 @@ class SyncManager:
         """
         return env_truthy('SYNC_TRUST_CORROBORATED_REWIND', 'true')
 
-    def _rewind_trust(self, abs_id: str, config: dict, client_name: str, echo_clients=None):
+    @staticmethod
+    def _backward_hold_seconds() -> float:
+        """How long a backward jump may be held while waiting for corroboration.
+
+        Bounded on purpose. An indefinite hold would be unanswerable: "rewound and
+        then stopped" and "reported a stale position and then stopped" look
+        identical forever, and nothing the bridge can observe separates them. So
+        the hold only buys time for evidence that may be seconds away, and on
+        expiry the old behavior resumes rather than the book being stuck.
+        """
+        try:
+            return float(os.environ.get("SYNC_REWIND_HOLD_SECONDS", "300") or 300)
+        except (TypeError, ValueError):
+            return 300.0
+
+    def _should_hold_backward_leader(
+        self, abs_id: str, title_snip: str, config: dict, client_name: str,
+        leader_pct, echo_clients=None, primary_audio_client: str | None = None,
+    ) -> bool:
+        """Whether to defer acting on a lone client's backward jump (#215).
+
+        The mirror of the demotion guard. `material_rollback` is gated on
+        `changed_client != primary_audio_client`, so an audio client that moves
+        backward never reaches it and leads unopposed — its position is propagated
+        to everyone, which is right for a deliberate rewind and wrong for the stale
+        update Kyomorie reported. (The same is true of ANY lone backward mover that
+        reaches this branch, including a text client whose book has no usable
+        normalization — a third path neither reporter has described.)
+
+        Corroboration cannot settle this on its own: a reader who rewound and
+        stopped emits exactly what a stale client emits — one backward report and
+        then silence. What corroboration CAN do is separate them whenever the user
+        carries on, which is the common case in both reports. So this holds only
+        briefly:
+
+          - corroborated  -> do not hold; it leads now and the rewind propagates.
+          - uncorroborated and the report is recent -> hold, propagate nothing, and
+            overwrite nothing. A stale blip is superseded by the next real report
+            inside this window; a genuine rewind is delayed by a cycle.
+          - uncorroborated and the report has gone quiet -> stop holding and accept
+            it, exactly as before this existed.
+
+        The trail's own timestamps supply the expiry, so there is no pending-hold
+        record to keep, reconcile, or leak.
+        """
+        from src.services import observation_trail
+
+        if not self._trust_corroborated_rewind_enabled():
+            return False
+        state = config.get(client_name) if config else None
+        previous_pct = getattr(state, "previous_pct", None)
+        if previous_pct is None or leader_pct is None:
+            return False
+        if leader_pct >= previous_pct - 1e-9:
+            return False                      # not a backward move
+        if len(config) < 2:
+            return False                      # nobody to protect the position from
+
+        trusted, evidence = self._rewind_trust(
+            abs_id, config, client_name, echo_clients, primary_audio_client
+        )
+        if trusted:
+            return False
+
+        trail = observation_trail.get_trail(client_name, abs_id)
+        if not trail:
+            # No evidence the report is even fresh. Fail open to today's behavior
+            # rather than hold on an assumption.
+            return False
+
+        age = time.time() - trail[-1].timestamp
+        window = self._backward_hold_seconds()
+        if age > window:
+            logger.info(
+                f"⌛ '{abs_id}' '{title_snip}' Accepting '{client_name}' backward move "
+                f"{previous_pct:.4%} -> {leader_pct:.4%}: uncorroborated but quiet for "
+                f"{age:.0f}s (> {window:.0f}s) — treating it as where the reader meant to be"
+            )
+            return False
+
+        logger.info(
+            f"⏳ '{abs_id}' '{title_snip}' Holding '{client_name}' backward move "
+            f"{previous_pct:.4%} -> {leader_pct:.4%} for up to {window - age:.0f}s more: "
+            f"{evidence} — not propagating it and not overwriting it until it is "
+            f"corroborated or goes quiet"
+        )
+        return True
+
+    def _rewind_trust(self, abs_id: str, config: dict, client_name: str, echo_clients=None,
+                      primary_audio_client: str | None = None):
         """Judge whether `client_name`'s backward move is a deliberate rewind.
 
         Returns `(trusted, detail)`. This is the single evaluator behind both the
@@ -445,21 +534,31 @@ class SyncManager:
 
         state = config.get(client_name) if config else None
         current = state.current if state is not None else {}
-        anchor_pct = current.get("pct")
-        corroboration = observation_trail.evaluate(client_name, abs_id, anchor_pct=anchor_pct)
+        corroboration = observation_trail.evaluate(client_name, abs_id)
 
-        source = current.get("_normalization_source")
-        high_confidence = source in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
-
-        collapsed = False
-        try:
-            locator_pct = current.get("_locator_pct")
-            if locator_pct is not None and anchor_pct is not None:
-                collapsed = self._locator_collapsed_to_start(
-                    LocatorResult(percentage=locator_pct), anchor_pct
-                )
-        except Exception:
+        # Locator quality is an EBOOK concept. `_normalize_for_cross_format_comparison`
+        # only resolves a locator for ebook clients — the primary audio client's
+        # position is already a timestamp on the audio timeline, so it never carries
+        # a `_normalization_source` and has no locator that could collapse. Applying
+        # those checks to it would reject every audio rewind, corroborated or not.
+        is_audio_client = bool(primary_audio_client) and client_name == primary_audio_client
+        if is_audio_client:
+            source = "audio_timeline"
+            high_confidence = True
             collapsed = False
+        else:
+            source = current.get("_normalization_source")
+            high_confidence = source in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
+            collapsed = False
+            try:
+                locator_pct = current.get("_locator_pct")
+                anchor_pct = current.get("pct")
+                if locator_pct is not None and anchor_pct is not None:
+                    collapsed = self._locator_collapsed_to_start(
+                        LocatorResult(percentage=locator_pct), anchor_pct
+                    )
+            except Exception:
+                collapsed = False
 
         is_echo = bool(echo_clients) and client_name in echo_clients
         trusted = bool(
@@ -474,6 +573,7 @@ class SyncManager:
     def _shadow_evaluate_rewind(
         self, abs_id: str, title_snip: str, config: dict, client_name: str,
         situation: str, detail: str, echo_clients=None,
+        primary_audio_client: str | None = None,
     ) -> None:
         """Log what the corroboration rule WOULD have decided. Decides nothing (#215).
 
@@ -492,23 +592,14 @@ class SyncManager:
         behavior in phase 0, so every failure here is swallowed.
         """
         try:
-            trusted, evidence = self._rewind_trust(abs_id, config, client_name, echo_clients)
-            if situation == "demoted":
-                # This path IS live now (see `_trust_corroborated_rewind_enabled`), so
-                # the shadow only reports what the gate did rather than a hypothetical.
-                outcome = (
-                    "corroborated — kept as leader"
-                    if trusted else
-                    "not corroborated — demoted, furthest-wins hands it to a peer"
-                )
-            else:
-                # Still shadow-only. Holding a sync that happens today is a
-                # suppression with its own expiry semantics and needs its own design.
-                outcome = (
-                    "would still lead (today: leads) — no change"
-                    if trusted else
-                    "WOULD HOLD instead of propagating (today: leads unopposed) — not yet wired"
-                )
+            trusted, evidence = self._rewind_trust(
+                abs_id, config, client_name, echo_clients, primary_audio_client
+            )
+            outcome = (
+                "corroborated — kept as leader"
+                if trusted else
+                "not corroborated — demoted, furthest-wins hands it to a peer"
+            )
 
             logger.info(
                 f"🧪 '{abs_id}' '{title_snip}' Rewind shadow [{situation}]: '{client_name}' {detail}; "
@@ -3572,7 +3663,8 @@ class SyncManager:
                         ):
                             try:
                                 rewind_trusted, rewind_evidence = self._rewind_trust(
-                                    abs_id, config, changed_client, echo_clients
+                                    abs_id, config, changed_client, echo_clients,
+                                    primary_audio_client,
                                 )
                             except Exception as trust_err:
                                 logger.debug(
@@ -3603,27 +3695,29 @@ class SyncManager:
                                 f"is {max_other_ts - changed_ts:.1f}s behind its max peer "
                                 f"({changed_ts:.1f}s vs {max_other_ts:.1f}s)",
                                 echo_clients=echo_clients,
+                                primary_audio_client=primary_audio_client,
                             )
 
         if len(clients_with_delta) == 1 and not single_delta_low_conf:
             # Only one client changed - that client is the leader (most recent change wins)
             leader = list(clients_with_delta.keys())[0]
             leader_pct = vals[leader]
-            logger.info(f"🔄 '{abs_id}' '{title_snip}' {leader} leads at {config[leader].value_formatter(leader_pct)} (only client with change)")
-            # The mirror image of the demotion above. The material-rollback guard is
-            # gated on `changed_client != primary_audio_client`, so an audio client
-            # that moves BACKWARD reaches here unopposed and its position is
-            # propagated — Kyomorie's ABS -> KoSync case on #215. Phase 0 logs what a
-            # corroboration rule would have done; it changes nothing.
+            # The mirror image of the demotion above, and the reason it is a HOLD
+            # rather than a demotion: unlike the text-client path, this position is
+            # not being overwritten by a peer today — it is winning. Demoting it
+            # would introduce the exact complaint #215 was opened about, on a path
+            # where it does not currently occur. So an uncorroborated backward jump
+            # is deferred, never reversed. Evaluated before the "leads at" log so a
+            # held cycle never announces a leader it then discards.
             try:
-                previous_pct = config[leader].previous_pct
-                if previous_pct is not None and leader_pct is not None and leader_pct < previous_pct - 1e-9:
-                    self._shadow_evaluate_rewind(
-                        abs_id, title_snip, config, leader, "obeyed",
-                        f"moved backward {previous_pct:.4%} -> {leader_pct:.4%} and leads unopposed",
-                    )
-            except Exception as shadow_err:
-                logger.debug(f"'{abs_id}' Backward-leader shadow check failed: {shadow_err}", exc_info=True)
+                if self._should_hold_backward_leader(
+                    abs_id, title_snip, config, leader, leader_pct, echo_clients,
+                    primary_audio_client,
+                ):
+                    return None, None
+            except Exception as hold_err:
+                logger.debug(f"'{abs_id}' Backward-leader hold check failed: {hold_err}", exc_info=True)
+            logger.info(f"🔄 '{abs_id}' '{title_snip}' {leader} leads at {config[leader].value_formatter(leader_pct)} (only client with change)")
         else:
             # Multiple clients changed or this is a discrepancy resolution
             # Use "furthest wins" logic among changed clients (or all if none changed)

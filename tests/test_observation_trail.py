@@ -4,10 +4,11 @@ The trail records externally originated positions from all three ingestion paths
 `_rewind_trust` is the single evaluator behind both the live gate and the shadow
 log, so what the log describes and what the code does cannot drift apart.
 
-Phase 2 wires ONE half live: a corroborated rewind keeps the lead instead of being
-demoted. The mirror case — an audio client moving backward unopposed — stays
-shadow-only, because holding a sync that happens today is a suppression with its
-own expiry semantics.
+Both halves are live. A corroborated rewind keeps the lead instead of being
+demoted; and a lone backward mover that leads UNOPPOSED today (an audio client,
+which the material-rollback guard never reaches) is HELD rather than demoted —
+deferred until it corroborates or goes quiet, never reversed, because demoting it
+would create the #215 complaint on a path where it does not currently occur.
 """
 
 import logging
@@ -87,14 +88,14 @@ class TestCorroboration(unittest.TestCase):
     def test_a_single_backward_report_is_not_corroborated(self):
         """Kyomorie's case: one genuinely new report that never advances."""
         self._record(0.1030)
-        result = observation_trail.evaluate("KoSync", "abs-1", anchor_pct=0.1030, user_id=1)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
         self.assertFalse(result.corroborated)
         self.assertIn("need 2", result.reason)
 
     def test_reading_on_from_the_rewind_point_is_corroborated(self):
         """Sean's case: back to where he fell asleep, then keeps reading."""
         self._record(0.1030, 0.1055, 0.1081)
-        result = observation_trail.evaluate("KoSync", "abs-1", anchor_pct=0.1030, user_id=1)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
         self.assertTrue(result.corroborated)
         self.assertGreaterEqual(result.advancing, 1)
 
@@ -103,22 +104,34 @@ class TestCorroboration(unittest.TestCase):
         # A second observation at the same place collapses, so force a distinct
         # timestamped sample that does not advance.
         observation_trail.record_observation("KoSync", "abs-1", 0.10299, source="poll", user_id=1)
-        result = observation_trail.evaluate("KoSync", "abs-1", anchor_pct=0.1030, user_id=1)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
         self.assertFalse(result.corroborated)
 
-    def test_movement_before_the_anchor_does_not_count(self):
-        """Positions behind the anchor are the old reading, not evidence the user
-        is reading from the new one."""
-        self._record(0.05, 0.06, 0.07)
-        result = observation_trail.evaluate("KoSync", "abs-1", anchor_pct=0.1030, user_id=1)
+    def test_reading_forward_and_then_jumping_back_is_not_corroborated(self):
+        """The case that makes the anchor matter. Identical advancing-step count to
+        a real rewind, opposite meaning: here the forward movement happened BEFORE
+        the jump, so it is the old reading session, not evidence the reader is
+        carrying on from the new spot."""
+        self._record(0.48, 0.49, 0.50, 0.31)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
         self.assertFalse(result.corroborated)
+        self.assertEqual(result.observations, 1)  # only the jump itself is past the anchor
+
+    def test_the_realistic_rewind_trail_keeps_its_pre_jump_history(self):
+        """A live trail still holds where the reader was before the rewind; those
+        points must not be counted, and must not prevent corroboration either."""
+        self._record(0.50, 0.31, 0.315, 0.32)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
+        self.assertTrue(result.corroborated)
+        self.assertEqual(result.observations, 3)
+        self.assertEqual(result.advancing, 2)
 
     def test_mixed_sources_all_count(self):
         """PUT, poll and socket are all the user moving."""
         observation_trail.record_observation("KoSync", "abs-1", 0.10, source="put", user_id=1)
         observation_trail.record_observation("KoSync", "abs-1", 0.11, source="poll", user_id=1)
         observation_trail.record_observation("KoSync", "abs-1", 0.12, source="socket", user_id=1)
-        result = observation_trail.evaluate("KoSync", "abs-1", anchor_pct=0.10, user_id=1)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
         self.assertTrue(result.corroborated)
         self.assertEqual(set(result.sources), {"put", "poll", "socket"})
 
@@ -136,8 +149,7 @@ class TestCorroboration(unittest.TestCase):
 
 
 class TestShadowLogging(unittest.TestCase):
-    """The shadow reports what the gate actually did on the now-live demoted path,
-    and what it WOULD do on the backward-audio path that is still shadow-only."""
+    """The shadow explains WHY the demote path decided as it did."""
 
     def setUp(self):
         observation_trail.clear()
@@ -177,6 +189,129 @@ class TestShadowLogging(unittest.TestCase):
         """It runs inside `_determine_leader`; it must not be able to break a cycle."""
         self.manager._shadow_evaluate_rewind("abs-1", "Book", {}, "KoSync", "demoted", "x")
         self.manager._shadow_evaluate_rewind(None, None, None, None, None, None)
+
+
+class TestBackwardHold(unittest.TestCase):
+    """The mirror case: a lone backward mover that leads UNOPPOSED today.
+
+    Unlike the demoted path, this position is not being overwritten by a peer — it
+    is winning. So an uncorroborated jump is DEFERRED, never reversed: demoting it
+    would create the #215 complaint on a path where it does not currently occur.
+    """
+
+    def setUp(self):
+        observation_trail.clear()
+        self.manager = SyncManager.__new__(SyncManager)
+        self._saved = {
+            k: os.environ.get(k)
+            for k in ("SYNC_TRUST_CORROBORATED_REWIND", "SYNC_REWIND_HOLD_SECONDS")
+        }
+        os.environ["SYNC_TRUST_CORROBORATED_REWIND"] = "true"
+
+    def tearDown(self):
+        observation_trail.clear()
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _config(self, current=0.31, previous=0.50, source="cfi"):
+        audio = MagicMock()
+        audio.current = {"pct": current, "_normalization_source": source}
+        audio.previous_pct = previous
+        peer = MagicMock()
+        peer.current = {"pct": 0.50, "_normalization_source": "xpath"}
+        peer.previous_pct = 0.50
+        return {"BookOrbitAudio": audio, "KoSync": peer}
+
+    def test_an_uncorroborated_recent_backward_jump_is_held(self):
+        observation_trail.record_observation("BookOrbitAudio", "abs-1", 0.31, source="poll")
+        with self.assertLogs("src.sync_manager", level="INFO") as logs:
+            held = self.manager._should_hold_backward_leader(
+                "abs-1", "Book", self._config(), "BookOrbitAudio", 0.31, set(), "BookOrbitAudio"
+            )
+        self.assertTrue(held)
+        self.assertIn("Holding", "\n".join(logs.output))
+
+    def test_a_corroborated_rewind_is_not_held(self):
+        """Rewound in the audio app and carried on listening — propagate at once.
+
+        The audio client must be named as such. `_normalize_for_cross_format_comparison`
+        only resolves a locator for EBOOK clients, so the primary audio client never
+        carries a `_normalization_source`; judging it by one would reject every audio
+        rewind, corroborated or not, and hold it until the window expired."""
+        for pct in (0.50, 0.30, 0.305, 0.31):
+            observation_trail.record_observation("BookOrbitAudio", "abs-1", pct, source="poll")
+        held = self.manager._should_hold_backward_leader(
+            "abs-1", "Book", self._config(source=None), "BookOrbitAudio", 0.31, set(),
+            "BookOrbitAudio",
+        )
+        self.assertFalse(held)
+
+    def test_an_audio_client_without_a_normalization_source_still_corroborates(self):
+        """The regression directly: same trail, but the audio client is NOT named,
+        so the ebook-only locator checks are applied and wrongly veto it."""
+        for pct in (0.50, 0.30, 0.305, 0.31):
+            observation_trail.record_observation("BookOrbitAudio", "abs-1", pct, source="poll")
+        trusted_named, _ = self.manager._rewind_trust(
+            "abs-1", self._config(source=None), "BookOrbitAudio", set(), "BookOrbitAudio"
+        )
+        trusted_unnamed, _ = self.manager._rewind_trust(
+            "abs-1", self._config(source=None), "BookOrbitAudio", set(), None
+        )
+        self.assertTrue(trusted_named)
+        self.assertFalse(trusted_unnamed)
+
+    def test_the_hold_expires_so_a_book_is_never_stuck(self):
+        """The property that matters most: a quiet uncorroborated jump is
+        eventually accepted, restoring the pre-existing behaviour."""
+        observation_trail.record_observation("BookOrbitAudio", "abs-1", 0.31, source="poll")
+        os.environ["SYNC_REWIND_HOLD_SECONDS"] = "0"
+        with self.assertLogs("src.sync_manager", level="INFO") as logs:
+            held = self.manager._should_hold_backward_leader(
+                "abs-1", "Book", self._config(), "BookOrbitAudio", 0.31, set(), "BookOrbitAudio"
+            )
+        self.assertFalse(held)
+        self.assertIn("Accepting", "\n".join(logs.output))
+
+    def test_a_forward_move_is_never_held(self):
+        observation_trail.record_observation("BookOrbitAudio", "abs-1", 0.60, source="poll")
+        held = self.manager._should_hold_backward_leader(
+            "abs-1", "Book", self._config(current=0.60, previous=0.50), "BookOrbitAudio", 0.60, set(), "BookOrbitAudio"
+        )
+        self.assertFalse(held)
+
+    def test_nothing_is_held_with_no_trail_evidence(self):
+        """No observation means no evidence the report is even fresh — fail open."""
+        held = self.manager._should_hold_backward_leader(
+            "abs-1", "Book", self._config(), "BookOrbitAudio", 0.31, set()
+        )
+        self.assertFalse(held)
+
+    def test_a_lone_client_is_never_held(self):
+        observation_trail.record_observation("BookOrbitAudio", "abs-1", 0.31, source="poll")
+        solo = MagicMock()
+        solo.current = {"pct": 0.31, "_normalization_source": "cfi"}
+        solo.previous_pct = 0.50
+        held = self.manager._should_hold_backward_leader(
+            "abs-1", "Book", {"BookOrbitAudio": solo}, "BookOrbitAudio", 0.31, set(), "BookOrbitAudio"
+        )
+        self.assertFalse(held)
+
+    def test_the_toggle_disables_the_hold(self):
+        observation_trail.record_observation("BookOrbitAudio", "abs-1", 0.31, source="poll")
+        os.environ["SYNC_TRUST_CORROBORATED_REWIND"] = "false"
+        held = self.manager._should_hold_backward_leader(
+            "abs-1", "Book", self._config(), "BookOrbitAudio", 0.31, set()
+        )
+        self.assertFalse(held)
+
+    def test_the_hold_window_survives_a_cleared_field(self):
+        for raw in ("", "   ", "abc"):
+            with self.subTest(value=raw):
+                os.environ["SYNC_REWIND_HOLD_SECONDS"] = raw
+                self.assertEqual(SyncManager._backward_hold_seconds(), 300.0)
 
 
 class TestIngestionHooks(unittest.TestCase):

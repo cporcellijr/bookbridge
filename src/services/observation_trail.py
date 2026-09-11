@@ -181,50 +181,50 @@ def required_observations() -> int:
         return 2
 
 
-def evaluate(
-    client_name: str,
-    abs_id: str,
-    anchor_pct: Optional[float] = None,
-    user_id=None,
-) -> Corroboration:
-    """Judge whether `client_name`'s trail shows sustained independent movement.
+def evaluate(client_name: str, abs_id: str, user_id=None) -> Corroboration:
+    """Judge whether `client_name`'s trail shows the reader moving on from a jump.
 
-    `anchor_pct` is the position under suspicion — the backward one. Movement is
-    only corroborating when it advances FROM that anchor: a client that jumped back
-    and then kept reading is a rewind, while one that jumped back and sat still, or
-    snapped forward to where it already was, is not.
+    The anchor is derived from the trail, never supplied by the caller. The obvious
+    choice — the client's currently reported position — is wrong: by the time a
+    cycle runs, that is wherever they have read TO, so nothing in the trail can
+    advance from it and a genuine rewind never corroborates.
+
+    The anchor is the LAST backward step in the trail, which is the jump itself,
+    and only observations at or after it count. That distinction is the whole
+    point: a trail like [0.50, 0.31, 0.315, 0.32] is someone who went back and
+    kept reading, while [0.48, 0.49, 0.50, 0.31] is someone who read forward and
+    then jumped — identical advancing-step counts, opposite meanings. With no
+    backward step in the window, the oldest observation is the anchor.
     """
-    trail = get_trail(client_name, abs_id, user_id=user_id)
+    trail = [entry for entry in get_trail(client_name, abs_id, user_id=user_id) if entry.pct is not None]
     needed = required_observations()
     sources = tuple(entry.source for entry in trail)
     span = (trail[-1].timestamp - trail[0].timestamp) if len(trail) > 1 else 0.0
 
-    if len(trail) < needed:
+    anchor_index = 0
+    for index in range(len(trail) - 1, 0, -1):
+        if trail[index].pct < trail[index - 1].pct - 1e-9:
+            anchor_index = index
+            break
+
+    since_anchor = trail[anchor_index:]
+    if len(since_anchor) < needed:
         return Corroboration(
-            observations=len(trail), advancing=0, sources=sources, span_seconds=span,
-            corroborated=False, reason=f"only {len(trail)} observation(s), need {needed}",
+            observations=len(since_anchor), advancing=0, sources=sources, span_seconds=span,
+            corroborated=False,
+            reason=f"only {len(since_anchor)} observation(s) since the jump, need {needed}",
         )
 
-    # Count points that advance on the previous one while staying at or ahead of the
-    # anchor. Reading forward from the rewind point is the signal.
-    advancing = 0
-    previous = None
-    for entry in trail:
-        if entry.pct is None:
-            continue
-        if anchor_pct is not None and entry.pct < anchor_pct - 1e-9:
-            previous = entry.pct
-            continue
-        if previous is not None and entry.pct > previous + 1e-9:
-            advancing += 1
-        previous = entry.pct
-
-    if advancing >= needed - 1 and len(trail) >= needed:
-        return Corroboration(
-            observations=len(trail), advancing=advancing, sources=sources, span_seconds=span,
-            corroborated=True, reason=f"{advancing} advancing step(s) from the anchor",
-        )
+    advancing = sum(
+        1 for earlier, later in zip(since_anchor, since_anchor[1:])
+        if later.pct > earlier.pct + 1e-9
+    )
+    corroborated = advancing >= needed - 1
     return Corroboration(
-        observations=len(trail), advancing=advancing, sources=sources, span_seconds=span,
-        corroborated=False, reason=f"only {advancing} advancing step(s) from the anchor",
+        observations=len(since_anchor), advancing=advancing, sources=sources, span_seconds=span,
+        corroborated=corroborated,
+        reason=(
+            f"{advancing} advancing step(s) since the jump" if corroborated
+            else f"only {advancing} advancing step(s) since the jump"
+        ),
     )

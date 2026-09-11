@@ -2075,8 +2075,11 @@
                             position win instead of being overwritten by the app that is furthest ahead. A single
                             backward reading is ignored — it only counts once that app reports you moving on from
                             the new spot, which is what separates a real rewind from a stale or echoed position.
-                            Independent of "furthest wins", which protects you from a DIFFERENT device pulling you
-                            back. Turn off to always let the furthest position win.</div>
+                            An app that jumps backwards and then goes quiet is held briefly rather than pushed to
+                            everything else, so one bad reading cannot drag your other apps back; if it stays quiet
+                            it is accepted anyway, so nothing ever gets stuck. Independent of "furthest wins",
+                            which protects you from a DIFFERENT device pulling you back. Turn off to always let the
+                            furthest position win.</div>
                     </div>
                     <div class="form-group">
                         <label>Locator Round-Trip Tolerance (Seconds)</label>

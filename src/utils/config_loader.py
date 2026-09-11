@@ -35,6 +35,7 @@ ALL_SETTINGS = [
     'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS', 'KOSYNC_AUTO_MAP_ON_AGREEMENT',
     'SYNC_OBSERVATION_TRAIL_SECONDS', 'SYNC_REWIND_CORROBORATION_COUNT',
     'SYNC_TRUST_CORROBORATED_REWIND',
+    'SYNC_REWIND_HOLD_SECONDS',
     'KOSYNC_HASH_RECONCILE_ENABLED', 'KOSYNC_HASH_RECONCILE_MINUTES',
     'KOSYNC_XPATH_ORDER_ENABLED', 'KOSYNC_FURTHEST_WINS',
     'KOSYNC_PUT_DEBOUNCE_SECONDS',
@@ -262,6 +263,11 @@ DEFAULT_CONFIG = {
     # different question (protection from ANOTHER device regressing you) and
     # already permits same-device rewinds.
     'SYNC_TRUST_CORROBORATED_REWIND': 'true',
+    # How long an uncorroborated BACKWARD jump is deferred before the old
+    # behaviour resumes. Bounded on purpose: 'rewound then stopped' and
+    # 'reported a stale position then stopped' are indistinguishable forever,
+    # so the hold only buys time for evidence, it never blocks a book.
+    'SYNC_REWIND_HOLD_SECONDS': '300',
     'SYNC_OBSERVATION_TRAIL_SECONDS': '600',
     'SYNC_REWIND_CORROBORATION_COUNT': '2',
     'TELEGRAM_LOG_LEVEL': 'ERROR',
