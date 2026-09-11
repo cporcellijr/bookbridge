@@ -314,6 +314,77 @@ class TestBackwardHold(unittest.TestCase):
                 self.assertEqual(SyncManager._backward_hold_seconds(), 300.0)
 
 
+class TestZeroDeltaRewind(unittest.TestCase):
+    """The path a KoSync rewind actually takes, found by live testing.
+
+    The KoSync PUT handler writes State before the sync cycle runs, so the client
+    arrives with delta=0 — the cycle logs "the triggering read already wrote State
+    (delta=0)". `clients_with_delta` is therefore EMPTY, not 1, and the whole
+    single-delta guard is skipped. The decision happens in zero-delta discrepancy
+    resolution, where furthest-on-the-timeline wins.
+
+    Observed on Dearest: the reader rewound to 19.5% and read on to 20.2%, and
+    BookOrbitAudio (32.2%) won and dragged them back to 32.7%.
+    """
+
+    def setUp(self):
+        observation_trail.clear()
+        self._saved = os.environ.get("SYNC_TRUST_CORROBORATED_REWIND")
+        os.environ["SYNC_TRUST_CORROBORATED_REWIND"] = "true"
+
+    def tearDown(self):
+        observation_trail.clear()
+        if self._saved is None:
+            os.environ.pop("SYNC_TRUST_CORROBORATED_REWIND", None)
+        else:
+            os.environ["SYNC_TRUST_CORROBORATED_REWIND"] = self._saved
+
+    def _manager_and_config(self):
+        manager = SyncManager.__new__(SyncManager)
+        manager.cross_format_deadband_seconds = 2.0
+        # Real numbers from the 18:06:47 cycle on 'Dearest'.
+        kosync = MagicMock()
+        kosync.current = {"pct": 0.2023, "_normalization_source": "xpath"}
+        kosync.previous_pct = 0.2023          # delta = 0: the PUT already wrote State
+        kosync.delta = 0.0
+        audio = MagicMock()
+        audio.current = {"pct": 0.322, "ts": 9792.5}
+        audio.previous_pct = 0.322
+        audio.delta = 0.0
+        return manager, {"KoSync": kosync, "BookOrbitAudio": audio}
+
+    def test_a_corroborated_zero_delta_rewind_is_trusted(self):
+        """4873.85s vs 9792.5s — 4,918s behind, and the reader moved on from it."""
+        for pct in (0.3274, 0.1954, 0.2000, 0.2023):
+            observation_trail.record_observation("KoSync", "abs-1", pct, source="put")
+        manager, config = self._manager_and_config()
+
+        trusted, evidence = manager._rewind_trust(
+            "abs-1", config, "KoSync", set(), "BookOrbitAudio"
+        )
+
+        self.assertTrue(trusted, evidence)
+
+    def test_an_uncorroborated_zero_delta_rewind_is_not_trusted(self):
+        """Rewound and stopped: furthest-wins still takes it, as before."""
+        for pct in (0.3274, 0.1954):
+            observation_trail.record_observation("KoSync", "abs-1", pct, source="put")
+        manager, config = self._manager_and_config()
+
+        trusted, _ = manager._rewind_trust(
+            "abs-1", config, "KoSync", set(), "BookOrbitAudio"
+        )
+
+        self.assertFalse(trusted)
+
+    def test_the_material_rollback_threshold_is_module_scoped(self):
+        """It is read on the zero-delta path, where the single-delta branch that
+        used to define it never runs."""
+        from src import sync_manager as sm
+
+        self.assertEqual(sm.MATERIAL_ROLLBACK_SECONDS, 30.0)
+
+
 class TestIngestionHooks(unittest.TestCase):
     """All three paths named in #215 feed the trail: PUT, poll and socket.
 

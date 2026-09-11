@@ -97,6 +97,12 @@ _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "ABSEbook",
 })
 
+# How far behind its peers a client must fall, on the normalized audio timeline,
+# before a lone backward move is treated as a rollback rather than ordinary drift.
+# Module-level because both the single-delta guard and the zero-delta discrepancy
+# path judge against it (issue #215).
+MATERIAL_ROLLBACK_SECONDS: float = 30.0
+
 # Normalization sources that resolved a real locator (xpath/CFI/href) rather than
 # falling back to `pct * total_len`. `_normalize_for_cross_format_comparison`
 # records the source per client; leader selection and the deadband already refuse
@@ -3639,7 +3645,6 @@ class SyncManager:
                         and abs(changed_locator_pct - changed_raw_pct) > 0.01
                     )
 
-                    MATERIAL_ROLLBACK_SECONDS = 30.0
                     material_rollback = changed_ts < (max_other_ts - MATERIAL_ROLLBACK_SECONDS)
                     mismatch_not_ahead = has_locator_mismatch and changed_ts <= (max_other_ts + NORMALIZED_LEAD_EPSILON_SECONDS)
                     if material_rollback or mismatch_not_ahead:
@@ -3760,12 +3765,55 @@ class SyncManager:
                         ),
                         None,
                     )
+                    # A KoSync-originated rewind never reaches the single-delta guard
+                    # above: the PUT handler writes State before the cycle runs, so the
+                    # client arrives with delta=0 ("the triggering read already wrote
+                    # State") and lands here instead, where furthest-on-the-timeline
+                    # wins and drags the reader forward again. Observed live on #215.
+                    # So the same corroboration test is applied here: a candidate that
+                    # is materially behind its peers but whose trail shows the reader
+                    # moving on from that point is the leader, not the overtaker.
+                    corroborated_rewind = None
+                    if self._trust_corroborated_rewind_enabled() and len(normalized_candidates) > 1:
+                        for candidate_name, candidate_ts in normalized_candidates.items():
+                            peer_ts = [
+                                ts for name, ts in normalized_candidates.items()
+                                if name != candidate_name and ts is not None
+                            ]
+                            if candidate_ts is None or not peer_ts:
+                                continue
+                            if candidate_ts >= max(peer_ts) - MATERIAL_ROLLBACK_SECONDS:
+                                continue
+                            try:
+                                trusted, evidence = self._rewind_trust(
+                                    abs_id, config, candidate_name, echo_clients,
+                                    primary_audio_client,
+                                )
+                            except Exception as trust_err:
+                                logger.debug(
+                                    f"'{abs_id}' Rewind trust evaluation failed for "
+                                    f"'{candidate_name}': {trust_err}", exc_info=True
+                                )
+                                continue
+                            if trusted:
+                                corroborated_rewind = (candidate_name, candidate_ts, max(peer_ts), evidence)
+                                break
+
                     high_conf_normalized_candidates = {}
                     for candidate_name, candidate_ts in normalized_candidates.items():
                         candidate_source = config[candidate_name].current.get("_normalization_source")
                         if candidate_name == primary_audio_client or candidate_source != "percent_fallback":
                             high_conf_normalized_candidates[candidate_name] = candidate_ts
-                    if recent_external_kosync:
+                    if corroborated_rewind:
+                        rewind_name, rewind_ts, rewind_peer_ts, rewind_evidence = corroborated_rewind
+                        selected_normalized_candidates = {rewind_name: rewind_ts}
+                        logger.info(
+                            f"↩️ '{abs_id}' '{title_snip}' Keeping '{rewind_name}' as leader: "
+                            f"corroborated rewind {rewind_peer_ts - rewind_ts:.1f}s behind its max peer "
+                            f"({rewind_ts:.1f}s vs {rewind_peer_ts:.1f}s) during zero-delta "
+                            f"discrepancy resolution — {rewind_evidence}"
+                        )
+                    elif recent_external_kosync:
                         selected_normalized_candidates = {
                             recent_external_kosync: normalized_candidates[recent_external_kosync]
                         }
