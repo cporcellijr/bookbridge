@@ -174,6 +174,116 @@ class TestShadowEvaluationIsInert(unittest.TestCase):
         self.manager._shadow_evaluate_rewind(None, None, None, None, None, None)
 
 
+class TestIngestionHooks(unittest.TestCase):
+    """All three paths named in #215 feed the trail: PUT, poll and socket.
+
+    Each hook sits AFTER the existing own-write exclusion, so BookBridge's own
+    write-back can never corroborate itself (#413/#416).
+    """
+
+    def setUp(self):
+        observation_trail.clear()
+        os.environ.setdefault("DATA_DIR", "/tmp/test_observation_trail")
+        os.environ["INSTANT_SYNC_ENABLED"] = "true"
+        import src.api.kosync_server as ks
+        ks._debounce_thread_started = False
+        with ks._kosync_debounce_lock:
+            ks._kosync_debounce.clear()
+
+    def tearDown(self):
+        observation_trail.clear()
+        os.environ.pop("INSTANT_SYNC_ENABLED", None)
+
+    def test_an_external_kosync_put_is_recorded(self):
+        import src.api.kosync_server as ks
+        from flask import Flask
+        from src.db.models import KosyncDocument
+
+        mock_db = MagicMock()
+        mock_db.get_user_kosync_progress.return_value = None
+        original_db, original_manager = ks._database_service, ks._manager
+        ks._database_service, ks._manager = mock_db, MagicMock()
+        try:
+            book = MagicMock()
+            book.abs_id = "trail-book"
+            book.abs_title = "Trail Book"
+            book.status = "active"
+            book.kosync_doc_id = "y" * 32
+
+            doc = MagicMock(spec=KosyncDocument)
+            doc.linked_abs_id = "trail-book"
+            doc.percentage = 0.30
+            doc.device_id = "D1"
+
+            mock_db.get_kosync_document.return_value = doc
+            mock_db.get_book.return_value = book
+            mock_db.get_book_by_kosync_id.return_value = None
+
+            app = Flask(__name__)
+            context = app.test_request_context(
+                "/syncs/progress", method="PUT",
+                json={
+                    "document": "y" * 32, "percentage": 0.21,
+                    "progress": "/body/test", "device": "Kobo", "device_id": "D1",
+                },
+                content_type="application/json",
+            )
+            with context:
+                ks.kosync_put_progress.__wrapped__()
+
+            trail = observation_trail.get_trail("KoSync", "trail-book")
+            self.assertEqual(len(trail), 1)
+            self.assertAlmostEqual(trail[0].pct, 0.21)
+            self.assertEqual(trail[0].source, "put")
+            self.assertEqual(trail[0].device, "Kobo")
+        finally:
+            ks._database_service, ks._manager = original_db, original_manager
+
+    def test_a_poller_detected_change_is_recorded(self):
+        from src.services.client_poller import ClientPoller
+
+        poller = ClientPoller.__new__(ClientPoller)
+        poller._pending_sync = {}
+        poller._sync_manager = MagicMock()
+        book = MagicMock()
+        book.abs_id = "poll-book"
+        book.abs_title = "Poll Book"
+
+        poller._trigger_or_defer_sync(
+            "BookOrbit", book, last_pct=0.40, current_pct=0.25,
+            wait_for_settle=True, user_id=7,
+        )
+
+        trail = observation_trail.get_trail("BookOrbit", "poll-book", user_id=7)
+        self.assertEqual(len(trail), 1)
+        self.assertAlmostEqual(trail[0].pct, 0.25)
+        self.assertEqual(trail[0].source, "poll")
+
+    def test_the_socket_listener_keeps_the_reported_position(self):
+        """The debounce-fire point has no event body, so the fraction has to be
+        carried forward from the event that queued it."""
+        from src.services.abs_socket_listener import ABSSocketListener
+
+        with patch("src.services.abs_socket_listener.socketio.Client"):
+            listener = ABSSocketListener.__new__(ABSSocketListener)
+        listener._pending = {}
+        listener._last_progress = {}
+        listener._fired = set()
+        listener._lock = __import__("threading").Lock()
+        listener._db = MagicMock()
+        book = MagicMock()
+        book.status = "active"
+        book.abs_title = "Socket Book"
+        listener._db.get_book.return_value = book
+
+        listener._handle_progress_event({
+            "data": {"libraryItemId": "socket-book", "progress": 0.42}
+        })
+
+        self.assertIn("socket-book", listener._pending)
+        self.assertAlmostEqual(listener._last_progress["socket-book"], 0.42)
+
+
 class TestLeaderSelectionUnchangedByPhase0(unittest.TestCase):
     """The neutrality pin.
 
