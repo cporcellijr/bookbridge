@@ -3165,14 +3165,29 @@ def _respond_from_book_states(doc_id, book):
     if poison_pill is not None:
         return poison_pill
 
-    return jsonify({
+    response_data = {
         "device": "abs-kosync-bridge",
         "device_id": "abs-kosync-bridge",
         "document": doc_id,
         "percentage": latest_pct,
         "progress": latest_progress,
         "timestamp": int(latest_state.last_updated) if latest_state.last_updated else 0
-    }), 200
+    }
+    # A LINKED book exits Step 1 of the GET handler straight into this function, so
+    # this is the response every book the bridge actually syncs receives — and it
+    # was the one response that never carried the recent-external-PUT marker. Only
+    # the sibling-hash branch above and the unlinked-document path in the handler
+    # attached it, which is why `_kosync_recent_external_put` was never set and the
+    # "Trusting recent external KoSync PUT" path in `_determine_leader` could not
+    # fire for any synced book (issue #215).
+    #
+    # The percentage guard inside the helper still applies: the marker is dropped
+    # unless the position being returned IS the one the device just PUT, so this
+    # cannot label a bridge-synced position as a device report.
+    response_data.update(
+        _recent_external_kosync_put_metadata(doc_id, latest_pct, user_id)
+    )
+    return jsonify(response_data), 200
 
 
 def _resolve_book_by_sibling_hash(doc_id: str, existing_doc=None):

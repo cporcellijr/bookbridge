@@ -251,3 +251,57 @@ class TestKoSyncCrossDeviceRewinds:
             assert float(db.doc.percentage) == 0.30, f"value={value}"
             assert db.saved == [(0.30, "reader-b")], f"value={value}"
             assert db.user_progress_updates[0][1] == 0.30, f"value={value}"
+
+
+class TestRecentExternalPutMarkerReachesLinkedBooks:
+    """The `_kosync_recent_external_put` marker must reach a LINKED book's response.
+
+    `_determine_leader` has a path built for exactly this signal — "Trusting recent
+    external KoSync PUT during zero-delta discrepancy resolution". It never fired on
+    a real install. The reason is routing, not the signal: Step 1 of the GET handler
+    resolves a linked book and returns `_respond_from_book_states(...)` immediately,
+    and that function's normal exit was the only response that did not attach the
+    marker. Every book the bridge actually syncs takes that exit.
+    """
+
+    @staticmethod
+    def _respond(monkeypatch_targets, doc_hash, latest_pct, recorded_pct):
+        import time as _time
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from flask import Flask
+
+        book = SimpleNamespace(abs_id="abs-1", abs_title="Linked Book")
+        state = SimpleNamespace(
+            client_name="kosync", percentage=latest_pct, xpath="/body/p[1].0",
+            cfi=None, last_updated=_time.time(),
+        )
+        db = MagicMock()
+        db.get_states_for_book.return_value = [state]
+        db.get_user_kosync_progress_for_book.return_value = []
+        db.get_kosync_documents_for_book.return_value = []
+
+        app = Flask(__name__)
+        with app.test_request_context("/syncs/progress/" + doc_hash):
+            with patch.object(kosync_server, "_database_service", db), \
+                 patch.object(kosync_server, "_resolve_book_by_sibling_hash", return_value=None), \
+                 patch.object(kosync_server, "_suppress_empty_progress_response", return_value=None):
+                kosync_server._record_recent_external_kosync_put(
+                    doc_hash, "Kobo", "dev-1", recorded_pct, _time.time(), None,
+                )
+                response, status = kosync_server._respond_from_book_states(doc_hash, book)
+        return response.get_json(), status
+
+    def test_marker_is_attached_when_the_returned_position_is_the_device_put(self):
+        payload, status = self._respond(None, "b" * 32, latest_pct=0.25, recorded_pct=0.25)
+        assert status == 200
+        assert payload.get("_bridge_recent_external_put") is True
+        assert payload.get("_bridge_recent_external_put_device") == "Kobo"
+
+    def test_marker_is_withheld_when_the_returned_position_is_not_the_device_put(self):
+        """The guard that keeps a bridge-synced position from being labelled a
+        device report."""
+        payload, status = self._respond(None, "c" * 32, latest_pct=0.60, recorded_pct=0.25)
+        assert status == 200
+        assert "_bridge_recent_external_put" not in payload
