@@ -336,6 +336,21 @@ value at **70.796**. That segment covers 0.36% of the book, and one of its slice
 holds nine anchors spanning 59 chars in **0.08 seconds**: a transcript artifact on
 a book whose transcript carries `0 measured, 57328 estimated` word timings.
 
+> **Correction, from the live remap (2026-09-10).** Those two figures — 0.5426 and
+> 70.796 — were measured on a map rebuilt in a diagnostic probe, not by the
+> pipeline. When the book was actually remapped, production's placement for that
+> same segment ended at ts 5196.146 against the probe's 5195.8, and that 0.35 s
+> difference in the segment's edge-implied line changed which anchors
+> `select_anchors` kept inside it: the nine-anchor 0.08 s burst is not in the
+> shipped map. The real stored map scores **0.8950 under the old metric (spread
+> 3.735) and 0.9926 under the new one (spread 1.063)** — the same defect and the
+> same direction, but about 10 points on this book rather than 45. Every other
+> segment reproduced almost exactly (probe 2.984 / 2.854 / 2.771 / 2.765 against
+> production 2.992 / 2.920 / 2.828 / 2.814), so the probe was faithful everywhere
+> except the one segment whose retained anchors hinged on that edge. **The 355-map
+> granularity measurement below is the load-bearing evidence and does not depend on
+> this book's number at all.**
+
 **This is not the max-of-N-noisy-estimates effect it resembles.** The proof is
 independent of segmentation entirely: 355 undisputed **in-order** stored maps,
 unchanged, re-measured with `k` equal char slices as synthetic segments. Maps whose
