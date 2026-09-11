@@ -8,6 +8,18 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Go back in one app and have it stick (#215).** If you fall asleep to the audiobook
+  and then go back in your reader to where you actually drifted off, that position used to
+  be wiped out on the next sync: the app that was furthest ahead always won, so your
+  audiobook dragged your reader forward again. BookBridge now recognises a deliberate
+  rewind and lets it win. It does not take your word for it from a single reading — one
+  backward position could just as easily be an app reporting something stale — it waits
+  until that app shows you actually *reading on* from the new spot, which is what tells a
+  real rewind apart from a glitch. Controlled by **Honor a Deliberate Rewind** under
+  Settings → Sync, on by default. This is separate from *furthest wins*, which protects
+  you from a different device pulling you backwards; you no longer have to give that up to
+  have your own rewinds respected.
+
 - **Catch a wrong ebook/audiobook pairing without needing an LLM (#426).** BookBridge
   already refused to align content that clearly didn't match, but that check ran only
   when Ollama was configured and reachable — so on most installs it never ran at all,

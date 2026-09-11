@@ -410,11 +410,72 @@ class SyncManager:
             return self._get_storyteller_ebook_filename(book)
         return self._get_non_story_ebook_filename(book)
 
+    @staticmethod
+    def _trust_corroborated_rewind_enabled() -> bool:
+        """Whether a corroborated rewind may keep the lead (#215).
+
+        Deliberately NOT `KOSYNC_FURTHEST_WINS`. That flag means "protect me from
+        another device regressing my position", and `kosync_server` already allows a
+        rewind from the SAME device while it is on — so reusing it would force a user
+        to give up cross-device protection to have their own rewinds honored. These
+        are two different questions and get two different switches.
+
+        Read per call so the settings UI applies without a restart.
+        """
+        return env_truthy('SYNC_TRUST_CORROBORATED_REWIND', 'true')
+
+    def _rewind_trust(self, abs_id: str, config: dict, client_name: str, echo_clients=None):
+        """Judge whether `client_name`'s backward move is a deliberate rewind.
+
+        Returns `(trusted, detail)`. This is the single evaluator behind both the
+        live gate and the shadow log, so the two cannot drift apart — a shadow that
+        described a different rule than the one that ships would be worse than no
+        shadow at all.
+
+        A backward report is trusted only when ALL of:
+          - the trail shows sustained independent movement advancing from the new
+            anchor (`observation_trail.evaluate`) — a reader who genuinely went back
+            keeps reading; a stale or echoed report never advances;
+          - the position resolved through a real locator, not `pct * total_len`
+            (a collapsed or percent-derived offset is #420's signature);
+          - the locator did not collapse to start-of-book;
+          - the client is not one of this cycle's own write-back echoes (#413/#416).
+        """
+        from src.services import observation_trail
+
+        state = config.get(client_name) if config else None
+        current = state.current if state is not None else {}
+        anchor_pct = current.get("pct")
+        corroboration = observation_trail.evaluate(client_name, abs_id, anchor_pct=anchor_pct)
+
+        source = current.get("_normalization_source")
+        high_confidence = source in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
+
+        collapsed = False
+        try:
+            locator_pct = current.get("_locator_pct")
+            if locator_pct is not None and anchor_pct is not None:
+                collapsed = self._locator_collapsed_to_start(
+                    LocatorResult(percentage=locator_pct), anchor_pct
+                )
+        except Exception:
+            collapsed = False
+
+        is_echo = bool(echo_clients) and client_name in echo_clients
+        trusted = bool(
+            corroboration.corroborated and high_confidence and not collapsed and not is_echo
+        )
+        detail = (
+            f"{corroboration.describe()}; source={source} high_conf={high_confidence} "
+            f"collapsed={collapsed} echo={is_echo}"
+        )
+        return trusted, detail
+
     def _shadow_evaluate_rewind(
         self, abs_id: str, title_snip: str, config: dict, client_name: str,
-        situation: str, detail: str,
+        situation: str, detail: str, echo_clients=None,
     ) -> None:
-        """Log what a corroboration rule WOULD have decided. Decides nothing (#215).
+        """Log what the corroboration rule WOULD have decided. Decides nothing (#215).
 
         Leader selection cannot tell a deliberate rewind from a stale client, an
         echo, or a collapsed locator, so today it guesses — and guesses in opposite
@@ -431,43 +492,27 @@ class SyncManager:
         behavior in phase 0, so every failure here is swallowed.
         """
         try:
-            from src.services import observation_trail
-
-            state = config.get(client_name)
-            current = state.current if state is not None else {}
-            anchor_pct = current.get("pct")
-            corroboration = observation_trail.evaluate(client_name, abs_id, anchor_pct=anchor_pct)
-
-            source = current.get("_normalization_source")
-            high_confidence = source in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
-            collapsed = False
-            try:
-                locator_pct = current.get("_locator_pct")
-                if locator_pct is not None and anchor_pct is not None:
-                    collapsed = self._locator_collapsed_to_start(
-                        LocatorResult(percentage=locator_pct), anchor_pct
-                    )
-            except Exception:
-                collapsed = False
-
-            would_trust = bool(corroboration.corroborated and high_confidence and not collapsed)
+            trusted, evidence = self._rewind_trust(abs_id, config, client_name, echo_clients)
             if situation == "demoted":
+                # This path IS live now (see `_trust_corroborated_rewind_enabled`), so
+                # the shadow only reports what the gate did rather than a hypothetical.
                 outcome = (
-                    "WOULD KEEP as leader (today: demoted, furthest-wins hands it to a peer)"
-                    if would_trust else
-                    "would still demote (today: demoted) — no change"
+                    "corroborated — kept as leader"
+                    if trusted else
+                    "not corroborated — demoted, furthest-wins hands it to a peer"
                 )
             else:
+                # Still shadow-only. Holding a sync that happens today is a
+                # suppression with its own expiry semantics and needs its own design.
                 outcome = (
                     "would still lead (today: leads) — no change"
-                    if would_trust else
-                    "WOULD HOLD instead of propagating (today: leads unopposed)"
+                    if trusted else
+                    "WOULD HOLD instead of propagating (today: leads unopposed) — not yet wired"
                 )
 
             logger.info(
                 f"🧪 '{abs_id}' '{title_snip}' Rewind shadow [{situation}]: '{client_name}' {detail}; "
-                f"{corroboration.describe()}; source={source} high_conf={high_confidence} "
-                f"collapsed={collapsed} -> {outcome}"
+                f"{evidence} -> {outcome}"
             )
         except Exception as shadow_err:
             logger.debug(f"'{abs_id}' Rewind shadow evaluation failed: {shadow_err}", exc_info=True)
@@ -3507,22 +3552,58 @@ class SyncManager:
                     material_rollback = changed_ts < (max_other_ts - MATERIAL_ROLLBACK_SECONDS)
                     mismatch_not_ahead = has_locator_mismatch and changed_ts <= (max_other_ts + NORMALIZED_LEAD_EPSILON_SECONDS)
                     if material_rollback or mismatch_not_ahead:
-                        single_delta_low_conf = True
-                        if material_rollback:
-                            reason = f"material rollback on normalized timeline (> {MATERIAL_ROLLBACK_SECONDS:.0f}s behind)"
+                        # A deliberate rewind is indistinguishable from a stale read in
+                        # a single sample, so this guard demotes both and furthest-wins
+                        # then overwrites the reader's position — issue #215. The trail
+                        # supplies the missing evidence: a reader who genuinely went
+                        # back keeps reading FROM the new point, so the client emits a
+                        # sequence advancing from it, while a stale or echoed report is
+                        # one sample that never advances.
+                        #
+                        # Scoped to `material_rollback` only. `mismatch_not_ahead` is a
+                        # raw/locator disagreement, not a claim about the reader having
+                        # moved, so corroboration says nothing about it.
+                        rewind_trusted = False
+                        rewind_evidence = ""
+                        if (
+                            material_rollback
+                            and not mismatch_not_ahead
+                            and self._trust_corroborated_rewind_enabled()
+                        ):
+                            try:
+                                rewind_trusted, rewind_evidence = self._rewind_trust(
+                                    abs_id, config, changed_client, echo_clients
+                                )
+                            except Exception as trust_err:
+                                logger.debug(
+                                    f"'{abs_id}' Rewind trust evaluation failed: {trust_err}",
+                                    exc_info=True,
+                                )
+                                rewind_trusted = False
+
+                        if rewind_trusted:
+                            logger.info(
+                                f"↩️ '{abs_id}' '{title_snip}' Keeping '{changed_client}' as leader: "
+                                f"corroborated rewind {max_other_ts - changed_ts:.1f}s behind its max peer "
+                                f"({changed_ts:.1f}s vs {max_other_ts:.1f}s) — {rewind_evidence}"
+                            )
                         else:
-                            reason = "raw/locator mismatch and not ahead on normalized timeline"
-                        logger.info(
-                            f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
-                            f"'{changed_client}' ({reason}: "
-                            f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
-                        )
-                        # Phase 0 instrumentation only — changes nothing (#215).
-                        self._shadow_evaluate_rewind(
-                            abs_id, title_snip, config, changed_client, "demoted",
-                            f"is {max_other_ts - changed_ts:.1f}s behind its max peer "
-                            f"({changed_ts:.1f}s vs {max_other_ts:.1f}s)",
-                        )
+                            single_delta_low_conf = True
+                            if material_rollback:
+                                reason = f"material rollback on normalized timeline (> {MATERIAL_ROLLBACK_SECONDS:.0f}s behind)"
+                            else:
+                                reason = "raw/locator mismatch and not ahead on normalized timeline"
+                            logger.info(
+                                f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
+                                f"'{changed_client}' ({reason}: "
+                                f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
+                            )
+                            self._shadow_evaluate_rewind(
+                                abs_id, title_snip, config, changed_client, "demoted",
+                                f"is {max_other_ts - changed_ts:.1f}s behind its max peer "
+                                f"({changed_ts:.1f}s vs {max_other_ts:.1f}s)",
+                                echo_clients=echo_clients,
+                            )
 
         if len(clients_with_delta) == 1 and not single_delta_low_conf:
             # Only one client changed - that client is the leader (most recent change wins)

@@ -1,9 +1,13 @@
-"""Tests for the observation trail and the #215 phase-0 shadow evaluation.
+"""Tests for the observation trail and the #215 corroborated-rewind rule.
 
-Phase 0 is instrumentation ONLY. The trail records externally originated positions
-and `_determine_leader` logs what a corroboration rule would have decided, but no
-leader decision changes. The last test class is the one that matters: it pins that
-neutrality, so phase 0 cannot quietly become phase 2.
+The trail records externally originated positions from all three ingestion paths.
+`_rewind_trust` is the single evaluator behind both the live gate and the shadow
+log, so what the log describes and what the code does cannot drift apart.
+
+Phase 2 wires ONE half live: a corroborated rewind keeps the lead instead of being
+demoted. The mirror case — an audio client moving backward unopposed — stays
+shadow-only, because holding a sync that happens today is a suppression with its
+own expiry semantics.
 """
 
 import logging
@@ -131,8 +135,9 @@ class TestCorroboration(unittest.TestCase):
                 os.environ["SYNC_REWIND_CORROBORATION_COUNT"] = saved
 
 
-class TestShadowEvaluationIsInert(unittest.TestCase):
-    """Phase 0 must log and nothing else."""
+class TestShadowLogging(unittest.TestCase):
+    """The shadow reports what the gate actually did on the now-live demoted path,
+    and what it WOULD do on the backward-audio path that is still shadow-only."""
 
     def setUp(self):
         observation_trail.clear()
@@ -156,7 +161,7 @@ class TestShadowEvaluationIsInert(unittest.TestCase):
             )
         joined = "\n".join(logs.output)
         self.assertIn("Rewind shadow [demoted]", joined)
-        self.assertIn("WOULD KEEP as leader", joined)
+        self.assertIn("corroborated — kept as leader", joined)
 
     def test_a_low_confidence_source_is_never_trusted(self):
         for pct in (0.10, 0.11, 0.12):
@@ -166,7 +171,7 @@ class TestShadowEvaluationIsInert(unittest.TestCase):
                 "abs-1", "Book", self._config(source="percent_fallback"), "KoSync",
                 "demoted", "is 900.0s behind",
             )
-        self.assertIn("would still demote", "\n".join(logs.output))
+        self.assertIn("not corroborated — demoted", "\n".join(logs.output))
 
     def test_it_never_raises_even_on_garbage(self):
         """It runs inside `_determine_leader`; it must not be able to break a cycle."""
@@ -284,47 +289,91 @@ class TestIngestionHooks(unittest.TestCase):
         self.assertAlmostEqual(listener._last_progress["socket-book"], 0.42)
 
 
-class TestLeaderSelectionUnchangedByPhase0(unittest.TestCase):
-    """The neutrality pin.
-
-    A deliberate rewind must STILL be overwritten today. If this test ever starts
-    failing, phase 0 has silently become phase 2.
-    """
+class TestRewindTrustGate(unittest.TestCase):
+    """The live rule (#215 phase 2): `_rewind_trust` decides, and every one of its
+    four conditions must be able to veto on its own."""
 
     def setUp(self):
         observation_trail.clear()
+        self.manager = SyncManager.__new__(SyncManager)
+        self._saved = os.environ.get("SYNC_TRUST_CORROBORATED_REWIND")
 
     def tearDown(self):
         observation_trail.clear()
+        if self._saved is None:
+            os.environ.pop("SYNC_TRUST_CORROBORATED_REWIND", None)
+        else:
+            os.environ["SYNC_TRUST_CORROBORATED_REWIND"] = self._saved
 
-    def test_a_fully_corroborated_rewind_is_still_demoted(self):
-        from tests.base_sync_test import BaseSyncCycleTestCase  # noqa: F401  (import guard only)
-
-        # Corroborate as hard as possible: many advancing, high-confidence samples.
-        for pct in (0.10, 0.11, 0.12, 0.13):
+    def _corroborate(self):
+        for pct in (0.10, 0.11, 0.12):
             observation_trail.record_observation("KoSync", "abs-1", pct, source="put")
 
-        manager = SyncManager.__new__(SyncManager)
-        result = observation_trail.evaluate("KoSync", "abs-1", anchor_pct=0.10)
-        self.assertTrue(result.corroborated, "test setup must be corroborated to be meaningful")
+    def _config(self, source="xpath", locator_pct=None):
+        state = MagicMock()
+        state.current = {"pct": 0.12, "_normalization_source": source}
+        if locator_pct is not None:
+            state.current["_locator_pct"] = locator_pct
+        state.previous_pct = 0.52
+        return {"KoSync": state}
 
-        # The shadow reports it WOULD keep the client...
-        with self.assertLogs("src.sync_manager", level="INFO") as logs:
-            state = MagicMock()
-            state.current = {"pct": 0.10, "_normalization_source": "xpath"}
-            state.previous_pct = 0.20
-            manager._shadow_evaluate_rewind(
-                "abs-1", "Book", {"KoSync": state}, "KoSync", "demoted", "is 900.0s behind",
-            )
-        self.assertIn("WOULD KEEP as leader", "\n".join(logs.output))
+    def test_a_corroborated_high_confidence_rewind_is_trusted(self):
+        self._corroborate()
+        trusted, detail = self.manager._rewind_trust("abs-1", self._config(), "KoSync", set())
+        self.assertTrue(trusted, detail)
 
-        # ...and that is the ONLY thing it does: the helper returns None and has no
-        # mechanism to alter a candidate set.
-        self.assertIsNone(
-            manager._shadow_evaluate_rewind(
-                "abs-1", "Book", {"KoSync": state}, "KoSync", "demoted", "is 900.0s behind",
-            )
+    def test_an_uncorroborated_rewind_is_not_trusted(self):
+        observation_trail.record_observation("KoSync", "abs-1", 0.12, source="put")
+        trusted, _ = self.manager._rewind_trust("abs-1", self._config(), "KoSync", set())
+        self.assertFalse(trusted)
+
+    def test_a_percent_fallback_source_is_not_trusted(self):
+        self._corroborate()
+        trusted, _ = self.manager._rewind_trust(
+            "abs-1", self._config(source="percent_fallback"), "KoSync", set()
         )
+        self.assertFalse(trusted)
+
+    def test_our_own_write_back_echo_is_not_trusted(self):
+        """Keeps #413/#416 intact: an echo can never corroborate itself."""
+        self._corroborate()
+        trusted, _ = self.manager._rewind_trust(
+            "abs-1", self._config(), "KoSync", {"KoSync"}
+        )
+        self.assertFalse(trusted)
+
+    def test_a_locator_collapsed_to_start_is_not_trusted(self):
+        """#420: a locator that resolved to ~0% is not a rewind."""
+        self._corroborate()
+        self.manager._locator_collapsed_to_start = MagicMock(return_value=True)
+        trusted, _ = self.manager._rewind_trust(
+            "abs-1", self._config(locator_pct=0.001), "KoSync", set()
+        )
+        self.assertFalse(trusted)
+
+    def test_the_toggle_accepts_both_boolean_spellings(self):
+        """Settings checkboxes POST 'on', not 'true' — failure mode #1."""
+        # An explicitly empty value is off for every boolean in this repo, and off
+        # is the safe direction for a behavior change.
+        for raw, expected in (("true", True), ("on", True), ("false", False), ("", False)):
+            with self.subTest(value=raw):
+                os.environ["SYNC_TRUST_CORROBORATED_REWIND"] = raw
+                self.assertEqual(SyncManager._trust_corroborated_rewind_enabled(), expected)
+
+    def test_the_toggle_defaults_on_when_unset(self):
+        os.environ.pop("SYNC_TRUST_CORROBORATED_REWIND", None)
+        self.assertTrue(SyncManager._trust_corroborated_rewind_enabled())
+
+    def test_the_setting_is_registered_everywhere_it_must_be(self):
+        """A boolean missing from bool_keys silently breaks — failure mode #1."""
+        from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG
+
+        self.assertIn("SYNC_TRUST_CORROBORATED_REWIND", ALL_SETTINGS)
+        self.assertIn("SYNC_TRUST_CORROBORATED_REWIND", DEFAULT_CONFIG)
+        web_server = open("src/web_server.py", encoding="utf-8").read()
+        self.assertIn("'SYNC_TRUST_CORROBORATED_REWIND',", web_server)
+        template = open("templates/settings.html", encoding="utf-8").read()
+        self.assertIn('name="SYNC_TRUST_CORROBORATED_REWIND"', template)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ ALL_SETTINGS = [
     'KOSYNC_HASH_METHOD', 'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
     'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS', 'KOSYNC_AUTO_MAP_ON_AGREEMENT',
     'SYNC_OBSERVATION_TRAIL_SECONDS', 'SYNC_REWIND_CORROBORATION_COUNT',
+    'SYNC_TRUST_CORROBORATED_REWIND',
     'KOSYNC_HASH_RECONCILE_ENABLED', 'KOSYNC_HASH_RECONCILE_MINUTES',
     'KOSYNC_XPATH_ORDER_ENABLED', 'KOSYNC_FURTHEST_WINS',
     'KOSYNC_PUT_DEBOUNCE_SECONDS',
@@ -255,6 +256,12 @@ DEFAULT_CONFIG = {
     # originated position stays usable as evidence that a client is genuinely
     # moving, and how many advancing observations count as corroboration.
     # Nothing reads these to make a decision yet.
+    # Issue #215: let a lone client whose position is materially behind its peers
+    # KEEP the lead when its observation trail shows it genuinely moving on from
+    # that point. Deliberately separate from KOSYNC_FURTHEST_WINS, which answers a
+    # different question (protection from ANOTHER device regressing you) and
+    # already permits same-device rewinds.
+    'SYNC_TRUST_CORROBORATED_REWIND': 'true',
     'SYNC_OBSERVATION_TRAIL_SECONDS': '600',
     'SYNC_REWIND_CORROBORATION_COUNT': '2',
     'TELEGRAM_LOG_LEVEL': 'ERROR',

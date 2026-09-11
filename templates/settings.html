@@ -2067,6 +2067,17 @@
                         <small>A behind client is only vetoed when the peer's position is at least this much newer —
                             keep generous to absorb clock differences between services.</small>
                     </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="trust_corroborated_rewind" name="SYNC_TRUST_CORROBORATED_REWIND" {% if
+                            get_bool('SYNC_TRUST_CORROBORATED_REWIND') %}checked{% endif %}>
+                        <label for="trust_corroborated_rewind">Honor a Deliberate Rewind</label>
+                        <div class="help-text">When you go back in one app and keep reading from there, let that
+                            position win instead of being overwritten by the app that is furthest ahead. A single
+                            backward reading is ignored — it only counts once that app reports you moving on from
+                            the new spot, which is what separates a real rewind from a stale or echoed position.
+                            Independent of "furthest wins", which protects you from a DIFFERENT device pulling you
+                            back. Turn off to always let the furthest position win.</div>
+                    </div>
                     <div class="form-group">
                         <label>Locator Round-Trip Tolerance (Seconds)</label>
                         <input type="number" min="0" name="LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"
