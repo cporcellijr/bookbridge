@@ -260,6 +260,14 @@ class _StubClient:
     def __init__(self, supported_types):
         self._supported_types = supported_types
         self.update_progress = MagicMock(return_value=SyncResult(0.0, True, {"pct": 0.0}))
+        # Only exercised by the fuzzy-text fallthrough test; every other test
+        # mocks `_resolve_alignment_locator_from_abs_timestamp` to a real locator
+        # and never reaches these.
+        self.get_text_from_current_state = MagicMock(return_value="leader anchor text")
+        self.get_locator_from_text = MagicMock(
+            return_value=LocatorResult(percentage=0.71, match_index=480, cfi="epubcfi(/6/4!/4/2:0)")
+        )
+        self.get_fallback_text = MagicMock(return_value=None)
 
     def get_supported_sync_types(self):
         return self._supported_types
@@ -357,6 +365,7 @@ def test_target_audio_ts_passed_to_audio_follower_when_text_client_leads():
                 "pct": 0.71,
                 "xpath": "/body/DocFragment[1]/body/p[1]/text().0",
                 "_normalized_ts": 23052.9,
+                "_normalization_source": "xpath",
             },
             previous_pct=0.68, delta=0.03, threshold=0.005,
         ),
@@ -398,7 +407,19 @@ def test_target_audio_ts_none_when_audio_client_leads():
     _wire_database(manager, book)
 
     config = {
-        "ABS": _state({"pct": 0.70, "ts": 23000.0}, previous_pct=0.65, delta=5000.0, threshold=60.0),
+        # The leader's own state deliberately CARRIES a normalized position and a
+        # high-confidence source. Without these the assertion below passes for the
+        # wrong reason -- `_normalized_ts` would be absent and the result None no
+        # matter what the guard did.
+        "ABS": _state(
+            {
+                "pct": 0.70,
+                "ts": 23000.0,
+                "_normalized_ts": 23000.0,
+                "_normalization_source": "xpath",
+            },
+            previous_pct=0.65, delta=5000.0, threshold=60.0,
+        ),
         "BookLoreAudio": _state({"pct": 0.60, "ts": 20000.0}, previous_pct=0.60, delta=0.0, threshold=60.0),
     }
     manager._fetch_states_parallel = MagicMock(return_value=config)
@@ -408,3 +429,160 @@ def test_target_audio_ts_none_when_audio_client_leads():
     audio_follower.update_progress.assert_called_once()
     request = audio_follower.update_progress.call_args[0][1]
     assert request.target_audio_ts is None
+
+
+def test_combined_audiobook_ebook_follower_gets_no_target_audio_ts():
+    """The audio gate is exact set equality, not membership.
+
+    Eight clients declare {'audiobook', 'ebook'} for combined mode. They write a
+    locator/percentage rather than a timestamp, so none of them may receive
+    `target_audio_ts` -- an `'audiobook' in ...` membership test would hand it to
+    all of them. This pins the distinction with a combined-mode client in the
+    FOLLOWER position, where `update_progress` is actually called."""
+    manager = _base_manager()
+
+    abs_client = _StubClient({"audiobook"})
+    kosync_client = _StubClient({"audiobook", "ebook"})
+    combined_follower = _StubClient({"audiobook", "ebook"})
+    manager.sync_clients = {
+        "ABS": abs_client,
+        "KoSync": kosync_client,
+        "BookOrbit": combined_follower,
+    }
+    manager._get_primary_audio_client_name = MagicMock(return_value="ABS")
+    manager._determine_leader = MagicMock(return_value=("KoSync", 0.71))
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(
+            LocatorResult(percentage=0.71, match_index=500, cfi="epubcfi(/6/4!/4/2:0)"),
+            "anchor text",
+        )
+    )
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Combined Follower Test", status="active",
+        duration=32385, transcript_file="DB_MANAGED",
+        ebook_filename="book.epub", original_ebook_filename="book.epub",
+        audio_source="ABS", sync_mode="audiobook",
+    )
+    _wire_database(manager, book)
+
+    config = {
+        "ABS": _state({"pct": 0.70, "ts": 23000.0}, previous_pct=0.70, delta=0.0, threshold=60.0),
+        "KoSync": _state(
+            {
+                "pct": 0.71,
+                "xpath": "/body/DocFragment[1]/body/p[1]/text().0",
+                "_normalized_ts": 23052.9,
+                "_normalization_source": "xpath",
+            },
+            previous_pct=0.68, delta=0.03, threshold=0.005,
+        ),
+        "BookOrbit": _state({"pct": 0.60}, previous_pct=0.60, delta=0.0, threshold=0.005),
+    }
+    manager._fetch_states_parallel = MagicMock(return_value=config)
+
+    manager._sync_cycle_internal(target_abs_id="abs-1")
+
+    # The audio-only client still gets it...
+    abs_client.update_progress.assert_called_once()
+    assert abs_client.update_progress.call_args[0][1].target_audio_ts == pytest.approx(23052.9)
+    # ...and the combined-mode follower does not.
+    combined_follower.update_progress.assert_called_once()
+    assert combined_follower.update_progress.call_args[0][1].target_audio_ts is None
+
+
+def test_target_audio_ts_withheld_when_the_locator_came_from_fuzzy_text():
+    """The audio write must not diverge from the locator the ebook clients get.
+
+    When `_resolve_alignment_locator_from_abs_timestamp` declines, the cycle
+    falls through to `fuzzy_text`, which resolves the leader's text
+    independently and lands at its own position. Writing `_normalized_ts` to
+    ABS anyway would put the ebook clients at one position and the audio
+    clients at another -- reintroducing, on the untrusted path, exactly the
+    split this change exists to close."""
+    manager = _base_manager()
+
+    abs_client = _StubClient({"audiobook"})
+    kosync_client = _StubClient({"audiobook", "ebook"})
+    manager.sync_clients = {"ABS": abs_client, "KoSync": kosync_client}
+    manager._get_primary_audio_client_name = MagicMock(return_value="ABS")
+    manager._determine_leader = MagicMock(return_value=("KoSync", 0.71))
+    # The alignment-direct path declines -> fuzzy text wins.
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(return_value=(None, None))
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Fuzzy Text Fallthrough", status="active",
+        duration=32385, transcript_file="DB_MANAGED",
+        ebook_filename="book.epub", original_ebook_filename="book.epub",
+        audio_source="ABS", sync_mode="audiobook",
+    )
+    _wire_database(manager, book)
+
+    config = {
+        "ABS": _state({"pct": 0.70, "ts": 23000.0}, previous_pct=0.70, delta=0.0, threshold=60.0),
+        "KoSync": _state(
+            {
+                "pct": 0.71,
+                "xpath": "/body/DocFragment[1]/body/p[1]/text().0",
+                "_normalized_ts": 23052.9,
+                "_normalization_source": "xpath",
+            },
+            previous_pct=0.68, delta=0.03, threshold=0.005,
+        ),
+    }
+    manager._fetch_states_parallel = MagicMock(return_value=config)
+
+    manager._sync_cycle_internal(target_abs_id="abs-1")
+
+    # The locator really did come from the fuzzy-text path.
+    kosync_client.get_locator_from_text.assert_called()
+    abs_client.update_progress.assert_called_once()
+    assert abs_client.update_progress.call_args[0][1].target_audio_ts is None
+
+
+def test_target_audio_ts_withheld_when_normalization_fell_back_to_percentage():
+    """A `_normalized_ts` derived from `pct * total_len` is not written to ABS.
+
+    `_determine_leader` demotes `percent_fallback` candidates and
+    `_should_skip_deadband_rollback` refuses to act on them; this keeps the
+    direct write consistent with that, instead of being the one place a
+    low-confidence normalization is written verbatim."""
+    manager = _base_manager()
+
+    abs_client = _StubClient({"audiobook"})
+    kosync_client = _StubClient({"audiobook", "ebook"})
+    manager.sync_clients = {"ABS": abs_client, "KoSync": kosync_client}
+    manager._get_primary_audio_client_name = MagicMock(return_value="ABS")
+    manager._determine_leader = MagicMock(return_value=("KoSync", 0.71))
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(
+            LocatorResult(percentage=0.71, match_index=500, cfi="epubcfi(/6/4!/4/2:0)"),
+            "anchor text",
+        )
+    )
+
+    book = SimpleNamespace(
+        abs_id="abs-1", abs_title="Percent Fallback Test", status="active",
+        duration=32385, transcript_file="DB_MANAGED",
+        ebook_filename="book.epub", original_ebook_filename="book.epub",
+        audio_source="ABS", sync_mode="audiobook",
+    )
+    _wire_database(manager, book)
+
+    config = {
+        "ABS": _state({"pct": 0.70, "ts": 23000.0}, previous_pct=0.70, delta=0.0, threshold=60.0),
+        "KoSync": _state(
+            {
+                "pct": 0.71,
+                "_normalized_ts": 23052.9,
+                "_normalization_source": "percent_fallback",
+            },
+            previous_pct=0.68, delta=0.03, threshold=0.005,
+        ),
+    }
+    manager._fetch_states_parallel = MagicMock(return_value=config)
+
+    manager._sync_cycle_internal(target_abs_id="abs-1")
+
+    abs_client.update_progress.assert_called_once()
+    assert abs_client.update_progress.call_args[0][1].target_audio_ts is None

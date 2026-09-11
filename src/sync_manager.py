@@ -97,6 +97,17 @@ _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "ABSEbook",
 })
 
+# Normalization sources that resolved a real locator (xpath/CFI/href) rather than
+# falling back to `pct * total_len`. `_normalize_for_cross_format_comparison`
+# records the source per client; leader selection and the deadband already refuse
+# to act on a `_normalized_ts` derived from the percentage fallback.
+_HIGH_CONFIDENCE_NORMALIZATION_SOURCES: frozenset[str] = frozenset({
+    "xpath",
+    "cfi",
+    "href_frag",
+    "href_progression",
+})
+
 # Clients that navigate by locator rather than by percentage. ABSEbook rejects a
 # locator whose cfi is None outright; BookOrbit, Grimmory and CWA all back a Kobo
 # reading state, and a Kobo moves only when it is handed a KoboSpan — which those
@@ -4286,9 +4297,30 @@ class SyncManager:
                 # selection and the rollback veto compare against). None whenever the
                 # leader IS the primary audio client (nothing to normalize — it's
                 # already on the audio timeline) or normalization didn't resolve one.
+                #
+                # Two further gates, because writing this number straight to an audio
+                # client skips screening the locator path used to apply:
+                #
+                # - The normalization must have resolved a real locator. On the
+                #   `percent_fallback` path the offset is just `pct * total_len`, and
+                #   the rest of the pipeline already refuses to act on that:
+                #   `_should_skip_deadband_rollback` ignores a `_normalized_ts` whose
+                #   source is not one of these, and `_determine_leader` demotes such
+                #   candidates twice. Handing it to ABS unscreened would have been the
+                #   one place a low-confidence normalization got written verbatim.
+                # - The locator this cycle actually built must be the one derived from
+                #   this number. When `_resolve_alignment_locator_from_abs_timestamp`
+                #   declines, the code falls through to `fuzzy_text`, which resolves
+                #   the leader's text independently and lands somewhere else. Writing
+                #   `_normalized_ts` anyway would put the ebook clients at one position
+                #   and the audio clients at another — the very split this change
+                #   exists to close.
                 leader_normalized_ts = (
                     leader_state.current.get("_normalized_ts")
-                    if leader != primary_audio_client else None
+                    if leader != primary_audio_client
+                    and leader_state.current.get("_normalization_source") in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
+                    and locator_source == "alignment_from_normalized_ts"
+                    else None
                 )
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
