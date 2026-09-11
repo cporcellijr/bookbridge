@@ -135,6 +135,16 @@ class TestCorroboration(unittest.TestCase):
         self.assertTrue(result.corroborated)
         self.assertEqual(set(result.sources), {"put", "poll", "socket"})
 
+    def test_the_reported_counts_and_sources_describe_the_same_window(self):
+        """Live log read `trail=3 obs over 113s (put,put,put,put)` — three
+        observations, four sources. Everything must describe the window SINCE the
+        jump, or the line people paste into an issue contradicts itself."""
+        self._record(0.265, 0.176, 0.178, 0.179)
+        result = observation_trail.evaluate("KoSync", "abs-1", user_id=1)
+        self.assertEqual(result.observations, len(result.sources))
+        self.assertEqual(result.observations, 3)
+        self.assertIn("obs", result.describe())
+
     def test_required_count_is_configurable_and_never_below_two(self):
         saved = os.environ.get("SYNC_REWIND_CORROBORATION_COUNT")
         try:

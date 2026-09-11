@@ -198,8 +198,6 @@ def evaluate(client_name: str, abs_id: str, user_id=None) -> Corroboration:
     """
     trail = [entry for entry in get_trail(client_name, abs_id, user_id=user_id) if entry.pct is not None]
     needed = required_observations()
-    sources = tuple(entry.source for entry in trail)
-    span = (trail[-1].timestamp - trail[0].timestamp) if len(trail) > 1 else 0.0
 
     anchor_index = 0
     for index in range(len(trail) - 1, 0, -1):
@@ -207,7 +205,12 @@ def evaluate(client_name: str, abs_id: str, user_id=None) -> Corroboration:
             anchor_index = index
             break
 
+    # Everything reported here describes the window SINCE the jump, so that the
+    # counts and the source list in the log line cannot disagree with each other.
     since_anchor = trail[anchor_index:]
+    sources = tuple(entry.source for entry in since_anchor)
+    span = (since_anchor[-1].timestamp - since_anchor[0].timestamp) if len(since_anchor) > 1 else 0.0
+
     if len(since_anchor) < needed:
         return Corroboration(
             observations=len(since_anchor), advancing=0, sources=sources, span_seconds=span,
