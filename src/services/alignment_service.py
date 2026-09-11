@@ -1644,6 +1644,26 @@ class AlignmentService:
         self._total_chars_cache[abs_id] = total_chars
         return total_chars
 
+    def get_map_terminal_char(self, abs_id: str) -> Optional[int]:
+        """The highest character offset this book's alignment map anchors.
+
+        This is a fingerprint of the EPUB the map was fitted against, and unlike
+        `total_chars` it cannot be contaminated after the fact: it is the stored
+        map's own last anchor, while `total_chars` is backfilled by callers from
+        whichever EPUB they happened to be holding.
+
+        `SyncManager._get_alignment_epub_filename` compares it against candidate
+        EPUB lengths to decide whose character space the map speaks. Map points
+        are stored sorted by char, so the last point carries the maximum.
+        """
+        alignment = self._get_alignment(abs_id)
+        if not alignment:
+            return None
+        try:
+            return self._point_char(alignment[-1])
+        except (IndexError, TypeError, ValueError):
+            return None
+
     def record_total_chars_if_missing(self, abs_id: str, total_chars: int) -> bool:
         """Backfill the ebook length for a map stored before it was captured.
 

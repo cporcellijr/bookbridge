@@ -410,6 +410,104 @@ class SyncManager:
             return self._get_storyteller_ebook_filename(book)
         return self._get_non_story_ebook_filename(book)
 
+    def _get_alignment_epub_filename(self, book: Book | None) -> str | None:
+        """The EPUB whose character space this book's alignment map speaks.
+
+        A map is fitted against `book.ebook_filename` at forge time, but that
+        field moves afterwards — a Storyteller artifact replaces the original
+        when a readalong is matched, and `original_ebook_filename` preserves what
+        was there before. So a book can carry two EPUBs whose text differs, and
+        the map may be anchored to either one depending on which was current when
+        it was forged. Measured here: of 29 such books, 18 are decidable and they
+        split BOTH ways.
+
+        An offset resolved in the wrong one of those two files and then looked up
+        in the map is silently wrong by the difference between them — up to 5,683
+        characters (338s of audio) on this library.
+
+        Returns None when the answer is not certain, in which case callers keep
+        their existing EPUB choice rather than guess. Books with a single EPUB —
+        the overwhelming majority — return it without touching the map.
+        """
+        if not book:
+            return None
+        current = getattr(book, "ebook_filename", None)
+        original = getattr(book, "original_ebook_filename", None)
+        candidates = [name for name in (current, original) if name]
+        # Dedupe while preserving order; the forge used `ebook_filename`, so it
+        # goes first and wins any tie.
+        seen: set[str] = set()
+        candidates = [n for n in candidates if not (n in seen or seen.add(n))]
+        if len(candidates) <= 1:
+            return candidates[0] if candidates else None
+
+        if not self.alignment_service:
+            return None
+        try:
+            terminal = self.alignment_service.get_map_terminal_char(book.abs_id)
+        except Exception as e:
+            logger.debug(f"'{book.abs_id}' Could not read alignment map terminal char: {e}", exc_info=True)
+            return None
+        if not terminal:
+            return None
+
+        for name in candidates:
+            try:
+                _text, length = self._get_cached_ebook_text(name)
+            except Exception:
+                continue
+            if length and int(length) == int(terminal):
+                return name
+        return None
+
+    def _translate_char_offset_between_epubs(
+        self, from_epub: str | None, to_epub: str | None, offset: int
+    ) -> Optional[int]:
+        """Express `offset` from `from_epub`'s character space in `to_epub`'s.
+
+        Two builds of the same book differ by front matter, a foreword, or a
+        publisher's boilerplate, which shifts every offset after it by a constant.
+        The shift is not knowable in the abstract, so this anchors on the text
+        itself: take a window at `offset` and find where that window lives in the
+        other file.
+
+        Returns None when the window cannot be located — a genuinely different
+        edition — so callers fall back to using the offset unchanged rather than
+        inventing a position.
+        """
+        if not from_epub or not to_epub or from_epub == to_epub:
+            return offset
+        try:
+            from_text, from_len = self._get_cached_ebook_text(from_epub)
+            to_text, to_len = self._get_cached_ebook_text(to_epub)
+        except Exception as e:
+            logger.debug(f"Could not load text to translate offset between EPUBs: {e}", exc_info=True)
+            return None
+        if not from_len or not to_len:
+            return None
+
+        offset = max(0, min(int(offset), from_len - 1))
+        probe_len = 240
+        start = offset
+        if start + probe_len > from_len:
+            start = max(0, from_len - probe_len)
+        probe = from_text[start:start + probe_len]
+        if len(probe) < 40:
+            return None
+        lead = offset - start
+
+        # Search near the naive position first. The two files are near-identical,
+        # so the true match is close by, and a local hit cannot be a repeat of the
+        # same passage from elsewhere in the book.
+        window = 60000
+        near_from = max(0, offset - window)
+        idx = to_text.find(probe, near_from, min(to_len, offset + window + probe_len))
+        if idx < 0:
+            idx = to_text.find(probe)
+        if idx < 0:
+            return None
+        return max(0, min(idx + lead, to_len - 1))
+
     def _get_locator_target_epub(self, book: Book | None, leader_name: str | None) -> str | None:
         """
         Locator generation target EPUB used for cross-client updates.
@@ -1299,12 +1397,39 @@ class SyncManager:
                 if not window_txt:
                     continue
 
+                # `char_offset` is in THIS CLIENT's EPUB. The alignment map may be
+                # anchored to the book's other EPUB (a Storyteller artifact and the
+                # original differ by their front matter), and looking an offset up
+                # in the wrong space is silently wrong by the difference between
+                # the two files. Translate first; `map_offset is char_offset`
+                # whenever the book has one EPUB, which is nearly every book.
+                map_offset = char_offset
+                alignment_epub = self._get_alignment_epub_filename(book)
+                if alignment_epub and alignment_epub != client_epub:
+                    translated = self._translate_char_offset_between_epubs(
+                        client_epub, alignment_epub, char_offset
+                    )
+                    if translated is None:
+                        logger.debug(
+                            f"'{book.abs_id}' Could not translate '{client_name}' offset {char_offset} from "
+                            f"'{sanitize_log_data(client_epub)}' into the alignment map's "
+                            f"'{sanitize_log_data(alignment_epub)}'; using it unchanged"
+                        )
+                    else:
+                        if translated != char_offset:
+                            logger.debug(
+                                f"'{book.abs_id}' Translated '{client_name}' offset {char_offset} -> {translated} "
+                                f"into the alignment map's EPUB '{sanitize_log_data(alignment_epub)}' "
+                                f"(shift {translated - char_offset:+d})"
+                            )
+                        map_offset = translated
+
                 ts_for_text = None
                 if self.alignment_service:
                     ts_for_text = self.alignment_service.get_time_for_text(
                         book.abs_id,
                         window_txt,
-                        char_offset_hint=char_offset,
+                        char_offset_hint=map_offset,
                     )
 
                 if ts_for_text is None:
@@ -1785,10 +1910,35 @@ class SyncManager:
             if char_offset is None:
                 return None, None
 
-            locator = self.ebook_parser.get_locator_from_char_offset(target_epub, int(char_offset))
+            # `char_offset` comes out of the map, so it is in the map's EPUB. The
+            # locator is built for the clients, so it must be in theirs. These are
+            # the same file for nearly every book; when a Storyteller artifact and
+            # the original disagree, building the locator from the raw map offset
+            # lands it off by the difference between the two files.
+            alignment_epub = self._get_alignment_epub_filename(book)
+            target_offset = char_offset
+            if alignment_epub and alignment_epub != target_epub:
+                translated = self._translate_char_offset_between_epubs(
+                    alignment_epub, target_epub, int(char_offset)
+                )
+                if translated is None:
+                    logger.debug(
+                        f"'{book.abs_id}' Could not translate map offset {char_offset} from "
+                        f"'{sanitize_log_data(alignment_epub)}' into locator target "
+                        f"'{sanitize_log_data(target_epub)}'; using it unchanged"
+                    )
+                else:
+                    if translated != char_offset:
+                        logger.debug(
+                            f"'{book.abs_id}' Translated map offset {char_offset} -> {translated} into locator "
+                            f"target '{sanitize_log_data(target_epub)}' (shift {translated - int(char_offset):+d})"
+                        )
+                    target_offset = translated
+
+            locator = self.ebook_parser.get_locator_from_char_offset(target_epub, int(target_offset))
             if not locator:
                 return None, None
-            locator = self._validate_and_stabilize_locator(book, int(char_offset), locator, ebook_filename=target_epub)
+            locator = self._validate_and_stabilize_locator(book, int(target_offset), locator, ebook_filename=target_epub)
 
             full_text, _ = self._get_cached_ebook_text(target_epub)
             context_txt = ""
@@ -1802,7 +1952,14 @@ class SyncManager:
                 backfill = getattr(
                     self.alignment_service, "record_total_chars_if_missing", None
                 )
-                if backfill is not None:
+                # Only ever record a length measured on the map's OWN EPUB. When a
+                # book carries two files that disagree, stamping the map with the
+                # target EPUB's length takes a number from a text the map was not
+                # fitted to: it misreports every percentage derived from the map and
+                # destroys the one fingerprint that says which file it speaks.
+                # `_get_alignment_epub_filename` returns the sole candidate when a
+                # book has only one EPUB, so this is an equality, not a special case.
+                if backfill is not None and alignment_epub == target_epub:
                     try:
                         backfill(book.abs_id, len(full_text))
                     except Exception as e:
