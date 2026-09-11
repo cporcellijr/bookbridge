@@ -410,6 +410,68 @@ class SyncManager:
             return self._get_storyteller_ebook_filename(book)
         return self._get_non_story_ebook_filename(book)
 
+    def _shadow_evaluate_rewind(
+        self, abs_id: str, title_snip: str, config: dict, client_name: str,
+        situation: str, detail: str,
+    ) -> None:
+        """Log what a corroboration rule WOULD have decided. Decides nothing (#215).
+
+        Leader selection cannot tell a deliberate rewind from a stale client, an
+        echo, or a collapsed locator, so today it guesses — and guesses in opposite
+        directions depending on whether the backward mover is a text client
+        (demoted, so the rewind is overwritten) or the audio client (obeyed, so a
+        stale position is propagated). Both reporters on #215 are describing that
+        one gap from opposite sides.
+
+        The proposed signal is corroboration: a reader who genuinely rewound keeps
+        reading, so the client emits a SEQUENCE of positions advancing from the new
+        anchor, while a stale or echoed report is one sample that never advances.
+
+        This runs in the hot path of `_determine_leader`, which must not change
+        behavior in phase 0, so every failure here is swallowed.
+        """
+        try:
+            from src.services import observation_trail
+
+            state = config.get(client_name)
+            current = state.current if state is not None else {}
+            anchor_pct = current.get("pct")
+            corroboration = observation_trail.evaluate(client_name, abs_id, anchor_pct=anchor_pct)
+
+            source = current.get("_normalization_source")
+            high_confidence = source in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
+            collapsed = False
+            try:
+                locator_pct = current.get("_locator_pct")
+                if locator_pct is not None and anchor_pct is not None:
+                    collapsed = self._locator_collapsed_to_start(
+                        LocatorResult(percentage=locator_pct), anchor_pct
+                    )
+            except Exception:
+                collapsed = False
+
+            would_trust = bool(corroboration.corroborated and high_confidence and not collapsed)
+            if situation == "demoted":
+                outcome = (
+                    "WOULD KEEP as leader (today: demoted, furthest-wins hands it to a peer)"
+                    if would_trust else
+                    "would still demote (today: demoted) — no change"
+                )
+            else:
+                outcome = (
+                    "would still lead (today: leads) — no change"
+                    if would_trust else
+                    "WOULD HOLD instead of propagating (today: leads unopposed)"
+                )
+
+            logger.info(
+                f"🧪 '{abs_id}' '{title_snip}' Rewind shadow [{situation}]: '{client_name}' {detail}; "
+                f"{corroboration.describe()}; source={source} high_conf={high_confidence} "
+                f"collapsed={collapsed} -> {outcome}"
+            )
+        except Exception as shadow_err:
+            logger.debug(f"'{abs_id}' Rewind shadow evaluation failed: {shadow_err}", exc_info=True)
+
     def _get_alignment_epub_filename(self, book: Book | None) -> str | None:
         """The EPUB whose character space this book's alignment map speaks.
 
@@ -3455,12 +3517,32 @@ class SyncManager:
                             f"'{changed_client}' ({reason}: "
                             f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
                         )
+                        # Phase 0 instrumentation only — changes nothing (#215).
+                        self._shadow_evaluate_rewind(
+                            abs_id, title_snip, config, changed_client, "demoted",
+                            f"is {max_other_ts - changed_ts:.1f}s behind its max peer "
+                            f"({changed_ts:.1f}s vs {max_other_ts:.1f}s)",
+                        )
 
         if len(clients_with_delta) == 1 and not single_delta_low_conf:
             # Only one client changed - that client is the leader (most recent change wins)
             leader = list(clients_with_delta.keys())[0]
             leader_pct = vals[leader]
             logger.info(f"🔄 '{abs_id}' '{title_snip}' {leader} leads at {config[leader].value_formatter(leader_pct)} (only client with change)")
+            # The mirror image of the demotion above. The material-rollback guard is
+            # gated on `changed_client != primary_audio_client`, so an audio client
+            # that moves BACKWARD reaches here unopposed and its position is
+            # propagated — Kyomorie's ABS -> KoSync case on #215. Phase 0 logs what a
+            # corroboration rule would have done; it changes nothing.
+            try:
+                previous_pct = config[leader].previous_pct
+                if previous_pct is not None and leader_pct is not None and leader_pct < previous_pct - 1e-9:
+                    self._shadow_evaluate_rewind(
+                        abs_id, title_snip, config, leader, "obeyed",
+                        f"moved backward {previous_pct:.4%} -> {leader_pct:.4%} and leads unopposed",
+                    )
+            except Exception as shadow_err:
+                logger.debug(f"'{abs_id}' Backward-leader shadow check failed: {shadow_err}", exc_info=True)
         else:
             # Multiple clients changed or this is a discrepancy resolution
             # Use "furthest wins" logic among changed clients (or all if none changed)

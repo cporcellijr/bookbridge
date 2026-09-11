@@ -13,6 +13,8 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 
+from src.services import observation_trail
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,6 +183,16 @@ class ClientPoller:
             " during suppression window; treating as external jump"
             if during_suppression else ""
         )
+        # Both callers of this method have already ruled out our own write-back, so
+        # everything reaching here is movement the user actually made. Recording it
+        # is instrumentation only -- nothing reads the trail to make a decision yet
+        # (issue #215 phase 0).
+        try:
+            observation_trail.record_observation(
+                client_name, book.abs_id, current_pct, source="poll", user_id=user_id,
+            )
+        except Exception as trail_err:
+            logger.debug(f"Could not record observation for '{client_name}': {trail_err}", exc_info=True)
         if wait_for_settle:
             self._pending_sync[(user_id, client_name, book.abs_id)] = current_pct
             logger.info(

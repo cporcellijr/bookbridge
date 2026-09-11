@@ -34,6 +34,7 @@ from src.utils.user_config import (
     resolve_setting,
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.services import observation_trail
 from src.services.llm_matching import judge_best_candidate
 from src.db.models import State
 
@@ -1736,6 +1737,17 @@ def kosync_put_progress():
     _database_service.save_kosync_document(kosync_doc)
     if not is_internal:
         _record_recent_external_kosync_put(doc_hash, device, device_id, percentage, now_ts, request_user_id)
+        # A device telling us where it is, in its own words. Instrumentation only for
+        # now — nothing reads the trail to make a decision yet (issue #215 phase 0).
+        linked_abs_id = getattr(kosync_doc, "linked_abs_id", None) if kosync_doc else None
+        if linked_abs_id:
+            try:
+                observation_trail.record_observation(
+                    "KoSync", linked_abs_id, percentage, source="put",
+                    user_id=request_user_id, device=device or "",
+                )
+            except Exception as trail_err:
+                logger.debug(f"Could not record KoSync observation: {trail_err}", exc_info=True)
         # Per-user device progress: the durable per-user record for unlinked docs
         # and the furthest-wins / sibling-GET source (no-op for no-accounts installs).
         _database_service.upsert_user_kosync_progress(

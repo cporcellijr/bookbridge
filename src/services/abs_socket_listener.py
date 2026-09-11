@@ -16,6 +16,7 @@ import time
 import requests
 import socketio
 
+from src.services import observation_trail
 from src.services.write_tracker import is_own_write as _tracker_is_own_write
 from src.utils.logging_utils import get_persistent_condition_logger
 
@@ -72,6 +73,9 @@ class ABSSocketListener:
 
         # {abs_id: last_event_timestamp}
         self._pending: dict[str, float] = {}
+        # Last progress fraction reported per book, for the observation trail
+        # (issue #215). Read at debounce-fire time, where the event body is gone.
+        self._last_progress: dict[str, float] = {}
         # Track which abs_ids already had a sync fired for the current event
         self._fired: set[str] = set()
         self._lock = threading.Lock()
@@ -306,8 +310,22 @@ class ABSSocketListener:
             )
             return
 
+        # The fire point only carries an abs_id, but the observation trail needs the
+        # POSITION to tell sustained reading from a single anomalous report, so keep
+        # the last reported fraction alongside the debounce entry (issue #215).
+        event_progress = None
+        if isinstance(inner, dict):
+            event_progress = inner.get("progress")
+        if event_progress is None:
+            event_progress = data.get("progress")
+
         with self._lock:
             self._pending[library_item_id] = time.time()
+            if event_progress is not None:
+                try:
+                    self._last_progress[library_item_id] = float(event_progress)
+                except (TypeError, ValueError):
+                    pass
             self._fired.discard(library_item_id)
 
         logger.debug(f"ABS Socket.IO: Progress event recorded for '{book.abs_title}'")
@@ -371,6 +389,14 @@ class ABSSocketListener:
                 ):
                     logger.debug(f"ABS Socket.IO: Ignoring self-triggered event for '{title}'{self._scope_suffix}")
                     continue
+                # Past the own-write check, so this is the user actually listening.
+                # Instrumentation only (issue #215 phase 0).
+                try:
+                    observation_trail.record_observation(
+                        "ABS", abs_id, self._last_progress.get(abs_id), source="socket", user_id=target_user_id,
+                    )
+                except Exception as trail_err:
+                    logger.debug(f"Could not record ABS observation: {trail_err}", exc_info=True)
                 logger.info(f"⚡ Socket.IO: ABS progress changed for '{title}'{self._scope_suffix} — triggering sync")
                 threading.Thread(
                     target=self._sync_manager.sync_cycle,

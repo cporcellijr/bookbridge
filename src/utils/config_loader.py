@@ -33,6 +33,7 @@ ALL_SETTINGS = [
     'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY', 'KOSYNC_AUTH_METHOD',
     'KOSYNC_HASH_METHOD', 'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
     'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS', 'KOSYNC_AUTO_MAP_ON_AGREEMENT',
+    'SYNC_OBSERVATION_TRAIL_SECONDS', 'SYNC_REWIND_CORROBORATION_COUNT',
     'KOSYNC_HASH_RECONCILE_ENABLED', 'KOSYNC_HASH_RECONCILE_MINUTES',
     'KOSYNC_XPATH_ORDER_ENABLED', 'KOSYNC_FURTHEST_WINS',
     'KOSYNC_PUT_DEBOUNCE_SECONDS',
@@ -250,6 +251,12 @@ DEFAULT_CONFIG = {
     'KOREADER_ANNOTATION_SYNC': 'true',
     'KOSYNC_PUT_DEBOUNCE_SECONDS': '300',
     'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS': '600',
+    # Issue #215 phase 0 (instrumentation only): how long an externally
+    # originated position stays usable as evidence that a client is genuinely
+    # moving, and how many advancing observations count as corroboration.
+    # Nothing reads these to make a decision yet.
+    'SYNC_OBSERVATION_TRAIL_SECONDS': '600',
+    'SYNC_REWIND_CORROBORATION_COUNT': '2',
     'TELEGRAM_LOG_LEVEL': 'ERROR',
     'DIAGNOSTICS_OPT_IN': 'false',
     'DIAGNOSTICS_PROMPTED': '',
