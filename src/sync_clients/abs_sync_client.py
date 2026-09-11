@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 from typing import Optional
 
@@ -249,8 +250,18 @@ class ABSSyncClient(SyncClient):
 
         # Route database-managed books to AlignmentService and legacy books to Transcriber.
         ts_for_text = None
-        
-        if book.transcript_file == "DB_MANAGED" and self.alignment_service:
+
+        # Prefer the timestamp leader selection already resolved onto the audio
+        # timeline (sync_manager's cross-format normalization) over re-deriving
+        # one from the locator: it's the exact number the leader decision was
+        # made on, and going back through the locator can only lose precision.
+        if (
+            request.target_audio_ts is not None
+            and math.isfinite(request.target_audio_ts)
+            and request.target_audio_ts >= 0
+        ):
+            ts_for_text = request.target_audio_ts
+        elif book.transcript_file == "DB_MANAGED" and self.alignment_service:
             # Use database alignment.
             # We use the match_index (character offset) found by the EbookParser
             char_index = request.locator_result.match_index

@@ -53,6 +53,12 @@ class UpdateProgressRequest:
     # had; None whenever the caller has no prior read (resets, ebook-only path),
     # in which case the client falls back to probing.
     current_state: Optional['ServiceState'] = None
+    # The leader's position already resolved onto the audio timeline by
+    # _build_normalized_positions and used by leader selection. Audio clients
+    # prefer it over re-deriving a timestamp from the locator, so the value
+    # written is the same one the leader decision was made on. None whenever
+    # the leader IS the audio client, or no normalized position was available.
+    target_audio_ts: Optional[float] = None
 
 @dataclass
 class SyncResult:

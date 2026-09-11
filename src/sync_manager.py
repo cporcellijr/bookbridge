@@ -4179,6 +4179,15 @@ class SyncManager:
                     and os.environ.get("STORYTELLER_LISTENING_SESSIONS", "true").strip().lower()
                     in ("true", "1", "yes", "on")
                 )
+                # The leader's position already resolved onto the audio timeline by
+                # _normalize_for_cross_format_comparison (the same number leader
+                # selection and the rollback veto compare against). None whenever the
+                # leader IS the primary audio client (nothing to normalize — it's
+                # already on the audio timeline) or normalization didn't resolve one.
+                leader_normalized_ts = (
+                    leader_state.current.get("_normalized_ts")
+                    if leader != primary_audio_client else None
+                )
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
@@ -4196,6 +4205,24 @@ class SyncManager:
                             if hydrated_locator and client_name in _CFI_DEPENDENT_CLIENTS
                             else locator
                         )
+                        # Audio-only clients (get_supported_sync_types() == {'audiobook'};
+                        # the combined audiobook+ebook clients write a locator/percentage,
+                        # not a timestamp, so they're excluded) get the leader's own
+                        # normalized timestamp instead of re-deriving one from the locator
+                        # this cycle just built — the re-derivation is a pure conversion
+                        # loss, never a gain (issue #434).
+                        target_audio_ts = (
+                            leader_normalized_ts
+                            if leader_normalized_ts is not None
+                            and client.get_supported_sync_types() == {'audiobook'}
+                            else None
+                        )
+                        if target_audio_ts is not None:
+                            logger.info(
+                                f"🎯 '{abs_id}' '{title_snip}' Writing '{client_name}' at the leader's "
+                                f"normalized timestamp {target_audio_ts:.2f}s (leader '{leader}') instead "
+                                f"of re-deriving it from the locator"
+                            )
                         request = UpdateProgressRequest(
                             target_locator,
                             txt,
@@ -4204,6 +4231,7 @@ class SyncManager:
                             # This cycle already read this client; handing the read back
                             # lets it skip re-fetching state it just had.
                             current_state=client_state,
+                            target_audio_ts=target_audio_ts,
                         )
                         result = client.update_progress(book, request)
                         results[client_name] = result

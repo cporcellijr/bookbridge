@@ -1,3 +1,4 @@
+import math
 import os
 import logging
 from typing import Optional
@@ -212,6 +213,16 @@ class BookOrbitAudioSyncClient(SyncClient):
         target_ts = None
         if request.locator_result.percentage == 0.0:
             target_ts = 0.0
+        elif (
+            request.target_audio_ts is not None
+            and math.isfinite(request.target_audio_ts)
+            and request.target_audio_ts >= 0
+        ):
+            # Prefer the timestamp leader selection already resolved onto the
+            # audio timeline over re-deriving one from the locator here: it's
+            # the exact number the leader decision was made on, and going back
+            # through the locator can only lose precision.
+            target_ts = request.target_audio_ts
         elif book.transcript_file == "DB_MANAGED" and self.alignment_service and request.txt:
             target_ts = self.alignment_service.get_time_for_text(
                 book.abs_id,
