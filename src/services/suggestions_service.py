@@ -4,6 +4,11 @@ from typing import Callable, List, Set, Any, Dict, Optional
 
 from src.services.llm_matching import craft_search_terms
 
+# Provider preference for collapsing the same physical audiobook when more than one
+# provider indexes the same shared library tree (#383): lower index wins ties. A
+# source absent from this tuple (unknown/future provider) sorts after every named one.
+AUDIO_SOURCE_PROVIDER_PREFERENCE: tuple[str, ...] = ("ABS", "BookOrbit", "BookLore")
+
 
 class SuggestionsService:
     """Service for scanning unmatched audiobooks and producing ebook suggestions."""
@@ -345,6 +350,20 @@ class SuggestionsService:
         "storyteller_library",
     })
 
+    # Wider root set for physical-audio-FILE identity ONLY (#383) — do not fold
+    # this into _EQUIVALENT_LIBRARY_ROOTS above, which backs the same-folder
+    # EBOOK matching path (_parent_dir_key / _same_directory_key /
+    # _paths_share_parent, tests/test_suggestions_same_folder.py) and must keep
+    # its current behavior. Roots observed live on real installs: Grimmory
+    # (BookLore) serves its libraries at `/Library/...` (ebooks) and
+    # `/Audiobook/...` (audio, singular); Audiobookshelf on the same host
+    # serves `/audiobooks/...`. Without "library"/"audiobook" here, a flat
+    # single-file audiobook path is never deep enough for the >=2-segment
+    # suffix rule in `_same_physical_audio` to bridge the two roots, so
+    # cross-provider dedupe silently fails for exactly the shallow paths ABS
+    # uses most. Paths are casefolded before this set is consulted.
+    _PHYSICAL_KEY_LIBRARY_ROOTS = _EQUIVALENT_LIBRARY_ROOTS | {"library", "audiobook"}
+
     @classmethod
     def _parent_dir_key(cls, raw_path: Any) -> str:
         """Return a normalized parent-directory key for local media paths."""
@@ -378,6 +397,16 @@ class SuggestionsService:
         return parts
 
     @classmethod
+    def _drop_physical_key_library_root(cls, parts: List[str]) -> List[str]:
+        """Like `_drop_equivalent_library_root`, but against the wider root set
+        used only for physical-audio-file identity (#383) — see
+        `_PHYSICAL_KEY_LIBRARY_ROOTS`. Must not be used by the same-folder
+        ebook-matching path."""
+        if parts and parts[0] in cls._PHYSICAL_KEY_LIBRARY_ROOTS:
+            return parts[1:]
+        return parts
+
+    @classmethod
     def _same_directory_key(cls, left_key: str, right_key: str) -> bool:
         if not left_key or not right_key:
             return False
@@ -402,6 +431,58 @@ class SuggestionsService:
             cls._parent_dir_key(left_path),
             cls._parent_dir_key(right_path),
         )
+
+    @classmethod
+    def _physical_audio_key(cls, path: Any) -> str:
+        """Normalized full-path identity key for the same physical audio file (#383).
+
+        Unlike `_parent_dir_key` (deliberately parent-directory-only, built for
+        same-folder ebook matching), this keeps the FINAL path segment. Real
+        audiobook paths are a mix of file paths (".../Title.m4b") and folder paths
+        (".../Title"); a parent-only key collapses every single-file audiobook onto
+        its shared library root and would dedupe unrelated books that merely live
+        under the same root.
+        """
+        if not path:
+            return ""
+
+        normalized = str(path).replace("\\", "/").strip().casefold()
+        parts = [part for part in normalized.split("/") if part]
+        if not parts:
+            return ""
+
+        parts = cls._drop_physical_key_library_root(parts)
+        if not parts:
+            return ""
+
+        return "/".join(parts)
+
+    @classmethod
+    def _same_physical_audio(cls, left: Any, right: Any) -> bool:
+        """True when `left` and `right` identify the same physical audiobook file
+        (#383) — e.g. Audiobookshelf and Grimmory both pointed at one shared
+        `/books` tree. Accepts raw audio paths or already-normalized physical keys
+        (`_physical_audio_key` is idempotent).
+
+        Exact key equality covers a bare filename compared against another bare
+        filename — specific enough on its own to trust. A suffix match additionally
+        covers the same file exposed under a different library root/mount, but only
+        once BOTH sides carry 2 or more path segments; a bare filename suffix-matching
+        a deep path is too weak a signal to trust.
+        """
+        left_key = cls._physical_audio_key(left)
+        right_key = cls._physical_audio_key(right)
+        if not left_key or not right_key:
+            return False
+        if left_key == right_key:
+            return True
+
+        left_parts = left_key.split("/")
+        right_parts = right_key.split("/")
+        shorter_len = min(len(left_parts), len(right_parts))
+        if shorter_len < 2:
+            return False
+        return left_parts[-shorter_len:] == right_parts[-shorter_len:]
 
     @classmethod
     def _same_folder_tier(cls, same_folder_count: int, title_score: float) -> tuple[float, str]:
@@ -1219,6 +1300,90 @@ class SuggestionsService:
             "matches": matches,
         }
 
+    def _collapse_duplicate_physical_audio(
+        self, unmatched_audiobooks: List[tuple[str, dict]],
+    ) -> List[tuple[str, dict]]:
+        """Collapse unmatched `(bridge_key, ab)` records that are the same physical
+        audiobook (#383) down to one per physical file, keeping the entry from the
+        most-preferred provider (`AUDIO_SOURCE_PROVIDER_PREFERENCE`, ties broken by
+        bridge key ascending). Records with no path (`_physical_audio_key` == "",
+        e.g. BookOrbit) pass through untouched and are never grouped with each other.
+        """
+        keyed: List[tuple[int, str]] = []
+        for idx, (_bridge_key, ab) in enumerate(unmatched_audiobooks):
+            physical_key = self._physical_audio_key(self._audio_path(ab))
+            if physical_key:
+                keyed.append((idx, physical_key))
+
+        if len(keyed) < 2:
+            return unmatched_audiobooks
+
+        parent = {idx: idx for idx, _key in keyed}
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        # Bucket by final path segment before the pairwise scan (#383 perf).
+        # `_same_physical_audio` can only ever return True when both keys share
+        # the same final segment: exact key equality trivially shares it, and a
+        # suffix match requires >=2 segments which always includes the last one.
+        # So two records whose final segment differs can never be duplicates,
+        # and grouping by it first turns the exhaustive O(n^2) comparison into
+        # per-bucket comparisons only (a unique final segment needs none at
+        # all). This narrows which pairs get compared only — the resulting
+        # groups (and therefore the collapse result) are identical to the
+        # exhaustive pairwise scan for every input.
+        buckets: Dict[str, List[tuple[int, str]]] = {}
+        for idx, key in keyed:
+            final_segment = key.rsplit("/", 1)[-1]
+            buckets.setdefault(final_segment, []).append((idx, key))
+
+        for bucket in buckets.values():
+            for i, (idx_a, key_a) in enumerate(bucket):
+                for idx_b, key_b in bucket[i + 1:]:
+                    if self._same_physical_audio(key_a, key_b):
+                        root_a, root_b = find(idx_a), find(idx_b)
+                        if root_a != root_b:
+                            parent[root_b] = root_a
+
+        groups: Dict[int, List[int]] = {}
+        for idx, _key in keyed:
+            groups.setdefault(find(idx), []).append(idx)
+
+        def _preference_rank(idx: int) -> tuple[int, str]:
+            bridge_key, ab = unmatched_audiobooks[idx]
+            source = self._audio_source(ab)
+            try:
+                source_rank = AUDIO_SOURCE_PROVIDER_PREFERENCE.index(source)
+            except ValueError:
+                source_rank = len(AUDIO_SOURCE_PROVIDER_PREFERENCE)
+            return (source_rank, bridge_key)
+
+        drop_indices: Set[int] = set()
+        for group_indices in groups.values():
+            if len(group_indices) < 2:
+                continue
+
+            ordered = sorted(group_indices, key=_preference_rank)
+            keep_bridge_key, keep_ab = unmatched_audiobooks[ordered[0]]
+            keep_physical_key = self._physical_audio_key(self._audio_path(keep_ab))
+            for dup_idx in ordered[1:]:
+                drop_indices.add(dup_idx)
+                dup_bridge_key, _dup_ab = unmatched_audiobooks[dup_idx]
+                self.logger.info(
+                    f"🧹 Suggestions: collapsed duplicate audiobook '{dup_bridge_key}' "
+                    f"into '{keep_bridge_key}' (same physical file: {keep_physical_key})"
+                )
+
+        if not drop_indices:
+            return unmatched_audiobooks
+        return [
+            item for idx, item in enumerate(unmatched_audiobooks) if idx not in drop_indices
+        ]
+
     def scan_library_suggestions(
         self,
         cached_suggestions_by_abs: Optional[Dict[str, dict]] = None,
@@ -1278,16 +1443,38 @@ class SuggestionsService:
 
         ignored_source_ids = self.get_ignored_suggestion_source_ids()
 
+        # Physical-file identity of already-matched books (#383): when the same physical
+        # audiobook is indexed by more than one provider (e.g. ABS + Grimmory pointed at
+        # the same shared /books tree), matching the ABS copy must not leave the
+        # Grimmory copy re-surfacing as "unmatched" on the very next scan.
+        matched_physical_keys: Set[str] = set()
         unmatched_audiobooks = []
         for ab in all_audiobooks:
             bridge_key = self._audio_bridge_key(ab)
             if not bridge_key:
                 continue
             if bridge_key in matched_bridge_keys:
+                physical_key = self._physical_audio_key(self._audio_path(ab))
+                if physical_key:
+                    matched_physical_keys.add(physical_key)
                 continue
             if bridge_key in ignored_source_ids:
                 continue
             unmatched_audiobooks.append((bridge_key, ab))
+
+        if matched_physical_keys:
+            unmatched_audiobooks = [
+                (bridge_key, ab) for bridge_key, ab in unmatched_audiobooks
+                if not any(
+                    self._same_physical_audio(self._audio_path(ab), matched_key)
+                    for matched_key in matched_physical_keys
+                )
+            ]
+
+        # Collapse duplicate unmatched records for the same physical audiobook seen
+        # through more than one provider (#383) down to one, so the Suggestions page
+        # doesn't offer the same audiobook twice.
+        unmatched_audiobooks = self._collapse_duplicate_physical_audio(unmatched_audiobooks)
 
         unmatched_abs_ids = {bridge_key for bridge_key, _ab in unmatched_audiobooks}
 
