@@ -505,6 +505,24 @@ class SyncManager:
             return 600.0
 
     @staticmethod
+    def _locator_roundtrip_seconds_tolerance() -> float:
+        """How far apart two offsets may be on the audio timeline before a
+        character-close locator is refused as seam-crossing. Read per call so
+        the settings UI applies immediately.
+
+        The `or` and the except are not defensive padding: clearing this field
+        in the settings UI stores an empty string (`web_server`'s POST /settings
+        keeps cleared keys as ""), and `load_settings` mirrors that straight
+        into `os.environ` because DB values always win. A bare `float("")` would
+        raise, and both callers of this value sit inside a broad `except
+        Exception`, so the failure would present as the alignment-direct locator
+        path silently switching itself off for every book."""
+        try:
+            return float(os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", "30") or 30)
+        except (TypeError, ValueError):
+            return 30.0
+
+    @staticmethod
     def _own_writeback_window_seconds() -> int:
         """How long a recorded own-write stays usable as evidence that a peer's
         position is BookBridge's own echo.
@@ -664,7 +682,7 @@ class SyncManager:
             return locator
 
         tolerance = int(os.getenv("CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS", self.ebook_parser.locator_roundtrip_tolerance))
-        roundtrip_seconds_tolerance = float(os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", 30))
+        roundtrip_seconds_tolerance = self._locator_roundtrip_seconds_tolerance()
         safe_locator = LocatorResult(**vars(locator))
         fallback = []
 

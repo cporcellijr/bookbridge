@@ -337,6 +337,64 @@ class TestValidateAndStabilizeLocatorNoMapUnchanged(unittest.TestCase):
         self.assertIsNone(result.perfect_ko_xpath)
 
 
+class TestRoundtripSecondsToleranceSettingIsFailSafe(unittest.TestCase):
+    """Coverage 8: clearing LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS in the settings
+    UI must not disable the locator path.
+
+    A cleared settings field is persisted as "" and mirrored verbatim into
+    os.environ (DB values always win), so the raw `float(os.environ.get(K, 30))`
+    this replaced raised ValueError. Both callers sit inside a broad `except
+    Exception`, so nothing crashed — `_resolve_alignment_locator_from_abs_timestamp`
+    simply returned "no locator" for every book, for as long as the field
+    stayed empty."""
+
+    def setUp(self):
+        self._saved = os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS")
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", None)
+        else:
+            os.environ["LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"] = self._saved
+
+    def test_cleared_blank_and_garbage_values_all_fall_back_to_the_default(self):
+        for raw in ("", "   ", "abc", None):
+            with self.subTest(value=raw):
+                if raw is None:
+                    os.environ.pop("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", None)
+                else:
+                    os.environ["LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"] = raw
+                self.assertEqual(SyncManager._locator_roundtrip_seconds_tolerance(), 30.0)
+
+    def test_a_real_value_is_honoured(self):
+        os.environ["LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"] = "45"
+        self.assertEqual(SyncManager._locator_roundtrip_seconds_tolerance(), 45.0)
+
+    def test_a_cleared_setting_still_validates_a_locator(self):
+        """The end-to-end shape of the bug: with the field cleared, a locator
+        that round-trips exactly still comes back intact."""
+        os.environ["LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"] = ""
+        parser = MagicMock()
+        parser.locator_roundtrip_tolerance = 2
+        parser.get_sentence_level_ko_xpath.return_value = None
+        parser.resolve_xpath_to_index.return_value = 100
+        manager = _make_manager(ebook_parser=parser, alignment_service=None)
+
+        result = manager._validate_and_stabilize_locator(
+            _make_book(),
+            target_offset=100,
+            locator=LocatorResult(
+                percentage=0.5,
+                xpath="/body/p[1]/text().0",
+                perfect_ko_xpath="/body/p[1]/text().0",
+                match_index=100,
+            ),
+            ebook_filename="test.epub",
+        )
+
+        self.assertEqual(result.xpath, "/body/p[1]/text().0")
+
+
 class TestHydrateCfiLocatorIsCharacterJudged(unittest.TestCase):
     """Coverage 7: `_hydrate_cfi_locator` judges its round-trip in CHARACTERS,
     deliberately — audio time gets no veto on this path.

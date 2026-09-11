@@ -54,7 +54,7 @@ class UpdateProgressRequest:
     # in which case the client falls back to probing.
     current_state: Optional['ServiceState'] = None
     # The leader's position already resolved onto the audio timeline by
-    # _build_normalized_positions and used by leader selection. Audio clients
+    # _normalize_for_cross_format_comparison and used by leader selection. Audio clients
     # prefer it over re-deriving a timestamp from the locator, so the value
     # written is the same one the leader decision was made on. None whenever
     # the leader IS the audio client, or no normalized position was available.
