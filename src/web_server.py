@@ -2412,11 +2412,31 @@ def _adopt_kosync_progress_for_book(abs_id: str, kosync_doc_id: str) -> None:
     though the position is durable and the hashes match exactly (#431). Add Book
     already computes the same hash, so adopt it here rather than leaving the reader
     to link it by hand.
+
+    Adoption is fail-closed: a hash already owned by a *different* book is left
+    alone, matching the sibling-hash step below and `_register_hash_for_book`.
+    `ensure_linked_kosync_document` re-points on conflict by design — hash
+    reconciliation needs that to keep sibling hashes of one book durable (#285) —
+    so the ownership check belongs here, at the one caller that must not steal.
+    Re-pointing would hide the loser's stored progress behind the same join this
+    function exists to repair, moving #431 rather than fixing it. The mapping paths
+    that legitimately consolidate a duplicate (`match`, `absorb_duplicate_mapping`,
+    the ebook-only tri-link) all migrate and delete the loser first, which clears
+    its link, so they reach this with nothing to conflict against.
     """
     if not abs_id or not isinstance(kosync_doc_id, str) or not kosync_doc_id.strip():
         return
     try:
-        if database_service.ensure_linked_kosync_document(kosync_doc_id.strip(), abs_id):
+        doc_id = kosync_doc_id.strip()
+        existing = database_service.get_kosync_document(doc_id)
+        owner = getattr(existing, "linked_abs_id", None) if existing else None
+        if owner and owner != abs_id:
+            logger.info(
+                "🔒 KoSync document '%s' already belongs to '%s' — not re-pointing it to '%s'",
+                sanitize_log_data(doc_id), sanitize_log_data(owner), sanitize_log_data(abs_id),
+            )
+            return
+        if database_service.ensure_linked_kosync_document(doc_id, abs_id):
             logger.info(
                 "🔗 Adopted existing KoSync document '%s' for '%s'",
                 sanitize_log_data(kosync_doc_id), sanitize_log_data(abs_id),

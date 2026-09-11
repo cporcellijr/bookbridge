@@ -38,6 +38,9 @@ class MockContainer:
         self.mock_database_service.get_book.return_value = None
         self.mock_database_service.get_book_by_kosync_id.return_value = None
         self.mock_database_service.get_pending_suggestion.return_value = None
+        # An unmocked Mock() reads as a document owned by a truthy stranger, which
+        # would trip the fail-closed ownership guard in _adopt_kosync_progress_for_book.
+        self.mock_database_service.get_kosync_document.return_value = None
 
         # Default manager behavior
         self.mock_sync_manager.abs_client = self.mock_abs_client
@@ -279,6 +282,84 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
 
         self.mock_container.mock_database_service.link_kosync_document.assert_not_called()
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_route_never_steals_a_primary_hash_linked_elsewhere(self, _mock_kosync):
+        """The primary hash gets the same fail-closed treatment as a sibling hash.
+
+        `_adopt_kosync_progress_for_book` reaches for `ensure_linked_kosync_document`,
+        whose upsert re-points a row that already names a different book — that is
+        deliberate for hash reconciliation's sibling hashes (#285) but wrong here.
+        Re-pointing would hide the losing book's stored progress behind the very join
+        the adoption exists to repair, relocating #431 instead of fixing it.
+        """
+        owned = Mock()
+        owned.document_hash = "hash-match-1"
+        owned.linked_abs_id = "some-other-book"
+        self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+
+        response = self.client.post(
+            "/match",
+            data={
+                "audiobook_id": "ab-1",
+                "ebook_filename": "book.epub",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_not_called()
+
+    def test_adopt_links_a_hash_no_book_has_claimed(self):
+        """An orphaned document row is still adopted — the #431 fix itself."""
+        orphan = Mock()
+        orphan.document_hash = "hash-orphan"
+        orphan.linked_abs_id = None
+        self.mock_container.mock_database_service.get_kosync_document.return_value = orphan
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-orphan")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-orphan", "ab-1"
+        )
+
+    def test_adopt_creates_the_row_when_no_document_exists_yet(self):
+        """A hash with no row at all is created, not skipped by the ownership guard."""
+        self.mock_container.mock_database_service.get_kosync_document.return_value = None
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-new")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-new", "ab-1"
+        )
+
+    def test_adopt_is_a_noop_when_the_book_already_owns_the_hash(self):
+        """Re-adopting a book's own hash still goes through, staying idempotent."""
+        owned = Mock()
+        owned.document_hash = "hash-mine"
+        owned.linked_abs_id = "ab-1"
+        self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-mine")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-mine", "ab-1"
+        )
+
+    def test_adopt_refuses_to_repoint_a_hash_owned_by_another_book(self):
+        """The guard at the choke point, covering every mapping path that adopts.
+
+        `_upsert_storyteller_mapping(mode_hint="existing")` — the Storyteller link
+        route — computes `existing_by_hash` only for "ebook_only_create", so it is the
+        one adoption path with no duplicate merge ahead of it to clear a rival's link.
+        """
+        owned = Mock()
+        owned.document_hash = "hash-theirs"
+        owned.linked_abs_id = "some-other-book"
+        self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-theirs")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_not_called()
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_reuses_alignment_instead_of_requeueing_transcription(self, _mock_kosync):
