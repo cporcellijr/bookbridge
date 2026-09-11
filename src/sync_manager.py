@@ -97,6 +97,13 @@ _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "ABSEbook",
 })
 
+# Ceiling on how far a hydrated CFI may round-trip from the offset it was built
+# from. The original bound was 1% of the book, which on a long book is thousands
+# of characters — measured median 6,300 (440 audio seconds) across 14 real
+# aligned books, enough to drop a reader pages from where they were. Books short
+# enough that 1% is tighter than this keep the 1%.
+_CFI_HYDRATION_MAX_ROUNDTRIP_CHARS: int = 2000
+
 # Clients that navigate by locator rather than by percentage. ABSEbook rejects a
 # locator whose cfi is None outright; BookOrbit, Grimmory and CWA all back a Kobo
 # reading state, and a Kobo moves only when it is handed a KoboSpan — which those
@@ -610,6 +617,36 @@ class SyncManager:
         except Exception:
             return None, None
 
+    def _roundtrip_time_error(self, abs_id: str, offset_a: int, offset_b: int) -> Optional[float]:
+        """Absolute audio-time difference (seconds) between two char offsets.
+
+        The authoritative replacement for a character-distance round-trip check
+        whenever `abs_id` has an alignment map: a segmented map (out-of-order
+        narration, issue #426) makes the char->time function discontinuous at
+        segment seams, so two char offsets that are close together can sit on
+        opposite sides of a seam and be hours apart in audio time — and,
+        symmetrically, two char offsets that are far apart can land within the
+        same segment and be seconds apart in audio time.
+
+        Returns None — "cannot judge in time" — when there is no alignment
+        service, no stored alignment map, or either offset fails to resolve to
+        a timestamp. Never raises: any lookup exception is treated the same as
+        "cannot judge in time" so callers can fall back to the character
+        comparison unconditionally.
+        """
+        try:
+            alignment_service = getattr(self, "alignment_service", None)
+            if not alignment_service:
+                return None
+            time_a = alignment_service.get_time_for_char(abs_id, int(offset_a))
+            time_b = alignment_service.get_time_for_char(abs_id, int(offset_b))
+            if time_a is None or time_b is None:
+                return None
+            return abs(float(time_a) - float(time_b))
+        except Exception as exc:
+            logger.debug(f"'{abs_id}' Round-trip time-error lookup failed: {exc}", exc_info=True)
+            return None
+
     def _validate_and_stabilize_locator(
         self,
         book: Book,
@@ -617,14 +654,57 @@ class SyncManager:
         locator: LocatorResult,
         ebook_filename: str | None = None,
     ):
-        """Round-trip validate locator fields and deterministically degrade to safer fields."""
+        """Round-trip validate locator fields and deterministically degrade to safer fields.
+
+        Characters are the wrong unit whenever `abs_id` has an alignment map: a
+        segmented map (out-of-order narration, issue #426) makes the char->time
+        function discontinuous at segment seams, so a tiny char round-trip error
+        can sit on the far side of a seam and be hours off in audio time, while a
+        large char error on the near side of the same seam is negligible in time.
+        Each round-trip check below is therefore judged in audio-time via
+        `_roundtrip_time_error` whenever that is possible (an alignment map
+        exists and both offsets resolve to a timestamp); it falls back to the
+        original character-distance comparison unchanged when it is not.
+        """
         target_epub = ebook_filename or self._get_non_story_ebook_filename(book) or getattr(book, "ebook_filename", None)
         if not locator or not target_epub:
             return locator
 
         tolerance = int(os.getenv("CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS", self.ebook_parser.locator_roundtrip_tolerance))
+        roundtrip_seconds_tolerance = float(os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", 30))
         safe_locator = LocatorResult(**vars(locator))
         fallback = []
+
+        def _within_tolerance(offset, char_error, label: str) -> bool:
+            """True when `offset` round-trips close enough to `target_offset`.
+
+            This locator is written to EBOOK clients (xpath to KoSync, CFI to
+            Grimmory/BookOrbit), so the reader's eye lands at a text position and
+            characters are the unit that decides acceptance — unchanged.
+
+            Audio time is a VETO only, never a licence. A segmented map
+            (out-of-order narration, #426) makes char->time discontinuous at
+            segment seams: two offsets a couple of characters apart can be hours
+            apart in audio, and writing that locator would strand every audio
+            follower derived from it. So a character-close locator is still
+            rejected when it lands across a seam. The converse is deliberately
+            NOT allowed — a locator thousands of characters away is wrong for the
+            reader no matter how close it happens to be in audio time.
+            """
+            if offset is None:
+                return False
+            if char_error is None or char_error > tolerance:
+                return False
+            time_error = self._roundtrip_time_error(book.abs_id, int(offset), int(target_offset))
+            if time_error is not None and time_error > roundtrip_seconds_tolerance:
+                logger.info(
+                    f"🚧 '{book.abs_id}' Locator round-trip rejected ({label}): offsets "
+                    f"{offset}->{target_offset} differ by {time_error:.1f}s on the audio "
+                    f"timeline (> {roundtrip_seconds_tolerance:.0f}s) — a segment seam or a "
+                    f"bad anchor; keeping the safer locator"
+                )
+                return False
+            return True
 
         ko_offset = None
         if safe_locator.perfect_ko_xpath:
@@ -635,13 +715,15 @@ class SyncManager:
             # XPath unresolvable — set error above tolerance to trigger fallback
             # instead of pretending it resolved with zero error.
             ko_error = tolerance + 1
+            ko_within_tolerance = False
         else:
             ko_error = abs(int(ko_offset) - int(target_offset))
-        if ko_error > tolerance:
+            ko_within_tolerance = _within_tolerance(ko_offset, ko_error, "xpath")
+        if not ko_within_tolerance:
             sentence_xpath = self.ebook_parser.get_sentence_level_ko_xpath(target_epub, safe_locator.percentage)
             sentence_offset = self.ebook_parser.resolve_xpath_to_index(target_epub, sentence_xpath) if sentence_xpath else None
             sentence_error = abs(int(sentence_offset) - int(target_offset)) if sentence_offset is not None else None
-            if sentence_xpath and sentence_offset is not None and sentence_error <= tolerance:
+            if sentence_xpath and _within_tolerance(sentence_offset, sentence_error, "sentence_xpath"):
                 safe_locator.xpath = sentence_xpath
                 safe_locator.perfect_ko_xpath = sentence_xpath
                 fallback.append("ko=sentence_xpath")
@@ -652,7 +734,8 @@ class SyncManager:
 
         cfi_offset = self.ebook_parser.resolve_cfi_to_index(target_epub, safe_locator.cfi) if safe_locator.cfi else None
         cfi_error = abs(int(cfi_offset) - int(target_offset)) if cfi_offset is not None else None
-        if cfi_offset is None or cfi_error > tolerance:
+        cfi_within_tolerance = _within_tolerance(cfi_offset, cfi_error, "cfi")
+        if not cfi_within_tolerance:
             regenerated_cfi = None
             regenerated_offset = None
             regenerated_error = None
@@ -670,7 +753,7 @@ class SyncManager:
             except Exception as regen_err:
                 logger.debug(f"'{book.abs_id}' Failed to regenerate CFI for Grimmory fallback: {regen_err}")
 
-            if regenerated_cfi and regenerated_error is not None and regenerated_error <= tolerance:
+            if regenerated_cfi and _within_tolerance(regenerated_offset, regenerated_error, "regenerated_cfi"):
                 safe_locator.cfi = regenerated_cfi
                 cfi_offset = regenerated_offset
                 cfi_error = regenerated_error
@@ -3375,7 +3458,14 @@ class SyncManager:
         expressed in a form the receiver can act on instead of discarded structure.
 
         Returns the hydrated locator, or None when the offset cannot be round-tripped
-        to within 1% of its target or the resolution collapsed to start-of-book.
+        to within tolerance of its target or the resolution collapsed to start-of-book.
+
+        The round-trip is judged in audio-time via `_roundtrip_time_error` whenever
+        `abs_id` has an alignment map (segment-aware, issue #426) — a segmented map
+        makes the char->time function discontinuous at segment seams, so the old
+        1%-of-book character check could silently accept a locator that is actually
+        hours off on the audio timeline. Falls back to the 1%-of-book character
+        check, unchanged, when no map/time judgment is available.
         """
         if not epub or str(epub).startswith("storyteller_") or locator.percentage is None:
             return None
@@ -3397,7 +3487,28 @@ class SyncManager:
             # Round-trip the derived CFI back to an offset: a locator that does not
             # resolve to where it was built from is worse than no locator at all.
             cfi_offset = self.ebook_parser.resolve_cfi_to_index(epub, hydrated.cfi)
-            if cfi_offset is None or abs(int(cfi_offset) - target_offset) / total_len > 0.01:
+            if cfi_offset is None:
+                return None
+
+            # 1% of a long book is thousands of characters — measured median 6,300
+            # (440 audio seconds) across 14 real aligned books, which drops a reader
+            # pages from where they were. Cap the budget so the bound stays meaningful
+            # as books get longer; short books keep the original 1%.
+            char_budget = min(int(total_len * 0.01), _CFI_HYDRATION_MAX_ROUNDTRIP_CHARS)
+            if abs(int(cfi_offset) - target_offset) > char_budget:
+                return None
+
+            # Audio time vetoes a character-close CFI that crosses a segment seam;
+            # it never licenses one that is character-far (see _within_tolerance).
+            roundtrip_seconds_tolerance = float(os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", 30))
+            time_error = self._roundtrip_time_error(abs_id, int(cfi_offset), int(target_offset))
+            if time_error is not None and time_error > roundtrip_seconds_tolerance:
+                logger.info(
+                    f"🚧 '{abs_id}' '{title_snip}' Locator round-trip rejected: offsets "
+                    f"{cfi_offset}->{target_offset} differ by {time_error:.1f}s on the audio "
+                    f"timeline (> {roundtrip_seconds_tolerance:.0f}s) — a segment seam or a "
+                    f"bad anchor; keeping the safer locator"
+                )
                 return None
 
             if self._locator_collapsed_to_start(

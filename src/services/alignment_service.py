@@ -660,6 +660,20 @@ class AlignmentService:
         If char_offset_hint is provided (from ebook reader), use it directly with the map.
         Otherwise, fuzzy search the text to find offset, then use map.
         """
+        if char_offset_hint is None:
+            # Note: For now, KOSync always provides an offset or we calculate it.
+            return None
+        return self.get_time_for_char(abs_id, char_offset_hint)
+
+    def get_time_for_char(self, abs_id: str, char_offset: int) -> Optional[float]:
+        """Interpolate the audio timestamp for a character offset in `abs_id`'s
+        stored alignment map.
+
+        Segment-aware (issue #426): the underlying map may be a segmented map
+        (out-of-order narration), so this never interpolates across a segment
+        boundary — it clamps to the nearest segment edge instead when the
+        bracketing points belong to two different segments (or to none).
+        """
         # 1. Fetch Alignment Map
         alignment = self._get_alignment(abs_id)
         if not alignment:
@@ -667,22 +681,16 @@ class AlignmentService:
 
         map_points = alignment
         segments = self._get_segments(abs_id)
+        target_offset = char_offset
 
-        # 2. Resolve offset
-        target_offset = char_offset_hint
-
-        if target_offset is None:
-            # Note: For now, KOSync always provides an offset or we calculate it.
-            return None
-
-        # 3. Interpolate Timestamp
+        # 2. Interpolate Timestamp
         # Binary search
         left = 0
         right = len(map_points) - 1
-        
+
         # Points are [{'char': x, 'ts': y}, ...]
         # Find interval [p1, p2] where p1.char <= target <= p2.char
-        
+
         first_char = self._point_char(map_points[0])
         last_char = self._point_char(map_points[-1])
 
@@ -700,7 +708,7 @@ class AlignmentService:
                 left = mid + 1
             else:
                 right = mid - 1
-        
+
         p1 = map_points[floor_idx]
 
         # Ceiling is next point

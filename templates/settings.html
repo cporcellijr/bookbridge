@@ -2067,6 +2067,16 @@
                         <small>A behind client is only vetoed when the peer's position is at least this much newer —
                             keep generous to absorb clock differences between services.</small>
                     </div>
+                    <div class="form-group">
+                        <label>Locator Round-Trip Tolerance (Seconds)</label>
+                        <input type="number" min="0" name="LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"
+                            value="{{ get_val('LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS') or '30' }}">
+                        <small>When a book has an alignment map, a rebuilt CFI/xpath is judged by how far its
+                            round-trip lands on the audio timeline, not by character distance — a normal snap is a
+                            few seconds, while a segment seam (out-of-order narration) can be minutes to hours for
+                            only a couple of characters. Books with no alignment map keep the character-based
+                            check.</small>
+                    </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="xpath_fallback" name="XPATH_FALLBACK_TO_PREVIOUS_SEGMENT" {% if
                             get_bool('XPATH_FALLBACK_TO_PREVIOUS_SEGMENT') %}checked{% endif %}>
