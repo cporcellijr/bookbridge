@@ -305,3 +305,69 @@ class TestRecentExternalPutMarkerReachesLinkedBooks:
         payload, status = self._respond(None, "c" * 32, latest_pct=0.60, recorded_pct=0.25)
         assert status == 200
         assert "_bridge_recent_external_put" not in payload
+
+
+class TestStaleDevicePositionDoesNotResurrect:
+    """A bridge-synced BACKWARD move must not be undone by the next GET.
+
+    `upsert_user_kosync_progress` runs only for external PUTs, so the bridge's own
+    sync-push advances the synced State but never the per-user row. After an audio
+    rewind propagates to the ebook side, that row still holds the device's last
+    self-reported (higher) position, and the GET used to hand it straight back.
+
+    Live sequence on 'Children of Memory':
+        18:42:22  Readest PUT            -> user_progress 51.52%
+        18:49:07  audio rewind propagates -> synced State 31.96%
+        18:50:14  GET returned 51.52%, KoSync "changed", everything dragged forward
+    """
+
+    @staticmethod
+    def _get(synced_pct, synced_epoch, device_pct, device_dt):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from flask import Flask
+
+        book = SimpleNamespace(abs_id="abs-1", abs_title="Book", kosync_doc_id=_DOC_HASH)
+        synced = SimpleNamespace(
+            client_name="kosync", percentage=synced_pct, xpath="/body/synced.0",
+            cfi=None, last_updated=synced_epoch,
+        )
+        device_row = SimpleNamespace(
+            document_hash=_DOC_HASH, percentage=device_pct,
+            progress="/body/device.0", timestamp=device_dt,
+        )
+        db = MagicMock()
+        db.get_states_for_book.return_value = [synced]
+        db.get_user_kosync_progress_for_book.return_value = [device_row]
+
+        app = Flask(__name__)
+        with app.test_request_context(f"/syncs/progress/{_DOC_HASH}"):
+            with patch.object(kosync_server, "_database_service", db), \
+                 patch.object(kosync_server, "_suppress_empty_progress_response", return_value=None):
+                response, status = kosync_server._respond_from_book_states(_DOC_HASH, book)
+        return response.get_json(), status
+
+    def test_an_ahead_but_older_device_position_is_refused(self):
+        import time as _time
+        from datetime import timedelta
+
+        now = _time.time()
+        payload, status = self._get(
+            synced_pct=0.3196, synced_epoch=now,
+            device_pct=0.5152, device_dt=utcnow() - timedelta(minutes=7),
+        )
+        assert status == 200
+        assert payload["percentage"] == 0.3196
+
+    def test_an_ahead_and_newer_device_position_still_wins(self):
+        """The case this branch exists for is preserved."""
+        import time as _time
+        from datetime import timedelta
+
+        payload, status = self._get(
+            synced_pct=0.3196, synced_epoch=_time.time() - 600,
+            device_pct=0.5152, device_dt=utcnow(),
+        )
+        assert status == 200
+        assert payload["percentage"] == 0.5152
