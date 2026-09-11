@@ -97,13 +97,6 @@ _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "ABSEbook",
 })
 
-# Ceiling on how far a hydrated CFI may round-trip from the offset it was built
-# from. The original bound was 1% of the book, which on a long book is thousands
-# of characters — measured median 6,300 (440 audio seconds) across 14 real
-# aligned books, enough to drop a reader pages from where they were. Books short
-# enough that 1% is tighter than this keep the 1%.
-_CFI_HYDRATION_MAX_ROUNDTRIP_CHARS: int = 2000
-
 # Clients that navigate by locator rather than by percentage. ABSEbook rejects a
 # locator whose cfi is None outright; BookOrbit, Grimmory and CWA all back a Kobo
 # reading state, and a Kobo moves only when it is handed a KoboSpan — which those
@@ -3460,12 +3453,13 @@ class SyncManager:
         Returns the hydrated locator, or None when the offset cannot be round-tripped
         to within tolerance of its target or the resolution collapsed to start-of-book.
 
-        The round-trip is judged in audio-time via `_roundtrip_time_error` whenever
-        `abs_id` has an alignment map (segment-aware, issue #426) — a segmented map
-        makes the char->time function discontinuous at segment seams, so the old
-        1%-of-book character check could silently accept a locator that is actually
-        hours off on the audio timeline. Falls back to the 1%-of-book character
-        check, unchanged, when no map/time judgment is available.
+        The round trip is judged in CHARACTERS here, deliberately, unlike
+        `_validate_and_stabilize_locator`. This locator reaches only
+        `_CFI_DEPENDENT_CLIENTS` — every one of them an ebook reader that navigates
+        by text position and none of them re-deriving an audio timestamp from it —
+        so audio time has no standing to refuse it, and the only fallback on refusal
+        is the bare percentage the device ignores (#364). Audio-time vetoes belong on
+        the path where audio followers actually consume the locator.
         """
         if not epub or str(epub).startswith("storyteller_") or locator.percentage is None:
             return None
@@ -3487,28 +3481,7 @@ class SyncManager:
             # Round-trip the derived CFI back to an offset: a locator that does not
             # resolve to where it was built from is worse than no locator at all.
             cfi_offset = self.ebook_parser.resolve_cfi_to_index(epub, hydrated.cfi)
-            if cfi_offset is None:
-                return None
-
-            # 1% of a long book is thousands of characters — measured median 6,300
-            # (440 audio seconds) across 14 real aligned books, which drops a reader
-            # pages from where they were. Cap the budget so the bound stays meaningful
-            # as books get longer; short books keep the original 1%.
-            char_budget = min(int(total_len * 0.01), _CFI_HYDRATION_MAX_ROUNDTRIP_CHARS)
-            if abs(int(cfi_offset) - target_offset) > char_budget:
-                return None
-
-            # Audio time vetoes a character-close CFI that crosses a segment seam;
-            # it never licenses one that is character-far (see _within_tolerance).
-            roundtrip_seconds_tolerance = float(os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", 30))
-            time_error = self._roundtrip_time_error(abs_id, int(cfi_offset), int(target_offset))
-            if time_error is not None and time_error > roundtrip_seconds_tolerance:
-                logger.info(
-                    f"🚧 '{abs_id}' '{title_snip}' Locator round-trip rejected: offsets "
-                    f"{cfi_offset}->{target_offset} differ by {time_error:.1f}s on the audio "
-                    f"timeline (> {roundtrip_seconds_tolerance:.0f}s) — a segment seam or a "
-                    f"bad anchor; keeping the safer locator"
-                )
+            if cfi_offset is None or abs(int(cfi_offset) - target_offset) / total_len > 0.01:
                 return None
 
             if self._locator_collapsed_to_start(

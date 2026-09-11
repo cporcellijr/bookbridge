@@ -22,9 +22,11 @@ Covers:
    seam seen from the other side).
 6. With no alignment map, `_validate_and_stabilize_locator` behaves exactly
    like today's character comparison — both the accept and reject case.
-7. `_hydrate_cfi_locator` rejects a hydrated CFI whose round-trip is within
-   1% of the book by characters but exceeds the seconds threshold — the case
-   the old guard silently allowed.
+7. `_hydrate_cfi_locator`, by contrast, stays CHARACTER-judged: it accepts a
+   character-close CFI even across the same 12.40-hour seam, and still
+   rejects a character-far one. That locator reaches only ebook readers, none
+   of which re-derive an audio timestamp from it, so seconds get no veto
+   there — and refusing would hand the device a percentage it ignores (#364).
 """
 
 import os
@@ -335,11 +337,16 @@ class TestValidateAndStabilizeLocatorNoMapUnchanged(unittest.TestCase):
         self.assertIsNone(result.perfect_ko_xpath)
 
 
-class TestHydrateCfiLocatorSecondsGuard(unittest.TestCase):
-    """Coverage 7: `_hydrate_cfi_locator` rejects a hydrated CFI whose
-    round-trip is within 1% of the book by characters but exceeds the
-    seconds threshold — the case the old (character-only) guard silently
-    allowed."""
+class TestHydrateCfiLocatorIsCharacterJudged(unittest.TestCase):
+    """Coverage 7: `_hydrate_cfi_locator` judges its round-trip in CHARACTERS,
+    deliberately — audio time gets no veto on this path.
+
+    The locator this builds reaches only `_CFI_DEPENDENT_CLIENTS` (ABSEbook,
+    BookOrbit, Grimmory, CWA). Every one is an ebook reader that navigates by
+    text position, and none re-derives an audio timestamp from it, so audio
+    time has no standing to refuse it — while refusing costs the bare
+    percentage the device ignores (#364). A seconds veto lived here briefly
+    and was removed; these tests exist so it is not reintroduced by reflex."""
 
     def setUp(self):
         os.environ.pop("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", None)
@@ -350,48 +357,32 @@ class TestHydrateCfiLocatorSecondsGuard(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", None)
 
-    def _build_manager(self, time_lookup):
+    def _build_manager(self, time_lookup, roundtrip_offset=None):
         alignment_service = MagicMock()
         alignment_service.get_time_for_char.side_effect = (
-            lambda abs_id, offset: time_lookup[offset]
+            lambda abs_id, offset: time_lookup.get(offset)
         )
         manager = _make_manager(alignment_service=alignment_service)
         manager._get_cached_ebook_text = MagicMock(return_value=("x" * self.total_len, self.total_len))
         manager.ebook_parser.get_locator_from_char_offset.return_value = LocatorResult(percentage=0.0, cfi="/6/4!")
-        manager.ebook_parser.resolve_cfi_to_index.return_value = self.roundtrip_offset
+        manager.ebook_parser.resolve_cfi_to_index.return_value = (
+            self.roundtrip_offset if roundtrip_offset is None else roundtrip_offset
+        )
         return manager
 
-    def test_within_1_percent_of_book_but_over_the_seconds_threshold_is_rejected(self):
+    def test_character_close_is_accepted_even_across_a_12_hour_seam(self):
+        """The headline case for this path: 2 chars apart, 12.40 HOURS apart in
+        audio. The reader's eye lands at a text position, so this is the right
+        CFI for them; refusing it would hand the device a percentage it drops."""
+        early_ts, late_ts = 100.0, 100.0 + SEAM_TIME_ERROR_SECONDS
         manager = self._build_manager({
-            self.target_offset: 100.0,
-            self.roundtrip_offset: 44740.0,
+            self.target_offset: early_ts,
+            self.roundtrip_offset: late_ts,
         })
         locator = LocatorResult(percentage=self.target_offset / self.total_len, match_index=self.target_offset)
 
-        # Sanity: the old 1%-of-book character check would have accepted this.
-        char_fraction = abs(self.roundtrip_offset - self.target_offset) / self.total_len
-        self.assertLessEqual(char_fraction, 0.01)
-
-        with self.assertLogs("src.sync_manager", level="INFO") as logs:
-            result = manager._hydrate_cfi_locator(
-                locator, "book.epub", "abs-1", "Test Book", "KoSync", 0.0099, lambda p: f"{p*100:.2f}%",
-            )
-
-        self.assertIsNone(result)
-        self.assertTrue(
-            any("Locator round-trip rejected" in message and "abs-1" in message
-                for message in logs.output),
-            f"expected an INFO rejection log, got: {logs.output}",
-        )
-
-    def test_within_1_percent_and_within_the_seconds_threshold_is_accepted(self):
-        """Companion sanity case: the same char-distance shape, but the
-        alignment map now shows a small time delta — hydration proceeds."""
-        manager = self._build_manager({
-            self.target_offset: 100.0,
-            self.roundtrip_offset: 105.0,  # only 5s away now
-        })
-        locator = LocatorResult(percentage=self.target_offset / self.total_len, match_index=self.target_offset)
+        # The time gap really is the full measured Tress seam (12.40 hours).
+        self.assertEqual(abs(late_ts - early_ts), SEAM_TIME_ERROR_SECONDS)
 
         result = manager._hydrate_cfi_locator(
             locator, "book.epub", "abs-1", "Test Book", "KoSync", 0.0099, lambda p: f"{p*100:.2f}%",
@@ -399,6 +390,21 @@ class TestHydrateCfiLocatorSecondsGuard(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result.cfi, "/6/4!")
+
+    def test_character_far_is_still_rejected(self):
+        """The 1%-of-book character bound is intact and is what decides here."""
+        far_offset = self.target_offset + 500  # 5% of the book
+        manager = self._build_manager(
+            {self.target_offset: 100.0, far_offset: 101.0},  # 1s apart in audio
+            roundtrip_offset=far_offset,
+        )
+        locator = LocatorResult(percentage=self.target_offset / self.total_len, match_index=self.target_offset)
+
+        result = manager._hydrate_cfi_locator(
+            locator, "book.epub", "abs-1", "Test Book", "KoSync", 0.0099, lambda p: f"{p*100:.2f}%",
+        )
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
