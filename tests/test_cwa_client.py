@@ -134,6 +134,137 @@ class TestCWAClient(unittest.TestCase):
         uuid = self.client.get_book_uuid('505')
         self.assertEqual(uuid, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
 
+    # -- _parse_opds id extraction (issue #427 defect 1: regex asymmetry) --
+
+    def test_parse_opds_extracts_numeric_id_from_download_link(self):
+        # CWA's acquisition link is /opds/download/<id>/epub/, not /book/<id>
+        # or /books/<id>. _parse_opds must recognize it too (get_book_uuid
+        # already did) so a numeric Calibre id is stored instead of falling
+        # back to a truncated title slug.
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>Only A Download Link</title>
+                <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                      href="/opds/download/505/epub/" />
+            </entry>
+        </feed>
+        """
+        results = self.client._parse_opds(feed)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], '505')
+
+    def test_parse_opds_falls_back_to_title_slug_without_numeric_id(self):
+        # No link and no atom:id carries a numeric id here, so the fallback
+        # chain (atom:id, then title slug) must still produce the slug.
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>No Numeric Anywhere</title>
+                <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                      href="/opds/download/abc/epub/" />
+            </entry>
+        </feed>
+        """
+        results = self.client._parse_opds(feed)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], 'No_Numeric_Anywhere')
+
+    # -- get_book_uuid single-result corroboration (defect 2) --
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_single_result_without_corroboration_returns_none(self, mock_get):
+        # A lone search result whose title slug has nothing to do with the
+        # stored key must not be accepted blindly — that is the exact #427
+        # failure (a renamed book + a loose fuzzy match).
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>Completely Different Book</title>
+                <id>urn:uuid:99999999-8888-7777-6666-555555555555</id>
+                <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                      href="/opds/download/999/epub/" />
+            </entry>
+        </feed>
+        """
+        self._mock_search(mock_get, feed)
+        uuid = self.client.get_book_uuid('Dungeon_Crawler_Carl')
+        self.assertIsNone(uuid)
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_refuses_a_series_sibling_whose_slug_is_a_prefix(self, mock_get):
+        # The reason a lone result is never accepted on its own. This stored key
+        # is the 30-char truncation of "Dungeon Crawler Carl: The Butcher's
+        # Masquerade", and the only search hit is the series opener "Dungeon
+        # Crawler Carl" — a DIFFERENT book whose slug happens to prefix the key.
+        # Binding them is precisely the wrong-book corruption #427 reported, so
+        # any prefix/fuzzy relaxation of the slug test must stay out of here.
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>Dungeon Crawler Carl</title>
+                <id>urn:uuid:22222222-3333-4444-5555-666666666666</id>
+                <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                      href="/opds/download/321/epub/" />
+            </entry>
+        </feed>
+        """
+        self._mock_search(mock_get, feed)
+        truncated_key = "Dungeon_Crawler_Carl__The_Butc"  # 30 chars, as _parse_opds would have stored it
+        self.assertEqual(len(truncated_key), 30)
+        self.assertIsNone(self.client.get_book_uuid(truncated_key))
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_slug_match_is_case_insensitive(self, mock_get):
+        # The slug is derived from the title, so a capitalisation edit in Calibre
+        # must not orphan an existing mapping.
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>DUNGEON CRAWLER CARL</title>
+                <id>urn:uuid:22222222-3333-4444-5555-666666666666</id>
+                <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                      href="/opds/download/321/epub/" />
+            </entry>
+        </feed>
+        """
+        self._mock_search(mock_get, feed)
+        uuid = self.client.get_book_uuid('Dungeon_Crawler_Carl')
+        self.assertEqual(uuid, '22222222-3333-4444-5555-666666666666')
+
+    # -- get_book_uuid negative-result caching (defect 3) --
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_failed_resolution_is_not_cached(self, mock_get):
+        # This client is a DI Singleton, so caching a None would wedge CWA
+        # sync for the book until the process restarts. A failure must be
+        # retried on the next call, not served from cache.
+        feed = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>Completely Different Book</title>
+                <id>urn:uuid:99999999-8888-7777-6666-555555555555</id>
+                <link rel="http://opds-spec.org/acquisition" type="application/epub+zip"
+                      href="/opds/download/999/epub/" />
+            </entry>
+        </feed>
+        """
+        self._mock_search(mock_get, feed)
+        self.assertIsNone(self.client.get_book_uuid('Dungeon_Crawler_Carl'))
+        self.assertIsNone(self.client.get_book_uuid('Dungeon_Crawler_Carl'))
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch('requests.Session.get')
+    def test_get_book_uuid_successful_resolution_is_cached(self, mock_get):
+        # A resolved UUID is still worth caching; only negative results must
+        # bypass the cache.
+        self._mock_search(mock_get, self._SERIES_FEED)
+        first = self.client.get_book_uuid('Dungeon_Crawler_Carl')
+        second = self.client.get_book_uuid('Dungeon_Crawler_Carl')
+        self.assertEqual(first, 'd02f40b4-873a-4d04-8c56-ffcf3033979d')
+        self.assertEqual(second, first)
+        self.assertEqual(mock_get.call_count, 1)
+
 
 class TestCWADownloadPublication(unittest.TestCase):
     """A failed ebook download must never replace a good file in the cache."""

@@ -314,11 +314,15 @@ class CWAClient:
                     import re
 
                     # 1. Try to extract ID from links (Most reliable for Calibre-Web)
-                    # Look for /opds/book/123 or /books/123 in any link
+                    # Look for /opds/book/123, /books/123, or /opds/download/123/ in any link
                     for link in entry.findall('atom:link', namespaces):
                         href = link.get('href', '')
-                        # Regex matches /book/123 or /books/123 anywhere in the path
-                        id_match = re.search(r'/(?:book|books)/(\d+)', href)
+                        # Regex matches /book/123, /books/123, or CWA's acquisition
+                        # form /opds/download/123/epub/ anywhere in the path. Missing
+                        # the download form here is what made every CWA match store a
+                        # title slug instead of the Calibre id, forcing the ambiguous
+                        # search that misresolved in #427.
+                        id_match = re.search(r'/(?:book|books|download)/(\d+)', href)
                         if id_match:
                             entry_id = id_match.group(1)
                             break
@@ -523,26 +527,47 @@ class CWAClient:
 
             # 2. Title-slug match — covers the common CWA case where the stored id
             #    is the title-derived slug. Only accept it when it is unambiguous.
+            #    Compared case-insensitively: the slug is derived from the title,
+            #    and a capitalisation edit in Calibre must not orphan the mapping.
+            #    Equality is the only safe test. A series routinely contains titles
+            #    that prefix one another ("Dungeon Crawler Carl" and "Dungeon
+            #    Crawler Carl: The Butcher's Masquerade"), and both slugs are cut to
+            #    the same 30 chars, so any prefix/fuzzy relaxation here binds one
+            #    book's progress to another — the exact corruption #427 reported.
             if chosen is None:
-                slug_matches = [c[0] for c in candidates if c[2] and c[2] == key]
+                key_cf = key.casefold()
+                slug_matches = [c[0] for c in candidates if c[2] and c[2].casefold() == key_cf]
                 if len(slug_matches) == 1:
                     chosen = slug_matches[0]
 
-            # 3. A single result is unambiguous by definition.
-            if chosen is None and len(candidates) == 1:
-                chosen = candidates[0][0]
+            # A lone search result is deliberately NOT accepted on its own. CWA's
+            # search matches series and author terms too, so "one result" means
+            # only that one book matched the query — not that it is this book. If
+            # the stored slug no longer matches anything (the title was edited),
+            # skipping the sync and logging is safer than binding to whatever came
+            # back; the reader can re-match the book to repair it.
 
             if chosen is None:
                 if candidates:
-                    logger.error(
+                    get_persistent_condition_logger().warn(
+                        logger,
+                        f"cwa_uuid_unresolved:{calibre_id}",
                         f"❌ CWA: Could not unambiguously resolve '{calibre_id}' to a "
                         f"single book ({len(candidates)} candidate(s) returned); skipping "
-                        "CWA sync to avoid writing progress to the wrong book."
+                        "CWA sync to avoid writing progress to the wrong book.",
+                        level=logging.ERROR,
                     )
-                self._uuid_cache[calibre_id] = None
+                # Do NOT cache the failure: this client is a DI Singleton, so a
+                # cached None would wedge CWA sync for this book until the
+                # process restarts, even after the user fixes their metadata.
                 return None
 
             self._uuid_cache[calibre_id] = chosen
+            get_persistent_condition_logger().resolve(
+                logger,
+                f"cwa_uuid_unresolved:{calibre_id}",
+                f"✅ CWA: Resolved '{calibre_id}' to UUID {chosen} after prior failures",
+            )
             logger.debug(f"📖 CWA: Resolved '{calibre_id}' -> UUID {chosen}")
             return chosen
 
