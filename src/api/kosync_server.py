@@ -34,6 +34,7 @@ from src.utils.user_config import (
     resolve_setting,
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.ebook_sources import is_grimmory_source
 from src.services import observation_trail
 from src.services.llm_matching import judge_best_candidate
 from src.db.models import State
@@ -1565,7 +1566,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         audio_cover_url=f"/api/cover-proxy/{candidate['abs_id']}",
         ebook_source=ebook_source,
         ebook_source_id=ebook_source_id,
-        booklore_ebook_id=ebook_source_id if ebook_source == "BookLore" else None,
+        booklore_ebook_id=ebook_source_id if is_grimmory_source(ebook_source) else None,
         kosync_doc_id=doc_hash_val,
     )
     if not saved:

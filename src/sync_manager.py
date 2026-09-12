@@ -55,6 +55,12 @@ from src.utils.transcription_cancel import (
 from src.utils.transcriber import TranscriptionCancelled
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
+from src.utils.ebook_sources import (
+    is_grimmory_source,
+    is_storyteller_filename,
+    local_ebook_filename,
+    normalize_ebook_source,
+)
 
 # Service imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
@@ -1746,7 +1752,7 @@ class SyncManager:
         """
         # 1. Skip Storyteller artifacts — they have their own materialization path
         #    and caching the library bytes under a Storyteller filename would be wrong.
-        if ebook_filename.startswith("storyteller_"):
+        if is_storyteller_filename(ebook_filename):
             return None
 
         # 2. Look up the mapping row by ebook_filename (matches current or original).
@@ -1771,11 +1777,12 @@ class SyncManager:
 
         # 3. Map source to the appropriate client and download by ID.
         client = None
-        if ebook_source == "BookOrbit":
+        normalized_source = normalize_ebook_source(ebook_source)
+        if normalized_source == "BookOrbit":
             client = self.active_bookorbit_client
-        elif ebook_source == "BookLore":
+        elif normalized_source == "Booklore":
             client = self.active_booklore_client
-        elif ebook_source == "Kavita":
+        elif normalized_source == "Kavita":
             client = self.active_kavita_client
         else:
             return None
@@ -1825,10 +1832,33 @@ class SyncManager:
         logger.info(f"✅ Downloaded EPUB to cache: '{cached_path}'")
         return cached_path
 
-    def _resolve_local_epub_uncached(self, ebook_filename):
+    def _resolve_local_epub_uncached(self, ebook_filename, _seen=None):
         """
         Get local path to EPUB file, downloading from Grimmory if necessary.
         """
+        # A reconciled library mapping may expose a new remote filename while the
+        # existing bytes intentionally remain cached under the original name.
+        # A second mapping can itself own that original filename, so retain a
+        # visited set rather than assuming the lookup returns the same row.
+        seen = set() if _seen is None else _seen
+        filename_key = str(ebook_filename)
+        if filename_key in seen:
+            logger.warning(
+                "Detected cyclic local EPUB filename mapping at '%s'; falling back",
+                sanitize_log_data(filename_key),
+            )
+            return None
+        seen.add(filename_key)
+        try:
+            mapped_book = self.database_service.get_book_by_ebook_filename(ebook_filename)
+        except Exception:
+            mapped_book = None
+        stable_local_filename = local_ebook_filename(mapped_book) if mapped_book else None
+        if stable_local_filename and stable_local_filename != ebook_filename:
+            stable_path = self._resolve_local_epub_uncached(stable_local_filename, seen)
+            if stable_path is not None:
+                return stable_path
+
         # 1. Try the parser's resolve_book_path first. It has a path-resolution
         #    cache (instant repeat lookups), managed-cache bypass for BookFusion/
         #    Storyteller files, and the same filesystem + cache-dir search.
@@ -3074,8 +3104,19 @@ class SyncManager:
                         book.original_ebook_filename = book.ebook_filename
                         logger.info(f"   ⚡ Preserving original filename: '{book.original_ebook_filename}'")
 
-                # Update the active filename to the one we just used/downloaded
-                book.ebook_filename = new_filename
+                # A source-side rename changes remote metadata, not the local cache
+                # identity. Do not oscillate ebook_filename back to the original
+                # cache basename after reconciliation.
+                stable_local = local_ebook_filename(book)
+                mapped_remote_identity = bool(
+                    getattr(book, "ebook_source", None)
+                    and getattr(book, "ebook_source_id", None)
+                    and stable_local
+                    and new_filename == stable_local
+                    and not is_storyteller_filename(new_filename)
+                )
+                if not mapped_remote_identity:
+                    book.ebook_filename = new_filename
             
             # Guard against a delete that landed after transcription finished but
             # before we persist (e.g. via SMIL/Storyteller paths that don't hit the
@@ -5233,7 +5274,7 @@ class SyncManager:
     def _resolve_grimmory_ebook_id(self, book):
         """Resolve the Grimmory book ID for a book's ebook. Returns int or None."""
         # Fast path: book explicitly sourced from Grimmory
-        if getattr(book, 'ebook_source', None) == "BookLore" and getattr(book, 'ebook_source_id', None):
+        if is_grimmory_source(getattr(book, 'ebook_source', None)) and getattr(book, 'ebook_source_id', None):
             try:
                 return int(book.ebook_source_id)
             except (TypeError, ValueError):

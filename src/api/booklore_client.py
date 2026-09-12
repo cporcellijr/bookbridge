@@ -16,6 +16,11 @@ from src.utils.file_transfers import (
     stream_response_to_path,
 )
 from src.utils.logging_utils import sanitize_log_data
+from src.utils.ebook_sources import (
+    is_grimmory_source,
+    is_storyteller_filename,
+    normalize_ebook_source,
+)
 from src.sync_clients.sync_client_interface import LocatorResult
 from src.utils.user_config import resolve_setting
 
@@ -55,6 +60,7 @@ class BookloreClient:
         self._book_id_cache = {}
         # Memoized LLM filename-rescue verdicts (stem -> cached filename or None)
         self._llm_filename_match_cache = {}
+        self._exact_filename_miss_cache = {}
         self._cache_timestamp = 0
         self._last_refresh_failed = False
         self._last_refresh_attempt = 0
@@ -859,6 +865,7 @@ class BookloreClient:
             return True
 
         self._llm_filename_match_cache = {}
+        self._exact_filename_miss_cache = {}
         self._last_refresh_attempt = time.time()
         try:
             all_books_list = []
@@ -1255,12 +1262,145 @@ class BookloreClient:
 
         return None
 
+    def reconcile_mapping_filename_drift(self):
+        """Refresh mapped external filenames while preserving local identity.
+
+        ``ebook_source_id`` is authoritative for existing Grimmory mappings.  A
+        filename change for that same id updates only ``ebook_filename``; the
+        original/local filename, KoSync hash, progress state, alignment, and status
+        are intentionally left untouched.  Legacy mappings may acquire a source id
+        only from one unambiguous, case-insensitive exact filename match.
+        """
+        if not self.db or not hasattr(self.db, "get_all_books"):
+            return 0
+        try:
+            mappings = list(self.db.get_all_books() or [])
+        except Exception:
+            logger.warning("Grimmory: Could not load mappings for filename reconciliation", exc_info=True)
+            return 0
+
+        by_id = {}
+        ids_by_filename = {}
+        incomplete_filename_catalog = False
+        for cached_id, book_info in self._snapshot_book_id_items():
+            if not isinstance(book_info, dict):
+                continue
+            raw_id = book_info.get("id")
+            if raw_id is None:
+                raw_id = cached_id
+            if raw_id is None:
+                continue
+            stable_id = str(raw_id)
+            by_id[stable_id] = book_info
+            filename = book_info.get("fileName")
+            if filename:
+                ids_by_filename.setdefault(Path(str(filename)).name.lower(), set()).add(stable_id)
+            elif book_info.get("_needs_detail"):
+                incomplete_filename_catalog = True
+
+        claimed_ids = {
+            str(getattr(mapping, "ebook_source_id", "") or "").strip()
+            for mapping in mappings
+            if is_grimmory_source(getattr(mapping, "ebook_source", None))
+            and str(getattr(mapping, "ebook_source_id", "") or "").strip()
+        }
+        pending_legacy_claims = {}
+        if not incomplete_filename_catalog:
+            for mapping in mappings:
+                if not is_grimmory_source(getattr(mapping, "ebook_source", None)):
+                    continue
+                if str(getattr(mapping, "ebook_source_id", None) or "").strip():
+                    continue
+                candidate_ids = set()
+                for filename in (
+                    getattr(mapping, "ebook_filename", None),
+                    getattr(mapping, "original_ebook_filename", None),
+                ):
+                    if filename:
+                        candidate_ids.update(
+                            ids_by_filename.get(Path(str(filename)).name.lower(), set())
+                        )
+                if len(candidate_ids) == 1:
+                    candidate_id = next(iter(candidate_ids))
+                    pending_legacy_claims.setdefault(candidate_id, []).append(mapping)
+
+        updated_count = 0
+        for mapping in mappings:
+            source = getattr(mapping, "ebook_source", None)
+            if not isinstance(source, str) or not is_grimmory_source(source):
+                continue
+
+            source_id = str(getattr(mapping, "ebook_source_id", None) or "").strip()
+            remote = by_id.get(source_id) if source_id else None
+            fields = {}
+            backfilled = False
+            if not source_id:
+                candidates = [
+                    candidate_id
+                    for candidate_id, candidate_mappings in pending_legacy_claims.items()
+                    if len(candidate_mappings) == 1 and candidate_mappings[0] is mapping
+                ]
+                if len(candidates) != 1 or candidates[0] in claimed_ids:
+                    continue
+                source_id = candidates[0]
+                remote = by_id.get(source_id)
+                canonical_source = normalize_ebook_source(source)
+                claim = getattr(self.db, "backfill_ebook_source_id_if_unclaimed", None)
+                if not callable(claim) or not claim(mapping.abs_id, source_id, canonical_source):
+                    continue
+                claimed_ids.add(source_id)
+                mapping.ebook_source = canonical_source
+                mapping.ebook_source_id = source_id
+                backfilled = True
+                logger.info(
+                    "Grimmory mapping source id backfilled for %s: %s (exact filename match)",
+                    getattr(mapping, "abs_id", "?"), source_id,
+                )
+
+            # A known id missing from the refreshed catalog is not a rename. Do not
+            # fall back to filename and risk silently relinking another resource.
+            if not remote:
+                continue
+            current_filename = str(remote.get("fileName") or "").strip()
+            stored_filename = str(getattr(mapping, "ebook_filename", None) or "").strip()
+            is_storyteller_artifact = is_storyteller_filename(stored_filename)
+            if current_filename and stored_filename != current_filename and not is_storyteller_artifact:
+                old_filename = stored_filename
+                fields["ebook_filename"] = current_filename
+                logger.info(
+                    "Grimmory mapping filename refreshed for %s: %s -> %s "
+                    "(source id unchanged: %s)",
+                    getattr(mapping, "abs_id", "?"), old_filename or "<empty>",
+                    current_filename, source_id,
+                )
+
+            if not fields:
+                if backfilled:
+                    updated_count += 1
+                continue
+            try:
+                saved = self.db.update_book_fields(
+                    mapping.abs_id,
+                    expected_ebook_source_id=source_id,
+                    expected_grimmory_source=True,
+                    notify_catalog_change=True,
+                    **fields,
+                )
+            except Exception:
+                logger.warning(
+                    "Grimmory: Failed to persist mapping reconciliation for %s",
+                    getattr(mapping, "abs_id", "?"), exc_info=True,
+                )
+                continue
+            if saved:
+                updated_count += 1
+        return updated_count
+
     def _fetch_and_cache_detail(self, book_id, force_refresh=False):
         """Fetch detail for a single book on demand and add it to cache."""
-        with self._cache_lock:
-            cached = self._book_id_cache.get(book_id)
-            if cached and not cached.get('_needs_detail') and not force_refresh:
-                return cached
+        cached = self._get_cached_book_by_id(book_id)
+        if cached and not cached.get('_needs_detail') and not force_refresh:
+            return cached
 
         token = self._get_fresh_token()
         if not token:
@@ -1269,8 +1409,10 @@ class BookloreClient:
         detail = self._fetch_book_detail(book_id, token)
         if detail and isinstance(detail, dict):
             self._process_book_detail(detail)
-            with self._cache_lock:
-                return self._book_id_cache.get(book_id)
+            # API ids are commonly integers while persisted mapping ids are
+            # strings. Resolve by value so a cold-cache write for source id "4"
+            # can use a detail response keyed as integer 4.
+            return self._get_cached_book_by_id(book_id)
         return None
 
     def _get_cached_book_by_id(self, book_id):
@@ -1386,6 +1528,61 @@ class BookloreClient:
         if allow_refresh:
             return self._llm_match_by_filename(target_stem)
         return None
+
+    def find_book_by_filename_exact(self, ebook_filename, allow_refresh=True):
+        """Find a Grimmory book by its current filename without fuzzy relinking.
+
+        This resolver is intended for legacy BookBridge mappings which do not yet
+        have a stable ``ebook_source_id``.  Case-insensitive basename equality is
+        the only accepted match; stem, partial, fuzzy, and LLM matches are
+        deliberately excluded because a successful result may be persisted as the
+        mapping's stable external identity.
+        """
+        if not ebook_filename:
+            return None
+        target_name = Path(str(ebook_filename)).name.lower()
+        now = time.time()
+        missed_at = self._exact_filename_miss_cache.get(target_name)
+        if missed_at is not None and now - missed_at < self._refresh_cooldown:
+            return None
+        if not self._has_cached_books() and allow_refresh and not self._is_refresh_on_cooldown():
+            self._refresh_book_cache()
+        exact_match = self._get_unique_exact_filename_match(target_name)
+        if exact_match is not None:
+            self._exact_filename_miss_cache.pop(target_name, None)
+            return exact_match
+        if allow_refresh and now - self._cache_timestamp > 3600 and not self._is_refresh_on_cooldown():
+            if self._refresh_book_cache():
+                exact_match = self._get_unique_exact_filename_match(target_name)
+                if exact_match is not None:
+                    self._exact_filename_miss_cache.pop(target_name, None)
+                    return exact_match
+        self._exact_filename_miss_cache[target_name] = time.time()
+        return None
+
+    def _get_unique_exact_filename_match(self, target_name):
+        """Return one catalog-wide exact filename match, never an ambiguity."""
+        matching_ids = set()
+        for cached_id, info in self._snapshot_book_id_items():
+            if not isinstance(info, dict):
+                continue
+            filename = info.get("fileName")
+            if not filename:
+                if info.get("_needs_detail"):
+                    # An unhydrated entry can conceal another exact match.
+                    return None
+                continue
+            if Path(str(filename)).name.lower() == target_name:
+                raw_id = info.get("id")
+                matching_ids.add(str(cached_id if raw_id is None else raw_id))
+        if len(matching_ids) != 1:
+            return None
+        with self._cache_lock:
+            match = self._book_cache.get(target_name)
+        if not isinstance(match, dict):
+            return None
+        raw_id = match.get("id")
+        return match if str(raw_id) in matching_ids else None
 
     def _llm_match_by_filename(self, target_stem):
         """Judge-confirmed rescue over the cached book list. Returns book_info or None."""
@@ -1523,6 +1720,7 @@ class BookloreClient:
             with self._cache_lock:
                 self._book_cache = {}
                 self._book_id_cache = {}
+                self._exact_filename_miss_cache = {}
                 self._cache_timestamp = 0
 
             self._last_refresh_failed = False
@@ -1955,11 +2153,15 @@ class BookloreClient:
             'track_position_ms': self._to_optional_int(progress.get('trackPositionMs')),
         }
 
+    def get_progress_by_book_id(self, book_id):
+        """Get progress directly from Grimmory's stable book identity."""
+        return self._get_progress_by_book_id(book_id)
+
     def get_progress(self, ebook_filename):
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             return None, None
-        return self._get_progress_by_book_id(book['id'])
+        return self.get_progress_by_book_id(book['id'])
 
     def get_progress_rich(self, ebook_filename):
         """Progress plus Grimmory's own metadata for a filename, or None.
@@ -1972,12 +2174,31 @@ class BookloreClient:
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             return None
-        response = self._make_request("GET", f"/api/v1/books/{book['id']}")
-        if not response or response.status_code != 200:
+        return self.get_progress_rich_by_book_id(book['id'])
+
+    def get_progress_rich_by_book_id(self, book_id):
+        """Return rich progress directly for a stable Grimmory book id."""
+        response = self._make_request("GET", f"/api/v1/books/{book_id}")
+        if not response:
             return None
-        data = self._parse_json_response(response, f"Grimmory rich progress for book {book['id']}")
+        if response.status_code == 404:
+            self._evict_cached_book(book_id=book_id, reason="rich progress lookup returned 404")
+            return None
+        if response.status_code != 200:
+            return None
+        data = self._parse_json_response(response, f"Grimmory rich progress for book {book_id}")
         if not isinstance(data, dict):
             return None
+
+        # Reuse this same detail for an immediately following write. Identity is
+        # still the requested id; caching only removes a redundant hydration GET.
+        # Some lightweight integrations construct a read-only client via
+        # ``__new__``; leave parsing functional when no cache was initialized.
+        if all(
+            hasattr(self, attr)
+            for attr in ("_cache_lock", "_book_cache", "_book_id_cache")
+        ):
+            self._process_book_detail(data)
 
         book_type = str(
             data.get('primaryFile', {}).get('bookType')
@@ -2243,6 +2464,25 @@ class BookloreClient:
         if not book:
             logger.debug(f"Grimmory: Book not found: {ebook_filename}")
             return False
+
+        return self._update_progress_for_book(book, ebook_filename, percentage, rich_locator)
+
+    def update_progress_by_book_id(self, book_id, percentage, rich_locator: Optional[LocatorResult] = None):
+        """Write progress directly to a mapped Grimmory book id.
+
+        A cached hydrated detail avoids an extra GET.  When metadata is absent we
+        fetch only this book by id; a full library refresh and filename lookup are
+        never used to resolve identity.
+        """
+        book = self.get_book_by_id(book_id)
+        if not book:
+            logger.debug("Grimmory: Book id not found: %s", book_id)
+            return False
+        display_filename = book.get('fileName') or f"book-id:{book_id}"
+        return self._update_progress_for_book(book, display_filename, percentage, rich_locator)
+
+    def _update_progress_for_book(self, book, ebook_filename, percentage, rich_locator=None):
+        """Shared write implementation after identity has already been resolved."""
 
         safe_filename = sanitize_log_data(ebook_filename)
         book_id = book['id']
@@ -3159,4 +3399,3 @@ class BookloreClient:
             )
             return False
         return True
-

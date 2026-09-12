@@ -94,6 +94,28 @@ def test_kosync_id_skips_bookorbit_when_local_file_present():
     bookorbit.download_book.assert_not_called()
 
 
+def test_kosync_id_checks_both_remote_and_original_cache_names():
+    bookorbit = MagicMock()
+    bookorbit.is_configured.return_value = False
+
+    with tempfile.TemporaryDirectory() as tmp:
+        old_name = "old-name.epub"
+        new_name = "new-name.epub"
+        old_path = Path(tmp) / old_name
+        old_path.write_bytes(b"cached")
+        container, parser = _container(tmp, "unused")
+        parser.get_kosync_id.return_value = "stablehash"
+        with patch.object(web_server, "uc", return_value=_clients(bookorbit)), \
+             patch.object(web_server, "container", container), \
+             patch.object(web_server, "find_ebook_file", return_value=None):
+            result = web_server.get_kosync_id_for_ebook(
+                new_name, original_filename=old_name
+            )
+
+    assert result == "stablehash"
+    parser.get_kosync_id.assert_called_once_with(old_path)
+
+
 def test_kosync_id_prefers_selected_source_path_before_filename_glob():
     """Approved Suggestions should hash the selected ebook file, not the first basename match."""
     bookorbit = MagicMock()

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -46,6 +47,7 @@ from .models import (
 )
 from src.services.map_quality import ALIGNMENT_QUALITY_REALIGN_THRESHOLD, quality_detail_json, score_map
 from src.utils import secret_store
+from src.utils.ebook_sources import source_name_variants
 from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -100,6 +102,7 @@ class DatabaseService:
         self.db_manager = DatabaseManager(str(self.db_path))
         self._default_uid = None  # cached default (admin) user id for state scoping
         self._catalog_change_callbacks: list[Callable[[], None]] = []
+        self._ebook_source_claim_lock = threading.Lock()
 
         # Run Alembic migrations to ensure schema is up to date
         self._run_alembic_migrations()
@@ -577,7 +580,15 @@ class DatabaseService:
             self._notify_catalog_change()
         return bool(updated)
 
-    def update_book_fields(self, abs_id: str, **fields) -> bool:
+    def update_book_fields(
+        self,
+        abs_id: str,
+        *,
+        expected_ebook_source_id: Optional[str] = None,
+        expected_grimmory_source: bool = False,
+        notify_catalog_change: bool = False,
+        **fields,
+    ) -> bool:
         """Update named columns on one book row, leaving `abs_id` alone.
 
         Used by the audio repoint, which changes a book's audio provider in place:
@@ -594,11 +605,22 @@ class DatabaseService:
         if not allowed:
             return False
         with self.get_session() as session:
-            updated = session.query(Book).filter(Book.abs_id == abs_id).update(
+            query = session.query(Book).filter(Book.abs_id == abs_id)
+            if expected_ebook_source_id is not None:
+                query = query.filter(Book.ebook_source_id == str(expected_ebook_source_id))
+            if expected_grimmory_source:
+                from sqlalchemy import func
+
+                query = query.filter(
+                    func.lower(Book.ebook_source).in_(("booklore", "grimmory"))
+                )
+            updated = query.update(
                 {getattr(Book, key): value for key, value in allowed.items()},
                 synchronize_session=False,
             )
-            return bool(updated)
+        if updated and notify_catalog_change:
+            self._notify_catalog_change()
+        return bool(updated)
 
     def has_alignment(self, abs_id: str) -> bool:
         """Whether a stored alignment map exists for a book.
@@ -1046,6 +1068,44 @@ class DatabaseService:
             session.refresh(existing)
             session.expunge(existing)
             return existing
+
+    def backfill_ebook_source_id_if_unclaimed(
+        self,
+        abs_id: str,
+        source_id: str,
+        ebook_source: str = "Booklore",
+    ) -> bool:
+        """Claim a legacy Grimmory id only when no other mapping owns it."""
+        from sqlalchemy import func
+
+        stable_id = str(source_id or "").strip()
+        if not abs_id or not stable_id:
+            return False
+        with self._ebook_source_claim_lock:
+            with self.get_session() as session:
+                conflict = session.query(Book.abs_id).filter(
+                    Book.abs_id != abs_id,
+                    Book.ebook_source_id == stable_id,
+                    func.lower(Book.ebook_source).in_(("booklore", "grimmory")),
+                ).first()
+                if conflict:
+                    return False
+                updated = session.query(Book).filter(
+                    Book.abs_id == abs_id,
+                    (Book.ebook_source_id.is_(None)) | (Book.ebook_source_id == ""),
+                    func.lower(func.trim(func.coalesce(Book.ebook_source, ""))).in_(
+                        ("", "booklore", "grimmory")
+                    ),
+                ).update(
+                    {
+                        "ebook_source": ebook_source,
+                        "ebook_source_id": stable_id,
+                    },
+                    synchronize_session=False,
+                )
+        if updated:
+            self._notify_catalog_change()
+        return bool(updated)
 
     def migrate_book_data(self, old_abs_id: str, new_abs_id: str):
         """
@@ -2210,11 +2270,13 @@ class DatabaseService:
 
     def get_book_by_ebook_source(self, ebook_source: str, ebook_source_id: str) -> Optional['Book']:
         """Find a book by its ebook source + source id (e.g. BookLore/<grimmory_id>)."""
-        if not ebook_source or not ebook_source_id:
+        variants = source_name_variants(ebook_source)
+        if not variants or not ebook_source_id:
             return None
+        from sqlalchemy import func
         with self.get_session() as session:
             book = session.query(Book).filter(
-                Book.ebook_source == ebook_source,
+                func.lower(func.trim(Book.ebook_source)).in_(variants),
                 Book.ebook_source_id == str(ebook_source_id),
             ).first()
             if book:
@@ -5206,5 +5268,3 @@ class DatabaseMigrator:
             return True
 
         return False
-
-

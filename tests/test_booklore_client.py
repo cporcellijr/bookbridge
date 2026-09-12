@@ -712,6 +712,7 @@ def test_refresh_book_cache_hydrates_small_library(booklore_client):
             filename=f"small-book-{book_id.split('-')[-1]}.epub",
         )
     )
+    booklore_client.reconcile_mapping_filename_drift = MagicMock()
 
     assert booklore_client._refresh_book_cache(refresh_stale_details=False) is True
     assert booklore_client._fetch_book_detail.call_count == 3
@@ -719,6 +720,7 @@ def test_refresh_book_cache_hydrates_small_library(booklore_client):
     assert len(booklore_client._book_id_cache) == 3
     assert all(not info.get('_needs_detail') for info in booklore_client._book_id_cache.values())
     assert booklore_client.db.save_booklore_book.call_count == 3
+    booklore_client.reconcile_mapping_filename_drift.assert_not_called()
 
 
 def test_refresh_book_cache_skips_bulk_detail_fetch_for_large_library(booklore_client):
