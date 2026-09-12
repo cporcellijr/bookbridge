@@ -9,6 +9,14 @@ from lxml import html
 from src.api.api_clients import KoSyncClient
 from src.db.models import Book, State
 from src.utils.ebook_utils import EbookParser
+from src.utils.fixed_page_progress import (
+    coerce_page,
+    count_cbz_pages,
+    estimate_cbz_page,
+    is_cbz_book,
+    page_from_persisted_state,
+    percentage_from_cbz_page,
+)
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import (
     prewarm_xpath_order_cache,
@@ -44,6 +52,10 @@ class KoSyncSyncClient(SyncClient):
         """KoSync participates in both audiobook and ebook sync modes."""
         return {'audiobook', 'ebook'}
 
+    def supports_fixed_page_progress(self) -> bool:
+        """The real KoSync protocol represents paged documents by page number."""
+        return True
+
     def supports_book(self, book: Book) -> bool:
         """Exclude audiobook-only mappings and books with invalid doc IDs."""
         sync_mode = getattr(book, "sync_mode", "audiobook")
@@ -66,6 +78,51 @@ class KoSyncSyncClient(SyncClient):
                 ko_pct, ko_xpath = self.kosync_client.get_progress(ko_id)
         else:
             ko_pct, ko_xpath = self.kosync_client.get_progress(ko_id)
+        epub = getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
+        page_is_estimated = False
+        if self.supports_fixed_page_progress() and is_cbz_book(book):
+            page = coerce_page(ko_xpath)
+            page_count = count_cbz_pages(self.ebook_parser, epub)
+            if ko_xpath not in (None, "") and page is None:
+                logger.warning(
+                    "Ignoring invalid KoSync CBZ page %r for '%s'",
+                    ko_xpath, epub,
+                )
+                return None
+            if page is not None and page_count is None:
+                logger.warning(
+                    "KoSync CBZ page %s for '%s' cannot be canonicalized because page count is unavailable; ignoring its percentage",
+                    page, epub,
+                )
+                return None
+            if page is None and ko_pct is not None and page_count is not None:
+                page = estimate_cbz_page(
+                    self.ebook_parser,
+                    epub,
+                    ko_pct,
+                    page_count,
+                    provenance="kosync",
+                )
+                ko_xpath = str(page) if page is not None else None
+                page_is_estimated = page is not None
+            canonical_pct = percentage_from_cbz_page(
+                self.ebook_parser, epub, page, page_count
+            )
+            if page is not None and canonical_pct is None:
+                logger.warning(
+                    "Ignoring out-of-range KoSync CBZ page %s (page_count=%s) for '%s'",
+                    page, page_count, epub,
+                )
+                return None
+            if canonical_pct is not None and (
+                ko_pct is None or float(ko_pct) > 0.0 or page > 1
+            ):
+                if ko_pct is not None and abs(float(ko_pct) - canonical_pct) > 0.005:
+                    logger.warning(
+                        "KoSync CBZ progress mismatch for '%s': reported=%.2f%%, page=%s -> canonical=%.2f%%; using page-derived progress",
+                        epub, float(ko_pct) * 100.0, page, canonical_pct * 100.0,
+                    )
+                ko_pct = canonical_pct
         book_label = f"'{title_snip}' " if title_snip else ""
         if ko_pct is None:
             if ko_xpath is None:
@@ -82,6 +139,11 @@ class KoSyncSyncClient(SyncClient):
         delta = abs(ko_pct - prev_kosync_pct)
 
         current = {"pct": ko_pct, "xpath": ko_xpath}
+        if self.supports_fixed_page_progress() and is_cbz_book(book):
+            current["page"] = coerce_page(ko_xpath)
+            current["_previous_page"] = page_from_persisted_state(prev_state)
+            if page_is_estimated:
+                current["_page_is_estimated"] = True
         # The KoSync GET response carries the stored device-PUT timestamp —
         # the service's own "position last changed" signal (0 = never).
         service_updated_at = parse_service_timestamp(ko_metadata.get("timestamp"))
@@ -107,6 +169,8 @@ class KoSyncSyncClient(SyncClient):
         ko_xpath = state.current.get('xpath')
         ko_pct = state.current.get('pct')
         epub = getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
+        if self.supports_fixed_page_progress() and is_cbz_book(book):
+            return None
         if ko_xpath and epub:
             txt = self.ebook_parser.resolve_xpath(epub, ko_xpath)
             if txt:
@@ -307,6 +371,60 @@ class KoSyncSyncClient(SyncClient):
             if book
             else None
         )
+        if self.supports_fixed_page_progress() and is_cbz_book(book):
+            locator = request.locator_result
+            page_count = count_cbz_pages(self.ebook_parser, epub)
+            page = coerce_page(getattr(locator, "page", None))
+            if page is not None and page_count is None:
+                logger.warning(
+                    "Skipping KoSync CBZ update for '%s': page count unavailable",
+                    book.abs_title if book else "unknown",
+                )
+                current = request.current_state.current if request.current_state else {}
+                return SyncResult(current.get('pct'), True, dict(current), skipped=True)
+            if page_count and page and page > page_count:
+                logger.warning(
+                    "Ignoring out-of-range KoSync CBZ page %s (page_count=%s) for '%s'",
+                    page, page_count, book.abs_title if book else "unknown",
+                )
+                page = None
+            if page is None and pct is not None and pct > 0:
+                page = estimate_cbz_page(self.ebook_parser, epub, pct, page_count)
+
+            if pct is not None and pct <= 0:
+                pct = 0.0
+                page_progress = "1"
+            elif page is not None:
+                canonical_pct = percentage_from_cbz_page(
+                    self.ebook_parser, epub, page, page_count
+                )
+                if canonical_pct is not None:
+                    if pct is not None and abs(float(pct) - canonical_pct) > 0.005:
+                        logger.warning(
+                            "Correcting outgoing KoSync CBZ progress for '%s': requested=%.2f%%, page=%s -> canonical=%.2f%%",
+                            epub, float(pct) * 100.0, page, canonical_pct * 100.0,
+                        )
+                    pct = canonical_pct
+                page_progress = str(page)
+            else:
+                logger.warning(
+                    "Skipping KoSync CBZ update due to unresolvable page for '%s'",
+                    book.abs_title if book else "unknown",
+                )
+                current = request.current_state.current if request.current_state else {}
+                return SyncResult(current.get('pct'), True, dict(current), skipped=True)
+
+            if pct is None:
+                logger.warning(
+                    "Skipping KoSync CBZ update without a reliable percentage for '%s'",
+                    book.abs_title if book else "unknown",
+                )
+                current = request.current_state.current if request.current_state else {}
+                return SyncResult(current.get('pct'), True, dict(current), skipped=True)
+
+            success = self.kosync_client.update_progress(ko_id, pct, page_progress)
+            return SyncResult(pct, success, {'pct': pct, 'xpath': page_progress})
+
         # Always collapse generated KoSync positions to block-level XPointers.
         # Text-node and inline offsets can resolve poorly in KOReader/CREngine,
         # while paragraph-level anchors survive renderer differences better.

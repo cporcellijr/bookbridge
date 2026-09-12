@@ -48,6 +48,10 @@ def install_stubs():
         def __init__(self, locator_result):
             self.locator_result = locator_result
 
+    class LocatorResult:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
     class ServiceState:
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
@@ -55,6 +59,7 @@ def install_stubs():
     iface.SyncClient = SyncClient
     iface.SyncResult = SyncResult
     iface.UpdateProgressRequest = UpdateProgressRequest
+    iface.LocatorResult = LocatorResult
     iface.ServiceState = ServiceState
     sys.modules[iface.__name__] = iface
 

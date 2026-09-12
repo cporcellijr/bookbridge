@@ -135,6 +135,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Keep CBZ page progress consistent between Grimmory and KoSync.** Fixed-page
+  positions now travel as explicit page numbers rather than fake EPUB locators,
+  use KOReader's page-count semantics (including its bundled MuPDF WebP support),
+  and never invent page 1 for non-zero progress. Unsupported comic archives and
+  Kavita retain their existing behavior.
+
 - **Prepare KOReader's download list when books are matched.** After a bridge
   restart, catalog changes now start the manifest worker for installs that have
   used device sync, instead of waiting for KOReader to connect. Rapid matches
