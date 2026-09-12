@@ -4989,14 +4989,15 @@ def _browser_cover_url(
         return raw
 
     source = (audio_source or "").strip()
+    normalized_audio_source = _normalize_text_source_type(source)
     src_id = (audio_source_id or "").strip()
     aid = (abs_id or "").strip()
 
-    if source == "BookLore" and src_id:
+    if normalized_audio_source == "Booklore" and src_id:
         return f"/api/booklore/audiobook-cover/{src_id}"
-    if source == "BookOrbit" and src_id:
+    if normalized_audio_source == "BookOrbit" and src_id:
         return f"/api/bookorbit/audiobook-cover/{src_id}"
-    if source not in _LIBRARY_AUDIO_SOURCES:
+    if normalized_audio_source not in ("Booklore", "BookOrbit"):
         proxy_id = aid or src_id
         if proxy_id and not _is_synthetic_bridge_key(proxy_id):
             return f"/api/cover-proxy/{proxy_id}"
@@ -5004,9 +5005,10 @@ def _browser_cover_url(
     ebook_src = (ebook_source or "").strip()
     ebook_id = (ebook_source_id or "").strip()
     if ebook_id:
-        if ebook_src == "BookLore":
-            return f"/api/booklore/audiobook-cover/{ebook_id}"
-        if ebook_src == "BookOrbit":
+        normalized_ebook_source = _normalize_text_source_type(ebook_src)
+        if normalized_ebook_source == "Booklore":
+            return f"/api/booklore/book-cover/{ebook_id}"
+        if normalized_ebook_source == "BookOrbit":
             return f"/api/bookorbit/audiobook-cover/{ebook_id}"
     return ""
 
@@ -11076,6 +11078,38 @@ def proxy_booklore_audiobook_cover(book_id):
         return "Error loading cover", 500
 
 
+def proxy_booklore_book_cover(book_id):
+    """Stream a regular Grimmory ebook cover through the backend."""
+    user = current_user()
+    # Older mappings use each of these spellings. Keep the ownership gate
+    # source-agnostic while the client request remains server-side.
+    book = None
+    if database_service:
+        for source in ("BookLore", "Booklore", "Grimmory"):
+            book = database_service.get_book_by_ebook_source(source, str(book_id))
+            if book:
+                break
+    if book and book.abs_id:
+        if not _user_may_modify_book(user, book.abs_id):
+            return _forbidden_book_response(json_response=True)
+    elif user is not None and not getattr(user, 'is_admin', False):
+        return _forbidden_book_response(json_response=True)
+
+    client = container.booklore_client()
+    if not client.is_configured():
+        return "Grimmory not configured", 400
+
+    try:
+        content, content_type = client.get_book_cover_bytes(book_id)
+        if not content:
+            return "Cover not found", 404
+        from flask import Response
+        return Response(content, content_type=content_type or "image/jpeg")
+    except Exception as e:
+        logger.error(f"❌ Error proxying Grimmory book cover for '{book_id}': {e}", exc_info=True)
+        return "Error loading cover", 500
+
+
 def proxy_bookorbit_audiobook_cover(book_id):
     """Stream a BookOrbit book cover through the backend."""
     user = current_user()
@@ -12514,6 +12548,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cache/clean', 'clean_cache', clean_inactive_cache, methods=['POST'])
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
+    app.add_url_rule('/api/booklore/book-cover/<book_id>', 'proxy_booklore_book_cover', proxy_booklore_book_cover, methods=['GET'])
     app.add_url_rule('/api/bookorbit/audiobook-cover/<book_id>', 'proxy_bookorbit_audiobook_cover', proxy_bookorbit_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/kavita/cover/<series_id>', 'proxy_kavita_cover', proxy_kavita_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
