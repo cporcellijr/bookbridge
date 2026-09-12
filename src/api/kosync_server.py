@@ -12,7 +12,7 @@ import time
 import zipfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone as _timezone
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +26,7 @@ from src.utils.cache_paths import safe_cache_path
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import load_persisted_pair
 from src.utils.kosync_headers import hash_kosync_key
+from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp
 from src.utils.time_utils import utcnow
 from src.utils.user_context import set_current_user_id, reset_current_user_id
 from src.utils.user_config import (
@@ -3014,6 +3015,22 @@ def _respond_from_book_states(doc_id, book):
         d for d in progress_rows
         if d.percentage and float(d.percentage) > 0 and (d.progress or "").strip()
     ]
+    # Only a corroborated rewind may supersede an older device position. Ordinary
+    # sync writes can be slightly behind through locator rounding (#434). Keep the
+    # original rewind cutoff, not State.last_updated, which advances on every sync.
+    rewind_at = get_kosync_approved_rewind_at(kosync_state)
+    if rewind_at is not None:
+        eligible_docs = []
+        for device_doc in docs_with_progress:
+            device_at = parse_service_timestamp(getattr(device_doc, "timestamp", None))
+            if device_at is not None and device_at < rewind_at - 1.0:
+                logger.info(
+                    f"KOSync: Ignoring stale device position {float(device_doc.percentage):.2%} for {doc_id} — "
+                    f"it predates the approved rewind; keeping the bridge-synced position {synced_pct:.2%}"
+                )
+            else:
+                eligible_docs.append(device_doc)
+        docs_with_progress = eligible_docs
     if docs_with_progress:
         best_doc = max(docs_with_progress, key=lambda d: float(d.percentage))
         # Furthest-wins: only hand back the device's own position when it is genuinely
@@ -3034,44 +3051,7 @@ def _respond_from_book_states(doc_id, book):
                 or str(getattr(kosync_state, "cfi", "") or "").strip()
             )
         )
-        # An ahead-but-OLDER device row is a ghost, not movement. The bridge's
-        # internal sync-push advances the synced State but never this per-user row
-        # (upsert_user_kosync_progress runs only for external PUTs), so after any
-        # bridge-initiated BACKWARD move — an audio rewind propagating to the ebook
-        # side — the row keeps the device's last self-reported position forever and
-        # hands it back on the very next read. Observed live: the bridge wrote
-        # 31.96%, this row still held 51.52% from seven minutes earlier, the GET
-        # returned 51.52%, KoSync then looked like it had moved, and it dragged
-        # every client forward again one cycle later (#215).
-        #
-        # A device that genuinely advanced reports it, so its row is also NEWER.
-        # Requiring that keeps the case this branch exists for (a device ahead of
-        # the synced position, e.g. a different EPUB build) while refusing a stale
-        # one. Unknown timestamps keep the previous percentage-only behaviour.
-        sibling_is_newer = True
-        sibling_ts = getattr(best_doc, "timestamp", None)
-        synced_ts = getattr(kosync_state, "last_updated", None) if kosync_state else None
-        if sibling_ts is not None and synced_ts:
-            try:
-                # Stored datetimes are naive UTC (`time_utils.utcnow`), so they must
-                # be stamped as UTC before comparing with State's epoch seconds —
-                # a bare .timestamp() would read them as local time.
-                if isinstance(sibling_ts, datetime):
-                    aware = sibling_ts if sibling_ts.tzinfo else sibling_ts.replace(tzinfo=_timezone.utc)
-                    sibling_epoch = aware.timestamp()
-                else:
-                    sibling_epoch = float(sibling_ts)
-                sibling_is_newer = sibling_epoch >= float(synced_ts) - 1.0
-            except (TypeError, ValueError, OSError, OverflowError):
-                sibling_is_newer = True
-
-        sibling_is_ahead = sibling_pct > synced_pct + 0.0001 and sibling_is_newer
-        if sibling_pct > synced_pct + 0.0001 and not sibling_is_newer:
-            logger.info(
-                f"KOSync: Ignoring stale device position {sibling_pct:.2%} for {doc_id} — "
-                f"the bridge-synced position {synced_pct:.2%} is newer, so the higher "
-                f"reading is a leftover from before the sync, not new movement"
-            )
+        sibling_is_ahead = sibling_pct > synced_pct + 0.0001
 
         # KOReader's reported percentage and the bridge-synced percentage can
         # use different position scales even for the same EPUB. The synced State

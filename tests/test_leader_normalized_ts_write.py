@@ -333,6 +333,99 @@ def _wire_database(manager, book):
     manager.database_service.save_book = MagicMock()
 
 
+@pytest.mark.parametrize(("approved", "leader"), [(False, "ABS"), (True, "ABS"), (True, "KoSync")])
+def test_434_sync_cycle_persists_rewind_intent_for_next_kosync_get(tmp_path, monkeypatch, caplog, approved, leader):
+    """A real cycle and SQLite round trip distinguish 62.72->62.37 drift from rewind."""
+    import time
+    from datetime import timedelta
+    from flask import Flask, g
+    from src.api import kosync_server
+    from src.db.database_service import DatabaseService
+    from src.db.models import KosyncDocument
+    from src.sync_clients.kosync_sync_client import KoSyncSyncClient
+    from src.utils.progress_metadata import get_kosync_approved_rewind_at, state_metadata_kwargs
+    from src.utils.time_utils import utcnow
+    from src.utils.user_context import set_current_user_id, reset_current_user_id
+
+    db = DatabaseService(str(tmp_path / "rewind.db"))
+    caplog.set_level("INFO", logger="src.api.kosync_server")
+    reader = db.create_user("reader", "test-password", role="user")
+    book = Book(abs_id="abs-434", abs_title="Issue 434", status="active",
+                ebook_filename="book.epub", kosync_doc_id="a" * 32,
+                transcript_file="DB_MANAGED", duration=57084)
+    db.save_book(book)
+    db.save_kosync_document(KosyncDocument(
+        document_hash=book.kosync_doc_id, linked_abs_id=book.abs_id, filename="book.epub",
+    ))
+    db.upsert_user_kosync_progress(
+        book.kosync_doc_id, 0.6272, progress="/body/DocFragment[1]/body/p[2].0",
+        device="Readest (iOS)", device_id="readest", timestamp=utcnow() - timedelta(minutes=7),
+        user_id=reader.id,
+    )
+    manager = _base_manager()
+    _wire_database(manager, book)
+    manager.database_service.save_state.side_effect = db.save_state
+    manager._get_primary_audio_client_name = MagicMock(return_value="ABS")
+    manager._determine_leader = MagicMock(return_value=(leader, 0.6237))
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(LocatorResult(percentage=0.6237, match_index=490094), "anchor"),
+    )
+    transport = MagicMock()
+    transport.update_progress.return_value = True
+    manager.ebook_parser.get_sentence_level_ko_xpath.return_value = "/body/DocFragment[1]/body/p[1].0"
+    client = KoSyncSyncClient(transport, manager.ebook_parser)
+    monkeypatch.setattr(client, "_generated_xpath_exists_in_epub", lambda *args: True)
+    monkeypatch.setenv("KOSYNC_XPATH_ORDER_ENABLED", "false")
+    manager.sync_clients = {"ABS": _StubClient({"audiobook"}), "KoSync": client}
+    manager._fetch_states_parallel = MagicMock(return_value={
+        "ABS": _state({"pct": 0.6237, "ts": 26917.63, "_approved_rewind": approved},
+                      previous_pct=0.70, delta=500, threshold=60),
+        "KoSync": _state({"pct": 0.6237 if leader == "KoSync" else 0.6272,
+                          "xpath": "/body/DocFragment[1]/body/p[1].0",
+                          "_normalized_ts": 26917.63, "_normalization_source": "xpath",
+                          "_approved_rewind": approved}, previous_pct=0.6272),
+    })
+    monkeypatch.setattr(kosync_server, "_database_service", db)
+    monkeypatch.setattr(kosync_server, "_suppress_empty_progress_response", lambda *args: None)
+    app = Flask(__name__)
+    app.add_url_rule("/syncs/progress/<doc_id>", view_func=lambda doc_id:
+                     kosync_server._respond_from_book_states(doc_id, book))
+
+    @app.before_request
+    def authenticate_reader():
+        g.kosync_user_id = reader.id
+
+    token = set_current_user_id(reader.id)
+    try:
+        before = time.time()
+        manager.sync_cycle(target_abs_id=book.abs_id)
+        assert transport.update_progress.call_count == (0 if leader == "KoSync" else 1)
+        saved = db.get_state(book.abs_id, "kosync", user_id=reader.id)
+        cutoff = get_kosync_approved_rewind_at(saved)
+        assert (cutoff is not None) is approved
+        if approved:
+            assert cutoff >= before
+        response = app.test_client().get(f"/syncs/progress/{book.kosync_doc_id}")
+        assert response.status_code == 200
+        assert response.json["percentage"] == (0.6237 if approved else 0.6272)
+        if approved:
+            assert "KOSync: Ignoring stale device position 62.72%" in caplog.text
+
+        # The next ordinary read/write must carry the ORIGINAL cutoff, not renew it.
+        transport.get_progress_with_metadata.return_value = (0.6237, saved.xpath, {})
+        observed = client.get_service_state(book, saved)
+        result = client.update_progress(book, UpdateProgressRequest(
+            LocatorResult(percentage=0.6238), current_state=observed,
+        ))
+        from src.db.models import State
+        db.save_state(State(abs_id=book.abs_id, client_name="kosync", percentage=0.6238,
+                            xpath=saved.xpath, last_updated=time.time(),
+                            **state_metadata_kwargs(result.updated_state)))
+        assert get_kosync_approved_rewind_at(db.get_state(book.abs_id, "kosync")) == cutoff
+    finally:
+        reset_current_user_id(token)
+
+
 def test_target_audio_ts_passed_to_audio_follower_when_text_client_leads():
     """When a TEXT client leads, the audio follower's request carries the
     leader's own `_normalized_ts` as `target_audio_ts`."""

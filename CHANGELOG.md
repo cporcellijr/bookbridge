@@ -135,6 +135,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Keep a reader's position when a sync only rounds it backward (#434).** A newer
+  bridge write no longer overrides an older, further-ahead device position merely
+  because it is newer. Only a corroborated rewind can retire positions reported
+  before that rewind. Intentional rewinds still stick, including when XPath ordering
+  is enabled, and later ordinary syncs keep the original rewind cutoff.
+
 - **Prepare KOReader's download list when books are matched.** After a bridge
   restart, catalog changes now start the manifest worker for installs that have
   used device sync, instead of waiting for KOReader to connect. Rapid matches

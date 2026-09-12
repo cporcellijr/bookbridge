@@ -141,3 +141,14 @@ def state_metadata_kwargs(current: dict) -> dict:
         "locator_source": derive_locator_source(current),
         "locator_json": extract_locator_json(current),
     }
+
+
+def get_kosync_approved_rewind_at(state: object) -> Optional[float]:
+    """Read the last intentional KoSync rewind cutoff from persisted metadata."""
+    try:
+        metadata = json.loads(getattr(state, "locator_json", None) or "{}")
+        if isinstance(metadata, dict):
+            return parse_service_timestamp(metadata.get("kosync_approved_rewind_at"))
+    except (TypeError, ValueError):
+        pass
+    return None

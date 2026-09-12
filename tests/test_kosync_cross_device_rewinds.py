@@ -1,7 +1,9 @@
 import os
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import pytest
 
 from flask import Flask
 
@@ -322,16 +324,18 @@ class TestStaleDevicePositionDoesNotResurrect:
     """
 
     @staticmethod
-    def _get(synced_pct, synced_epoch, device_pct, device_dt):
+    def _get(synced_pct, synced_epoch, device_pct, device_dt, rewind_at=None, canonical=False):
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
 
         from flask import Flask
 
-        book = SimpleNamespace(abs_id="abs-1", abs_title="Book", kosync_doc_id=_DOC_HASH)
+        book = SimpleNamespace(abs_id="abs-1", abs_title="Book", kosync_doc_id=_DOC_HASH,
+                               ebook_filename="book.epub")
         synced = SimpleNamespace(
             client_name="kosync", percentage=synced_pct, xpath="/body/synced.0",
             cfi=None, last_updated=synced_epoch,
+            locator_json=json.dumps({"kosync_approved_rewind_at": rewind_at}),
         )
         device_row = SimpleNamespace(
             document_hash=_DOC_HASH, percentage=device_pct,
@@ -340,10 +344,17 @@ class TestStaleDevicePositionDoesNotResurrect:
         db = MagicMock()
         db.get_states_for_book.return_value = [synced]
         db.get_user_kosync_progress_for_book.return_value = [device_row]
+        db.get_kosync_document.return_value = SimpleNamespace(filename="book.epub")
+        container = MagicMock()
+        container.ebook_parser.return_value.resolve_xpath_to_index.side_effect = [490094, 489851]
 
         app = Flask(__name__)
         with app.test_request_context(f"/syncs/progress/{_DOC_HASH}"):
             with patch.object(kosync_server, "_database_service", db), \
+                 patch.object(kosync_server, "_container", container), \
+                 patch.object(kosync_server, "_xpath_index_cache_get", return_value=None), \
+                 patch.object(kosync_server, "_xpath_index_cache_put"), \
+                 patch.dict(os.environ, {"KOSYNC_XPATH_ORDER_ENABLED": str(canonical).lower()}), \
                  patch.object(kosync_server, "_suppress_empty_progress_response", return_value=None):
                 response, status = kosync_server._respond_from_book_states(_DOC_HASH, book)
         return response.get_json(), status
@@ -356,6 +367,7 @@ class TestStaleDevicePositionDoesNotResurrect:
         payload, status = self._get(
             synced_pct=0.3196, synced_epoch=now,
             device_pct=0.5152, device_dt=utcnow() - timedelta(minutes=7),
+            rewind_at=now,
         )
         assert status == 200
         assert payload["percentage"] == 0.3196
@@ -371,3 +383,42 @@ class TestStaleDevicePositionDoesNotResurrect:
         )
         assert status == 200
         assert payload["percentage"] == 0.5152
+
+    def test_434_older_readest_position_survives_unapproved_locator_drift(self):
+        import time as _time
+        from datetime import timedelta
+
+        payload, status = self._get(
+            synced_pct=0.6237, synced_epoch=_time.time(),
+            device_pct=0.6272, device_dt=utcnow() - timedelta(minutes=7),
+        )
+        assert status == 200
+        assert payload["percentage"] == 0.6272
+        assert payload["progress"] == "/body/device.0"
+
+    def test_ordinary_sync_does_not_extend_an_earlier_rewind_cutoff(self):
+        import time as _time
+        from datetime import timedelta
+
+        now = _time.time()
+        payload, status = self._get(
+            synced_pct=0.6237, synced_epoch=now,
+            device_pct=0.6272, device_dt=utcnow() - timedelta(minutes=3),
+            rewind_at=now - 600,
+        )
+        assert status == 200
+        assert payload["percentage"] == 0.6272
+
+    @pytest.mark.parametrize("approved", [False, True])
+    def test_xpath_order_respects_intentional_rewind_but_protects_against_drift(self, approved):
+        import time as _time
+        from datetime import timedelta
+
+        now = _time.time()
+        payload, status = self._get(
+            synced_pct=0.6237, synced_epoch=now,
+            device_pct=0.6272, device_dt=utcnow() - timedelta(minutes=7),
+            rewind_at=now if approved else None, canonical=True,
+        )
+        assert status == 200
+        assert payload["percentage"] == (0.6237 if approved else 0.6272)

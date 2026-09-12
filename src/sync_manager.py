@@ -4922,6 +4922,8 @@ class SyncManager:
 
                 # Save leader state
                 leader_state_data = leader_state.current
+                if leader == "KoSync" and leader_state_data.get("_approved_rewind"):
+                    leader_state_data["kosync_approved_rewind_at"] = current_time
 
                 leader_state_model = State(
                     abs_id=book.abs_id,

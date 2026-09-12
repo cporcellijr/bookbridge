@@ -27,6 +27,7 @@ def install_stubs():
 
     progress_metadata = types.ModuleType("src.utils.progress_metadata")
     progress_metadata.parse_service_timestamp = lambda value: value
+    progress_metadata.get_kosync_approved_rewind_at = lambda state: None
     sys.modules[progress_metadata.__name__] = progress_metadata
 
     iface = types.ModuleType("src.sync_clients.sync_client_interface")
@@ -123,7 +124,8 @@ class KoSyncSyncClientCanonicalTests(unittest.TestCase):
         self.path.unlink(missing_ok=True)
 
     def _request(self, pct):
-        return SimpleNamespace(locator_result=SimpleNamespace(percentage=pct))
+        return SimpleNamespace(locator_result=SimpleNamespace(percentage=pct),
+                               allow_rewind=False, current_state=None)
 
     def _book(self):
         return SimpleNamespace(
