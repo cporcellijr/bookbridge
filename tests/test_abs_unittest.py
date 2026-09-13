@@ -15,7 +15,7 @@ from tests.base_sync_test import BaseSyncCycleTestCase
 from src.db.models import State
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.sync_clients.kosync_sync_client import KoSyncSyncClient
-from src.sync_clients.sync_client_interface import LocatorResult
+from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 
 class TestABSLeadsSync(BaseSyncCycleTestCase):
     """Test case for ABS leading sync_cycle scenario."""
@@ -91,7 +91,7 @@ class TestABSLeadsSync(BaseSyncCycleTestCase):
             ebook_filename='test-book.epub',
             abs_title='Test Audiobook',
         )
-        request = SimpleNamespace(
+        request = UpdateProgressRequest(
             locator_result=LocatorResult(percentage=0.4, xpath="/html/body/div[1]/p[5]")
         )
 

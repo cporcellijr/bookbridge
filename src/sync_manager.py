@@ -1744,7 +1744,7 @@ class SyncManager:
 
 
     def _download_epub_by_source_id(
-        self, ebook_filename: str, cached_path: Path
+        self, ebook_filename: str, cached_path: Path, mapped_book: Book | None = None
     ) -> Path | None:
         """
         Try to download an EPUB using the stored library mapping (ebook_source + ebook_source_id).
@@ -1759,16 +1759,17 @@ class SyncManager:
             return None
 
         # 2. Look up the mapping row by ebook_filename (matches current or original).
-        book = None
-        try:
-            book = self.database_service.get_book_by_ebook_filename(ebook_filename)
-        except Exception as e:
-            logger.debug(
-                "Database lookup failed for '%s': %s",
-                sanitize_log_data(ebook_filename),
-                e,
-            )
-            return None
+        book = mapped_book
+        if book is None:
+            try:
+                book = self.database_service.get_book_by_ebook_filename(ebook_filename)
+            except Exception as e:
+                logger.debug(
+                    "Database lookup failed for '%s': %s",
+                    sanitize_log_data(ebook_filename),
+                    e,
+                )
+                return None
 
         if not book:
             return None
@@ -1835,32 +1836,19 @@ class SyncManager:
         logger.info(f"✅ Downloaded EPUB to cache: '{cached_path}'")
         return cached_path
 
-    def _resolve_local_epub_uncached(self, ebook_filename, _seen=None):
+    def _resolve_local_epub_uncached(self, ebook_filename):
         """
         Get local path to EPUB file, downloading from Grimmory if necessary.
         """
-        # A reconciled library mapping may expose a new remote filename while the
-        # existing bytes intentionally remain cached under the original name.
-        # A second mapping can itself own that original filename, so retain a
-        # visited set rather than assuming the lookup returns the same row.
-        seen = set() if _seen is None else _seen
-        filename_key = str(ebook_filename)
-        if filename_key in seen:
-            logger.warning(
-                "Detected cyclic local EPUB filename mapping at '%s'; falling back",
-                sanitize_log_data(filename_key),
-            )
-            return None
-        seen.add(filename_key)
+        # Resolve the original cache name once. Looking that name up as another
+        # mapping could switch to a different book whose remote filename matches it.
         try:
             mapped_book = self.database_service.get_book_by_ebook_filename(ebook_filename)
         except Exception:
             mapped_book = None
         stable_local_filename = local_ebook_filename(mapped_book) if mapped_book else None
-        if stable_local_filename and stable_local_filename != ebook_filename:
-            stable_path = self._resolve_local_epub_uncached(stable_local_filename, seen)
-            if stable_path is not None:
-                return stable_path
+        if stable_local_filename:
+            ebook_filename = stable_local_filename
 
         # 1. Try the parser's resolve_book_path first. It has a path-resolution
         #    cache (instant repeat lookups), managed-cache bypass for BookFusion/
@@ -1897,9 +1885,14 @@ class SyncManager:
 
         # 3. Try to download using the stored library mapping (ebook_source + ebook_source_id)
         #    before falling back to filename-based search.
-        by_id_result = self._download_epub_by_source_id(ebook_filename, cached_path)
+        by_id_result = self._download_epub_by_source_id(
+            ebook_filename, cached_path, mapped_book=mapped_book
+        )
         if by_id_result is not None:
             return by_id_result
+        if (mapped_book and is_grimmory_source(getattr(mapped_book, "ebook_source", None))
+                and getattr(mapped_book, "ebook_source_id", None)):
+            return None
 
         # Try to download from Grimmory API
         # Note: We use hasattr to prevent crashes if BookloreClient wasn't updated with these methods yet
@@ -3606,8 +3599,12 @@ class SyncManager:
             # a peer the user actually moved no longer matches what we wrote.
             echo_margin = getattr(self, "sync_delta_between_clients", 0.005)
             for client_name, observed_pct in vals.items():
+                client_echo_margin = (
+                    1e-9 if self._has_fixed_page_delta(client_name, config[client_name], book)
+                    else echo_margin
+                )
                 if self._peer_position_is_own_writeback(
-                    abs_id, client_name, observed_pct, echo_margin
+                    abs_id, client_name, observed_pct, client_echo_margin
                 ):
                     echo_clients.add(client_name)
             for client_name in sorted(echo_clients):

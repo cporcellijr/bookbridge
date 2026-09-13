@@ -1376,6 +1376,8 @@ class BookloreClient:
             is_storyteller_artifact = is_storyteller_filename(stored_filename)
             if current_filename and stored_filename != current_filename and not is_storyteller_artifact:
                 old_filename = stored_filename
+                if old_filename and not getattr(mapping, "original_ebook_filename", None):
+                    fields["original_ebook_filename"] = old_filename
                 fields["ebook_filename"] = current_filename
                 logger.info(
                     "Grimmory mapping filename refreshed for %s: %s -> %s "
@@ -2828,7 +2830,7 @@ class BookloreClient:
                         safe_filename, cbx_page, sorted(observed_pages),
                     )
                     self._cache_verified_cbx_progress(book_id, verified)
-                    return True
+                    return False
                 if fully_verified:
                     if verified_pct is not None and abs(float(verified_pct) - float(percentage)) > 0.005:
                         logger.info(
@@ -2857,11 +2859,11 @@ class BookloreClient:
                     if variant_idx < len(payload_variants):
                         last_status = f"verify_{variant_name}_stale"
                         continue
-                    # The POST was applied, but read-back is stale or unavailable.
-                    # Keep the actually observed state (or invalidate it) so a
-                    # concurrent reader is never replaced locally by our attempt.
+                    # HTTP success did not confirm the target page. Keep observed
+                    # cache values, but do not let the sync client persist our
+                    # attempted position or mark it as an applied bridge write.
                     self._cache_verified_cbx_progress(book_id, verified)
-                    return True
+                    return False
                 if variant_name != "cbxProgress+fileProgress":
                     logger.info(
                         "Grimmory CBZ progress fallback accepted for %s (variant=%s)",

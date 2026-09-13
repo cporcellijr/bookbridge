@@ -55,15 +55,14 @@ def coerce_page(value) -> Optional[int]:
 
 
 def page_from_persisted_state(state) -> Optional[int]:
-    """Read a previously persisted fixed page from ``State.locator_json``."""
+    """Read the synced page baseline, falling back to a legacy numeric XPath."""
     raw = getattr(state, "locator_json", None)
-    if not raw:
-        return None
     try:
-        payload = json.loads(raw)
+        payload = json.loads(raw or "{}")
     except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    return coerce_page(payload.get("page")) if isinstance(payload, dict) else None
+        payload = {}
+    page = coerce_page(payload.get("page")) if isinstance(payload, dict) else None
+    return page or coerce_page(getattr(state, "xpath", None))
 
 
 def count_cbz_pages(ebook_parser, filename: Optional[str]) -> Optional[int]:

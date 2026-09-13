@@ -120,6 +120,8 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
         abs_client = Mock()
         kosync_client = Mock()
         booklore_client = Mock()
+        # These cycle fixtures exercise the legacy filename-only transport.
+        booklore_client.find_book_by_filename_exact = None
         booklore_client._cache_timestamp = 0
         booklore_client.find_book_by_filename.return_value = {"id": "test-booklore-id"}
         booklore_client.download_book.return_value = None

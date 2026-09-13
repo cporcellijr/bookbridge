@@ -178,4 +178,4 @@ def test_resolve_local_epub_uncached_stops_cyclic_original_filename_mappings(tmp
 
     assert manager._resolve_local_epub_uncached("remote-a.epub") is None
 
-    assert parser.resolve_book_path.call_count == 2
+    parser.resolve_book_path.assert_called_once_with("cache-b.epub")

@@ -369,6 +369,12 @@ class KoSyncSyncClient(SyncClient):
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
         pct = request.locator_result.percentage
         ko_id = book.kosync_doc_id if book else None
+        # Keep the original cutoff through ordinary writes; only a corroborated
+        # rewind can retire an older device position, including for CBZ books.
+        rewind_at = time.time() if request.allow_rewind else (
+            request.current_state.current.get("kosync_approved_rewind_at")
+            if request.current_state else None
+        )
 
         epub = (
             (getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None))
@@ -427,7 +433,10 @@ class KoSyncSyncClient(SyncClient):
                 return SyncResult(current.get('pct'), True, dict(current), skipped=True)
 
             success = self.kosync_client.update_progress(ko_id, pct, page_progress)
-            return SyncResult(pct, success, {'pct': pct, 'xpath': page_progress})
+            updated_state = {'pct': pct, 'xpath': page_progress, 'page': coerce_page(page_progress)}
+            if success and rewind_at is not None:
+                updated_state["kosync_approved_rewind_at"] = rewind_at
+            return SyncResult(pct, success, updated_state)
 
         # Always collapse generated KoSync positions to block-level XPointers.
         # Text-node and inline offsets can resolve poorly in KOReader/CREngine,
@@ -491,12 +500,6 @@ class KoSyncSyncClient(SyncClient):
                     exc_info=True,
                 )
 
-        # Keep the original cutoff through ordinary writes; their newer timestamps
-        # must not turn incidental locator drift into an intentional rewind (#434).
-        rewind_at = time.time() if request.allow_rewind else (
-            request.current_state.current.get("kosync_approved_rewind_at")
-            if request.current_state else None
-        )
         success = self.kosync_client.update_progress(ko_id, pct, safe_xpath)
         updated_state = {
             'pct': pct,

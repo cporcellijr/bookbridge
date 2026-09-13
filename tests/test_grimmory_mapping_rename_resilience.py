@@ -57,13 +57,16 @@ def test_mapped_read_uses_stable_id_after_filename_alias_is_removed(source):
 def test_mapped_write_uses_stable_id_for_epub_and_cbz(filename):
     api = MagicMock(spec=BookloreClient)
     api.update_progress_by_book_id.return_value = True
-    sync = BookloreSyncClient(api, MagicMock())
+    parser = MagicMock()
+    parser.get_cached_fixed_page_count.return_value = 58
+    sync = BookloreSyncClient(api, parser)
     request = UpdateProgressRequest(locator_result=LocatorResult(percentage=1.0))
 
     result = sync.update_progress(mapped_book(filename), request)
 
     assert result.success is True
-    api.update_progress_by_book_id.assert_called_once_with("4", 1.0, request.locator_result)
+    expected_locator = LocatorResult(percentage=1.0, page=58) if filename.endswith('.cbz') else request.locator_result
+    api.update_progress_by_book_id.assert_called_once_with("4", 1.0, expected_locator)
     api.update_progress.assert_not_called()
     api.find_book_by_filename.assert_not_called()
 

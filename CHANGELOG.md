@@ -135,6 +135,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Show Grimmory ebook covers through its book media endpoint (#435).** Ebook
+  covers use the book ID rather than the audiobook file-cover route.
+- **Keep Grimmory reads, writes, and cached books tied to the selected ID (#437).**
+  Ambiguous or refused legacy mappings stop without guessing another book. Renames
+  preserve the original cache filename, including older mappings where it was unset.
+- **Sync single-page comic turns even just after a bridge write (#436).** KoSync
+  retains the prior synced page through incoming updates, and CBZ echo suppression
+  distinguishes adjacent pages. Unconfirmed Grimmory writes no longer save the
+  attempted page as successful; concurrent reader progress stays available.
+
 - **Keep a reader's position when a sync only rounds it backward (#434).** A newer
   bridge write no longer overrides an older, further-ahead device position merely
   because it is newer. Only a corroborated rewind can retire positions reported

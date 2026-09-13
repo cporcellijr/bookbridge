@@ -26,7 +26,8 @@ from src.utils.cache_paths import safe_cache_path
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import load_persisted_pair
 from src.utils.kosync_headers import hash_kosync_key
-from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp
+from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
+from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
 from src.utils.time_utils import utcnow
 from src.utils.user_context import set_current_user_id, reset_current_user_id
 from src.utils.user_config import (
@@ -1605,6 +1606,16 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
     if not book or user_id is None:
         return
     try:
+        metadata = {}
+        if is_cbz_book(book):
+            previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
+            # PUT updates the wire position immediately. Retain the last synced
+            # page until the cycle consumes it, including across several PUTs,
+            # so a single page turn is still detectable when its pct delta is 0.
+            metadata = state_metadata_kwargs({
+                "page": page_from_persisted_state(previous),
+                "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
+            })
         _database_service.save_state(State(
             abs_id=book.abs_id,
             client_name="kosync",
@@ -1613,6 +1624,7 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
             last_updated=int(time.time()),
             xpath=progress or "",
             user_id=user_id,
+            **metadata,
         ))
     except Exception as exc:
         logger.warning(

@@ -14,6 +14,7 @@ import time
 from collections.abc import Mapping, Sequence
 
 from src.services import observation_trail
+from src.utils.fixed_page_progress import coerce_page, is_cbz_book
 
 logger = logging.getLogger(__name__)
 
@@ -419,6 +420,15 @@ class ClientPoller:
                 last_marker = self._last_known.get(cache_key)
                 last_pct = self._cached_pct(last_marker, fallback=current_pct)
                 marker_changed = self._state_changed(last_marker, current_marker, last_pct, current_pct)
+                echo_tolerance = self._echo_tolerance
+                if (is_cbz_book(book)
+                        and callable(getattr(sync_client, 'supports_fixed_page_progress', None))
+                        and sync_client.supports_fixed_page_progress() is True
+                        and coerce_page(current_state.current.get('page')) is not None
+                        and not current_state.current.get('_page_is_estimated')):
+                    # Concrete CBZ pages have canonical fractions; a one-page
+                    # turn must not fit inside the ordinary ebook echo margin.
+                    echo_tolerance = 1e-9
 
                 if last_marker is None:
                     logger.debug(
@@ -431,7 +441,7 @@ class ClientPoller:
                         recent_pct = recent.get("pct")
                         if (
                             recent_pct is not None
-                            and abs(current_pct - recent_pct) > self._echo_tolerance
+                            and abs(current_pct - recent_pct) > echo_tolerance
                         ):
                             self._trigger_or_defer_sync(
                                 client_name, book, last_pct, current_pct,
@@ -454,7 +464,7 @@ class ClientPoller:
                     recent_pct = recent.get("pct") if recent else None
                     still_self_echo = recent is not None and (
                         recent_pct is None
-                        or abs(current_pct - recent_pct) <= self._echo_tolerance
+                        or abs(current_pct - recent_pct) <= echo_tolerance
                     )
                     if still_self_echo:
                         logger.debug(

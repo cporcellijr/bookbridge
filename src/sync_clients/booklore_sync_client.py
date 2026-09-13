@@ -135,6 +135,8 @@ class BookloreSyncClient(SyncClient):
         # classic (pct, cfi) tuple.
         rich = None
         book_id = self._mapped_book_id(book) or self._resolve_legacy_book_id(book, epub)
+        if book_id is None and callable(getattr(self.booklore_client, "find_book_by_filename_exact", None)):
+            return None
         direct_rich_attempted = False
         if book_id and hasattr(self.booklore_client, "get_progress_rich_by_book_id"):
             direct_rich_attempted = True
@@ -304,6 +306,8 @@ class BookloreSyncClient(SyncClient):
             locator = LocatorResult(percentage=pct, page=page)
 
         book_id = self._mapped_book_id(book) or self._resolve_legacy_book_id(book, epub)
+        if book_id is None and callable(getattr(self.booklore_client, "find_book_by_filename_exact", None)):
+            return SyncResult(None, False)
         if book_id and hasattr(self.booklore_client, "update_progress_by_book_id"):
             outcome = self.booklore_client.update_progress_by_book_id(book_id, pct, locator)
         else:

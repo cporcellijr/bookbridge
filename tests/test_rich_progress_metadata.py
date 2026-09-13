@@ -192,13 +192,14 @@ class TestGrimmoryCapture(unittest.TestCase):
     def test_sync_client_captures_rich_fields(self):
         from src.sync_clients.booklore_sync_client import BookloreSyncClient
         bl = MagicMock()
-        bl.get_progress_rich.return_value = {
+        bl.get_progress_rich_by_book_id.return_value = {
             "pct": 0.275, "cfi": "epubcfi(/6/32!/4/14/8:0)",
             "href": "OEBPS/14_Chapter_06.xhtml",
             "last_read_time": "2026-06-02T22:01:01Z", "status": "READING",
         }
         client = BookloreSyncClient(bl, MagicMock())
-        book = MagicMock(original_ebook_filename="x.epub", ebook_filename="x.epub")
+        book = MagicMock(original_ebook_filename="x.epub", ebook_filename="x.epub",
+                         ebook_source="Grimmory", ebook_source_id="10194")
         state = client.get_service_state(book, prev_state=None)
         self.assertEqual(state.current["service_updated_at"], GRIMMORY_TS)
         self.assertEqual(state.current["status"], "READING")
@@ -208,6 +209,7 @@ class TestGrimmoryCapture(unittest.TestCase):
         from src.sync_clients.booklore_sync_client import BookloreSyncClient
         bl = MagicMock()
         bl.get_progress_rich.return_value = MagicMock()  # mocked/legacy client
+        bl.find_book_by_filename_exact = None
         bl.get_progress.return_value = (0.5, "epubcfi(/6/4!)")
         client = BookloreSyncClient(bl, MagicMock())
         book = MagicMock(original_ebook_filename="x.epub", ebook_filename="x.epub")
@@ -218,9 +220,10 @@ class TestGrimmoryCapture(unittest.TestCase):
     def test_sync_client_treats_missing_percentage_as_expected_empty_state(self):
         from src.sync_clients.booklore_sync_client import BookloreSyncClient
         bl = MagicMock()
-        bl.get_progress_rich.return_value = {"pct": None, "cfi": None}
+        bl.get_progress_rich_by_book_id.return_value = {"pct": None, "cfi": None}
         client = BookloreSyncClient(bl, MagicMock())
-        book = MagicMock(original_ebook_filename="x.epub", ebook_filename="x.epub")
+        book = MagicMock(original_ebook_filename="x.epub", ebook_filename="x.epub",
+                         ebook_source="Grimmory", ebook_source_id="10194")
 
         with self.assertNoLogs(
             "src.sync_clients.booklore_sync_client", level="WARNING"

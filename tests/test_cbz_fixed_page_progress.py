@@ -86,6 +86,7 @@ def cbz_book(path: Path):
         original_ebook_filename=str(path),
         ebook_filename=None,
         ebook_source="Grimmory",
+        ebook_source_id="42",
         sync_mode="ebook_only",
         abs_id="book-1",
         abs_title="Comic",
@@ -180,7 +181,7 @@ def test_kosync_cbz_write_uses_page_without_epub_xpath_or_cfi(cbz_path):
 
     expected_pct = TEST_PAGE / PAGE_COUNT
     assert result.success is True
-    assert result.updated_state == {"pct": pytest.approx(expected_pct), "xpath": str(TEST_PAGE)}
+    assert result.updated_state == {"pct": pytest.approx(expected_pct), "xpath": str(TEST_PAGE), "page": TEST_PAGE}
     transport.update_progress.assert_called_once_with("a" * 32, pytest.approx(expected_pct), str(TEST_PAGE))
     parser.get_sentence_level_ko_xpath.assert_not_called()
     parser.resolve_xpath_to_index.assert_not_called()
@@ -202,7 +203,7 @@ def test_kosync_cbz_reset_preserves_zero_percent(cbz_path):
     result = client.update_progress(cbz_book(cbz_path), UpdateProgressRequest(locator))
 
     assert result.success is True
-    assert result.updated_state == {"pct": 0.0, "xpath": "1"}
+    assert result.updated_state == {"pct": 0.0, "xpath": "1", "page": 1}
     transport.update_progress.assert_called_once_with("a" * 32, 0.0, "1")
     parser.extract_text_and_map.assert_not_called()
 
@@ -394,8 +395,8 @@ def test_grimmory_sync_client_reset_stays_zero_percent(cbz_path):
 
     assert result.success is True
     assert result.updated_state == {"pct": 0.0, "page": 1}
-    written_locator = api.update_progress.call_args.args[2]
-    assert api.update_progress.call_args.args[1] == 0.0
+    written_locator = api.update_progress_by_book_id.call_args.args[2]
+    assert api.update_progress_by_book_id.call_args.args[1] == 0.0
     assert written_locator.percentage == 0.0
     assert written_locator.page == 1
 
@@ -766,14 +767,14 @@ def test_grimmory_concrete_page_beats_missing_or_stale_zero(cbz_path, reported_p
     assert state.current["pct"] == pytest.approx(TEST_PAGE / PAGE_COUNT)
 
 
-def test_grimmory_applied_write_with_inconclusive_readback_succeeds():
+def test_grimmory_write_with_inconclusive_readback_is_not_confirmed():
     expected_pct = TEST_PAGE / PAGE_COUNT
     client = make_cbx_api_client(None)
 
     with patch("src.api.booklore_client.time.sleep"):
         assert client.update_progress(
             "comic.cbz", expected_pct, LocatorResult(percentage=expected_pct, page=TEST_PAGE)
-        ) is True
+        ) is False
 
     assert client.get_progress_rich_by_book_id.call_count == 7
     assert client._make_request.call_count == 3
@@ -980,7 +981,7 @@ def test_grimmory_concurrent_remote_page_is_preserved_in_cache():
             "comic.cbz",
             expected_pct,
             LocatorResult(percentage=expected_pct, page=TEST_PAGE),
-        ) is True
+        ) is False
 
     assert client._book_id_cache[42]["cbxProgress"]["page"] == 20
     assert client._book_id_cache[42]["cbxProgress"]["page"] != TEST_PAGE
@@ -1193,6 +1194,7 @@ def test_unsupported_cbx_without_primary_file_id_is_safe_skip(suffix):
 def test_unsupported_cbx_skip_uses_sync_result_contract(suffix):
     api = make_cbx_api_client({"pct": 0.5, "page": None})
     api.find_book_by_filename.return_value["primaryFile"].pop("id")
+    api.find_book_by_filename.return_value["fileName"] = f"comic{suffix}"
     parser = MagicMock()
     book = cbz_book(Path(f"comic{suffix}"))
     observed = cycle_state(0.25)
