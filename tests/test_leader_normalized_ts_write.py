@@ -333,8 +333,13 @@ def _wire_database(manager, book):
     manager.database_service.save_book = MagicMock()
 
 
-@pytest.mark.parametrize(("approved", "leader"), [(False, "ABS"), (True, "ABS"), (True, "KoSync")])
-def test_434_sync_cycle_persists_rewind_intent_for_next_kosync_get(tmp_path, monkeypatch, caplog, approved, leader):
+@pytest.mark.parametrize(("approved", "leader", "prior_rewind"), [
+    (False, "ABS", False), (True, "ABS", False), (True, "KoSync", False),
+    (True, "KoSync", True),
+])
+def test_434_sync_cycle_persists_rewind_intent_for_next_kosync_get(
+    tmp_path, monkeypatch, caplog, approved, leader, prior_rewind,
+):
     """A real cycle and SQLite round trip distinguish 62.72->62.37 drift from rewind."""
     import time
     from datetime import timedelta
@@ -385,6 +390,12 @@ def test_434_sync_cycle_persists_rewind_intent_for_next_kosync_get(tmp_path, mon
                           "_normalized_ts": 26917.63, "_normalization_source": "xpath",
                           "_approved_rewind": approved}, previous_pct=0.6272),
     })
+    if prior_rewind:
+        # A second approved rewind must also retire device positions reported
+        # after the first cutoff, rather than preserving that obsolete cutoff.
+        manager._fetch_states_parallel.return_value["KoSync"].current[
+            "kosync_approved_rewind_at"
+        ] = time.time() - 20 * 60
     monkeypatch.setattr(kosync_server, "_database_service", db)
     monkeypatch.setattr(kosync_server, "_suppress_empty_progress_response", lambda *args: None)
     app = Flask(__name__)

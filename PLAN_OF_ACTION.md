@@ -151,3 +151,28 @@ This verifies real Grimmory cover retrieval and bidirectional comic progress
 through isolated bridge wiring. An actual Grimmory server-side rename/download
 and a physical reader device were not exercised. BookOrbit's CBZ page-sync support
 was not added or claimed by these PRs.
+
+## Reconcile rewritten #436 — September 13
+
+Reviewed head `516c197` against original head `58ee108` with `git range-diff`.
+The rewrite rebases the CBZ work from `9d5c6b4` onto #434's `d9d596a` and moves
+approved-rewind cutoff creation from the KoSync leader save into generic locator
+serialization. Its CBZ follower cutoff handling is already present locally.
+
+The new serialization uses `setdefault`, so a second approved KoSync rewind keeps
+the first rewind's old cutoff. A regression case through the real sync cycle and
+SQLite persistence reproduced this: an approved rewind retained the cutoff from
+20 minutes earlier. That can leave an intervening device position eligible to
+override the new rewind. The existing explicit KoSync leader save refreshes the
+cutoff correctly and passes the same case.
+
+Reconciled with a real merge of the rewritten head while retaining the existing
+runtime implementation, page metadata/PUT baseline, honest write outcomes, mapping
+identity protections, and complete canonical-test fixtures. Added the second-rewind
+regression case. This is not a new runtime deployment: `src/` is unchanged from
+`d552c7d`, so earlier live verification still applies and no restart is needed.
+
+Validation: **113 focused tests passed**; full suite **4223 passed, 9 skipped,
+135 subtests passed** (6 existing warnings, 141.61s, exit 0). Test delta: +1.
+`git diff --check` passed. All three current PR heads are included in the
+reconciled local history. Nothing was pushed.
