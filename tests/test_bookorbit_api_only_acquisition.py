@@ -160,6 +160,41 @@ class TestBookOrbitApiOnlyAcquisition(unittest.TestCase):
         bookorbit_client.find_book_by_filename.assert_not_called()
         bookorbit_client.download_book.assert_not_called()
 
+    def test_grimmory_source_spelling_variants_all_download_by_id(self):
+        for index, source in enumerate(("grimmory", "Booklore", "BookLore")):
+            with self.subTest(source=source):
+                manager = self._setup_manager_for_resolution(_build_manager(self.tmp_path))
+                ebook_filename = f"variant-{index}.epub"
+                manager.database_service.get_book_by_ebook_filename.return_value = (
+                    _make_book_row(ebook_filename, source, "4")
+                )
+                manager.booklore_client.is_configured.return_value = True
+                manager.booklore_client.download_book.return_value = b"Grimmory bytes"
+                manager.booklore_client.find_book_by_filename = MagicMock(return_value=None)
+
+                result = manager._resolve_local_epub_uncached(ebook_filename)
+
+                self.assertEqual(result, manager.epub_cache_dir / ebook_filename)
+                manager.booklore_client.download_book.assert_called_once_with("4")
+                manager.booklore_client.find_book_by_filename.assert_not_called()
+
+    def test_reconciled_remote_name_reuses_original_cached_file(self):
+        manager = self._setup_manager_for_resolution(_build_manager(self.tmp_path))
+        old_filename = "old-name.epub"
+        new_filename = "new-name.epub"
+        book_row = _make_book_row(new_filename, "Booklore", "4")
+        book_row.original_ebook_filename = old_filename
+        manager.database_service.get_book_by_ebook_filename.return_value = book_row
+        manager.epub_cache_dir.mkdir(parents=True, exist_ok=True)
+        old_path = manager.epub_cache_dir / old_filename
+        old_path.write_bytes(b"existing cached bytes")
+
+        result = manager._resolve_local_epub_uncached(new_filename)
+
+        self.assertEqual(result, old_path)
+        self.assertFalse((manager.epub_cache_dir / new_filename).exists())
+        manager.booklore_client.download_book.assert_not_called()
+
     def test_legacy_mapping_falls_back_to_filename_search(self):
         """
         C — Legacy mapping falls back.

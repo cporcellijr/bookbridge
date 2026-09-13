@@ -155,3 +155,27 @@ def test_resolve_local_epub_uncached_parser_preferred_over_filesystem(tmp_path):
     # Parser path wins
     assert result == parser_path
     assert result.read_bytes() == b"parser version"
+
+
+def test_resolve_local_epub_uncached_stops_cyclic_original_filename_mappings(tmp_path):
+    parser = MagicMock()
+    parser.resolve_book_path.return_value = None
+    first = Book(
+        abs_id="first",
+        ebook_filename="remote-a.epub",
+        original_ebook_filename="cache-b.epub",
+    )
+    second = Book(
+        abs_id="second",
+        ebook_filename="cache-b.epub",
+        original_ebook_filename="remote-a.epub",
+    )
+    manager = _build_manager(tmp_path, ebook_parser=parser)
+    manager.database_service.get_book_by_ebook_filename.side_effect = (
+        lambda filename: {"remote-a.epub": first, "cache-b.epub": second}.get(filename)
+    )
+    manager.booklore_client.is_configured.return_value = False
+
+    assert manager._resolve_local_epub_uncached("remote-a.epub") is None
+
+    assert parser.resolve_book_path.call_count == 2

@@ -24,12 +24,15 @@ class _Book:
     """Minimal stand-in with the identity attributes the guard inspects."""
 
     def __init__(self, abs_id="ab-1", status="active", kosync_doc_id=None,
-                 ebook_filename=None, audio_source_id=None):
+                 ebook_filename=None, audio_source_id=None, ebook_source=None,
+                 ebook_source_id=None):
         self.abs_id = abs_id
         self.status = status
         self.kosync_doc_id = kosync_doc_id
         self.ebook_filename = ebook_filename
         self.audio_source_id = audio_source_id
+        self.ebook_source = ebook_source
+        self.ebook_source_id = ebook_source_id
 
 
 class MappingStatusReuseTestCase(unittest.TestCase):
