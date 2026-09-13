@@ -97,7 +97,57 @@ Completed startup cycles: 433 books in 102.7s and 6 books in 3.6s. Docker report
 Post-restart ERROR/CRITICAL/traceback count: **0**. Imports and the legacy numeric
 page fallback also passed inside the container. CodeGraph reports up to date.
 
-Grimmory is unconfigured here: its real cover endpoint, rename/download behavior,
-and bidirectional CBZ progress remain **not live-verified**. Regression tests cover
-these paths using isolated SQLite and service doubles. No test positions, books,
-or annotations were created in live services, so no test-data restoration was needed.
+At the initial restart, Grimmory was disabled in bridge settings, so its real
+cover endpoint, rename/download behavior, and bidirectional CBZ progress had not
+been live-verified. No live test data was created during that initial pass.
+
+## Follow-up: real Grimmory CBZ verification — September 13
+
+The user confirmed Grimmory was running and offered a CBZ. The same 75-page
+`CheechandChongsNextMovie-TheBook.cbz` exists in Grimmory (book 12014, file 14150)
+and BookOrbit (book 6038, file 15693), available through the bridge's `/books` mount.
+The saved **per-user** credentials successfully authenticate to Grimmory.
+
+Ran the deployed Python code inside the primary container with a disposable
+SQLite database, an isolated HTTP KoSync server, and a non-admin bridge test user.
+Only Grimmory's real comic progress was changed. This exercised HTTP authentication,
+PUT persistence, the real debounce thread, `sync_cycle`, remote Grimmory writes
+and verification, and the reverse poller/KoSync HTTP path. The mapping deliberately
+carried an outdated remote filename and the correct source ID/original local name.
+No transport, state-fetch, leader-selection, or write-verification mocks were used.
+The normal bridge's Grimmory enable flag stayed false throughout.
+
+```text
+COVER 71483 image/jpeg
+PASS KoSync HTTP PUT -> debounce -> sync cycle -> Grimmory page 16
+PASS Grimmory page 17 -> poller -> sync cycle -> KoSync HTTP page 17
+PASS exactly two sync cycles; no settled-poll or internal-PUT echo
+FINAL_KOSYNC (0.22666666666666666, '17')
+RESET_HTTP 200
+BOOKORBIT_UNCHANGED True
+live_probe_book_rows 0
+live_probe_user_rows 0
+remaining_probe_databases []
+```
+
+Real Grimmory read-back reported `page=17`, `cbx_page=17`, `file_page=17`.
+Its rounded percentage was 22.7%; the bridge correctly used page 17/75 internally.
+The repeat settled poll and next debounce tick produced no additional cycle.
+The separate admin test user had no progress rows, confirming bridge user scoping.
+
+Cleanup used Grimmory's documented `POST /api/v1/books/reset-progress?type=BOOKLORE`
+for this single book. The complete rich-progress response matched its captured
+starting value afterward: percentage 0, no page fields, no last-read timestamp,
+status `UNSET`. BookOrbit's complete progress response also matched its starting
+value. The temporary database was removed and the primary remained healthy.
+
+The first probe passed both directions and restored progress, but exited on an
+unnecessary cleanup call to a nonexistent database attribute. After removing that
+probe-only call, the clean repeat exited 0. No production code changes or new test
+cases were needed; the existing full-suite result remains 4222 passed / 9 skipped /
+135 subtests. Raw local evidence: `%TEMP%/bookbridge_cbz_live_probe.log`.
+
+This verifies real Grimmory cover retrieval and bidirectional comic progress
+through isolated bridge wiring. An actual Grimmory server-side rename/download
+and a physical reader device were not exercised. BookOrbit's CBZ page-sync support
+was not added or claimed by these PRs.
