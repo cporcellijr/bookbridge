@@ -1067,6 +1067,28 @@ def test_get_audiobook_cover_bytes_uses_plural_endpoint(booklore_client):
     booklore_client._make_request.assert_called_once_with("GET", "/api/v1/audiobooks/6043/cover")
 
 
+def test_get_book_cover_bytes_uses_media_book_endpoint(booklore_client):
+    response = MagicMock()
+    response.status_code = 200
+    response.content = b"cover"
+    response.headers = {"Content-Type": "image/webp"}
+    booklore_client._make_request = MagicMock(return_value=response)
+
+    content, content_type = booklore_client.get_book_cover_bytes(4)
+
+    assert content == b"cover"
+    assert content_type == "image/webp"
+    booklore_client._make_request.assert_called_once_with("GET", "/api/v1/media/book/4/cover")
+
+
+def test_get_book_cover_bytes_returns_empty_for_non_success(booklore_client):
+    response = MagicMock()
+    response.status_code = 404
+    booklore_client._make_request = MagicMock(return_value=response)
+
+    assert booklore_client.get_book_cover_bytes(4) == (None, None)
+
+
 def test_add_to_shelf_404_evicts_stale_hydrated_entry(booklore_client):
     booklore_client._process_book_detail(make_detail("gone", title="Gone Book", filename="gone.epub"))
     booklore_client._cache_timestamp = time.time()

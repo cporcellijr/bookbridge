@@ -2002,6 +2002,13 @@ class BookloreClient:
             return None, None
         return response.content, response.headers.get('Content-Type', 'image/jpeg')
 
+    def get_book_cover_bytes(self, book_id):
+        """Return a regular Grimmory book cover without exposing credentials."""
+        response = self._make_request("GET", f"/api/v1/media/book/{book_id}/cover")
+        if not response or response.status_code != 200:
+            return None, None
+        return response.content, response.headers.get('Content-Type', 'image/jpeg')
+
     def download_book_to_path(self, book_id, output_path, expected_size: int = 0) -> bool:
         """Stream-download the audiobook file directly to disk.
 
@@ -3159,4 +3166,3 @@ class BookloreClient:
             )
             return False
         return True
-

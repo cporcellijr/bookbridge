@@ -1544,6 +1544,9 @@ class TestCoverProxyUserIsolation(unittest.TestCase):
         self.mock_container.mock_booklore_client.get_audiobook_cover_bytes.return_value = (
             b"booklore-cover", "image/jpeg",
         )
+        self.mock_container.mock_booklore_client.get_book_cover_bytes.return_value = (
+            b"book-cover", "image/webp",
+        )
         self.mock_container.mock_bookorbit_client.is_configured.return_value = True
         self.mock_container.mock_bookorbit_client.get_cover_bytes.return_value = (
             b"bookorbit-cover", "image/jpeg",
@@ -1584,10 +1587,16 @@ class TestCoverProxyUserIsolation(unittest.TestCase):
             ebook_source="Storyteller", ebook_source_id="st-text-1",
             ebook_filename="bo-audio.epub", duration=100, user_id=self.reg.id,
         ))
+        self.svc.save_book(Book(
+            abs_id="reg-booklore-ebook", abs_title="Reg Grimmory Ebook",
+            ebook_source="Grimmory", ebook_source_id="bl-ebook-1",
+            ebook_filename="bl-ebook.cbz", duration=100, user_id=self.reg.id,
+        ))
         self.svc.link_user_book(admin.id, "admin-book")
         self.svc.link_user_book(self.reg.id, "reg-book")
         self.svc.link_user_book(self.reg.id, "reg-booklore-audio")
         self.svc.link_user_book(self.reg.id, "reg-bookorbit-audio")
+        self.svc.link_user_book(self.reg.id, "reg-booklore-ebook")
 
     def tearDown(self):
         import src.db.migration_utils
@@ -1631,6 +1640,25 @@ class TestCoverProxyUserIsolation(unittest.TestCase):
         resp = self.client.get('/api/booklore/audiobook-cover/bl-audio-1')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data, b"booklore-cover")
+
+    def test_regular_user_can_proxy_owned_booklore_ebook_cover(self):
+        self._login("reg", "pw")
+        resp = self.client.get('/api/booklore/book-cover/bl-ebook-1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data, b"book-cover")
+        self.assertEqual(resp.content_type, "image/webp")
+
+    def test_booklore_ebook_cover_missing_is_not_found(self):
+        self.mock_container.mock_booklore_client.get_book_cover_bytes.return_value = (None, None)
+        self._login("reg", "pw")
+        resp = self.client.get('/api/booklore/book-cover/bl-ebook-1')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_booklore_ebook_cover_upstream_error_is_safe(self):
+        self.mock_container.mock_booklore_client.get_book_cover_bytes.side_effect = RuntimeError("down")
+        self._login("reg", "pw")
+        resp = self.client.get('/api/booklore/book-cover/bl-ebook-1')
+        self.assertEqual(resp.status_code, 500)
 
     def test_regular_user_can_proxy_owned_bookorbit_audio_with_other_ebook_source(self):
         """BookOrbit audio ids are not looked up through ebook source fields."""
