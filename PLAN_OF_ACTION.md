@@ -45,10 +45,10 @@ Work locally; pushing and posting GitHub reviews are outside this task.
       project virtual environment and Git Bash (tests share some temp paths).
 - [x] Check the final diff, update CHANGELOG.md and BRANCH_STATUS.md, and commit
       the fixes locally with the completed plan.
-- [ ] Fast-forward the primary dev checkout to the verified integration result.
-- [ ] Restart the primary container and inspect startup/health and available
+- [x] Fast-forward the primary dev checkout to the verified integration result.
+- [x] Restart the primary container and inspect startup/health and available
       live integrations; record any unavailable Grimmory/CBZ verification.
-- [ ] Report commits, test counts, live evidence, and remaining limitations.
+- [x] Record commits, test counts, live evidence, and remaining limitations below.
 
 ## Review evidence
 
@@ -74,3 +74,30 @@ use the complete `UpdateProgressRequest`. The full rerun exited 0.
 
 `git diff --check` passed; no new `print()` calls in `src/`. Deploy requires a
 **restart**, with no dependency rebuild, schema migration, or plugin re-download.
+
+## Local deployment evidence
+
+Local merges: `b6c2d6b` (#435), `9fd2a1c` (#436), `ce553c8` (#437).
+Review fixes: `b740b22`. Primary `dev` was fast-forwarded and
+`docker compose restart` completed. Nothing was pushed.
+
+Observed September 12, 2026, 22:07–22:09 local container log time:
+
+```text
+✅ Database Migrations Completed
+2026-09-12 22:07:14,237 - INFO - ⚙️  Loaded 258 settings from database
+2026-09-12 22:07:14,560 - DEBUG - Grimmory: client not configured; skipping cached library load
+2026-09-12 22:08:05,879 - DEBUG - 📡 BookOrbit poll: checked 430 across 1 target(s)
+2026-09-12 22:08:33,643 - DEBUG - 📡 BookOrbitAudio poll: checked 369 across 1 target(s)
+2026-09-12 22:08:57,938 - DEBUG - 'bookorbit:6034' 'Monster Girl Islands 2' No changes and clients in sync, skipping
+```
+
+Completed startup cycles: 433 books in 102.7s and 6 books in 3.6s. Docker reports
+`running healthy`; dashboard HTTP 200, KoSync `/healthcheck` HTTP 200 / `OK`.
+Post-restart ERROR/CRITICAL/traceback count: **0**. Imports and the legacy numeric
+page fallback also passed inside the container. CodeGraph reports up to date.
+
+Grimmory is unconfigured here: its real cover endpoint, rename/download behavior,
+and bidirectional CBZ progress remain **not live-verified**. Regression tests cover
+these paths using isolated SQLite and service doubles. No test positions, books,
+or annotations were created in live services, so no test-data restoration was needed.
