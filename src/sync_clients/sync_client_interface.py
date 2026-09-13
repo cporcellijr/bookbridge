@@ -37,6 +37,9 @@ class LocatorResult:
     css_selector: Optional[str] = None
     chapter_progress: Optional[float] = None
     fragments: Optional[list] = None
+    # Concrete 1-based position for fixed-page documents. Kept separate from
+    # CFI/fragment so page positions cannot leak as fake EPUB data.
+    page: Optional[int] = None
 
 @dataclass
 class UpdateProgressRequest:
@@ -129,6 +132,10 @@ class SyncClient:
         """Return True when this client is applicable to the provided book."""
         return True
 
+    def supports_fixed_page_progress(self) -> bool:
+        """Return whether this concrete client speaks page-based progress."""
+        return False
+
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
         """
         Args:
@@ -165,5 +172,6 @@ class SyncClient:
             perfect_ko_xpath=perfect_xpath,
             css_selector=locator_result.css_selector,
             chapter_progress=locator_result.chapter_progress,
-            fragments=locator_result.fragments
+            fragments=locator_result.fragments,
+            page=locator_result.page,
         )

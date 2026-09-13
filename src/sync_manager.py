@@ -55,6 +55,7 @@ from src.utils.transcription_cancel import (
 from src.utils.transcriber import TranscriptionCancelled
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
+from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
 
 # Service imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
@@ -251,6 +252,8 @@ class SyncManager:
         if not hasattr(self, "_sync_cycle_ebook_cache"):
             self._sync_cycle_ebook_cache = {}
         if not ebook_filename:
+            return None, 0
+        if is_cbz_filename(ebook_filename):
             return None, 0
 
         cached = self._sync_cycle_ebook_cache.get(ebook_filename)
@@ -2854,8 +2857,14 @@ class SyncManager:
                 logger.info(
                     f"Ebook-only background prep: skipping Storyteller/SMIL/Whisper transcript generation for '{sanitize_log_data(abs_title)}'"
                 )
-                # Warm parser caches for subsequent locator-based sync cycles.
-                self.ebook_parser.extract_text_and_map(epub_path)
+                # Reflowable ebooks benefit from a warm text/locator cache. CBZ is
+                # fixed-page and must never be handed to ebooklib's EPUB parser.
+                if is_cbz_filename(epub_path.name):
+                    logger.info(
+                        f"Ebook-only background prep: skipping EPUB parser warmup for CBZ '{sanitize_log_data(epub_path.name)}'"
+                    )
+                else:
+                    self.ebook_parser.extract_text_and_map(epub_path)
                 update_progress(1.0, 3)
                 book.status = 'active'
                 persist_book()
@@ -3185,8 +3194,28 @@ class SyncManager:
         - API noise on long books (Grimmory's 20s rounding errors filtered)
         - Missing real progress on all books (30s+ changes do count)
         """
+        if self._has_fixed_page_delta(client_name, config[client_name], book):
+            return True
         delta_pct = self._state_percentage_delta(config[client_name])
         return self._is_significant_pct_delta(delta_pct, book)
+
+    def _has_fixed_page_delta(self, client_name, client_state, book) -> bool:
+        if not is_cbz_book(book):
+            return False
+        client = self.sync_clients.get(client_name)
+        try:
+            if not client or client.supports_fixed_page_progress() is not True:
+                return False
+        except (AttributeError, TypeError):
+            return False
+        current_page = coerce_page(client_state.current.get("page"))
+        previous_page = coerce_page(client_state.current.get("_previous_page"))
+        return (
+            not client_state.current.get("_page_is_estimated", False)
+            and current_page is not None
+            and previous_page is not None
+            and abs(current_page - previous_page) >= 1
+        )
 
     @staticmethod
     def _state_percentage_delta(client_state) -> float:
@@ -3970,6 +3999,9 @@ class SyncManager:
         is the bare percentage the device ignores (#364). Audio-time vetoes belong on
         the path where audio followers actually consume the locator.
         """
+        if is_cbz_filename(epub):
+            return None
+
         if not epub or str(epub).startswith("storyteller_") or locator.percentage is None:
             return None
         try:
@@ -4013,6 +4045,16 @@ class SyncManager:
                 f"'{abs_id}' '{title_snip}' CFI hydration failed: {exc}", exc_info=True
             )
             return None
+
+    @staticmethod
+    def _fixed_page_locator_from_state(client, state, percentage) -> LocatorResult:
+        """Build a first-class page locator only for clients that support it."""
+        try:
+            supports_pages = client.supports_fixed_page_progress() is True
+        except (AttributeError, TypeError):
+            supports_pages = False
+        page = coerce_page(state.current.get("page")) if supports_pages else None
+        return LocatorResult(percentage=percentage, page=page)
 
     @staticmethod
     def _sync_result_was_applied(result) -> bool:
@@ -4317,6 +4359,11 @@ class SyncManager:
         # Clear caches at start of cycle
         self._sync_cycle_ebook_cache.clear()
         self._sync_cycle_local_epub_cache.clear()
+        clear_fixed_page_cache = getattr(
+            getattr(self, "ebook_parser", None), "clear_fixed_page_count_cache", None
+        )
+        if callable(clear_fixed_page_cache):
+            clear_fixed_page_cache()
         self._storyteller_epub_ensure_attempted.clear()
         storyteller_client = self.sync_clients.get('Storyteller')
         if storyteller_client and hasattr(storyteller_client, 'storyteller_client'):
@@ -4515,7 +4562,18 @@ class SyncManager:
                 # Calculate char_delta = int(state.delta * total_chars)
                 # If char_delta >= self.delta_chars_thresh, log it and set significant_diff = True
                 char_delta_triggered = False  # Track if character delta triggered significance
-                if not significant_diff and hasattr(book, 'ebook_filename') and book.ebook_filename:
+                page_delta_triggered = any(
+                    self._has_fixed_page_delta(name, state, book)
+                    for name, state in config.items()
+                )
+                if page_delta_triggered:
+                    significant_diff = True
+                    logger.info(
+                        f"'{abs_id}' '{title_snip}' Significant fixed-page change detected"
+                    )
+                fixed_page_book = is_cbz_book(book)
+                if (not significant_diff and hasattr(book, 'ebook_filename') and book.ebook_filename
+                        and not fixed_page_book):
                     for client_name_key, client_state in config.items():
                          percentage_delta = self._state_percentage_delta(client_state)
                          if percentage_delta > 0:
@@ -4573,11 +4631,12 @@ class SyncManager:
                     for client_name in config.keys()
                 )
                 is_instant_target = bool(target_abs_id)
-                if (significant_diff and not any_significant_delta and not char_delta_triggered
+                if (significant_diff and not any_significant_delta and not char_delta_triggered and not page_delta_triggered
                         and not new_client_in_config and not is_instant_target):
                     logger.debug(f"'{abs_id}' '{title_snip}' Discrepancy exists ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) but no recent client activity detected. Waiting for a new read event to determine true leader")
                     continue
-                if is_instant_target and significant_diff and not any_significant_delta and not char_delta_triggered and not new_client_in_config:
+                if (is_instant_target and significant_diff and not any_significant_delta
+                        and not char_delta_triggered and not page_delta_triggered and not new_client_in_config):
                     logger.info(f"'{abs_id}' '{title_snip}' Instant-sync target: resolving discrepancy ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) — the triggering read already wrote State (delta=0)")
 
                 if significant_diff:
@@ -4642,7 +4701,12 @@ class SyncManager:
                 audio_only_mode = getattr(book, "sync_mode", "audiobook") == "audiobook_only"
 
                 primary_audio_client = self._get_primary_audio_client_name(book)
-                if leader == primary_audio_client:
+                if fixed_page_book:
+                    locator = self._fixed_page_locator_from_state(
+                        leader_client, leader_state, leader_pct
+                    )
+                    locator_source = "fixed_page"
+                elif leader == primary_audio_client:
                     abs_timestamp = leader_state.current.get('ts')
                     locator, txt = self._resolve_alignment_locator_from_abs_timestamp(book, abs_timestamp)
                     if locator:
@@ -4704,14 +4768,15 @@ class SyncManager:
                     logger.warning(f"⚠️ '{abs_id}' '{title_snip}' Could not resolve locator from text for leader '{leader}', falling back to percentage of leader")
                     locator = LocatorResult(percentage=leader_pct)
                     locator_source = "percent_fallback"
-                if txt is None:
+                if txt is None and not fixed_page_book:
                     txt = ""
 
                 # Locator-driven clients need a real position, not a bare percentage
                 # (see _hydrate_cfi_locator and #364). Resolve one once per cycle and
                 # hand it to whichever of them are in play.
                 hydrated_locator = None
-                if not locator.cfi and any(name in config for name in _CFI_DEPENDENT_CLIENTS):
+                if (not fixed_page_book and not locator.cfi
+                        and any(name in config for name in _CFI_DEPENDENT_CLIENTS)):
                     hydrated_locator = self._hydrate_cfi_locator(
                         locator, epub, abs_id, title_snip, leader, leader_pct, leader_formatter
                     )
@@ -4922,8 +4987,6 @@ class SyncManager:
 
                 # Save leader state
                 leader_state_data = leader_state.current
-                if leader == "KoSync" and leader_state_data.get("_approved_rewind"):
-                    leader_state_data["kosync_approved_rewind_at"] = current_time
 
                 leader_state_model = State(
                     abs_id=book.abs_id,

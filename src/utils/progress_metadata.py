@@ -20,6 +20,7 @@ This module is capture-only: nothing here influences leader selection.
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -125,6 +126,13 @@ def extract_locator_json(current: dict) -> Optional[str]:
         except (TypeError, ValueError):
             continue
         payload[key] = value
+
+    # KoSync's leader-state save path carries rewind intent as private metadata.
+    # Persist the cutoff before private keys are discarded so ordinary later
+    # writes cannot turn locator rounding into a newly approved rewind (#434).
+    if current.get("_approved_rewind") and current.get("xpath") is not None:
+        payload.setdefault("kosync_approved_rewind_at", time.time())
+
     if not payload:
         return None
     return json.dumps(payload, sort_keys=True)
