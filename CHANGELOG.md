@@ -141,6 +141,12 @@ All notable changes to BookBridge will be documented in this file.
   before that rewind. Intentional rewinds still stick, including when XPath ordering
   is enabled, and later ordinary syncs keep the original rewind cutoff.
 
+- **Keep CBZ page progress consistent between Grimmory and KoSync.** Fixed-page
+  positions now travel as explicit page numbers rather than fake EPUB locators,
+  use KOReader's page-count semantics (including its bundled MuPDF WebP support),
+  and never invent page 1 for non-zero progress. Unsupported comic archives and
+  Kavita retain their existing behavior.
+
 - **Prepare KOReader's download list when books are matched.** After a bridge
   restart, catalog changes now start the manifest worker for installs that have
   used device sync, instead of waiting for KOReader to connect. Rapid matches

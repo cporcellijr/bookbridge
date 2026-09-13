@@ -103,6 +103,10 @@ class EbookParser:
         self._path_cache: OrderedDict[str, Path] = OrderedDict()
         self._path_cache_max = max(0, int(os.getenv("EBOOK_PATH_CACHE_SIZE", "100")))
         self._path_cache_lock = threading.Lock()
+        # Positive CBZ counts are cached only within one sync cycle. Failures are
+        # deliberately not cached so a transient NAS/ZIP error can recover.
+        self._fixed_page_count_cache: dict[str, int] = {}
+        self._fixed_page_count_cache_lock = threading.Lock()
 
         logger.info(
             f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, "
@@ -1488,6 +1492,20 @@ class EbookParser:
             spine_index,
         )
         return None
+
+    def get_cached_fixed_page_count(self, filename: str) -> Optional[int]:
+        with self._fixed_page_count_cache_lock:
+            return self._fixed_page_count_cache.get(filename)
+
+    def cache_fixed_page_count(self, filename: str, page_count: int) -> None:
+        if page_count <= 0:
+            return
+        with self._fixed_page_count_cache_lock:
+            self._fixed_page_count_cache[filename] = page_count
+
+    def clear_fixed_page_count_cache(self) -> None:
+        with self._fixed_page_count_cache_lock:
+            self._fixed_page_count_cache.clear()
 
     def get_sentence_level_ko_xpath(self, filename, percentage) -> Optional[str]:
         """

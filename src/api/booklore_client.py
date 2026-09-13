@@ -3,12 +3,13 @@ import time
 import logging
 import threading
 from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
 from typing import Optional
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from pathlib import Path
 
 from src.utils.file_transfers import (
     IncompleteTransferError,
@@ -17,6 +18,7 @@ from src.utils.file_transfers import (
 )
 from src.utils.logging_utils import sanitize_log_data
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.fixed_page_progress import coerce_page, is_cbz_filename
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,14 @@ MAX_DETAIL_FETCHES_PER_SEARCH = 20
 # Safety bound on paginated scans so a server that never reports the last page
 # (or ignores the size param) can't loop forever. 10000 pages * 200 = 2M books.
 SCAN_MAX_PAGES = int(os.getenv("BOOKLORE_SCAN_MAX_PAGES", "10000"))
+
+
+class ProgressWriteOutcome(Enum):
+    """Non-boolean progress outcomes that callers must handle explicitly."""
+
+    SKIPPED = "skipped"
+
+
 # Concurrency for the detail-fetch fan-out during a full library refresh. The
 # session's connection pool is sized from this (see __init__) — urllib3's
 # default pool of 10 is exactly this worker count, which leaves no headroom and
@@ -1962,20 +1972,30 @@ class BookloreClient:
         return self._get_progress_by_book_id(book['id'])
 
     def get_progress_rich(self, ebook_filename):
-        """Progress plus Grimmory's own metadata for a filename, or None.
+        """Progress plus Grimmory's own metadata for a filename, or ``None``.
 
-        Returns ``{pct, cfi, href, last_read_time, status, content_source_pct}``
-        — lastReadTime is Grimmory's ISO timestamp of the last position change
-        and readStatus its reading status (verified live 2026-07-02). EPUB books
-        carry cfi/href from epubProgress; PDF/CBX fall back to percentage-only.
+        Returns percentage, locator fields, page data, lastReadTime and readStatus.
+        EPUB carries CFI/href, while CBX exposes its merged legacy/file page. For
+        EPUB/PDF, an absent progress row retains upstream's 0% semantics; CBX also
+        reports whether its percentage was actually present so a concrete page is
+        not mistaken for a reset.
         """
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             return None
-        response = self._make_request("GET", f"/api/v1/books/{book['id']}")
+        return self.get_progress_rich_by_book_id(book['id'])
+
+    def get_progress_rich_by_book_id(self, book_id):
+        """Return rich progress without resolving or refreshing by filename.
+
+        For CBX, ``pct`` remains ``None`` when Grimmory omitted the percentage and
+        ``page`` is returned independently. EPUB/PDF preserve their established
+        absent-progress value of 0%.
+        """
+        response = self._make_request("GET", f"/api/v1/books/{book_id}")
         if not response or response.status_code != 200:
             return None
-        data = self._parse_json_response(response, f"Grimmory rich progress for book {book['id']}")
+        data = self._parse_json_response(response, f"Grimmory rich progress for book {book_id}")
         if not isinstance(data, dict):
             return None
 
@@ -1986,11 +2006,52 @@ class BookloreClient:
         ).upper()
         progress_key = {'EPUB': 'epubProgress', 'PDF': 'pdfProgress', 'CBX': 'cbxProgress'}.get(book_type)
         progress = (data.get(progress_key) or {}) if progress_key else {}
+        percentage_present = 'percentage' in progress and progress.get('percentage') is not None
+        cbx_page = coerce_page(progress.get('page')) if book_type == 'CBX' else None
+        pct = self._to_progress_fraction(progress.get('percentage')) if percentage_present else 0.0
+        if book_type == 'CBX' and cbx_page is not None and not percentage_present:
+            # A page without a percentage is an incomplete/stale pair and must be
+            # canonicalized by the sync client. A completely untouched CBX book,
+            # however, keeps upstream's 0% state so it participates in catch-up.
+            pct = None
+        primary_file = data.get('primaryFile') or {}
+        explicit_file_progress = (
+            data.get('fileProgress')
+            or primary_file.get('fileProgress')
+            or primary_file.get('progress')
+            or {}
+        )
+        file_position = explicit_file_progress.get('positionData')
+        if file_position in (None, ""):
+            file_position = explicit_file_progress.get('page')
+        file_page = coerce_page(file_position)
+        file_pct_raw = explicit_file_progress.get(
+            'progressPercent', explicit_file_progress.get('percentage')
+        )
+        file_pct = self._to_progress_fraction(file_pct_raw) if file_pct_raw is not None else None
+        # Derive observability from the same selected value as file_page so an
+        # explicit null positionData cannot mask a populated page fallback.
+        file_page_observable = file_position not in (None, "")
+        # Current Grimmory folds primary-file progress back into cbxProgress on
+        # GET. When it does not expose the file row separately, this merged value
+        # is the best available file-authoritative read-back.
+        if book_type == 'CBX' and primary_file.get('id') is not None and not explicit_file_progress:
+            file_page = coerce_page(progress.get('page'))
+            file_pct = pct
+            file_page_observable = file_page is not None
 
         return {
-            "pct": self._to_progress_fraction(progress.get('percentage', 0)),
+            "pct": pct,
+            "percentage_present": percentage_present,
             "cfi": progress.get('cfi') if book_type == 'EPUB' else None,
             "href": progress.get('href') if book_type == 'EPUB' else None,
+            "page": cbx_page,
+            "cbx_page": cbx_page,
+            "file_page": file_page if book_type == 'CBX' else None,
+            "file_pct": file_pct if book_type == 'CBX' else None,
+            "file_page_observable": file_page_observable if book_type == 'CBX' else False,
+            "book_file_id": primary_file.get('id'),
+            "book_type": book_type,
             "last_read_time": data.get('lastReadTime'),
             "status": data.get('readStatus'),
             "content_source_pct": progress.get('contentSourceProgressPercent'),
@@ -2245,6 +2306,26 @@ class BookloreClient:
         logger.error(f"❌ Grimmory audiobook update failed: {last_status}")
         return False
 
+    def _cache_verified_cbx_progress(self, book_id, verified: Optional[dict]) -> None:
+        """Mirror only values actually observed during CBX read-back."""
+        with self._cache_lock:
+            cached = self._book_id_cache.get(book_id)
+            if not cached:
+                return
+            if not isinstance(verified, dict):
+                cached.pop('cbxProgress', None)
+                return
+            page = coerce_page(verified.get('page'))
+            pct = verified.get('pct')
+            if page is None and pct is None:
+                cached.pop('cbxProgress', None)
+                return
+            progress = cached.setdefault('cbxProgress', {})
+            if page is not None:
+                progress['page'] = page
+            if pct is not None:
+                progress['percentage'] = float(pct) * 100.0
+
     def update_progress(self, ebook_filename, percentage, rich_locator: Optional[LocatorResult] = None):
         book = self.find_book_by_filename(ebook_filename)
         if not book:
@@ -2265,11 +2346,59 @@ class BookloreClient:
         clear_reset = book_type == 'EPUB' and percentage <= 0
         cfi = rich_locator.cfi if rich_locator and rich_locator.cfi else None
         href = rich_locator.href if rich_locator and rich_locator.href else None
+        fixed_cbz = book_type == 'CBX' and is_cbz_filename(ebook_filename)
+        cbx_page = coerce_page(getattr(rich_locator, 'page', None)) if rich_locator and fixed_cbz else None
+        if fixed_cbz:
+            if percentage <= 0:
+                percentage = 0.0
+                pct_display = 0.0
+                cbx_page = 1
+            elif cbx_page is None:
+                logger.warning(
+                    "Grimmory: refusing non-zero CBZ write without a reliable page for '%s'",
+                    safe_filename,
+                )
+                return False
         primary_file = book.get('primaryFile') or {}
         book_file_id = primary_file.get('id')
+        pre_write_cbx = self.get_progress_rich_by_book_id(book_id) if fixed_cbz else None
+        pre_write_page = (
+            coerce_page(pre_write_cbx.get('page'))
+            if isinstance(pre_write_cbx, dict)
+            else None
+        )
 
         payload_variants = []
-        if book_type in ('EPUB', 'PDF', 'CBX') and book_file_id is not None:
+        if fixed_cbz:
+            cbx_payload = {
+                "bookId": book_id,
+                "cbxProgress": {
+                    "page": cbx_page,
+                    "percentage": pct_display,
+                },
+            }
+            if book_file_id is not None:
+                cbx_payload["fileProgress"] = {
+                    "bookFileId": self._to_optional_int(book_file_id) or book_file_id,
+                    "positionData": str(cbx_page),
+                    "progressPercent": pct_display,
+                }
+                payload_variants.append(("cbxProgress+fileProgress", cbx_payload))
+                payload_variants.append(("fileProgress", {
+                    "bookId": book_id,
+                    "fileProgress": dict(cbx_payload["fileProgress"]),
+                }))
+                payload_variants.append(("cbxProgress", {
+                    "bookId": book_id,
+                    "cbxProgress": dict(cbx_payload["cbxProgress"]),
+                }))
+            else:
+                logger.warning(
+                    "Grimmory: primaryFile.id missing for '%s'; writing legacy CBX progress only",
+                    safe_filename,
+                )
+                payload_variants.append(("cbxProgress", cbx_payload))
+        elif book_type in ('EPUB', 'PDF', 'CBX') and book_file_id is not None:
             file_progress = {
                 "bookFileId": self._to_optional_int(book_file_id) or book_file_id,
                 "progressPercent": pct_display,
@@ -2308,7 +2437,11 @@ class BookloreClient:
             elif book_type == 'PDF':
                 payload_variants = [("standard", {"bookId": book_id, "pdfProgress": {"page": 1, "percentage": pct_display}})]
             elif book_type == 'CBX':
-                payload_variants = [("standard", {"bookId": book_id, "cbxProgress": {"page": 1, "percentage": pct_display}})]
+                logger.warning(
+                    "Grimmory: skipping percentage-only CBX write without primaryFile.id for '%s'",
+                    safe_filename,
+                )
+                return ProgressWriteOutcome.SKIPPED
             else:
                 logger.warning(f"Grimmory: Unknown book type {book_type} for '{safe_filename}'")
                 return False
@@ -2390,6 +2523,115 @@ class BookloreClient:
                         last_status = f"verify_mismatch:{verified_pct * 100:.2f}%"
                         continue
 
+            if fixed_cbz:
+                verified = None
+                for verify_attempt in range(2):
+                    if verify_attempt:
+                        time.sleep(0.1)
+                    verified = self.get_progress_rich_by_book_id(book_id)
+                    if not isinstance(verified, dict):
+                        continue
+                    observed_cbx = coerce_page(verified.get('cbx_page', verified.get('page')))
+                    observed_file = (
+                        coerce_page(verified.get('file_page'))
+                        if 'file_page' in verified
+                        else coerce_page(verified.get('page'))
+                    )
+                    file_page_observable = bool(
+                        verified.get(
+                            'file_page_observable',
+                            observed_file is not None,
+                        )
+                    )
+                    representations_match = observed_cbx == cbx_page and (
+                        book_file_id is None
+                        or not file_page_observable
+                        or observed_file == cbx_page
+                    )
+                    if representations_match:
+                        break
+                verified_page = coerce_page(verified.get('page')) if isinstance(verified, dict) else None
+                verified_cbx_page = (
+                    coerce_page(verified.get('cbx_page', verified.get('page')))
+                    if isinstance(verified, dict)
+                    else None
+                )
+                verified_file_page = (
+                    (
+                        coerce_page(verified.get('file_page'))
+                        if 'file_page' in verified
+                        else verified_page
+                    )
+                    if isinstance(verified, dict)
+                    else None
+                )
+                verified_pct = verified.get('pct') if isinstance(verified, dict) else None
+                verified_file_observable = bool(
+                    verified.get(
+                        'file_page_observable',
+                        verified_file_page is not None,
+                    )
+                ) if isinstance(verified, dict) else False
+                fully_verified = verified_cbx_page == cbx_page and (
+                    book_file_id is None
+                    or not verified_file_observable
+                    or verified_file_page == cbx_page
+                )
+                observed_pages = {
+                    page for page in (verified_page, verified_cbx_page, verified_file_page)
+                    if page is not None
+                }
+                remote_moved = pre_write_page is not None and any(
+                    page != cbx_page and page != pre_write_page
+                    for page in observed_pages
+                )
+                if remote_moved:
+                    logger.info(
+                        "Grimmory CBZ reader moved during verification for %s "
+                        "(attempted=%s observed=%s); preserving remote state",
+                        safe_filename, cbx_page, sorted(observed_pages),
+                    )
+                    self._cache_verified_cbx_progress(book_id, verified)
+                    return True
+                if fully_verified:
+                    if verified_pct is not None and abs(float(verified_pct) - float(percentage)) > 0.005:
+                        logger.info(
+                            "Grimmory CBZ page verified for %s; reported percentage differs "
+                            "(expected=%.2f%% observed=%.2f%% page=%s)",
+                            safe_filename, pct_display, float(verified_pct) * 100.0, cbx_page,
+                        )
+                    if book_file_id is not None and not verified_file_observable:
+                        logger.info(
+                            "Grimmory CBX page verified for %s; primary-file page is not observable",
+                            safe_filename,
+                        )
+                    else:
+                        logger.debug(
+                            "Grimmory CBZ representations verified for %s: cbx_page=%s file_page=%s",
+                            safe_filename, verified_cbx_page, verified_file_page,
+                        )
+                    self._cache_verified_cbx_progress(book_id, verified)
+                else:
+                    logger.warning(
+                        "Grimmory CBZ representation not yet confirmed for %s "
+                        "(variant=%s expected=%s cbx_page=%s file_page=%s)",
+                        safe_filename, variant_name, cbx_page,
+                        verified_cbx_page, verified_file_page,
+                    )
+                    if variant_idx < len(payload_variants):
+                        last_status = f"verify_{variant_name}_stale"
+                        continue
+                    # The POST was applied, but read-back is stale or unavailable.
+                    # Keep the actually observed state (or invalidate it) so a
+                    # concurrent reader is never replaced locally by our attempt.
+                    self._cache_verified_cbx_progress(book_id, verified)
+                    return True
+                if variant_name != "cbxProgress+fileProgress":
+                    logger.info(
+                        "Grimmory CBZ progress fallback accepted for %s (variant=%s)",
+                        safe_filename, variant_name,
+                    )
+
             logger.info(f"Grimmory: {safe_filename} -> {pct_display:.1f}%")
 
             # Update cache in-place instead of full library refresh
@@ -2409,7 +2651,7 @@ class BookloreClient:
                             if not cached.get('pdfProgress'):
                                 cached['pdfProgress'] = {}
                             cached['pdfProgress']['percentage'] = pct_display
-                        elif book_type == 'CBX':
+                        elif book_type == 'CBX' and not fixed_cbz:
                             if not cached.get('cbxProgress'):
                                 cached['cbxProgress'] = {}
                             cached['cbxProgress']['percentage'] = pct_display

@@ -10,6 +10,7 @@ from src.sync_clients.sync_client_interface import (
     SyncResult,
     UpdateProgressRequest,
 )
+from src.utils.fixed_page_progress import is_cbz_book
 from src.utils.progress_metadata import parse_service_timestamp
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,10 @@ class KavitaSyncClient(KoSyncSyncClient):
     def __init__(self, kavita_kosync_client, ebook_parser):
         super().__init__(kavita_kosync_client, ebook_parser)
         self._locator_pct_cache: dict[tuple[str, str], float] = {}
+
+    def supports_fixed_page_progress(self) -> bool:
+        """Kavita's KoSync-compatible transport does not use KOReader page mode."""
+        return False
 
     def supports_book(self, book: Book) -> bool:
         source = str(getattr(book, "ebook_source", "") or "").strip().lower()
@@ -77,7 +82,8 @@ class KavitaSyncClient(KoSyncSyncClient):
         remote_pct, xpath, metadata = self.kosync_client.get_progress_with_metadata(
             book.kosync_doc_id
         )
-        percentage = self._percentage_from_xpath(book, xpath)
+        fixed_page_file = is_cbz_book(book)
+        percentage = None if fixed_page_file else self._percentage_from_xpath(book, xpath)
         if percentage is None:
             try:
                 percentage = float(remote_pct) if remote_pct is not None else None
@@ -92,7 +98,7 @@ class KavitaSyncClient(KoSyncSyncClient):
         # the last persisted percentage.
         if prev_state and xpath and prev_state.xpath == xpath:
             previous_pct = percentage
-        current = {"pct": percentage, "xpath": xpath}
+        current = {"pct": percentage, "xpath": None if fixed_page_file else xpath}
         if remote_pct is not None:
             current["_remote_pct"] = remote_pct
         service_updated_at = parse_service_timestamp((metadata or {}).get("timestamp"))
@@ -109,6 +115,12 @@ class KavitaSyncClient(KoSyncSyncClient):
         )
 
     def update_progress(self, book: Book, request: UpdateProgressRequest) -> SyncResult:
+        if is_cbz_book(book):
+            # Kavita inherits the KoSync transport adapter but does not implement
+            # KOReader's fixed-page protocol. Never manufacture an EPUB XPath for
+            # a CBZ; retain the fresh target state and perform no write.
+            current = request.current_state.current if request.current_state else {}
+            return SyncResult(current.get("pct"), True, dict(current), skipped=True)
         result = super().update_progress(book, request)
         if result.success:
             try:
@@ -118,3 +130,8 @@ class KavitaSyncClient(KoSyncSyncClient):
             except ImportError:
                 pass
         return result
+
+    def get_text_from_current_state(self, book: Book, state: ServiceState) -> Optional[str]:
+        if is_cbz_book(book):
+            return None
+        return super().get_text_from_current_state(book, state)
