@@ -135,6 +135,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Preserve confirmed reader movement across linked KoSync files.** When the same book
+  is linked through more than one reader-file hash, continued movement from the same
+  reader can temporarily beat an older, further-ahead sibling instead of being undone
+  on the next GET. A first-open or unchanged stale position is not enough, and a later
+  synced state clears the preference. Controlled by **Prefer Confirmed Recent Reader
+  Movement** under Settings → KoSync → Advanced cross-device progress. Related to #215.
+
 - **Keep BookOrbit audiobook polling working after its playback API update.**
   BookOrbit's new audiobook reader replaced the old per-book audio-progress route
   with revisioned playback state and manifest asset IDs. BookBridge now reads and

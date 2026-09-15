@@ -145,10 +145,34 @@ def state_metadata_kwargs(current: dict) -> dict:
 
 def get_kosync_approved_rewind_at(state: object) -> Optional[float]:
     """Read the last intentional KoSync rewind cutoff from persisted metadata."""
+    metadata = get_state_locator_metadata(state)
+    if metadata:
+        return parse_service_timestamp(metadata.get("kosync_approved_rewind_at"))
+    return None
+
+
+def get_state_locator_metadata(state: object) -> dict:
+    """Return a copy of a State row's persisted locator metadata."""
     try:
         metadata = json.loads(getattr(state, "locator_json", None) or "{}")
-        if isinstance(metadata, dict):
-            return parse_service_timestamp(metadata.get("kosync_approved_rewind_at"))
+        return dict(metadata) if isinstance(metadata, dict) else {}
     except (TypeError, ValueError):
-        pass
-    return None
+        return {}
+
+
+def get_kosync_authoritative_put_metadata(state: object) -> dict:
+    """Return the exact reader PUT temporarily preferred across sibling hashes."""
+    metadata = get_state_locator_metadata(state)
+    authoritative_at = parse_service_timestamp(metadata.get("kosync_authoritative_put_at"))
+    document_hash = str(metadata.get("kosync_authoritative_put_hash") or "").strip()
+    try:
+        percentage = float(metadata.get("kosync_authoritative_put_pct"))
+    except (TypeError, ValueError):
+        percentage = None
+    if authoritative_at is None or not document_hash or percentage is None:
+        return {}
+    return {
+        "timestamp": authoritative_at,
+        "document_hash": document_hash,
+        "percentage": percentage,
+    }

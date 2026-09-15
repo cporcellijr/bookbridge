@@ -432,6 +432,111 @@ class TestKosyncEndpoints(unittest.TestCase):
         # It linked to the existing book rather than auto-creating an ebook-only mapping.
         self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
 
+    def test_put_progress_stamps_confirmed_sibling_authority_only_after_movement(self):
+        """The endpoint wires the pre-upsert sample into confirmed sibling authority."""
+        import json
+        from unittest.mock import patch
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        older_hash = "3" * 32
+        active_hash = "4" * 32
+        abs_id = "confirmed-sibling-put"
+        svc.save_book(Book(
+            abs_id=abs_id,
+            abs_title="Confirmed Sibling PUT",
+            ebook_filename="confirmed.epub",
+            kosync_doc_id=older_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=older_hash, linked_abs_id=abs_id, user_id=admin_id,
+        ))
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=active_hash, linked_abs_id=abs_id, user_id=admin_id,
+        ))
+        svc.upsert_user_kosync_progress(
+            older_hash, 0.80, progress="/body/old-high.0",
+            device="ReaderA", device_id="reader-a",
+            timestamp=utcnow() - timedelta(minutes=10), user_id=admin_id,
+        )
+        svc.upsert_user_kosync_progress(
+            active_hash, 0.30, progress="/body/active-30.0",
+            device="ReaderB", device_id="reader-b",
+            timestamp=utcnow() - timedelta(minutes=5), user_id=admin_id,
+        )
+
+        env = {
+            "INSTANT_SYNC_ENABLED": "false",
+            "KOSYNC_SIBLING_LAST_WRITE_WINS": "true",
+            "SYNC_TRUST_CORROBORATED_REWIND": "true",
+        }
+        with patch.dict(os.environ, env):
+            first = self.client.put('/syncs/progress', headers=self.auth_headers, json={
+                'document': active_hash, 'progress': '/body/active-30.0',
+                'percentage': 0.30, 'device': 'ReaderB', 'device_id': 'reader-b',
+            })
+            self.assertEqual(first.status_code, 200)
+            first_state = svc.get_state(abs_id, "kosync", user_id=admin_id)
+            first_meta = json.loads(first_state.locator_json or "{}")
+            self.assertNotIn("kosync_authoritative_put_hash", first_meta)
+
+            second = self.client.put('/syncs/progress', headers=self.auth_headers, json={
+                'document': active_hash, 'progress': '/body/active-31.0',
+                'percentage': 0.31, 'device': 'ReaderB', 'device_id': 'reader-b',
+            })
+            self.assertEqual(second.status_code, 200)
+
+        state = svc.get_state(abs_id, "kosync", user_id=admin_id)
+        metadata = json.loads(state.locator_json or "{}")
+        self.assertEqual(metadata["kosync_authoritative_put_hash"], active_hash)
+        self.assertAlmostEqual(metadata["kosync_authoritative_put_pct"], 0.31)
+        self.assertIn("kosync_authoritative_put_at", metadata)
+
+    def test_put_progress_single_hash_movement_does_not_stamp_sibling_authority(self):
+        """Ordinary one-hash KoSync traffic stays outside the sibling preference."""
+        import json
+        from unittest.mock import patch
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        doc_hash = "5" * 32
+        abs_id = "single-hash-put"
+        svc.save_book(Book(
+            abs_id=abs_id,
+            abs_title="Single Hash PUT",
+            ebook_filename="single.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        svc.save_kosync_document(KosyncDocument(
+            document_hash=doc_hash, linked_abs_id=abs_id, user_id=admin_id,
+        ))
+        svc.upsert_user_kosync_progress(
+            doc_hash, 0.30, progress="/body/single-30.0",
+            device="Reader", device_id="reader-one",
+            timestamp=utcnow() - timedelta(minutes=5), user_id=admin_id,
+        )
+
+        env = {
+            "INSTANT_SYNC_ENABLED": "false",
+            "KOSYNC_SIBLING_LAST_WRITE_WINS": "true",
+            "SYNC_TRUST_CORROBORATED_REWIND": "true",
+        }
+        with patch.dict(os.environ, env):
+            response = self.client.put('/syncs/progress', headers=self.auth_headers, json={
+                'document': doc_hash, 'progress': '/body/single-31.0',
+                'percentage': 0.31, 'device': 'Reader', 'device_id': 'reader-one',
+            })
+        self.assertEqual(response.status_code, 200)
+        state = svc.get_state(abs_id, "kosync", user_id=admin_id)
+        metadata = json.loads(state.locator_json or "{}")
+        self.assertNotIn("kosync_authoritative_put_hash", metadata)
+
     def test_get_progress_returns_404_for_missing(self):
         """Test that GET returns 404 (not 502) for missing document."""
         response = self.client.get(

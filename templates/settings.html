@@ -891,6 +891,16 @@
                     <details class="advanced-sub full-width">
                         <summary>Advanced — cross-device progress</summary>
                         <div class="section-body" style="padding: 12px 0 0;">
+                            <div class="checkbox-wrapper full-width">
+                                <input type="checkbox" id="kosync_sibling_last_write_wins"
+                                    name="KOSYNC_SIBLING_LAST_WRITE_WINS" {% if
+                                    get_bool('KOSYNC_SIBLING_LAST_WRITE_WINS') %}checked{% endif %}>
+                                <label for="kosync_sibling_last_write_wins">Prefer Confirmed Recent Reader Movement</label>
+                                <div class="help-text">When an older linked reader file is further ahead, prefer the
+                                    lower file only after the same reader continues forward from its previously reported
+                                    position. A first-open or unchanged stale position is not enough. The preference is
+                                    temporary and ends after the recent-PUT window or when a sync replaces it.</div>
+                            </div>
                             <div class="form-group full-width">
                                 <label>Backward progress from another device</label>
                                 <select name="KOSYNC_FURTHEST_WINS">
