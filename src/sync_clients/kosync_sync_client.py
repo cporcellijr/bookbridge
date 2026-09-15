@@ -23,7 +23,10 @@ from src.utils.kosync_canonical import (
     prewarm_xpath_order_cache,
     resolve_canonical_position,
 )
-from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp
+from src.utils.progress_metadata import (
+    get_kosync_approved_rewind_at,
+    parse_service_timestamp,
+)
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
 
 logger = logging.getLogger(__name__)

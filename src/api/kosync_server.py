@@ -11,6 +11,7 @@ import threading
 import time
 import zipfile
 from collections import OrderedDict
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import wraps
@@ -26,7 +27,12 @@ from src.utils.cache_paths import safe_cache_path
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import load_persisted_pair
 from src.utils.kosync_headers import hash_kosync_key
-from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
+from src.utils.progress_metadata import (
+    get_kosync_approved_rewind_at,
+    get_kosync_authoritative_put_metadata,
+    parse_service_timestamp,
+    state_metadata_kwargs,
+)
 from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
 from src.utils.time_utils import datetime_to_epoch, utcnow
 from src.utils.user_context import set_current_user_id, reset_current_user_id
@@ -234,6 +240,61 @@ def _recent_external_kosync_put_metadata(document_hash: str | None, percentage=N
         "_bridge_recent_external_put_device": entry.get("device") or "",
         "_bridge_recent_external_put_device_id": entry.get("device_id") or "",
     }
+
+
+def _latest_authoritative_kosync_put_document(
+    documents: Optional[Iterable[object]],
+    kosync_state: object,
+) -> Optional[object]:
+    """Return a recent confirmed reader movement for its exact sibling hash."""
+    if not env_truthy("KOSYNC_SIBLING_LAST_WRITE_WINS", "true"):
+        return None
+    if not env_truthy("SYNC_TRUST_CORROBORATED_REWIND", "true"):
+        return None
+
+    authority = get_kosync_authoritative_put_metadata(kosync_state)
+    ttl = _recent_external_put_ttl_seconds()
+    if not authority or ttl <= 0:
+        return None
+    authoritative_at = authority["timestamp"]
+    if time.time() - authoritative_at > ttl:
+        return None
+
+    # A synced state at another percentage has replaced the reader action even if
+    # an old metadata blob somehow survived the save that produced it.
+    try:
+        state_pct = float(getattr(kosync_state, "percentage", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if abs(state_pct - authority["percentage"]) > 0.0001:
+        return None
+
+    latest_doc = None
+    latest_at = float("-inf")
+    for device_doc in documents or []:
+        if getattr(device_doc, "document_hash", None) != authority["document_hash"]:
+            continue
+        if _is_internal_kosync_device(
+            getattr(device_doc, "device", None),
+            getattr(device_doc, "device_id", None),
+        ):
+            continue
+        device_at = parse_service_timestamp(getattr(device_doc, "timestamp", None))
+        try:
+            device_pct = float(getattr(device_doc, "percentage", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if (
+            device_at is None
+            or device_at < authoritative_at - 1.0
+            or abs(device_pct - authority["percentage"]) > 0.0001
+        ):
+            continue
+        if device_at > latest_at:
+            latest_at = device_at
+            latest_doc = device_doc
+    return latest_doc
+
 
 _last_device_sync_activity: float = 0.0
 _MANIFEST_CACHE_FILENAME = "device_sync_manifest.json"
@@ -1596,26 +1657,99 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
     return saved
 
 
-def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
-    """Persist a KoSync PUT into the per-user State table.
+def _is_confirmed_reader_movement(previous, percentage, progress, device_id, book) -> bool:
+    """Require local forward evidence before temporarily preferring a sibling hash.
 
-    The kosync_documents row is keyed only by document hash, so two users reading
-    the same EPUB share that transient row. State is keyed by user and is the
-    durable isolation boundary for subsequent GETs and sync cycles.
+    This is intentionally narrower than SyncManager's cross-service rewind trust:
+    it does not approve a backward move. It only proves that the same reader kept
+    moving forward on the same hash, while first-open, replay, device-switch, and
+    backward samples all fail closed. The global corroborated-rewind flag remains
+    the master safety switch for both behaviors.
+    """
+    if not env_truthy("KOSYNC_SIBLING_LAST_WRITE_WINS", "true"):
+        return False
+    if not env_truthy("SYNC_TRUST_CORROBORATED_REWIND", "true"):
+        return False
+    if previous is None or not device_id:
+        return False
+    if getattr(previous, "device_id", None) != device_id:
+        return False
+    try:
+        previous_pct = float(getattr(previous, "percentage", 0) or 0)
+        new_pct = float(percentage or 0)
+    except (TypeError, ValueError):
+        return False
+    if new_pct > previous_pct + 0.0001:
+        return True
+    if not is_cbz_book(book) or abs(new_pct - previous_pct) > 0.0001:
+        return False
+    try:
+        previous_page = int(str(getattr(previous, "progress", "") or "").strip())
+        new_page = int(str(progress or "").strip())
+    except (TypeError, ValueError):
+        return False
+    return new_page > previous_page
+
+
+def _has_older_higher_sibling(rows, document_hash, percentage, cutoff) -> bool:
+    """Whether another user-scoped sibling is both older and further ahead."""
+    try:
+        incoming_pct = float(percentage or 0)
+    except (TypeError, ValueError):
+        return False
+    for row in rows or []:
+        if getattr(row, "document_hash", None) == document_hash:
+            continue
+        try:
+            sibling_pct = float(getattr(row, "percentage", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if sibling_pct <= incoming_pct + 0.0001:
+            continue
+        sibling_at = parse_service_timestamp(getattr(row, "timestamp", None))
+        if sibling_at is not None and sibling_at < cutoff - 1.0:
+            return True
+    return False
+
+
+def _record_user_kosync_state(
+    book,
+    percentage,
+    progress,
+    timestamp,
+    user_id,
+    *,
+    authoritative_document_hash=None,
+):
+    """Persist an external KoSync PUT into the per-user State table.
+
+    A sibling override is recorded only after the same reader demonstrates forward
+    movement from its previous sample. Generic locator metadata is intentionally not
+    copied from the previous State because it describes a different position.
     """
     if not book or user_id is None:
         return
     try:
-        metadata = {}
-        if is_cbz_book(book):
-            previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
-            # PUT updates the wire position immediately. Retain the last synced
-            # page until the cycle consumes it, including across several PUTs,
-            # so a single page turn is still detectable when its pct delta is 0.
-            metadata = state_metadata_kwargs({
-                "page": page_from_persisted_state(previous),
-                "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
+        metadata_current = {}
+        cbz_book = is_cbz_book(book)
+        previous = (
+            _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
+            if cbz_book
+            else None
+        )
+        if authoritative_document_hash:
+            authoritative_at = parse_service_timestamp(timestamp) if timestamp else None
+            if authoritative_at is None:
+                authoritative_at = time.time()
+            metadata_current.update({
+                "kosync_authoritative_put_at": authoritative_at,
+                "kosync_authoritative_put_hash": authoritative_document_hash,
+                "kosync_authoritative_put_pct": float(percentage or 0),
             })
+        if cbz_book:
+            metadata_current["page"] = page_from_persisted_state(previous)
+            metadata_current["kosync_approved_rewind_at"] = get_kosync_approved_rewind_at(previous)
+        metadata = state_metadata_kwargs(metadata_current)
         _database_service.save_state(State(
             abs_id=book.abs_id,
             client_name="kosync",
@@ -1813,7 +1947,25 @@ def kosync_put_progress():
     if linked_book and not is_internal:
         if not _kosync_user_may_access_book(linked_book):
             return _defer_kosync_book_access(doc_hash, linked_book, source="put")
-        _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
+        authoritative_document_hash = None
+        if _is_confirmed_reader_movement(
+            user_prog, percentage, progress, device_id, linked_book
+        ):
+            sibling_rows = _database_service.get_user_kosync_progress_for_book(
+                linked_book.abs_id, request_user_id
+            )
+            if _has_older_higher_sibling(
+                sibling_rows, doc_hash, percentage, now_ts
+            ):
+                authoritative_document_hash = doc_hash
+        _record_user_kosync_state(
+            linked_book,
+            percentage,
+            progress,
+            now,
+            request_user_id,
+            authoritative_document_hash=authoritative_document_hash,
+        )
 
     # AUTO-DISCOVERY
     if not linked_book:
@@ -1829,9 +1981,8 @@ def kosync_put_progress():
             )
 
     if linked_book:
-        # NOTE: We intentionally do NOT update book_states here.
-        # The sync cycle is the only thing that should update book_states.
-        # This ensures proper delta detection between cycles.
+        # The external PUT was captured above. Do not perform a second generic
+        # State update here; the sync cycle remains responsible for later writes.
         logger.debug(f"KOSync: Updated linked book '{linked_book.abs_title}' to {percentage:.2%}")
 
         # Debounce sync trigger — wait until the reader stops turning pages
@@ -3044,6 +3195,37 @@ def _respond_from_book_states(doc_id, book):
             else:
                 eligible_docs.append(device_doc)
         docs_with_progress = eligible_docs
+
+    recent_doc = _latest_authoritative_kosync_put_document(docs_with_progress, kosync_state)
+    if recent_doc is not None:
+        logger.info(
+            "KOSync: Preferring latest device PUT for %s via sibling hash %s (%.2f%%)",
+            doc_id,
+            recent_doc.document_hash,
+            float(recent_doc.percentage) * 100.0,
+        )
+        poison_pill = _suppress_empty_progress_response(
+            doc_id, float(recent_doc.percentage), recent_doc.progress
+        )
+        if poison_pill is not None:
+            return poison_pill
+        response_data = {
+            "device": "abs-kosync-bridge",
+            "device_id": "abs-kosync-bridge",
+            "document": doc_id,
+            "percentage": float(recent_doc.percentage),
+            "progress": recent_doc.progress or "",
+            "timestamp": int(parse_service_timestamp(recent_doc.timestamp) or 0),
+        }
+        response_data.update(
+            _recent_external_kosync_put_metadata(
+                recent_doc.document_hash,
+                response_data["percentage"],
+                user_id,
+            )
+        )
+        return jsonify(response_data), 200
+
     if docs_with_progress:
         best_doc = max(docs_with_progress, key=lambda d: float(d.percentage))
         # Furthest-wins: only hand back the device's own position when it is genuinely
