@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.db.models import Book
 from src.sync_manager import SyncManager
 from src.utils.transcription_cancel import register_worker
@@ -307,3 +309,109 @@ def test_cancelled_worker_removes_deferred_audio_cache(tmp_path):
     assert not cache_dir.exists()
     transcriber.process_audio.assert_not_called()
     db.update_book_if_exists.assert_not_called()
+
+
+def test_new_book_upgrades_to_ctc_after_transcription(tmp_path, monkeypatch):
+    """A new long book (no prior map) transcribes, then upgrades to CTC using the
+    fresh lexical map as chunk boundaries — no manual Remap, no Storyteller needed."""
+    monkeypatch.setenv("CTC_ENABLED", "true")
+    manager, _db, _abs, transcriber, alignment_service = _build_manager(tmp_path)
+
+    transcriber.transcribe_from_smil.return_value = None        # force the Whisper path
+    transcriber.process_audio.return_value = [{"start": 0.0, "end": 1.0, "text": "x"}]
+    alignment_service.align_and_store.return_value = True
+    # First CTC attempt fails (no boundaries yet); the post-transcript upgrade succeeds.
+    alignment_service.align_forced_and_store.side_effect = [False, True]
+
+    audio = tmp_path / "a.m4b"
+    audio.write_text("x", encoding="utf-8")
+    adapter = MagicMock()
+    adapter.get_audio_files.return_value = [{"local_path": str(audio)}]
+    adapter.get_chapters.return_value = [{"start": 0.0, "end": 12.0}]
+    manager.audio_source_adapters = {"BookOrbit": adapter}
+
+    book = Book(
+        abs_id="new-ctc-1", abs_title="New Long Book", ebook_filename="book.epub",
+        kosync_doc_id="h", status="pending", duration=12.0,
+        audio_source="BookOrbit", audio_source_id="5961", sync_mode="audiobook",
+    )
+    manager._run_background_job(book)
+
+    assert alignment_service.align_and_store.call_count == 1
+    assert alignment_service.align_forced_and_store.call_count == 2   # first attempt + upgrade
+    transcriber.process_audio.assert_called_once()
+    assert book.transcript_source == "ctc"
+
+
+# --------------------------------------------------------------------------- #
+# _try_ctc_alignment: the shared helper both call sites above go through
+# (issue #426 phase 3) -- exercised directly so its exact log text and
+# exception handling are pinned regardless of which call site drives it.
+# --------------------------------------------------------------------------- #
+
+def test_try_ctc_alignment_emits_the_exact_existing_success_log_lines(tmp_path, caplog):
+    manager, _db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    alignment_service.align_forced_and_store.return_value = True
+
+    with caplog.at_level(logging.INFO, logger="src.sync_manager"):
+        assert manager._try_ctc_alignment(
+            "abs-1", ["/a.m4b"], "book text", None, "My Book", 12.0,
+            source_label="attempt",
+        ) is True
+    assert "CTC forced-alignment map generated for 'My Book'" in caplog.text
+    assert "from transcript boundaries" not in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="src.sync_manager"):
+        assert manager._try_ctc_alignment(
+            "abs-1", ["/a.m4b"], "book text", None, "My Book", 12.0,
+            source_label="upgrade",
+        ) is True
+    assert "CTC forced-alignment map generated for 'My Book' (from transcript boundaries)" in caplog.text
+
+
+def test_try_ctc_alignment_reraises_transcription_cancelled(tmp_path):
+    manager, _db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    alignment_service.align_forced_and_store.side_effect = TranscriptionCancelled("abs-1")
+
+    with pytest.raises(TranscriptionCancelled):
+        manager._try_ctc_alignment(
+            "abs-1", ["/a.m4b"], "book text", None, "My Book", 12.0,
+            source_label="attempt",
+        )
+
+
+def test_try_ctc_alignment_logs_each_sites_own_failure_message(tmp_path, caplog):
+    manager, _db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+
+    alignment_service.align_forced_and_store.side_effect = RuntimeError("boom")
+    with caplog.at_level(logging.WARNING, logger="src.sync_manager"):
+        assert manager._try_ctc_alignment(
+            "abs-1", ["/a.m4b"], "book text", None, "My Book", 12.0,
+            source_label="attempt",
+        ) is False
+    assert "CTC alignment failed for 'abs-1': boom" in caplog.text
+
+    caplog.clear()
+    alignment_service.align_forced_and_store.side_effect = RuntimeError("boom2")
+    with caplog.at_level(logging.WARNING, logger="src.sync_manager"):
+        assert manager._try_ctc_alignment(
+            "abs-1", ["/a.m4b"], "book text", None, "My Book", 12.0,
+            source_label="upgrade",
+        ) is False
+    assert "CTC upgrade failed for 'abs-1': boom2" in caplog.text
+
+
+def test_try_ctc_alignment_passes_audio_duration_through(tmp_path):
+    manager, _db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    alignment_service.align_forced_and_store.return_value = False
+
+    manager._try_ctc_alignment(
+        "abs-1", ["/a.m4b"], "book text", [{"start": 0, "end": 1}], "My Book", 106703.0,
+        source_label="attempt",
+    )
+
+    alignment_service.align_forced_and_store.assert_called_once_with(
+        "abs-1", ["/a.m4b"], "book text", spine_chapters=[{"start": 0, "end": 1}],
+        audio_duration=106703.0,
+    )

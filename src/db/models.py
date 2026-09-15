@@ -540,22 +540,104 @@ class BookAlignment(Base):
     # not the end of the book, so using it over-reports every position. NULL =
     # built before this was recorded; callers fall back to the last anchor.
     total_chars = Column(Integer, nullable=True)
+    # `map_quality.score_map(...).score` (0.0-1.0, higher is better) computed at
+    # publish time. NULL = scored before this column existed; backfilled lazily
+    # (`DatabaseService.backfill_alignment_quality`), not all at once.
+    quality_score = Column(Float, nullable=True)
+    # JSON-encoded `MapQuality` fields (anchors, span_chars, max_gap_fraction,
+    # anchor_density, density_spread, backwards_fraction) for diagnostics. NULL
+    # alongside `quality_score` for the same reason.
+    quality_detail = Column(Text, nullable=True)
+    # JSON-encoded list of `{char_start, char_end, ts_start, ts_end}` placements
+    # (issue #426 phase 1), one per ebook section independently fit to the audio
+    # timeline so out-of-order narration (e.g. an EPUB's acknowledgements spined
+    # first but narrated last) doesn't force every anchor into one global
+    # monotonic chain. NULL = flat monotonic map, legacy path — every map built
+    # before this shipped, and every map without out-of-order narration.
+    segments_json = Column(Text, nullable=True)
 
     # Relationship
     book = relationship("Book", back_populates="alignment")
 
     def __init__(self, abs_id: str, alignment_map_json: str, align_method: str = None,
-                 total_chars: int = None):
+                 total_chars: int = None, quality_score: float = None,
+                 quality_detail: str = None, segments_json: str = None):
         self.abs_id = abs_id
         self.alignment_map_json = alignment_map_json
         self.align_method = align_method
         self.total_chars = total_chars
+        self.quality_score = quality_score
+        self.quality_detail = quality_detail
+        self.segments_json = segments_json
+
+
+class BookAlignmentBackup(Base):
+    """The alignment map a book had immediately before its last CTC overwrite.
+
+    CTC forced alignment (issue #426) replaces a book's map in place. A map that
+    passes the acceptance gate can still be worse in positioning than the one it
+    replaced (the gate cannot judge that from density alone), so the prior map is
+    copied here first, making a bad remap instantly reversible
+    (``AlignmentService.restore_previous_alignment``). One row per book: the most
+    recent pre-overwrite map only.
+    """
+    __tablename__ = 'book_alignment_backups'
+
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
+    alignment_map_json = Column(Text, nullable=False)
+    align_method = Column(String(32), nullable=True)
+    total_chars = Column(Integer, nullable=True)
+    # JSON-encoded segment placement index, mirroring `BookAlignment.segments_json`
+    # (issue #426 phase 1). Travels with `alignment_map_json` as one inseparable
+    # unit: the two describe the same map, and restoring one without the other
+    # pairs a map's flat points with a different map's segment boundaries,
+    # silently mis-resolving every lookup. NULL for a flat monotonic map, same
+    # as the live column.
+    segments_json = Column(Text, nullable=True)
+    backed_up_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    def __init__(self, abs_id: str, alignment_map_json: str, align_method: str = None,
+                 total_chars: int = None, segments_json: str = None):
+        self.abs_id = abs_id
+        self.alignment_map_json = alignment_map_json
+        self.align_method = align_method
+        self.total_chars = total_chars
+        self.segments_json = segments_json
+
+
+class ReadingSessionBuffer(Base):
+    """Open estimates and durable delivery to Grimmory and BookOrbit; user 0 is the default scope."""
+    __tablename__ = 'reading_session_buffers'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False, default=0, server_default='0', index=True)
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), nullable=False)
+    session_type = Column(String(20), nullable=False)
+    leader_client = Column(String(50), nullable=False)
+    started_at = Column(Float, nullable=False)
+    last_event_at = Column(Float, nullable=False)
+    accumulated_seconds = Column(Float, nullable=False)
+    start_progress = Column(Float, nullable=False)
+    end_progress = Column(Float, nullable=False)
+    end_location = Column(Text, nullable=True)
+    grimmory_book_id = Column(Integer, nullable=True)
+    grimmory_status = Column(String(20), nullable=False, default='disabled', server_default='disabled')
+    bookorbit_book_id = Column(Integer, nullable=True)
+    bookorbit_candidate_ids = Column(Text, nullable=True)
+    bookorbit_status = Column(String(20), nullable=False, default='disabled', server_default='disabled')
+    delivery_attempts = Column(Integer, nullable=False, default=0, server_default='0')
+    closed_at = Column(Float, nullable=True)
+
+    __table_args__ = (
+        Index('uq_reading_session_buffer_open', user_id, abs_id, session_type,
+              unique=True, sqlite_where=closed_at.is_(None)),
+    )
 
 
 class ReadingSession(Base):
     """
     Local reading session tracking for dashboard stats.
-    Recorded on every sync cycle where a leader is elected and progress changes.
+    Recorded when a progress-derived session closes or device telemetry is uploaded.
     """
     __tablename__ = 'reading_sessions'
 

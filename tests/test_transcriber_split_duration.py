@@ -74,6 +74,35 @@ class TestRawSourceFailureLogging(unittest.TestCase):
 
         self.assertIn("server returned 500", str(ctx.exception))
 
+    def test_cancellation_during_provider_stops_without_error_or_cache_resurrection(self):
+        from src.utils.transcription_cancel import CancellationToken
+
+        abs_id = "cancelled-book"
+        token = CancellationToken(abs_id)
+        cache = self.transcriber.cache_root / abs_id
+        provider = MagicMock()
+        provider.supports_raw_audio = True
+        provider.get_name.return_value = "raw-provider"
+
+        def cancel_during_transcription(_source):
+            token.cancel()
+            shutil.rmtree(cache)
+            return [{"start": 0, "end": 100, "text": "completed after deletion"}]
+
+        provider.transcribe.side_effect = cancel_during_transcription
+        with patch.object(transcriber_module, "get_transcription_provider", return_value=provider), \
+                self.assertLogs(transcriber_module.logger, level="INFO") as logs, \
+                self.assertRaises(transcriber_module.TranscriptionCancelled):
+            self.transcriber.process_audio(
+                abs_id, [{'stream_url': 'http://example.com/book.m4b', 'ext': 'm4b'}],
+                cancellation_token=token,
+            )
+
+        self.assertTrue(any("Transcription cancelled for cancelled-book (mapping deleted); stopping cleanly"
+                            in line for line in logs.output))
+        self.assertFalse(any(record.levelno >= 40 for record in logs.records), logs.output)
+        self.assertFalse(cache.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

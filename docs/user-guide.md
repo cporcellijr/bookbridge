@@ -14,6 +14,7 @@ It shows:
 - **Source badges** so you can tell whether a mapping is using Audiobookshelf, Grimmory, BookOrbit, CWA, or another connected source
 - **Direct links** into supported services, including Grimmory and BookOrbit audio when a mapping uses them
 - **Show position** beside the progress bar on any book with an ebook, opening a short excerpt of the text where you are currently synced
+- **Author, series, and format filters** with counts, plus a visible total of the books currently shown
 - Annotation sync status when the updated Bridge Sync KOReader plugin is in use
 - Quick access to **Add / Update Book**, **Suggestions**, **Stats**, **Settings**, and **Logs**
 
@@ -21,13 +22,20 @@ If a book is significantly out of sync, the card is highlighted so you can spot 
 
 ### Sorting and searching
 
-Sort by title, author, series, progress, or **Date Added**; the arrow beside the
-menu flips the direction. A series sorts by its most recently added book, so
-adding one title to a series you started long ago brings the whole group forward.
+Sort by title, author, series, progress, status, **Last Synced**, **Date Added**, or
+rating; the arrow beside the menu flips the direction. Author and series sorting keep
+related books together and use title or volume order to break ties.
 
 The search box filters the books you already sync. If you search for a book you
 have not matched yet, BookBridge offers to look for that title in your libraries
 instead and carries what you typed straight into **Add / Update Book**.
+
+Use the **Author**, **Series**, and **Format** filters together to narrow the library.
+Each menu shows only choices that can still match your other filters, while retaining a
+current selection so it is easy to undo. **Has Audio** includes combined and
+audiobook-only mappings; **Audiobook Only** excludes books with an ebook. The counter
+shows either the whole library or the filtered total, and a series-name search still
+respects the active filters.
 
 ### Show position
 
@@ -45,6 +53,19 @@ The excerpt loads only when you ask for it, is scoped to your own books, and is
 not offered for audiobook-only mappings.
 
 When you start actions like **Create Mapping**, **Create Storyteller Edition & Match All**, **Add to Queue**, or **Match All**, the page now shows a working message right away so you know the action started.
+
+### Alignment and rewinds
+
+Open **Settings → Sync → Alignment Health** to see alignment quality scores, identify
+maps that can benefit from rebuilding, and restore the previous map if a remap is not
+an improvement. On a book card, use **Remap alignment** to rebuild the audio-to-ebook
+map without clearing reading progress; **Clear position** remains the action that
+resets progress. A CTC badge marks a book already using the optional CTC backend.
+
+**Honor a Deliberate Rewind** is on by default in Settings → Sync. After you go back in
+one app, keep reading or listening from the new position so the bridge can distinguish
+your rewind from a stale report. The setting is independent of the normal protection
+against a different device pulling you backward.
 
 ---
 
@@ -372,8 +393,10 @@ No other service can supply audio.
 **Storyteller** is not in this list. A Storyteller title is chosen separately, alongside
 the standard ebook, and adds read-along support.
 
-If **Record Reading Sessions** is enabled in Settings, Grimmory and BookOrbit also
-receive session updates as you make progress.
+If **Record Reading Sessions** is enabled in Settings, Grimmory and BookOrbit receive
+completed continuous sessions rather than one entry for every progress update. The
+**Reading Session Merge Gap** in Settings → Sync controls how long a pause separates
+sessions; progress itself continues to sync immediately.
 
 If Grimmory imports change and results look stale, run
 **Settings -> System -> Advanced -> Refresh Grimmory Cache**. If BookOrbit, Kavita, or
@@ -461,7 +484,9 @@ Stops syncing that book. It does not delete your original media files.
 
 ### Reset progress
 
-Clears the stored sync state for a mapping.
+**Clear position** clears the stored sync state for a mapping. **Remap alignment** is a
+separate action that keeps the current position and rebuilds only its audio-to-ebook
+map.
 
 If **Regenerate Missing Data on Reset** is enabled, the bridge can also rebuild missing alignment data when needed.
 

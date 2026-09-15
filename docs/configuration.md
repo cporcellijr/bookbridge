@@ -531,6 +531,12 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | Deepgram API Key | `DEEPGRAM_API_KEY` | empty | Deepgram API key. |
 | Deepgram Model | `DEEPGRAM_MODEL` | `nova-2` | Deepgram model tier. |
 | SMIL Validation Threshold | `SMIL_VALIDATION_THRESHOLD` | `60` | Minimum token match percentage for accepting SMIL timing data. |
+| Content-Match Guard | `CONTENT_MATCH_GUARD` | `true` | Refuses to store an alignment when transcript and ebook wording overlap too little, even without Ollama. |
+| Content-Match Min Overlap | `CONTENT_MATCH_MIN_OVERLAP` | `0.15` | Minimum direct word n-gram overlap required by the guard. Raise only when you knowingly align a rough edition. |
+| Segmented Alignment Maps | `ALIGNMENT_SEGMENTED_MAPS` | `false` | Experimental. Enable only for a collection whose audiobook narrates sections in a different order from the EPUB spine, then remap that book. |
+| Use CTC Forced Alignment | `CTC_ENABLED` | `false` | Experimental and available only in a self-built image with `INSTALL_CTC=true`; leave off for the standard Whisper/lexical pipeline. |
+| CTC Model | `CTC_MODEL` | `mms_fa` | The only supported forced-alignment model bundle. Visible after enabling CTC. |
+| CTC Device | `CTC_DEVICE` | `auto` | Uses an NVIDIA GPU when available; CPU is practical only for short books. Visible after enabling CTC. |
 
 Transcription notes:
 
@@ -538,6 +544,9 @@ Transcription notes:
 - The `whispercpp` provider works with any OpenAI-compatible transcription endpoint — whisper.cpp server, speaches, parakeet, or a proxy such as llama-swap — not just whisper.cpp itself. Use the 🔗 **Test** button next to the URL to check the endpoint before saving. Inside Docker, do not use `localhost`; use the host's LAN IP or the whisper container's service name.
 - **Split Uploads** exists for servers that return one merged segment per request (parakeet does this). Alignment can only be as precise as the segments it gets back, so on those servers set it low — 2 or 3 minutes — and leave it at `0` for servers that already return fine-grained segments.
 - **Send Original Audio** skips local ffmpeg normalization and splitting, which saves minutes per book, but only works on servers that decode arbitrary formats *and* chunk long audio themselves (e.g. parakeet with `-long-audio`). Leave it off for whisper.cpp, which requires 16kHz WAV input. When it is on, **Audio Split Length** no longer applies — the server controls chunking.
+- **Content-Match Guard** is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.
+- **Segmented Alignment Maps** is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use **Remap alignment** for the affected book.
+- **CTC forced alignment** is a separate experimental backend, not an upgrade to the standard or `-cuda` image. It is disabled by default and requires the custom build described below.
 
 ### Sync Tuning
 
@@ -553,8 +562,11 @@ Found under **Settings -> Sync**, alongside instant-sync options and Alignment H
 | Fuzzy Match Threshold | `FUZZY_MATCH_THRESHOLD` | `80` | Matching threshold used by several book and text lookups. |
 | Job Max Retries | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs. |
 | Job Retry Delay (Minutes) | `JOB_RETRY_DELAY_MINS` | `15` | Delay before retrying failed jobs. |
+| Reading Session Merge Gap (Minutes) | `READING_SESSION_MERGE_MINUTES` | `5` | Groups non-KOReader progress into one session. The effective idle gap is at least twice the sync period and at most 30 minutes. |
 | Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips while avoiding backward writes to newer high-confidence ebook locators. |
 | Cross-Format Roundtrip Tolerance | `CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS` | `2` | Locator roundtrip tolerance used when stabilizing cross-format locators. |
+| Honor a Deliberate Rewind | `SYNC_TRUST_CORROBORATED_REWIND` | `true` | Lets a rewind lead after the same app reports you continuing from the new position; an isolated stale backward report is held briefly. |
+| Locator Round-Trip Tolerance (Seconds) | `LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS` | `30` | Rejects an otherwise character-close rebuilt locator when it lands far away on the audio timeline, which protects segmented maps at a section seam. |
 
 ### Advanced Toggles
 
@@ -639,3 +651,18 @@ services:
 In **Settings**, set **Transcription Provider** to `local`. **Whisper Device** defaults to `auto`, which uses the GPU once the three steps above are done, so there is nothing else to set. Compute type follows the device (`float16` on GPU, `int8` on CPU).
 
 Consider raising **Whisper Model** to `small` or `medium` if your GPU can handle it.
+
+### CTC forced alignment (experimental)
+
+The published standard and `-cuda` images do not include CTC's torch and torchaudio
+dependencies. To try it, build your own image, then enable **Use CTC forced alignment**
+in Settings and use **Remap alignment** on a book:
+
+```bash
+docker compose build --build-arg INSTALL_CTC=true
+docker compose up -d
+```
+
+Use an NVIDIA GPU for full-length audiobooks. CPU mode is available for short books but
+is very slow. CTC remains opt-in; leaving it off keeps the normal Whisper/lexical
+pipeline unchanged.

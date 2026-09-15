@@ -13,8 +13,9 @@ API quirks (verified against a live instance, see the `bookorbit-api` memo):
     `pagination` and optional `q` search. List-row file stubs include id/format/role
     but omit filenames/paths, so per-book detail (`GET /api/v1/books/:id`) resolves
     the primary file id, filename and duration. Detail is cached per book id.
-  * Audio progress write (`PATCH /api/v1/books/:id/audio-progress`) requires
-    `currentFileId`; omitting it is a 400.
+  * Current BookOrbit releases use revisioned audiobook manifests and
+    `GET/PUT /api/v1/audiobooks/:id/playback-state`; older releases use
+    `GET/PATCH /api/v1/books/:id/audio-progress`. Both are supported.
 """
 
 import os
@@ -22,6 +23,8 @@ import re
 import time
 import logging
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from difflib import SequenceMatcher
@@ -30,6 +33,11 @@ from urllib.parse import quote
 import requests
 
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.file_transfers import (
+    IncompleteTransferError,
+    response_declares_size,
+    stream_response_to_path,
+)
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -70,6 +78,9 @@ class BookOrbitClient:
         # _filename_index, which is reserved for filename-confirmed matches.
         self._llm_match_cache: dict = {}
         self._detail_cache: dict = {}      # id -> (timestamp, detail dict)
+        self._audiobook_api: Optional[str] = None
+        self._audiobook_manifests: dict = {}
+        self._audiobook_playback_states: dict = {}
         self._cache_timestamp: float = 0
         self._cache_lock = threading.RLock()
         self._refresh_lock = threading.Lock()
@@ -185,6 +196,8 @@ class BookOrbitClient:
             return self.session.get(url, headers=headers, timeout=15)
         if m == "POST":
             return self.session.post(url, headers=headers, json=json_data, timeout=20)
+        if m == "PUT":
+            return self.session.put(url, headers=headers, json=json_data, timeout=15)
         if m == "PATCH":
             return self.session.patch(url, headers=headers, json=json_data, timeout=15)
         if m == "DELETE":
@@ -386,6 +399,8 @@ class BookOrbitClient:
             self._book_cache = {}
             self._filename_index = {}
             self._detail_cache = {}
+            self._audiobook_manifests = {}
+            self._audiobook_playback_states = {}
             self._cache_timestamp = 0
         self._last_refresh_failed = False
         return self._refresh_book_cache()
@@ -919,8 +934,28 @@ class BookOrbitClient:
         return False
 
     # ------------------------------------------------------------------
-    # Audiobook progress (per book, requires currentFileId)
+    # Audiobook progress
     # ------------------------------------------------------------------
+
+    def _get_audiobook_manifest(self, book_id, force: bool = False) -> Optional[dict]:
+        """Return BookOrbit's v2 audiobook manifest, cached by book id."""
+        with self._cache_lock:
+            cached = self._audiobook_manifests.get(book_id)
+            state = self._audiobook_playback_states.get(book_id)
+        if cached and not force:
+            state_revision = state.get("manifestRevision") if isinstance(state, dict) else None
+            if not state_revision or cached.get("revision") == state_revision:
+                return cached
+
+        resp = self._make_request("GET", f"/api/v1/audiobooks/{book_id}/manifest")
+        if resp is None or resp.status_code != 200:
+            return None
+        data = self._parse_json(resp)
+        if not isinstance(data, dict) or not isinstance(data.get("assets"), list):
+            return None
+        with self._cache_lock:
+            self._audiobook_manifests[book_id] = data
+        return data
 
     def get_audiobook_info(self, book_id) -> Optional[dict]:
         """Returns {'duration_seconds', 'primary_file_id', 'filename', 'chapters',
@@ -960,9 +995,25 @@ class BookOrbitClient:
                 "absolute_path": f.get("absolutePath"),
             })
 
+        manifest = (
+            self._get_audiobook_manifest(book_id)
+            if self._audiobook_api == "playback" and len(tracks) > 1
+            else None
+        )
+        playback_tracks = []
+        if manifest:
+            for asset in sorted(manifest.get("assets") or [], key=lambda item: item.get("sequence", 0)):
+                duration_ms = asset.get("durationMs")
+                playback_tracks.append({
+                    "id": asset.get("assetId"),
+                    "duration_seconds": float(duration_ms) / 1000.0 if duration_ms is not None else 0.0,
+                })
+
         # Whole-book duration: audioMetadata total, else the track sum (the
         # primary file alone under-reports on multi-file books), else primary.
         duration = audio_meta.get("durationSeconds")
+        if manifest and manifest.get("totalDurationMs") is not None:
+            duration = float(manifest["totalDurationMs"]) / 1000.0
         if duration is None and tracks:
             duration = sum(t["duration_seconds"] for t in tracks) or None
         if duration is None and pf:
@@ -971,9 +1022,11 @@ class BookOrbitClient:
         return {
             "duration_seconds": duration,
             "primary_file_id": (pf or {}).get("id"),
+            "primary_playback_id": playback_tracks[0]["id"] if playback_tracks else None,
             "filename": (pf or {}).get("filename"),
-            "chapters": audio_meta.get("chapters") or [],
+            "chapters": (manifest or {}).get("chapters") or audio_meta.get("chapters") or [],
             "tracks": tracks,
+            "playback_tracks": playback_tracks,
         }
 
     # Unstarted-audiobook baseline: a writable follower at 0, NOT None (None would
@@ -982,15 +1035,43 @@ class BookOrbitClient:
                         "updated_at": None}
 
     def get_audiobook_progress(self, book_id) -> Optional[dict]:
-        """Returns {'pct': 0-1, 'position_seconds': float, 'current_file_id': int} or None.
+        """Return normalized audiobook progress across old and current APIs.
 
         An unstarted audiobook reads as the 0.0 baseline. BookOrbit signals "no
         progress yet" two ways: 204 No Content (pre-1.9) and, since v1.9.0, HTTP 200
         with a JSON ``null`` body. Both map to the baseline, never None.
         """
+        if self._audiobook_api != "legacy":
+            resp = self._make_request("GET", f"/api/v1/audiobooks/{book_id}/playback-state")
+            if resp is None:
+                return None
+            if resp.status_code in (200, 204):
+                self._audiobook_api = "playback"
+                data = self._parse_json(resp) if resp.status_code == 200 else None
+                with self._cache_lock:
+                    self._audiobook_playback_states[book_id] = data
+                if not isinstance(data, dict):
+                    return dict(self._AUDIO_UNSTARTED)
+                try:
+                    position_seconds = float(data.get("positionMs") or 0.0) / 1000.0
+                except (TypeError, ValueError):
+                    position_seconds = 0.0
+                return {
+                    "pct": self._to_pct_fraction(data.get("percentage")) or 0.0,
+                    "position_seconds": position_seconds,
+                    "current_file_id": data.get("assetId"),
+                    "updated_at": data.get("capturedAt"),
+                }
+            if resp.status_code != 404:
+                return None
+            if self._audiobook_api == "playback":
+                return None
+
         resp = self._make_request("GET", f"/api/v1/books/{book_id}/audio-progress")
-        if not resp:
+        if resp is None:
             return None
+        if resp.status_code != 404:
+            self._audiobook_api = "legacy"
         if resp.status_code == 204:
             return dict(self._AUDIO_UNSTARTED)
         if resp.status_code != 200:
@@ -1013,9 +1094,63 @@ class BookOrbitClient:
 
     def update_audiobook_progress(
         self, book_id, position_seconds: float, percentage: float,
-        current_file_id: Optional[int] = None,
+        current_file_id: Optional[object] = None,
     ) -> bool:
-        """Push audiobook progress. position_seconds is absolute; currentFileId required."""
+        """Push track-local audiobook progress through the server's supported API."""
+        if self._audiobook_api is None:
+            self.get_audiobook_progress(book_id)
+
+        if self._audiobook_api == "playback":
+            info = self.get_audiobook_info(book_id) or {}
+            manifest = self._get_audiobook_manifest(book_id)
+            assets = sorted(
+                (manifest or {}).get("assets") or [],
+                key=lambda item: item.get("sequence", 0),
+            )
+            playback_id = current_file_id if str(current_file_id or "").startswith("aud_") else None
+            if playback_id is None and current_file_id is not None:
+                track_ids = [track.get("id") for track in info.get("tracks") or []]
+                try:
+                    index = track_ids.index(current_file_id)
+                    playback_tracks = info.get("playback_tracks") or assets
+                    playback_id = playback_tracks[index].get("id") or playback_tracks[index].get("assetId")
+                except (ValueError, IndexError, AttributeError):
+                    pass
+            playback_id = (
+                playback_id
+                or info.get("primary_playback_id")
+                or (assets[0].get("assetId") if assets else None)
+            )
+            with self._cache_lock:
+                state = self._audiobook_playback_states.get(book_id)
+            if not playback_id or not manifest or not manifest.get("revision"):
+                logger.error("BookOrbit audio: cannot update book %s — no playback asset", book_id)
+                return False
+            payload = {
+                "assetId": playback_id,
+                "positionMs": max(0, round(float(position_seconds) * 1000)),
+                "capturedAt": datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z"),
+                "operationId": str(uuid.uuid4()),
+                "baseRevision": int((state or {}).get("revision") or 0),
+                "manifestRevision": manifest["revision"],
+            }
+            resp = self._make_request("PUT", f"/api/v1/audiobooks/{book_id}/playback-state", payload)
+            if resp is not None and resp.status_code in (200, 201, 204):
+                data = self._parse_json(resp)
+                if isinstance(data, dict):
+                    with self._cache_lock:
+                        self._audiobook_playback_states[book_id] = data
+                logger.info(
+                    "BookOrbit audio: book_id=%s → %.2fs (%.1f%%)",
+                    book_id, position_seconds, percentage * 100,
+                )
+                return True
+            status = resp.status_code if resp is not None else "no response"
+            logger.error("BookOrbit audiobook update failed: book_id=%s status=%s", book_id, status)
+            return False
+
         if current_file_id is None:
             current_file_id = self._resolve_primary_file_id(book_id, "audiobook")
         if current_file_id is None:
@@ -1064,7 +1199,7 @@ class BookOrbitClient:
         if not token:
             return False
         url = f"{self._get_base_url()}/api/v1/books/files/{file_id}/download"
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"}
         try:
             with self.session.get(url, headers=headers, stream=True, timeout=300) as resp:
                 if resp.status_code != 200:
@@ -1073,13 +1208,18 @@ class BookOrbitClient:
                         file_id, resp.status_code,
                     )
                     return False
-                output_path = Path(output_path)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(output_path, "wb") as handle:
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        if chunk:
-                            handle.write(chunk)
-                return True
+                expected_size = response_declares_size(resp)
+                try:
+                    return stream_response_to_path(resp, output_path, expected_size=expected_size)
+                except IncompleteTransferError as e:
+                    logger.error(
+                        "BookOrbit file download incomplete: file_id=%s got=%s expected=%s",
+                        file_id,
+                        e.actual_size,
+                        e.expected_size if e.expected_size is not None else "unknown",
+                        exc_info=True,
+                    )
+                    return False
         except Exception as e:
             logger.error("BookOrbit file download error: file_id=%s: %s", file_id, e, exc_info=True)
             return False
@@ -1194,7 +1334,30 @@ class BookOrbitClient:
         end_time: float,
         window_seconds: int = _SESSION_DEDUPE_WINDOW_SECONDS,
     ) -> Optional[dict]:
-        """Return an existing session covering the same reading, if there is one.
+        """Return the first existing session overlapping this reading, if any.
+
+        Thin wrapper over :meth:`find_covering_sessions` for callers that only need
+        to know whether anything overlaps at all.
+        """
+        matches = self.find_covering_sessions(
+            book_ids, start_progress, end_progress, end_time, window_seconds,
+        )
+        return matches[0] if matches else None
+
+    def find_covering_sessions(
+        self,
+        book_ids,
+        start_progress: float,
+        end_progress: float,
+        end_time: float,
+        window_seconds: int = _SESSION_DEDUPE_WINDOW_SECONDS,
+    ) -> list[dict]:
+        """Return every existing session overlapping the same reading.
+
+        All of them, not just the first: an aggregated session covers a long span,
+        and a caller has to weigh how much of that span BookOrbit already logged
+        before deciding to skip it. Suppressing a whole session on one sliver of
+        overlap would lose most of the reading it represents.
 
         Matching is by progress range rather than timestamp: BookOrbit stamps its
         session when the reader flushes it, while ours is backdated from the poll
@@ -1211,7 +1374,8 @@ class BookOrbitClient:
         ebook are separate books in BookOrbit and keep separate session lists.
 
         Progress args are 0-1 fractions; BookOrbit's session fields are 0-100.
-        Returns the matching session dict, or None.
+        Returns the matching session dicts, each carrying BookOrbit's own 0-100
+        ``endProgress``/``progressDelta``, newest-first per book.
         """
         if isinstance(book_ids, (str, int)):
             book_ids = [book_ids]
@@ -1224,8 +1388,9 @@ class BookOrbitClient:
             if value not in wanted:
                 wanted.append(value)
         if not wanted:
-            return None
+            return []
 
+        matches = []
         lo = min(float(start_progress), float(end_progress)) * 100
         hi = max(float(start_progress), float(end_progress)) * 100
         for book_id in wanted:
@@ -1247,8 +1412,8 @@ class BookOrbitClient:
                     continue
                 s_lo, s_hi = min(s_start, s_end), max(s_start, s_end)
                 if min(hi, s_hi) - max(lo, s_lo) > _SESSION_OVERLAP_EPSILON_PCT:
-                    return session
-        return None
+                    matches.append(session)
+        return matches
     # ------------------------------------------------------------------
 
     def create_reading_session(

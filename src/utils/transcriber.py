@@ -28,6 +28,11 @@ from src.utils.logging_utils import sanitize_log_data, time_execution
 from src.utils.transcription_providers import get_transcription_provider
 from src.utils.polisher import Polisher
 from src.utils.storyteller_transcript import StorytellerTranscript
+from src.utils.file_transfers import (
+    copy_file_to_path,
+    response_declares_size,
+    stream_response_to_path,
+)
 from src.utils.transcription_cancel import CancellationToken, is_cancelled
 # We keep the import for type hinting, but we don't instantiate it directly anymore
 
@@ -54,6 +59,27 @@ class AudioTranscriber:
         # Use the injected instances.
         self.smil_extractor = smil_extractor
         self.polisher = polisher
+
+    def invalidate_transcript_cache(self, abs_id: str) -> bool:
+        """Delete a book's persisted Whisper transcript so the next run re-transcribes.
+
+        The completed transcript is cached in ``_progress.json`` and reused to skip
+        Whisper on a rebuild. A transcript captured before word-level timing shipped
+        holds no per-word times, so Remap-to-word-level must drop it to force a fresh,
+        word-timestamped transcription. Returns True if a cached transcript was removed.
+        """
+        progress_file = self.cache_root / str(abs_id) / "_progress.json"
+        try:
+            removed = progress_file.exists()
+            progress_file.unlink(missing_ok=True)
+            if removed:
+                logger.info(f"🗑️ Invalidated cached transcript for {abs_id} (Remap)")
+            return removed
+        except OSError as e:
+            logger.warning(
+                f"⚠️ Could not invalidate transcript cache for {abs_id}: {e}", exc_info=True
+            )
+            return False
 
     @property
     def split_duration(self) -> int:
@@ -138,25 +164,22 @@ class AudioTranscriber:
             return 0.0
 
     @staticmethod
-    def _verify_download_size(response, local_path: Path) -> None:
+    def _verify_download_size(response, local_path: Path, display_name: str = "") -> None:
         """Raise when a streamed download is shorter than its declared Content-Length.
 
         `requests.iter_content` stops silently when the connection closes early, so a
-        truncated body used to land on disk as a "successful" download.
+        truncated body used to land on disk as a "successful" download. A length that
+        cannot be compared — absent, malformed, or describing a compressed body that
+        requests decoded — is no length to check against, so verification is skipped.
         """
-        declared = str(response.headers.get('Content-Length') or "").strip()
-        # Content-Length is a decimal string; anything else is not a length we can
-        # check against, so verification is simply skipped.
-        if not declared.isdigit():
-            return
-        expected_bytes = int(declared)
-        if expected_bytes <= 0:
+        expected_bytes = response_declares_size(response)
+        if not expected_bytes or expected_bytes <= 0:
             return
 
         actual_bytes = local_path.stat().st_size if local_path.exists() else 0
         if actual_bytes != expected_bytes:
             raise ValueError(
-                f"Truncated download for {local_path.name}: got {actual_bytes} bytes, "
+                f"Truncated download for {display_name or local_path.name}: got {actual_bytes} bytes, "
                 f"expected {expected_bytes}"
             )
 
@@ -641,16 +664,23 @@ class AudioTranscriber:
                             local_path = book_cache_dir / f"part_{idx:03d}{extension}"
                             if local_source_path:
                                 logger.info(f"   Copying Part {idx + 1}/{len(audio_urls)} from local cache...")
-                                shutil.copy2(local_source_path, local_path)
+                                # Publish only a complete copy: a source still being
+                                # written must not become a cached transcription input.
+                                copy_file_to_path(local_source_path, local_path)
                             else:
                                 logger.info(f"   Downloading Part {idx + 1}/{len(audio_urls)}...")
-                                with requests.get(stream_url, stream=True, timeout=300) as r:
+                                # identity encoding keeps Content-Length comparable.
+                                headers = {"Accept-Encoding": "identity"}
+                                with requests.get(stream_url, headers=headers, stream=True, timeout=300) as r:
                                     r.raise_for_status()
-                                    with open(local_path, 'wb') as f:
-                                        for chunk in r.iter_content(chunk_size=8192):
-                                            raise_if_cancelled()
-                                            f.write(chunk)
-                                    self._verify_download_size(r, local_path)
+                                    stream_response_to_path(
+                                        r,
+                                        local_path,
+                                        on_chunk=raise_if_cancelled,
+                                        validator=lambda staged: self._verify_download_size(
+                                            r, staged, local_path.name
+                                        ),
+                                    )
 
                             if not local_path.exists() or local_path.stat().st_size == 0:
                                 raise ValueError(f"File {local_path} is empty or missing.")
@@ -777,12 +807,22 @@ class AudioTranscriber:
                     raise_if_cancelled()
                     
                     for segment in segments:
-                        full_transcript.append({
+                        timed_segment = {
                             "start": segment["start"] + cumulative_duration,
                             "end": segment["end"] + cumulative_duration,
                             "text": segment["text"]
-                        })
+                        }
+                        if segment.get("words"):
+                            timed_segment["words"] = [
+                                {**word,
+                                 "start": word["start"] + cumulative_duration,
+                                 "end": word["end"] + cumulative_duration}
+                                for word in segment["words"]
+                            ]
+                        full_transcript.append(timed_segment)
 
+                except TranscriptionCancelled:
+                    raise
                 except Exception as e:
                     # Raw-audio providers get stream URLs (plain strings) here, not Paths.
                     source_label = getattr(local_path, 'name', local_path)

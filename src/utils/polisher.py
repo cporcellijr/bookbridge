@@ -150,7 +150,9 @@ class Polisher:
             gap = next_segment['start'] - current_segment['end']
             
             # Heuristic: If gap is small (< 1.5s) and combined text looks like a continuation
-            if gap < 2.0: 
+            # Timed segments already locate their words; merging would discard
+            # those timings (or mix them with an untimed neighbour).
+            if gap < 2.0 and not current_segment.get('words') and not next_segment.get('words'):
                 combined_text = (current_segment['text'] + " " + next_segment['text']).strip()
                 normalized_combo = self.normalize(combined_text)
                 

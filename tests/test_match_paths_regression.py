@@ -38,6 +38,9 @@ class MockContainer:
         self.mock_database_service.get_book.return_value = None
         self.mock_database_service.get_book_by_kosync_id.return_value = None
         self.mock_database_service.get_pending_suggestion.return_value = None
+        # An unmocked Mock() reads as a document owned by a truthy stranger, which
+        # would trip the fail-closed ownership guard in _adopt_kosync_progress_for_book.
+        self.mock_database_service.get_kosync_document.return_value = None
 
         # Default manager behavior
         self.mock_sync_manager.abs_client = self.mock_abs_client
@@ -219,6 +222,254 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.mock_container.mock_database_service.dismiss_suggestion.assert_any_call("hash-match-1")
         self.mock_container.mock_abs_client.add_to_collection.assert_called_once_with("ab-1", "Synced with KOReader")
         self.mock_container.mock_booklore_client.add_to_shelf.assert_called_once_with("book.epub", "Kobo")
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_route_adopts_existing_kosync_document(self, _mock_kosync):
+        """Add Book must adopt a KoSync document that already holds the reader's progress.
+
+        KOReader stores progress under the document hash before the book is mapped.
+        Dismissing the suggestion without linking left that progress orphaned and the
+        book reading as unstarted, because the resolution path reaches per-user progress
+        by joining KosyncDocument.linked_abs_id (#431).
+        """
+        response = self.client.post(
+            "/match",
+            data={
+                "audiobook_id": "ab-1",
+                "ebook_filename": "book.epub",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-match-1", "ab-1"
+        )
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_route_adopts_unclaimed_device_hash_for_the_same_filename(self, _mock_kosync):
+        """A device-served build of the same book is adopted as a durable sibling hash."""
+        device_doc = Mock()
+        device_doc.document_hash = "device-hash-9"
+        device_doc.linked_abs_id = None
+        self.mock_container.mock_database_service.get_kosync_doc_by_filename.return_value = device_doc
+
+        self.client.post(
+            "/match",
+            data={
+                "audiobook_id": "ab-1",
+                "ebook_filename": "book.epub",
+            },
+        )
+
+        self.mock_container.mock_database_service.link_kosync_document.assert_called_once_with(
+            "device-hash-9", "ab-1"
+        )
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_route_never_steals_a_device_hash_linked_elsewhere(self, _mock_kosync):
+        """A hash already claimed by another book is dismissed but never re-pointed."""
+        device_doc = Mock()
+        device_doc.document_hash = "device-hash-9"
+        device_doc.linked_abs_id = "some-other-book"
+        self.mock_container.mock_database_service.get_kosync_doc_by_filename.return_value = device_doc
+
+        self.client.post(
+            "/match",
+            data={
+                "audiobook_id": "ab-1",
+                "ebook_filename": "book.epub",
+            },
+        )
+
+        self.mock_container.mock_database_service.link_kosync_document.assert_not_called()
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_route_never_steals_a_primary_hash_linked_elsewhere(self, _mock_kosync):
+        """The primary hash gets the same fail-closed treatment as a sibling hash.
+
+        `_adopt_kosync_progress_for_book` reaches for `ensure_linked_kosync_document`,
+        whose upsert re-points a row that already names a different book — that is
+        deliberate for hash reconciliation's sibling hashes (#285) but wrong here.
+        Re-pointing would hide the losing book's stored progress behind the very join
+        the adoption exists to repair, relocating #431 instead of fixing it.
+        """
+        owned = Mock()
+        owned.document_hash = "hash-match-1"
+        owned.linked_abs_id = "some-other-book"
+        self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+
+        response = self.client.post(
+            "/match",
+            data={
+                "audiobook_id": "ab-1",
+                "ebook_filename": "book.epub",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_not_called()
+
+    def test_adopt_links_a_hash_no_book_has_claimed(self):
+        """An orphaned document row is still adopted — the #431 fix itself."""
+        orphan = Mock()
+        orphan.document_hash = "hash-orphan"
+        orphan.linked_abs_id = None
+        self.mock_container.mock_database_service.get_kosync_document.return_value = orphan
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-orphan")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-orphan", "ab-1"
+        )
+
+    def test_adopt_creates_the_row_when_no_document_exists_yet(self):
+        """A hash with no row at all is created, not skipped by the ownership guard."""
+        self.mock_container.mock_database_service.get_kosync_document.return_value = None
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-new")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-new", "ab-1"
+        )
+
+    def test_adopt_is_a_noop_when_the_book_already_owns_the_hash(self):
+        """Re-adopting a book's own hash still goes through, staying idempotent."""
+        owned = Mock()
+        owned.document_hash = "hash-mine"
+        owned.linked_abs_id = "ab-1"
+        self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-mine")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+            "hash-mine", "ab-1"
+        )
+
+    def test_adopt_refuses_to_repoint_a_hash_owned_by_another_book(self):
+        """The guard at the choke point, covering every mapping path that adopts.
+
+        `_upsert_storyteller_mapping(mode_hint="existing")` — the Storyteller link
+        route — computes `existing_by_hash` only for "ebook_only_create", so it is the
+        one adoption path with no duplicate merge ahead of it to clear a rival's link.
+        """
+        owned = Mock()
+        owned.document_hash = "hash-theirs"
+        owned.linked_abs_id = "some-other-book"
+        self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+
+        web_server._adopt_kosync_progress_for_book("ab-1", "hash-theirs")
+
+        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_not_called()
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
+    def test_match_route_reuses_alignment_instead_of_requeueing_transcription(self, _mock_kosync):
+        """Re-matching an unchanged, already-aligned ABS mapping must stay active.
+
+        `_preserve_or_reset_mapping_status` exists because re-matching used to reset
+        every mapping to 'pending', sending an already-aligned book back through
+        transcription and alignment. The inline ABS path built its replacement Book
+        with a hardcoded status='pending' and never consulted that guard.
+        """
+        from src.db.models import Book
+
+        existing = Book(
+            abs_id="ab-1",
+            abs_title="Regression Book",
+            audio_source="ABS",
+            audio_source_id="ab-1",
+            ebook_filename="book.epub",
+            kosync_doc_id="hash-match-1",
+            status="active",
+            duration=3600,
+        )
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = existing
+        db.has_alignment.return_value = True
+        db.save_book.side_effect = lambda book: book
+
+        response = self.client.post(
+            "/match",
+            data={
+                "audiobook_id": "ab-1",
+                "ebook_filename": "book.epub",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        saved_book = db.save_book.call_args[0][0]
+        self.assertEqual(saved_book.status, "active")
+        db.has_alignment.assert_called_with("ab-1")
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-bo-1")
+    def test_library_audio_rematch_keeps_the_id_the_mapping_was_stored_under(self, _mock_kosync):
+        """A library-audio mapping must never be re-keyed onto its bridge key.
+
+        `get_book_by_audio_source` can return a row whose abs_id is a UUID while
+        `_build_bridge_key` yields 'bookorbit:<id>'. Rewriting abs_id would strand
+        every State, annotation and per-user claim filed against the original id.
+        """
+        from src.db.models import Book
+
+        existing = Book(
+            abs_id="uuid-legacy-1",
+            abs_title="Legacy Mapping",
+            audio_source="BookOrbit",
+            audio_source_id="5143",
+            ebook_filename="legacy.epub",
+            kosync_doc_id="hash-bo-1",
+            status="active",
+        )
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = None
+        db.get_book_by_audio_source.return_value = existing
+        db.save_book.side_effect = lambda book: book
+
+        response = self.client.post(
+            "/match",
+            data={
+                "audio_source": "BookOrbit",
+                "audio_source_id": "5143",
+                "ebook_filename": "legacy.epub",
+                "ebook_source": "BookOrbit",
+                "ebook_source_id": "2171",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        saved_book = db.save_book.call_args[0][0]
+        self.assertEqual(saved_book.abs_id, "uuid-legacy-1")
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="1234567890abcdef1234567890abcdef")
+    def test_library_audio_match_resolves_series_on_match(self, _mock_kosync):
+        """A BookOrbit/Grimmory audio match resolves series at match time, so the book
+        collapses into its series card without a manual backfill."""
+        from src.utils.series_metadata import SeriesResolution
+
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = None
+        db.get_book_by_audio_source.return_value = None
+        db.save_book.side_effect = lambda book: book
+
+        with patch(
+            "src.web_server.resolve_series_details",
+            return_value=SeriesResolution("The Reckoning", 3.0, "bookorbit", True),
+        ) as resolve:
+            response = self.client.post(
+                "/match",
+                data={
+                    "audio_source": "BookOrbit",
+                    "audio_source_id": "5143",
+                    "ebook_filename": "b.epub",
+                    "ebook_source": "BookOrbit",
+                    "ebook_source_id": "2171",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        resolve.assert_called_once()
+        saved_book = db.save_book.call_args[0][0]
+        self.assertEqual(saved_book.series_name, "The Reckoning")
+        self.assertEqual(saved_book.series_sequence, 3.0)
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="1234567890abcdef1234567890abcdef")
     def test_match_route_creates_ebook_only_mapping_from_storyteller_without_audiobook(self, _mock_kosync):

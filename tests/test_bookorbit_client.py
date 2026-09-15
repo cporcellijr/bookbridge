@@ -136,15 +136,50 @@ def test_get_ebook_progress_error_returns_none(client):
 
 
 def test_get_audiobook_progress_shape(client):
-    payload = {"percentage": 25, "currentFileId": 11, "positionSeconds": 3600.0}
-    with patch.object(client, '_make_request', return_value=_Resp(payload)):
+    payload = {
+        "percentage": 25,
+        "assetId": "aud_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "positionMs": 3600000,
+        "capturedAt": "2026-09-14T17:00:00.000Z",
+        "revision": 9,
+        "manifestRevision": "b" * 64,
+    }
+    with patch.object(client, '_make_request', return_value=_Resp(payload)) as request:
         prog = client.get_audiobook_progress(5)
     assert prog["pct"] == pytest.approx(0.25)
     assert prog["position_seconds"] == 3600.0
+    assert prog["current_file_id"] == payload["assetId"]
+    assert prog["updated_at"] == payload["capturedAt"]
+    assert request.call_args.args[:2] == (
+        "GET", "/api/v1/audiobooks/5/playback-state"
+    )
+
+
+def test_get_audiobook_progress_falls_back_to_legacy_api(client):
+    responses = [
+        _Resp(status_code=404),
+        _Resp({"percentage": 25, "currentFileId": 11, "positionSeconds": 3600.0}),
+    ]
+    with patch.object(client, '_make_request', side_effect=responses) as request:
+        prog = client.get_audiobook_progress(5)
+
+    assert prog["pct"] == pytest.approx(0.25)
     assert prog["current_file_id"] == 11
+    assert request.call_args_list[1].args[:2] == (
+        "GET", "/api/v1/books/5/audio-progress"
+    )
+
+
+def test_playback_api_404_does_not_call_removed_legacy_route(client):
+    client._audiobook_api = "playback"
+    with patch.object(client, '_make_request', return_value=_Resp(status_code=404)) as request:
+        assert client.get_audiobook_progress(5) is None
+
+    request.assert_called_once_with("GET", "/api/v1/audiobooks/5/playback-state")
 
 
 def test_get_audiobook_progress_unstarted_204_is_zero_not_none(client):
+    client._audiobook_api = "legacy"
     with patch.object(client, '_make_request', return_value=_Resp(status_code=204)):
         prog = client.get_audiobook_progress(5)
     assert prog == {"pct": 0.0, "position_seconds": 0.0, "current_file_id": None, "updated_at": None}
@@ -153,12 +188,14 @@ def test_get_audiobook_progress_unstarted_204_is_zero_not_none(client):
 def test_get_audiobook_progress_unstarted_200_null_is_zero_not_none(client):
     # v1.9.0: an unstarted audiobook returns HTTP 200 with a JSON `null` body.
     # That must read as the 0.0 baseline, not None (None drops BookOrbit from sync).
+    client._audiobook_api = "legacy"
     with patch.object(client, '_make_request', return_value=_Resp(None, status_code=200)):
         prog = client.get_audiobook_progress(5)
     assert prog == {"pct": 0.0, "position_seconds": 0.0, "current_file_id": None, "updated_at": None}
 
 
 def test_update_audiobook_progress_includes_current_file_id(client):
+    client._audiobook_api = "legacy"
     captured = {}
 
     def fake_request(method, endpoint, payload=None):
@@ -177,12 +214,52 @@ def test_update_audiobook_progress_includes_current_file_id(client):
 
 
 def test_update_audiobook_progress_resolves_file_id_when_missing(client):
+    client._audiobook_api = "legacy"
     with patch.object(client, '_resolve_primary_file_id', return_value=99) as res, \
          patch.object(client, '_make_request', return_value=_Resp(status_code=204)) as req:
         ok = client.update_audiobook_progress(5, position_seconds=10.0, percentage=0.5)
     assert ok is True
     res.assert_called_once_with(5, "audiobook")
     assert req.call_args[0][2]["currentFileId"] == 99
+
+
+def test_update_audiobook_progress_uses_revisioned_playback_api(client):
+    asset_id = "aud_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    manifest = {
+        "revision": "b" * 64,
+        "assets": [{"assetId": asset_id, "sequence": 0, "durationMs": 200000}],
+    }
+    state = {
+        "assetId": asset_id,
+        "positionMs": 1000,
+        "percentage": 0.5,
+        "capturedAt": "2026-09-14T17:00:00.000Z",
+        "revision": 9,
+        "manifestRevision": manifest["revision"],
+    }
+    client._audiobook_api = "playback"
+    client._audiobook_playback_states[5] = state
+    client._audiobook_manifests[5] = manifest
+    client.get_audiobook_info = MagicMock(return_value={
+        "primary_playback_id": asset_id,
+        "tracks": [{"id": 11}],
+        "playback_tracks": [{"id": asset_id, "duration_seconds": 200}],
+    })
+
+    with patch.object(client, '_make_request', return_value=_Resp({**state, "revision": 10})) as request:
+        ok = client.update_audiobook_progress(
+            5, position_seconds=18.25, percentage=0.10, current_file_id=11
+        )
+
+    assert ok is True
+    method, endpoint, payload = request.call_args.args
+    assert (method, endpoint) == ("PUT", "/api/v1/audiobooks/5/playback-state")
+    assert payload["assetId"] == asset_id
+    assert payload["positionMs"] == 18250
+    assert payload["baseRevision"] == 9
+    assert payload["manifestRevision"] == "b" * 64
+    assert payload["capturedAt"].endswith("Z")
+    assert len(payload["operationId"]) == 36
 
 
 def test_update_ebook_progress_uses_primary_file(client):
@@ -388,8 +465,8 @@ def test_search_ebooks_empty_term_returns_empty(client):
 
 def test_search_ebooks_carries_edition_metadata_subtitle_series_index(client):
     hits = [
-        {"id": 1, "title": "Warlock", "authors": ["D. Kensington"],
-         "libraryName": "Ebooks", "formats": ["epub"], "seriesName": "Warlock"},
+        {"id": 1, "title": "Sorcerer", "authors": ["D. Kensington"],
+         "libraryName": "Ebooks", "formats": ["epub"], "seriesName": "Sorcerer"},
     ]
 
     def fake_request(method, endpoint, payload=None):
@@ -397,22 +474,22 @@ def test_search_ebooks_carries_edition_metadata_subtitle_series_index(client):
         return _Resp(hits)
 
     details = {
-        1: {"id": 1, "title": "Warlock", "subtitle": "Book 2",
-            "authors": [{"name": "D. Kensington"}], "seriesName": "Warlock",
+        1: {"id": 1, "title": "Sorcerer", "subtitle": "Book 2",
+            "authors": [{"name": "D. Kensington"}], "seriesName": "Sorcerer",
             "seriesIndex": 2,
             "files": [{"id": 11, "format": "epub", "role": "primary",
-                       "filename": "Warlock_Book2.epub"}]},
+                       "filename": "Sorcerer_Book2.epub"}]},
     }
     with patch.object(client, '_make_request', side_effect=fake_request), \
          patch.object(client, 'get_book_detail', side_effect=lambda bid, force=False: details.get(bid)):
-        out = client.search_ebooks("warlock")
+        out = client.search_ebooks("sorcerer")
 
     assert len(out) == 1
     row = out[0]
     assert row["id"] == 1
-    assert row["fileName"] == "Warlock_Book2.epub"
+    assert row["fileName"] == "Sorcerer_Book2.epub"
     assert row["subtitle"] == "Book 2"
-    assert row["seriesName"] == "Warlock"
+    assert row["seriesName"] == "Sorcerer"
     assert row["seriesIndex"] == 2
 
 
@@ -446,8 +523,8 @@ def test_search_ebooks_standalone_book_no_subtitle_no_series(client):
 
 def test_search_ebooks_prefers_hit_seriesname_over_detail(client):
     hits = [
-        {"id": 3, "title": "Warlock", "authors": ["D. Kensington"],
-         "libraryName": "Ebooks", "formats": ["epub"], "seriesName": "Warlock"},
+        {"id": 3, "title": "Sorcerer", "authors": ["D. Kensington"],
+         "libraryName": "Ebooks", "formats": ["epub"], "seriesName": "Sorcerer"},
     ]
 
     def fake_request(method, endpoint, payload=None):
@@ -455,25 +532,25 @@ def test_search_ebooks_prefers_hit_seriesname_over_detail(client):
         return _Resp(hits)
 
     details = {
-        3: {"id": 3, "title": "Warlock", "authors": [{"name": "D. Kensington"}],
+        3: {"id": 3, "title": "Sorcerer", "authors": [{"name": "D. Kensington"}],
             "files": [{"id": 33, "format": "epub", "role": "primary",
-                       "filename": "Warlock.epub"}]},
+                       "filename": "Sorcerer.epub"}]},
     }
     with patch.object(client, '_make_request', side_effect=fake_request), \
          patch.object(client, 'get_book_detail', side_effect=lambda bid, force=False: details.get(bid)):
-        out = client.search_ebooks("warlock")
+        out = client.search_ebooks("sorcerer")
 
     assert len(out) == 1
     row = out[0]
-    assert row["seriesName"] == "Warlock"
+    assert row["seriesName"] == "Sorcerer"
     assert row["subtitle"] == ""
     assert row["seriesIndex"] is None
 
 
 def test_search_audiobooks_carries_edition_metadata(client):
     hits = [
-        {"id": 10, "title": "Warlock", "authors": ["D. Kensington"],
-         "libraryName": "Audiobooks", "formats": ["m4b"], "seriesName": "Warlock"},
+        {"id": 10, "title": "Sorcerer", "authors": ["D. Kensington"],
+         "libraryName": "Audiobooks", "formats": ["m4b"], "seriesName": "Sorcerer"},
     ]
 
     def fake_request(method, endpoint, payload=None):
@@ -481,11 +558,11 @@ def test_search_audiobooks_carries_edition_metadata(client):
         return _Resp(hits)
 
     detail = {
-        10: {"id": 10, "title": "Warlock", "subtitle": "Book 1",
-             "authors": [{"name": "D. Kensington"}], "language": "en", "seriesName": "Warlock",
+        10: {"id": 10, "title": "Sorcerer", "subtitle": "Book 1",
+             "authors": [{"name": "D. Kensington"}], "language": "en", "seriesName": "Sorcerer",
              "seriesIndex": 1,
              "files": [{"id": 101, "format": "m4b", "role": "primary",
-                        "filename": "Warlock_Book1.m4b", "durationSeconds": 3600.0,
+                        "filename": "Sorcerer_Book1.m4b", "durationSeconds": 3600.0,
                         "sizeBytes": 1000000}]},
     }
     audio_info = {
@@ -495,14 +572,14 @@ def test_search_audiobooks_carries_edition_metadata(client):
     with patch.object(client, '_make_request', side_effect=fake_request), \
          patch.object(client, 'get_book_detail', side_effect=lambda bid, force=False: detail.get(bid)), \
          patch.object(client, 'get_audiobook_info', return_value=audio_info):
-        out = client.search_audiobooks("warlock")
+        out = client.search_audiobooks("sorcerer")
 
     assert len(out) == 1
     row = out[0]
     assert row["id"] == 10
-    assert row["title"] == "Warlock"
+    assert row["title"] == "Sorcerer"
     assert row["subtitle"] == "Book 1"
-    assert row["seriesName"] == "Warlock"
+    assert row["seriesName"] == "Sorcerer"
     assert row["seriesIndex"] == 1
     assert row["language"] == "en"
     assert row["duration_seconds"] == 3600.0

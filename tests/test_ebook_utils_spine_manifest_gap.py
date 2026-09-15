@@ -11,12 +11,58 @@ blanket ``except`` in ``extract_text_and_map`` and abandoned the WHOLE book as
 """
 
 import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import ebooklib
 
 from src.utils.ebook_utils import EbookParser
+
+
+def _write_broken_manifest_epub(path: Path) -> None:
+    """A real EPUB whose OPF manifest references a file absent from the archive
+    (a classic Adobe ``page-template.xpgt``). ``read_epub`` raises a KeyError on
+    it; the spine and its one real chapter are otherwise valid."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" '
+            'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+            '<rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        z.writestr(
+            "OEBPS/content.opf",
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '
+            'version="2.0" unique-identifier="id"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Broken</dc:title>'
+            '<dc:identifier id="id">x</dc:identifier></metadata><manifest>'
+            '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="pt" href="page-template.xpgt" '
+            'media-type="application/vnd.adobe-page-template+xml"/></manifest>'
+            '<spine><itemref idref="ch1"/></spine></package>',
+        )
+        z.writestr(
+            "OEBPS/ch1.xhtml",
+            '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>'
+            '<p>Recovered chapter body</p></body></html>',
+        )
+        # page-template.xpgt is deliberately NOT written to the archive.
+
+
+def test_missing_manifest_file_is_repaired_and_parsed():
+    """A manifest item whose file is missing no longer abandons the whole book."""
+    with tempfile.TemporaryDirectory() as tmp:
+        parser = _parser(Path(tmp))
+        epub_path = Path(tmp) / "books" / "lolita.epub"
+        _write_broken_manifest_epub(epub_path)
+
+        text, spine_map = parser.extract_text_and_map(str(epub_path))
+
+    assert "Recovered chapter body" in text
+    assert len(spine_map) == 1
 
 
 def _parser(tmp: Path) -> EbookParser:

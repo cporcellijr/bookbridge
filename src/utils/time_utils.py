@@ -15,3 +15,16 @@ def utcnow() -> datetime:
     Equivalent to the deprecated ``datetime.utcnow()`` but without the warning.
     """
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def datetime_to_epoch(value: datetime) -> float:
+    """Return Unix epoch seconds, interpreting naive datetimes as UTC.
+
+    BookBridge deliberately stores UTC datetimes without ``tzinfo`` in SQLite.
+    Calling ``datetime.timestamp()`` directly on those values would interpret
+    them in the host's local timezone. Attach UTC only for the conversion so the
+    stored/comparison semantics stay naive while epoch values remain portable.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.timestamp()

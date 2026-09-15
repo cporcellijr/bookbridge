@@ -37,6 +37,9 @@ class LocatorResult:
     css_selector: Optional[str] = None
     chapter_progress: Optional[float] = None
     fragments: Optional[list] = None
+    # Concrete 1-based position for fixed-page documents. Kept separate from
+    # CFI/fragment so page positions cannot leak as fake EPUB data.
+    page: Optional[int] = None
 
 @dataclass
 class UpdateProgressRequest:
@@ -53,6 +56,18 @@ class UpdateProgressRequest:
     # had; None whenever the caller has no prior read (resets, ebook-only path),
     # in which case the client falls back to probing.
     current_state: Optional['ServiceState'] = None
+    # The leader's position already resolved onto the audio timeline by
+    # _normalize_for_cross_format_comparison and used by leader selection. Audio clients
+    # prefer it over re-deriving a timestamp from the locator, so the value
+    # written is the same one the leader decision was made on. None whenever
+    # the leader IS the audio client, or no normalized position was available.
+    target_audio_ts: Optional[float] = None
+    # This cycle's leader is a rewind the bridge deliberately approved (issue #215).
+    # Audio clients refuse a backward write by default, which is right for a stale
+    # position and wrong for a reader who went back on purpose: the rewind wins leader
+    # selection and is then silently dropped at the write, leaving the ebook side moved
+    # and the audio side ahead. Set only on the corroborated paths, never on a guess.
+    allow_rewind: bool = False
 
 @dataclass
 class SyncResult:
@@ -117,6 +132,10 @@ class SyncClient:
         """Return True when this client is applicable to the provided book."""
         return True
 
+    def supports_fixed_page_progress(self) -> bool:
+        """Return whether this concrete client speaks page-based progress."""
+        return False
+
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
         """
         Args:
@@ -153,5 +172,6 @@ class SyncClient:
             perfect_ko_xpath=perfect_xpath,
             css_selector=locator_result.css_selector,
             chapter_progress=locator_result.chapter_progress,
-            fragments=locator_result.fragments
+            fragments=locator_result.fragments,
+            page=locator_result.page,
         )

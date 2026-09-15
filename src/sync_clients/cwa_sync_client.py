@@ -47,12 +47,58 @@ class CWASyncClient(SyncClient):
     def _resolve_epub_filename(book: Book) -> Optional[str]:
         return getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
 
+    @staticmethod
+    def _resolve_search_hints(book: Book) -> list[str]:
+        """Ordered OPDS search-term fallbacks for locating a CWA book.
+
+        Measured against a live CWA library (#427 follow-up, 6 real books):
+        the filename-derived term resolved 4 of 6 and ``book.abs_title``
+        resolved the other 2, so the two sources are complementary rather than
+        redundant and both are worth trying. The filename-derived term comes
+        FIRST because ``book.abs_title`` is the AUDIOBOOK title and routinely
+        carries decoration CWA's ebook catalog does not have (e.g. "Dungeon
+        Crawler Carl (Unabridged)", "The Dare - Harley Laroux"), whereas the
+        stored ebook filename (CWA-sourced files are named
+        ``cwa_<title>.epub``) tracks CWA's own title slug far more often.
+
+        Each term is derived by stripping a leading ``cwa_`` prefix, dropping
+        the extension, and replacing underscores with spaces for the
+        filename; empties are skipped and the result is de-duplicated
+        (case-insensitive) while preserving order. Returns ``[]`` when nothing
+        is derivable, so the caller falls back to searching by the raw
+        Calibre id (today's behavior).
+        """
+        hints: list[str] = []
+
+        filename = CWASyncClient._resolve_epub_filename(book) or ""
+        stem = os.path.splitext(filename)[0]
+        if stem.startswith("cwa_"):
+            stem = stem[len("cwa_"):]
+        derived = stem.replace("_", " ").strip()
+        if derived:
+            hints.append(derived)
+
+        title = (getattr(book, "abs_title", None) or "").strip()
+        if title:
+            hints.append(title)
+
+        seen_cf: set[str] = set()
+        ordered: list[str] = []
+        for hint in hints:
+            hint_cf = hint.casefold()
+            if hint_cf in seen_cf:
+                continue
+            seen_cf.add(hint_cf)
+            ordered.append(hint)
+        return ordered
+
     def _resolve_uuid(self, book: Book) -> Optional[str]:
         """Resolve the Calibre UUID for a CWA-sourced book."""
         source_id = getattr(book, "ebook_source_id", None)
         if not source_id:
             return None
-        return self.cwa_sync_api.resolve_book_uuid(str(source_id))
+        search_hints = self._resolve_search_hints(book)
+        return self.cwa_sync_api.resolve_book_uuid(str(source_id), search_hints=search_hints)
 
     def supports_book(self, book: Book) -> bool:
         if getattr(book, "ebook_source", None) != "CWA":

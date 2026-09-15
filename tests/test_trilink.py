@@ -14,6 +14,7 @@ import unittest
 import sys
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
@@ -154,6 +155,15 @@ class TestStorytellerAPIClientSearch(unittest.TestCase):
 class TestStorytellerAPIClientDownload(unittest.TestCase):
     """Test the StorytellerAPIClient download_book method."""
 
+    @staticmethod
+    def _epub_bytes(tmpdir) -> bytes:
+        """Minimal but structurally valid EPUB; the download guard verifies the zip."""
+        source = Path(tmpdir) / 'fixture.epub'
+        with zipfile.ZipFile(source, 'w') as archive:
+            archive.writestr('mimetype', 'application/epub+zip')
+            archive.writestr('OEBPS/content.opf', '<package/>')
+        return source.read_bytes()
+
     @patch.dict(os.environ, {
         'STORYTELLER_API_URL': 'http://test-storyteller:8001',
         'STORYTELLER_USER': 'testuser',
@@ -171,7 +181,8 @@ class TestStorytellerAPIClientDownload(unittest.TestCase):
             # Mock successful download
             mock_response = Mock()
             mock_response.status_code = 200
-            mock_response.iter_content = Mock(return_value=[b'fake epub content'])
+            mock_response.headers = {}
+            mock_response.iter_content = Mock(return_value=[self._epub_bytes(tmpdir)])
             mock_response.raise_for_status = Mock()
             mock_response.__enter__ = Mock(return_value=mock_response)
             mock_response.__exit__ = Mock(return_value=False)
@@ -196,7 +207,7 @@ class TestStorytellerAPIClientDownload(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / 'downloaded.epub'
             local_readaloud = Path(tmpdir) / 'local-readaloud.epub'
-            local_readaloud.write_bytes(b'local artifact')
+            local_readaloud.write_bytes(self._epub_bytes(tmpdir))
 
             api_response = Mock()
             api_response.status_code = 404
@@ -231,7 +242,7 @@ class TestStorytellerAPIClientDownload(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = Path(tmpdir) / 'downloaded.epub'
             local_readaloud = Path(tmpdir) / 'local-readaloud.epub'
-            local_readaloud.write_bytes(b'local artifact')
+            local_readaloud.write_bytes(self._epub_bytes(tmpdir))
 
             api_response = Mock()
             api_response.status_code = 404

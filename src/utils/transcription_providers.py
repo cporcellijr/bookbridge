@@ -6,6 +6,7 @@ Supports local Whisper and cloud providers like Deepgram.
 
 import importlib.util
 import logging
+import math
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -27,7 +28,8 @@ class TranscriptionProvider(ABC):
             progress_callback: Optional callback for progress updates (0.0 to 1.0)
         
         Returns:
-            List of dicts with 'start', 'end', 'text' keys
+            List of dicts with 'start', 'end', 'text' keys and optional
+            'words' records containing 'word', 'start', 'end' in the same timebase.
         """
         pass
     
@@ -119,14 +121,20 @@ class LocalWhisperProvider(TranscriptionProvider):
         segments_out = []
         
         logger.info(f"🧠 Transcribing with {self.get_name()}: {audio_path.name}")
-        segments, info = model.transcribe(str(audio_path), beam_size=1, best_of=1)
+        segments, info = model.transcribe(str(audio_path), beam_size=1, best_of=1, word_timestamps=True)
         
         for segment in segments:
-            segments_out.append({
+            seg_dict = {
                 "start": segment.start,
                 "end": segment.end,
                 "text": segment.text.strip()
-            })
+            }
+            if segment.words:
+                seg_dict["words"] = [
+                    {"word": w.word, "start": w.start, "end": w.end}
+                    for w in segment.words
+                ]
+            segments_out.append(seg_dict)
         
         logger.info(f"✅ Transcription complete: {len(segments_out)} segments")
         return segments_out
@@ -255,21 +263,33 @@ class WhisperCppServerProvider(TranscriptionProvider):
         if source_str.startswith(("http://", "https://")):
             # Raw mode with a stream URL: buffer the source to a temp file so the
             # multipart upload has a real file with a known size.
+            import shutil
             import tempfile
 
+            from src.utils.file_transfers import (
+                response_declares_size,
+                stream_response_to_path,
+            )
+
             suffix = Path(label).suffix or ".mp3"
-            tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-            tmp_path = Path(tmp.name)
+            # A truncated buffer must never reach the transcription server, so the
+            # upload only sees a file the transfer helper accepted as complete.
+            tmp_dir = tempfile.mkdtemp(prefix="bookbridge_raw_audio_")
+            tmp_path = Path(tmp_dir) / f"raw_audio{suffix}"
             try:
-                with requests.get(source_str, stream=True, timeout=300) as r:
+                # identity encoding keeps Content-Length comparable.
+                headers = {"Accept-Encoding": "identity"}
+                with requests.get(source_str, headers=headers, stream=True, timeout=300) as r:
                     r.raise_for_status()
-                    for chunk in r.iter_content(chunk_size=1 << 20):
-                        tmp.write(chunk)
-                tmp.close()
+                    stream_response_to_path(
+                        r,
+                        tmp_path,
+                        expected_size=response_declares_size(r),
+                        chunk_size=1 << 20,
+                    )
                 return self._upload(tmp_path, label)
             finally:
-                tmp.close()
-                tmp_path.unlink(missing_ok=True)
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
         return self._upload(Path(source_str), label)
 
@@ -323,6 +343,10 @@ class WhisperCppServerProvider(TranscriptionProvider):
                 for seg in chunk_segs:
                     seg["start"] += offset
                     seg["end"] += offset
+                    if seg.get("words"):
+                        for w in seg["words"]:
+                            w["start"] += offset
+                            w["end"] += offset
                 segments_out.extend(chunk_segs)
                 idx += 1
 
@@ -334,7 +358,12 @@ class WhisperCppServerProvider(TranscriptionProvider):
         files = {
             "file": (filename, fileobj, content_type)
         }
-        data = {"model": self.model, "response_format": "verbose_json"}
+        data = {
+            "model": self.model,
+            "response_format": "verbose_json",
+            "timestamp_granularities": ["word", "segment"],
+            "timestamp_granularities[]": ["word", "segment"],
+        }
 
         response = requests.post(
             self.server_url,
@@ -359,12 +388,27 @@ class WhisperCppServerProvider(TranscriptionProvider):
         result = response.json()
 
         segments_out = []
-        for seg in result.get("segments", []):
-            segments_out.append({
+        segments = result.get("segments") or []
+        top_level_words = result.get("words", [])
+
+        for seg in segments:
+            seg_dict = {
                 "start": float(seg["start"]),
                 "end": float(seg["end"]),
                 "text": seg["text"].strip()
-            })
+            }
+            if seg.get("words"):
+                valid_words = self._validate_words(seg["words"])
+                if valid_words:
+                    seg_dict["words"] = valid_words
+            segments_out.append(seg_dict)
+
+        if top_level_words:
+            valid_top_words = self._validate_words(top_level_words)
+            if valid_top_words:
+                segments_out = self._associate_words_with_segments(segments_out, valid_top_words)
+                if not segments and isinstance(result.get("text"), str) and result["text"].strip():
+                    segments_out[0]["text"] = result["text"].strip()
 
         if not segments_out and result.get("text"):
             logger.warning(
@@ -374,6 +418,75 @@ class WhisperCppServerProvider(TranscriptionProvider):
             segments_out.append({"start": 0.0, "end": 0.0, "text": str(result["text"]).strip()})
 
         return segments_out
+
+    def _validate_words(self, words: list) -> list[dict] | None:
+        """Validate word records. Returns None if any word is malformed (don't attach partial lists)."""
+        if not isinstance(words, list) or not words:
+            return None
+
+        valid = []
+        for w in words:
+            if not isinstance(w, dict):
+                return None
+            word_text = w.get("word") or w.get("text")
+            if not isinstance(word_text, str) or not word_text.strip():
+                return None
+
+            try:
+                start = float(w["start"])
+                end = float(w["end"])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+            if (not math.isfinite(start) or not math.isfinite(end)
+                    or start < 0 or end < start
+                    or (valid and start < valid[-1]["start"])):
+                return None
+
+            valid.append({"word": word_text, "start": start, "end": end})
+
+        return valid
+
+    def _associate_words_with_segments(self, segments: list[dict], words: list[dict]) -> list[dict]:
+        """Associate top-level words with segments in a linear ordered pass.
+
+        Words are assigned to the first segment whose bounds contain the word's start time.
+        Words that fall outside all segments are dropped (don't duplicate).
+        If no segments exist but words exist, create a single segment from the words.
+        """
+        if not words:
+            return segments
+
+        if not segments:
+            # Words-only response: create a single segment
+            return [{
+                "start": words[0]["start"],
+                "end": words[-1]["end"],
+                "text": " ".join(w["word"].strip() for w in words),
+                "words": words
+            }]
+
+        # Create a copy to avoid mutating original
+        result = []
+        word_idx = 0
+
+        for seg in segments:
+            seg_copy = dict(seg)
+            seg_words = []
+            seg_start = seg["start"]
+            seg_end = seg["end"]
+
+            # Assign words whose start falls within this segment's bounds
+            while word_idx < len(words) and words[word_idx]["start"] < seg_end:
+                if words[word_idx]["start"] >= seg_start:
+                    seg_words.append(words[word_idx])
+                word_idx += 1
+
+            if seg_words and not seg_copy.get("words"):
+                seg_copy["words"] = seg_words
+            result.append(seg_copy)
+
+        return result
 
 
 def get_transcription_provider() -> TranscriptionProvider:

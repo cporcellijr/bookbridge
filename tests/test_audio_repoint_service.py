@@ -27,7 +27,7 @@ from src.services.audio_repoint_service import AudioRepointService
 ABS_ID = "30d4addf-7ba8-4295-abc9-ee512e042336"
 
 
-def _book(abs_id=ABS_ID, title="Three Days in April", duration=34016.0,
+def _book(abs_id=ABS_ID, title="Four Nights in May", duration=34016.0,
           audio_source="ABS", status="active", sync_mode="audiobook"):
     return SimpleNamespace(
         abs_id=abs_id, abs_title=title, duration=duration,
@@ -88,7 +88,7 @@ class TestTitleNormalisation(unittest.TestCase):
         n = AudioRepointService.normalize_title
         self.assertEqual(n("01 Sandman Slim"), n("Sandman Slim"))
         self.assertEqual(n("Dragon's Justice 7 (Unabridged)"), n("Dragon's Justice 7"))
-        self.assertEqual(n("Trad Wife - Sarah Langan"), n("Trad Wife"))
+        self.assertEqual(n("Home Maker - Erin Cole"), n("Home Maker"))
         self.assertEqual(n("Bedlam: Book One of the Sheol Saga"), n("Bedlam"))
 
     def test_durations_agree_within_tolerance(self):
@@ -103,7 +103,7 @@ class TestTitleNormalisation(unittest.TestCase):
 class TestPlan(unittest.TestCase):
     def test_unique_title_with_matching_duration_is_automatic(self):
         db = _FakeDb([_book()])
-        svc = AudioRepointService(db, _client([_catalog_entry(5568, "Three Days in April")], {5568: 34016.0}))
+        svc = AudioRepointService(db, _client([_catalog_entry(5568, "Four Nights in May")], {5568: 34016.0}))
 
         plan = svc.build_plan()
 
@@ -114,7 +114,7 @@ class TestPlan(unittest.TestCase):
         """A same-titled book of a different length is a different narration; the
         existing alignment would not fit it."""
         db = _FakeDb([_book()])
-        svc = AudioRepointService(db, _client([_catalog_entry(99, "Three Days in April")], {99: 61000.0}))
+        svc = AudioRepointService(db, _client([_catalog_entry(99, "Four Nights in May")], {99: 61000.0}))
 
         plan = svc.build_plan()
 
@@ -123,8 +123,8 @@ class TestPlan(unittest.TestCase):
         self.assertIn("different narration", plan["review"][0]["reason"])
 
     def test_duplicate_copies_go_to_review_not_a_guess(self):
-        db = _FakeDb([_book(title="Coldheart Canyon", duration=50000.0)])
-        catalog = [_catalog_entry(1, "Coldheart Canyon"), _catalog_entry(2, "Coldheart Canyon")]
+        db = _FakeDb([_book(title="Frostvale Hollow", duration=50000.0)])
+        catalog = [_catalog_entry(1, "Frostvale Hollow"), _catalog_entry(2, "Frostvale Hollow")]
         svc = AudioRepointService(db, _client(catalog, {1: 50000.0, 2: 50000.0}))
 
         plan = svc.build_plan()
@@ -133,7 +133,7 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(len(plan["review"][0]["candidates"]), 2)
 
     def test_book_absent_from_bookorbit_is_unmatched(self):
-        db = _FakeDb([_book(title="Dungeon Crawler Carl")])
+        db = _FakeDb([_book(title="Dungeon Runner Dana")])
         svc = AudioRepointService(db, _client([_catalog_entry(1, "Something Else Entirely")], {1: 100.0}))
 
         plan = svc.build_plan()
@@ -165,7 +165,7 @@ class TestApply(unittest.TestCase):
         """abs_id must survive — every State row, alignment and link hangs off it."""
         book = _book()
         db = _FakeDb([book])
-        svc = AudioRepointService(db, _client([_catalog_entry(5568, "Three Days in April")], {5568: 34016.0}))
+        svc = AudioRepointService(db, _client([_catalog_entry(5568, "Four Nights in May")], {5568: 34016.0}))
 
         result = svc.apply([{"abs_id": ABS_ID, "target_id": 5568}])
 
@@ -205,7 +205,7 @@ class TestApply(unittest.TestCase):
         the shared Book.audio_source_id fallback is never reached."""
         db = _FakeDb([_book()])
         db.claimants[ABS_ID] = [1, 2]
-        svc = AudioRepointService(db, _client([_catalog_entry(5568, "Three Days in April")], {5568: 34016.0}))
+        svc = AudioRepointService(db, _client([_catalog_entry(5568, "Four Nights in May")], {5568: 34016.0}))
 
         svc.apply([{"abs_id": ABS_ID, "target_id": 5568}])
 

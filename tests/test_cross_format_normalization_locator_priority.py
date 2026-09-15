@@ -858,8 +858,7 @@ def test_sync_cycle_skips_deadband_rollback_to_high_conf_kosync():
     manager.ebook_parser.extract_text_and_map.return_value = ("a" * 1000, [])
     manager._get_local_epub = lambda filename: Path(f"/tmp/{filename}")
     manager._promote_alignment_backed_book = MagicMock(return_value=False)
-    manager._record_local_reading_session = MagicMock()
-    manager._record_grimmory_reading_session = MagicMock()
+    manager._record_reading_movement = MagicMock()
 
     abs_client = _SyncLoopClient(supported_types={"audiobook"})
     kosync_client = _SyncLoopClient()

@@ -13,6 +13,9 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 
+from src.services import observation_trail
+from src.utils.fixed_page_progress import coerce_page, is_cbz_book
+
 logger = logging.getLogger(__name__)
 
 
@@ -181,6 +184,16 @@ class ClientPoller:
             " during suppression window; treating as external jump"
             if during_suppression else ""
         )
+        # Both callers of this method have already ruled out our own write-back, so
+        # everything reaching here is movement the user actually made. Recording it
+        # is instrumentation only -- nothing reads the trail to make a decision yet
+        # (issue #215 phase 0).
+        try:
+            observation_trail.record_observation(
+                client_name, book.abs_id, current_pct, source="poll", user_id=user_id,
+            )
+        except Exception as trail_err:
+            logger.debug(f"Could not record observation for '{client_name}': {trail_err}", exc_info=True)
         if wait_for_settle:
             self._pending_sync[(user_id, client_name, book.abs_id)] = current_pct
             logger.info(
@@ -407,6 +420,15 @@ class ClientPoller:
                 last_marker = self._last_known.get(cache_key)
                 last_pct = self._cached_pct(last_marker, fallback=current_pct)
                 marker_changed = self._state_changed(last_marker, current_marker, last_pct, current_pct)
+                echo_tolerance = self._echo_tolerance
+                if (is_cbz_book(book)
+                        and callable(getattr(sync_client, 'supports_fixed_page_progress', None))
+                        and sync_client.supports_fixed_page_progress() is True
+                        and coerce_page(current_state.current.get('page')) is not None
+                        and not current_state.current.get('_page_is_estimated')):
+                    # Concrete CBZ pages have canonical fractions; a one-page
+                    # turn must not fit inside the ordinary ebook echo margin.
+                    echo_tolerance = 1e-9
 
                 if last_marker is None:
                     logger.debug(
@@ -419,7 +441,7 @@ class ClientPoller:
                         recent_pct = recent.get("pct")
                         if (
                             recent_pct is not None
-                            and abs(current_pct - recent_pct) > self._echo_tolerance
+                            and abs(current_pct - recent_pct) > echo_tolerance
                         ):
                             self._trigger_or_defer_sync(
                                 client_name, book, last_pct, current_pct,
@@ -442,7 +464,7 @@ class ClientPoller:
                     recent_pct = recent.get("pct") if recent else None
                     still_self_echo = recent is not None and (
                         recent_pct is None
-                        or abs(current_pct - recent_pct) <= self._echo_tolerance
+                        or abs(current_pct - recent_pct) <= echo_tolerance
                     )
                     if still_self_echo:
                         logger.debug(

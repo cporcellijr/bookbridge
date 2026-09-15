@@ -27,7 +27,9 @@
 - **Flexible Match Flows**: Link ABS, Grimmory, or BookOrbit audiobooks; use Kavita or CWA as an ebook source; or create ebook-only links when you only want text sync.
 - **Flexible Setup**: You can intentionally turn Audiobookshelf off for ebook-only or maintenance-focused setups.
 - **Dashboard Session Details**: See recent reading or listening session summaries right on the dashboard cards.
-- **Smart Alignment Sources**: Uses Storyteller forced-alignment transcripts when available, then SMIL, then Whisper fallback.
+- **Deliberate Rewinds That Stick**: Go back in one app and continue from there without the furthest-ahead app immediately pulling you forward again.
+- **Safer, More Visible Alignment**: Uses Storyteller transcripts when available, then SMIL or Whisper; catches wrong pairings, scores maps, and lets you remap or restore them.
+- **Richer Dashboard Controls**: Filter by author, series, or format; sort by author, series, progress, status, last sync, date added, or rating.
 - **Web UI**: Management dashboard for tracking syncs and matching books.
 - **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk.
 - **Same-Folder Matching**: Treat sibling audiobook and ebook files in the same

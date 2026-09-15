@@ -7,7 +7,7 @@ on disk.  Once the DB held that value (from any prior successful cache), every
 subsequent call short-circuited on the early-return, making the re-download
 path structurally unreachable — explaining the "permanently unresolvable,
 retried every cycle, always fails, never recover" pattern reported 8+ times
-for *Dungeon Crawler Carl* on 2026-07-13.
+for *Dungeon Runner Dana* on 2026-07-13.
 """
 
 import sys
@@ -71,7 +71,7 @@ class TestSyncManagerStaleStorytellerFilename(unittest.TestCase):
 
         book = Book(
             abs_id="d3845713-da29-4150-8d7e-16215b90b666",
-            abs_title="Dungeon Crawler Carl (Unabridged)",
+            abs_title="Dungeon Runner Dana (Unabridged)",
             storyteller_uuid=_STORYTELLER_UUID,
             ebook_filename=_STALE_FILENAME,
             status="active",
@@ -133,7 +133,7 @@ class TestStorytellerSyncClientStaleFilename(unittest.TestCase):
 
         book = Book(
             abs_id="d3845713-da29-4150-8d7e-16215b90b666",
-            abs_title="Dungeon Crawler Carl (Unabridged)",
+            abs_title="Dungeon Runner Dana (Unabridged)",
             storyteller_uuid=_STORYTELLER_UUID,
             ebook_filename=_STALE_FILENAME,
             status="active",
@@ -168,7 +168,7 @@ class TestStorytellerSyncClientStaleFilename(unittest.TestCase):
 
         book = Book(
             abs_id="d3845713-da29-4150-8d7e-16215b90b666",
-            abs_title="Dungeon Crawler Carl (Unabridged)",
+            abs_title="Dungeon Runner Dana (Unabridged)",
             storyteller_uuid=_STORYTELLER_UUID,
             ebook_filename=_STALE_FILENAME,
             status="active",
@@ -212,7 +212,7 @@ class TestStorytellerSyncClientStaleFilename(unittest.TestCase):
 
         book = Book(
             abs_id="d3845713-da29-4150-8d7e-16215b90b666",
-            abs_title="Dungeon Crawler Carl (Unabridged)",
+            abs_title="Dungeon Runner Dana (Unabridged)",
             storyteller_uuid=_STORYTELLER_UUID,
             ebook_filename=_STALE_FILENAME,
             status="active",

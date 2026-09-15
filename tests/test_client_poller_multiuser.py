@@ -1,9 +1,13 @@
+import logging
+import os
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import src.services.client_poller as client_poller_module
+from src.api.bookorbit_client import BookOrbitClient
 from src.services.client_poller import ClientPoller
 from src.services import write_tracker
+from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClient
 
 
 class _ImmediateThread:
@@ -29,6 +33,15 @@ class _Registry:
         return self._mapping[user_id]
 
 
+class _Response:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
 def _client(pct):
     c = MagicMock()
     c.is_configured.return_value = True
@@ -44,6 +57,56 @@ def _db(users, books):
     # shared/claimed by every user under test.
     db.get_linked_abs_ids.return_value = {b.abs_id for b in books}
     return db
+
+
+def test_bookorbit_v2_playback_state_counts_as_polled(caplog):
+    """ceda7428 removed /books/:id/audio-progress, making the live poll log
+    ``BookOrbitAudio poll: checked 0 across 1 target(s)`` for every cycle.
+    """
+    asset_id = "aud_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    book = SimpleNamespace(
+        abs_id="bookorbit:5", abs_title="Updated BookOrbit Audio",
+        audio_source="BookOrbit", audio_source_id="5", audio_provider_book_id=None,
+        audio_duration=200.0, duration=200.0,
+    )
+    db = _db([], [book])
+    raw_client = BookOrbitClient()
+    raw_client.get_book_detail = MagicMock(return_value={
+        "id": 5,
+        "audioMetadata": {"durationSeconds": 200},
+        "files": [{
+            "id": 11, "format": "m4b", "role": "primary",
+            "filename": "book.m4b", "durationSeconds": 200,
+        }],
+    })
+
+    def request(_method, endpoint, _payload=None):
+        if endpoint.endswith("/playback-state"):
+            return _Response({
+                "assetId": asset_id, "positionMs": 50000, "percentage": 25,
+                "capturedAt": "2026-09-14T17:00:00.000Z", "revision": 1,
+                "manifestRevision": "b" * 64,
+            })
+        if endpoint.endswith("/manifest"):
+            return _Response({
+                "revision": "b" * 64, "totalDurationMs": 200000,
+                "assets": [{"assetId": asset_id, "sequence": 0, "durationMs": 200000}],
+                "chapters": [],
+            })
+        raise AssertionError(endpoint)
+
+    raw_client._make_request = MagicMock(side_effect=request)
+    sync_client = BookOrbitAudioSyncClient(raw_client, ebook_parser=None)
+    poller = ClientPoller(db, MagicMock(), {"BookOrbitAudio": sync_client})
+
+    caplog.set_level(logging.DEBUG, logger="src.services.client_poller")
+    with patch.dict(os.environ, {
+        "BOOKORBIT_SERVER": "http://mock", "BOOKORBIT_USER": "u",
+        "BOOKORBIT_PASSWORD": "p",
+    }):
+        poller._poll_client("BookOrbitAudio")
+
+    assert "📡 BookOrbitAudio poll: checked 1 across 1 target(s)" in caplog.messages
 
 
 def test_poller_triggers_per_user_sync(monkeypatch):

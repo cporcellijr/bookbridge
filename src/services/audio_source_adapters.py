@@ -775,11 +775,30 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
         for idx, track in enumerate(tracks):
             ext = (track.get("format") or "mp3").lower().lstrip(".")
             local_path = source_cache_dir / f"track_{idx:03d}.{ext}"
-            if not local_path.exists() or local_path.stat().st_size == 0:
+            try:
+                expected_size = max(0, int(track.get("size_bytes") or 0))
+            except (TypeError, ValueError):
+                expected_size = 0
+            cached_size = local_path.stat().st_size if local_path.exists() else 0
+            if cached_size and expected_size and cached_size != expected_size:
+                logger.warning(
+                    "BookOrbit audio cache size mismatch: book_id=%s file_id=%s "
+                    "cached=%s expected=%s; re-downloading",
+                    source_id, track.get("id"), cached_size, expected_size,
+                )
+            if not cached_size or (expected_size and cached_size != expected_size):
                 ok = self.bookorbit_client.download_file_to_path(track.get("id"), local_path)
                 if not ok:
                     raise RuntimeError(
                         f"BookOrbit track download failed for book_id={source_id} file_id={track.get('id')}"
+                    )
+                downloaded_size = local_path.stat().st_size
+                if not downloaded_size or (expected_size and downloaded_size != expected_size):
+                    local_path.unlink()
+                    raise RuntimeError(
+                        f"Incomplete BookOrbit audio download for book_id={source_id} "
+                        f"file_id={track.get('id')}: got {downloaded_size} bytes, "
+                        f"expected {expected_size or 'non-empty file'}"
                     )
             duration = track.get("duration_seconds")
             files.append(

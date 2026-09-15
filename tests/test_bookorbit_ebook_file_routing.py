@@ -31,14 +31,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.api.bookorbit_client import BookOrbitClient
 from src.sync_clients.sync_client_interface import LocatorResult
 
-# The reporter's own book: "Three Days in April", epub 2576 + m4b 14676. The
+# The reporter's own book: "Four Nights in May", epub 2576 + m4b 14676. The
 # audiobook is listed FIRST, which is what let file order decide the write.
 BOOK_ID = 480
 EPUB_FILE_ID = 2576
 M4B_FILE_ID = 14676
 LIST_ROW = {
     "id": BOOK_ID,
-    "title": "Three Days in April",
+    "title": "Four Nights in May",
     "authors": [{"name": "Edward Ashton"}],
     "files": [
         {"id": M4B_FILE_ID, "format": "m4b", "role": "content"},

@@ -10,6 +10,28 @@ with just an audio source and an ebook client. Add Storyteller only if you actua
 Storyteller read-along app — the bridge will then sync its position and use its transcripts
 as a bonus alignment source.
 
+### An alignment is rejected, or opens at the wrong place
+
+- Confirm that the selected ebook and audiobook are the same edition. The
+  **Content-Match Guard** deliberately refuses maps with too little shared wording;
+  leave it enabled unless you know the pairing is a rough but intended match.
+- Open **Settings -> Sync -> Alignment Health**. A low-quality map can be rebuilt with
+  **Remap alignment**, and **Restore previous** returns to the last saved map if the
+  replacement is worse.
+- If a collection's audiobook narrates chapters in a different order from the EPUB,
+  enable experimental **Segmented Alignment Maps** in Settings, then remap that book.
+  It is off by default and is not needed for normally ordered books.
+- CTC forced alignment is optional and unavailable in published images. It requires a
+  custom `INSTALL_CTC=true` build and is not the first troubleshooting step.
+
+### A deliberate rewind does not stick
+
+- Confirm **Honor a Deliberate Rewind** is enabled under **Settings -> Sync**.
+- After going back, make some forward progress in the same app. One isolated backward
+  report is intentionally held so a stale or echoed position cannot pull every reader
+  backward.
+- If you want the furthest position to win in every case, turn the setting off.
+
 ### Books are not showing up
 
 - Make sure your `/books` volume is mounted correctly in `docker-compose.yml`.
@@ -64,6 +86,12 @@ as a bonus alignment source.
 - For BookFusion, enable **BookFusion -> Highlight Sync** in that reader's Integrations and confirm the book is linked to BookFusion.
 - For Readest, enable **Readest -> Highlight Sync** and enter that reader's Readest email/password.
 - For Hardcover, enable **Hardcover -> Highlight Sync** and enter that reader's Hardcover API token.
+
+### Bridge Sync uses too much memory or a device download fails
+
+- Update the Bridge Sync plugin to **0.6.10** or newer, then restart KOReader.
+- A failed replacement leaves the previous good book on the device. Run **Sync books**
+  again after fixing network access; do not delete the existing copy first.
 
 ### Books are not appearing in Readest
 

@@ -23,13 +23,20 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
+COPY requirements-ctc.txt /app/requirements-ctc.txt
 
 # 2. Install Python Dependencies
 ARG INSTALL_GPU=false
+# CTC forced alignment (issue #426) is opt-in: torch/torchaudio are large and stay
+# out of the standard image. Build with --build-arg INSTALL_CTC=true (the -ctc tag).
+ARG INSTALL_CTC=false
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /app/requirements.txt && \
     if [ "$INSTALL_GPU" = "true" ]; then \
     pip install --no-cache-dir nvidia-cublas-cu12 nvidia-cudnn-cu12; \
+    fi && \
+    if [ "$INSTALL_CTC" = "true" ]; then \
+    pip install --no-cache-dir -r /app/requirements-ctc.txt; \
     fi
 
 # 3. Create directories

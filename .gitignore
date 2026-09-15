@@ -6,6 +6,9 @@ docker-compose.yml*
 /data/
 *.db
 *.json
+# Test fixtures are real captured data the suite depends on -- without them
+# tests/test_segment_fit.py's real-data regressions fail on a fresh clone.
+!tests/fixtures/*.json
 epub_cache/
 
 # Python

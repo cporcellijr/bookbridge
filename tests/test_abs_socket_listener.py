@@ -252,7 +252,7 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
                 sync_manager=self.mock_sync,
                 user_id=7,
             )
-        book = self._make_active_book("crawler-carl", "Dungeon Crawler Carl")
+        book = self._make_active_book("crawler-carl", "Dungeon Runner Dana")
         self.mock_db.get_book.return_value = book
 
         listener._pending["crawler-carl"] = time.time() - 2

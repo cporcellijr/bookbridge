@@ -26,7 +26,9 @@ from src.utils.cache_paths import safe_cache_path
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_canonical import load_persisted_pair
 from src.utils.kosync_headers import hash_kosync_key
-from src.utils.time_utils import utcnow
+from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
+from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
+from src.utils.time_utils import datetime_to_epoch, utcnow
 from src.utils.user_context import set_current_user_id, reset_current_user_id
 from src.utils.user_config import (
     _ALLOW_GLOBAL_FALLBACK_KEY,
@@ -34,6 +36,8 @@ from src.utils.user_config import (
     resolve_setting,
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
+from src.utils.ebook_sources import is_grimmory_source
+from src.services import observation_trail
 from src.services.llm_matching import judge_best_candidate
 from src.db.models import State
 
@@ -290,8 +294,15 @@ def seconds_since_device_sync_activity() -> float:
 
 
 def signal_manifest_rebuild() -> None:
-    """Wake the manifest prebuilder thread so it rebuilds on the next cycle."""
+    """Refresh used device-sync manifests as soon as the catalog changes."""
     _manifest_rebuild_event.set()
+    if not _manifest_prebuilder_started:
+        # A persisted manifest proves device sync was used before this restart.
+        # Start now so a new match is ready before the next device request; keep
+        # installs that have never used device sync idle (ref #342).
+        path = _manifest_cache_file()
+        if path is not None and path.exists():
+            _start_manifest_prebuilder()
 
 
 def _compute_manifest_revision(items) -> str:
@@ -587,9 +598,16 @@ def _scope_manifest_to_user(manifest, user_id):
 
 
 def _manifest_prebuilder_loop() -> None:
-    """Daemon thread: rebuild manifest cache when signaled or every 60 seconds."""
+    """Daemon thread: rebuild the manifest cache when signaled, or as a backstop.
+
+    Catalog changes signal this loop directly (DatabaseService fires a
+    catalog-change callback on book create/delete/catalog-field changes), so the
+    timeout is only a safety net for unannounced changes -- chiefly a book's bytes
+    changing on disk while its catalog row stays put. It is deliberately long:
+    a short interval rebuilt an unchanged manifest hundreds of times a day.
+    """
     global _manifest_cache
-    _REBUILD_INTERVAL = 60
+    _REBUILD_INTERVAL = 1800
     logger.info("Manifest prebuilder thread started")
     while True:
         _manifest_rebuild_event.wait(timeout=_REBUILD_INTERVAL)
@@ -613,9 +631,10 @@ def _manifest_prebuilder_loop() -> None:
 
 def _start_manifest_prebuilder() -> None:
     global _manifest_prebuilder_started
-    if not _manifest_prebuilder_started:
-        _manifest_prebuilder_started = True
-        threading.Thread(target=_manifest_prebuilder_loop, daemon=True).start()
+    with _manifest_cache_lock:
+        if not _manifest_prebuilder_started:
+            threading.Thread(target=_manifest_prebuilder_loop, daemon=True).start()
+            _manifest_prebuilder_started = True
 
 
 def init_kosync_server(database_service, container, manager, ebook_dir=None):
@@ -626,8 +645,8 @@ def init_kosync_server(database_service, container, manager, ebook_dir=None):
     _manager = manager
     _ebook_dir = ebook_dir
     _kosync_device_session_registry = None
-    # Prebuilder is started lazily on first manifest request so idle installs
-    # that don't use device-sync never hash the library (ref #342).
+    # First-time device sync starts the prebuilder on request. After that,
+    # catalog-change signals can start it again following a restart.
 
 
 def _get_koreader_device_sync_service():
@@ -1291,7 +1310,7 @@ def kosync_get_progress(doc_id):
                 "document": doc_id,
                 "percentage": float(progress_row.percentage),
                 "progress": progress_row.progress or "",
-                "timestamp": int(progress_row.timestamp.timestamp()) if progress_row.timestamp else 0
+                "timestamp": int(datetime_to_epoch(progress_row.timestamp)) if progress_row.timestamp else 0
             }
             response_data.update(
                 _recent_external_kosync_put_metadata(
@@ -1309,6 +1328,10 @@ def kosync_get_progress(doc_id):
     if book:
         if not _kosync_user_may_access_book(book):
             return _defer_kosync_book_access(doc_id, book, source="get")
+        # The book names this hash but an existing document row may still be unlinked,
+        # which hides its stored per-user progress from _respond_from_book_states (#431).
+        # Register it the way Step 3 does so the pairing heals on this read.
+        _register_hash_for_book(doc_id, book)
         return _respond_from_book_states(doc_id, book)
 
     # Step 3: Sibling hash resolution — find the book via other linked hashes.
@@ -1545,7 +1568,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         audio_cover_url=f"/api/cover-proxy/{candidate['abs_id']}",
         ebook_source=ebook_source,
         ebook_source_id=ebook_source_id,
-        booklore_ebook_id=ebook_source_id if ebook_source == "BookLore" else None,
+        booklore_ebook_id=ebook_source_id if is_grimmory_source(ebook_source) else None,
         kosync_doc_id=doc_hash_val,
     )
     if not saved:
@@ -1583,14 +1606,25 @@ def _record_user_kosync_state(book, percentage, progress, timestamp, user_id):
     if not book or user_id is None:
         return
     try:
+        metadata = {}
+        if is_cbz_book(book):
+            previous = _database_service.get_state(book.abs_id, "kosync", user_id=user_id)
+            # PUT updates the wire position immediately. Retain the last synced
+            # page until the cycle consumes it, including across several PUTs,
+            # so a single page turn is still detectable when its pct delta is 0.
+            metadata = state_metadata_kwargs({
+                "page": page_from_persisted_state(previous),
+                "kosync_approved_rewind_at": get_kosync_approved_rewind_at(previous),
+            })
         _database_service.save_state(State(
             abs_id=book.abs_id,
             client_name="kosync",
             percentage=float(percentage or 0),
-            timestamp=int(timestamp.timestamp()) if timestamp else int(time.time()),
+            timestamp=int(datetime_to_epoch(timestamp)) if timestamp else int(time.time()),
             last_updated=int(time.time()),
             xpath=progress or "",
             user_id=user_id,
+            **metadata,
         ))
     except Exception as exc:
         logger.warning(
@@ -1662,7 +1696,25 @@ def kosync_put_progress():
         if request_user_id is None or doc_user_id in (None, request_user_id):
             baseline = kosync_doc
     baseline_pct = float(baseline.percentage) if baseline and baseline.percentage else 0
-    same_device = bool(baseline and baseline.device_id and baseline.device_id == device_id)
+    baseline_device = getattr(baseline, "device", None)
+    baseline_device_id = getattr(baseline, "device_id", None)
+    same_device = bool(baseline and baseline_device_id and baseline_device_id == device_id)
+
+    # Furthest-wins exists to stop one DEVICE from regressing another. When the
+    # position it is defending was never claimed by a real device — no device_id
+    # recorded, or BookBridge's own sync-bot write-back — there is no peer to
+    # protect and the guard degenerates into the bridge blocking the user from
+    # their own reader.
+    #
+    # That case is a deadlock, not an edge case: a device's identity is only
+    # recorded when a PUT is ACCEPTED, but a backward PUT is only accepted from an
+    # already-recorded device. So a reader that has only ever RECEIVED positions —
+    # which is every reader the bridge has pushed to and that has not yet pushed a
+    # forward position of its own — can never rewind, and the user's deliberate
+    # rewind is rejected against an echo of our own write (issue #215).
+    baseline_unclaimed = not baseline_device_id or _is_internal_kosync_device(
+        baseline_device, baseline_device_id
+    )
 
     if (
         furthest_wins
@@ -1673,11 +1725,19 @@ def kosync_put_progress():
     ):
         new_pct = float(percentage)
         if new_pct < baseline_pct - 0.0001:
-            logger.info(f"KOSync: Ignored progress from '{device}' for doc {doc_hash} (user has higher: {baseline_pct:.2f}% vs new {new_pct:.2f}%)")
-            return jsonify({
-                "document": doc_hash,
-                "timestamp": int(baseline.timestamp.timestamp()) if baseline and baseline.timestamp else int(now.timestamp())
-            }), 200
+            if baseline_unclaimed:
+                logger.info(
+                    f"KOSync: Allowing rewind from '{device}' for doc {doc_hash} "
+                    f"({baseline_pct:.2%} -> {new_pct:.2%}): the higher position was never "
+                    f"claimed by another device (stored device_id="
+                    f"{baseline_device_id or 'none'}), so furthest-wins has no peer to defend"
+                )
+            else:
+                logger.info(f"KOSync: Ignored progress from '{device}' for doc {doc_hash} (user has higher: {baseline_pct:.2f}% vs new {new_pct:.2f}%)")
+                return jsonify({
+                    "document": doc_hash,
+                    "timestamp": int(datetime_to_epoch(baseline.timestamp)) if baseline and baseline.timestamp else int(datetime_to_epoch(now))
+                }), 200
 
     if kosync_doc is None:
         kosync_doc = KosyncDocument(
@@ -1717,6 +1777,17 @@ def kosync_put_progress():
     _database_service.save_kosync_document(kosync_doc)
     if not is_internal:
         _record_recent_external_kosync_put(doc_hash, device, device_id, percentage, now_ts, request_user_id)
+        # A device telling us where it is, in its own words. Instrumentation only for
+        # now — nothing reads the trail to make a decision yet (issue #215 phase 0).
+        linked_abs_id = getattr(kosync_doc, "linked_abs_id", None) if kosync_doc else None
+        if linked_abs_id:
+            try:
+                observation_trail.record_observation(
+                    "KoSync", linked_abs_id, percentage, source="put",
+                    user_id=request_user_id, device=device or "",
+                )
+            except Exception as trail_err:
+                logger.debug(f"Could not record KoSync observation: {trail_err}", exc_info=True)
         # Per-user device progress: the durable per-user record for unlinked docs
         # and the furthest-wins / sibling-GET source (no-op for no-accounts installs).
         _database_service.upsert_user_kosync_progress(
@@ -1796,7 +1867,7 @@ def kosync_put_progress():
     response_timestamp = now.isoformat() + "Z"
     if device and device.lower() == "booknexus":
         # BookNexus expects an integer timestamp (Unix epoch)
-        response_timestamp = int(now.timestamp())
+        response_timestamp = int(datetime_to_epoch(now))
 
     return jsonify({
         "document": doc_hash,
@@ -1816,8 +1887,8 @@ def koreader_device_sync_manifest():
     build and primes the cache so subsequent requests are instant.
     """
     global _manifest_cache
-    # Prebuilder is started lazily on first manifest request so idle installs
-    # that don't use device-sync never hash the library (ref #342).
+    # First-time device sync starts here; returning installs can also start
+    # the prebuilder on a catalog change before the device connects.
     _start_manifest_prebuilder()
     note_device_sync_activity()
 
@@ -1896,7 +1967,13 @@ def koreader_device_sync_download(abs_id):
         max_age=0,
     )
     response.set_etag(content_hash)
-    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    # Content-Disposition is left to send_file, which RFC 5987-encodes a non-ASCII
+    # download_name. Overwriting it with a raw f-string put the literal filename in
+    # the header, and a WSGI server encodes headers as latin-1: a curly apostrophe
+    # (any curly apostrophe) raised UnicodeEncodeError while writing the
+    # response, killing the connection mid-download. The device saw only a read
+    # timeout and retried forever. BridgeSync never reads this header anyway -- it
+    # takes the filename from the manifest.
     return response
 
 
@@ -2951,6 +3028,22 @@ def _respond_from_book_states(doc_id, book):
         d for d in progress_rows
         if d.percentage and float(d.percentage) > 0 and (d.progress or "").strip()
     ]
+    # Only a corroborated rewind may supersede an older device position. Ordinary
+    # sync writes can be slightly behind through locator rounding (#434). Keep the
+    # original rewind cutoff, not State.last_updated, which advances on every sync.
+    rewind_at = get_kosync_approved_rewind_at(kosync_state)
+    if rewind_at is not None:
+        eligible_docs = []
+        for device_doc in docs_with_progress:
+            device_at = parse_service_timestamp(getattr(device_doc, "timestamp", None))
+            if device_at is not None and device_at < rewind_at - 1.0:
+                logger.info(
+                    f"KOSync: Ignoring stale device position {float(device_doc.percentage):.2%} for {doc_id} — "
+                    f"it predates the approved rewind; keeping the bridge-synced position {synced_pct:.2%}"
+                )
+            else:
+                eligible_docs.append(device_doc)
+        docs_with_progress = eligible_docs
     if docs_with_progress:
         best_doc = max(docs_with_progress, key=lambda d: float(d.percentage))
         # Furthest-wins: only hand back the device's own position when it is genuinely
@@ -3081,7 +3174,7 @@ def _respond_from_book_states(doc_id, book):
                 "document": doc_id,
                 "percentage": float(best_doc.percentage),
                 "progress": best_doc.progress or "",
-                "timestamp": int(best_doc.timestamp.timestamp()) if best_doc.timestamp else 0
+                "timestamp": int(datetime_to_epoch(best_doc.timestamp)) if best_doc.timestamp else 0
             }
             response_data.update(
                 _recent_external_kosync_put_metadata(
@@ -3102,14 +3195,29 @@ def _respond_from_book_states(doc_id, book):
     if poison_pill is not None:
         return poison_pill
 
-    return jsonify({
+    response_data = {
         "device": "abs-kosync-bridge",
         "device_id": "abs-kosync-bridge",
         "document": doc_id,
         "percentage": latest_pct,
         "progress": latest_progress,
         "timestamp": int(latest_state.last_updated) if latest_state.last_updated else 0
-    }), 200
+    }
+    # A LINKED book exits Step 1 of the GET handler straight into this function, so
+    # this is the response every book the bridge actually syncs receives — and it
+    # was the one response that never carried the recent-external-PUT marker. Only
+    # the sibling-hash branch above and the unlinked-document path in the handler
+    # attached it, which is why `_kosync_recent_external_put` was never set and the
+    # "Trusting recent external KoSync PUT" path in `_determine_leader` could not
+    # fire for any synced book (issue #215).
+    #
+    # The percentage guard inside the helper still applies: the marker is dropped
+    # unless the position being returned IS the one the device just PUT, so this
+    # cannot label a bridge-synced position as a device report.
+    response_data.update(
+        _recent_external_kosync_put_metadata(doc_id, latest_pct, user_id)
+    )
+    return jsonify(response_data), 200
 
 
 def _resolve_book_by_sibling_hash(doc_id: str, existing_doc=None):

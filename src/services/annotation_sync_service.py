@@ -586,6 +586,12 @@ class AnnotationSyncService:
 
         uploaded_ids = []
         server_ids_by_annotation_id = {}
+        # A competing create can win after our first GET (Grimmory answers 409).
+        # Refresh the remote map at most once per invocation — if Grimmory is
+        # failing systemically rather than racing, every one of the up to
+        # _MAX_CHANGES_PER_BOOK failing creates would otherwise re-fetch the
+        # full remote list for no new information.
+        refreshed_after_failed_create = False
         for raw_change in (state.get("changes") or [])[:_MAX_CHANGES_PER_BOOK]:
             change = dict(raw_change)
             annotation_id = change.pop("_id", None)
@@ -602,6 +608,9 @@ class AnnotationSyncService:
 
             remote_id = int(remote_id) if remote_id is not None else None
             if remote_id is None:
+                remote_id = next((key for key, item in remote_by_id.items()
+                                  if self._same_remote_anchor(payload, item)), None)
+            if remote_id is None:
                 created = client.create_annotation(
                     book_id,
                     payload["cfi"],
@@ -614,7 +623,22 @@ class AnnotationSyncService:
                 if created and created.get("id") is not None:
                     uploaded_ids.append(annotation_id)
                     server_ids_by_annotation_id[str(annotation_id)] = int(created["id"])
-                continue
+                    remote_by_id[int(created["id"])] = {**payload, **created}
+                    continue
+                # Only an exact anchor match permits adoption; a failed POST
+                # alone does not. Refresh at most once per invocation (see
+                # comment above) — later failing changes adopt against the
+                # already-refreshed map without triggering another GET.
+                if not refreshed_after_failed_create:
+                    refreshed_after_failed_create = True
+                    refreshed = client.get_annotations(book_id)
+                    if refreshed is not None:
+                        remote_by_id = {int(item["id"]): item for item in refreshed
+                                        if item.get("id") is not None}
+                remote_id = next((key for key, item in remote_by_id.items()
+                                  if self._same_remote_anchor(payload, item)), None)
+                if remote_id is None:
+                    continue
 
             if self._same_remote_anchor(payload, remote_by_id.get(remote_id)):
                 if client.update_annotation(remote_id, payload["color"], payload["style"], payload["note"]):

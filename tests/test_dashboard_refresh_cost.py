@@ -260,6 +260,49 @@ class TestCompactRefreshEndpoint(unittest.TestCase):
                 full["states"][client_name]["timestamp"],
             )
 
+    def test_ctc_status_updates_card_and_compact_feed_without_reading_map_blobs(self):
+        from lxml import html
+        from sqlalchemy import event
+        from src.services.alignment_service import AlignmentService
+        from src.utils.polisher import Polisher
+
+        self._seed()
+        self._login()
+        self.assertFalse(self.client.get('/api/status/progress').get_json()['mappings'][0]['ctc_aligned'])
+        alignment = AlignmentService(self.svc, Polisher())
+        alignment._save_alignment('abs-1', [{'char': 0, 'ts': 0.0}, {'char': 100, 'ts': 10.0}], 'ctc')
+
+        statements = []
+        def capture_sql(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+        with self.svc.get_session() as session:
+            engine = session.get_bind()
+        event.listen(engine, 'before_cursor_execute', capture_sql)
+        try:
+            compact = self.client.get('/api/status/progress').get_json()['mappings'][0]
+        finally:
+            event.remove(engine, 'before_cursor_execute', capture_sql)
+        self.assertTrue(compact['ctc_aligned'])
+        alignment_queries = [sql for sql in statements if 'book_alignments' in sql.lower()]
+        self.assertEqual(len(alignment_queries), 1)
+        self.assertNotIn('alignment_map_json', alignment_queries[0])
+        self.assertTrue(self.client.get('/api/status').get_json()['mappings'][0]['ctc_aligned'])
+
+        page = html.fromstring(self.client.get('/').get_data(as_text=True))
+        badge = page.xpath('//span[@class="ctc-alignment-badge"]')[0]
+        remap = page.xpath('//button[contains(@class,"remap-alignment-btn")]')[0]
+        clear = page.xpath('//button[starts-with(@onclick,"clearPosition(")]')[0]
+        self.assertIsNone(badge.get('hidden'))
+        self.assertIsNotNone(remap.get('disabled'))
+        self.assertEqual(remap.text_content().strip(), '✓ Already using CTC')
+        self.assertIsNone(clear.get('disabled'))
+
+        alignment._save_alignment('abs-1', [{'char': 0, 'ts': 0.0}], 'lexical_timed')
+        self.assertFalse(self.client.get('/api/status/progress').get_json()['mappings'][0]['ctc_aligned'])
+        page = html.fromstring(self.client.get('/').get_data(as_text=True))
+        self.assertIsNotNone(page.xpath('//span[@class="ctc-alignment-badge"]')[0].get('hidden'))
+        self.assertIsNone(page.xpath('//button[contains(@class,"remap-alignment-btn")]')[0].get('disabled'))
+
     def test_only_the_users_own_books_are_returned(self):
         self._seed()
         other = self.svc.create_user("other-user", "otherpw", role="user")

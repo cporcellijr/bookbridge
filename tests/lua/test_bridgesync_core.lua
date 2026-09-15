@@ -182,8 +182,17 @@ api_client:init("http://bridge", "reader", "secret", nil, function(task)
 end)
 local request_ok, request_code, request_body = api_client:_request("GET", "/test")
 assert(request_ok and request_code == 200 and request_body == "ok",
-    "background API request must preserve the HTTP result")
-assert(request_runner_calls == 1, "non-download HTTP must run through the request runner")
+    "API request must preserve the HTTP result")
+-- Forking a ~100 MB reader image for every API call is what exhausted memory on
+-- Kindle ("fork failed: Cannot allocate memory") and made each child re-open the
+-- plugin database behind its parent ("database is locked"). Ordinary requests
+-- must stay on the UI loop and never reach the subprocess runner.
+assert(request_runner_calls == 0, "ordinary HTTP must not fork a subprocess")
+
+local opted_in_ok, opted_in_code = api_client:_request("GET", "/test", nil, nil, { background = true })
+assert(opted_in_ok and opted_in_code == 200,
+    "an explicit background request must still return its HTTP result")
+assert(request_runner_calls == 1, "background = true must still route through the request runner")
 
 local download_path = os.tmpname()
 local download_ok, download_err = api_client:downloadBook("/book", download_path, 2)
@@ -440,6 +449,59 @@ finish_first()
 assert(table.concat(order, ",") == "first,close,new-annotations",
     "coordinator did not honor priority and replacement")
 assert(not coordinator:isBusy(), "coordinator remained busy after all jobs completed")
+
+-- Cancellation: suspend and ReaderUI teardown must be able to abandon work.
+local owner_a, owner_b = {}, {}
+local ran = {}
+local finish_active
+local cancel_coordinator = coordinator_module:new(function() return now end)
+cancel_coordinator:submit({
+    family = "active", owner = owner_a, priority = 100,
+    run = function(done) table.insert(ran, "active"); finish_active = done end,
+})
+cancel_coordinator:submit({
+    family = "queued_a", owner = owner_a, priority = 100,
+    run = function(done) table.insert(ran, "queued_a"); done() end,
+})
+cancel_coordinator:submit({
+    family = "queued_b", owner = owner_b, priority = 100,
+    run = function(done) table.insert(ran, "queued_b"); done() end,
+})
+assert(cancel_coordinator:status().pending_count == 2, "cancellation fixture did not queue both jobs")
+-- A departing instance drops only its own queued work; another owner's survives.
+assert(cancel_coordinator:cancelPending(owner_a) == 1,
+    "cancelPending did not drop the departing owner's queued job")
+assert(cancel_coordinator:status().pending_count == 1,
+    "cancelPending dropped another owner's queued job")
+-- Teardown leaves a running job alone; only an explicit cancel flags it.
+assert(not cancel_coordinator:isActiveCancelled(),
+    "cancelPending must not flag the job that is already running")
+assert(cancel_coordinator:cancelActive(owner_b) == false,
+    "cancelActive flagged a job belonging to a different owner")
+assert(cancel_coordinator:cancelActive(owner_a),
+    "cancelActive did not flag the owner's running job")
+assert(cancel_coordinator:isActiveCancelled(), "the running job was not reported as cancelled")
+-- A flagged job still drains the queue when it finishes, so cancelling can
+-- never wedge the coordinator.
+finish_active()
+assert(table.concat(ran, ",") == "active,queued_b", "cancellation ran the wrong jobs")
+assert(not cancel_coordinator:isBusy(), "coordinator stayed busy after a cancelled job finished")
+
+local purge_coordinator = coordinator_module:new(function() return now end)
+local purge_finish
+purge_coordinator:submit({
+    family = "running", priority = 100,
+    run = function(done) purge_finish = done end,
+})
+purge_coordinator:submit({
+    family = "waiting", priority = 100,
+    run = function() error("a purged job must never run") end,
+})
+assert(purge_coordinator:cancelPending() == 1, "cancelPending did not report the dropped job")
+assert(purge_coordinator:status().pending_count == 0, "cancelPending left work queued")
+assert(purge_coordinator:cancelActive(), "cancelActive did not flag the running job")
+purge_finish()
+assert(not purge_coordinator:isBusy(), "coordinator stayed busy after a purge")
 
 assert(version.isNewer("0.4.0", "0.3.6"), "newer semantic version was not detected")
 assert(not version.isNewer("0.3.5", "0.3.6"), "older server version would trigger a downgrade")

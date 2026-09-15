@@ -170,6 +170,27 @@ def test_audio_read_reconstructs_absolute_ts_from_track():
     assert state.current["pct"] == pytest.approx(0.1995)
 
 
+def test_audio_read_reconstructs_absolute_ts_from_v2_asset():
+    client = MagicMock()
+    client.get_audiobook_info.return_value = {
+        **_MULTI_TRACK_INFO,
+        "playback_tracks": [
+            {"id": "aud_a", "duration_seconds": 3806.0},
+            {"id": "aud_b", "duration_seconds": 4287.0},
+            {"id": "aud_c", "duration_seconds": 4472.0},
+            {"id": "aud_d", "duration_seconds": 4484.0},
+        ],
+    }
+    client.get_audiobook_progress.return_value = {
+        "pct": 0.1995, "position_seconds": 194.0, "current_file_id": "aud_b",
+    }
+    sc = BookOrbitAudioSyncClient(client, ebook_parser=None)
+
+    state = sc.get_service_state(_multi_track_book(), prev_state=None)
+
+    assert state.current["ts"] == pytest.approx(4000.0)
+
+
 def test_audio_read_unknown_file_id_falls_back_to_percentage():
     client = MagicMock()
     client.get_audiobook_info.return_value = dict(_MULTI_TRACK_INFO)

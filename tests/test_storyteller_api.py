@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -283,7 +284,9 @@ class TestStorytellerSlimReadaloudEpub(unittest.TestCase):
 
             self.assertTrue(ok)
             # The full artifact may only ever land on the transient .full.tmp.
-            self.assertEqual(Path(mock_dl.call_args[0][1]).name, dest.name + ".full.tmp")
+            self.assertEqual(Path(mock_dl.call_args[0][1]).name, "full.tmp")
+            self.assertEqual(Path(mock_dl.call_args[0][1]).parent.parent, dest.parent)
+            self.assertFalse(Path(mock_dl.call_args[0][1]).parent.exists())
             self.assertFalse(dest.with_name(dest.name + ".full.tmp").exists())
             self.assertFalse(self.client._epub_has_embedded_audio(dest))
             with zipfile.ZipFile(dest, "r") as z:
@@ -569,3 +572,65 @@ class TestStorytellerPositionPostCompatibility(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@patch.dict(
+    os.environ,
+    {
+        "STORYTELLER_API_URL": "http://test-storyteller:8001",
+        "STORYTELLER_USER": "testuser",
+        "STORYTELLER_PASSWORD": "testpass",
+    },
+)
+class TestStorytellerArtifactPublication(unittest.TestCase):
+    """A truncated readaloud EPUB must never replace a good cached artifact."""
+
+    def setUp(self):
+        self.client = StorytellerAPIClient()
+        self.client._get_fresh_token = Mock(return_value="token")
+        self.client.session = Mock()
+
+    @staticmethod
+    def _epub_bytes(tmp: Path) -> bytes:
+        source = tmp / "source.epub"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.writestr("mimetype", "application/epub+zip")
+            archive.writestr("OEBPS/content.opf", "<package/>")
+        return source.read_bytes()
+
+    def _respond(self, chunks):
+        response = Mock()
+        response.status_code = 200
+        response.headers = {}
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.iter_content = Mock(return_value=chunks)
+        self.client.session.get.return_value = response
+
+    def test_complete_readaloud_artifact_is_published(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            payload = self._epub_bytes(tmp_path)
+            target = tmp_path / "artifact.epub"
+            self._respond([payload])
+
+            self.assertTrue(self.client.download_book("uuid-1", target))
+            self.assertEqual(
+                zipfile.ZipFile(target).read("mimetype"), b"application/epub+zip"
+            )
+
+    def test_truncated_zip_is_rejected_and_previous_artifact_survives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            payload = self._epub_bytes(tmp_path)
+            target = tmp_path / "artifact.epub"
+            target.write_bytes(b"a previously downloaded artifact")
+            self._respond([payload[: len(payload) // 2]])
+
+            # No local fallback is reachable, so the download reports failure.
+            self.client._make_request = Mock(return_value=None)
+            with self.assertRaises(Exception):
+                self.client.download_book("uuid-1", target)
+
+            self.assertEqual(target.read_bytes(), b"a previously downloaded artifact")
+            self.assertEqual(list(tmp_path.glob("*.part")), [])

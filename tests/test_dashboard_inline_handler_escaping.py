@@ -6,9 +6,9 @@ Reported 2026-08-20. The button rendered as
 
 and Jinja's `e` filter escapes `'` to `&#39;`. The browser decodes HTML entities
 in an attribute *before* compiling the handler, so a title like
-"Returner's Defiance 6" produced
+"Wanderer's Resolve 6" produced
 
-    markComplete('ebook-1', 'Returner's Defiance 6')
+    markComplete('ebook-1', 'Wanderer's Resolve 6')
 
 which is a JavaScript syntax error. The handler never ran and the click was
 silently inert — no dialog, no request, nothing but a console error.
@@ -31,7 +31,7 @@ _INDEX = Path(__file__).resolve().parents[1] / "templates" / "index.html"
 # Titles that break naive quoting. The first two are real books in a reporting
 # user's library.
 _HOSTILE_TITLES = [
-    "Returner's Defiance 6 - Bruce Sentar",
+    "Wanderer's Resolve 6 - Jamie Rowe",
     "To Valor's Bid",
     'He said "hi" loudly',
     "Tom & Jerry",
@@ -104,7 +104,7 @@ class MarkCompleteHandlerEscapingTests(unittest.TestCase):
         """Guards the test itself: the pre-fix markup must not pass silently."""
         broken = "markComplete('{{ mapping.abs_id }}', '{{ mapping.abs_title | e }}')"
 
-        rendered = self._render('"', broken, "Returner's Defiance 6")
+        rendered = self._render('"', broken, "Wanderer's Resolve 6")
         attr = re.search(r'onclick="(?P<v>.*?)"', rendered, re.S).group("v")
         as_javascript = html.unescape(attr)
 

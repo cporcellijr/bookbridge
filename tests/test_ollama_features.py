@@ -334,19 +334,19 @@ class TestStage3VolumeGuard(_OllamaEnvGuard):
 
     def test_does_not_resolve_base_title_to_sequel(self):
         ebooks = [_Candidate(
-            name="Heretic Spellblade 2 - K.D. Robertson.epub",
-            title="Heretic Spellblade 2", authors="K.D. Robertson", source_id="x")]
-        chosen = {"display_name": "Heretic Spellblade", "author": "K.D. Robertson", "ebook_filename": ""}
-        self._svc(ebooks)._resolve_real_file("Heretic Spellblade", chosen)
+            name="Apostate Runeblade 2 - J.M. Sterling.epub",
+            title="Apostate Runeblade 2", authors="J.M. Sterling", source_id="x")]
+        chosen = {"display_name": "Apostate Runeblade", "author": "J.M. Sterling", "ebook_filename": ""}
+        self._svc(ebooks)._resolve_real_file("Apostate Runeblade", chosen)
         self.assertEqual(chosen["ebook_filename"], "")  # sequel rejected
 
     def test_resolves_matching_volume(self):
         ebooks = [_Candidate(
-            name="Returner's Defiance 2 - Bruce Sentar.epub",
-            title="Returner's Defiance 2", authors="Bruce Sentar", source_id="y")]
-        chosen = {"display_name": "Returner's Defiance 2", "author": "Bruce Sentar", "ebook_filename": ""}
-        self._svc(ebooks)._resolve_real_file("Returner's Defiance 2", chosen)
-        self.assertEqual(chosen["ebook_filename"], "Returner's Defiance 2 - Bruce Sentar.epub")
+            name="Wanderer's Resolve 2 - Jamie Rowe.epub",
+            title="Wanderer's Resolve 2", authors="Jamie Rowe", source_id="y")]
+        chosen = {"display_name": "Wanderer's Resolve 2", "author": "Jamie Rowe", "ebook_filename": ""}
+        self._svc(ebooks)._resolve_real_file("Wanderer's Resolve 2", chosen)
+        self.assertEqual(chosen["ebook_filename"], "Wanderer's Resolve 2 - Jamie Rowe.epub")
 
     def test_strips_unabridged_suffix_before_volume_compare(self):
         ebooks = [_Candidate(
@@ -411,13 +411,13 @@ class TestTitleNormalization(unittest.TestCase):
     def test_strips_prefix_and_parens(self):
         n = SuggestionsService._normalize_title_for_match
         self.assertEqual(n("01. Astral Odyssey (2024)"), "Astral Odyssey")
-        self.assertEqual(n("Bad Man (readaloud)"), "Bad Man")
+        self.assertEqual(n("Grim Fellow (readaloud)"), "Grim Fellow")
         self.assertEqual(n("1Q84 (Unabridged)"), "1Q84")
 
     def test_reorders_trailing_article(self):
         n = SuggestionsService._normalize_title_for_match
         self.assertEqual(n("Mirror’s Truth, The"), "The Mirror's Truth")
-        self.assertEqual(n("Psalm for the Wild-Built, A"), "A Psalm for the Wild-Built")
+        self.assertEqual(n("Song for the Hand-Built, A"), "A Song for the Hand-Built")
 
 
 class TestEmbeddingRetrieval(_OllamaEnvGuard):

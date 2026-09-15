@@ -42,7 +42,7 @@ from src.sync_clients.sync_client_interface import ServiceState
 from src.sync_manager import SyncManager
 
 ABS_ID = "bookorbit:480"
-TITLE = "Three Days in April"
+TITLE = "Four Nights in May"
 
 # The reporter's numbers, verbatim.
 READER_PCT = 0.93761303923520878        # Storyteller, where the user actually is

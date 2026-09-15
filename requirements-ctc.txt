@@ -1,0 +1,21 @@
+# CTC forced alignment (issue #426, opt-in).
+#
+# Installed ONLY when the image is built with --build-arg INSTALL_CTC=true, which
+# produces the `-ctc` image tag. torch + torchaudio are large (hundreds of MB to
+# GBs), so they are deliberately kept out of the base image; the standard image
+# runs the Whisper/lexical pipeline exactly as before and CTC is inert there.
+#
+# These are CPU wheels from PyPI. For GPU (CUDA) forced alignment, build on top of
+# the -cuda base and install the matching CUDA torch build from the PyTorch index
+# (e.g. --index-url https://download.pytorch.org/whl/cu121) — tracked as a follow-up.
+# torch drives the MMS model; torchaudio provides the MMS_FA bundle + forced_align.
+# Audio is decoded via the ffmpeg CLI (already in the image), NOT torchaudio.load, so
+# torchcodec and its strict FFmpeg-version coupling are deliberately avoided.
+#
+# NOTE on image size: on Linux `pip install torch` defaults to the CUDA build, which
+# makes the -ctc image ~10 GB (validated). That is what a GPU host wants. For a
+# CPU-only host, build against the CPU wheels to cut it to ~2-3 GB:
+#   pip install --index-url https://download.pytorch.org/whl/cpu -r requirements-ctc.txt
+# (wire that index into the INSTALL_CTC step, or set CTC_DEVICE=cpu at runtime).
+torch>=2.2,<3
+torchaudio>=2.2,<3

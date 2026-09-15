@@ -248,7 +248,17 @@ class TestCWASyncApi(unittest.TestCase):
         self.mock_cwa_client.get_book_uuid.return_value = "abcd-1234-uuid"
         result = self.client.resolve_book_uuid("42")
         self.assertEqual(result, "abcd-1234-uuid")
-        self.mock_cwa_client.get_book_uuid.assert_called_once_with("42")
+        self.mock_cwa_client.get_book_uuid.assert_called_once_with("42", search_hints=None)
+
+    def test_resolve_book_uuid_forwards_search_hints(self):
+        # #427: the numeric Calibre id can't be searched for itself, so the
+        # ordered hint chain must reach CWAClient.get_book_uuid unchanged.
+        self.mock_cwa_client.get_book_uuid.return_value = "abcd-1234-uuid"
+        result = self.client.resolve_book_uuid("1519", search_hints=["Dungeon Crawler Carl"])
+        self.assertEqual(result, "abcd-1234-uuid")
+        self.mock_cwa_client.get_book_uuid.assert_called_once_with(
+            "1519", search_hints=["Dungeon Crawler Carl"]
+        )
 
     def test_resolve_book_uuid_no_cwa_client(self):
         client = self._make_client(cwa_client=None)

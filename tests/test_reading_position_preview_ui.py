@@ -73,5 +73,8 @@ def test_grid_layout_is_resynced_when_series_grouping_moves_cards():
     assert "window.bookbridgeSyncPreviewLayout = syncAllGridPreviewLayouts" in script
     assert "document.querySelectorAll('.book-grid').forEach(applyGridPreviewLayout)" in script
 
+    # Scoped to the function body rather than a fixed character window, so the
+    # assertion keeps meaning as applySeriesGrouping grows.
     start = index.index("function applySeriesGrouping")
-    assert "window.bookbridgeSyncPreviewLayout()" in index[start:start + 800]
+    end = index.index("\n            function ", start + 1)
+    assert "window.bookbridgeSyncPreviewLayout()" in index[start:end]

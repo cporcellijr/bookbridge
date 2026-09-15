@@ -30,6 +30,9 @@ local unpack = unpack or table.unpack
 
 local PLUGIN_NAME = "bridgesync"
 
+-- Wait this long for a competing writer before surfacing SQLITE_BUSY.
+local BUSY_TIMEOUT_MS = 5000
+
 -- State-file keys that intentionally stay in LuaSettings:
 --   annotation_watermarks -- bridge_annotations.lua still reads/writes
 --   bridge.state directly, so migrating it would strand live data.
@@ -254,6 +257,16 @@ function BridgeSqliteState:init()
         return false, conn
     end
     self.conn = conn
+
+    -- Another writer (a second plugin instance, or a still-live forked
+    -- child holding an inherited handle) must make this connection wait
+    -- rather than fail the whole operation with SQLITE_BUSY.
+    local busy_ok, busy_err = pcall(function()
+        conn:set_busy_timeout(BUSY_TIMEOUT_MS)
+    end)
+    if not busy_ok then
+        logger.warn("BridgeSqliteState: failed to set busy timeout:", tostring(busy_err))
+    end
 
     local schema_ok, err = pcall(function()
         conn:exec(SCHEMA_SQL)

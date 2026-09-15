@@ -98,6 +98,19 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+    #
+    # ============================================
+    # CTC FORCED ALIGNMENT (OPTIONAL, issue #426)
+    # ============================================
+    # Aligns the audiobook directly against the ebook text (Meta MMS via torchaudio)
+    # instead of transcribing + matching back — denser, more accurate positions.
+    # It bundles torch/torchaudio, so it is opt-in and makes the image large
+    # (~10 GB with the default CUDA torch; ~2-3 GB with CPU wheels). To enable:
+    #   1. build with the CTC arg:      args: { INSTALL_CTC: "true" }
+    #   2. turn it on:                  environment: - CTC_ENABLED=true
+    #   3. persist the model (~1 GB):   environment: - TORCH_HOME=/data/models/torch
+    #   4. for GPU, add the deploy.resources block above (CTC uses it automatically;
+    #      set CTC_DEVICE=cpu to force CPU). Rebuild with `docker compose up -d --build`.
 
 networks:
   your-network:

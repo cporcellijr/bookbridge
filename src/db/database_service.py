@@ -7,11 +7,12 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,7 @@ from .models import (
     PendingSuggestion,
     BookloreBook,
     ReadingSession,
+    ReadingSessionBuffer,
     KOReaderBookStat,
     KOReaderPageStat,
     KoreaderAnnotation,
@@ -43,10 +45,42 @@ from .models import (
     UserBookOrbitLink,
     Base,
 )
+from src.services.map_quality import ALIGNMENT_QUALITY_REALIGN_THRESHOLD, quality_detail_json, score_map
 from src.utils import secret_store
+from src.utils.ebook_sources import source_name_variants
 from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+# Reading-session buffer delivery destinations, mapped to the status column each
+# one owns. A buffered session is delivered to these independently, so one being
+# unreachable never holds up or duplicates the other.
+_READING_SESSION_DESTINATIONS = {
+    "grimmory": "grimmory_status",
+    "bookorbit": "bookorbit_status",
+}
+
+# The columns the KOReader device-sync manifest is actually built from: the book
+# is listed only while active, and each entry carries its title, the resolved
+# ebook file, and that file's content hash. A save that touches none of these
+# cannot change the manifest. This matters because the sync cycle and the
+# transcription jobs call save_book constantly to write back routine fields --
+# announcing every one of those rebuilt the whole manifest back to back.
+MANIFEST_RELEVANT_BOOK_FIELDS = (
+    "status",
+    "abs_title",
+    "original_ebook_filename",
+    "ebook_filename",
+    "kosync_doc_id",
+    "sync_mode",
+    "ebook_source",
+    "ebook_source_id",
+)
+
+
+def _manifest_signature(book) -> tuple:
+    """Snapshot the manifest-relevant columns of a book row for change detection."""
+    return tuple(getattr(book, field, None) for field in MANIFEST_RELEVANT_BOOK_FIELDS)
 
 # SQLite limits bound parameters per statement (SQLITE_MAX_VARIABLE_NUMBER, historically 999).
 # Use 500 to stay well under the cap with room for other query parameters.
@@ -67,12 +101,39 @@ class DatabaseService:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_manager = DatabaseManager(str(self.db_path))
         self._default_uid = None  # cached default (admin) user id for state scoping
+        self._catalog_change_callbacks: list[Callable[[], None]] = []
+        self._ebook_source_claim_lock = threading.Lock()
 
         # Run Alembic migrations to ensure schema is up to date
         self._run_alembic_migrations()
 
         # Ensure all tables exist (covers new models not yet in migrations)
         Base.metadata.create_all(self.db_manager.engine)
+
+    def register_catalog_change_callback(self, callback: Callable[[], None]) -> None:
+        """Register a zero-argument callable to run after the catalog changes.
+
+        The catalog is the set of books a device or client can see, so anything
+        derived from it (the KOReader device-sync manifest, for one) needs to know
+        when a book is created, deleted, or has its status flipped. Registering a
+        callback here keeps that dependency pointing inward: this module never
+        imports the API layer.
+        """
+        self._catalog_change_callbacks.append(callback)
+
+    def _notify_catalog_change(self) -> None:
+        """Run every catalog-change callback, swallowing individual failures.
+
+        A subscriber must never be able to fail the database write that triggered
+        it -- the mutation is already committed by the time this runs.
+        """
+        for callback in self._catalog_change_callbacks:
+            try:
+                callback()
+            except Exception as e:
+                logger.warning(
+                    "⚠️ Catalog-change callback failed: %s", e, exc_info=True
+                )
 
     def _run_alembic_migrations(self):
         """Run Alembic migrations to ensure database schema is up to date."""
@@ -514,9 +575,20 @@ class DatabaseService:
             updated = session.query(Book).filter(Book.abs_id == abs_id).update(
                 {Book.status: status}, synchronize_session=False
             )
-            return bool(updated)
 
-    def update_book_fields(self, abs_id: str, **fields) -> bool:
+        if updated:
+            self._notify_catalog_change()
+        return bool(updated)
+
+    def update_book_fields(
+        self,
+        abs_id: str,
+        *,
+        expected_ebook_source_id: Optional[str] = None,
+        expected_grimmory_source: bool = False,
+        notify_catalog_change: bool = False,
+        **fields,
+    ) -> bool:
         """Update named columns on one book row, leaving `abs_id` alone.
 
         Used by the audio repoint, which changes a book's audio provider in place:
@@ -533,11 +605,22 @@ class DatabaseService:
         if not allowed:
             return False
         with self.get_session() as session:
-            updated = session.query(Book).filter(Book.abs_id == abs_id).update(
+            query = session.query(Book).filter(Book.abs_id == abs_id)
+            if expected_ebook_source_id is not None:
+                query = query.filter(Book.ebook_source_id == str(expected_ebook_source_id))
+            if expected_grimmory_source:
+                from sqlalchemy import func
+
+                query = query.filter(
+                    func.lower(Book.ebook_source).in_(("booklore", "grimmory"))
+                )
+            updated = query.update(
                 {getattr(Book, key): value for key, value in allowed.items()},
                 synchronize_session=False,
             )
-            return bool(updated)
+        if updated and notify_catalog_change:
+            self._notify_catalog_change()
+        return bool(updated)
 
     def has_alignment(self, abs_id: str) -> bool:
         """Whether a stored alignment map exists for a book.
@@ -577,6 +660,35 @@ class DatabaseService:
             except (TypeError, ValueError):
                 return None
 
+    def get_alignment_method(self, abs_id: str) -> Optional[str]:
+        """How a book's stored alignment map was built, or None if it has no map.
+
+        Returns the ``align_method`` string (e.g. 'lexical', 'lexical_timed',
+        'llm_anchor', 'linear', 'ctc', 'storyteller', 'storyteller_linear'). A stored
+        map with a NULL method (built before provenance tracking) returns the empty
+        string so callers can distinguish "no map" (None) from "map, unknown method".
+        Selects the scalar only, never the map blob.
+        """
+        if not abs_id:
+            return None
+        with self.get_session() as session:
+            row = (
+                session.query(BookAlignment.align_method)
+                .filter(BookAlignment.abs_id == abs_id)
+                .first()
+            )
+            if row is None:
+                return None
+            return row[0] or ""
+
+    def get_ctc_aligned_book_ids(self) -> set[str]:
+        """Return CTC-aligned book IDs in one query without loading map blobs."""
+        with self.get_session() as session:
+            return {
+                row[0] for row in session.query(BookAlignment.abs_id)
+                .filter(BookAlignment.align_method == "ctc").all()
+            }
+
     def set_alignment_total_chars_if_missing(self, abs_id: str, total_chars: int) -> bool:
         """Record an ebook length on a map that has none. Returns whether it wrote.
 
@@ -595,21 +707,39 @@ class DatabaseService:
             )
             if row is None or row.total_chars is not None:
                 return False
-            row.total_chars = int(total_chars)
+            # This is a metadata backfill, not a re-alignment: the map itself is
+            # untouched, so `last_updated` (the map's build/rebuild provenance
+            # timestamp, surfaced by `get_alignment_provenance`) must not move.
+            # A plain ORM attribute assignment (`row.total_chars = ...`) still
+            # fires `BookAlignment.last_updated`'s `onupdate=utcnow` -- it fires
+            # on ANY UPDATE to the row, not just when `last_updated` itself
+            # changes. Naming `last_updated` explicitly in the bulk UPDATE's SET
+            # clause is what suppresses `onupdate`: an explicit value takes
+            # precedence over it, whereas re-assigning the same value through
+            # the ORM leaves the attribute un-dirty (omitted from the SET
+            # clause), so `onupdate` fires anyway.
+            session.query(BookAlignment).filter(BookAlignment.abs_id == abs_id).update(
+                {"total_chars": int(total_chars), "last_updated": row.last_updated},
+                synchronize_session=False,
+            )
             return True
 
     def get_alignment_provenance(self) -> dict:
         """Report how each stored alignment map was built.
 
         Returns {'summary': {method: count, ...}, 'total': int, 'needs_realign': int,
-        'books': [{abs_id, title, align_method, llm_used, needs_realign, last_updated}, ...]}.
+        'books': [{abs_id, title, align_method, llm_used, needs_realign, last_updated,
+        quality_score}, ...]}.
         NULL align_method (maps built before provenance tracking) is reported as 'pre_llm'.
 
-        The 'books' list now ONLY contains rows that need re-aligning (NULL align_method,
-        'linear', or 'storyteller_linear'). The 'summary' and 'total' still cover every
-        stored map. The alignment_map_json blob is deliberately never selected.
+        The 'books' list now contains rows that need re-aligning: NULL align_method,
+        'linear', 'storyteller_linear', OR a recorded quality_score below
+        `ALIGNMENT_QUALITY_REALIGN_THRESHOLD` (issue #426 phase 4 — a clean 'lexical'
+        map is not automatically accurate; the align_method alone can't see a map
+        that scored badly for other reasons). The 'summary' and 'total' still cover
+        every stored map. The alignment_map_json blob is deliberately never selected.
         """
-        from sqlalchemy import func, case, or_
+        from sqlalchemy import func, case, or_, and_
         with self.get_session() as session:
             # Summary + total from aggregate query grouped by align_method
             summary_rows = (
@@ -629,13 +759,18 @@ class DatabaseService:
                 summary[method] = count
                 total += count
 
-            # books now contains ONLY rows that need re-aligning
+            # books now contains rows that need re-aligning
             realign_methods = {None, "linear", "storyteller_linear"}
+            low_quality = and_(
+                BookAlignment.quality_score.isnot(None),
+                BookAlignment.quality_score < ALIGNMENT_QUALITY_REALIGN_THRESHOLD,
+            )
             book_rows = (
                 session.query(
                     BookAlignment.abs_id,
                     BookAlignment.align_method,
                     BookAlignment.last_updated,
+                    BookAlignment.quality_score,
                     Book.abs_title
                 )
                 .outerjoin(Book, Book.abs_id == BookAlignment.abs_id)
@@ -643,18 +778,24 @@ class DatabaseService:
                     or_(
                         BookAlignment.align_method.is_(None),
                         BookAlignment.align_method.in_(["linear", "storyteller_linear"]),
+                        low_quality,
                     )
                 )
                 .all()
             )
             books = []
-            for abs_id, align_method, last_updated, title in book_rows:
+            for abs_id, align_method, last_updated, quality_score, title in book_rows:
                 books.append({
                     "abs_id": abs_id,
                     "title": title or abs_id,
                     "align_method": align_method,
                     "llm_used": align_method == "llm_anchor",
-                    "needs_realign": align_method in realign_methods,
+                    "needs_realign": (
+                        align_method in realign_methods
+                        or (quality_score is not None
+                            and quality_score < ALIGNMENT_QUALITY_REALIGN_THRESHOLD)
+                    ),
+                    "quality_score": quality_score,
                     "last_updated": last_updated.isoformat() if last_updated else None,
                 })
             books.sort(key=lambda b: (b["llm_used"], (b["align_method"] or "")))
@@ -665,7 +806,18 @@ class DatabaseService:
         self, abs_ids: list[str], method: str
     ) -> int:
         """Apply an align_method value to abs_ids in chunks to avoid SQLite's
-        bound-parameter limit. Returns the total number of rows updated."""
+        bound-parameter limit. Returns the total number of rows updated.
+
+        This classifies a pre-existing map by shape (see
+        `backfill_alignment_methods`); it does not rebuild it, so
+        `last_updated` must not move. A bulk UPDATE that omits a column still
+        fires that column's `onupdate=utcnow` for every row it touches (same
+        issue as `backfill_alignment_quality`, which explains the mechanism in
+        full), so `last_updated` is set to a self-referential column
+        expression here -- a genuine value in the SET clause that reassigns
+        each row its own current value and so suppresses `onupdate`, without
+        needing to fetch each row's timestamp up front.
+        """
         if not abs_ids:
             return 0
         total_updated = 0
@@ -674,7 +826,13 @@ class DatabaseService:
                 chunk = abs_ids[i : i + _SQL_IN_CHUNK]
                 total_updated += session.query(BookAlignment).filter(
                     BookAlignment.abs_id.in_(chunk)
-                ).update({BookAlignment.align_method: method}, synchronize_session=False)
+                ).update(
+                    {
+                        BookAlignment.align_method: method,
+                        BookAlignment.last_updated: BookAlignment.last_updated,
+                    },
+                    synchronize_session=False,
+                )
         return total_updated
 
     def backfill_alignment_methods(self) -> int:
@@ -717,13 +875,18 @@ class DatabaseService:
         return updated
 
     def get_books_needing_llm_realign(self) -> List[str]:
-        """abs_ids whose alignment is pre-LLM (NULL) or a flat linear fallback — i.e. the
-        maps that re-running under the LLM-enabled pipeline could actually improve.
+        """abs_ids whose alignment is pre-LLM (NULL), a flat linear fallback, or scored
+        below `ALIGNMENT_QUALITY_REALIGN_THRESHOLD` — i.e. the maps that re-running
+        under the LLM-enabled pipeline could actually improve.
 
-        A clean 'lexical' map is already accurate (the embedding rescue only fires when
-        lexical anchoring fails), so it is intentionally excluded.
+        A clean 'lexical' map is NOT automatically accurate: the embedding rescue only
+        fires when lexical anchoring fails, but lexical anchoring can itself still
+        produce a badly broken map (issue #426 phase 4 — Immortal Mana, Starfish,
+        Bestial, and Four Past Midnight all carry a 'lexical' map that scores far
+        below threshold). A NULL `quality_score` (map stored before scoring existed)
+        is, on its own, not a reason to re-align — only a recorded low score is.
         """
-        from sqlalchemy import or_
+        from sqlalchemy import or_, and_
         with self.get_session() as session:
             rows = (
                 session.query(BookAlignment.abs_id)
@@ -731,11 +894,67 @@ class DatabaseService:
                     or_(
                         BookAlignment.align_method.is_(None),
                         BookAlignment.align_method.in_(["linear", "storyteller_linear"]),
+                        and_(
+                            BookAlignment.quality_score.isnot(None),
+                            BookAlignment.quality_score < ALIGNMENT_QUALITY_REALIGN_THRESHOLD,
+                        ),
                     )
                 )
                 .all()
             )
             return [r[0] for r in rows]
+
+    def backfill_alignment_quality(self, limit: int = 25) -> int:
+        """Score up to `limit` stored maps whose `quality_score` is still NULL.
+
+        Mirrors `backfill_alignment_methods`'s self-heal pattern, bounded for the
+        same reason: map blobs run 10-15MB each and there are ~383 of them, so
+        scoring every unscored row in one call would be far too slow for a request.
+        Order is deterministic (`abs_id`) so repeated calls make steady forward
+        progress instead of re-picking the same unscored rows at random.
+
+        Returns how many rows were scored.
+        """
+        with self.get_session() as session:
+            rows = (
+                session.query(BookAlignment)
+                .filter(BookAlignment.quality_score.is_(None))
+                .order_by(BookAlignment.abs_id)
+                .limit(limit)
+                .all()
+            )
+            scored = 0
+            for row in rows:
+                try:
+                    alignment_map = json.loads(row.alignment_map_json)
+                except Exception:
+                    continue
+                quality = score_map(alignment_map)
+                # This is a metadata backfill, not a re-alignment: the map
+                # itself is untouched, so `last_updated` (the map's
+                # build/rebuild provenance timestamp, surfaced by
+                # `get_alignment_provenance`) must not move. A plain ORM
+                # attribute assignment (`row.quality_score = ...`) still fires
+                # `BookAlignment.last_updated`'s `onupdate=utcnow` -- it fires
+                # on ANY UPDATE to the row, not just when `last_updated` itself
+                # changes -- which would silently rewrite provenance for the
+                # whole library a page at a time (this endpoint calls this
+                # method 25 rows at a time on every load). Naming
+                # `last_updated` explicitly in the SET clause is what
+                # suppresses `onupdate`: an explicit value takes precedence
+                # over it, whereas re-assigning the same value through the ORM
+                # leaves the attribute un-dirty (omitted from the SET clause),
+                # so `onupdate` fires anyway.
+                session.query(BookAlignment).filter(BookAlignment.abs_id == row.abs_id).update(
+                    {
+                        "quality_score": quality.score,
+                        "quality_detail": quality_detail_json(quality),
+                        "last_updated": row.last_updated,
+                    },
+                    synchronize_session=False,
+                )
+                scored += 1
+            return scored
 
     def get_all_books(self, user_id: int = None) -> List[Book]:
         """Get all books as model objects. When user_id is given, scope to the
@@ -764,15 +983,42 @@ class DatabaseService:
             session.flush()
             session.refresh(book)
             session.expunge(book)
-            return book
+
+        self._notify_catalog_change()
+        return book
 
     def save_book(self, book: Book) -> Book:
         """Save or update a book model."""
+        from sqlalchemy.exc import IntegrityError
+
         with self.get_session() as session:
             existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
 
+            if existing is None:
+                # Keep the first creator, but claim the mapping for both requests
+                # when concurrent matches race to insert the same ABS id.
+                creator_uid = book.user_id if getattr(book, "user_id", None) is not None else self._resolve_uid(None)
+                book.user_id = creator_uid
+                session.add(book)
+                try:
+                    session.flush()
+                except IntegrityError as exc:
+                    session.rollback()
+                    if "UNIQUE constraint failed: books.abs_id" not in str(exc.orig):
+                        raise
+                    existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
+                    if existing is None:
+                        raise
+                if creator_uid is not None:
+                    exists = session.query(UserBook).filter(
+                        UserBook.user_id == creator_uid, UserBook.abs_id == book.abs_id
+                    ).first()
+                    if not exists:
+                        session.add(UserBook(user_id=creator_uid, abs_id=book.abs_id))
+
             if existing:
                 # Update existing book
+                before_signature = _manifest_signature(existing)
                 for attr in ['abs_title', 'audio_source', 'audio_source_id', 'audio_title',
                            'audio_cover_url', 'audio_duration', 'audio_provider_book_id',
                            'audio_provider_file_id', 'ebook_filename', 'ebook_source',
@@ -784,27 +1030,18 @@ class DatabaseService:
                         setattr(existing, attr, getattr(book, attr))
                 session.flush()
                 session.refresh(existing)
+                catalog_changed = _manifest_signature(existing) != before_signature
                 session.expunge(existing)
-                return existing
+                saved = existing
             else:
-                # Create new book — stamp the creator from the ambient user context
-                # (the matching request, the kosync device user, or the running
-                # sync cycle), falling back to the default admin. user_id is the
-                # original creator (set on insert only); visibility is governed by
-                # the per-user `user_books` links, so also claim it for the creator.
-                creator_uid = book.user_id if getattr(book, "user_id", None) is not None else self._resolve_uid(None)
-                book.user_id = creator_uid
-                session.add(book)
-                session.flush()
-                if creator_uid is not None:
-                    exists = session.query(UserBook).filter(
-                        UserBook.user_id == creator_uid, UserBook.abs_id == book.abs_id
-                    ).first()
-                    if not exists:
-                        session.add(UserBook(user_id=creator_uid, abs_id=book.abs_id))
                 session.refresh(book)
                 session.expunge(book)
-                return book
+                catalog_changed = True
+                saved = book
+
+        if catalog_changed:
+            self._notify_catalog_change()
+        return saved
 
     def update_book_if_exists(self, book: Book) -> Optional[Book]:
         """Update a book without ever inserting a missing/deleted mapping."""
@@ -831,6 +1068,44 @@ class DatabaseService:
             session.refresh(existing)
             session.expunge(existing)
             return existing
+
+    def backfill_ebook_source_id_if_unclaimed(
+        self,
+        abs_id: str,
+        source_id: str,
+        ebook_source: str = "Booklore",
+    ) -> bool:
+        """Claim a legacy Grimmory id only when no other mapping owns it."""
+        from sqlalchemy import func
+
+        stable_id = str(source_id or "").strip()
+        if not abs_id or not stable_id:
+            return False
+        with self._ebook_source_claim_lock:
+            with self.get_session() as session:
+                conflict = session.query(Book.abs_id).filter(
+                    Book.abs_id != abs_id,
+                    Book.ebook_source_id == stable_id,
+                    func.lower(Book.ebook_source).in_(("booklore", "grimmory")),
+                ).first()
+                if conflict:
+                    return False
+                updated = session.query(Book).filter(
+                    Book.abs_id == abs_id,
+                    (Book.ebook_source_id.is_(None)) | (Book.ebook_source_id == ""),
+                    func.lower(func.trim(func.coalesce(Book.ebook_source, ""))).in_(
+                        ("", "booklore", "grimmory")
+                    ),
+                ).update(
+                    {
+                        "ebook_source": ebook_source,
+                        "ebook_source_id": stable_id,
+                    },
+                    synchronize_session=False,
+                )
+        if updated:
+            self._notify_catalog_change()
+        return bool(updated)
 
     def migrate_book_data(self, old_abs_id: str, new_abs_id: str):
         """
@@ -868,6 +1143,80 @@ class DatabaseService:
                 logger.error(f"❌ Failed to migrate book data: {e}", exc_info=True)
                 raise
 
+    def _find_ebook_only_duplicate(self, keep_book) -> Optional[str]:
+        """Find an ebook-only mapping pointing at the same source ebook.
+
+        The content hash is not enough on its own: the same file can yield two
+        different hashes (a library that re-stamps metadata on download gives a
+        stored hash and a served hash, which the bridge already records as
+        siblings), so an exact-hash check misses the pair. The source ebook id is
+        the stable identity.
+
+        Restricted to ``ebook_only`` rows on purpose. Two *audiobook* mappings
+        sharing one source ebook is a mis-match, not a duplicate -- two distinct
+        audiobooks were linked to the same ebook -- and folding those together
+        would destroy one of them.
+        """
+        from sqlalchemy import func
+
+        source = (getattr(keep_book, "ebook_source", None) or "").strip()
+        source_id = str(getattr(keep_book, "ebook_source_id", None) or "").strip()
+        keep_abs_id = getattr(keep_book, "abs_id", None)
+        if not source or not source_id or not keep_abs_id:
+            return None
+
+        with self.get_session() as session:
+            row = session.query(Book.abs_id).filter(
+                func.lower(Book.ebook_source) == source.lower(),
+                Book.ebook_source_id == source_id,
+                Book.abs_id != keep_abs_id,
+                Book.sync_mode == "ebook_only",
+            ).first()
+            return row[0] if row else None
+
+    def absorb_duplicate_mapping(self, keep_book) -> Optional[str]:
+        """Fold a stale mapping for the same ebook into ``keep_book``.
+
+        Two mappings for one ebook is never right: KOSync names a document by its
+        content hash and ``KosyncDocument.linked_abs_id`` holds exactly one book,
+        so the loser of the pair is listed and served but can never receive
+        progress, and the device downloads a second copy of bytes it already has.
+
+        Detection, migration and deletion live in this one call precisely because
+        splitting them is how the bug arose -- the merge was reimplemented per
+        match path, and the paths that forgot it duplicated silently.
+
+        Returns the absorbed abs_id, or None when there was nothing to fold in.
+        """
+        keep_abs_id = getattr(keep_book, "abs_id", None)
+        if not keep_abs_id:
+            return None
+
+        stale_abs_id = None
+        doc_id = str(getattr(keep_book, "kosync_doc_id", None) or "").strip()
+        if doc_id:
+            candidate = self.get_book_by_kosync_id(doc_id)
+            candidate_id = getattr(candidate, "abs_id", None)
+            if candidate_id and candidate_id != keep_abs_id:
+                stale_abs_id = candidate_id
+
+        if stale_abs_id is None:
+            stale_abs_id = self._find_ebook_only_duplicate(keep_book)
+
+        if not stale_abs_id:
+            # Logged so that "ran and found nothing" is distinguishable from
+            # "never ran" -- the silent no-op made it impossible to tell whether a
+            # match path was reaching this at all.
+            logger.debug("No duplicate mapping to absorb for '%s'", keep_abs_id)
+            return None
+
+        self.migrate_book_data(stale_abs_id, keep_abs_id)
+        self.delete_book(stale_abs_id)
+        logger.info(
+            "🔗 Absorbed duplicate mapping '%s' into '%s'", stale_abs_id, keep_abs_id
+        )
+        return stale_abs_id
+
     def delete_book(self, abs_id: str) -> bool:
         """Delete a book and all its related data."""
         with self.get_session() as session:
@@ -885,12 +1234,20 @@ class DatabaseService:
             session.query(UserBook).filter(
                 UserBook.abs_id == abs_id
             ).delete(synchronize_session=False)
+            session.query(ReadingSessionBuffer).filter(
+                ReadingSessionBuffer.abs_id == abs_id
+            ).delete(synchronize_session=False)
             
             book = session.query(Book).filter(Book.abs_id == abs_id).first()
             if book:
                 session.delete(book)  # Cascade will handle states and jobs
-                return True
-            return False
+                deleted = True
+            else:
+                deleted = False
+
+        if deleted:
+            self._notify_catalog_change()
+        return deleted
 
     def cleanup_orphaned_book_references(self) -> dict[str, int]:
         """Remove legacy membership or hash links whose book no longer exists."""
@@ -1913,11 +2270,13 @@ class DatabaseService:
 
     def get_book_by_ebook_source(self, ebook_source: str, ebook_source_id: str) -> Optional['Book']:
         """Find a book by its ebook source + source id (e.g. BookLore/<grimmory_id>)."""
-        if not ebook_source or not ebook_source_id:
+        variants = source_name_variants(ebook_source)
+        if not variants or not ebook_source_id:
             return None
+        from sqlalchemy import func
         with self.get_session() as session:
             book = session.query(Book).filter(
-                Book.ebook_source == ebook_source,
+                func.lower(func.trim(Book.ebook_source)).in_(variants),
                 Book.ebook_source_id == str(ebook_source_id),
             ).first()
             if book:
@@ -4377,6 +4736,212 @@ class DatabaseService:
                 ReadingSession.user_id == uid,
             ).first() is not None
 
+    @staticmethod
+    def _close_reading_session(session, row: ReadingSessionBuffer, now: float) -> None:
+        """Close the buffer and insert local history in the same transaction."""
+        from src.services.reading_session_aggregator import MAX_SESSION_SECONDS
+
+        duration = int(min(row.accumulated_seconds,
+                           max(0, row.last_event_at - row.started_at), MAX_SESSION_SECONDS))
+        row.closed_at = now
+        if duration <= 0:
+            row.grimmory_status = "disabled"
+            row.bookorbit_status = "disabled"
+            return
+        session.add(ReadingSession(
+            abs_id=row.abs_id, session_type=row.session_type,
+            start_time=row.last_event_at - duration, end_time=row.last_event_at,
+            duration_seconds=duration, start_progress=row.start_progress,
+            end_progress=row.end_progress, leader_client=row.leader_client,
+            user_id=row.user_id or None,
+        ))
+        logger.info("Reading session closed: user=%s book='%s' type=%s estimated_seconds=%s",
+                    row.user_id, row.abs_id, row.session_type, duration)
+
+    def extend_reading_session(self, abs_id: str, session_type: str, leader_client: str,
+                               now: float, previous_at: float | None, position_delta: float,
+                               start_progress: float, end_progress: float, gap_seconds: float,
+                               grimmory_book_id: int | None = None,
+                               bookorbit_book_id: int | None = None,
+                               bookorbit_candidate_ids: list | None = None,
+                               end_location: str | None = None,
+                               complete: bool = False, user_id: int | None = None) -> None:
+        """Accumulate one observation; callers serialize writes with the sync lock."""
+        from src.services.reading_session_aggregator import (
+            MAX_SESSION_SECONDS, movement_seconds, unexplained_idle_seconds,
+        )
+
+        uid = self._resolve_uid(user_id) or 0
+        with self.get_session() as session:
+            row = session.query(ReadingSessionBuffer).filter_by(
+                user_id=uid, abs_id=abs_id, session_type=session_type, closed_at=None,
+            ).first()
+            if row is not None and now <= row.last_event_at:
+                return
+            if row is not None:
+                # A destination id only means "a different book" when both sides are
+                # known. It is re-resolved on every observation and legitimately comes
+                # back None while that client's book cache is cold, and reading None as
+                # a change would split the session and strand its remainder undelivered.
+                destination_changed = any(
+                    stored is not None and incoming is not None and stored != incoming
+                    for stored, incoming in (
+                        (row.grimmory_book_id, grimmory_book_id),
+                        (row.bookorbit_book_id, bookorbit_book_id),
+                    )
+                )
+                idle = unexplained_idle_seconds(now - row.last_event_at, position_delta)
+                if (
+                    idle > gap_seconds
+                    or now - row.started_at >= MAX_SESSION_SECONDS
+                    or row.leader_client != leader_client
+                    or destination_changed
+                ):
+                    previous_at = max(previous_at or row.last_event_at, row.last_event_at)
+                    self._close_reading_session(session, row, now)
+                    session.flush()  # release the partial unique index before inserting its successor
+                    row = None
+            if row is None:
+                # Local history survives buffer cleanup and bounds the first interval
+                # after completion, force-close, a restart, or an idle gap.
+                previous = session.query(ReadingSession.end_time).filter_by(
+                    abs_id=abs_id, session_type=session_type, user_id=uid or None,
+                ).order_by(ReadingSession.end_time.desc()).first()
+                if previous:
+                    previous_at = max(previous_at or previous[0], previous[0])
+                contribution = movement_seconds(position_delta, now, previous_at, gap_seconds)
+                if contribution <= 0:
+                    return
+                row = ReadingSessionBuffer(
+                    user_id=uid, abs_id=abs_id, session_type=session_type,
+                    leader_client=leader_client, started_at=now - contribution,
+                    last_event_at=now, accumulated_seconds=contribution,
+                    start_progress=start_progress, end_progress=end_progress,
+                    end_location=end_location,
+                    grimmory_book_id=grimmory_book_id,
+                    grimmory_status="pending" if grimmory_book_id is not None else "disabled",
+                    bookorbit_book_id=bookorbit_book_id,
+                    bookorbit_status="pending" if bookorbit_book_id is not None else "disabled",
+                )
+                if bookorbit_candidate_ids:
+                    row.bookorbit_candidate_ids = json.dumps(bookorbit_candidate_ids)
+                session.add(row)
+            else:
+                baseline = max(previous_at or row.last_event_at, row.last_event_at)
+                row.accumulated_seconds += movement_seconds(position_delta, now, baseline, gap_seconds)
+                row.last_event_at = now
+                row.end_progress = end_progress
+                row.end_location = end_location
+                if grimmory_book_id is not None and row.grimmory_book_id is None:
+                    row.grimmory_book_id = grimmory_book_id
+                    if row.grimmory_status == "disabled":
+                        row.grimmory_status = "pending"
+                if bookorbit_book_id is not None and row.bookorbit_book_id is None:
+                    row.bookorbit_book_id = bookorbit_book_id
+                    if row.bookorbit_status == "disabled":
+                        row.bookorbit_status = "pending"
+                if bookorbit_candidate_ids:
+                    row.bookorbit_candidate_ids = json.dumps(bookorbit_candidate_ids)
+            if complete:
+                self._close_reading_session(session, row, now)
+
+    def close_reading_sessions(self, now: float, gap_seconds: float,
+                               user_id: int | None = None, all_users: bool = False) -> None:
+        """Close idle or over-age buffers, including users no longer eligible for sync.
+
+        The idle timer is deliberately more patient than the gap the next
+        observation is judged against, so a service that flushes progress
+        infrequently gets the chance to prove the sitting never ended.
+        """
+        from src.services.reading_session_aggregator import (
+            IDLE_CLOSE_PATIENCE, MAX_SESSION_SECONDS,
+        )
+
+        idle_limit = gap_seconds * IDLE_CLOSE_PATIENCE
+        uid = None if all_users else (self._resolve_uid(user_id) or 0)
+        with self.get_session() as session:
+            query = session.query(ReadingSessionBuffer).filter(ReadingSessionBuffer.closed_at.is_(None))
+            if not all_users:
+                query = query.filter(ReadingSessionBuffer.user_id == uid)
+            for row in query.all():
+                if now - row.last_event_at > idle_limit or now - row.started_at >= MAX_SESSION_SECONDS:
+                    self._close_reading_session(session, row, now)
+
+    def get_pending_reading_sessions(self, user_id: int | None = None) -> list[ReadingSessionBuffer]:
+        """Return at most 200 closed buffers with at least one destination still pending."""
+        from sqlalchemy import or_
+
+        uid = self._resolve_uid(user_id) or 0
+        with self.get_session() as session:
+            rows = session.query(ReadingSessionBuffer).filter(
+                ReadingSessionBuffer.user_id == uid,
+                ReadingSessionBuffer.closed_at.isnot(None),
+                or_(
+                    ReadingSessionBuffer.grimmory_status == "pending",
+                    ReadingSessionBuffer.bookorbit_status == "pending",
+                ),
+            ).order_by(ReadingSessionBuffer.id).limit(200).all()
+            for row in rows:
+                session.expunge(row)
+            return rows
+
+    def mark_reading_session_delivered(self, session_id: int, destination: str, status: str,
+                                       user_id: int | None = None) -> None:
+        """Acknowledge success or an explicitly disabled destination within its owner scope."""
+        if destination not in _READING_SESSION_DESTINATIONS:
+            raise ValueError("Invalid reading session delivery destination")
+        if status not in {"delivered", "disabled", "failed"}:
+            raise ValueError("Invalid reading session delivery status")
+        column = _READING_SESSION_DESTINATIONS[destination]
+        uid = self._resolve_uid(user_id) or 0
+        with self.get_session() as session:
+            session.query(ReadingSessionBuffer).filter_by(
+                id=session_id, user_id=uid, **{column: "pending"},
+            ).update({column: status}, synchronize_session=False)
+
+    def record_reading_session_delivery_failure(self, session_id: int, now: float,
+                                                user_id: int | None = None) -> bool:
+        """Count one failed delivery pass; abandon the row once retries run out.
+
+        Returns whether the remaining destinations were given up on, so a
+        decommissioned service cannot pin the queue or grow the buffer forever.
+        """
+        from src.services.reading_session_aggregator import DELIVERY_RETRY_WINDOW_SECONDS
+
+        uid = self._resolve_uid(user_id) or 0
+        with self.get_session() as session:
+            row = session.query(ReadingSessionBuffer).filter_by(
+                id=session_id, user_id=uid,
+            ).first()
+            if row is None:
+                return False
+            row.delivery_attempts = (row.delivery_attempts or 0) + 1
+            if (row.closed_at or now) > now - DELIVERY_RETRY_WINDOW_SECONDS:
+                return False
+            abandoned = [
+                name for name, column in _READING_SESSION_DESTINATIONS.items()
+                if getattr(row, column) == "pending"
+            ]
+            if not abandoned:
+                return False
+            for column in (_READING_SESSION_DESTINATIONS[name] for name in abandoned):
+                setattr(row, column, "failed")
+            logger.warning(
+                "⚠️ Giving up on reading session delivery for '%s' after %s attempts: %s",
+                row.abs_id, row.delivery_attempts, ", ".join(sorted(abandoned)),
+            )
+            return True
+
+    def purge_delivered_reading_sessions(self, now: float) -> None:
+        """Remove buffers after 30 days once every destination is terminal."""
+        terminal = ("delivered", "disabled", "failed")
+        with self.get_session() as session:
+            session.query(ReadingSessionBuffer).filter(
+                ReadingSessionBuffer.closed_at < now - 30 * 86400,
+                ReadingSessionBuffer.grimmory_status.in_(terminal),
+                ReadingSessionBuffer.bookorbit_status.in_(terminal),
+            ).delete(synchronize_session=False)
+
     def record_reading_session(self, abs_id: str, session_type: str, start_time: float,
                                end_time: float, duration_seconds: int,
                                start_progress: float = None, end_progress: float = None,
@@ -4703,5 +5268,3 @@ class DatabaseMigrator:
             return True
 
         return False
-
-

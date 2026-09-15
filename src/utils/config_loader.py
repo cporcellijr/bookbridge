@@ -33,6 +33,9 @@ ALL_SETTINGS = [
     'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY', 'KOSYNC_AUTH_METHOD',
     'KOSYNC_HASH_METHOD', 'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
     'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS', 'KOSYNC_AUTO_MAP_ON_AGREEMENT',
+    'SYNC_OBSERVATION_TRAIL_SECONDS', 'SYNC_REWIND_CORROBORATION_COUNT',
+    'SYNC_TRUST_CORROBORATED_REWIND',
+    'SYNC_REWIND_HOLD_SECONDS',
     'KOSYNC_HASH_RECONCILE_ENABLED', 'KOSYNC_HASH_RECONCILE_MINUTES',
     'KOSYNC_XPATH_ORDER_ENABLED', 'KOSYNC_FURTHEST_WINS',
     'KOSYNC_PUT_DEBOUNCE_SECONDS',
@@ -135,12 +138,12 @@ ALL_SETTINGS = [
     'SYNC_PERIOD_MINS', 'SYNC_DELTA_ABS_SECONDS', 'SYNC_DELTA_KOSYNC_PERCENT',
     'SYNC_DELTA_BETWEEN_CLIENTS_PERCENT', 'SYNC_DELTA_KOSYNC_WORDS',
     'SYNC_FRESHNESS_GUARDS', 'SYNC_COMPLETION_PROPAGATION', 'SYNC_COMPLETION_THRESHOLD',
-    'SYNC_ROLLBACK_VETO_SECONDS',
+    'SYNC_ROLLBACK_VETO_SECONDS', 'LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS',
     'XPATH_FALLBACK_TO_PREVIOUS_SEGMENT', 'SYNC_ABS_EBOOK', 'ABS_EBOOK_LOCATOR_FORMAT',
     'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
     'FUZZY_MATCH_THRESHOLD', 'SUGGESTIONS_ENABLED',
     'SUGGESTIONS_AUTO_MATCH_ENABLED', 'SUGGESTIONS_AUTO_MATCH_THRESHOLD',
-    'INSTANT_SYNC_ENABLED', 'KOREADER_SESSION_GAP_MINUTES',
+    'INSTANT_SYNC_ENABLED', 'KOREADER_SESSION_GAP_MINUTES', 'READING_SESSION_MERGE_MINUTES',
     'STORYTELLER_POLL_MODE', 'STORYTELLER_POLL_SECONDS', 'STORYTELLER_POLL_WAIT_FOR_SETTLE',
     'STORYTELLER_LISTENING_SESSIONS',
     'BOOKLORE_POLL_MODE', 'BOOKLORE_POLL_SECONDS', 'BOOKLORE_POLL_WAIT_FOR_SETTLE',
@@ -156,6 +159,9 @@ ALL_SETTINGS = [
     'JOB_MAX_RETRIES', 'JOB_RETRY_DELAY_MINS', 'WHISPER_MODEL',
     'WHISPER_DEVICE', 'WHISPER_COMPUTE_TYPE',
     'TRANSCRIPTION_PROVIDER', 'DEEPGRAM_API_KEY', 'DEEPGRAM_MODEL', 'WHISPER_CPP_URL', 'WHISPER_CPP_TIMEOUT', 'WHISPER_CPP_SEND_ORIGINAL', 'WHISPER_CPP_CHUNK_MINUTES',
+    'CTC_ENABLED', 'CTC_MODEL', 'CTC_DEVICE',
+    'ALIGNMENT_SEGMENTED_MAPS',
+    'CONTENT_MATCH_GUARD', 'CONTENT_MATCH_MIN_OVERLAP',
     'AUDIO_SPLIT_DURATION_MINUTES',
     'SMIL_VALIDATION_THRESHOLD', 'TRANSCRIPT_MIN_COVERAGE',
     'DIAGNOSTICS_MAX_PAYLOAD_BYTES',
@@ -178,7 +184,23 @@ DEFAULT_CONFIG = {
     'SYNC_DELTA_KOSYNC_WORDS': '400',
     'SYNC_FRESHNESS_GUARDS': 'true',
     'SYNC_ROLLBACK_VETO_SECONDS': '600',
+    # 30s rests on two independent bounds, not on "seams are large".
+    #
+    # Measured: across every segmented book in a real 375-map library, 1,496
+    # one- and two-character steps over fitted segment edges. The largest step
+    # that stays inside in-order narration is 27.7s; the smallest step that
+    # crosses into out-of-order narration is 37.7s. 30s separates them — but
+    # the gap is only 1.4x wide, so this is a fitted threshold, not a roomy one.
+    # Ordinary fitted edges really do reach 16-27s (chapter joins, credits),
+    # so a materially lower value would start refusing correct locators.
+    #
+    # Derived: SYNC_DELTA_ABS_SECONDS defaults to 60s — the smallest audio
+    # movement the system acts on at all. At half of that, a round-trip error
+    # this admits is by construction beneath the noise floor of anything the
+    # sync pipeline would treat as movement.
+    'LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS': '30',
     'KOREADER_SESSION_GAP_MINUTES': '30',
+    'READING_SESSION_MERGE_MINUTES': '5',
     'FUZZY_MATCH_THRESHOLD': '80',
     'WHISPER_MODEL': 'tiny',
     'WHISPER_DEVICE': 'auto',
@@ -188,6 +210,21 @@ DEFAULT_CONFIG = {
     'WHISPER_CPP_TIMEOUT': '600',
     'WHISPER_CPP_SEND_ORIGINAL': 'false',
     'WHISPER_CPP_CHUNK_MINUTES': '0',
+    # CTC forced alignment (opt-in; needs the CTC-enabled image with torch/torchaudio).
+    'CTC_ENABLED': 'false',
+    'CTC_MODEL': 'mms_fa',
+    'CTC_DEVICE': 'auto',
+    # Per-chapter RANSAC segment placement (issue #426 phase 2), replacing the global
+    # monotonic LIS filter only for books whose narration order genuinely differs from
+    # spine order. See docs/PLAN_OUT_OF_ORDER_NARRATION.md and
+    # AlignmentService.segmented_maps_enabled().
+    'ALIGNMENT_SEGMENTED_MAPS': 'false',
+    # Non-LLM content-match guard (issue #426): n-gram overlap fallback used when the
+    # embedding path (OLLAMA_ALIGN_CONTENT_GUARD) is unavailable. See
+    # AlignmentService._verify_content_match / map_quality.transcript_text_overlap for
+    # the calibration data behind the 0.25 default.
+    'CONTENT_MATCH_GUARD': 'true',
+    'CONTENT_MATCH_MIN_OVERLAP': '0.15',
     'AUDIO_SPLIT_DURATION_MINUTES': '45',
     'TRANSCRIPT_MIN_COVERAGE': '0.85',
     # Byte budget for a diagnostics upload. The receiver rejects larger bodies with
@@ -216,6 +253,23 @@ DEFAULT_CONFIG = {
     'KOREADER_ANNOTATION_SYNC': 'true',
     'KOSYNC_PUT_DEBOUNCE_SECONDS': '300',
     'KOSYNC_RECENT_EXTERNAL_PUT_SECONDS': '600',
+    # Issue #215 phase 0 (instrumentation only): how long an externally
+    # originated position stays usable as evidence that a client is genuinely
+    # moving, and how many advancing observations count as corroboration.
+    # Nothing reads these to make a decision yet.
+    # Issue #215: let a lone client whose position is materially behind its peers
+    # KEEP the lead when its observation trail shows it genuinely moving on from
+    # that point. Deliberately separate from KOSYNC_FURTHEST_WINS, which answers a
+    # different question (protection from ANOTHER device regressing you) and
+    # already permits same-device rewinds.
+    'SYNC_TRUST_CORROBORATED_REWIND': 'true',
+    # How long an uncorroborated BACKWARD jump is deferred before the old
+    # behaviour resumes. Bounded on purpose: 'rewound then stopped' and
+    # 'reported a stale position then stopped' are indistinguishable forever,
+    # so the hold only buys time for evidence, it never blocks a book.
+    'SYNC_REWIND_HOLD_SECONDS': '300',
+    'SYNC_OBSERVATION_TRAIL_SECONDS': '600',
+    'SYNC_REWIND_CORROBORATION_COUNT': '2',
     'TELEGRAM_LOG_LEVEL': 'ERROR',
     'DIAGNOSTICS_OPT_IN': 'false',
     'DIAGNOSTICS_PROMPTED': '',

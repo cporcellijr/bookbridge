@@ -158,7 +158,7 @@ class TestKosyncDocument(unittest.TestCase):
         epub_dir = Path(TEST_DIR) / 'epub_collision'
         shutil.rmtree(epub_dir, ignore_errors=True)
         epub_dir.mkdir(parents=True, exist_ok=True)
-        filename = 'Dungeon Crawler Carl.epub'
+        filename = 'Dungeon Runner Dana.epub'
         epub_path = epub_dir / filename
         epub_path.write_bytes(b'epub-content')
 
@@ -495,6 +495,34 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertEqual(data['device'], 'TestKindle')
         self.assertEqual(data['device_id'], 'KINDLE456')
         self.assertIn('timestamp', data)
+
+    def test_get_progress_adopts_an_unlinked_document_its_book_already_names(self):
+        """A book naming a hash must adopt that document row on read (#431).
+
+        Add Book could leave an existing kosync_documents row unlinked while the book
+        carried the byte-identical hash, which hides the reader's stored progress from
+        the linked-book resolution path. Step 3 already self-healed a sibling hash;
+        the book's own hash must heal the same way.
+        """
+        from src import web_server
+
+        svc = web_server.database_service
+        admin_id = svc._default_user_id()
+        doc_hash = "b" * 32
+        svc.save_book(Book(
+            abs_id="adopt-regression",
+            abs_title="Orphaned Progress",
+            ebook_filename="orphaned.epub",
+            kosync_doc_id=doc_hash,
+            status="active",
+            user_id=admin_id,
+        ))
+        svc.save_kosync_document(KosyncDocument(document_hash=doc_hash))
+        self.assertIsNone(svc.get_kosync_document(doc_hash).linked_abs_id)
+
+        self.client.get(f"/syncs/progress/{doc_hash}", headers=self.auth_headers)
+
+        self.assertEqual(svc.get_kosync_document(doc_hash).linked_abs_id, "adopt-regression")
 
     def test_linked_book_get_pulls_behind_device_forward_to_synced_state(self):
         """A device that is BEHIND the bridge-synced position must be pulled forward.
@@ -957,6 +985,52 @@ class TestKosyncEndpoints(unittest.TestCase):
             response.headers.get("Content-Disposition", ""),
         )
         self.assertEqual(response.data, b"epub")
+
+    def test_device_sync_download_survives_a_non_latin1_filename(self):
+        """A curly apostrophe in the filename must not kill the response.
+
+        Content-Disposition was being overwritten with a raw f-string carrying the
+        literal filename. WSGI encodes headers as latin-1, so "Sister’s Birthday
+        Gift.epub" raised UnicodeEncodeError inside the server while writing the
+        response -- the connection died mid-download and BridgeSync saw only
+        `wantread`, retrying three times and failing the book every sync.
+        """
+        from src.api import kosync_server
+        from src import web_server
+
+        svc = web_server.database_service
+        svc.save_book(Book(abs_id="abs-curly", abs_title="Winter’s Tale",
+                           ebook_filename="s.epub", status="active",
+                           user_id=svc._default_user_id()))
+
+        download_path = Path(TEST_DIR) / "curly.epub"
+        download_path.write_bytes(b"epub-bytes")
+
+        service = MagicMock()
+        service.resolve_download.return_value = {
+            "path": download_path,
+            "filename": "Winter’s Tale.epub",
+            "content_hash": "hash-curly",
+            "mime_type": "application/epub+zip",
+        }
+        container = MagicMock()
+        container.koreader_device_sync_service.return_value = service
+
+        with patch.object(kosync_server, '_container', container):
+            response = self.client.get(
+                '/koreader/device-sync/books/abs-curly/download',
+                headers=self.auth_headers,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"epub-bytes")
+
+        disposition = response.headers.get("Content-Disposition", "")
+        # The actual failure: a WSGI server encodes every header as latin-1.
+        disposition.encode("latin-1")
+        # And the real name still reaches the client, RFC 5987-encoded.
+        self.assertIn("filename*=UTF-8''", disposition)
+        self.assertIn("%E2%80%99", disposition)
 
     def test_device_sync_manifest_scopes_to_owning_user(self):
         from src.api import kosync_server
@@ -2698,7 +2772,7 @@ class TestAutoMapSelection(unittest.TestCase):
 
     def _candidate(self, **overrides):
         base = {
-            "abs_id": "ab1", "title": "Sublimation", "author": "Isabel J. Kim",
+            "abs_id": "ab1", "title": "Transmutation", "author": "Robin T. Hale",
             "isbn": "", "asin": "", "duration": 3600, "progress_pct": 0,
             "title_sim": 0.97, "author_sim": 0.95,
         }
@@ -2713,7 +2787,7 @@ class TestAutoMapSelection(unittest.TestCase):
         candidate = self._candidate(asin="B0CTXDLTKC", title_sim=0.40, author_sim=0.10)
         with patch.object(kosync_server, '_container', container):
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim", "isbn": "", "asin": "b0ctxdltkc"},
+                {"title": "Transmutation", "author": "Robin T. Hale", "isbn": "", "asin": "b0ctxdltkc"},
                 [candidate],
             )
         self.assertEqual(reason, "identifier")
@@ -2726,7 +2800,7 @@ class TestAutoMapSelection(unittest.TestCase):
         with patch.object(kosync_server, '_container', container), \
              patch.object(kosync_server, 'judge_best_candidate', return_value=0):
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+                {"title": "Transmutation", "author": "Robin T. Hale"}, [self._candidate()]
             )
         self.assertEqual(reason, "agreement")
         self.assertEqual(chosen["abs_id"], "ab1")
@@ -2738,7 +2812,7 @@ class TestAutoMapSelection(unittest.TestCase):
         with patch.object(kosync_server, '_container', container), \
              patch.object(kosync_server, 'judge_best_candidate', return_value=None):
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+                {"title": "Transmutation", "author": "Robin T. Hale"}, [self._candidate()]
             )
         self.assertIsNone(chosen)
         self.assertIsNone(reason)
@@ -2755,7 +2829,7 @@ class TestAutoMapSelection(unittest.TestCase):
         with patch.object(kosync_server, '_container', container), \
              patch.object(kosync_server, 'judge_best_candidate', return_value=0) as judge:
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+                {"title": "Transmutation", "author": "Robin T. Hale"}, candidates
             )
         # The judge saw both strong candidates and picked the first.
         self.assertEqual(len(judge.call_args.args[3]), 2)
@@ -2771,7 +2845,7 @@ class TestAutoMapSelection(unittest.TestCase):
         with patch.object(kosync_server, '_container', container), \
              patch.object(kosync_server, 'judge_best_candidate', return_value=0) as judge:
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim"}, candidates
+                {"title": "Transmutation", "author": "Robin T. Hale"}, candidates
             )
         self.assertIsNone(chosen)
         judge.assert_not_called()
@@ -2781,11 +2855,11 @@ class TestAutoMapSelection(unittest.TestCase):
         container = MagicMock()
         container.ollama_client.return_value.is_configured.return_value = True
         # Judge confidently picks the sequel, but the EPUB is volume 1 -> volume guard blocks.
-        candidate = self._candidate(title="Heretic Spellblade 2", author_sim=0.95, title_sim=0.93)
+        candidate = self._candidate(title="Apostate Runeblade 2", author_sim=0.95, title_sim=0.93)
         with patch.object(kosync_server, '_container', container), \
              patch.object(kosync_server, 'judge_best_candidate', return_value=0):
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Heretic Spellblade", "author": "K.D. Robertson"}, [candidate]
+                {"title": "Apostate Runeblade", "author": "J.M. Sterling"}, [candidate]
             )
         self.assertIsNone(chosen)
 
@@ -2795,7 +2869,7 @@ class TestAutoMapSelection(unittest.TestCase):
         container.ollama_client.return_value.is_configured.return_value = False
         with patch.object(kosync_server, '_container', container):
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim"}, [self._candidate()]
+                {"title": "Transmutation", "author": "Robin T. Hale"}, [self._candidate()]
             )
         self.assertIsNone(chosen)   # strong fuzzy but no LLM and no ID -> suggest instead
 
@@ -2806,7 +2880,7 @@ class TestAutoMapSelection(unittest.TestCase):
         with patch.object(kosync_server, '_container', container), \
              patch.object(kosync_server, 'judge_best_candidate', return_value=0):
             chosen, reason = kosync_server._select_auto_map_candidate(
-                {"title": "Sublimation", "author": "Isabel J. Kim"},
+                {"title": "Transmutation", "author": "Robin T. Hale"},
                 [self._candidate(progress_pct=90)],
             )
         self.assertIsNone(chosen)
@@ -2820,10 +2894,10 @@ class TestResolveLibraryEbookSource(unittest.TestCase):
         container = MagicMock()
         container.bookorbit_client.return_value.is_configured.return_value = True
         container.bookorbit_client.return_value.find_book_by_filename.return_value = {
-            "id": 3530, "fileName": "Blister (2016).epub",
+            "id": 3530, "fileName": "Ember (2016).epub",
         }
         with patch.object(kosync_server, '_container', container):
-            source, source_id = kosync_server._resolve_library_ebook_source("Blister (2016).epub")
+            source, source_id = kosync_server._resolve_library_ebook_source("Ember (2016).epub")
         self.assertEqual((source, source_id), ("BookOrbit", "3530"))
 
     def test_none_when_no_library_configured(self):

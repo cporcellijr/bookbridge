@@ -606,4 +606,223 @@ assert(dead_ok == false and dead_reason == "subprocess produced no result",
     "a subprocess that exits without a result must be reported as a failure")
 bridge._in_subprocess = nil
 
+-- Session rejection reasons. A session the bridge will never accept used to sit
+-- in the queue re-uploading on every wake: after a match was deleted the device
+-- logged "Session upload partially accepted: 0 accepted, 3 retained for retry"
+-- on every single wake, and the bridge logged "Session upload: book not found"
+-- to match, forever.
+bridge.session_upload_attempts = {}
+bridge.pending_sessions = {}
+
+assert(bridge:_shouldAbandonSession({ session_id = "bad" }, { reason = "invalid_session" }),
+    "a malformed session can never become valid and must be abandoned at once")
+assert(not bridge:_shouldAbandonSession({ session_id = "t" }, { reason = "record_failed" }),
+    "a transient bridge-side failure must stay queued for retry")
+assert(not bridge:_shouldAbandonSession({ session_id = "t2" }, nil),
+    "a rejection carrying no reason must stay queued for retry")
+
+-- book_not_found recovers if the same file is matched again, so it gets a
+-- bounded number of attempts rather than an instant drop or an endless retry.
+local gone = { session_id = "gone", abs_id = "ebook-89a7f7b8d25f2391" }
+local gone_attempts = 0
+while not bridge:_shouldAbandonSession(gone, { reason = "book_not_found" }) do
+    gone_attempts = gone_attempts + 1
+    assert(gone_attempts < 20, "book_not_found never stopped retrying")
+end
+gone_attempts = gone_attempts + 1
+assert(gone_attempts == 5,
+    "book_not_found must be abandoned on the 5th attempt, got " .. tostring(gone_attempts))
+
+-- Attempt counters for sessions that have left the queue must not accumulate.
+bridge.pending_sessions = { { session_id = "still-queued" } }
+bridge.session_upload_attempts["still-queued"] = 2
+bridge:_pruneSessionUploadAttempts()
+assert(bridge.session_upload_attempts["still-queued"] == 2,
+    "pruning dropped the counter for a session that is still queued")
+assert(bridge.session_upload_attempts["gone"] == nil,
+    "pruning kept the counter for a session that is no longer queued")
+
+-- Drive the real manifest sweep: failed publication must keep the old file,
+-- its progress sidecar and its tracked entry, and leave the revision retryable.
+local function file_bytes(path)
+    local handle = io.open(path, "rb")
+    if not handle then return nil end
+    local bytes = handle:read("*a")
+    handle:close()
+    return bytes
+end
+local function write_bytes(path, bytes)
+    local handle = assert(io.open(path, "wb"))
+    handle:write(bytes)
+    handle:close()
+end
+for _, failure in ipairs({ "missing", "empty", "size", "hash", "rename", "rename_eexist", "success" }) do
+    local target = settings_dir .. "/replacement.epub"
+    local temp_path = target .. ".part"
+    local backup_path = target .. ".bak"
+    write_bytes(target, "old-good-book")
+    local previous = { local_path = target, filename = "replacement.epub", content_hash = "old-good-book" }
+    local items = { replacement = previous }
+    local sidecar_removed = false
+    local saved_revision
+    local sync = BridgeSync:new{
+        download_dir = settings_dir,
+        _ensureDirectory = function() return true end,
+        _getStateScalar = function() return "old-revision" end,
+        _loadStateItems = function() return items end,
+        _buildHashIndex = function() return {} end,
+        _fileExists = function(_, path) return file_bytes(path) ~= nil end,
+        _calculateBookHash = function(_, path) return file_bytes(path) end,
+        _safeRemove = function(_, path) os.remove(path) end,
+        _removeTree = function() sidecar_removed = true end,
+        _updateCollections = function() end,
+        _saveState = function(_, saved, revision) items = saved; saved_revision = revision end,
+        logInfo = function() end,
+        logWarn = function() end,
+        api = {
+            getManifest = function() return true, { revision = "new-revision", books = {
+                { abs_id = "replacement", filename = "replacement.epub", content_hash = "new-book",
+                  size = 8, download_path = "/book" },
+            } } end,
+            downloadBook = function(_, _, path)
+                if failure ~= "missing" then
+                    write_bytes(path, failure == "empty" and "" or failure == "size" and "short"
+                        or failure == "hash" and "bad-book" or "new-book")
+                end
+                return true
+            end,
+        },
+    }
+    local real_rename = os.rename
+    -- The retry after a Windows EEXIST fallback moves the destination aside
+    -- and republishes it, so the "previous good file" guarantee only holds
+    -- for the FIRST publication attempt on a given book, not every rename
+    -- call - the move-aside and restore calls are distinguished by path,
+    -- not counted as publication attempts.
+    local first_publish_attempt = true
+    os.rename = function(src, dst)
+        if src == target and dst == backup_path then
+            -- The fallback's move-aside: let it actually happen so the
+            -- retry (and a possible restore) have a real backup to work
+            -- with.
+            return real_rename(src, dst)
+        end
+        if src == backup_path and dst == target then
+            -- The fallback's restore after a failed retry.
+            return real_rename(src, dst)
+        end
+        local is_first_call = first_publish_attempt
+        first_publish_attempt = false
+        if is_first_call then
+            assert(file_bytes(dst) == "old-good-book", "publication deleted the previous good file")
+        end
+        if failure == "rename" then return nil, "No such file or directory" end
+        if failure == "rename_eexist" and is_first_call then
+            -- os.rename is C rename(): on Windows it fails with EEXIST when
+            -- the destination already exists, instead of POSIX's atomic
+            -- replace-on-rename.
+            return nil, "EEXIST: file already exists"
+        end
+        -- Model KOReader's POSIX replace on Windows too (or the retry once
+        -- the fallback has moved the destination aside).
+        os.remove(dst)
+        return real_rename(src, dst)
+    end
+    local ok, result = pcall(function() return sync:_runSync() end)
+    os.rename = real_rename
+    assert(ok, result)
+    if failure == "success" or failure == "rename_eexist" then
+        assert(result.downloaded == 1 and result.errors == 0)
+        assert(file_bytes(target) == "new-book" and items.replacement.content_hash == "new-book")
+        assert(sidecar_removed and saved_revision == "new-revision")
+    else
+        assert(result.errors == 1 and result.downloaded == 0, failure .. " must fail closed")
+        assert(file_bytes(target) == "old-good-book", failure .. " lost the previous book")
+        assert(items.replacement == previous and not sidecar_removed, failure .. " lost progress state")
+        assert(saved_revision == "", failure .. " must remain retryable")
+    end
+    assert(file_bytes(target .. ".part") == nil, "partial file leaked")
+    assert(file_bytes(backup_path) == nil, "backup file leaked")
+    os.remove(target)
+end
+
+-- The Kindle downloaded Household Inheritance then deleted it through its old
+-- ebook ID. Run the actual forked book-sync entry point and repeat the sync to
+-- prove both file retention and SQLite revision persistence.
+do
+    local filename = "Household Inheritance.epub"
+    local target = settings_dir .. "/" .. filename
+    local old_id, new_id = "ebook-c84f08fa7c356f9d", "bookorbit:6043"
+    local items = { [old_id] = {
+        local_path = target, filename = filename, content_hash = "book-bytes",
+    } }
+    local revision = "old-revision"
+    local downloads, deletions = 0, 0
+    local SQLite = require("bridge_sqlite_state")
+    local original_new = SQLite.new
+    SQLite.new = function()
+        return {
+            init = function() return true end,
+            get_setting = function() return revision end,
+            get_all_books = function()
+                local ids = {}
+                for id in pairs(items) do ids[#ids + 1] = id end
+                return ids
+            end,
+            get_all_state_items_for_book = function(_, id) return items[id] end,
+            replace_state = function(_, saved, saved_revision)
+                items, revision = saved, saved_revision
+                return true
+            end,
+        }
+    end
+    preload("apps/filemanager/filemanager", empty_module)
+    local sync = BridgeSync:new{
+        server_url = "http://bridge", username = "reader", key = "test",
+        sqlite_available = true, sqlite_state = SQLite:new(),
+        state = { readSetting = function() error("book sync read stale LuaSettings") end },
+        download_dir = settings_dir, delete_removed_books = true,
+        _preflightNetwork = function() return true end,
+        _ensureDirectory = function() return true end,
+        _buildHashIndex = function() return {} end,
+        _fileExists = function(_, path) return file_bytes(path) ~= nil end,
+        _calculateBookHash = function(_, path) return file_bytes(path) end,
+        _removeTree = function() end,
+        _isCurrentDocument = function() return false end,
+        _deleteManagedFile = function(_, path)
+            deletions = deletions + 1
+            os.remove(path)
+            return true
+        end,
+        _updateCollections = function() end,
+        _maybeAutoSyncStats = function() end,
+        _uploadDeviceLogTail = function() end,
+        logInfo = function() end, logWarn = function() end, logErr = function() end,
+        api = {
+            getManifest = function() return true, { revision = "new-revision", books = {
+                { abs_id = new_id, filename = filename, content_hash = "book-bytes",
+                  size = 10, download_path = "/book" },
+            } } end,
+            downloadBook = function(_, _, path)
+                downloads = downloads + 1
+                write_bytes(path, "book-bytes")
+                return true
+            end,
+        },
+    }
+    stub_fork(true)
+    assert(drive(function() return sync:syncFromBridge(true) end),
+        "forked book sync must use its own SQLite connection")
+    assert(file_bytes(target) == "book-bytes" and deletions == 0,
+        "Household Inheritance was downloaded then deleted through its retired ebook ID")
+    assert(items[old_id] == nil and items[new_id] and revision == "new-revision",
+        "book sync must persist the replacement ID and revision in SQLite")
+    sync._in_subprocess = nil
+    assert(drive(function() return sync:syncFromBridge(true) end))
+    assert(downloads == 1 and file_bytes(target) == "book-bytes",
+        "the next sync must retain Household Inheritance without downloading it again")
+    SQLite.new = original_new
+    os.remove(target)
+end
+
 print("BridgeSync Lua init regression test passed")

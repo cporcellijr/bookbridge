@@ -138,6 +138,64 @@ class TestLocalWhisperProvider(unittest.TestCase):
                 compute_type='float16'
             )
 
+    @patch("faster_whisper.WhisperModel")
+    @patch("utils.transcription_providers.logger")
+    @patch.dict(os.environ, {"WHISPER_MODEL": "base", "WHISPER_DEVICE": "auto"}, clear=True)
+    def test_transcribe_with_word_timestamps(self, mock_logger, mock_whisper_model):
+        """Test that transcribe calls model with word_timestamps=True and retains words."""
+        provider = LocalWhisperProvider()
+
+        # Mock the model and its transcribe method
+        mock_model_instance = mock_whisper_model.return_value
+
+        # Create mock segments with words
+        mock_segment1 = MagicMock()
+        mock_segment1.start = 0.0
+        mock_segment1.end = 2.0
+        mock_segment1.text = "Hello world"
+
+        mock_word1 = MagicMock()
+        mock_word1.word = "Hello"
+        mock_word1.start = 0.0
+        mock_word1.end = 0.5
+
+        mock_word2 = MagicMock()
+        mock_word2.word = " world"
+        mock_word2.start = 0.5
+        mock_word2.end = 2.0
+
+        mock_segment1.words = [mock_word1, mock_word2]
+
+        mock_segment2 = MagicMock()
+        mock_segment2.start = 2.5
+        mock_segment2.end = 4.0
+        mock_segment2.text = "How are you"
+        mock_segment2.words = None  # Test handling of None words
+
+        mock_model_instance.transcribe.return_value = ([mock_segment1, mock_segment2], MagicMock())
+
+        with patch.object(provider, '_get_device_config', return_value=('cpu', 'int8')):
+            segments = provider.transcribe(Path("test.wav"))
+
+        # Verify word_timestamps=True was passed
+        mock_model_instance.transcribe.assert_called_once()
+        _, kwargs = mock_model_instance.transcribe.call_args
+        self.assertTrue(kwargs.get('word_timestamps'))
+
+        # Verify segments and words
+        self.assertEqual(len(segments), 2)
+        self.assertEqual(segments[0]['text'], "Hello world")
+        self.assertEqual(segments[0]['start'], 0.0)
+        self.assertEqual(segments[0]['end'], 2.0)
+        self.assertIn('words', segments[0])
+        self.assertEqual(len(segments[0]['words']), 2)
+        self.assertEqual(segments[0]['words'][0], {"word": "Hello", "start": 0.0, "end": 0.5})
+        self.assertEqual(segments[0]['words'][1], {"word": " world", "start": 0.5, "end": 2.0})
+
+        # Second segment has no words
+        self.assertEqual(segments[1]['text'], "How are you")
+        self.assertNotIn('words', segments[1])
+
 class TestDeepgramProvider(unittest.TestCase):
     
     def test_init_without_key(self):
@@ -345,6 +403,241 @@ class TestWhisperCppServerProvider(unittest.TestCase):
         }, clear=True):
             provider = get_transcription_provider()
             self.assertIsInstance(provider, WhisperCppServerProvider)
+
+    def test_post_requests_word_and_segment_granularity(self):
+        """POST includes both timestamp_granularities and timestamp_granularities[] for word+segment."""
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/v1/audio/transcriptions"}, clear=True):
+            provider = WhisperCppServerProvider()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"segments": [{"start": 0.0, "end": 1.0, "text": "test"}]}
+        with patch("requests.post", return_value=mock_resp) as mock_post, \
+             patch("builtins.open", unittest.mock.mock_open(read_data=b"wav")):
+            provider.transcribe(Path("chunk.wav"))
+
+        _, kwargs = mock_post.call_args
+        data = kwargs["data"]
+        self.assertIn("timestamp_granularities", data)
+        self.assertIn("timestamp_granularities[]", data)
+        self.assertEqual(data["timestamp_granularities"], ["word", "segment"])
+        self.assertEqual(data["timestamp_granularities[]"], ["word", "segment"])
+
+    def test_nested_segment_words_retained(self):
+        """Server returns words inside segments; they are validated and retained."""
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/v1/audio/transcriptions"}, clear=True):
+            provider = WhisperCppServerProvider()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "segments": [{
+                "start": 0.0,
+                "end": 2.0,
+                "text": "Hello world",
+                "words": [
+                    {"word": "Hello", "start": 0.0, "end": 0.5},
+                    {"word": " world", "start": 0.5, "end": 2.0}
+                ]
+            }]
+        }
+        with patch("requests.post", return_value=mock_resp), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=b"wav")):
+            segments = provider.transcribe(Path("chunk.wav"))
+
+        self.assertEqual(len(segments), 1)
+        self.assertIn("words", segments[0])
+        self.assertEqual(len(segments[0]["words"]), 2)
+        self.assertEqual(segments[0]["words"][0], {"word": "Hello", "start": 0.0, "end": 0.5})
+        self.assertEqual(segments[0]["words"][1], {"word": " world", "start": 0.5, "end": 2.0})
+
+    def test_top_level_words_associated_with_segments(self):
+        """Top-level words array is associated with segments by start time."""
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/v1/audio/transcriptions"}, clear=True):
+            provider = WhisperCppServerProvider()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "segments": [
+                {"start": 0.0, "end": 2.0, "text": "Hello world"},
+                {"start": 2.5, "end": 4.0, "text": "How are you"}
+            ],
+            "words": [
+                {"word": "Hello", "start": 0.0, "end": 0.5},
+                {"word": "world", "start": 0.5, "end": 2.0},
+                {"word": "How", "start": 2.5, "end": 3.0},
+                {"word": "are", "start": 3.0, "end": 3.5},
+                {"word": "you", "start": 3.5, "end": 4.0}
+            ]
+        }
+        with patch("requests.post", return_value=mock_resp), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=b"wav")):
+            segments = provider.transcribe(Path("chunk.wav"))
+
+        self.assertEqual(len(segments), 2)
+        self.assertIn("words", segments[0])
+        self.assertEqual(len(segments[0]["words"]), 2)
+        self.assertEqual(segments[0]["words"][0]["word"], "Hello")
+        self.assertEqual(segments[0]["words"][1]["word"], "world")
+        self.assertIn("words", segments[1])
+        self.assertEqual(len(segments[1]["words"]), 3)
+        self.assertEqual(segments[1]["words"][0]["word"], "How")
+        self.assertEqual(segments[1]["words"][1]["word"], "are")
+        self.assertEqual(segments[1]["words"][2]["word"], "you")
+
+    def test_words_only_response_creates_single_segment(self):
+        """Words-only response (no segments) creates a single segment with joined text."""
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/v1/audio/transcriptions"}, clear=True):
+            provider = WhisperCppServerProvider()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "words": [
+                {"word": "Hello", "start": 0.0, "end": 0.5},
+                {"word": "world", "start": 0.5, "end": 2.0}
+            ],
+            "text": "Hello world"
+        }
+        with patch("requests.post", return_value=mock_resp), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=b"wav")):
+            segments = provider.transcribe(Path("chunk.wav"))
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0]["start"], 0.0)
+        self.assertEqual(segments[0]["end"], 2.0)
+        self.assertEqual(segments[0]["text"], "Hello world")
+        self.assertIn("words", segments[0])
+        self.assertEqual(len(segments[0]["words"]), 2)
+
+    def test_malformed_nested_words_falls_back_to_segment_only(self):
+        """Malformed words in segments cause fallback to segment-only (no partial words attached)."""
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/v1/audio/transcriptions"}, clear=True):
+            provider = WhisperCppServerProvider()
+
+        # Missing 'word' field
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "segments": [{
+                "start": 0.0,
+                "end": 2.0,
+                "text": "Hello world",
+                "words": [{"start": 0.0, "end": 0.5}]  # missing word/text
+            }]
+        }
+        with patch("requests.post", return_value=mock_resp), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=b"wav")):
+            segments = provider.transcribe(Path("chunk.wav"))
+
+        self.assertEqual(len(segments), 1)
+        self.assertNotIn("words", segments[0])  # No words attached due to validation failure
+
+    def test_malformed_top_level_words_falls_back_to_segment_only(self):
+        """Malformed top-level words cause fallback to segment-only (no words attached)."""
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/v1/audio/transcriptions"}, clear=True):
+            provider = WhisperCppServerProvider()
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "segments": [{"start": 0.0, "end": 2.0, "text": "Hello world"}],
+            "words": [{"word": "Hello", "start": "invalid", "end": 0.5}]  # invalid start
+        }
+        with patch("requests.post", return_value=mock_resp), \
+             patch("builtins.open", unittest.mock.mock_open(read_data=b"wav")):
+            segments = provider.transcribe(Path("chunk.wav"))
+
+        self.assertEqual(len(segments), 1)
+        self.assertNotIn("words", segments[0])  # No words attached due to validation failure
+
+    def test_invalid_word_shapes_and_nonfinite_times_fall_back(self):
+        with patch.dict(os.environ, {"WHISPER_CPP_URL": "http://x/transcriptions"}):
+            provider = WhisperCppServerProvider()
+        invalid = [
+            "not a list", [None], ["not a record"],
+            [{"word": "hello", "start": 0, "end": float('inf')}],
+            [{"word": "hello", "start": float('nan'), "end": 1}],
+            [{"word": "hello", "start": 2, "end": 3},
+             {"word": "world", "start": 1, "end": 2}],
+        ]
+        for words in invalid:
+            with self.subTest(words=words):
+                response = MagicMock()
+                response.json.return_value = {
+                    "segments": [{"start": 0, "end": 3, "text": "hello world", "words": words}],
+                }
+                with patch('requests.post', return_value=response):
+                    self.assertEqual(provider._post(None, 'test.wav', 'audio/wav'),
+                                     [{"start": 0.0, "end": 3.0, "text": "hello world"}])
+
+    def test_chunked_wav_offsets_nested_word_timestamps(self):
+        """Second WAV chunk offsets nested word start/end along with segment timestamps."""
+        import io
+        import tempfile
+        import wave
+
+        with patch.dict(os.environ, {
+            "WHISPER_CPP_URL": "http://x/v1/audio/transcriptions",
+            "WHISPER_CPP_CHUNK_MINUTES": "1",
+        }, clear=True):
+            provider = WhisperCppServerProvider()
+
+        # 90 seconds of silence at 16kHz mono -> two chunks (60s + 30s)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            with wave.open(tmp, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(b"\x00\x00" * 16000 * 90)
+            wav_path = Path(tmp.name)
+
+        call_count = [0]
+
+        def fake_post(url, files=None, data=None, timeout=None):
+            call_count[0] += 1
+            buf = files["file"][1]
+            with wave.open(io.BytesIO(buf.read()), "rb") as wf:
+                dur = wf.getnframes() / wf.getframerate()
+            resp = MagicMock()
+            if call_count[0] == 1:
+                # First chunk: segment with nested words
+                resp.json.return_value = {
+                    "segments": [{
+                        "start": 0.0,
+                        "end": dur,
+                        "text": "part 1",
+                        "words": [
+                            {"word": "part", "start": 0.0, "end": 0.5},
+                            {"word": "1", "start": 0.5, "end": dur}
+                        ]
+                    }]
+                }
+            else:
+                # Second chunk: segment with nested words
+                resp.json.return_value = {
+                    "segments": [{
+                        "start": 0.0,
+                        "end": dur,
+                        "text": "part 2",
+                        "words": [
+                            {"word": "part", "start": 0.0, "end": 0.5},
+                            {"word": "2", "start": 0.5, "end": dur}
+                        ]
+                    }]
+                }
+            return resp
+
+        try:
+            with patch("requests.post", side_effect=fake_post):
+                segments = provider.transcribe(wav_path)
+        finally:
+            wav_path.unlink()
+
+        self.assertEqual(len(segments), 2)
+        # First chunk: words at 0.0-0.5, 0.5-60.0
+        self.assertIn("words", segments[0])
+        self.assertEqual(segments[0]["words"][0], {"word": "part", "start": 0.0, "end": 0.5})
+        self.assertEqual(segments[0]["words"][1], {"word": "1", "start": 0.5, "end": 60.0})
+        # Second chunk: words offset by 60s -> 60.0-60.5, 60.5-90.0
+        self.assertIn("words", segments[1])
+        self.assertEqual(segments[1]["words"][0], {"word": "part", "start": 60.0, "end": 60.5})
+        self.assertEqual(segments[1]["words"][1], {"word": "2", "start": 60.5, "end": 90.0})
 
 
 if __name__ == '__main__':

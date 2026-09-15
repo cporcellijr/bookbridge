@@ -53,14 +53,26 @@ from src.utils.transcription_cancel import (
     unregister_worker,
 )
 from src.utils.transcriber import TranscriptionCancelled
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
+from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
+from src.utils.ebook_sources import (
+    is_grimmory_source,
+    is_storyteller_filename,
+    local_ebook_filename,
+    normalize_ebook_source,
+)
 
 # Service imports
 from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import LibraryService
 from src.services.migration_service import MigrationService
+from src.services.reading_session_aggregator import (
+    MAX_SESSION_SECONDS,
+    effective_session_gap_seconds,
+    uncovered_fraction,
+)
 
 # Silence noisy third-party loggers
 for noisy in ('urllib3', 'requests', 'schedule', 'chardet', 'multipart', 'faster_whisper'):
@@ -90,6 +102,23 @@ _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "StoryGraph",
     "Hardcover",
     "ABSEbook",
+})
+
+# How far behind its peers a client must fall, on the normalized audio timeline,
+# before a lone backward move is treated as a rollback rather than ordinary drift.
+# Module-level because both the single-delta guard and the zero-delta discrepancy
+# path judge against it (issue #215).
+MATERIAL_ROLLBACK_SECONDS: float = 30.0
+
+# Normalization sources that resolved a real locator (xpath/CFI/href) rather than
+# falling back to `pct * total_len`. `_normalize_for_cross_format_comparison`
+# records the source per client; leader selection and the deadband already refuse
+# to act on a `_normalized_ts` derived from the percentage fallback.
+_HIGH_CONFIDENCE_NORMALIZATION_SOURCES: frozenset[str] = frozenset({
+    "xpath",
+    "cfi",
+    "href_frag",
+    "href_progression",
 })
 
 # Clients that navigate by locator rather than by percentage. ABSEbook rejects a
@@ -229,6 +258,8 @@ class SyncManager:
         if not hasattr(self, "_sync_cycle_ebook_cache"):
             self._sync_cycle_ebook_cache = {}
         if not ebook_filename:
+            return None, 0
+        if is_cbz_filename(ebook_filename):
             return None, 0
 
         cached = self._sync_cycle_ebook_cache.get(ebook_filename)
@@ -394,6 +425,302 @@ class SyncManager:
             return self._get_storyteller_ebook_filename(book)
         return self._get_non_story_ebook_filename(book)
 
+    @staticmethod
+    def _trust_corroborated_rewind_enabled() -> bool:
+        """Whether a corroborated rewind may keep the lead (#215).
+
+        Deliberately NOT `KOSYNC_FURTHEST_WINS`. That flag means "protect me from
+        another device regressing my position", and `kosync_server` already allows a
+        rewind from the SAME device while it is on — so reusing it would force a user
+        to give up cross-device protection to have their own rewinds honored. These
+        are two different questions and get two different switches.
+
+        Read per call so the settings UI applies without a restart.
+        """
+        return env_truthy('SYNC_TRUST_CORROBORATED_REWIND', 'true')
+
+    @staticmethod
+    def _backward_hold_seconds() -> float:
+        """How long a backward jump may be held while waiting for corroboration.
+
+        Bounded on purpose. An indefinite hold would be unanswerable: "rewound and
+        then stopped" and "reported a stale position and then stopped" look
+        identical forever, and nothing the bridge can observe separates them. So
+        the hold only buys time for evidence that may be seconds away, and on
+        expiry the old behavior resumes rather than the book being stuck.
+        """
+        try:
+            return float(os.environ.get("SYNC_REWIND_HOLD_SECONDS", "300") or 300)
+        except (TypeError, ValueError):
+            return 300.0
+
+    def _should_hold_backward_leader(
+        self, abs_id: str, title_snip: str, config: dict, client_name: str,
+        leader_pct, echo_clients=None, primary_audio_client: str | None = None,
+    ) -> bool:
+        """Whether to defer acting on a lone client's backward jump (#215).
+
+        The mirror of the demotion guard. `material_rollback` is gated on
+        `changed_client != primary_audio_client`, so an audio client that moves
+        backward never reaches it and leads unopposed — its position is propagated
+        to everyone, which is right for a deliberate rewind and wrong for the stale
+        update Kyomorie reported. (The same is true of ANY lone backward mover that
+        reaches this branch, including a text client whose book has no usable
+        normalization — a third path neither reporter has described.)
+
+        Corroboration cannot settle this on its own: a reader who rewound and
+        stopped emits exactly what a stale client emits — one backward report and
+        then silence. What corroboration CAN do is separate them whenever the user
+        carries on, which is the common case in both reports. So this holds only
+        briefly:
+
+          - corroborated  -> do not hold; it leads now and the rewind propagates.
+          - uncorroborated and the report is recent -> hold, propagate nothing, and
+            overwrite nothing. A stale blip is superseded by the next real report
+            inside this window; a genuine rewind is delayed by a cycle.
+          - uncorroborated and the report has gone quiet -> stop holding and accept
+            it, exactly as before this existed.
+
+        The trail's own timestamps supply the expiry, so there is no pending-hold
+        record to keep, reconcile, or leak.
+        """
+        from src.services import observation_trail
+
+        if not self._trust_corroborated_rewind_enabled():
+            return False
+        state = config.get(client_name) if config else None
+        previous_pct = getattr(state, "previous_pct", None)
+        if previous_pct is None or leader_pct is None:
+            return False
+        if leader_pct >= previous_pct - 1e-9:
+            return False                      # not a backward move
+        if len(config) < 2:
+            return False                      # nobody to protect the position from
+
+        trusted, evidence = self._rewind_trust(
+            abs_id, config, client_name, echo_clients, primary_audio_client
+        )
+        if trusted:
+            return False
+
+        trail = observation_trail.get_trail(client_name, abs_id)
+        if not trail:
+            # No evidence the report is even fresh. Fail open to today's behavior
+            # rather than hold on an assumption.
+            return False
+
+        age = time.time() - trail[-1].timestamp
+        window = self._backward_hold_seconds()
+        if age > window:
+            logger.info(
+                f"⌛ '{abs_id}' '{title_snip}' Accepting '{client_name}' backward move "
+                f"{previous_pct:.4%} -> {leader_pct:.4%}: uncorroborated but quiet for "
+                f"{age:.0f}s (> {window:.0f}s) — treating it as where the reader meant to be"
+            )
+            return False
+
+        logger.info(
+            f"⏳ '{abs_id}' '{title_snip}' Holding '{client_name}' backward move "
+            f"{previous_pct:.4%} -> {leader_pct:.4%} for up to {window - age:.0f}s more: "
+            f"{evidence} — not propagating it and not overwriting it until it is "
+            f"corroborated or goes quiet"
+        )
+        return True
+
+    def _rewind_trust(self, abs_id: str, config: dict, client_name: str, echo_clients=None,
+                      primary_audio_client: str | None = None):
+        """Judge whether `client_name`'s backward move is a deliberate rewind.
+
+        Returns `(trusted, detail)`. This is the single evaluator behind both the
+        live gate and the shadow log, so the two cannot drift apart — a shadow that
+        described a different rule than the one that ships would be worse than no
+        shadow at all.
+
+        A backward report is trusted only when ALL of:
+          - the trail shows sustained independent movement advancing from the new
+            anchor (`observation_trail.evaluate`) — a reader who genuinely went back
+            keeps reading; a stale or echoed report never advances;
+          - the position resolved through a real locator, not `pct * total_len`
+            (a collapsed or percent-derived offset is #420's signature);
+          - the locator did not collapse to start-of-book;
+          - the client is not one of this cycle's own write-back echoes (#413/#416).
+        """
+        from src.services import observation_trail
+
+        state = config.get(client_name) if config else None
+        current = state.current if state is not None else {}
+        corroboration = observation_trail.evaluate(client_name, abs_id)
+
+        # Locator quality is an EBOOK concept. `_normalize_for_cross_format_comparison`
+        # only resolves a locator for ebook clients — the primary audio client's
+        # position is already a timestamp on the audio timeline, so it never carries
+        # a `_normalization_source` and has no locator that could collapse. Applying
+        # those checks to it would reject every audio rewind, corroborated or not.
+        is_audio_client = bool(primary_audio_client) and client_name == primary_audio_client
+        if is_audio_client:
+            source = "audio_timeline"
+            high_confidence = True
+            collapsed = False
+        else:
+            source = current.get("_normalization_source")
+            high_confidence = source in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
+            collapsed = False
+            try:
+                locator_pct = current.get("_locator_pct")
+                anchor_pct = current.get("pct")
+                if locator_pct is not None and anchor_pct is not None:
+                    collapsed = self._locator_collapsed_to_start(
+                        LocatorResult(percentage=locator_pct), anchor_pct
+                    )
+            except Exception:
+                collapsed = False
+
+        is_echo = bool(echo_clients) and client_name in echo_clients
+        trusted = bool(
+            corroboration.corroborated and high_confidence and not collapsed and not is_echo
+        )
+        detail = (
+            f"{corroboration.describe()}; source={source} high_conf={high_confidence} "
+            f"collapsed={collapsed} echo={is_echo}"
+        )
+        return trusted, detail
+
+    def _shadow_evaluate_rewind(
+        self, abs_id: str, title_snip: str, config: dict, client_name: str,
+        situation: str, detail: str, echo_clients=None,
+        primary_audio_client: str | None = None,
+    ) -> None:
+        """Log what the corroboration rule WOULD have decided. Decides nothing (#215).
+
+        Leader selection cannot tell a deliberate rewind from a stale client, an
+        echo, or a collapsed locator, so today it guesses — and guesses in opposite
+        directions depending on whether the backward mover is a text client
+        (demoted, so the rewind is overwritten) or the audio client (obeyed, so a
+        stale position is propagated). Both reporters on #215 are describing that
+        one gap from opposite sides.
+
+        The proposed signal is corroboration: a reader who genuinely rewound keeps
+        reading, so the client emits a SEQUENCE of positions advancing from the new
+        anchor, while a stale or echoed report is one sample that never advances.
+
+        This runs in the hot path of `_determine_leader`, which must not change
+        behavior in phase 0, so every failure here is swallowed.
+        """
+        try:
+            trusted, evidence = self._rewind_trust(
+                abs_id, config, client_name, echo_clients, primary_audio_client
+            )
+            outcome = (
+                "corroborated — kept as leader"
+                if trusted else
+                "not corroborated — demoted, furthest-wins hands it to a peer"
+            )
+
+            logger.info(
+                f"🧪 '{abs_id}' '{title_snip}' Rewind shadow [{situation}]: '{client_name}' {detail}; "
+                f"{evidence} -> {outcome}"
+            )
+        except Exception as shadow_err:
+            logger.debug(f"'{abs_id}' Rewind shadow evaluation failed: {shadow_err}", exc_info=True)
+
+    def _get_alignment_epub_filename(self, book: Book | None) -> str | None:
+        """The EPUB whose character space this book's alignment map speaks.
+
+        A map is fitted against `book.ebook_filename` at forge time, but that
+        field moves afterwards — a Storyteller artifact replaces the original
+        when a readalong is matched, and `original_ebook_filename` preserves what
+        was there before. So a book can carry two EPUBs whose text differs, and
+        the map may be anchored to either one depending on which was current when
+        it was forged. Measured here: of 29 such books, 18 are decidable and they
+        split BOTH ways.
+
+        An offset resolved in the wrong one of those two files and then looked up
+        in the map is silently wrong by the difference between them — up to 5,683
+        characters (338s of audio) on this library.
+
+        Returns None when the answer is not certain, in which case callers keep
+        their existing EPUB choice rather than guess. Books with a single EPUB —
+        the overwhelming majority — return it without touching the map.
+        """
+        if not book:
+            return None
+        current = getattr(book, "ebook_filename", None)
+        original = getattr(book, "original_ebook_filename", None)
+        candidates = [name for name in (current, original) if name]
+        # Dedupe while preserving order; the forge used `ebook_filename`, so it
+        # goes first and wins any tie.
+        seen: set[str] = set()
+        candidates = [n for n in candidates if not (n in seen or seen.add(n))]
+        if len(candidates) <= 1:
+            return candidates[0] if candidates else None
+
+        if not self.alignment_service:
+            return None
+        try:
+            terminal = self.alignment_service.get_map_terminal_char(book.abs_id)
+        except Exception as e:
+            logger.debug(f"'{book.abs_id}' Could not read alignment map terminal char: {e}", exc_info=True)
+            return None
+        if not terminal:
+            return None
+
+        for name in candidates:
+            try:
+                _text, length = self._get_cached_ebook_text(name)
+            except Exception:
+                continue
+            if length and int(length) == int(terminal):
+                return name
+        return None
+
+    def _translate_char_offset_between_epubs(
+        self, from_epub: str | None, to_epub: str | None, offset: int
+    ) -> Optional[int]:
+        """Express `offset` from `from_epub`'s character space in `to_epub`'s.
+
+        Two builds of the same book differ by front matter, a foreword, or a
+        publisher's boilerplate, which shifts every offset after it by a constant.
+        The shift is not knowable in the abstract, so this anchors on the text
+        itself: take a window at `offset` and find where that window lives in the
+        other file.
+
+        Returns None when the window cannot be located — a genuinely different
+        edition — so callers fall back to using the offset unchanged rather than
+        inventing a position.
+        """
+        if not from_epub or not to_epub or from_epub == to_epub:
+            return offset
+        try:
+            from_text, from_len = self._get_cached_ebook_text(from_epub)
+            to_text, to_len = self._get_cached_ebook_text(to_epub)
+        except Exception as e:
+            logger.debug(f"Could not load text to translate offset between EPUBs: {e}", exc_info=True)
+            return None
+        if not from_len or not to_len:
+            return None
+
+        offset = max(0, min(int(offset), from_len - 1))
+        probe_len = 240
+        start = offset
+        if start + probe_len > from_len:
+            start = max(0, from_len - probe_len)
+        probe = from_text[start:start + probe_len]
+        if len(probe) < 40:
+            return None
+        lead = offset - start
+
+        # Search near the naive position first. The two files are near-identical,
+        # so the true match is close by, and a local hit cannot be a repeat of the
+        # same passage from elsewhere in the book.
+        window = 60000
+        near_from = max(0, offset - window)
+        idx = to_text.find(probe, near_from, min(to_len, offset + window + probe_len))
+        if idx < 0:
+            idx = to_text.find(probe)
+        if idx < 0:
+            return None
+        return max(0, min(idx + lead, to_len - 1))
+
     def _get_locator_target_epub(self, book: Book | None, leader_name: str | None) -> str | None:
         """
         Locator generation target EPUB used for cross-client updates.
@@ -428,6 +755,61 @@ class SyncManager:
             return None
         return self.active_audio_source_adapters.get(source)
 
+    def _ctc_local_audio_paths(self, audio_adapter, audio_source_id, abs_id):
+        """Local audio file paths for CTC, or None unless every part is local.
+
+        CTC decodes files with ffmpeg, so it needs on-disk parts. get_audio_files
+        downloads/caches them (and re-downloads if a prior part was pruned).
+        """
+        if not audio_adapter:
+            return None
+        files = audio_adapter.get_audio_files(audio_source_id, bridge_key=abs_id)
+        paths = [f.get("local_path") for f in (files or []) if f.get("local_path")]
+        if files and len(paths) == len(files):
+            return paths
+        return None
+
+    def _try_ctc_alignment(self, abs_id: str, audio_paths: list, book_text: str,
+                           spine_chapters: Optional[list], abs_title: str,
+                           audio_duration: Optional[float], source_label: str) -> bool:
+        """Run one CTC forced-alignment attempt and log its outcome (issue #426).
+
+        `_run_background_job` calls `AlignmentService.align_forced_and_store` from
+        two places -- the pre-transcription attempt and the post-transcript upgrade
+        -- that are otherwise near-duplicate try/except/log blocks. This is their
+        single shared implementation: it re-raises `TranscriptionCancelled` and
+        catches/logs any other exception exactly as both call sites did before,
+        returning whether a CTC map was stored.
+
+        `source_label` is ``"attempt"`` for the pre-transcription call site and
+        ``"upgrade"`` for the post-transcript one; it selects each site's existing,
+        byte-identical success and failure log text (the two sites word their
+        failure log differently, so this is not just a success-message suffix).
+        """
+        is_upgrade = source_label == "upgrade"
+        try:
+            stored = self.alignment_service.align_forced_and_store(
+                abs_id, audio_paths, book_text, spine_chapters=spine_chapters,
+                audio_duration=audio_duration,
+            )
+        except TranscriptionCancelled:
+            raise
+        except Exception as ctc_err:
+            if is_upgrade:
+                logger.warning(f"CTC upgrade failed for '{abs_id}': {ctc_err}", exc_info=True)
+            else:
+                logger.warning(f"CTC alignment failed for '{abs_id}': {ctc_err}", exc_info=True)
+            return False
+        if stored:
+            if is_upgrade:
+                logger.info(
+                    "CTC forced-alignment map generated for "
+                    f"'{sanitize_log_data(abs_title)}' (from transcript boundaries)"
+                )
+            else:
+                logger.info(f"CTC forced-alignment map generated for '{sanitize_log_data(abs_title)}'")
+        return stored
+
     @staticmethod
     def _freshness_guards_enabled() -> bool:
         """Kill switch for the Phase 2 freshness guards (staleness suppression +
@@ -443,6 +825,24 @@ class SyncManager:
             return float(os.environ.get("SYNC_ROLLBACK_VETO_SECONDS", "600") or 600)
         except (TypeError, ValueError):
             return 600.0
+
+    @staticmethod
+    def _locator_roundtrip_seconds_tolerance() -> float:
+        """How far apart two offsets may be on the audio timeline before a
+        character-close locator is refused as seam-crossing. Read per call so
+        the settings UI applies immediately.
+
+        The `or` and the except are not defensive padding: clearing this field
+        in the settings UI stores an empty string (`web_server`'s POST /settings
+        keeps cleared keys as ""), and `load_settings` mirrors that straight
+        into `os.environ` because DB values always win. A bare `float("")` would
+        raise, and both callers of this value sit inside a broad `except
+        Exception`, so the failure would present as the alignment-direct locator
+        path silently switching itself off for every book."""
+        try:
+            return float(os.environ.get("LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS", "30") or 30)
+        except (TypeError, ValueError):
+            return 30.0
 
     @staticmethod
     def _own_writeback_window_seconds() -> int:
@@ -550,6 +950,36 @@ class SyncManager:
         except Exception:
             return None, None
 
+    def _roundtrip_time_error(self, abs_id: str, offset_a: int, offset_b: int) -> Optional[float]:
+        """Absolute audio-time difference (seconds) between two char offsets.
+
+        The authoritative replacement for a character-distance round-trip check
+        whenever `abs_id` has an alignment map: a segmented map (out-of-order
+        narration, issue #426) makes the char->time function discontinuous at
+        segment seams, so two char offsets that are close together can sit on
+        opposite sides of a seam and be hours apart in audio time — and,
+        symmetrically, two char offsets that are far apart can land within the
+        same segment and be seconds apart in audio time.
+
+        Returns None — "cannot judge in time" — when there is no alignment
+        service, no stored alignment map, or either offset fails to resolve to
+        a timestamp. Never raises: any lookup exception is treated the same as
+        "cannot judge in time" so callers can fall back to the character
+        comparison unconditionally.
+        """
+        try:
+            alignment_service = getattr(self, "alignment_service", None)
+            if not alignment_service:
+                return None
+            time_a = alignment_service.get_time_for_char(abs_id, int(offset_a))
+            time_b = alignment_service.get_time_for_char(abs_id, int(offset_b))
+            if time_a is None or time_b is None:
+                return None
+            return abs(float(time_a) - float(time_b))
+        except Exception as exc:
+            logger.debug(f"'{abs_id}' Round-trip time-error lookup failed: {exc}", exc_info=True)
+            return None
+
     def _validate_and_stabilize_locator(
         self,
         book: Book,
@@ -557,14 +987,71 @@ class SyncManager:
         locator: LocatorResult,
         ebook_filename: str | None = None,
     ):
-        """Round-trip validate locator fields and deterministically degrade to safer fields."""
+        """Round-trip validate locator fields and deterministically degrade to safer fields.
+
+        Characters are the wrong unit whenever `abs_id` has an alignment map: a
+        segmented map (out-of-order narration, issue #426) makes the char->time
+        function discontinuous at segment seams, so a tiny char round-trip error
+        can sit on the far side of a seam and be hours off in audio time, while a
+        large char error on the near side of the same seam is negligible in time.
+        Each round-trip check below is therefore judged in audio-time via
+        `_roundtrip_time_error` whenever that is possible (an alignment map
+        exists and both offsets resolve to a timestamp); it falls back to the
+        original character-distance comparison unchanged when it is not.
+        """
         target_epub = ebook_filename or self._get_non_story_ebook_filename(book) or getattr(book, "ebook_filename", None)
         if not locator or not target_epub:
             return locator
 
         tolerance = int(os.getenv("CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS", self.ebook_parser.locator_roundtrip_tolerance))
+        roundtrip_seconds_tolerance = self._locator_roundtrip_seconds_tolerance()
         safe_locator = LocatorResult(**vars(locator))
         fallback = []
+
+        def _within_tolerance(offset, char_error, label: str) -> bool:
+            """True when `offset` round-trips close enough to `target_offset`.
+
+            This locator has TWO kinds of consumer, which is what makes the
+            asymmetry below the right one. It is written to ebook clients (xpath
+            to KoSync, CFI to Grimmory/BookOrbit), and it is also the thing
+            BookLoreAudio and BookOrbitAudio re-derive a timestamp from, via
+            `match_index` and `get_time_for_text`.
+
+            Characters decide ACCEPTANCE, because the reader's eye lands at a
+            text position — unchanged. Audio time is a VETO only, never a
+            licence. A segmented map (out-of-order narration, #426) makes
+            char->time discontinuous at segment seams: two offsets a couple of
+            characters apart can be hours apart in audio, and an audio follower
+            re-deriving from that locator would be stranded there. So a
+            character-close locator is still rejected when it lands across a
+            seam. The converse is deliberately NOT allowed — a locator thousands
+            of characters away is wrong for the reader no matter how close it
+            happens to be in audio time.
+
+            Refusing is cheap on both sides, which is why a veto here is safe:
+            xpath falls back to percent-only and KoSync is a percentage protocol
+            anyway, while CFI falls back to regeneration from `target_offset`,
+            which is character-exact by construction.
+
+            Contrast `_hydrate_cfi_locator`, which is character-judged with no
+            time veto at all: its output reaches only `_CFI_DEPENDENT_CLIENTS`,
+            no audio follower ever sees it, and its only fallback is the bare
+            percentage a Kobo-backed device ignores (#364).
+            """
+            if offset is None:
+                return False
+            if char_error is None or char_error > tolerance:
+                return False
+            time_error = self._roundtrip_time_error(book.abs_id, int(offset), int(target_offset))
+            if time_error is not None and time_error > roundtrip_seconds_tolerance:
+                logger.info(
+                    f"🚧 '{book.abs_id}' Locator round-trip rejected ({label}): offsets "
+                    f"{offset}->{target_offset} differ by {time_error:.1f}s on the audio "
+                    f"timeline (> {roundtrip_seconds_tolerance:.0f}s) — a segment seam or a "
+                    f"bad anchor; keeping the safer locator"
+                )
+                return False
+            return True
 
         ko_offset = None
         if safe_locator.perfect_ko_xpath:
@@ -575,13 +1062,15 @@ class SyncManager:
             # XPath unresolvable — set error above tolerance to trigger fallback
             # instead of pretending it resolved with zero error.
             ko_error = tolerance + 1
+            ko_within_tolerance = False
         else:
             ko_error = abs(int(ko_offset) - int(target_offset))
-        if ko_error > tolerance:
+            ko_within_tolerance = _within_tolerance(ko_offset, ko_error, "xpath")
+        if not ko_within_tolerance:
             sentence_xpath = self.ebook_parser.get_sentence_level_ko_xpath(target_epub, safe_locator.percentage)
             sentence_offset = self.ebook_parser.resolve_xpath_to_index(target_epub, sentence_xpath) if sentence_xpath else None
             sentence_error = abs(int(sentence_offset) - int(target_offset)) if sentence_offset is not None else None
-            if sentence_xpath and sentence_offset is not None and sentence_error <= tolerance:
+            if sentence_xpath and _within_tolerance(sentence_offset, sentence_error, "sentence_xpath"):
                 safe_locator.xpath = sentence_xpath
                 safe_locator.perfect_ko_xpath = sentence_xpath
                 fallback.append("ko=sentence_xpath")
@@ -592,7 +1081,8 @@ class SyncManager:
 
         cfi_offset = self.ebook_parser.resolve_cfi_to_index(target_epub, safe_locator.cfi) if safe_locator.cfi else None
         cfi_error = abs(int(cfi_offset) - int(target_offset)) if cfi_offset is not None else None
-        if cfi_offset is None or cfi_error > tolerance:
+        cfi_within_tolerance = _within_tolerance(cfi_offset, cfi_error, "cfi")
+        if not cfi_within_tolerance:
             regenerated_cfi = None
             regenerated_offset = None
             regenerated_error = None
@@ -610,7 +1100,7 @@ class SyncManager:
             except Exception as regen_err:
                 logger.debug(f"'{book.abs_id}' Failed to regenerate CFI for Grimmory fallback: {regen_err}")
 
-            if regenerated_cfi and regenerated_error is not None and regenerated_error <= tolerance:
+            if regenerated_cfi and _within_tolerance(regenerated_offset, regenerated_error, "regenerated_cfi"):
                 safe_locator.cfi = regenerated_cfi
                 cfi_offset = regenerated_offset
                 cfi_error = regenerated_error
@@ -1120,12 +1610,39 @@ class SyncManager:
                 if not window_txt:
                     continue
 
+                # `char_offset` is in THIS CLIENT's EPUB. The alignment map may be
+                # anchored to the book's other EPUB (a Storyteller artifact and the
+                # original differ by their front matter), and looking an offset up
+                # in the wrong space is silently wrong by the difference between
+                # the two files. Translate first; `map_offset is char_offset`
+                # whenever the book has one EPUB, which is nearly every book.
+                map_offset = char_offset
+                alignment_epub = self._get_alignment_epub_filename(book)
+                if alignment_epub and alignment_epub != client_epub:
+                    translated = self._translate_char_offset_between_epubs(
+                        client_epub, alignment_epub, char_offset
+                    )
+                    if translated is None:
+                        logger.debug(
+                            f"'{book.abs_id}' Could not translate '{client_name}' offset {char_offset} from "
+                            f"'{sanitize_log_data(client_epub)}' into the alignment map's "
+                            f"'{sanitize_log_data(alignment_epub)}'; using it unchanged"
+                        )
+                    else:
+                        if translated != char_offset:
+                            logger.debug(
+                                f"'{book.abs_id}' Translated '{client_name}' offset {char_offset} -> {translated} "
+                                f"into the alignment map's EPUB '{sanitize_log_data(alignment_epub)}' "
+                                f"(shift {translated - char_offset:+d})"
+                            )
+                        map_offset = translated
+
                 ts_for_text = None
                 if self.alignment_service:
                     ts_for_text = self.alignment_service.get_time_for_text(
                         book.abs_id,
                         window_txt,
-                        char_offset_hint=char_offset,
+                        char_offset_hint=map_offset,
                     )
 
                 if ts_for_text is None:
@@ -1227,7 +1744,7 @@ class SyncManager:
 
 
     def _download_epub_by_source_id(
-        self, ebook_filename: str, cached_path: Path
+        self, ebook_filename: str, cached_path: Path, mapped_book: Book | None = None
     ) -> Path | None:
         """
         Try to download an EPUB using the stored library mapping (ebook_source + ebook_source_id).
@@ -1238,20 +1755,21 @@ class SyncManager:
         """
         # 1. Skip Storyteller artifacts — they have their own materialization path
         #    and caching the library bytes under a Storyteller filename would be wrong.
-        if ebook_filename.startswith("storyteller_"):
+        if is_storyteller_filename(ebook_filename):
             return None
 
         # 2. Look up the mapping row by ebook_filename (matches current or original).
-        book = None
-        try:
-            book = self.database_service.get_book_by_ebook_filename(ebook_filename)
-        except Exception as e:
-            logger.debug(
-                "Database lookup failed for '%s': %s",
-                sanitize_log_data(ebook_filename),
-                e,
-            )
-            return None
+        book = mapped_book
+        if book is None:
+            try:
+                book = self.database_service.get_book_by_ebook_filename(ebook_filename)
+            except Exception as e:
+                logger.debug(
+                    "Database lookup failed for '%s': %s",
+                    sanitize_log_data(ebook_filename),
+                    e,
+                )
+                return None
 
         if not book:
             return None
@@ -1263,11 +1781,12 @@ class SyncManager:
 
         # 3. Map source to the appropriate client and download by ID.
         client = None
-        if ebook_source == "BookOrbit":
+        normalized_source = normalize_ebook_source(ebook_source)
+        if normalized_source == "BookOrbit":
             client = self.active_bookorbit_client
-        elif ebook_source == "BookLore":
+        elif normalized_source == "Booklore":
             client = self.active_booklore_client
-        elif ebook_source == "Kavita":
+        elif normalized_source == "Kavita":
             client = self.active_kavita_client
         else:
             return None
@@ -1321,6 +1840,16 @@ class SyncManager:
         """
         Get local path to EPUB file, downloading from Grimmory if necessary.
         """
+        # Resolve the original cache name once. Looking that name up as another
+        # mapping could switch to a different book whose remote filename matches it.
+        try:
+            mapped_book = self.database_service.get_book_by_ebook_filename(ebook_filename)
+        except Exception:
+            mapped_book = None
+        stable_local_filename = local_ebook_filename(mapped_book) if mapped_book else None
+        if stable_local_filename:
+            ebook_filename = stable_local_filename
+
         # 1. Try the parser's resolve_book_path first. It has a path-resolution
         #    cache (instant repeat lookups), managed-cache bypass for BookFusion/
         #    Storyteller files, and the same filesystem + cache-dir search.
@@ -1356,9 +1885,14 @@ class SyncManager:
 
         # 3. Try to download using the stored library mapping (ebook_source + ebook_source_id)
         #    before falling back to filename-based search.
-        by_id_result = self._download_epub_by_source_id(ebook_filename, cached_path)
+        by_id_result = self._download_epub_by_source_id(
+            ebook_filename, cached_path, mapped_book=mapped_book
+        )
         if by_id_result is not None:
             return by_id_result
+        if (mapped_book and is_grimmory_source(getattr(mapped_book, "ebook_source", None))
+                and getattr(mapped_book, "ebook_source_id", None)):
+            return None
 
         # Try to download from Grimmory API
         # Note: We use hasattr to prevent crashes if BookloreClient wasn't updated with these methods yet
@@ -1606,10 +2140,35 @@ class SyncManager:
             if char_offset is None:
                 return None, None
 
-            locator = self.ebook_parser.get_locator_from_char_offset(target_epub, int(char_offset))
+            # `char_offset` comes out of the map, so it is in the map's EPUB. The
+            # locator is built for the clients, so it must be in theirs. These are
+            # the same file for nearly every book; when a Storyteller artifact and
+            # the original disagree, building the locator from the raw map offset
+            # lands it off by the difference between the two files.
+            alignment_epub = self._get_alignment_epub_filename(book)
+            target_offset = char_offset
+            if alignment_epub and alignment_epub != target_epub:
+                translated = self._translate_char_offset_between_epubs(
+                    alignment_epub, target_epub, int(char_offset)
+                )
+                if translated is None:
+                    logger.debug(
+                        f"'{book.abs_id}' Could not translate map offset {char_offset} from "
+                        f"'{sanitize_log_data(alignment_epub)}' into locator target "
+                        f"'{sanitize_log_data(target_epub)}'; using it unchanged"
+                    )
+                else:
+                    if translated != char_offset:
+                        logger.debug(
+                            f"'{book.abs_id}' Translated map offset {char_offset} -> {translated} into locator "
+                            f"target '{sanitize_log_data(target_epub)}' (shift {translated - int(char_offset):+d})"
+                        )
+                    target_offset = translated
+
+            locator = self.ebook_parser.get_locator_from_char_offset(target_epub, int(target_offset))
             if not locator:
                 return None, None
-            locator = self._validate_and_stabilize_locator(book, int(char_offset), locator, ebook_filename=target_epub)
+            locator = self._validate_and_stabilize_locator(book, int(target_offset), locator, ebook_filename=target_epub)
 
             full_text, _ = self._get_cached_ebook_text(target_epub)
             context_txt = ""
@@ -1623,7 +2182,14 @@ class SyncManager:
                 backfill = getattr(
                     self.alignment_service, "record_total_chars_if_missing", None
                 )
-                if backfill is not None:
+                # Only ever record a length measured on the map's OWN EPUB. When a
+                # book carries two files that disagree, stamping the map with the
+                # target EPUB's length takes a number from a text the map was not
+                # fitted to: it misreports every percentage derived from the map and
+                # destroys the one fingerprint that says which file it speaks.
+                # `_get_alignment_epub_filename` returns the sole candidate when a
+                # book has only one EPUB, so this is an equality, not a special case.
+                if backfill is not None and alignment_epub == target_epub:
                     try:
                         backfill(book.abs_id, len(full_text))
                     except Exception as e:
@@ -2314,8 +2880,14 @@ class SyncManager:
                 logger.info(
                     f"Ebook-only background prep: skipping Storyteller/SMIL/Whisper transcript generation for '{sanitize_log_data(abs_title)}'"
                 )
-                # Warm parser caches for subsequent locator-based sync cycles.
-                self.ebook_parser.extract_text_and_map(epub_path)
+                # Reflowable ebooks benefit from a warm text/locator cache. CBZ is
+                # fixed-page and must never be handed to ebooklib's EPUB parser.
+                if is_cbz_filename(epub_path.name):
+                    logger.info(
+                        f"Ebook-only background prep: skipping EPUB parser warmup for CBZ '{sanitize_log_data(epub_path.name)}'"
+                    )
+                else:
+                    self.ebook_parser.extract_text_and_map(epub_path)
                 update_progress(1.0, 3)
                 book.status = 'active'
                 persist_book()
@@ -2332,7 +2904,12 @@ class SyncManager:
 
             raw_transcript = None
             transcript_source = None
-            storyteller_aligned = False
+            # A direct alignment map (Storyteller or CTC) was already stored — when
+            # set, transcription (SMIL/Whisper) and lexical anchoring are skipped.
+            direct_aligned = False
+            # Local audio paths for CTC, resolved once and reused for the post-transcript
+            # CTC upgrade (new long books have no prior map to chunk against up front).
+            ctc_local_paths = None
 
             # [MOVED UP] Fetch item details to get chapters (for time alignment) and for Ebook Acquisition
             # item_details = self.abs_client.get_item_details(abs_id) # Already fetched above
@@ -2343,7 +2920,7 @@ class SyncManager:
             
             # Pre-fetch book text for validation and alignment.
             # We need this for Validating SMIL OR for Aligning Whisper
-            book_text, _ = self.ebook_parser.extract_text_and_map(epub_path)
+            book_text, spine_chapters = self.ebook_parser.extract_text_and_map(epub_path)
 
             if (
                 self.alignment_service
@@ -2383,10 +2960,10 @@ class SyncManager:
                 if storyteller_manifest:
                     try:
                         storyteller_transcript = StorytellerTranscript(storyteller_manifest)
-                        storyteller_aligned = self.alignment_service.align_storyteller_and_store(
+                        direct_aligned = self.alignment_service.align_storyteller_and_store(
                             abs_id, storyteller_transcript, ebook_text=book_text
                         )
-                        if storyteller_aligned:
+                        if direct_aligned:
                             transcript_source = "storyteller"
                             update_progress(1.0, 2)
                             logger.info(f"Storyteller alignment map generated for '{sanitize_log_data(abs_title)}'")
@@ -2397,8 +2974,35 @@ class SyncManager:
                 else:
                     logger.info(f"Storyteller manifest unavailable for '{abs_id}', falling back to SMIL/Whisper")
 
+            # CTC forced alignment (issue #426): align the audio directly against the
+            # ebook text — no transcript. Preferred when enabled; falls back to
+            # SMIL/Whisper on any failure, or when the audio is not fully local (CTC
+            # needs local files to decode).
+            if not direct_aligned and AlignmentService.ctc_enabled():
+                try:
+                    ctc_local_paths = self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
+                    if ctc_local_paths:
+                        # First pass: succeeds directly for short books, and for a Remap
+                        # (existing map -> chunk boundaries). A new long book has no prior
+                        # map yet, so this falls back and CTC is applied after transcription.
+                        ensure_active()
+                        if self._try_ctc_alignment(
+                            abs_id, ctc_local_paths, book_text, spine_chapters, abs_title,
+                            getattr(book, "audio_duration", None) or getattr(book, "duration", None),
+                            source_label="attempt",
+                        ):
+                            direct_aligned = True
+                            transcript_source = "ctc"
+                            update_progress(1.0, 2)
+                    else:
+                        logger.info(f"CTC enabled but audio for '{abs_id}' is not fully local; using SMIL/Whisper")
+                except TranscriptionCancelled:
+                    raise
+                except Exception as ctc_err:
+                    logger.warning(f"CTC alignment failed for '{abs_id}': {ctc_err}", exc_info=True)
+
             # Attempt SMIL extraction
-            if not storyteller_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
+            if not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
                   raw_transcript = self.transcriber.transcribe_from_smil(
                       abs_id, epub_path, chapters,
                       full_book_text=book_text,
@@ -2408,7 +3012,7 @@ class SyncManager:
                       transcript_source = "smil"
 
             # Step 3: Fallback to Whisper (Slow Path) - Only runs if SMIL failed
-            if not storyteller_aligned and not raw_transcript:
+            if not direct_aligned and not raw_transcript:
                 logger.info("🔄 SMIL extraction skipped/failed, falling back to Whisper transcription")
                 
                 if not audio_adapter:
@@ -2425,11 +3029,11 @@ class SyncManager:
                 )
                 if raw_transcript:
                     transcript_source = "whisper"
-            elif not storyteller_aligned:
+            elif not direct_aligned:
                 # If SMIL worked, it's already done with transcribing phase
                 update_progress(1.0, 2)
 
-            if not storyteller_aligned and not raw_transcript:
+            if not direct_aligned and not raw_transcript:
                 raise Exception("Failed to generate transcript from both SMIL and Whisper.")
 
             # Step 4: Parse EPUB - ebook_parser caches result, so repeating is cheap.
@@ -2437,20 +3041,41 @@ class SyncManager:
             
             # Align and store using AlignmentService.
             # This is where we commit the result to the DB
-            if not storyteller_aligned:
+            if not direct_aligned:
                 logger.info(f"🧠 Aligning transcript ({transcript_source}) using Anchored Alignment...")
             
             # Update progress to show we are working on alignment (Start of Phase 3 = 90%)
             update_progress(0.1, 3) # 91%
             
-            if storyteller_aligned:
+            if direct_aligned:
                 success = True
             else:
                 ensure_active()
                 success = self.alignment_service.align_and_store(
-                    abs_id, raw_transcript, book_text, chapters
+                    abs_id, raw_transcript, book_text, spine_chapters
                 )
-            
+                # A new book has no prior map, so the CTC attempt above could not chunk a
+                # long book. Now that transcription built a lexical map, reuse it as chunk
+                # boundaries to upgrade to CTC (issue #426) — new long books get CTC on
+                # first mapping (not only via a manual Remap), regardless of Storyteller.
+                if success and AlignmentService.ctc_enabled():
+                    upgrade_paths = ctc_local_paths
+                    if not (upgrade_paths and all(os.path.exists(p) for p in upgrade_paths)):
+                        upgrade_paths = self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
+                    if upgrade_paths:
+                        try:
+                            ensure_active()
+                            if self._try_ctc_alignment(
+                                abs_id, upgrade_paths, book_text, spine_chapters, abs_title,
+                                getattr(book, "audio_duration", None) or getattr(book, "duration", None),
+                                source_label="upgrade",
+                            ):
+                                transcript_source = "ctc"
+                        except TranscriptionCancelled:
+                            raise
+                        except Exception as ctc_err:
+                            logger.warning(f"CTC upgrade failed for '{abs_id}': {ctc_err}", exc_info=True)
+
             # Alignment done
             update_progress(0.5, 3) # 95%
             
@@ -2481,8 +3106,19 @@ class SyncManager:
                         book.original_ebook_filename = book.ebook_filename
                         logger.info(f"   ⚡ Preserving original filename: '{book.original_ebook_filename}'")
 
-                # Update the active filename to the one we just used/downloaded
-                book.ebook_filename = new_filename
+                # A source-side rename changes remote metadata, not the local cache
+                # identity. Do not oscillate ebook_filename back to the original
+                # cache basename after reconciliation.
+                stable_local = local_ebook_filename(book)
+                mapped_remote_identity = bool(
+                    getattr(book, "ebook_source", None)
+                    and getattr(book, "ebook_source_id", None)
+                    and stable_local
+                    and new_filename == stable_local
+                    and not is_storyteller_filename(new_filename)
+                )
+                if not mapped_remote_identity:
+                    book.ebook_filename = new_filename
             
             # Guard against a delete that landed after transcription finished but
             # before we persist (e.g. via SMIL/Storyteller paths that don't hit the
@@ -2592,8 +3228,28 @@ class SyncManager:
         - API noise on long books (Grimmory's 20s rounding errors filtered)
         - Missing real progress on all books (30s+ changes do count)
         """
+        if self._has_fixed_page_delta(client_name, config[client_name], book):
+            return True
         delta_pct = self._state_percentage_delta(config[client_name])
         return self._is_significant_pct_delta(delta_pct, book)
+
+    def _has_fixed_page_delta(self, client_name, client_state, book) -> bool:
+        if not is_cbz_book(book):
+            return False
+        client = self.sync_clients.get(client_name)
+        try:
+            if not client or client.supports_fixed_page_progress() is not True:
+                return False
+        except (AttributeError, TypeError):
+            return False
+        current_page = coerce_page(client_state.current.get("page"))
+        previous_page = coerce_page(client_state.current.get("_previous_page"))
+        return (
+            not client_state.current.get("_page_is_estimated", False)
+            and current_page is not None
+            and previous_page is not None
+            and abs(current_page - previous_page) >= 1
+        )
 
     @staticmethod
     def _state_percentage_delta(client_state) -> float:
@@ -2943,8 +3599,12 @@ class SyncManager:
             # a peer the user actually moved no longer matches what we wrote.
             echo_margin = getattr(self, "sync_delta_between_clients", 0.005)
             for client_name, observed_pct in vals.items():
+                client_echo_margin = (
+                    1e-9 if self._has_fixed_page_delta(client_name, config[client_name], book)
+                    else echo_margin
+                )
                 if self._peer_position_is_own_writeback(
-                    abs_id, client_name, observed_pct, echo_margin
+                    abs_id, client_name, observed_pct, client_echo_margin
                 ):
                     echo_clients.add(client_name)
             for client_name in sorted(echo_clients):
@@ -3052,25 +3712,86 @@ class SyncManager:
                         and abs(changed_locator_pct - changed_raw_pct) > 0.01
                     )
 
-                    MATERIAL_ROLLBACK_SECONDS = 30.0
                     material_rollback = changed_ts < (max_other_ts - MATERIAL_ROLLBACK_SECONDS)
                     mismatch_not_ahead = has_locator_mismatch and changed_ts <= (max_other_ts + NORMALIZED_LEAD_EPSILON_SECONDS)
                     if material_rollback or mismatch_not_ahead:
-                        single_delta_low_conf = True
-                        if material_rollback:
-                            reason = f"material rollback on normalized timeline (> {MATERIAL_ROLLBACK_SECONDS:.0f}s behind)"
+                        # A deliberate rewind is indistinguishable from a stale read in
+                        # a single sample, so this guard demotes both and furthest-wins
+                        # then overwrites the reader's position — issue #215. The trail
+                        # supplies the missing evidence: a reader who genuinely went
+                        # back keeps reading FROM the new point, so the client emits a
+                        # sequence advancing from it, while a stale or echoed report is
+                        # one sample that never advances.
+                        #
+                        # Scoped to `material_rollback` only. `mismatch_not_ahead` is a
+                        # raw/locator disagreement, not a claim about the reader having
+                        # moved, so corroboration says nothing about it.
+                        rewind_trusted = False
+                        rewind_evidence = ""
+                        if (
+                            material_rollback
+                            and not mismatch_not_ahead
+                            and self._trust_corroborated_rewind_enabled()
+                        ):
+                            try:
+                                rewind_trusted, rewind_evidence = self._rewind_trust(
+                                    abs_id, config, changed_client, echo_clients,
+                                    primary_audio_client,
+                                )
+                            except Exception as trust_err:
+                                logger.debug(
+                                    f"'{abs_id}' Rewind trust evaluation failed: {trust_err}",
+                                    exc_info=True,
+                                )
+                                rewind_trusted = False
+
+                        if rewind_trusted:
+                            # Audio clients refuse a backward write unless told this
+                            # rewind was approved; the dispatch loop reads it back.
+                            config[changed_client].current["_approved_rewind"] = True
+                            logger.info(
+                                f"↩️ '{abs_id}' '{title_snip}' Keeping '{changed_client}' as leader: "
+                                f"corroborated rewind {max_other_ts - changed_ts:.1f}s behind its max peer "
+                                f"({changed_ts:.1f}s vs {max_other_ts:.1f}s) — {rewind_evidence}"
+                            )
                         else:
-                            reason = "raw/locator mismatch and not ahead on normalized timeline"
-                        logger.info(
-                            f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
-                            f"'{changed_client}' ({reason}: "
-                            f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
-                        )
+                            single_delta_low_conf = True
+                            if material_rollback:
+                                reason = f"material rollback on normalized timeline (> {MATERIAL_ROLLBACK_SECONDS:.0f}s behind)"
+                            else:
+                                reason = "raw/locator mismatch and not ahead on normalized timeline"
+                            logger.info(
+                                f"🔄 '{abs_id}' '{title_snip}' Ignoring single-client delta from "
+                                f"'{changed_client}' ({reason}: "
+                                f"{changed_ts:.1f}s vs max peer {max_other_ts:.1f}s); evaluating all candidates"
+                            )
+                            self._shadow_evaluate_rewind(
+                                abs_id, title_snip, config, changed_client, "demoted",
+                                f"is {max_other_ts - changed_ts:.1f}s behind its max peer "
+                                f"({changed_ts:.1f}s vs {max_other_ts:.1f}s)",
+                                echo_clients=echo_clients,
+                                primary_audio_client=primary_audio_client,
+                            )
 
         if len(clients_with_delta) == 1 and not single_delta_low_conf:
             # Only one client changed - that client is the leader (most recent change wins)
             leader = list(clients_with_delta.keys())[0]
             leader_pct = vals[leader]
+            # The mirror image of the demotion above, and the reason it is a HOLD
+            # rather than a demotion: unlike the text-client path, this position is
+            # not being overwritten by a peer today — it is winning. Demoting it
+            # would introduce the exact complaint #215 was opened about, on a path
+            # where it does not currently occur. So an uncorroborated backward jump
+            # is deferred, never reversed. Evaluated before the "leads at" log so a
+            # held cycle never announces a leader it then discards.
+            try:
+                if self._should_hold_backward_leader(
+                    abs_id, title_snip, config, leader, leader_pct, echo_clients,
+                    primary_audio_client,
+                ):
+                    return None, None
+            except Exception as hold_err:
+                logger.debug(f"'{abs_id}' Backward-leader hold check failed: {hold_err}", exc_info=True)
             logger.info(f"🔄 '{abs_id}' '{title_snip}' {leader} leads at {config[leader].value_formatter(leader_pct)} (only client with change)")
         else:
             # Multiple clients changed or this is a discrepancy resolution
@@ -3114,12 +3835,56 @@ class SyncManager:
                         ),
                         None,
                     )
+                    # A KoSync-originated rewind never reaches the single-delta guard
+                    # above: the PUT handler writes State before the cycle runs, so the
+                    # client arrives with delta=0 ("the triggering read already wrote
+                    # State") and lands here instead, where furthest-on-the-timeline
+                    # wins and drags the reader forward again. Observed live on #215.
+                    # So the same corroboration test is applied here: a candidate that
+                    # is materially behind its peers but whose trail shows the reader
+                    # moving on from that point is the leader, not the overtaker.
+                    corroborated_rewind = None
+                    if self._trust_corroborated_rewind_enabled() and len(normalized_candidates) > 1:
+                        for candidate_name, candidate_ts in normalized_candidates.items():
+                            peer_ts = [
+                                ts for name, ts in normalized_candidates.items()
+                                if name != candidate_name and ts is not None
+                            ]
+                            if candidate_ts is None or not peer_ts:
+                                continue
+                            if candidate_ts >= max(peer_ts) - MATERIAL_ROLLBACK_SECONDS:
+                                continue
+                            try:
+                                trusted, evidence = self._rewind_trust(
+                                    abs_id, config, candidate_name, echo_clients,
+                                    primary_audio_client,
+                                )
+                            except Exception as trust_err:
+                                logger.debug(
+                                    f"'{abs_id}' Rewind trust evaluation failed for "
+                                    f"'{candidate_name}': {trust_err}", exc_info=True
+                                )
+                                continue
+                            if trusted:
+                                corroborated_rewind = (candidate_name, candidate_ts, max(peer_ts), evidence)
+                                break
+
                     high_conf_normalized_candidates = {}
                     for candidate_name, candidate_ts in normalized_candidates.items():
                         candidate_source = config[candidate_name].current.get("_normalization_source")
                         if candidate_name == primary_audio_client or candidate_source != "percent_fallback":
                             high_conf_normalized_candidates[candidate_name] = candidate_ts
-                    if recent_external_kosync:
+                    if corroborated_rewind:
+                        rewind_name, rewind_ts, rewind_peer_ts, rewind_evidence = corroborated_rewind
+                        selected_normalized_candidates = {rewind_name: rewind_ts}
+                        config[rewind_name].current["_approved_rewind"] = True
+                        logger.info(
+                            f"↩️ '{abs_id}' '{title_snip}' Keeping '{rewind_name}' as leader: "
+                            f"corroborated rewind {rewind_peer_ts - rewind_ts:.1f}s behind its max peer "
+                            f"({rewind_ts:.1f}s vs {rewind_peer_ts:.1f}s) during zero-delta "
+                            f"discrepancy resolution — {rewind_evidence}"
+                        )
+                    elif recent_external_kosync:
                         selected_normalized_candidates = {
                             recent_external_kosync: normalized_candidates[recent_external_kosync]
                         }
@@ -3262,8 +4027,19 @@ class SyncManager:
         expressed in a form the receiver can act on instead of discarded structure.
 
         Returns the hydrated locator, or None when the offset cannot be round-tripped
-        to within 1% of its target or the resolution collapsed to start-of-book.
+        to within tolerance of its target or the resolution collapsed to start-of-book.
+
+        The round trip is judged in CHARACTERS here, deliberately, unlike
+        `_validate_and_stabilize_locator`. This locator reaches only
+        `_CFI_DEPENDENT_CLIENTS` — every one of them an ebook reader that navigates
+        by text position and none of them re-deriving an audio timestamp from it —
+        so audio time has no standing to refuse it, and the only fallback on refusal
+        is the bare percentage the device ignores (#364). Audio-time vetoes belong on
+        the path where audio followers actually consume the locator.
         """
+        if is_cbz_filename(epub):
+            return None
+
         if not epub or str(epub).startswith("storyteller_") or locator.percentage is None:
             return None
         try:
@@ -3307,6 +4083,16 @@ class SyncManager:
                 f"'{abs_id}' '{title_snip}' CFI hydration failed: {exc}", exc_info=True
             )
             return None
+
+    @staticmethod
+    def _fixed_page_locator_from_state(client, state, percentage) -> LocatorResult:
+        """Build a first-class page locator only for clients that support it."""
+        try:
+            supports_pages = client.supports_fixed_page_progress() is True
+        except (AttributeError, TypeError):
+            supports_pages = False
+        page = coerce_page(state.current.get("page")) if supports_pages else None
+        return LocatorResult(percentage=percentage, page=page)
 
     @staticmethod
     def _sync_result_was_applied(result) -> bool:
@@ -3370,7 +4156,7 @@ class SyncManager:
         except Exception as e:
             logger.debug(f"Could not persist state snapshot for '{client_name}': {e}")
 
-    def sync_cycle(self, target_abs_id=None, user_id=None):
+    def sync_cycle(self, target_abs_id=None, user_id=None, sessions_only: bool = False):
         """
         Run a sync cycle.
 
@@ -3380,6 +4166,7 @@ class SyncManager:
             user_id: Multi-user — run the cycle for this user, using their own
                      client bundle and scoping state/progress to them. When None,
                      runs as the default (single-user/admin) exactly as before.
+            sessions_only: Deliver buffered sessions using the same user context and lock.
         """
         # Per-user context: only when an explicit user + a registry are present,
         # so the default cycle is byte-for-byte unchanged.
@@ -3427,7 +4214,10 @@ class SyncManager:
                      return
 
             try:
-                self._sync_cycle_internal(target_abs_id)
+                if sessions_only:
+                    self._flush_reading_sessions()
+                else:
+                    self._sync_cycle_internal(target_abs_id)
             except Exception as e:
                 logger.error(f"❌ Sync cycle internal error: {e}", exc_info=True)
             finally:
@@ -3449,6 +4239,36 @@ class SyncManager:
                 reset_current_user_id(user_token)
             if creds_token is not None:
                 reset_current_user_credentials(creds_token)
+
+    def flush_reading_sessions_for_all_users(self) -> None:
+        """Scheduler maintenance; close locally for all owners, deliver as active users."""
+        if not self._sync_lock.acquire(blocking=False):
+            return
+        try:
+            now = time.time()
+            self.database_service.close_reading_sessions(
+                now, effective_session_gap_seconds(), all_users=True,
+            )
+            self.database_service.purge_delivered_reading_sessions(now)
+            users = self.database_service.list_users()
+            get_persistent_condition_logger().resolve(
+                logger, "reading-session-maintenance", "Reading session maintenance resumed",
+            )
+        except Exception as exc:
+            get_persistent_condition_logger().warn(
+                logger, "reading-session-maintenance", "Reading session maintenance failed: %s", exc, exc_info=True,
+            )
+            return
+        finally:
+            self._sync_lock.release()
+        # Never turn the storage-only sentinel 0 into a registry lookup. Once
+        # accounts exist, orphan/default-scope remote rows remain pending.
+        if not users:
+            self.sync_cycle(sessions_only=True)
+        elif self.user_client_registry is not None:
+            for user in users:
+                if user.active:
+                    self.sync_cycle(user_id=user.id, sessions_only=True)
 
     def _active_sync_users(self):
         """Active users that have at least one configured client. Returns [] when
@@ -3573,9 +4393,15 @@ class SyncManager:
         return visible
 
     def _sync_cycle_internal(self, target_abs_id=None):
+        self._flush_reading_sessions()
         # Clear caches at start of cycle
         self._sync_cycle_ebook_cache.clear()
         self._sync_cycle_local_epub_cache.clear()
+        clear_fixed_page_cache = getattr(
+            getattr(self, "ebook_parser", None), "clear_fixed_page_count_cache", None
+        )
+        if callable(clear_fixed_page_cache):
+            clear_fixed_page_cache()
         self._storyteller_epub_ensure_attempted.clear()
         storyteller_client = self.sync_clients.get('Storyteller')
         if storyteller_client and hasattr(storyteller_client, 'storyteller_client'):
@@ -3774,7 +4600,18 @@ class SyncManager:
                 # Calculate char_delta = int(state.delta * total_chars)
                 # If char_delta >= self.delta_chars_thresh, log it and set significant_diff = True
                 char_delta_triggered = False  # Track if character delta triggered significance
-                if not significant_diff and hasattr(book, 'ebook_filename') and book.ebook_filename:
+                page_delta_triggered = any(
+                    self._has_fixed_page_delta(name, state, book)
+                    for name, state in config.items()
+                )
+                if page_delta_triggered:
+                    significant_diff = True
+                    logger.info(
+                        f"'{abs_id}' '{title_snip}' Significant fixed-page change detected"
+                    )
+                fixed_page_book = is_cbz_book(book)
+                if (not significant_diff and hasattr(book, 'ebook_filename') and book.ebook_filename
+                        and not fixed_page_book):
                     for client_name_key, client_state in config.items():
                          percentage_delta = self._state_percentage_delta(client_state)
                          if percentage_delta > 0:
@@ -3832,11 +4669,12 @@ class SyncManager:
                     for client_name in config.keys()
                 )
                 is_instant_target = bool(target_abs_id)
-                if (significant_diff and not any_significant_delta and not char_delta_triggered
+                if (significant_diff and not any_significant_delta and not char_delta_triggered and not page_delta_triggered
                         and not new_client_in_config and not is_instant_target):
                     logger.debug(f"'{abs_id}' '{title_snip}' Discrepancy exists ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) but no recent client activity detected. Waiting for a new read event to determine true leader")
                     continue
-                if is_instant_target and significant_diff and not any_significant_delta and not char_delta_triggered and not new_client_in_config:
+                if (is_instant_target and significant_diff and not any_significant_delta
+                        and not char_delta_triggered and not page_delta_triggered and not new_client_in_config):
                     logger.info(f"'{abs_id}' '{title_snip}' Instant-sync target: resolving discrepancy ({max_progress*100:.1f}% vs {min_progress*100:.1f}%) — the triggering read already wrote State (delta=0)")
 
                 if significant_diff:
@@ -3901,7 +4739,12 @@ class SyncManager:
                 audio_only_mode = getattr(book, "sync_mode", "audiobook") == "audiobook_only"
 
                 primary_audio_client = self._get_primary_audio_client_name(book)
-                if leader == primary_audio_client:
+                if fixed_page_book:
+                    locator = self._fixed_page_locator_from_state(
+                        leader_client, leader_state, leader_pct
+                    )
+                    locator_source = "fixed_page"
+                elif leader == primary_audio_client:
                     abs_timestamp = leader_state.current.get('ts')
                     locator, txt = self._resolve_alignment_locator_from_abs_timestamp(book, abs_timestamp)
                     if locator:
@@ -3963,14 +4806,15 @@ class SyncManager:
                     logger.warning(f"⚠️ '{abs_id}' '{title_snip}' Could not resolve locator from text for leader '{leader}', falling back to percentage of leader")
                     locator = LocatorResult(percentage=leader_pct)
                     locator_source = "percent_fallback"
-                if txt is None:
+                if txt is None and not fixed_page_book:
                     txt = ""
 
                 # Locator-driven clients need a real position, not a bare percentage
                 # (see _hydrate_cfi_locator and #364). Resolve one once per cycle and
                 # hand it to whichever of them are in play.
                 hydrated_locator = None
-                if not locator.cfi and any(name in config for name in _CFI_DEPENDENT_CLIENTS):
+                if (not fixed_page_book and not locator.cfi
+                        and any(name in config for name in _CFI_DEPENDENT_CLIENTS)):
                     hydrated_locator = self._hydrate_cfi_locator(
                         locator, epub, abs_id, title_snip, leader, leader_pct, leader_formatter
                     )
@@ -4031,6 +4875,36 @@ class SyncManager:
                     and os.environ.get("STORYTELLER_LISTENING_SESSIONS", "true").strip().lower()
                     in ("true", "1", "yes", "on")
                 )
+                # The leader's position already resolved onto the audio timeline by
+                # _normalize_for_cross_format_comparison (the same number leader
+                # selection and the rollback veto compare against). None whenever the
+                # leader IS the primary audio client (nothing to normalize — it's
+                # already on the audio timeline) or normalization didn't resolve one.
+                #
+                # Two further gates, because writing this number straight to an audio
+                # client skips screening the locator path used to apply:
+                #
+                # - The normalization must have resolved a real locator. On the
+                #   `percent_fallback` path the offset is just `pct * total_len`, and
+                #   the rest of the pipeline already refuses to act on that:
+                #   `_should_skip_deadband_rollback` ignores a `_normalized_ts` whose
+                #   source is not one of these, and `_determine_leader` demotes such
+                #   candidates twice. Handing it to ABS unscreened would have been the
+                #   one place a low-confidence normalization got written verbatim.
+                # - The locator this cycle actually built must be the one derived from
+                #   this number. When `_resolve_alignment_locator_from_abs_timestamp`
+                #   declines, the code falls through to `fuzzy_text`, which resolves
+                #   the leader's text independently and lands somewhere else. Writing
+                #   `_normalized_ts` anyway would put the ebook clients at one position
+                #   and the audio clients at another — the very split this change
+                #   exists to close.
+                leader_normalized_ts = (
+                    leader_state.current.get("_normalized_ts")
+                    if leader != primary_audio_client
+                    and leader_state.current.get("_normalization_source") in _HIGH_CONFIDENCE_NORMALIZATION_SOURCES
+                    and locator_source == "alignment_from_normalized_ts"
+                    else None
+                )
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
@@ -4048,6 +4922,24 @@ class SyncManager:
                             if hydrated_locator and client_name in _CFI_DEPENDENT_CLIENTS
                             else locator
                         )
+                        # Audio-only clients (get_supported_sync_types() == {'audiobook'};
+                        # the combined audiobook+ebook clients write a locator/percentage,
+                        # not a timestamp, so they're excluded) get the leader's own
+                        # normalized timestamp instead of re-deriving one from the locator
+                        # this cycle just built — the re-derivation is a pure conversion
+                        # loss, never a gain (issue #434).
+                        target_audio_ts = (
+                            leader_normalized_ts
+                            if leader_normalized_ts is not None
+                            and client.get_supported_sync_types() == {'audiobook'}
+                            else None
+                        )
+                        if target_audio_ts is not None:
+                            logger.info(
+                                f"🎯 '{abs_id}' '{title_snip}' Writing '{client_name}' at the leader's "
+                                f"normalized timestamp {target_audio_ts:.2f}s (leader '{leader}') instead "
+                                f"of re-deriving it from the locator"
+                            )
                         request = UpdateProgressRequest(
                             target_locator,
                             txt,
@@ -4056,6 +4948,13 @@ class SyncManager:
                             # This cycle already read this client; handing the read back
                             # lets it skip re-fetching state it just had.
                             current_state=client_state,
+                            target_audio_ts=target_audio_ts,
+                            # Set by `_determine_leader` only on the corroborated
+                            # rewind paths. Without it an audio client drops the
+                            # write and the reader is left split: ebook moved back,
+                            # audio still ahead, and the next cycle drags them
+                            # forward again (issue #215 / #391).
+                            allow_rewind=bool(leader_state.current.get("_approved_rewind")),
                         )
                         result = client.update_progress(book, request)
                         results[client_name] = result
@@ -4126,6 +5025,8 @@ class SyncManager:
 
                 # Save leader state
                 leader_state_data = leader_state.current
+                if leader == "KoSync" and leader_state_data.get("_approved_rewind"):
+                    leader_state_data["kosync_approved_rewind_at"] = current_time
 
                 leader_state_model = State(
                     abs_id=book.abs_id,
@@ -4166,50 +5067,17 @@ class SyncManager:
 
                 logger.info(f"💾 '{abs_id}' '{title_snip}' States saved to database")
 
-                # ── Local Reading Session Recording (always fires) ──
+                # One movement feeds local/Grimmory history independently of progress writes.
                 if leader_pct != leader_state.previous_pct:
                     try:
-                        self._record_local_reading_session(
+                        self._record_reading_movement(
                             book, leader, leader_state, prev_states_by_client, current_time
                         )
-                    except Exception:
-                        pass  # Non-blocking
-
-                # ── Grimmory Reading Session Recording ──
-                booklore_client = self.active_booklore_client
-                if (
-                    os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
-                    and booklore_client
-                    and booklore_client.is_configured()
-                    and leader_pct != leader_state.previous_pct
-                    and leader.lower() != 'kosync'  # Plugin handles KOSync→Grimmory
-                ):
-                    try:
-                        self._record_grimmory_reading_session(
-                            book, leader, leader_state, prev_states_by_client, current_time
+                    except Exception as exc:
+                        get_persistent_condition_logger().warn(
+                            logger, f"reading-session-ingest:{get_current_user_id()}:{book.abs_id}",
+                            "Reading session accumulation failed for '%s': %s", book.abs_id, exc, exc_info=True,
                         )
-                    except Exception:
-                        pass  # Non-blocking: never prevent sync
-
-                # ── BookOrbit Reading Session Recording ──
-                bookorbit_client = self.active_bookorbit_client
-                if (
-                    os.environ.get("BOOKORBIT_READING_SESSIONS", "true").strip().lower() in ("true", "1", "yes", "on")
-                    and bookorbit_client
-                    and bookorbit_client.is_configured()
-                    and (
-                        getattr(book, "ebook_source", None) == "BookOrbit"
-                        or getattr(book, "audio_source", None) == "BookOrbit"
-                    )
-                    and leader_pct != leader_state.previous_pct
-                    and leader.lower() != 'kosync'  # kosync_server handles KOSync->BookOrbit
-                ):
-                    try:
-                        self._record_bookorbit_reading_session(
-                            book, leader, leader_state, prev_states_by_client, current_time
-                        )
-                    except Exception:
-                        pass  # Non-blocking: never prevent sync
 
                 # Debugging crash: Flush logs to ensure we see this before any potential hard crash
                 for handler in logger.handlers:
@@ -4238,285 +5106,239 @@ class SyncManager:
                 logger.info(summary)
         logger.debug("End of sync cycle for active books")
 
-    def _compute_session_duration(
-        self,
-        book,
-        leader: str,
-        leader_state,
-        prev_states_by_client: dict,
-        current_time: float,
-    ) -> int | None:
-        """Compute an accurate session duration in seconds. Returns None if indeterminate."""
-        leader_pct = leader_state.current.get('pct', 0)
-        prev_pct = leader_state.previous_pct or 0.0
-        prev_state = prev_states_by_client.get(leader.lower())
-
-        primary_audio_client = self._get_primary_audio_client_name(book)
-        is_audio_leader = (leader == primary_audio_client)
-
-        # Audio Tier: ABS/audio playback timestamp delta
-        if is_audio_leader:
-            current_ts = leader_state.current.get('ts')
-            previous_ts = prev_state.timestamp if prev_state else None
-            if current_ts is not None and previous_ts is not None and current_ts > previous_ts:
-                delta = int(current_ts - previous_ts)
-                if 0 < delta <= 14400:
-                    return delta
-
-        # Progress-delta heuristic (universal fallback)
-        progress_delta = abs(leader_pct - prev_pct)
-        if progress_delta > 0:
-            total_time = getattr(book, 'duration', None) or getattr(book, 'audio_duration', None) or 36000
-            estimated = int(progress_delta * total_time)
-            return max(60, min(estimated, 3600))  # clamp [1min, 1hr]
-
-        return None
-
-    def _record_local_reading_session(
-        self,
-        book,
-        leader: str,
-        leader_state,
-        prev_states_by_client: dict,
-        current_time: float,
+    def _record_reading_movement(
+        self, book, leader: str, leader_state, prev_states_by_client: dict, current_time: float,
     ) -> None:
-        """Record a local reading session for dashboard stats. Always fires on progress change."""
-        try:
-            # Plugin handles all KOSync ebook sessions directly
-            if leader.lower() == 'kosync':
-                return
-
-            leader_pct = leader_state.current.get('pct', 0)
-            prev_pct = leader_state.previous_pct or 0.0
-
-            prev_state = prev_states_by_client.get(leader.lower())
-            start_time = (
-                prev_state.last_updated
-                if prev_state and prev_state.last_updated
-                else current_time - 60
-            )
-
-            primary_audio_client = self._get_primary_audio_client_name(book)
-            is_audio_leader = (leader == primary_audio_client)
-
-            if is_audio_leader:
-                session_type = "AUDIOBOOK"
-            else:
-                ebook_filename = getattr(book, 'ebook_filename', '') or ''
-                if ebook_filename.lower().endswith('.epub'):
-                    session_type = "EPUB"
-                elif ebook_filename.lower().endswith('.pdf'):
-                    session_type = "PDF"
-                else:
-                    session_type = "EBOOK"
-
-            duration_seconds = self._compute_session_duration(
-                book, leader, leader_state, prev_states_by_client, current_time
-            )
-            if duration_seconds is None or duration_seconds <= 0:
-                return
-
-            self.database_service.record_reading_session(
-                abs_id=book.abs_id,
-                session_type=session_type,
-                start_time=start_time,
-                end_time=current_time,
-                duration_seconds=duration_seconds,
-                start_progress=prev_pct,
-                end_progress=leader_pct,
-                leader_client=leader,
-            )
-        except Exception:
-            pass  # Never block sync
-
-    def _record_grimmory_reading_session(
-        self,
-        book,
-        leader: str,
-        leader_state,
-        prev_states_by_client: dict,
-        current_time: float,
-    ) -> None:
-        """Record a reading session to Grimmory when progress changes on a tracked book.
-
-        Grimmory has no endpoint for reading back its existing sessions, so the
-        BookOrbit double-count guard (#424) has no equivalent here; whether Grimmory
-        self-records is untested.
-        """
-        booklore_client = self.active_booklore_client
-        if not booklore_client:
+        """Accumulate one progress observation for local history and Grimmory."""
+        if leader.lower() == "kosync":
             return
+        current = leader_state.current
+        previous_pct = leader_state.previous_pct or 0.0
+        current_pct = current.get("pct") or 0.0
+        previous = prev_states_by_client.get(leader.lower())
+        audio = leader == self._get_primary_audio_client_name(book)
+        if audio:
+            session_type = "AUDIOBOOK"
+        else:
+            extension = Path(getattr(book, "ebook_filename", "") or "").suffix.lower()
+            session_type = {".epub": "EPUB", ".pdf": "PDF"}.get(extension, "EBOOK")
 
-        leader_pct = leader_state.current.get('pct', 0)
-        prev_pct = leader_state.previous_pct or 0.0
+        previous_ts = getattr(previous, "timestamp", None)
+        if audio and current.get("ts") is not None and previous_ts is not None:
+            delta = current["ts"] - previous_ts
+        else:
+            duration = getattr(book, "duration", None) or getattr(book, "audio_duration", None) or 36000
+            delta = (current_pct - previous_pct) * duration
 
-        # Compute accurate duration, then backdate start_time so Grimmory's
-        # internal (end_time - start_time) math produces the correct value.
-        duration_seconds = self._compute_session_duration(
-            book, leader, leader_state, prev_states_by_client, current_time
-        )
-        if duration_seconds is None or duration_seconds <= 0:
-            duration_seconds = 60  # Conservative 1-minute fallback for Grimmory
-        start_time = current_time - duration_seconds
-
-        primary_audio_client = self._get_primary_audio_client_name(book)
-        is_audio_leader = (leader == primary_audio_client)
-
-        if is_audio_leader:
-            # Path 1: Audio Session (Strict Isolation - No Ebook Double Dip)
-            audio_grimmory_id = None
-            if getattr(book, 'audio_source', None) == "BookLore":
-                audio_grimmory_id = getattr(book, 'audio_provider_book_id', None) or getattr(book, 'audio_source_id', None)
-
-            # If using ABS audio, fallback to logging the audiobook session against the linked Grimmory ebook ID
-            grimmory_id = audio_grimmory_id
+        grimmory_id = None
+        client = self.active_booklore_client
+        if env_truthy("GRIMMORY_READING_SESSIONS", "true") and client and client.is_configured():
+            if audio and getattr(book, "audio_source", None) == "BookLore":
+                grimmory_id = (getattr(book, "audio_provider_book_id", None)
+                               or getattr(book, "audio_source_id", None))
             if not grimmory_id:
                 grimmory_id = self._resolve_grimmory_ebook_id(book)
+            try:
+                grimmory_id = int(grimmory_id) if grimmory_id is not None else None
+            except (TypeError, ValueError):
+                grimmory_id = None
 
-            if grimmory_id:
-                try:
-                    booklore_client.create_reading_session(
-                        book_id=int(grimmory_id),
-                        start_time=start_time,
-                        end_time=current_time,
-                        start_progress=prev_pct,
-                        end_progress=leader_pct,
-                        book_type="AUDIOBOOK",
-                    )
-                except (TypeError, ValueError):
-                    pass
-        else:
-            # Path 2: Ebook Session (Strict Isolation - Only if reading)
-            ebook_grimmory_id = self._resolve_grimmory_ebook_id(book)
-            if ebook_grimmory_id:
-                book_type = None
-                ebook_filename = getattr(book, 'ebook_filename', '') or ''
-                if ebook_filename.lower().endswith('.epub'):
-                    book_type = "EPUB"
-                elif ebook_filename.lower().endswith('.pdf'):
-                    book_type = "PDF"
+        bookorbit_id, bookorbit_candidates = self._resolve_bookorbit_session_ids(book, audio)
 
-                cfi = leader_state.current.get('cfi')
-                try:
-                    booklore_client.create_reading_session(
-                        book_id=int(ebook_grimmory_id),
-                        start_time=start_time,
-                        end_time=current_time,
-                        start_progress=prev_pct,
-                        end_progress=leader_pct,
-                        book_type=book_type,
-                        end_location=cfi,
-                    )
-                except (TypeError, ValueError):
-                    pass
-
-    def _record_bookorbit_reading_session(
-        self,
-        book,
-        leader: str,
-        leader_state,
-        prev_states_by_client: dict,
-        current_time: float,
-    ) -> None:
-        """Record a reading session to BookOrbit when progress changes on a
-        BookOrbit-hosted ebook or audiobook. Audio-leader sessions are logged
-        against the BookOrbit audiobook when the audio is BookOrbit-hosted,
-        falling back to the ebook's BookOrbit id otherwise.
-
-        Skipped when BookOrbit has already logged a session covering the same
-        reading — its web reader records its own as the user reads, so posting ours
-        on top double-counts it (#424).
-        """
-        bookorbit_client = self.active_bookorbit_client
-        if not bookorbit_client:
-            return
-
-        leader_pct = leader_state.current.get('pct', 0)
-        prev_pct = leader_state.previous_pct or 0.0
-
-        duration_seconds = self._compute_session_duration(
-            book, leader, leader_state, prev_states_by_client, current_time
+        self.database_service.extend_reading_session(
+            abs_id=book.abs_id, session_type=session_type, leader_client=leader,
+            now=current_time, previous_at=getattr(previous, "last_updated", None),
+            position_delta=delta, start_progress=previous_pct, end_progress=current_pct,
+            gap_seconds=effective_session_gap_seconds(), grimmory_book_id=grimmory_id,
+            bookorbit_book_id=bookorbit_id, bookorbit_candidate_ids=bookorbit_candidates,
+            end_location=current.get("cfi") if not audio else None,
+            complete=current_pct >= self._completion_threshold(),
         )
-        if duration_seconds is None or duration_seconds <= 0:
-            duration_seconds = 60
-        start_time = current_time - duration_seconds
+        get_persistent_condition_logger().resolve(
+            logger, f"reading-session-ingest:{get_current_user_id()}:{book.abs_id}",
+            "Reading session accumulation resumed for '%s'", book.abs_id,
+        )
 
-        primary_audio_client = self._get_primary_audio_client_name(book)
-        is_audio_leader = (leader == primary_audio_client)
+    # Buffered sessions fan out to these at close, each with its own book id,
+    # setting and delivery status, so one destination being unreachable never
+    # holds up or duplicates the other.
+    _SESSION_DESTINATIONS = (
+        ("grimmory", "Grimmory", "GRIMMORY_READING_SESSIONS"),
+        ("bookorbit", "BookOrbit", "BOOKORBIT_READING_SESSIONS"),
+    )
 
-        book_id = None
-        if is_audio_leader and getattr(book, "audio_source", None) == "BookOrbit":
-            book_id = (
-                getattr(book, "audio_provider_book_id", None)
-                or getattr(book, "audio_source_id", None)
-            )
-        if not book_id and getattr(book, "ebook_source", None) == "BookOrbit":
-            book_id = getattr(book, "ebook_source_id", None)
-        if not book_id:
-            return
+    def _reading_session_client(self, destination: str):
+        """Return this user's client for one reading-session destination."""
+        if destination == "grimmory":
+            return self.active_booklore_client
+        return self.active_bookorbit_client
 
-        end_location = None
-        if is_audio_leader:
-            book_type = "AUDIOBOOK"
-        else:
-            ebook_filename = getattr(book, 'ebook_filename', '') or ''
-            if ebook_filename.lower().endswith('.epub'):
-                book_type = "EPUB"
-            elif ebook_filename.lower().endswith('.pdf'):
-                book_type = "PDF"
-            else:
-                book_type = "EBOOK"
-            end_location = leader_state.current.get('cfi')
+    def _resolve_bookorbit_session_ids(self, book, audio: bool) -> tuple[int | None, list[int]]:
+        """Return the BookOrbit book id to post a session against, plus every id
+        for the same work.
 
-        # Check every BookOrbit id for this work, not just the one we would post to:
-        # audio and ebook are separate BookOrbit books with separate session lists,
-        # and a stretch consumed in either format is the same reading (#424).
-        candidate_ids = [book_id]
+        Audio-leader sessions go against the BookOrbit audiobook when the audio is
+        BookOrbit-hosted, falling back to the ebook. The candidate list spans both
+        formats because a stretch consumed in either is the same reading (#424).
+        """
+        client = self.active_bookorbit_client
+        if not env_truthy("BOOKORBIT_READING_SESSIONS", "true") or not client or not client.is_configured():
+            return None, []
+
+        audio_id = None
         if getattr(book, "audio_source", None) == "BookOrbit":
-            candidate_ids.append(getattr(book, "audio_provider_book_id", None)
-                                 or getattr(book, "audio_source_id", None))
+            audio_id = (getattr(book, "audio_provider_book_id", None)
+                        or getattr(book, "audio_source_id", None))
+        ebook_id = None
         if getattr(book, "ebook_source", None) == "BookOrbit":
-            candidate_ids.append(getattr(book, "ebook_source_id", None))
+            ebook_id = getattr(book, "ebook_source_id", None)
 
-        existing = None
+        def _as_int(value):
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        # An audio session falls back to the ebook, but an ebook session is never
+        # logged against the audiobook — that would invent listening that did not
+        # happen. Unchanged from the per-sync path this replaced.
+        book_id = _as_int(audio_id) if audio else None
+        if book_id is None:
+            book_id = _as_int(ebook_id)
+        candidates = [i for i in (book_id, _as_int(audio_id), _as_int(ebook_id)) if i is not None]
+        return book_id, list(dict.fromkeys(candidates))
+
+    def _bookorbit_session_scale(self, row, duration: int) -> float:
+        """Fraction of a buffered session BookOrbit has not already logged itself.
+
+        BookOrbit's own reader records sessions as the user reads, so posting ours
+        on top double-counts it (#424). An aggregated session spans much more of a
+        book than the per-observation sessions this replaced, so a sliver of
+        overlap must not suppress the whole thing — credit only the uncovered part.
+        """
+        client = self.active_bookorbit_client
+        candidates = []
+        if row.bookorbit_candidate_ids:
+            try:
+                candidates = [int(i) for i in json.loads(row.bookorbit_candidate_ids)]
+            except (TypeError, ValueError):
+                candidates = []
+        if not candidates:
+            candidates = [row.bookorbit_book_id]
+
         try:
-            existing = bookorbit_client.find_overlapping_session(
-                book_ids=[i for i in candidate_ids if i],
-                start_progress=prev_pct,
-                end_progress=leader_pct,
-                end_time=current_time,
+            existing = client.find_covering_sessions(
+                book_ids=[i for i in candidates if i],
+                start_progress=row.start_progress,
+                end_progress=row.end_progress,
+                end_time=row.last_event_at,
             )
         except Exception as e:
             logger.warning(
                 "BookOrbit session dedupe check failed for '%s': %s",
-                getattr(book, 'abs_id', None), e, exc_info=True,
+                row.abs_id, e, exc_info=True,
             )
-        if existing:
+            return 1.0
+
+        spans = []
+        for session in existing or ():
+            try:
+                end_pct = float(session.get("endProgress") or 0)
+                spans.append((end_pct - float(session.get("progressDelta") or 0), end_pct))
+            except (TypeError, ValueError):
+                continue
+        if not spans:
+            return 1.0
+
+        fraction = uncovered_fraction(row.start_progress * 100, row.end_progress * 100, spans)
+        if fraction <= 0.1:
             logger.info(
                 "⏸️ Skipping BookOrbit reading session for '%s': BookOrbit already logged "
-                "session %s covering %.2f%%->%.2f%% (leader '%s')",
-                getattr(book, 'abs_id', None), existing.get('id'),
-                prev_pct * 100, leader_pct * 100, leader,
+                "%.0f%% of %.2f%%->%.2f%% (leader '%s')",
+                row.abs_id, (1 - fraction) * 100,
+                row.start_progress * 100, row.end_progress * 100, row.leader_client,
             )
-            return
+            return 0.0
+        if fraction < 1.0:
+            logger.info(
+                "✂️ Trimming BookOrbit reading session for '%s' to %.0f%% of %ds: "
+                "BookOrbit already logged the rest of %.2f%%->%.2f%%",
+                row.abs_id, fraction * 100, duration,
+                row.start_progress * 100, row.end_progress * 100,
+            )
+        return fraction
 
+    def _deliver_reading_session(self, row, destination: str, duration: int) -> bool:
+        """Post one buffered session to one destination. False means retry later."""
+        client = self._reading_session_client(destination)
+        if destination == "bookorbit":
+            scale = self._bookorbit_session_scale(row, duration)
+            if scale <= 0:
+                self.database_service.mark_reading_session_delivered(row.id, destination, "disabled")
+                return True
+            duration = max(1, int(duration * scale))
+        # At-least-once delivery: a lost POST response may cause a duplicate.
+        # Retain the row on any failure; local history was committed at close.
+        return bool(client.create_reading_session(
+            book_id=getattr(row, f"{destination}_book_id"),
+            start_time=row.last_event_at - duration,
+            end_time=row.last_event_at, start_progress=row.start_progress,
+            end_progress=row.end_progress, book_type=row.session_type,
+            end_location=row.end_location,
+        ))
+
+    def _flush_reading_sessions(self) -> None:
+        """Close and deliver this user's sessions, only while the sync lock is held."""
         try:
-            bookorbit_client.create_reading_session(
-                book_id=int(book_id),
-                start_time=start_time,
-                end_time=current_time,
-                start_progress=prev_pct,
-                end_progress=leader_pct,
-                book_type=book_type,
-                end_location=end_location,
+            now = time.time()
+            self.database_service.close_reading_sessions(now, effective_session_gap_seconds())
+            rows = self.database_service.get_pending_reading_sessions()
+            for row in rows:
+                duration = int(min(row.accumulated_seconds,
+                                   max(0, row.last_event_at - row.started_at), MAX_SESSION_SECONDS))
+                book_present = self.database_service.get_book(row.abs_id) is not None
+                retry_later = False
+                for destination, display, setting in self._SESSION_DESTINATIONS:
+                    if getattr(row, f"{destination}_status") != "pending":
+                        continue
+                    delivery_key = f"reading-session-post:{destination}:{row.id}"
+                    if (not env_truthy(setting, "true") or duration <= 0 or not book_present
+                            or getattr(row, f"{destination}_book_id") is None):
+                        self.database_service.mark_reading_session_delivered(
+                            row.id, destination, "disabled")
+                        continue
+                    client = self._reading_session_client(destination)
+                    if not client or not client.is_configured():
+                        retry_later = True
+                        continue
+                    if self._deliver_reading_session(row, destination, duration):
+                        self.database_service.mark_reading_session_delivered(
+                            row.id, destination, "delivered")
+                        get_persistent_condition_logger().resolve(
+                            logger, delivery_key, "%s session delivery resumed for '%s'",
+                            display, row.abs_id,
+                        )
+                    else:
+                        retry_later = True
+                        get_persistent_condition_logger().warn(
+                            logger, delivery_key, "%s session delivery pending for '%s'; will retry",
+                            display, row.abs_id,
+                        )
+                if retry_later:
+                    self.database_service.record_reading_session_delivery_failure(row.id, now)
+            get_persistent_condition_logger().resolve(
+                logger, f"reading-session-flush:{get_current_user_id()}", "Reading session delivery resumed",
             )
-        except (TypeError, ValueError):
-            pass
+        except Exception as exc:
+            get_persistent_condition_logger().warn(
+                logger, f"reading-session-flush:{get_current_user_id()}",
+                "Reading session delivery failed: %s", exc, exc_info=True,
+            )
 
     def _resolve_grimmory_ebook_id(self, book):
         """Resolve the Grimmory book ID for a book's ebook. Returns int or None."""
         # Fast path: book explicitly sourced from Grimmory
-        if getattr(book, 'ebook_source', None) == "BookLore" and getattr(book, 'ebook_source_id', None):
+        if is_grimmory_source(getattr(book, 'ebook_source', None)) and getattr(book, 'ebook_source_id', None):
             try:
                 return int(book.ebook_source_id)
             except (TypeError, ValueError):

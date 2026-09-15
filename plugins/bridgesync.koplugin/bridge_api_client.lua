@@ -32,7 +32,7 @@ local APIClient = {
     server_url = "",
     username = "",
     key = "",
-    timeout = 30,
+    timeout = 10,
     max_json_body_bytes = MAX_JSON_BODY_BYTES,
     log_callback = nil,
     request_runner = nil,
@@ -107,8 +107,9 @@ function APIClient:_request(method, path, sink, extra_headers, timeout_opts)
     self:_log("info", method, url)
     local opts = timeout_opts or {}
     local block_timeout = opts.block_timeout or (sink and 60 or self.timeout)
-    local total_timeout = opts.total_timeout or (sink and 300 or 60)
+    local total_timeout = opts.total_timeout or (sink and 300 or 30)
     local attempts = opts.attempts or 1
+    local background = opts.background == true
 
     for attempt = 1, attempts do
         local code, response_headers, status, body = self:_performRequest(function()
@@ -119,7 +120,7 @@ function APIClient:_request(method, path, sink, extra_headers, timeout_opts)
                 headers = self:_build_headers(extra_headers),
                 sink = sink or socketutil.table_sink(response_body),
             }, response_body
-        end, block_timeout, total_timeout, sink == nil)
+        end, block_timeout, total_timeout, background)
 
         local is_timeout = code == socketutil.TIMEOUT_CODE or
             code == socketutil.SSL_HANDSHAKE_CODE or
@@ -273,8 +274,9 @@ function APIClient:_requestJSON(method, path, json_body, timeout_opts)
     self:_log("info", method, url)
     local opts = timeout_opts or {}
     local block_timeout = opts.block_timeout or self.timeout
-    local total_timeout = opts.total_timeout or 60
+    local total_timeout = opts.total_timeout or 30
     local attempts = opts.attempts or 1
+    local background = opts.background == true
 
     for attempt = 1, attempts do
         local code, response_headers, status, body = self:_performRequest(function()
@@ -289,7 +291,7 @@ function APIClient:_requestJSON(method, path, json_body, timeout_opts)
                 source = ltn12.source.string(json_body),
                 sink = socketutil.table_sink(response_body),
             }, response_body
-        end, block_timeout, total_timeout, true)
+        end, block_timeout, total_timeout, background)
 
         local is_timeout = code == socketutil.TIMEOUT_CODE or
             code == socketutil.SSL_HANDSHAKE_CODE or

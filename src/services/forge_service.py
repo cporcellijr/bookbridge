@@ -12,6 +12,7 @@ import requests
 
 from src.services.alignment_service import ingest_storyteller_transcripts
 from src.utils.cache_paths import safe_library_path
+from src.utils.file_transfers import copy_file_to_path, hardlink_file_to_path
 from src.utils.storyteller_transcript import StorytellerTranscript
 
 logger = logging.getLogger(__name__)
@@ -298,11 +299,12 @@ class ForgeService:
                     return "existing"
             except Exception:
                 pass
-            dest_path.unlink()
 
+        # Both modes stage beside the destination and replace it only on success, so
+        # a failed re-stage leaves the previously staged file usable.
         if normalized_mode == HARDLINK_STAGE_MODE:
             try:
-                os.link(src_path, dest_path)
+                hardlink_file_to_path(src_path, dest_path)
                 logger.info(f"{context}: Hardlinked local source '{src_path.name}'")
                 return HARDLINK_STAGE_MODE
             except Exception as link_err:
@@ -312,7 +314,7 @@ class ForgeService:
                     exc_info=True
                 )
 
-        shutil.copy2(str(src_path), dest_path)
+        copy_file_to_path(src_path, dest_path)
         logger.info(f"{context}: Copied local source '{src_path.name}'")
         return "copy"
 

@@ -279,13 +279,13 @@ class TestEbookOnlyMetadataFallback(_EnvGuard):
     def test_storygraph_uses_epub_metadata_when_no_abs_item(self):
         sg = MagicMock()
         sg.is_configured.return_value = True
-        sg.resolve_book.return_value = {"book_id": "sgX", "title": "Appalachian Siren", "author": "Leslie Kurt"}
+        sg.resolve_book.return_value = {"book_id": "sgX", "title": "Mountain Song", "author": "Dana Pike"}
         sg.get_book_editions.return_value = []
         sg.get_book_rating.return_value = {}
         sg.book_url.return_value = "http://sg/books/sgX"
         parser = MagicMock()
         parser.get_book_metadata.return_value = {
-            "title": "Appalachian Siren", "author": "Leslie Kurt", "isbn": "9798875931147", "asin": "B0CTXDLTKC",
+            "title": "Mountain Song", "author": "Dana Pike", "isbn": "9798875931147", "asin": "B0CTXDLTKC",
         }
         svc = StorygraphSyncClient(
             storygraph_client=sg,
@@ -294,20 +294,20 @@ class TestEbookOnlyMetadataFallback(_EnvGuard):
             database_service=MagicMock(get_storygraph_details=MagicMock(return_value=None)),
             ollama_client=None,
         )
-        svc._automatch_storygraph(MagicMock(abs_id="ebook-1", abs_title="Appalachian Siren_ Backwoods Ex - Leslie Kurt", ebook_filename="Appalachian Siren.epub"))
+        svc._automatch_storygraph(MagicMock(abs_id="ebook-1", abs_title="Mountain Song_ Backwoods Ex - Dana Pike", ebook_filename="Mountain Song.epub"))
 
-        parser.get_book_metadata.assert_called_once_with("Appalachian Siren.epub")
+        parser.get_book_metadata.assert_called_once_with("Mountain Song.epub")
         # ISBN from the EPUB drives the authoritative search.
-        sg.resolve_book.assert_any_call(title="Appalachian Siren", author="Leslie Kurt", isbn="9798875931147")
+        sg.resolve_book.assert_any_call(title="Mountain Song", author="Dana Pike", isbn="9798875931147")
         svc.database_service.save_storygraph_details.assert_called_once()
 
     def test_hardcover_uses_epub_metadata_when_no_abs_item(self):
         hc = MagicMock()
         hc.is_configured.return_value = True
-        hc.search_by_isbn.return_value = {"book_id": 42, "slug": "appalachian-siren", "edition_id": 7, "pages": 280, "title": "Appalachian Siren"}
+        hc.search_by_isbn.return_value = {"book_id": 42, "slug": "appalachian-siren", "edition_id": 7, "pages": 280, "title": "Mountain Song"}
         parser = MagicMock()
         parser.get_book_metadata.return_value = {
-            "title": "Appalachian Siren", "author": "Leslie Kurt", "isbn": "9798875931147", "asin": "B0CTXDLTKC",
+            "title": "Mountain Song", "author": "Dana Pike", "isbn": "9798875931147", "asin": "B0CTXDLTKC",
         }
         svc = HardcoverSyncClient(
             hardcover_client=hc,
@@ -316,9 +316,9 @@ class TestEbookOnlyMetadataFallback(_EnvGuard):
             database_service=MagicMock(get_hardcover_details=MagicMock(return_value=None)),
             ollama_client=None,
         )
-        svc._automatch_hardcover(MagicMock(abs_id="ebook-1", abs_title="Appalachian Siren_ Backwoods Ex - Leslie Kurt", ebook_filename="Appalachian Siren.epub"))
+        svc._automatch_hardcover(MagicMock(abs_id="ebook-1", abs_title="Mountain Song_ Backwoods Ex - Dana Pike", ebook_filename="Mountain Song.epub"))
 
-        parser.get_book_metadata.assert_called_once_with("Appalachian Siren.epub")
+        parser.get_book_metadata.assert_called_once_with("Mountain Song.epub")
         hc.search_by_isbn.assert_any_call("9798875931147")
         svc.database_service.save_hardcover_details.assert_called_once()
 

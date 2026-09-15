@@ -2,7 +2,7 @@
 """
 Regression tests for issue #358 ("Can't reset progress?").
 
-The reporter was re-reading Dungeon Crawler Carl. ABS held the correct audio
+The reporter was re-reading Dungeon Runner Dana. ABS held the correct audio
 position (~76.9%) and was the acknowledged leader, but KoSync, Hardcover and
 StoryGraph were all pinned at 100%, and every progress reset came straight back.
 Their log showed BookBridge writing the 100% itself, through its own bot device:
@@ -79,7 +79,7 @@ class TestEndCollapseGuardSyncCycle(BaseSyncCycleTestCase):
     def get_test_mapping(self):
         return {
             'abs_id': 'test-abs-id-end-collapse',
-            'abs_title': 'Dungeon Crawler Carl',
+            'abs_title': 'Dungeon Runner Dana',
             'kosync_doc_id': '6453d1af20fab7ae4ccd9d1b6f52b09a',
             'ebook_filename': 'test-book.epub',
             'transcript_file': str(Path(self.temp_dir) / 'test_transcript.json'),

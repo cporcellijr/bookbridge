@@ -3,6 +3,7 @@ import logging
 import mimetypes
 import os
 import re
+import tempfile
 import time
 import zipfile
 from datetime import datetime, timezone
@@ -12,11 +13,43 @@ from urllib.parse import unquote
 
 import requests
 
+from src.utils.file_transfers import (
+    IncompleteTransferError,
+    copy_file_to_path,
+    response_declares_size,
+    stream_response_to_path,
+)
 from src.sync_clients.sync_client_interface import LocatorResult
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_epub_zip(path: Path) -> None:
+    """Reject a readaloud artifact whose zip is truncated or corrupt.
+
+    A short EPUB3 can otherwise sit in the cache looking usable and fail much
+    later inside parsing, so the CRC check happens before the file is published.
+    """
+    try:
+        with zipfile.ZipFile(path) as archive:
+            broken = archive.testzip()
+            if broken is not None:
+                raise IncompleteTransferError(
+                    f"corrupt entry {broken} in downloaded EPUB {path}",
+                    actual_size=path.stat().st_size,
+                )
+            if not archive.namelist():
+                raise IncompleteTransferError(
+                    f"empty EPUB archive {path}", actual_size=path.stat().st_size
+                )
+    except zipfile.BadZipFile as e:
+        raise IncompleteTransferError(
+            f"downloaded EPUB {path} is not a valid zip: {e}",
+            actual_size=path.stat().st_size,
+        ) from e
+
 
 class StorytellerAPIClient:
     # Audio resources embedded in a ReadAloud EPUB. The bridge only needs the
@@ -731,8 +764,9 @@ class StorytellerAPIClient:
         # We need to manually construct the request to handle streaming
         token = self._get_fresh_token()
         if not token: return False
-        headers = {"Authorization": f"Bearer {token}"}
-        
+        # identity encoding keeps Content-Length comparable with the bytes written.
+        headers = {"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"}
+
         # Try API Download First
         try:
             if polling:
@@ -741,9 +775,14 @@ class StorytellerAPIClient:
                 logger.info(f"⚡ Attempting download from '{url}'")
             with self.session.get(url, headers=headers, params={"format": "readaloud"}, stream=True, timeout=60) as r:
                 if r.status_code == 200:
-                    with open(output_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192): 
-                            f.write(chunk)
+                    # Publish only a complete, readable EPUB: a truncated readaloud
+                    # artifact must never replace a good one in the cache.
+                    stream_response_to_path(
+                        r,
+                        output_path,
+                        expected_size=response_declares_size(r),
+                        validator=_validate_epub_zip,
+                    )
                     logger.info(f"✅ Downloaded Storyteller artifact for '{book_uuid}' to '{output_path}'")
                     return True
                 else:
@@ -782,16 +821,17 @@ class StorytellerAPIClient:
             if not isinstance(book_data, dict):
                 logger.error("❌ Invalid book details response for fallback: expected an object")
                 return False
-            # Check readaloud object first, then root filepath
-            readaloud = book_data.get('readaloud', {})
+            readaloud = book_data.get('readaloud')
+            if not isinstance(readaloud, dict):
+                readaloud = {}
             source_path = readaloud.get('filepath')
             
             if not source_path:
                 if polling:
                     logger.debug(f"Storyteller poll: readaloud filepath not yet available for '{book_uuid[:8]}...'")
                     return False
-                logger.error("❌ No filepath found in book details for fallback")
-                raise Exception("No filepath in book details")
+                logger.info(f"Storyteller readaloud filepath not yet available for '{book_uuid}'")
+                return False
 
             # 2. Map Path
             # Mapping: /ebooks -> /storyteller/library
@@ -805,8 +845,7 @@ class StorytellerAPIClient:
             logger.info(f"🔄 Attempting local fallback from: '{local_path}'")
             
             if local_path.exists():
-                import shutil
-                shutil.copy2(local_path, output_path)
+                copy_file_to_path(local_path, output_path, validator=_validate_epub_zip)
                 logger.info(f"✅ Downloaded (via Local Copy) Storyteller artifact for '{book_uuid}'")
                 return True
             else:
@@ -816,7 +855,7 @@ class StorytellerAPIClient:
                  logger.error(f"❌ Local fallback file not found: '{local_path}'")
                  # Try unmapped?
                  if Path(source_path).exists():
-                     shutil.copy2(source_path, output_path)
+                     copy_file_to_path(source_path, output_path, validator=_validate_epub_zip)
                      logger.info(f"✅ Downloaded (via Direct Path) Storyteller artifact")
                      return True
                  
@@ -873,15 +912,18 @@ class StorytellerAPIClient:
     def download_slim_book(self, book_uuid: str, dest_path, *, polling: bool = False) -> bool:
         """Download the ReadAloud EPUB and cache an audio-stripped copy at dest_path.
 
-        The full artifact only ever exists as a transient .full.tmp. Returns True
+        The full artifact only exists in a private staging directory. Returns True
         when the slim copy is in place.
         """
         dest_path = Path(dest_path)
-        tmp_full = dest_path.with_name(dest_path.name + ".full.tmp")
         try:
-            if not self.download_book(book_uuid, tmp_full, polling=polling):
-                return False
-            self._strip_audio_from_epub(tmp_full, dest_path)
+            with tempfile.TemporaryDirectory(dir=dest_path.parent, prefix=dest_path.name + ".") as staging:
+                tmp_full = Path(staging) / "full.tmp"
+                tmp_slim = Path(staging) / "slim.tmp"
+                if not self.download_book(book_uuid, tmp_full, polling=polling):
+                    return False
+                self._strip_audio_from_epub(tmp_full, tmp_slim)
+                os.replace(tmp_slim, dest_path)
             if dest_path.exists():
                 logger.info(
                     f"📦 Cached slim ReadAloud EPUB for '{book_uuid[:8]}...' "
@@ -894,18 +936,7 @@ class StorytellerAPIClient:
                 f"⚠️ Failed to materialize slim ReadAloud EPUB for '{book_uuid[:8]}...': {e}",
                 exc_info=True,
             )
-            try:
-                if dest_path.exists():
-                    dest_path.unlink()
-            except Exception:
-                pass
             return False
-        finally:
-            try:
-                if tmp_full.exists():
-                    tmp_full.unlink()
-            except Exception:
-                pass
 
     def strip_cached_audio_in_place(self, cache_path) -> bool:
         """Rewrite an already-cached artifact that still carries narration audio,
@@ -917,10 +948,11 @@ class StorytellerAPIClient:
         if not self._epub_has_embedded_audio(cache_path):
             return False
         original_size = cache_path.stat().st_size
-        tmp_slim = cache_path.with_name(cache_path.name + ".slim.tmp")
         try:
-            self._strip_audio_from_epub(cache_path, tmp_slim)
-            os.replace(tmp_slim, cache_path)
+            with tempfile.TemporaryDirectory(dir=cache_path.parent, prefix=cache_path.name + ".") as staging:
+                tmp_slim = Path(staging) / "slim.tmp"
+                self._strip_audio_from_epub(cache_path, tmp_slim)
+                os.replace(tmp_slim, cache_path)
             logger.info(
                 f"🛠️ Re-stripped audio from cached ReadAloud EPUB '{cache_path.name}' "
                 f"({original_size / 1e6:.2f} MB → {cache_path.stat().st_size / 1e6:.2f} MB)"
@@ -931,11 +963,6 @@ class StorytellerAPIClient:
                 f"⚠️ Could not re-strip cached ReadAloud EPUB '{cache_path.name}': {e}",
                 exc_info=True,
             )
-            try:
-                if tmp_slim.exists():
-                    tmp_slim.unlink()
-            except Exception:
-                pass
             return False
 
     def ensure_readaloud_epub_cached(self, book_uuid: str, epub_cache_dir) -> bool:

@@ -1,3 +1,4 @@
+import json
 import threading
 import tempfile
 import unittest
@@ -386,6 +387,10 @@ class TestSyncCycleUserScoping(unittest.TestCase):
 
             def create_reading_session(self, **kwargs):
                 self.session_calls.append(kwargs)
+                return True
+
+            def is_configured(self):
+                return True
 
         user_bl = _BookLoreSessionClient()
         global_bl = _BookLoreSessionClient()
@@ -394,20 +399,30 @@ class TestSyncCycleUserScoping(unittest.TestCase):
         })
         mgr = _make_manager({"ABS": _FakeClient()}, registry=registry)
         mgr.booklore_client = global_bl
-        mgr._compute_session_duration = lambda *args, **kwargs: 120
         book = SimpleNamespace(
             abs_id="booklore:123",
             audio_source="BookLore",
             audio_source_id="123",
             ebook_filename="book.epub",
         )
-        leader_state = SimpleNamespace(current={"pct": 0.5}, previous_pct=0.4)
-
-        def _internal(target_abs_id=None):
-            mgr._record_grimmory_reading_session(book, "BookLoreAudio", leader_state, {}, 1000.0)
-
-        mgr._sync_cycle_internal = _internal
-        mgr.sync_cycle(user_id=5)
+        pending = SimpleNamespace(
+            id=1, abs_id=book.abs_id, accumulated_seconds=120, started_at=880,
+            last_event_at=1000, start_progress=0.4, end_progress=0.5,
+            grimmory_book_id=123, grimmory_status="pending",
+            bookorbit_book_id=None, bookorbit_status="disabled",
+            bookorbit_candidate_ids=None, leader_client="BookLoreAudio",
+            session_type="AUDIOBOOK", end_location=None,
+        )
+        mgr.database_service = SimpleNamespace(
+            close_reading_sessions=lambda *args: None,
+            get_pending_reading_sessions=lambda: [pending],
+            get_book=lambda abs_id: book,
+            mark_reading_session_delivered=lambda *args: None,
+            record_reading_session_delivery_failure=lambda *args: False,
+        )
+        from unittest.mock import patch
+        with patch.dict("os.environ", {"GRIMMORY_READING_SESSIONS": "true"}):
+            mgr.sync_cycle(user_id=5, sessions_only=True)
 
         self.assertEqual(len(user_bl.session_calls), 1)
         self.assertEqual(user_bl.session_calls[0]["book_id"], 123)
@@ -420,6 +435,13 @@ class TestSyncCycleUserScoping(unittest.TestCase):
 
             def create_reading_session(self, **kwargs):
                 self.session_calls.append(kwargs)
+                return True
+
+            def find_covering_sessions(self, **kwargs):
+                return []
+
+            def is_configured(self):
+                return True
 
         user_bo = _BookOrbitSessionClient()
         global_bo = _BookOrbitSessionClient()
@@ -428,7 +450,6 @@ class TestSyncCycleUserScoping(unittest.TestCase):
         })
         mgr = _make_manager({"ABS": _FakeClient()}, registry=registry)
         mgr.bookorbit_client = global_bo
-        mgr._compute_session_duration = lambda *args, **kwargs: 90
         book = SimpleNamespace(
             abs_id="bookorbit-book",
             audio_source="ABS",
@@ -436,13 +457,24 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             ebook_source_id="42",
             ebook_filename="book.epub",
         )
-        leader_state = SimpleNamespace(current={"pct": 0.6, "cfi": "epubcfi(/6/2)"}, previous_pct=0.5)
-
-        def _internal(target_abs_id=None):
-            mgr._record_bookorbit_reading_session(book, "BookOrbit", leader_state, {}, 1000.0)
-
-        mgr._sync_cycle_internal = _internal
-        mgr.sync_cycle(user_id=6)
+        pending = SimpleNamespace(
+            id=1, abs_id=book.abs_id, accumulated_seconds=90, started_at=910,
+            last_event_at=1000, start_progress=0.5, end_progress=0.6,
+            grimmory_book_id=None, grimmory_status="disabled",
+            bookorbit_book_id=42, bookorbit_status="pending",
+            bookorbit_candidate_ids=json.dumps([42]), leader_client="BookOrbit",
+            session_type="EPUB", end_location="epubcfi(/6/2)",
+        )
+        mgr.database_service = SimpleNamespace(
+            close_reading_sessions=lambda *args: None,
+            get_pending_reading_sessions=lambda: [pending],
+            get_book=lambda abs_id: book,
+            mark_reading_session_delivered=lambda *args: None,
+            record_reading_session_delivery_failure=lambda *args: False,
+        )
+        from unittest.mock import patch
+        with patch.dict("os.environ", {"BOOKORBIT_READING_SESSIONS": "true"}):
+            mgr.sync_cycle(user_id=6, sessions_only=True)
 
         self.assertEqual(len(user_bo.session_calls), 1)
         self.assertEqual(user_bo.session_calls[0]["book_id"], 42)

@@ -2,11 +2,26 @@ import os
 from typing import Optional
 import logging
 
-from src.api.booklore_client import BookloreClient
+from src.api.booklore_client import BookloreClient, ProgressWriteOutcome
 from src.db.models import Book, State
 from src.utils.ebook_utils import EbookParser
+from src.utils.fixed_page_progress import (
+    coerce_page,
+    count_cbz_pages,
+    estimate_cbz_page,
+    is_cbz_book,
+    page_from_persisted_state,
+    percentage_from_cbz_page,
+)
 from src.utils.progress_metadata import parse_service_timestamp
-from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
+from src.utils.ebook_sources import is_grimmory_source, normalize_ebook_source
+from src.sync_clients.sync_client_interface import (
+    LocatorResult,
+    SyncClient,
+    SyncResult,
+    UpdateProgressRequest,
+    ServiceState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,22 +41,85 @@ class BookloreSyncClient(SyncClient):
         """Grimmory participates in both audiobook and ebook sync modes."""
         return {'audiobook', 'ebook'}
 
+    def supports_fixed_page_progress(self) -> bool:
+        """Grimmory exposes a native page position for CBZ books."""
+        return True
+
     @staticmethod
     def _resolve_epub_filename(book: Book) -> Optional[str]:
         return getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
 
+    def _is_cbz_book(self, book: Book) -> bool:
+        return is_cbz_book(book)
+
+    @staticmethod
+    def _mapped_book_id(book: Book) -> Optional[str]:
+        source = getattr(book, "ebook_source", None)
+        source_id = getattr(book, "ebook_source_id", None)
+        if not isinstance(source, str) or not is_grimmory_source(source):
+            return None
+        if not isinstance(source_id, (str, int)) or not str(source_id).strip():
+            return None
+        return str(source_id).strip()
+
+    def _resolve_legacy_book_id(self, book: Book, epub: Optional[str]) -> Optional[str]:
+        """Resolve and safely backfill an exact legacy filename match."""
+        if not epub:
+            return None
+        source = getattr(book, "ebook_source", None)
+        if source is not None and (
+            not isinstance(source, str)
+            or (source.strip() and not is_grimmory_source(source))
+        ):
+            return None
+        exact_resolver = getattr(self.booklore_client, "find_book_by_filename_exact", None)
+        target = exact_resolver(epub) if callable(exact_resolver) else None
+        if not isinstance(target, dict) or target.get("id") in (None, ""):
+            return None
+
+        book_id = str(target["id"])
+        original_source = source
+        book.ebook_source = normalize_ebook_source(source or "Booklore")
+        book.ebook_source_id = book_id
+        db = getattr(self.booklore_client, "db", None)
+        claim = getattr(db, "backfill_ebook_source_id_if_unclaimed", None)
+        if callable(claim):
+            try:
+                if not claim(book.abs_id, book_id, book.ebook_source):
+                    logger.warning(
+                        "Grimmory mapping source-id backfill refused for %s: id %s is already claimed",
+                        getattr(book, "abs_id", "?"), book_id,
+                    )
+                    book.ebook_source = original_source
+                    book.ebook_source_id = None
+                    return None
+                logger.info(
+                    "Grimmory mapping source id backfilled for %s: %s (exact filename: %s)",
+                    getattr(book, "abs_id", "?"), book_id, epub,
+                )
+            except Exception:
+                logger.warning(
+                    "Grimmory mapping source-id backfill failed for %s",
+                    getattr(book, "abs_id", "?"), exc_info=True,
+                )
+                book.ebook_source = original_source
+                book.ebook_source_id = None
+                return None
+        return book_id
+
     def supports_book(self, book: Book) -> bool:
         epub = self._resolve_epub_filename(book)
-        if not epub:
-            return False
 
         # An explicit ebook source is authoritative. Match Grimmory regardless of
         # the tag variant it was saved under ('BookLore'/'Booklore'/'Grimmory');
         # never hijack a book explicitly owned by another ebook source (e.g.
         # BookOrbit), even if Grimmory hosts the same file.
-        src = (getattr(book, "ebook_source", None) or "").strip().lower()
+        src = str(getattr(book, "ebook_source", None) or "").strip()
         if src:
-            return src in ("booklore", "grimmory")
+            return is_grimmory_source(src) and bool(self._mapped_book_id(book) or epub)
+
+        if not epub:
+            return False
 
         # Otherwise (legacy/unsourced) only participate when the ebook can actually
         # be resolved against the Grimmory library cache.
@@ -56,15 +134,71 @@ class BookloreSyncClient(SyncClient):
         # readStatus); non-dict results (older/mocked clients) fall back to the
         # classic (pct, cfi) tuple.
         rich = None
-        if hasattr(self.booklore_client, "get_progress_rich"):
+        book_id = self._mapped_book_id(book) or self._resolve_legacy_book_id(book, epub)
+        if book_id is None and callable(getattr(self.booklore_client, "find_book_by_filename_exact", None)):
+            return None
+        direct_rich_attempted = False
+        if book_id and hasattr(self.booklore_client, "get_progress_rich_by_book_id"):
+            direct_rich_attempted = True
+            candidate = self.booklore_client.get_progress_rich_by_book_id(book_id)
+            if isinstance(candidate, dict):
+                rich = candidate
+        elif hasattr(self.booklore_client, "get_progress_rich"):
             candidate = self.booklore_client.get_progress_rich(epub)
             if isinstance(candidate, dict):
                 rich = candidate
         if rich is not None:
             bl_pct, bl_cfi = rich.get("pct"), rich.get("cfi")
+        elif direct_rich_attempted:
+            # The rich endpoint is the same GET /books/{id} used by the classic
+            # read. A second call cannot improve identity resolution and turns a
+            # 404/transient failure into needless duplicate traffic.
+            bl_pct, bl_cfi = None, None
         else:
-            bl_pct, bl_cfi = self.booklore_client.get_progress(epub)
+            if book_id and hasattr(self.booklore_client, "get_progress_by_book_id"):
+                bl_pct, bl_cfi = self.booklore_client.get_progress_by_book_id(book_id)
+            else:
+                bl_pct, bl_cfi = self.booklore_client.get_progress(epub)
 
+        if self._is_cbz_book(book) and rich is not None:
+            page = coerce_page(rich.get("page"))
+            if rich.get("page") not in (None, "") and page is None:
+                logger.warning(
+                    "Ignoring invalid Grimmory CBZ page %r for '%s'",
+                    rich.get("page"), epub,
+                )
+                return None
+            page_count = count_cbz_pages(self.ebook_parser, epub)
+            if page is not None and page_count is None:
+                logger.warning(
+                    "Grimmory CBZ page %s for '%s' cannot be canonicalized because page count is unavailable; ignoring its percentage",
+                    page, epub,
+                )
+                return None
+            canonical_pct = percentage_from_cbz_page(
+                self.ebook_parser, epub, page, page_count
+            )
+            if page is not None and canonical_pct is None:
+                logger.warning(
+                    "Ignoring out-of-range Grimmory CBZ page %s (page_count=%s) for '%s'",
+                    page, page_count, epub,
+                )
+                return None
+            percentage_present = rich.get("percentage_present", bl_pct is not None)
+            explicit_reset = (
+                percentage_present
+                and bl_pct is not None
+                and float(bl_pct) <= 0.0
+                and page == 1
+            )
+            if canonical_pct is not None and not explicit_reset:
+                if bl_pct is not None and abs(float(bl_pct) - canonical_pct) > 0.005:
+                    logger.warning(
+                        "Grimmory CBZ progress mismatch for '%s': reported=%.2f%%, page=%s -> canonical=%.2f%%; using page-derived progress",
+                        epub, float(bl_pct) * 100.0, page, canonical_pct * 100.0,
+                    )
+                bl_pct = canonical_pct
+                rich["page"] = page
         if bl_pct is None:
             logger.debug("Grimmory percentage is None - returning no service state")
             return None
@@ -78,6 +212,9 @@ class BookloreSyncClient(SyncClient):
         if rich is not None:
             if rich.get("href"):
                 current["href"] = rich["href"]
+            if rich.get("page") is not None:
+                current["page"] = rich["page"]
+                current["_previous_page"] = page_from_persisted_state(prev_state)
             service_updated_at = parse_service_timestamp(rich.get("last_read_time"))
             if service_updated_at is not None:
                 current["service_updated_at"] = service_updated_at
@@ -95,6 +232,10 @@ class BookloreSyncClient(SyncClient):
         )
 
     def get_text_from_current_state(self, book: Book, state: ServiceState) -> Optional[str]:
+        # The manager builds a first-class page locator directly from state.
+        if self._is_cbz_book(book):
+            return None
+
         bl_pct = state.current.get('pct')
         bl_cfi = state.current.get('cfi')
         epub = self._resolve_epub_filename(book)
@@ -110,7 +251,71 @@ class BookloreSyncClient(SyncClient):
         # Prefer the original filename for updates too.
         epub = self._resolve_epub_filename(book)
         pct = request.locator_result.percentage
-        success = self.booklore_client.update_progress(epub, pct, request.locator_result)
+        locator = request.locator_result
+
+        if self._is_cbz_book(book):
+            page_count = count_cbz_pages(self.ebook_parser, epub)
+            page = coerce_page(getattr(locator, "page", None))
+            if page is not None and page_count is None:
+                logger.warning(
+                    "Skipping Grimmory CBZ update for '%s': page count unavailable",
+                    book.abs_title,
+                )
+                current = request.current_state.current if request.current_state else {}
+                return SyncResult(current.get("pct"), True, dict(current), skipped=True)
+            if page_count and page and page > page_count:
+                logger.warning(
+                    "Ignoring out-of-range Grimmory CBZ page %s (page_count=%s) for '%s'",
+                    page, page_count, book.abs_title,
+                )
+                page = None
+            if pct is not None and float(pct) <= 0.0:
+                page = 1
+                pct = 0.0
+            elif page is None:
+                page = estimate_cbz_page(self.ebook_parser, epub, pct, page_count)
+            if page is None:
+                logger.warning(
+                    "Skipping Grimmory CBZ update due to unresolvable page for '%s'",
+                    book.abs_title,
+                )
+                current = request.current_state.current if request.current_state else {"pct": pct}
+                return SyncResult(current.get("pct"), True, dict(current), skipped=True)
+
+            canonical_pct = percentage_from_cbz_page(
+                self.ebook_parser, epub, page, page_count
+            )
+            if canonical_pct is not None and (pct is None or float(pct) > 0.0):
+                if (
+                    pct is not None
+                    and float(pct) > 0.0
+                    and abs(float(pct) - canonical_pct) > 0.005
+                ):
+                    logger.warning(
+                        "Correcting outgoing Grimmory CBZ progress for '%s': requested=%.2f%%, page=%s -> canonical=%.2f%%",
+                        epub, float(pct) * 100.0, page, canonical_pct * 100.0,
+                    )
+                pct = canonical_pct
+            if pct is None:
+                logger.warning(
+                    "Skipping Grimmory CBZ update without a reliable percentage for '%s'",
+                    book.abs_title,
+                )
+                current = request.current_state.current if request.current_state else {"pct": None, "page": page}
+                return SyncResult(current.get("pct"), True, dict(current), skipped=True)
+            locator = LocatorResult(percentage=pct, page=page)
+
+        book_id = self._mapped_book_id(book) or self._resolve_legacy_book_id(book, epub)
+        if book_id is None and callable(getattr(self.booklore_client, "find_book_by_filename_exact", None)):
+            return SyncResult(None, False)
+        if book_id and hasattr(self.booklore_client, "update_progress_by_book_id"):
+            outcome = self.booklore_client.update_progress_by_book_id(book_id, pct, locator)
+        else:
+            outcome = self.booklore_client.update_progress(epub, pct, locator)
+        if outcome is ProgressWriteOutcome.SKIPPED:
+            current = request.current_state.current if request.current_state else {"pct": pct}
+            return SyncResult(current.get("pct"), True, dict(current), skipped=True)
+        success = bool(outcome)
         if success:
             try:
                 from src.services.write_tracker import record_write
@@ -120,6 +325,8 @@ class BookloreSyncClient(SyncClient):
         updated_state = {
             'pct': pct
         }
-        if request.locator_result and request.locator_result.cfi:
-            updated_state['cfi'] = request.locator_result.cfi
+        if self._is_cbz_book(book) and locator and locator.page is not None:
+            updated_state['page'] = locator.page
+        elif locator and locator.cfi:
+            updated_state['cfi'] = locator.cfi
         return SyncResult(pct, success, updated_state)

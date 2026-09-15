@@ -117,6 +117,7 @@ class BookMappingService:
                 bookorbit_client=bookorbit,
                 booklore_client=booklore,
                 kavita_client=kavita,
+                ebook_parser=self.ebook_parser,
             )
         except Exception as e:
             logger.warning(
@@ -256,7 +257,24 @@ class BookMappingService:
                 target_book.series_name = _sname
                 target_book.series_sequence = _sseq
 
+        # A mapping for this exact ebook may already exist -- typically an
+        # ebook-only entry created before the audiobook turned up. Carry over what
+        # only that row knows before saving, then fold it in afterwards. Skipping
+        # this leaves two rows claiming one KOSync hash, and since
+        # KosyncDocument.linked_abs_id holds a single book, the loser is served but
+        # can never receive progress while the device downloads the bytes twice.
+        stale = (
+            self.database_service.get_book_by_kosync_id(kosync_doc_id)
+            if kosync_doc_id else None
+        )
+        if stale is not None and getattr(stale, "abs_id", None) != target_book.abs_id:
+            for field in ("storyteller_uuid", "transcript_source", "transcript_file",
+                          "abs_ebook_item_id"):
+                if not getattr(target_book, field, None):
+                    setattr(target_book, field, getattr(stale, field, None))
+
         saved_book = self.database_service.save_book(target_book)
+        self.database_service.absorb_duplicate_mapping(saved_book)
         self._automatch_progress_trackers(saved_book, user_id=user_id)
 
         # ABS collection only for actual ABS audio sources — not BookOrbit
@@ -382,6 +400,7 @@ class BookMappingService:
                 audio_source_id=None,
                 ebook_source=ebook_source,
                 ebook_source_id=ebook_source_id or booklore_ebook_id,
+                ebook_filename=ebook_filename,
             ),
             user_id=user_id,
         )

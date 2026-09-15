@@ -115,7 +115,7 @@ class TestReconcileHashes(unittest.TestCase):
     def test_two_books_sharing_one_file_do_not_steal_the_hash(self):
         """A catalogue mis-mapping must not make passes flip the link forever.
 
-        Observed live: 'The Breach' and 'The Dorians' both pointed at the same EPUB,
+        Observed live: 'Northern Reach' and 'Salt Marsh' both pointed at the same EPUB,
         so each pass rebound the same hash to whichever book came last.
         """
         same = {"path": Path("shared"), "content_hash": "shared-hash"}

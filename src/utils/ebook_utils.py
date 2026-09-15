@@ -103,6 +103,10 @@ class EbookParser:
         self._path_cache: OrderedDict[str, Path] = OrderedDict()
         self._path_cache_max = max(0, int(os.getenv("EBOOK_PATH_CACHE_SIZE", "100")))
         self._path_cache_lock = threading.Lock()
+        # Positive CBZ counts are cached only within one sync cycle. Failures are
+        # deliberately not cached so a transient NAS/ZIP error can recover.
+        self._fixed_page_count_cache: dict[str, int] = {}
+        self._fixed_page_count_cache_lock = threading.Lock()
 
         logger.info(
             f"✅ EbookParser initialized (cache={cache_size}, hash={self.hash_method}, "
@@ -464,6 +468,56 @@ class EbookParser:
 
         return resolve
 
+    def _sanitize_epub(self, str_path):
+        """Rewrite an EPUB with manifest items whose files are absent from the
+        archive removed, so ebooklib can read a malformed book (e.g. an OPF that
+        references a missing Adobe ``page-template.xpgt``). ``read_epub`` eagerly
+        reads every manifest item and aborts the whole book on the first missing
+        one. Returns a temp path to the repaired copy, or None when there is
+        nothing to repair (so the caller re-raises the original error)."""
+        from lxml import etree
+        try:
+            with zipfile.ZipFile(str_path) as zf:
+                names = set(zf.namelist())
+                container = zf.read("META-INF/container.xml").decode("utf-8", "replace")
+                match = re.search(r'full-path="([^"]+)"', container)
+                if not match or match.group(1) not in names:
+                    return None
+                opf_path = match.group(1)
+                opf_dir = posixpath.dirname(opf_path)
+                opf_bytes = zf.read(opf_path)
+
+            root = etree.fromstring(opf_bytes)
+            removed = 0
+            for item in root.findall('.//{*}manifest/{*}item'):
+                href = item.get('href')
+                if not href:
+                    continue
+                full = posixpath.normpath(posixpath.join(opf_dir, href)) if opf_dir else href
+                if href not in names and full not in names:
+                    item.getparent().remove(item)
+                    removed += 1
+            if not removed:
+                return None
+
+            patched = etree.tostring(root, xml_declaration=True, encoding="utf-8")
+            tmp = tempfile.NamedTemporaryFile(suffix=".epub", delete=False)
+            tmp_path = tmp.name
+            tmp.close()
+            with zipfile.ZipFile(str_path) as zin, \
+                    zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                for info in zin.infolist():
+                    data = patched if info.filename == opf_path else zin.read(info.filename)
+                    zout.writestr(info, data)
+            logger.warning(
+                "⚠️ EPUB '%s' manifest references %d item(s) missing from the archive; "
+                "parsing a repaired copy with them removed", Path(str_path).name, removed,
+            )
+            return tmp_path
+        except Exception as e:
+            logger.debug(f"EPUB sanitize failed for '{str_path}': {e}", exc_info=True)
+            return None
+
     def extract_text_and_map(self, filepath, progress_callback=None):
         """
         Used for fuzzy matching and general content extraction.
@@ -483,7 +537,19 @@ class EbookParser:
         logger.info(f"Parsing EPUB: {filepath.name}")
 
         try:
-            book = epub.read_epub(str_path)
+            try:
+                book = epub.read_epub(str_path)
+            except Exception as read_error:
+                repaired = self._sanitize_epub(str_path)
+                if not repaired:
+                    raise
+                try:
+                    book = epub.read_epub(repaired)
+                finally:
+                    try:
+                        os.unlink(repaired)
+                    except OSError:
+                        pass
             href_resolver = self._build_href_resolver(str_path)
             full_text_parts = []
             spine_map = []
@@ -1426,6 +1492,20 @@ class EbookParser:
             spine_index,
         )
         return None
+
+    def get_cached_fixed_page_count(self, filename: str) -> Optional[int]:
+        with self._fixed_page_count_cache_lock:
+            return self._fixed_page_count_cache.get(filename)
+
+    def cache_fixed_page_count(self, filename: str, page_count: int) -> None:
+        if page_count <= 0:
+            return
+        with self._fixed_page_count_cache_lock:
+            self._fixed_page_count_cache[filename] = page_count
+
+    def clear_fixed_page_count_cache(self) -> None:
+        with self._fixed_page_count_cache_lock:
+            self._fixed_page_count_cache.clear()
 
     def get_sentence_level_ko_xpath(self, filename, percentage) -> Optional[str]:
         """

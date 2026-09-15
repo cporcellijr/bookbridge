@@ -101,7 +101,9 @@ class TestStorytellerArtifactAudioStrip(unittest.TestCase):
         self.assertEqual(Path(path), cached)
 
         # Pre-fix this wrote the audio-intact artifact straight to the cache path.
-        self.assertEqual(Path(mock_dl.call_args[0][1]).name, "storyteller_uuid-414.epub.full.tmp")
+        self.assertEqual(Path(mock_dl.call_args[0][1]).name, "full.tmp")
+        self.assertEqual(Path(mock_dl.call_args[0][1]).parent.parent, self.cache_dir)
+        self.assertFalse(Path(mock_dl.call_args[0][1]).parent.exists())
         self.assertFalse(StorytellerAPIClient._epub_has_embedded_audio(cached))
         self.assertLess(cached.stat().st_size, len(FAT_AUDIO))
 

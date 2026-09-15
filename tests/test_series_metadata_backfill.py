@@ -1,8 +1,8 @@
 """Regression tests for series metadata resolution and persistence.
 
 Reported symptom: a series collapsed only some of its books on the dashboard.
-"A Mage's Cultivation" grouped three of four (Mana Master stayed loose), and the
-ebook-only BookOrbit series "Dragon Flight Academy" and "Lawless Haven" did not
+"A Mage's Cultivation" grouped three of four (Ether Master stayed loose), and the
+ebook-only BookOrbit series "Ridgeline Academy" and "Harbour Lights" did not
 group at all despite BookOrbit listing them as series.
 
 Root cause: `books.series_name` was only ever written from ABS metadata, so
@@ -45,22 +45,22 @@ class TestLibraryDetailExtraction(unittest.TestCase):
     """Shapes captured live from the running services."""
 
     def test_bookorbit_detail_yields_name_and_index(self):
-        detail = {"id": 5104, "title": "Dragon Flight Academy",
-                  "seriesName": "Dragon Flight Academy", "seriesIndex": 1,
+        detail = {"id": 5104, "title": "Ridgeline Academy",
+                  "seriesName": "Ridgeline Academy", "seriesIndex": 1,
                   "seriesId": 15331}
         self.assertEqual(
             extract_series_from_library_detail(detail),
-            ("Dragon Flight Academy", 1.0),
+            ("Ridgeline Academy", 1.0),
         )
 
     def test_grimmory_nested_metadata_series_number(self):
-        raw = {"metadata": {"seriesName": "Lawless Haven", "seriesNumber": "3"}}
-        self.assertEqual(extract_series_from_library_detail(raw), ("Lawless Haven", 3.0))
+        raw = {"metadata": {"seriesName": "Harbour Lights", "seriesNumber": "3"}}
+        self.assertEqual(extract_series_from_library_detail(raw), ("Harbour Lights", 3.0))
 
     def test_series_index_zero_is_not_dropped(self):
         """A prequel at index 0 must keep its sequence, not fall through as falsy."""
-        detail = {"seriesName": "Lawless Haven", "seriesIndex": 0}
-        self.assertEqual(extract_series_from_library_detail(detail), ("Lawless Haven", 0.0))
+        detail = {"seriesName": "Harbour Lights", "seriesIndex": 0}
+        self.assertEqual(extract_series_from_library_detail(detail), ("Harbour Lights", 0.0))
 
     def test_non_dict_input(self):
         self.assertEqual(extract_series_from_library_detail(None), (None, None))
@@ -95,22 +95,22 @@ class TestReportedTitlesDefeatTheTitleHeuristic(unittest.TestCase):
     book 1 of each reported series stayed ungrouped."""
 
     def test_unnumbered_and_decorated_titles_do_not_parse(self):
-        self.assertEqual(extract_series_from_title("Dragon Flight Academy"), (None, None))
+        self.assertEqual(extract_series_from_title("Ridgeline Academy"), (None, None))
         self.assertEqual(
-            extract_series_from_title("Lawless Haven: Book 1 - Eden Redd"), (None, None)
+            extract_series_from_title("Harbour Lights: Book 1 - Casey Lin"), (None, None)
         )
 
     def test_library_lookup_rescues_them(self):
         book = SimpleNamespace(
             abs_id="ebook-b196872fb1c1fe82",
-            abs_title="Lawless Haven: Book 1 - Eden Redd",
+            abs_title="Harbour Lights: Book 1 - Casey Lin",
             audio_source=None, audio_source_id=None,
             ebook_source="BookOrbit", ebook_source_id="5099",
         )
-        client = _bookorbit_client({"seriesName": "Lawless Haven", "seriesIndex": 1})
+        client = _bookorbit_client({"seriesName": "Harbour Lights", "seriesIndex": 1})
         self.assertEqual(
             resolve_series_for_book(book, bookorbit_client=client),
-            ("Lawless Haven", 1.0),
+            ("Harbour Lights", 1.0),
         )
 
 
@@ -120,15 +120,15 @@ class TestResolveSeriesForBook(unittest.TestCase):
         """BookOrbit's light record omits the series fields and is keyed by int id,
         so `get_book_by_id` with the stored string id resolves nothing."""
         book = SimpleNamespace(
-            abs_id="ebook-2914cec36706567c", abs_title="Dragon Flight Academy",
+            abs_id="ebook-2914cec36706567c", abs_title="Ridgeline Academy",
             audio_source=None, audio_source_id=None,
             ebook_source="BookOrbit", ebook_source_id="5104",
         )
-        client = _bookorbit_client({"seriesName": "Dragon Flight Academy", "seriesIndex": 1})
+        client = _bookorbit_client({"seriesName": "Ridgeline Academy", "seriesIndex": 1})
 
         self.assertEqual(
             resolve_series_for_book(book, bookorbit_client=client),
-            ("Dragon Flight Academy", 1.0),
+            ("Ridgeline Academy", 1.0),
         )
         client.get_book_detail.assert_called_once_with("5104")
         client.get_book_by_id.assert_not_called()
@@ -136,7 +136,7 @@ class TestResolveSeriesForBook(unittest.TestCase):
     def test_abs_audio_book_resolves_from_abs(self):
         book = SimpleNamespace(
             abs_id="e912294c-8617-49de-a3ec-52968170bde4",
-            abs_title="Mana Master: A Mage's Cultivation, Book 1",
+            abs_title="Ether Master: A Mage's Cultivation, Book 1",
             audio_source="ABS", audio_source_id="e912294c-8617-49de-a3ec-52968170bde4",
             ebook_source="BookOrbit", ebook_source_id="4001",
         )
@@ -157,7 +157,7 @@ class TestResolveSeriesForBook(unittest.TestCase):
 
     def test_failed_lookup_falls_through_instead_of_raising(self):
         book = SimpleNamespace(
-            abs_id="ebook-1", abs_title="Dragon Flight Academy 2",
+            abs_id="ebook-1", abs_title="Ridgeline Academy 2",
             audio_source=None, audio_source_id=None,
             ebook_source="BookOrbit", ebook_source_id="5105",
         )
@@ -167,7 +167,7 @@ class TestResolveSeriesForBook(unittest.TestCase):
 
         self.assertEqual(
             resolve_series_for_book(book, bookorbit_client=client),
-            ("Dragon Flight Academy", 2.0),
+            ("Ridgeline Academy", 2.0),
         )
 
     def test_unconfigured_client_is_skipped(self):
@@ -185,7 +185,7 @@ class TestResolveSeriesForBook(unittest.TestCase):
 class TestServiceAnsweredReporting(unittest.TestCase):
     """A refresh may only retire a series when the owning service actually spoke.
 
-    Reported: a bogus "Stephen King" series was deleted in ABS and the dashboard
+    Reported: a bogus "Arthur Vane" series was deleted in ABS and the dashboard
     kept showing it, because every writer of series_name is fill-only.
     """
 
@@ -234,9 +234,9 @@ class TestServiceAnsweredReporting(unittest.TestCase):
         self.assertFalse(result.service_answered)
 
     def test_resolution_reports_which_source_won(self):
-        client = _bookorbit_client({"seriesName": "Lawless Haven", "seriesIndex": 2})
+        client = _bookorbit_client({"seriesName": "Harbour Lights", "seriesIndex": 2})
         book = SimpleNamespace(
-            abs_id="ebook-1", abs_title="Lawless Haven 2", audio_source=None,
+            abs_id="ebook-1", abs_title="Harbour Lights 2", audio_source=None,
             audio_source_id=None, ebook_source="BookOrbit", ebook_source_id="5103",
         )
         result = resolve_series_details(book, bookorbit_client=client)
@@ -244,9 +244,9 @@ class TestServiceAnsweredReporting(unittest.TestCase):
 
     def test_force_refresh_bypasses_the_hour_long_detail_cache(self):
         """BookOrbit caches book detail for an hour; a re-check must see edits."""
-        client = _bookorbit_client({"seriesName": "Lawless Haven", "seriesIndex": 2})
+        client = _bookorbit_client({"seriesName": "Harbour Lights", "seriesIndex": 2})
         book = SimpleNamespace(
-            abs_id="ebook-1", abs_title="Lawless Haven 2", audio_source=None,
+            abs_id="ebook-1", abs_title="Harbour Lights 2", audio_source=None,
             audio_source_id=None, ebook_source="BookOrbit", ebook_source_id="5103",
         )
 
@@ -254,9 +254,9 @@ class TestServiceAnsweredReporting(unittest.TestCase):
         client.get_book_detail.assert_called_once_with("5103", force=True)
 
     def test_default_lookup_uses_the_cache(self):
-        client = _bookorbit_client({"seriesName": "Lawless Haven", "seriesIndex": 2})
+        client = _bookorbit_client({"seriesName": "Harbour Lights", "seriesIndex": 2})
         book = SimpleNamespace(
-            abs_id="ebook-1", abs_title="Lawless Haven 2", audio_source=None,
+            abs_id="ebook-1", abs_title="Harbour Lights 2", audio_source=None,
             audio_source_id=None, ebook_source="BookOrbit", ebook_source_id="5103",
         )
 
@@ -273,20 +273,20 @@ class TestSeriesRefreshAction(unittest.TestCase):
 
     def test_deleted_series_is_cleared_when_the_service_answered(self):
         resolution = SeriesResolution(None, None, None, service_answered=True)
-        self.assertEqual(self.decide("Stephen King", None, resolution), "clear")
+        self.assertEqual(self.decide("Arthur Vane", None, resolution), "clear")
 
     def test_stored_series_survives_an_unreachable_service(self):
         """The safety rule: silence must never be read as deletion."""
         resolution = SeriesResolution(None, None, None, service_answered=False)
-        self.assertEqual(self.decide("Stephen King", None, resolution), "keep")
+        self.assertEqual(self.decide("Arthur Vane", None, resolution), "keep")
 
     def test_matching_resolution_is_unchanged(self):
-        resolution = SeriesResolution("Lawless Haven", 2.0, "bookorbit", True)
-        self.assertEqual(self.decide("Lawless Haven", 2.0, resolution), "unchanged")
+        resolution = SeriesResolution("Harbour Lights", 2.0, "bookorbit", True)
+        self.assertEqual(self.decide("Harbour Lights", 2.0, resolution), "unchanged")
 
     def test_integer_and_float_sequences_compare_equal(self):
-        resolution = SeriesResolution("Lawless Haven", 2.0, "bookorbit", True)
-        self.assertEqual(self.decide("Lawless Haven", 2, resolution), "unchanged")
+        resolution = SeriesResolution("Harbour Lights", 2.0, "bookorbit", True)
+        self.assertEqual(self.decide("Harbour Lights", 2, resolution), "unchanged")
 
     def test_a_known_volume_number_is_not_traded_for_an_unknown_one(self):
         """Found live: BookOrbit reports "Black Swan Event" with no index, so a
@@ -304,11 +304,11 @@ class TestSeriesRefreshAction(unittest.TestCase):
 
     def test_corrected_name_is_an_update(self):
         resolution = SeriesResolution("A Mage's Cultivation", 1.0, "abs", True)
-        self.assertEqual(self.decide("Stephen King", None, resolution), "update")
+        self.assertEqual(self.decide("Arthur Vane", None, resolution), "update")
 
     def test_changed_sequence_alone_is_an_update(self):
-        resolution = SeriesResolution("Lawless Haven", 3.0, "bookorbit", True)
-        self.assertEqual(self.decide("Lawless Haven", 2.0, resolution), "update")
+        resolution = SeriesResolution("Harbour Lights", 3.0, "bookorbit", True)
+        self.assertEqual(self.decide("Harbour Lights", 2.0, resolution), "update")
 
     def test_empty_row_with_no_resolution_is_none(self):
         resolution = SeriesResolution(None, None, None, service_answered=True)
@@ -316,7 +316,7 @@ class TestSeriesRefreshAction(unittest.TestCase):
         self.assertEqual(self.decide("", None, resolution), "none")
 
     def test_fill_of_an_empty_row_is_an_update(self):
-        resolution = SeriesResolution("Dragon Flight Academy", 1.0, "bookorbit", True)
+        resolution = SeriesResolution("Ridgeline Academy", 1.0, "bookorbit", True)
         self.assertEqual(self.decide(None, None, resolution), "update")
 
 
@@ -344,19 +344,19 @@ class TestEbookOnlyMappingPersistsSeries(unittest.TestCase):
         )
 
     def test_bookorbit_ebook_only_mapping_carries_series(self):
-        client = _bookorbit_client({"seriesName": "Dragon Flight Academy", "seriesIndex": 1})
+        client = _bookorbit_client({"seriesName": "Ridgeline Academy", "seriesIndex": 1})
         client.download_book.return_value = b"epub-bytes"
         svc = self._service(client)
 
         saved = svc.create_ebook_only_mapping(
             ebook_filename="dragon-flight-academy.epub",
-            ebook_title="Dragon Flight Academy",
+            ebook_title="Ridgeline Academy",
             ebook_source="BookOrbit",
             ebook_source_id="5104",
         )
 
         self.assertIsNotNone(saved)
-        self.assertEqual(saved.series_name, "Dragon Flight Academy")
+        self.assertEqual(saved.series_name, "Ridgeline Academy")
         self.assertEqual(saved.series_sequence, 1.0)
 
 
@@ -370,7 +370,7 @@ class TestDashboardGroupingNeedsPersistedSeries(unittest.TestCase):
     @staticmethod
     def _mapping(abs_id, title, series_name, series_sequence):
         return {
-            "abs_id": abs_id, "display_title": title, "display_author": "Eden Redd",
+            "abs_id": abs_id, "display_title": title, "display_author": "Casey Lin",
             "unified_progress": 0.0, "series_name": series_name,
             "series_sequence": series_sequence, "cover_url": None,
             "last_sync_unix": 0.0, "added_at_unix": 0.0,
@@ -379,10 +379,10 @@ class TestDashboardGroupingNeedsPersistedSeries(unittest.TestCase):
 
     def test_null_series_book_stays_loose(self):
         mappings = [
-            self._mapping("a", "Mana Master", None, None),
+            self._mapping("a", "Ether Master", None, None),
             self._mapping("b", "Mana Beast", "A Mage's Cultivation", 2.0),
-            self._mapping("c", "Mana Immortal", "A Mage's Cultivation", 3.0),
-            self._mapping("d", "Immortal Mana", "A Mage's Cultivation", 4.0),
+            self._mapping("c", "Ether Eternal", "A Mage's Cultivation", 3.0),
+            self._mapping("d", "Eternal Ether", "A Mage's Cultivation", 4.0),
         ]
         result = self.group(mappings)
 
@@ -394,10 +394,10 @@ class TestDashboardGroupingNeedsPersistedSeries(unittest.TestCase):
 
     def test_all_four_group_once_series_is_populated(self):
         mappings = [
-            self._mapping("a", "Mana Master", "A Mage's Cultivation", 1.0),
+            self._mapping("a", "Ether Master", "A Mage's Cultivation", 1.0),
             self._mapping("b", "Mana Beast", "A Mage's Cultivation", 2.0),
-            self._mapping("c", "Mana Immortal", "A Mage's Cultivation", 3.0),
-            self._mapping("d", "Immortal Mana", "A Mage's Cultivation", 4.0),
+            self._mapping("c", "Ether Eternal", "A Mage's Cultivation", 3.0),
+            self._mapping("d", "Eternal Ether", "A Mage's Cultivation", 4.0),
         ]
         result = self.group(mappings)
 

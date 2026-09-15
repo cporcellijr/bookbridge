@@ -2,7 +2,7 @@
 
 BookOrbit's own web reader logs a reading session as the user reads. BookBridge
 also posts an estimated session when it notices the progress move, so the same
-reading was counted twice. Captured live on 2026-08-31 against Goblin Gigs:
+reading was counted twice. Captured live on 2026-08-31 against Marsh Errands:
 
     id=2768  epub  dur=149  pct 11.43->14.34319   <- BookOrbit's own
     id=2769  epub  dur=737  pct 11.89->14.34      <- BookBridge's estimate
@@ -22,6 +22,7 @@ real stats for one of those two cases. BookBridge instead asks BookOrbit what it
 already has, which is correct for both without needing to know which happened.
 """
 
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -62,26 +63,59 @@ def _leader_state():
 # sync_manager: skip only when BookOrbit already has the reading
 # ---------------------------------------------------------------------------
 
+def _delivery_row(sm, session_type="AUDIOBOOK"):
+    """A closed buffer row as the delivery pass sees it, ids resolved by real code."""
+    book_id, candidates = sm._resolve_bookorbit_session_ids(_book(), audio=True)
+    state = _leader_state()
+    return SimpleNamespace(
+        id=1, abs_id="bookorbit:5924", session_type=session_type,
+        leader_client="BookOrbitAudio", start_progress=state.previous_pct,
+        end_progress=state.current["pct"], last_event_at=1_000_000.0, end_location=None,
+        bookorbit_book_id=book_id, bookorbit_candidate_ids=json.dumps(candidates),
+    )
+
+
 def test_session_skipped_when_bookorbit_already_logged_the_reading():
     bo = MagicMock()
     bo.is_configured.return_value = True
-    bo.find_overlapping_session.return_value = {"id": 2768, "durationSeconds": 149}
+    # BookOrbit's own id=2768, 11.43->14.34319, covering all of our 11.89->14.34.
+    bo.find_covering_sessions.return_value = [
+        {"id": 2768, "durationSeconds": 149, "endProgress": 14.34319, "progressDelta": 2.91319},
+    ]
     sm = _sync_manager(bookorbit_client=bo)
-    with patch.object(sm, "_compute_session_duration", return_value=737):
-        sm._record_bookorbit_reading_session(_book(), "BookOrbit", _leader_state(), {}, 1_000_000.0)
+    sm.database_service = MagicMock()
+    assert sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 737)
     bo.create_reading_session.assert_not_called()
+    sm.database_service.mark_reading_session_delivered.assert_called_once_with(
+        1, "bookorbit", "disabled")
+
+
+def test_partial_overlap_trims_instead_of_suppressing_the_whole_session():
+    """A sliver of BookOrbit's own reading must not erase an aggregated session."""
+    bo = MagicMock()
+    bo.is_configured.return_value = True
+    # 14.24->14.34319: BookOrbit saw only the last ~4% of our 11.89->14.34 span.
+    bo.find_covering_sessions.return_value = [
+        {"id": 2768, "endProgress": 14.34319, "progressDelta": 0.1},
+    ]
+    bo.create_reading_session.return_value = True
+    sm = _sync_manager(bookorbit_client=bo)
+    sm.database_service = MagicMock()
+    assert sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 737)
+    kwargs = bo.create_reading_session.call_args.kwargs
+    assert 0 < kwargs["end_time"] - kwargs["start_time"] < 737
+    assert kwargs["end_time"] - kwargs["start_time"] > 600
 
 
 def test_session_recorded_when_bookorbit_has_nothing():
     """The audio path, and any read BookOrbit did not log itself."""
     bo = MagicMock()
     bo.is_configured.return_value = True
-    bo.find_overlapping_session.return_value = None
+    bo.find_covering_sessions.return_value = []
+    bo.create_reading_session.return_value = True
     sm = _sync_manager(bookorbit_client=bo)
-    with patch.object(sm, "_compute_session_duration", return_value=312):
-        sm._record_bookorbit_reading_session(
-            _book(), "BookOrbitAudio", _leader_state(), {}, 1_000_000.0
-        )
+    sm.database_service = MagicMock()
+    assert sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 312)
     bo.create_reading_session.assert_called_once()
     assert bo.create_reading_session.call_args.kwargs["book_type"] == "AUDIOBOOK"
 
@@ -89,11 +123,12 @@ def test_session_recorded_when_bookorbit_has_nothing():
 def test_dedupe_is_asked_about_the_span_we_are_about_to_write():
     bo = MagicMock()
     bo.is_configured.return_value = True
-    bo.find_overlapping_session.return_value = None
+    bo.find_covering_sessions.return_value = []
+    bo.create_reading_session.return_value = True
     sm = _sync_manager(bookorbit_client=bo)
-    with patch.object(sm, "_compute_session_duration", return_value=737):
-        sm._record_bookorbit_reading_session(_book(), "BookOrbit", _leader_state(), {}, 1_000_000.0)
-    kwargs = bo.find_overlapping_session.call_args.kwargs
+    sm.database_service = MagicMock()
+    sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 737)
+    kwargs = bo.find_covering_sessions.call_args.kwargs
     assert {int(i) for i in kwargs["book_ids"]} == {5920, 5924}
     assert kwargs["start_progress"] == 0.1189
     assert kwargs["end_progress"] == 0.1434
@@ -104,10 +139,11 @@ def test_dedupe_failure_does_not_block_recording():
     """A failed lookup must not cost the user the session."""
     bo = MagicMock()
     bo.is_configured.return_value = True
-    bo.find_overlapping_session.side_effect = RuntimeError("BookOrbit unreachable")
+    bo.find_covering_sessions.side_effect = RuntimeError("BookOrbit unreachable")
+    bo.create_reading_session.return_value = True
     sm = _sync_manager(bookorbit_client=bo)
-    with patch.object(sm, "_compute_session_duration", return_value=737):
-        sm._record_bookorbit_reading_session(_book(), "BookOrbit", _leader_state(), {}, 1_000_000.0)
+    sm.database_service = MagicMock()
+    assert sm._deliver_reading_session(_delivery_row(sm), "bookorbit", 737)
     bo.create_reading_session.assert_called_once()
 
 
@@ -132,7 +168,7 @@ def _client(items, per_book=None):
     return client
 
 
-# The live payload that exposed the bug (Goblin Gigs, 2026-08-31).
+# The live payload that exposed the bug (Marsh Errands, 2026-08-31).
 _REAL_SESSION = {
     "id": 2768, "bookFileId": 15511, "durationSeconds": 149,
     "startedAt": "2026-08-31T17:37:46.000Z", "endedAt": "2026-08-31T17:40:16.000Z",

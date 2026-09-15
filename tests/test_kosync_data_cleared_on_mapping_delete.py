@@ -2,7 +2,7 @@
 """
 Regression tests for issue #358 (second cause).
 
-The reporter deleted his Dungeon Crawler Carl mapping and re-matched it, and the
+The reporter deleted his Dungeon Runner Dana mapping and re-matched it, and the
 book came straight back at 100%. Mapping cleanup only removed the KoSync document
 for `ebook_only` mappings, so an audiobook mapping left both the `KosyncDocument`
 row and every `KosyncUserProgress` row behind. The document hash is derived from
@@ -51,7 +51,7 @@ class TestKosyncDataClearedOnMappingDelete(unittest.TestCase):
         """A finished audiobook mapping: linked doc + per-user progress at 100%."""
         book = Book(
             abs_id='dcc-abs-id',
-            abs_title='Dungeon Crawler Carl',
+            abs_title='Dungeon Runner Dana',
             ebook_filename='dcc.epub',
             kosync_doc_id=DOC_HASH,
             sync_mode=sync_mode,
@@ -116,7 +116,7 @@ class TestKosyncDataClearedOnMappingDelete(unittest.TestCase):
         # Re-matching the same file yields the same content hash and re-links it.
         rematched = Book(
             abs_id='dcc-abs-id',
-            abs_title='Dungeon Crawler Carl',
+            abs_title='Dungeon Runner Dana',
             ebook_filename='dcc.epub',
             kosync_doc_id=DOC_HASH,
             sync_mode='audiobook',

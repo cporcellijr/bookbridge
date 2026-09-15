@@ -108,7 +108,7 @@ class OwnWritebackVetoBase(unittest.TestCase):
     def _lead(self, manager, config):
         with self.assertLogs("src.sync_manager", level="INFO") as captured:
             leader, leader_pct = manager._determine_leader(
-                config, _book(), "bookorbit:480", "Three Days in April"
+                config, _book(), "bookorbit:480", "Four Nights in May"
             )
         return leader, leader_pct, "\n".join(captured.output)
 

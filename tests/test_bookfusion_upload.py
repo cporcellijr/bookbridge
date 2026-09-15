@@ -160,7 +160,7 @@ class ExtractEpubMetadataTest(unittest.TestCase):
 
     def test_extracts_all_fields(self):
         epub_bytes = _make_minimal_epub(
-            title="Anansi Boys",
+            title="Spider Sons",
             authors=("Neil Gaiman",),
             language="en",
             summary="A story about gods and tricksters.",
@@ -174,7 +174,7 @@ class ExtractEpubMetadataTest(unittest.TestCase):
         finally:
             os.unlink(path)
 
-        self.assertEqual(meta["title"], "Anansi Boys")
+        self.assertEqual(meta["title"], "Spider Sons")
         self.assertEqual(meta["authors"], ["Neil Gaiman"])
         self.assertEqual(meta["language"], "en")
         self.assertEqual(meta["summary"], "A story about gods and tricksters.")

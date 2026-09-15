@@ -89,6 +89,35 @@ function Coordinator:submit(job)
     return "started"
 end
 
+-- Cancellation. A pending job can simply be dropped; an active one cannot,
+-- because its run() is already in flight and only its own done() callback
+-- advances the queue. So an active job is flagged instead: the job body polls
+-- isActiveCancelled() at its safe points and returns early, and the queue
+-- still drains normally when done() fires.
+function Coordinator:cancelPending(owner)
+    local cancelled = 0
+    for family, job in pairs(self.pending) do
+        if owner == nil or job.owner == owner then
+            self.pending[family] = nil
+            self.pending_count = self.pending_count - 1
+            cancelled = cancelled + 1
+        end
+    end
+    return cancelled
+end
+
+function Coordinator:cancelActive(owner)
+    local job = self.active
+    if not job then return false end
+    if owner ~= nil and job.owner ~= owner then return false end
+    job.cancelled = true
+    return true
+end
+
+function Coordinator:isActiveCancelled()
+    return self.active ~= nil and self.active.cancelled == true
+end
+
 local function statusFor(job, now)
     if not job then return nil end
     return {

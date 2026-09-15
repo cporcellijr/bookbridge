@@ -51,9 +51,23 @@ end
 local _ = require("gettext")
 local T = require("ffi/util").template
 local STATS_UPLOAD_BATCH = 3000
+-- A book_not_found rejection usually means the match was deleted on the bridge,
+-- but it recovers if the same file is matched again -- so retry a few times
+-- before giving up rather than either looping forever or dropping instantly.
+local SESSION_MAX_BOOK_NOT_FOUND_ATTEMPTS = 5
 local SETTINGS_VERSION = 1
 local DEVICE_LOG_UPLOAD_MAX_BYTES = 24 * 1024
 local DEVICE_LOG_MAX_BYTES = 512 * 1024
+
+-- Forked children still alive, keyed by pid. Suspend has to be able to kill
+-- work started by any plugin instance, not just the one handling the event.
+local live_subprocess_pids = {}
+
+-- One queue for the whole app. KOReader builds a BridgeSync for the file
+-- manager and for every ReaderUI, and overlapping instances each ran their own
+-- copy of the after-wake job set; a shared coordinator collapses those by
+-- family instead of replaying them.
+local shared_coordinator = nil
 
 local BridgeSync = WidgetContainer:extend{
     name = "bridgesync",
@@ -202,6 +216,7 @@ function BridgeSync:init()
         self.pending_sessions = self.state:readSetting("pending_sessions") or {}
     end
     self.pending_annotation_closes = self:_getStateScalarJSON("pending_annotation_closes", {}) or {}
+    self.session_upload_attempts = self:_getStateScalarJSON("session_upload_attempts", {}) or {}
 
     self.sync_in_progress = false
     self.last_auto_sync_time = 0
@@ -219,7 +234,10 @@ function BridgeSync:init()
     end, function(task)
         return self:_runInSubprocess(task)
     end)
-    self.sync_coordinator = BridgeSyncCoordinator:new()
+    if not shared_coordinator then
+        shared_coordinator = BridgeSyncCoordinator:new()
+    end
+    self.sync_coordinator = shared_coordinator
 
     self.ui.menu:registerToMainMenu(self)
     self:_scheduleTask("plugin_update", 10, function()
@@ -229,6 +247,7 @@ end
 
 -- Helper method to save a setting (SQLite first, fallback to LuaSettings)
 function BridgeSync:_saveSetting(key, value)
+    if self._state_unavailable then return false end
     if self.sqlite_available then
         return self.sqlite_state:set_setting(key, value)
     else
@@ -252,6 +271,7 @@ function BridgeSync:_getStateScalar(key, default)
 end
 
 function BridgeSync:_saveStateScalar(key, value)
+    if self._state_unavailable then return false end
     if self.sqlite_available then
         return self.sqlite_state:set_setting(key, value)
     else
@@ -263,6 +283,7 @@ end
 
 -- JSON scalar state helpers (for storing/reading table values as JSON strings in SQLite)
 function BridgeSync:_saveStateScalarJSON(key, value)
+    if self._state_unavailable then return false end
     if self.sqlite_available then
         return self.sqlite_state:set_setting(key, json.encode(value))
     else
@@ -708,7 +729,9 @@ function BridgeSync:_showManagedFolderChooser(touchmenu_instance)
     self:_showMessage(_("Managed Folder picker is not available on this KOReader build"), 4)
 end
 
-function BridgeSync:_runInSubprocess(task)
+function BridgeSync:_runInSubprocess(task, opts)
+    opts = opts or {}
+
     -- Forked child: it must never fork again. The child inherits the running
     -- coroutine, so a nested call would fork a grandchild and then yield the
     -- child back into a copy of the parent's UIManager loop, leaving a second
@@ -717,20 +740,35 @@ function BridgeSync:_runInSubprocess(task)
         return true, task()
     end
 
+    -- A fork costs a copy-on-write image of the whole reader (~100 MB on a
+    -- Kindle), which is why short tasks ask to stay on the UI loop instead.
+    if opts.inline then
+        return true, task()
+    end
+
     local co, is_main = coroutine.running()
     if not co or is_main then
         return true, task()
     end
 
+    local needs_sqlite = opts.needs_sqlite == true
     local pid, parent_read_fd = FFIUtil.runInSubProcess(function(_, child_write_fd)
         self._in_subprocess = true
-        if self.sqlite_available then
+        if needs_sqlite and self.sqlite_available then
             -- Forked child: a SQLite handle must never be shared across a
             -- fork, so replace the inherited one with the child's own.
             self.sqlite_state = BridgeSqliteState:new()
             if not self.sqlite_state:init() then
                 self.sqlite_available = false
             end
+        else
+            -- This task needs no database. Opening one here is what made every
+            -- forked request contend with the parent for the same file and log
+            -- "database is locked", so drop the inherited handle instead and
+            -- refuse state writes, which could never reach the parent anyway.
+            self.sqlite_state = nil
+            self.sqlite_available = false
+            self._state_unavailable = true
         end
         local output_str = ""
         local results = table.pack(task())
@@ -746,6 +784,8 @@ function BridgeSync:_runInSubprocess(task)
     if not pid then
         return false, parent_read_fd or "failed to start subprocess"
     end
+
+    live_subprocess_pids[pid] = true
 
     local check_interval_sec = 0.125
     local check_num = 0
@@ -772,6 +812,7 @@ function BridgeSync:_runInSubprocess(task)
                 if ok and decoded then
                     ret_values = decoded
                 else
+                    live_subprocess_pids[pid] = nil
                     return false, decoded or "malformed subprocess result"
                 end
                 if not subprocess_done then
@@ -779,6 +820,7 @@ function BridgeSync:_runInSubprocess(task)
                     collect_and_clean = function()
                         if FFIUtil.isSubProcessDone(pid) then
                             logger.dbg("Bridge Sync subprocess collected")
+                            live_subprocess_pids[pid] = nil
                         else
                             UIManager:scheduleIn(1, collect_and_clean)
                         end
@@ -790,6 +832,10 @@ function BridgeSync:_runInSubprocess(task)
             end
             break
         end
+    end
+
+    if FFIUtil.isSubProcessDone(pid) then
+        live_subprocess_pids[pid] = nil
     end
 
     if ret_values then
@@ -925,24 +971,34 @@ end
 
 function BridgeSync:_submitSyncJob(family, label, source, priority, silent, action)
     local result = self.sync_coordinator:submit({
+        owner = self,
         family = family,
         label = label,
         source = source,
         priority = priority,
         run = function(done)
             Trapper:wrap(function()
+                -- Suspend or a ReaderUI teardown can flag this job between the
+                -- coordinator starting it and Trapper actually entering it.
+                if self.sync_coordinator:isActiveCancelled() then
+                    self:logInfo(label, "cancelled before it ran")
+                    done()
+                    return
+                end
                 local ok, outcome = pcall(action)
                 if not ok then
                     self:logErr(label, "failed:", tostring(outcome))
                 end
-                self:_saveStateScalarJSON("last_sync_job", {
-                    family = family,
-                    label = label,
-                    source = source,
-                    at = os.time(),
-                    success = ok and outcome ~= false,
-                    error = not ok and tostring(outcome) or nil,
-                })
+                if not self.sync_coordinator:isActiveCancelled() then
+                    self:_saveStateScalarJSON("last_sync_job", {
+                        family = family,
+                        label = label,
+                        source = source,
+                        at = os.time(),
+                        success = ok and outcome ~= false,
+                        error = not ok and tostring(outcome) or nil,
+                    })
+                end
                 done()
             end)
         end,
@@ -1355,6 +1411,7 @@ end
 
 function BridgeSync:startAnnotationSweep()
     local result = self.sync_coordinator:submit({
+        owner = self,
         family = "annotation_sweep",
         label = _("Highlight sweep"),
         source = "manual",
@@ -1623,6 +1680,7 @@ function BridgeSync:_runSync()
 
     local remote_books = manifest.books or {}
     local remote_by_abs = {}
+    local remote_paths = {}
     local items = self:_loadStateItems()
     local hash_index = nil
     local function getHashIndex()
@@ -1637,6 +1695,7 @@ function BridgeSync:_runSync()
     for _, book in ipairs(remote_books) do
         remote_by_abs[book.abs_id] = true
         local target_path = self.download_dir .. "/" .. book.filename
+        remote_paths[self:_normalizeManagedPath(target_path)] = true
         local entry = items[book.abs_id]
         local previous_entry = entry and {
             local_path = entry.local_path,
@@ -1699,14 +1758,40 @@ function BridgeSync:_runSync()
                     errors = errors + 1
                     self:_safeRemove(temp_path)
                 else
-                    local downloaded_hash = self:_calculateBookHash(temp_path)
-                    if downloaded_hash and downloaded_hash ~= book.content_hash then
-                        self:logWarn("Hash mismatch for", book.abs_id, downloaded_hash, book.content_hash)
+                    local downloaded_size = tonumber((lfs.attributes(temp_path, "size"))) or 0
+                    local expected_size = tonumber(book.size) or 0
+                    local downloaded_hash = downloaded_size > 0 and self:_calculateBookHash(temp_path) or nil
+                    if downloaded_size <= 0 or (expected_size > 0 and downloaded_size ~= expected_size)
+                        or not downloaded_hash or downloaded_hash ~= book.content_hash
+                    then
+                        self:logWarn("Hash mismatch for", book.abs_id, downloaded_hash or "unavailable", book.content_hash)
                         errors = errors + 1
                         self:_safeRemove(temp_path)
                     else
-                        self:_safeRemove(target_path)
                         local move_ok, move_err = os.rename(temp_path, target_path)
+                        if not move_ok and self:_fileExists(target_path) then
+                            -- Same atomic-install idiom as _installPluginZip, sized down
+                            -- to a single file: os.rename is C rename(), which fails with
+                            -- EEXIST on Windows when the destination already exists
+                            -- (POSIX replaces it atomically instead). Verification has
+                            -- already passed, so move the previous good book aside
+                            -- rather than deleting it, retry the publish once, and
+                            -- restore the backup if that retry also fails - a broken
+                            -- publication must never cost the reader the copy they
+                            -- already had. The backup is a sibling of the target so both
+                            -- renames stay on one filesystem.
+                            local backup_path = target_path .. ".bak"
+                            self:_safeRemove(backup_path)
+                            local moved_aside = os.rename(target_path, backup_path)
+                            if moved_aside then
+                                move_ok, move_err = os.rename(temp_path, target_path)
+                                if move_ok then
+                                    self:_safeRemove(backup_path)
+                                else
+                                    os.rename(backup_path, target_path)
+                                end
+                            end
+                        end
                         if not move_ok then
                             self:logWarn("Rename failed for", book.abs_id, move_err or "")
                             errors = errors + 1
@@ -1737,7 +1822,10 @@ function BridgeSync:_runSync()
     if self.delete_removed_books then
         for abs_id, entry in pairs(items) do
             if not remote_by_abs[abs_id] then
-                if self:_isCurrentDocument(entry.local_path) then
+                if remote_paths[self:_normalizeManagedPath(entry.local_path)] then
+                    -- A replacement ID can own the same file as a retired match.
+                    items[abs_id] = nil
+                elseif self:_isCurrentDocument(entry.local_path) then
                     entry.pending_delete = true
                     items[abs_id] = entry
                     deferred = deferred + 1
@@ -1902,7 +1990,7 @@ function BridgeSync:syncFromBridge(silent)
         return pcall(function()
             return self:_runSync()
         end)
-    end)
+    end, { needs_sqlite = true })
 
     if info_msg then
         UIManager:close(info_msg)
@@ -1991,7 +2079,7 @@ function BridgeSync:testConnection()
 
     local subprocess_ok, ok, message = self:_runInSubprocess(function()
         return self.api:testAuth()
-    end)
+    end, { inline = true })
 
     UIManager:close(info_msg)
 
@@ -2199,6 +2287,51 @@ function BridgeSync:_mergeOrAppendSession(session)
     return merged
 end
 
+-- The bridge reports why it turned a session down. A reason the device can never
+-- satisfy must not sit in the queue re-uploading on every wake.
+function BridgeSync:_shouldAbandonSession(session, result)
+    local reason = result and result.reason or nil
+    if reason == "invalid_session" then
+        self:logWarn("Abandoning malformed session", tostring(session.session_id))
+        return true
+    end
+    if reason ~= "book_not_found" then
+        return false
+    end
+    local session_id = tostring(session.session_id or "")
+    if session_id == "" then
+        return true
+    end
+    local attempts = (tonumber(self.session_upload_attempts[session_id]) or 0) + 1
+    self.session_upload_attempts[session_id] = attempts
+    if attempts >= SESSION_MAX_BOOK_NOT_FOUND_ATTEMPTS then
+        self:logWarn("Abandoning session for a book the bridge does not have:",
+            tostring(session.abs_id or session.document_hash or session_id),
+            "after", tostring(attempts), "attempts")
+        return true
+    end
+    return false
+end
+
+-- Forget attempt counts for sessions that are no longer queued, so the map
+-- cannot grow without bound as sessions are accepted or abandoned.
+function BridgeSync:_pruneSessionUploadAttempts()
+    local live = {}
+    for _, session in ipairs(self.pending_sessions) do
+        if session.session_id then
+            live[tostring(session.session_id)] = true
+        end
+    end
+    local kept = {}
+    for session_id, attempts in pairs(self.session_upload_attempts) do
+        if live[session_id] then
+            kept[session_id] = attempts
+        end
+    end
+    self.session_upload_attempts = kept
+    self:_saveStateScalarJSON("session_upload_attempts", kept)
+end
+
 function BridgeSync:_uploadSessions()
     if #self.pending_sessions == 0 then
         return true
@@ -2217,6 +2350,7 @@ function BridgeSync:_uploadSessions()
 
         local accepted_sessions = submitted_sessions
         local retained_sessions = {}
+        local abandoned_sessions = {}
         local has_per_session_results = response and type(response.results) == "table"
         if has_per_session_results then
             accepted_sessions = {}
@@ -2230,6 +2364,8 @@ function BridgeSync:_uploadSessions()
                 local result = results_by_index[index]
                 if result and result.accepted == true then
                     table.insert(accepted_sessions, session)
+                elseif self:_shouldAbandonSession(session, result) then
+                    table.insert(abandoned_sessions, session)
                 else
                     table.insert(retained_sessions, session)
                 end
@@ -2239,10 +2375,17 @@ function BridgeSync:_uploadSessions()
             retained_sessions = submitted_sessions
         end
 
-        -- Mark SQLite rows as uploaded so they aren't reloaded on restart
+        -- Mark SQLite rows as uploaded so they aren't reloaded on restart.
+        -- Abandoned rows are marked too: the bridge will never take them, so the
+        -- row has to stop coming back rather than be retried on every wake.
         if self.sqlite_available then
             local uploaded_ids = {}
             for _, s in ipairs(accepted_sessions) do
+                if s.session_id then
+                    table.insert(uploaded_ids, s.session_id)
+                end
+            end
+            for _, s in ipairs(abandoned_sessions) do
                 if s.session_id then
                     table.insert(uploaded_ids, s.session_id)
                 end
@@ -2261,6 +2404,11 @@ function BridgeSync:_uploadSessions()
 
         self.pending_sessions = retained_sessions
         self:_savePendingSessions(self.pending_sessions)
+        self:_pruneSessionUploadAttempts()
+        if #abandoned_sessions > 0 then
+            self:logWarn("Abandoned", #abandoned_sessions,
+                "session(s) the bridge will never accept")
+        end
         if #retained_sessions > 0 then
             self:logWarn("Session upload partially accepted:", #accepted_sessions,
                 "accepted,", #retained_sessions, "retained for retry")
@@ -2967,7 +3115,43 @@ end
 function BridgeSync:onSuspend()
     self:_cancelAutomaticTasks()
     if BridgeSweep.isRunning() then BridgeSweep.cancel() end
+    self:_abandonRunningWork("suspend")
     self:endSession({ silent = true, force_queue = true })
+    return false
+end
+
+-- Suspend and teardown must not leave work running. A queued job would resume
+-- against a stale reader, and a forked child survives the suspend outright,
+-- holding its share of memory and any socket it inherited until the next wake.
+function BridgeSync:_abandonRunningWork(reason)
+    local coordinator = self.sync_coordinator
+    local dropped = 0
+    if coordinator then
+        dropped = coordinator:cancelPending()
+        if coordinator:cancelActive() then
+            dropped = dropped + 1
+        end
+    end
+    local killed = 0
+    for pid in pairs(live_subprocess_pids) do
+        live_subprocess_pids[pid] = nil
+        if pcall(FFIUtil.terminateSubProcess, pid) then
+            killed = killed + 1
+        end
+    end
+    if dropped > 0 or killed > 0 then
+        self:logInfo("Abandoned background work on", tostring(reason),
+            "- jobs:", tostring(dropped), "subprocesses:", tostring(killed))
+    end
+end
+
+function BridgeSync:onCloseWidget()
+    -- This instance is going away. Anything it still has queued would start
+    -- against a torn down ReaderUI, so drop it. A job already running is left
+    -- alone to finish -- only suspend stops work that is already in flight.
+    if shared_coordinator then
+        shared_coordinator:cancelPending(self)
+    end
     return false
 end
 
@@ -3021,7 +3205,7 @@ function BridgeSync:checkForPluginUpdate(silent)
 
     local subprocess_ok, ok, result = self:_runInSubprocess(function()
         return self.api:getPluginVersion()
-    end)
+    end, { inline = true })
 
     if info_msg then UIManager:close(info_msg) end
 

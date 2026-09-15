@@ -2021,10 +2021,20 @@
                             value="{{ get_val('SYNC_DELTA_BETWEEN_CLIENTS_PERCENT') }}">
                     </div>
                     <div class="form-group">
-                        <label>Reading Session Gap (Minutes)</label>
+                        <label>KOReader Session Gap (Minutes)</label>
                         <input type="number" min="1" name="KOREADER_SESSION_GAP_MINUTES"
                             value="{{ get_val('KOREADER_SESSION_GAP_MINUTES') or '30' }}">
                         <small>Idle gap that splits KOReader page events into separate reading sessions on the stats page.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Reading Session Merge Gap (Minutes)</label>
+                        <input type="number" min="1" name="READING_SESSION_MERGE_MINUTES"
+                            value="{{ get_val('READING_SESSION_MERGE_MINUTES') or '5' }}">
+                        <small>Groups progress updates into local and Grimmory sessions. Effective idle gap:
+                            <strong><span id="effective_session_gap">{{ [1, get_val('READING_SESSION_MERGE_MINUTES')|float(5), [2 * (get_val('SYNC_PERIOD_MINS')|float(5)), 30]|min]|max }}</span> minutes</strong>
+                            (at least twice the sync period, capped at 30), plus time until the next session check.
+                            Sessions also close on completion or at four hours. Estimated reading time appears after closure.
+                            BookOrbit and KOReader uploads keep their existing timing.</small>
                     </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="sync_completion_propagation" name="SYNC_COMPLETION_PROPAGATION" {% if
@@ -2056,6 +2066,33 @@
                             value="{{ get_val('SYNC_ROLLBACK_VETO_SECONDS') or '600' }}">
                         <small>A behind client is only vetoed when the peer's position is at least this much newer —
                             keep generous to absorb clock differences between services.</small>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="trust_corroborated_rewind" name="SYNC_TRUST_CORROBORATED_REWIND" {% if
+                            get_bool('SYNC_TRUST_CORROBORATED_REWIND') %}checked{% endif %}>
+                        <label for="trust_corroborated_rewind">Honor a Deliberate Rewind</label>
+                        <div class="help-text">When you go back in one app and keep reading from there, let that
+                            position win instead of being overwritten by the app that is furthest ahead. A single
+                            backward reading is ignored — it only counts once that app reports you moving on from
+                            the new spot, which is what separates a real rewind from a stale or echoed position.
+                            An app that jumps backwards and then goes quiet is held briefly rather than pushed to
+                            everything else, so one bad reading cannot drag your other apps back; if it stays quiet
+                            it is accepted anyway, so nothing ever gets stuck. Independent of "furthest wins",
+                            which protects you from a DIFFERENT device pulling you back. Turn off to always let the
+                            furthest position win.</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Locator Round-Trip Tolerance (Seconds)</label>
+                        <input type="number" min="0" name="LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS"
+                            value="{{ get_val('LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS') or '30' }}">
+                        <small>When a book has an alignment map, a rebuilt xpath/CFI that is character-close can
+                            still be refused if its round-trip lands far away on the audio timeline — the signature
+                            of a segment seam in an out-of-order narration, where a couple of characters can be
+                            hours apart. Ordinary chapter joins measure up to ~28s, real seams start around ~38s,
+                            so the default sits between them; lower it much and correct locators start being
+                            refused. Audio time can only refuse a locator here, never approve a
+                            character-distant one. Books with no alignment map keep the character-based
+                            check.</small>
                     </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="xpath_fallback" name="XPATH_FALLBACK_TO_PREVIOUS_SEGMENT" {% if
@@ -2140,7 +2177,7 @@
                         </div>
                         <div class="form-group" id="storyteller_poll_settle_row"
                              {% if get_val('STORYTELLER_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>Storyteller — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="STORYTELLER_POLL_WAIT_FOR_SETTLE"
@@ -2170,7 +2207,7 @@
                         </div>
                         <div class="form-group" id="booklore_poll_settle_row"
                              {% if get_val('BOOKLORE_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>Grimmory — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="BOOKLORE_POLL_WAIT_FOR_SETTLE"
@@ -2198,7 +2235,7 @@
                         </div>
                         <div class="form-group" id="booklore_audio_poll_settle_row"
                              {% if get_val('BOOKLORE_AUDIO_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>Grimmory Audiobook — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="BOOKLORE_AUDIO_POLL_WAIT_FOR_SETTLE"
@@ -2228,7 +2265,7 @@
                         </div>
                         <div class="form-group" id="bookorbit_poll_settle_row"
                              {% if get_val('BOOKORBIT_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>BookOrbit — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="BOOKORBIT_POLL_WAIT_FOR_SETTLE"
@@ -2256,7 +2293,7 @@
                         </div>
                         <div class="form-group" id="bookorbit_audio_poll_settle_row"
                              {% if get_val('BOOKORBIT_AUDIO_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>BookOrbit Audiobook — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="BOOKORBIT_AUDIO_POLL_WAIT_FOR_SETTLE"
@@ -2286,7 +2323,7 @@
                         </div>
                         <div class="form-group" id="kavita_poll_settle_row"
                              {% if get_val('KAVITA_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>Kavita — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="KAVITA_POLL_WAIT_FOR_SETTLE"
@@ -2316,7 +2353,7 @@
                         </div>
                         <div class="form-group" id="cwa_sync_poll_settle_row"
                              {% if get_val('CWA_SYNC_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>Calibre-Web Automated — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="CWA_SYNC_POLL_WAIT_FOR_SETTLE"
@@ -2346,7 +2383,7 @@
                         </div>
                         <div class="form-group" id="bookfusion_poll_settle_row"
                              {% if get_val('BOOKFUSION_POLL_MODE') != 'custom' %}style="opacity: 0.45; pointer-events: none;"{% endif %}>
-                            <label>Wait for Position to Settle</label>
+                            <label>BookFusion — Wait for Position to Settle</label>
                             <div class="toggle-switch-wrapper">
                                 <label class="toggle-switch">
                                     <input type="checkbox" name="BOOKFUSION_POLL_WAIT_FOR_SETTLE"
@@ -2369,10 +2406,10 @@
                 </div>
                 <div class="section-body">
                     <div class="form-group full-width">
-                        <label>Pre-LLM / Linear Alignment Maps</label>
+                        <label>Pre-LLM / Linear / Low-Quality Alignment Maps</label>
                         <div class="cleanup-group">
                             <button type="button" class="btn btn-primary" id="realignAllBtn" onclick="realignAllNonLlm()">
-                                Re-align all pre-LLM / linear maps
+                                Re-align all pre-LLM / linear / low-quality maps
                             </button>
                             <p class="help-text flex-1 m-0" id="alignHealthSummary">Loading alignment health...</p>
                         </div>
@@ -2781,6 +2818,104 @@
                             <div class="help-text">Use int8 for CPU, float16 for GPU.</div>
                         </div>
                     </div>
+
+                    <div class="form-group full-width" style="align-items: center;">
+                        <label>Content-Match Guard</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="CONTENT_MATCH_GUARD"
+                                {% if get_bool('CONTENT_MATCH_GUARD') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="help-text">Non-LLM guard: refuse to store an alignment when a
+                            direct word n-gram overlap check finds too little of the ebook text inside
+                            the transcript — a sign the audio and ebook are different content (wrong
+                            edition / abridged / different book). Runs whenever the semantic
+                            (Ollama) content-match guard above cannot give a verdict — because Ollama
+                            is not configured, or is configured but down — so an outage never leaves
+                            you unguarded. Leave on unless you are deliberately re-aligning a book you
+                            know is a rough match.</div>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Content-Match Min Overlap (0-1)</label>
+                        <input type="number" step="0.01" min="0" max="1" name="CONTENT_MATCH_MIN_OVERLAP"
+                            value="{{ get_val('CONTENT_MATCH_MIN_OVERLAP') }}">
+                        <div class="help-text">Below this fraction of matched ebook n-grams, the
+                            Content-Match Guard refuses to store the map. The default 0.15 was
+                            measured across 28 real book/transcript pairs: correct pairings scored
+                            0.30-0.85 (never 1.0 — speech recognition never matches text verbatim),
+                            while a genuinely different book shares almost no phrases and scores near
+                            0. Raise it only if mismatches are slipping through.</div>
+                    </div>
+
+                    <!-- CTC forced alignment: experimental/advanced, hidden behind a disclosure.
+                         Not in any published image (needs a local INSTALL_CTC=true build) and
+                         effectively needs a GPU — see the note below. -->
+                    <details class="advanced-sub full-width" {% if get_bool('CTC_ENABLED') %}open{% endif %}>
+                        <summary>Advanced · Experimental — CTC forced alignment (needs a custom build + a GPU)</summary>
+                    <div class="form-group full-width">
+                        <label class="toggle-label">
+                            <input type="checkbox" name="CTC_ENABLED"
+                                onchange="toggleSection('ctc_body', this.checked)"
+                                {% if get_bool('CTC_ENABLED') %}checked{% endif %}>
+                            Use CTC forced alignment
+                        </label>
+                        <div class="help-text"><strong>Experimental &amp; advanced — leave off unless you
+                            know you want it.</strong> Aligns the audiobook directly against the known ebook
+                            text (per-word) instead of transcribing and matching back — more accurate for
+                            char-precise readers (BookOrbit, ABS ebook, Grimmory). <strong>Not included in any
+                            published image:</strong> it requires a custom <code>-ctc</code> build
+                            (<code>INSTALL_CTC=true</code>, which bundles torch/torchaudio) and is inert on the
+                            standard and <code>-cuda</code> images. <strong>Effectively requires an NVIDIA
+                            GPU</strong> — on CPU it works only for short books and is very slow on full-length
+                            audiobooks. Leave off to keep the Whisper/lexical pipeline (the default).</div>
+                    </div>
+                    <div id="ctc_body" class="dynamic-group full-width section-body {% if not get_bool('CTC_ENABLED') %}collapsed{% endif %}" style="display:contents;">
+                        <div class="form-group">
+                            <label>CTC Model</label>
+                            <input type="text" name="CTC_MODEL" value="{{ get_val('CTC_MODEL', 'mms_fa') }}"
+                                placeholder="mms_fa" autocomplete="off">
+                            <div class="help-text">Forced-alignment model bundle. <code>mms_fa</code> (Meta MMS,
+                                ~1000 languages) is the only supported value today.</div>
+                        </div>
+                        <div class="form-group">
+                            <label>CTC Device</label>
+                            <select name="CTC_DEVICE">
+                                <option value="auto" {% if get_val('CTC_DEVICE')=='auto' %}selected{% endif %}>Auto
+                                    (detect GPU)</option>
+                                <option value="cpu" {% if get_val('CTC_DEVICE')=='cpu' %}selected{% endif %}>CPU</option>
+                                <option value="cuda" {% if get_val('CTC_DEVICE')=='cuda' %}selected{% endif %}>GPU
+                                    (NVIDIA)</option>
+                            </select>
+                            <div class="help-text">Auto uses an NVIDIA GPU when available, otherwise CPU. CTC on CPU
+                                is workable but slow for long audiobooks.</div>
+                        </div>
+                    </div>
+                    </details>
+
+                    <!-- Segmented alignment maps: fits each EPUB spine chapter to the audio
+                         independently instead of one global monotonic filter, so a book whose
+                         narration order differs from its spine order (issue #426) still places
+                         every chapter correctly. Only changes anything for books that are
+                         actually out of order; every other book's map is unaffected. -->
+                    <details class="advanced-sub full-width">
+                        <summary>Advanced · Experimental — Segmented alignment (out-of-order narration)</summary>
+                    <div class="form-group full-width" style="align-items: center;">
+                        <label>Segmented Alignment Maps</label>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="ALIGNMENT_SEGMENTED_MAPS"
+                                {% if get_bool('ALIGNMENT_SEGMENTED_MAPS') %}checked{% endif %}>
+                            <span class="slider"></span>
+                        </label>
+                        <div class="help-text"><strong>Experimental &mdash; leave off unless a book's
+                            audiobook narrates its sections in a different order than the EPUB spines
+                            them</strong> (e.g. a short-story or novella collection spined 2-4-3-1 but
+                            narrated 1-2-3-4, or acknowledgements that open the ebook but close the
+                            audiobook). When on, re-aligning such a book fits each EPUB chapter to the
+                            audio independently instead of forcing every anchor into one global
+                            increasing sequence, so out-of-order chapters are placed correctly instead
+                            of dropped. Books that are already in order are unaffected either way.</div>
+                    </div>
+                    </details>
                 </div>
             </div>
 
@@ -3272,6 +3407,17 @@
             return div.innerHTML;
         }
 
+        function formatQualityScore(score) {
+            return (typeof score === 'number') ? score.toFixed(2) : '—';
+        }
+
+        function qualityScoreColor(score) {
+            if (typeof score !== 'number') return 'rgba(255,255,255,0.45)';
+            if (score < 0.5) return '#e57373';
+            if (score < 0.75) return '#ffb74d';
+            return '#81c784';
+        }
+
         async function loadAlignmentHealth() {
             const summaryEl = document.getElementById('alignHealthSummary');
             const listEl = document.getElementById('alignHealthList');
@@ -3281,7 +3427,7 @@
                 const res = await fetch('/api/alignments/llm-status');
                 const data = await res.json();
                 const needs = data.needs_realign || 0;
-                summaryEl.textContent = `${needs} of ${data.total || 0} maps could benefit from LLM re-alignment.`;
+                summaryEl.textContent = `${needs} of ${data.total || 0} maps could benefit from LLM re-alignment (pre-LLM, linear, or low-quality).`;
 
                 const allBtn = document.getElementById('realignAllBtn');
                 if (allBtn) allBtn.disabled = needs === 0;
@@ -3295,16 +3441,24 @@
                 listEl.innerHTML = '';
                 recommended.forEach((book) => {
                     const method = book.align_method || 'pre_llm';
+                    const score = book.quality_score;
                     const row = document.createElement('div');
                     row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;';
                     row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(book.title)}</span>`
+                        + `<span style="color:${qualityScoreColor(score)};font-size:12px;min-width:44px;text-align:right;" title="Map quality score (0-1, higher is better)">${formatQualityScore(score)}</span>`
                         + `<span style="color:#e57373;font-size:12px;min-width:120px;text-align:right;">${escapeHtml(method)}</span>`;
-                    const button = document.createElement('button');
-                    button.type = 'button';
-                    button.textContent = 'Re-align';
-                    button.className = 'btn';
-                    button.onclick = () => realignBook(book.abs_id, button);
-                    row.appendChild(button);
+                    const realignBtn = document.createElement('button');
+                    realignBtn.type = 'button';
+                    realignBtn.textContent = 'Re-align';
+                    realignBtn.className = 'btn';
+                    realignBtn.onclick = () => realignBook(book.abs_id, realignBtn);
+                    row.appendChild(realignBtn);
+                    const restoreBtn = document.createElement('button');
+                    restoreBtn.type = 'button';
+                    restoreBtn.textContent = 'Restore previous';
+                    restoreBtn.className = 'btn';
+                    restoreBtn.onclick = () => restoreAlignment(book.abs_id, restoreBtn);
+                    row.appendChild(restoreBtn);
                     listEl.appendChild(row);
                 });
             } catch (err) {
@@ -3331,6 +3485,27 @@
             }
         }
 
+        async function restoreAlignment(absId, btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Restoring...';
+            }
+            try {
+                const res = await fetch('/api/alignments/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ abs_id: absId })
+                });
+                const data = await res.json();
+                if (btn) btn.textContent = data.restored ? 'Restored' : 'No backup';
+            } catch (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Restore previous';
+                }
+            }
+        }
+
         async function realignAllNonLlm() {
             const btn = document.getElementById('realignAllBtn');
             if (btn) {
@@ -3348,7 +3523,7 @@
             } catch (err) {
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = 'Re-align all pre-LLM / linear maps';
+                    btn.textContent = 'Re-align all pre-LLM / linear / low-quality maps';
                 }
             }
         }
@@ -3921,6 +4096,24 @@
         document.addEventListener('DOMContentLoaded', function () {
             const fromHash = (location.hash || '').replace('#', '');
             showSettingsTab(fromHash || 'integrations');
+
+            const sessionGap = document.querySelector('[name="READING_SESSION_MERGE_MINUTES"]');
+            const syncPeriod = document.querySelector('[name="SYNC_PERIOD_MINS"]');
+            const effectiveGap = document.getElementById('effective_session_gap');
+            if (sessionGap && syncPeriod && effectiveGap) {
+                const positiveMinutes = input => {
+                    const value = Number(input.value);
+                    return Number.isFinite(value) && value > 0 ? value : 5;
+                };
+                const updateSessionGap = () => {
+                    effectiveGap.textContent = Math.max(
+                        1, positiveMinutes(sessionGap),
+                        Math.min(2 * positiveMinutes(syncPeriod), 30));
+                };
+                sessionGap.addEventListener('input', updateSessionGap);
+                syncPeriod.addEventListener('input', updateSessionGap);
+                updateSessionGap();
+            }
 
             // Integration card headers expand/collapse their body on click.
             // Clicks inside the header tail (status pill, enable switch) are ignored.

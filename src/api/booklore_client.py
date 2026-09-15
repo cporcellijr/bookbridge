@@ -3,15 +3,27 @@ import time
 import logging
 import threading
 from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
 from typing import Optional
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
-from pathlib import Path
 
+from src.utils.file_transfers import (
+    IncompleteTransferError,
+    response_declares_size,
+    stream_response_to_path,
+)
 from src.utils.logging_utils import sanitize_log_data
+from src.utils.ebook_sources import (
+    is_grimmory_source,
+    is_storyteller_filename,
+    normalize_ebook_source,
+)
 from src.sync_clients.sync_client_interface import LocatorResult
+from src.utils.fixed_page_progress import coerce_page, is_cbz_filename
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -25,6 +37,14 @@ MAX_DETAIL_FETCHES_PER_SEARCH = 20
 # Safety bound on paginated scans so a server that never reports the last page
 # (or ignores the size param) can't loop forever. 10000 pages * 200 = 2M books.
 SCAN_MAX_PAGES = int(os.getenv("BOOKLORE_SCAN_MAX_PAGES", "10000"))
+
+
+class ProgressWriteOutcome(Enum):
+    """Non-boolean progress outcomes that callers must handle explicitly."""
+
+    SKIPPED = "skipped"
+
+
 # Concurrency for the detail-fetch fan-out during a full library refresh. The
 # session's connection pool is sized from this (see __init__) — urllib3's
 # default pool of 10 is exactly this worker count, which leaves no headroom and
@@ -50,6 +70,7 @@ class BookloreClient:
         self._book_id_cache = {}
         # Memoized LLM filename-rescue verdicts (stem -> cached filename or None)
         self._llm_filename_match_cache = {}
+        self._exact_filename_miss_cache = {}
         self._cache_timestamp = 0
         self._last_refresh_failed = False
         self._last_refresh_attempt = 0
@@ -854,6 +875,7 @@ class BookloreClient:
             return True
 
         self._llm_filename_match_cache = {}
+        self._exact_filename_miss_cache = {}
         self._last_refresh_attempt = time.time()
         try:
             all_books_list = []
@@ -1250,12 +1272,147 @@ class BookloreClient:
 
         return None
 
+    def reconcile_mapping_filename_drift(self):
+        """Refresh mapped external filenames while preserving local identity.
+
+        ``ebook_source_id`` is authoritative for existing Grimmory mappings.  A
+        filename change for that same id updates only ``ebook_filename``; the
+        original/local filename, KoSync hash, progress state, alignment, and status
+        are intentionally left untouched.  Legacy mappings may acquire a source id
+        only from one unambiguous, case-insensitive exact filename match.
+        """
+        if not self.db or not hasattr(self.db, "get_all_books"):
+            return 0
+        try:
+            mappings = list(self.db.get_all_books() or [])
+        except Exception:
+            logger.warning("Grimmory: Could not load mappings for filename reconciliation", exc_info=True)
+            return 0
+
+        by_id = {}
+        ids_by_filename = {}
+        incomplete_filename_catalog = False
+        for cached_id, book_info in self._snapshot_book_id_items():
+            if not isinstance(book_info, dict):
+                continue
+            raw_id = book_info.get("id")
+            if raw_id is None:
+                raw_id = cached_id
+            if raw_id is None:
+                continue
+            stable_id = str(raw_id)
+            by_id[stable_id] = book_info
+            filename = book_info.get("fileName")
+            if filename:
+                ids_by_filename.setdefault(Path(str(filename)).name.lower(), set()).add(stable_id)
+            elif book_info.get("_needs_detail"):
+                incomplete_filename_catalog = True
+
+        claimed_ids = {
+            str(getattr(mapping, "ebook_source_id", "") or "").strip()
+            for mapping in mappings
+            if is_grimmory_source(getattr(mapping, "ebook_source", None))
+            and str(getattr(mapping, "ebook_source_id", "") or "").strip()
+        }
+        pending_legacy_claims = {}
+        if not incomplete_filename_catalog:
+            for mapping in mappings:
+                if not is_grimmory_source(getattr(mapping, "ebook_source", None)):
+                    continue
+                if str(getattr(mapping, "ebook_source_id", None) or "").strip():
+                    continue
+                candidate_ids = set()
+                for filename in (
+                    getattr(mapping, "ebook_filename", None),
+                    getattr(mapping, "original_ebook_filename", None),
+                ):
+                    if filename:
+                        candidate_ids.update(
+                            ids_by_filename.get(Path(str(filename)).name.lower(), set())
+                        )
+                if len(candidate_ids) == 1:
+                    candidate_id = next(iter(candidate_ids))
+                    pending_legacy_claims.setdefault(candidate_id, []).append(mapping)
+
+        updated_count = 0
+        for mapping in mappings:
+            source = getattr(mapping, "ebook_source", None)
+            if not isinstance(source, str) or not is_grimmory_source(source):
+                continue
+
+            source_id = str(getattr(mapping, "ebook_source_id", None) or "").strip()
+            remote = by_id.get(source_id) if source_id else None
+            fields = {}
+            backfilled = False
+            if not source_id:
+                candidates = [
+                    candidate_id
+                    for candidate_id, candidate_mappings in pending_legacy_claims.items()
+                    if len(candidate_mappings) == 1 and candidate_mappings[0] is mapping
+                ]
+                if len(candidates) != 1 or candidates[0] in claimed_ids:
+                    continue
+                source_id = candidates[0]
+                remote = by_id.get(source_id)
+                canonical_source = normalize_ebook_source(source)
+                claim = getattr(self.db, "backfill_ebook_source_id_if_unclaimed", None)
+                if not callable(claim) or not claim(mapping.abs_id, source_id, canonical_source):
+                    continue
+                claimed_ids.add(source_id)
+                mapping.ebook_source = canonical_source
+                mapping.ebook_source_id = source_id
+                backfilled = True
+                logger.info(
+                    "Grimmory mapping source id backfilled for %s: %s (exact filename match)",
+                    getattr(mapping, "abs_id", "?"), source_id,
+                )
+
+            # A known id missing from the refreshed catalog is not a rename. Do not
+            # fall back to filename and risk silently relinking another resource.
+            if not remote:
+                continue
+            current_filename = str(remote.get("fileName") or "").strip()
+            stored_filename = str(getattr(mapping, "ebook_filename", None) or "").strip()
+            is_storyteller_artifact = is_storyteller_filename(stored_filename)
+            if current_filename and stored_filename != current_filename and not is_storyteller_artifact:
+                old_filename = stored_filename
+                if old_filename and not getattr(mapping, "original_ebook_filename", None):
+                    fields["original_ebook_filename"] = old_filename
+                fields["ebook_filename"] = current_filename
+                logger.info(
+                    "Grimmory mapping filename refreshed for %s: %s -> %s "
+                    "(source id unchanged: %s)",
+                    getattr(mapping, "abs_id", "?"), old_filename or "<empty>",
+                    current_filename, source_id,
+                )
+
+            if not fields:
+                if backfilled:
+                    updated_count += 1
+                continue
+            try:
+                saved = self.db.update_book_fields(
+                    mapping.abs_id,
+                    expected_ebook_source_id=source_id,
+                    expected_grimmory_source=True,
+                    notify_catalog_change=True,
+                    **fields,
+                )
+            except Exception:
+                logger.warning(
+                    "Grimmory: Failed to persist mapping reconciliation for %s",
+                    getattr(mapping, "abs_id", "?"), exc_info=True,
+                )
+                continue
+            if saved:
+                updated_count += 1
+        return updated_count
+
     def _fetch_and_cache_detail(self, book_id, force_refresh=False):
         """Fetch detail for a single book on demand and add it to cache."""
-        with self._cache_lock:
-            cached = self._book_id_cache.get(book_id)
-            if cached and not cached.get('_needs_detail') and not force_refresh:
-                return cached
+        cached = self._get_cached_book_by_id(book_id)
+        if cached and not cached.get('_needs_detail') and not force_refresh:
+            return cached
 
         token = self._get_fresh_token()
         if not token:
@@ -1264,8 +1421,10 @@ class BookloreClient:
         detail = self._fetch_book_detail(book_id, token)
         if detail and isinstance(detail, dict):
             self._process_book_detail(detail)
-            with self._cache_lock:
-                return self._book_id_cache.get(book_id)
+            # API ids are commonly integers while persisted mapping ids are
+            # strings. Resolve by value so a cold-cache write for source id "4"
+            # can use a detail response keyed as integer 4.
+            return self._get_cached_book_by_id(book_id)
         return None
 
     def _get_cached_book_by_id(self, book_id):
@@ -1381,6 +1540,61 @@ class BookloreClient:
         if allow_refresh:
             return self._llm_match_by_filename(target_stem)
         return None
+
+    def find_book_by_filename_exact(self, ebook_filename, allow_refresh=True):
+        """Find a Grimmory book by its current filename without fuzzy relinking.
+
+        This resolver is intended for legacy BookBridge mappings which do not yet
+        have a stable ``ebook_source_id``.  Case-insensitive basename equality is
+        the only accepted match; stem, partial, fuzzy, and LLM matches are
+        deliberately excluded because a successful result may be persisted as the
+        mapping's stable external identity.
+        """
+        if not ebook_filename:
+            return None
+        target_name = Path(str(ebook_filename)).name.lower()
+        now = time.time()
+        missed_at = self._exact_filename_miss_cache.get(target_name)
+        if missed_at is not None and now - missed_at < self._refresh_cooldown:
+            return None
+        if not self._has_cached_books() and allow_refresh and not self._is_refresh_on_cooldown():
+            self._refresh_book_cache()
+        exact_match = self._get_unique_exact_filename_match(target_name)
+        if exact_match is not None:
+            self._exact_filename_miss_cache.pop(target_name, None)
+            return exact_match
+        if allow_refresh and now - self._cache_timestamp > 3600 and not self._is_refresh_on_cooldown():
+            if self._refresh_book_cache():
+                exact_match = self._get_unique_exact_filename_match(target_name)
+                if exact_match is not None:
+                    self._exact_filename_miss_cache.pop(target_name, None)
+                    return exact_match
+        self._exact_filename_miss_cache[target_name] = time.time()
+        return None
+
+    def _get_unique_exact_filename_match(self, target_name):
+        """Return one catalog-wide exact filename match, never an ambiguity."""
+        matching_ids = set()
+        for cached_id, info in self._snapshot_book_id_items():
+            if not isinstance(info, dict):
+                continue
+            filename = info.get("fileName")
+            if not filename:
+                if info.get("_needs_detail"):
+                    # An unhydrated entry can conceal another exact match.
+                    return None
+                continue
+            if Path(str(filename)).name.lower() == target_name:
+                raw_id = info.get("id")
+                matching_ids.add(str(cached_id if raw_id is None else raw_id))
+        if len(matching_ids) != 1:
+            return None
+        with self._cache_lock:
+            match = self._book_cache.get(target_name)
+        if not isinstance(match, dict):
+            return None
+        raw_id = match.get("id")
+        return match if str(raw_id) in matching_ids else None
 
     def _llm_match_by_filename(self, target_stem):
         """Judge-confirmed rescue over the cached book list. Returns book_info or None."""
@@ -1518,6 +1732,7 @@ class BookloreClient:
             with self._cache_lock:
                 self._book_cache = {}
                 self._book_id_cache = {}
+                self._exact_filename_miss_cache = {}
                 self._cache_timestamp = 0
 
             self._last_refresh_failed = False
@@ -1950,29 +2165,58 @@ class BookloreClient:
             'track_position_ms': self._to_optional_int(progress.get('trackPositionMs')),
         }
 
+    def get_progress_by_book_id(self, book_id):
+        """Get progress directly from Grimmory's stable book identity."""
+        return self._get_progress_by_book_id(book_id)
+
     def get_progress(self, ebook_filename):
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             return None, None
-        return self._get_progress_by_book_id(book['id'])
+        return self.get_progress_by_book_id(book['id'])
 
     def get_progress_rich(self, ebook_filename):
-        """Progress plus Grimmory's own metadata for a filename, or None.
+        """Progress plus Grimmory's own metadata for a filename, or ``None``.
 
-        Returns ``{pct, cfi, href, last_read_time, status, content_source_pct}``
-        — lastReadTime is Grimmory's ISO timestamp of the last position change
-        and readStatus its reading status (verified live 2026-07-02). EPUB books
-        carry cfi/href from epubProgress; PDF/CBX fall back to percentage-only.
+        Returns percentage, locator fields, page data, lastReadTime and readStatus.
+        EPUB carries CFI/href, while CBX exposes its merged legacy/file page. For
+        EPUB/PDF, an absent progress row retains upstream's 0% semantics; CBX also
+        reports whether its percentage was actually present so a concrete page is
+        not mistaken for a reset.
         """
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             return None
-        response = self._make_request("GET", f"/api/v1/books/{book['id']}")
-        if not response or response.status_code != 200:
+        return self.get_progress_rich_by_book_id(book['id'])
+
+    def get_progress_rich_by_book_id(self, book_id):
+        """Return rich progress without resolving or refreshing by filename.
+
+        For CBX, ``pct`` remains ``None`` when Grimmory omitted the percentage and
+        ``page`` is returned independently. EPUB/PDF preserve their established
+        absent-progress value of 0%.
+        """
+        response = self._make_request("GET", f"/api/v1/books/{book_id}")
+        if not response:
             return None
-        data = self._parse_json_response(response, f"Grimmory rich progress for book {book['id']}")
+        if response.status_code == 404:
+            self._evict_cached_book(book_id=book_id, reason="rich progress lookup returned 404")
+            return None
+        if response.status_code != 200:
+            return None
+        data = self._parse_json_response(response, f"Grimmory rich progress for book {book_id}")
         if not isinstance(data, dict):
             return None
+
+        # Reuse this same detail for an immediately following write. Identity is
+        # still the requested id; caching only removes a redundant hydration GET.
+        # Some lightweight integrations construct a read-only client via
+        # ``__new__``; leave parsing functional when no cache was initialized.
+        if all(
+            hasattr(self, attr)
+            for attr in ("_cache_lock", "_book_cache", "_book_id_cache")
+        ):
+            self._process_book_detail(data)
 
         book_type = str(
             data.get('primaryFile', {}).get('bookType')
@@ -1981,11 +2225,52 @@ class BookloreClient:
         ).upper()
         progress_key = {'EPUB': 'epubProgress', 'PDF': 'pdfProgress', 'CBX': 'cbxProgress'}.get(book_type)
         progress = (data.get(progress_key) or {}) if progress_key else {}
+        percentage_present = 'percentage' in progress and progress.get('percentage') is not None
+        cbx_page = coerce_page(progress.get('page')) if book_type == 'CBX' else None
+        pct = self._to_progress_fraction(progress.get('percentage')) if percentage_present else 0.0
+        if book_type == 'CBX' and cbx_page is not None and not percentage_present:
+            # A page without a percentage is an incomplete/stale pair and must be
+            # canonicalized by the sync client. A completely untouched CBX book,
+            # however, keeps upstream's 0% state so it participates in catch-up.
+            pct = None
+        primary_file = data.get('primaryFile') or {}
+        explicit_file_progress = (
+            data.get('fileProgress')
+            or primary_file.get('fileProgress')
+            or primary_file.get('progress')
+            or {}
+        )
+        file_position = explicit_file_progress.get('positionData')
+        if file_position in (None, ""):
+            file_position = explicit_file_progress.get('page')
+        file_page = coerce_page(file_position)
+        file_pct_raw = explicit_file_progress.get(
+            'progressPercent', explicit_file_progress.get('percentage')
+        )
+        file_pct = self._to_progress_fraction(file_pct_raw) if file_pct_raw is not None else None
+        # Derive observability from the same selected value as file_page so an
+        # explicit null positionData cannot mask a populated page fallback.
+        file_page_observable = file_position not in (None, "")
+        # Current Grimmory folds primary-file progress back into cbxProgress on
+        # GET. When it does not expose the file row separately, this merged value
+        # is the best available file-authoritative read-back.
+        if book_type == 'CBX' and primary_file.get('id') is not None and not explicit_file_progress:
+            file_page = coerce_page(progress.get('page'))
+            file_pct = pct
+            file_page_observable = file_page is not None
 
         return {
-            "pct": self._to_progress_fraction(progress.get('percentage', 0)),
+            "pct": pct,
+            "percentage_present": percentage_present,
             "cfi": progress.get('cfi') if book_type == 'EPUB' else None,
             "href": progress.get('href') if book_type == 'EPUB' else None,
+            "page": cbx_page,
+            "cbx_page": cbx_page,
+            "file_page": file_page if book_type == 'CBX' else None,
+            "file_pct": file_pct if book_type == 'CBX' else None,
+            "file_page_observable": file_page_observable if book_type == 'CBX' else False,
+            "book_file_id": primary_file.get('id'),
+            "book_type": book_type,
             "last_read_time": data.get('lastReadTime'),
             "status": data.get('readStatus'),
             "content_source_pct": progress.get('contentSourceProgressPercent'),
@@ -1993,6 +2278,13 @@ class BookloreClient:
 
     def get_audiobook_cover_bytes(self, book_id):
         response = self._make_request("GET", f"/api/v1/audiobooks/{book_id}/cover")
+        if not response or response.status_code != 200:
+            return None, None
+        return response.content, response.headers.get('Content-Type', 'image/jpeg')
+
+    def get_book_cover_bytes(self, book_id):
+        """Return a regular Grimmory book cover without exposing credentials."""
+        response = self._make_request("GET", f"/api/v1/media/book/{book_id}/cover")
         if not response or response.status_code != 200:
             return None, None
         return response.content, response.headers.get('Content-Type', 'image/jpeg')
@@ -2005,7 +2297,8 @@ class BookloreClient:
         token = self._get_fresh_token()
         if not token:
             return False
-        headers = {"Authorization": f"Bearer {token}"}
+        # identity encoding keeps Content-Length comparable with the bytes written.
+        headers = {"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"}
         urls = [
             f"{self.base_url}/api/v1/audiobooks/{book_id}/stream",
         ]
@@ -2033,20 +2326,27 @@ class BookloreClient:
                         continue
 
                     output_path = Path(output_path)
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(output_path, "wb") as handle:
-                        for chunk in response.iter_content(chunk_size=65536):
-                            if chunk:
-                                handle.write(chunk)
-                    actual_size = output_path.stat().st_size
-                    size_display = f"{actual_size // (1024 * 1024)} MiB" if actual_size > 1024 * 1024 else f"{actual_size // 1024} KiB"
-                    
-                    # If we downloaded a file that is still too small, try next endpoint
-                    if expected_size and actual_size < expected_size * 0.1:
+                    # Publish only a complete stream: a rejected candidate must leave
+                    # any previously downloaded file intact for the next endpoint.
+                    try:
+                        stream_response_to_path(
+                            response,
+                            output_path,
+                            expected_size=response_declares_size(response),
+                            min_size=int(expected_size * 0.1) if expected_size else 0,
+                            chunk_size=65536,
+                        )
+                    except IncompleteTransferError as e:
+                        got = e.actual_size
+                        got_display = f"{got // (1024 * 1024)} MiB" if got > 1024 * 1024 else f"{got // 1024} KiB"
                         logger.warning(
-                            f"Grimmory downloaded file too small ({size_display}) from {url}, trying next endpoint..."
+                            f"Grimmory downloaded file too small ({got_display}) from {url}, "
+                            f"trying next endpoint... reason={e}",
+                            exc_info=True,
                         )
                         continue
+                    actual_size = output_path.stat().st_size
+                    size_display = f"{actual_size // (1024 * 1024)} MiB" if actual_size > 1024 * 1024 else f"{actual_size // 1024} KiB"
 
                     logger.info(
                         f"Grimmory audiobook download: book_id={book_id} "
@@ -2069,7 +2369,8 @@ class BookloreClient:
         token = self._get_fresh_token()
         if not token:
             return False
-        headers = {"Authorization": f"Bearer {token}"}
+        # identity encoding keeps Content-Length comparable with the bytes written.
+        headers = {"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"}
         url = f"{self.base_url}/api/v1/audiobooks/{book_id}/track/{track_index}/stream"
         try:
             with self.session.get(url, headers=headers, stream=True, timeout=120) as response:
@@ -2079,13 +2380,21 @@ class BookloreClient:
                         f"track_index={track_index} status={response.status_code}"
                     )
                     return False
-                output_path = Path(output_path)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(output_path, "wb") as handle:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            handle.write(chunk)
-                return True
+                expected_size = response_declares_size(response)
+                try:
+                    return stream_response_to_path(response, output_path, expected_size=expected_size)
+                except IncompleteTransferError as e:
+                    logger.error(
+                        "❌ Grimmory audiobook track download truncated: book_id=%s track_index=%s "
+                        "path=%s got=%s expected=%s",
+                        book_id,
+                        track_index,
+                        output_path,
+                        e.actual_size,
+                        e.expected_size if e.expected_size is not None else "unknown",
+                        exc_info=True,
+                    )
+                    return False
         except Exception as e:
             logger.error(f"❌ Grimmory audiobook track download error: {e}", exc_info=True)
             return False
@@ -2216,11 +2525,50 @@ class BookloreClient:
         logger.error(f"❌ Grimmory audiobook update failed: {last_status}")
         return False
 
+    def _cache_verified_cbx_progress(self, book_id, verified: Optional[dict]) -> None:
+        """Mirror only values actually observed during CBX read-back."""
+        with self._cache_lock:
+            cached = self._book_id_cache.get(book_id)
+            if not cached:
+                return
+            if not isinstance(verified, dict):
+                cached.pop('cbxProgress', None)
+                return
+            page = coerce_page(verified.get('page'))
+            pct = verified.get('pct')
+            if page is None and pct is None:
+                cached.pop('cbxProgress', None)
+                return
+            progress = cached.setdefault('cbxProgress', {})
+            if page is not None:
+                progress['page'] = page
+            if pct is not None:
+                progress['percentage'] = float(pct) * 100.0
+
     def update_progress(self, ebook_filename, percentage, rich_locator: Optional[LocatorResult] = None):
         book = self.find_book_by_filename(ebook_filename)
         if not book:
             logger.debug(f"Grimmory: Book not found: {ebook_filename}")
             return False
+
+        return self._update_progress_for_book(book, ebook_filename, percentage, rich_locator)
+
+    def update_progress_by_book_id(self, book_id, percentage, rich_locator: Optional[LocatorResult] = None):
+        """Write progress directly to a mapped Grimmory book id.
+
+        A cached hydrated detail avoids an extra GET.  When metadata is absent we
+        fetch only this book by id; a full library refresh and filename lookup are
+        never used to resolve identity.
+        """
+        book = self.get_book_by_id(book_id)
+        if not book:
+            logger.debug("Grimmory: Book id not found: %s", book_id)
+            return False
+        display_filename = book.get('fileName') or f"book-id:{book_id}"
+        return self._update_progress_for_book(book, display_filename, percentage, rich_locator)
+
+    def _update_progress_for_book(self, book, ebook_filename, percentage, rich_locator=None):
+        """Shared write implementation after identity has already been resolved."""
 
         safe_filename = sanitize_log_data(ebook_filename)
         book_id = book['id']
@@ -2236,11 +2584,59 @@ class BookloreClient:
         clear_reset = book_type == 'EPUB' and percentage <= 0
         cfi = rich_locator.cfi if rich_locator and rich_locator.cfi else None
         href = rich_locator.href if rich_locator and rich_locator.href else None
+        fixed_cbz = book_type == 'CBX' and is_cbz_filename(ebook_filename)
+        cbx_page = coerce_page(getattr(rich_locator, 'page', None)) if rich_locator and fixed_cbz else None
+        if fixed_cbz:
+            if percentage <= 0:
+                percentage = 0.0
+                pct_display = 0.0
+                cbx_page = 1
+            elif cbx_page is None:
+                logger.warning(
+                    "Grimmory: refusing non-zero CBZ write without a reliable page for '%s'",
+                    safe_filename,
+                )
+                return False
         primary_file = book.get('primaryFile') or {}
         book_file_id = primary_file.get('id')
+        pre_write_cbx = self.get_progress_rich_by_book_id(book_id) if fixed_cbz else None
+        pre_write_page = (
+            coerce_page(pre_write_cbx.get('page'))
+            if isinstance(pre_write_cbx, dict)
+            else None
+        )
 
         payload_variants = []
-        if book_type in ('EPUB', 'PDF', 'CBX') and book_file_id is not None:
+        if fixed_cbz:
+            cbx_payload = {
+                "bookId": book_id,
+                "cbxProgress": {
+                    "page": cbx_page,
+                    "percentage": pct_display,
+                },
+            }
+            if book_file_id is not None:
+                cbx_payload["fileProgress"] = {
+                    "bookFileId": self._to_optional_int(book_file_id) or book_file_id,
+                    "positionData": str(cbx_page),
+                    "progressPercent": pct_display,
+                }
+                payload_variants.append(("cbxProgress+fileProgress", cbx_payload))
+                payload_variants.append(("fileProgress", {
+                    "bookId": book_id,
+                    "fileProgress": dict(cbx_payload["fileProgress"]),
+                }))
+                payload_variants.append(("cbxProgress", {
+                    "bookId": book_id,
+                    "cbxProgress": dict(cbx_payload["cbxProgress"]),
+                }))
+            else:
+                logger.warning(
+                    "Grimmory: primaryFile.id missing for '%s'; writing legacy CBX progress only",
+                    safe_filename,
+                )
+                payload_variants.append(("cbxProgress", cbx_payload))
+        elif book_type in ('EPUB', 'PDF', 'CBX') and book_file_id is not None:
             file_progress = {
                 "bookFileId": self._to_optional_int(book_file_id) or book_file_id,
                 "progressPercent": pct_display,
@@ -2279,7 +2675,11 @@ class BookloreClient:
             elif book_type == 'PDF':
                 payload_variants = [("standard", {"bookId": book_id, "pdfProgress": {"page": 1, "percentage": pct_display}})]
             elif book_type == 'CBX':
-                payload_variants = [("standard", {"bookId": book_id, "cbxProgress": {"page": 1, "percentage": pct_display}})]
+                logger.warning(
+                    "Grimmory: skipping percentage-only CBX write without primaryFile.id for '%s'",
+                    safe_filename,
+                )
+                return ProgressWriteOutcome.SKIPPED
             else:
                 logger.warning(f"Grimmory: Unknown book type {book_type} for '{safe_filename}'")
                 return False
@@ -2361,6 +2761,115 @@ class BookloreClient:
                         last_status = f"verify_mismatch:{verified_pct * 100:.2f}%"
                         continue
 
+            if fixed_cbz:
+                verified = None
+                for verify_attempt in range(2):
+                    if verify_attempt:
+                        time.sleep(0.1)
+                    verified = self.get_progress_rich_by_book_id(book_id)
+                    if not isinstance(verified, dict):
+                        continue
+                    observed_cbx = coerce_page(verified.get('cbx_page', verified.get('page')))
+                    observed_file = (
+                        coerce_page(verified.get('file_page'))
+                        if 'file_page' in verified
+                        else coerce_page(verified.get('page'))
+                    )
+                    file_page_observable = bool(
+                        verified.get(
+                            'file_page_observable',
+                            observed_file is not None,
+                        )
+                    )
+                    representations_match = observed_cbx == cbx_page and (
+                        book_file_id is None
+                        or not file_page_observable
+                        or observed_file == cbx_page
+                    )
+                    if representations_match:
+                        break
+                verified_page = coerce_page(verified.get('page')) if isinstance(verified, dict) else None
+                verified_cbx_page = (
+                    coerce_page(verified.get('cbx_page', verified.get('page')))
+                    if isinstance(verified, dict)
+                    else None
+                )
+                verified_file_page = (
+                    (
+                        coerce_page(verified.get('file_page'))
+                        if 'file_page' in verified
+                        else verified_page
+                    )
+                    if isinstance(verified, dict)
+                    else None
+                )
+                verified_pct = verified.get('pct') if isinstance(verified, dict) else None
+                verified_file_observable = bool(
+                    verified.get(
+                        'file_page_observable',
+                        verified_file_page is not None,
+                    )
+                ) if isinstance(verified, dict) else False
+                fully_verified = verified_cbx_page == cbx_page and (
+                    book_file_id is None
+                    or not verified_file_observable
+                    or verified_file_page == cbx_page
+                )
+                observed_pages = {
+                    page for page in (verified_page, verified_cbx_page, verified_file_page)
+                    if page is not None
+                }
+                remote_moved = pre_write_page is not None and any(
+                    page != cbx_page and page != pre_write_page
+                    for page in observed_pages
+                )
+                if remote_moved:
+                    logger.info(
+                        "Grimmory CBZ reader moved during verification for %s "
+                        "(attempted=%s observed=%s); preserving remote state",
+                        safe_filename, cbx_page, sorted(observed_pages),
+                    )
+                    self._cache_verified_cbx_progress(book_id, verified)
+                    return False
+                if fully_verified:
+                    if verified_pct is not None and abs(float(verified_pct) - float(percentage)) > 0.005:
+                        logger.info(
+                            "Grimmory CBZ page verified for %s; reported percentage differs "
+                            "(expected=%.2f%% observed=%.2f%% page=%s)",
+                            safe_filename, pct_display, float(verified_pct) * 100.0, cbx_page,
+                        )
+                    if book_file_id is not None and not verified_file_observable:
+                        logger.info(
+                            "Grimmory CBX page verified for %s; primary-file page is not observable",
+                            safe_filename,
+                        )
+                    else:
+                        logger.debug(
+                            "Grimmory CBZ representations verified for %s: cbx_page=%s file_page=%s",
+                            safe_filename, verified_cbx_page, verified_file_page,
+                        )
+                    self._cache_verified_cbx_progress(book_id, verified)
+                else:
+                    logger.warning(
+                        "Grimmory CBZ representation not yet confirmed for %s "
+                        "(variant=%s expected=%s cbx_page=%s file_page=%s)",
+                        safe_filename, variant_name, cbx_page,
+                        verified_cbx_page, verified_file_page,
+                    )
+                    if variant_idx < len(payload_variants):
+                        last_status = f"verify_{variant_name}_stale"
+                        continue
+                    # HTTP success did not confirm the target page. Keep observed
+                    # cache values, but do not let the sync client persist our
+                    # attempted position or mark it as an applied bridge write.
+                    self._cache_verified_cbx_progress(book_id, verified)
+                    return False
+                if variant_name != "cbxProgress+fileProgress":
+                    logger.info(
+                        "Grimmory CBZ progress fallback accepted for %s (variant=%s)",
+                        safe_filename, variant_name,
+                    )
+
             logger.info(f"Grimmory: {safe_filename} -> {pct_display:.1f}%")
 
             # Update cache in-place instead of full library refresh
@@ -2380,7 +2889,7 @@ class BookloreClient:
                             if not cached.get('pdfProgress'):
                                 cached['pdfProgress'] = {}
                             cached['pdfProgress']['percentage'] = pct_display
-                        elif book_type == 'CBX':
+                        elif book_type == 'CBX' and not fixed_cbz:
                             if not cached.get('cbxProgress'):
                                 cached['cbxProgress'] = {}
                             cached['cbxProgress']['percentage'] = pct_display
@@ -3137,4 +3646,3 @@ class BookloreClient:
             )
             return False
         return True
-

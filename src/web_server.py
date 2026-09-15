@@ -40,6 +40,7 @@ from src.utils.user_config import SERVICE_ENABLE_KEYS
 from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
 from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename
 from src.utils.ebook_utils import LRUCache
+from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.logging_utils import get_persistent_condition_logger
@@ -373,7 +374,16 @@ def setup_dependencies(app, test_container=None):
 
     # Register KoSync Blueprint and initialize with dependencies
     init_kosync_server(database_service, container, manager, EBOOK_DIR)
-    manager.register_post_cycle_callback(signal_manifest_rebuild)
+    # A catalog change (match added, deleted, or status flipped) invalidates the
+    # device-sync manifest, so rebuild it then rather than waiting on the loop.
+    #
+    # Deliberately NOT hooked to the end of a sync cycle. That was the original
+    # invalidation signal, from before this precise one existed, and a cycle only
+    # moves reading progress -- which the manifest does not carry. Since instant
+    # sync runs a cycle whenever a device or a poller sees movement, and a full
+    # rebuild of a few hundred books takes minutes, that proxy signal kept the
+    # prebuilder rebuilding an identical manifest back to back all day.
+    database_service.register_catalog_change_callback(signal_manifest_rebuild)
     app.register_blueprint(kosync_sync_bp)
     app.register_blueprint(kosync_admin_bp)
 
@@ -486,7 +496,7 @@ _ADMIN_ONLY_ENDPOINTS = {
     'admin_users', 'admin_user_integrations',
     'api_restart', 'test_connection',
     'get_booklore_libraries', 'get_booklore_shelves', 'get_abs_libraries',
-    'api_booklore_refresh', 'alignments_llm_status', 'alignments_realign',
+    'api_booklore_refresh', 'alignments_llm_status', 'alignments_realign', 'alignments_restore',
     'kosync_admin.api_get_kosync_documents',
     'kosync_admin.api_link_kosync_document',
     'kosync_admin.api_unlink_kosync_document',
@@ -1787,6 +1797,7 @@ def sync_daemon():
         # Use the global SYNC_PERIOD_MINS which is validated
         schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(manager.run_sync_for_all_users)
         schedule.every(1).minutes.do(manager.check_pending_jobs)
+        schedule.every(1).minutes.do(manager.flush_reading_sessions_for_all_users)
         schedule.every(1).hours.do(_run_diagnostics_send)
 
         logger.info(f"🔄 Sync daemon started (period: {SYNC_PERIOD_MINS} minutes)")
@@ -1891,9 +1902,12 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
 
     # Check the EPUB cache explicitly when LibraryService acquired a file outside /books.
     epub_cache = container.epub_cache_dir()
-    cached_path = safe_cache_path(epub_cache, ebook_filename)
-    if cached_path and cached_path.exists():
-         return container.ebook_parser().get_kosync_id(cached_path)
+    for cache_filename in dict.fromkeys((ebook_filename, original_filename)):
+        if not cache_filename:
+            continue
+        cached_path = safe_cache_path(epub_cache, cache_filename)
+        if cached_path and cached_path.exists():
+            return container.ebook_parser().get_kosync_id(cached_path)
 
     # On-demand fetching
     # 0. BookOrbit On-Demand — the library hosts the file via API even when the
@@ -2318,6 +2332,7 @@ def _preserve_or_reset_mapping_status(
     ebook_filename=None,
     audio_source_id=None,
     storyteller_uuid=None,
+    ebook_source=None,
     ebook_source_id=None,
 ) -> None:
     """Queue a mapping for processing, unless its existing alignment still applies.
@@ -2344,9 +2359,22 @@ def _preserve_or_reset_mapping_status(
     # readalong uuid and the ebook source id are as much a part of the pairing as
     # the filename — swapping a book to a different Storyteller readalong changes
     # the audio the map was built against.
+    existing_source = _normalize_text_source_type(getattr(target_book, "ebook_source", None))
+    next_source = _normalize_text_source_type(ebook_source) if ebook_source is not None else existing_source
+    existing_source_id = str(getattr(target_book, "ebook_source_id", None) or "").strip()
+    next_source_id = str(ebook_source_id or "").strip()
+    same_stable_ebook = bool(
+        existing_source
+        and next_source
+        and existing_source.lower() == next_source.lower()
+        and existing_source_id
+        and next_source_id
+        and existing_source_id == next_source_id
+    )
+
     candidates = (
         ("kosync_doc_id", kosync_doc_id),
-        ("ebook_filename", ebook_filename),
+        ("ebook_filename", None if same_stable_ebook else ebook_filename),
         ("audio_source_id", audio_source_id),
         ("storyteller_uuid", storyteller_uuid),
         ("ebook_source_id", ebook_source_id),
@@ -2363,6 +2391,17 @@ def _preserve_or_reset_mapping_status(
         # would re-transcribe books this guard exists to spare.
         if existing and str(existing) != str(new_value):
             changed.append(attr)
+
+    if ebook_source is not None and existing_source and existing_source.lower() != next_source.lower():
+        changed.append("ebook_source")
+
+    if same_stable_ebook and not changed:
+        logger.info(
+            "♻️ '%s' External ebook metadata changed with stable source identity — "
+            "preserving mapping status",
+            sanitize_log_data(abs_id),
+        )
+        return
 
     reusable = False
     if not changed and abs_id:
@@ -2391,6 +2430,48 @@ def _preserve_or_reset_mapping_status(
             sanitize_log_data(abs_id), ", ".join(changed),
         )
     target_book.status = "pending"
+
+
+def _adopt_kosync_progress_for_book(abs_id: str, kosync_doc_id: str) -> None:
+    """Link an already-known KoSync document hash to a freshly mapped book.
+
+    KOReader stores progress under a document hash before the book is mapped. The
+    resolution path reaches that progress by joining KosyncDocument.linked_abs_id, so
+    an unlinked row stays invisible to sync and the book reads as unstarted even
+    though the position is durable and the hashes match exactly (#431). Add Book
+    already computes the same hash, so adopt it here rather than leaving the reader
+    to link it by hand.
+
+    Adoption is fail-closed: a hash already owned by a *different* book is left
+    alone, matching the sibling-hash step below and `_register_hash_for_book`.
+    `ensure_linked_kosync_document` re-points on conflict by design — hash
+    reconciliation needs that to keep sibling hashes of one book durable (#285) —
+    so the ownership check belongs here, at the one caller that must not steal.
+    Re-pointing would hide the loser's stored progress behind the same join this
+    function exists to repair, moving #431 rather than fixing it. The mapping paths
+    that legitimately consolidate a duplicate (`match`, `absorb_duplicate_mapping`,
+    the ebook-only tri-link) all migrate and delete the loser first, which clears
+    its link, so they reach this with nothing to conflict against.
+    """
+    if not abs_id or not isinstance(kosync_doc_id, str) or not kosync_doc_id.strip():
+        return
+    try:
+        doc_id = kosync_doc_id.strip()
+        existing = database_service.get_kosync_document(doc_id)
+        owner = getattr(existing, "linked_abs_id", None) if existing else None
+        if owner and owner != abs_id:
+            logger.info(
+                "🔒 KoSync document '%s' already belongs to '%s' — not re-pointing it to '%s'",
+                sanitize_log_data(doc_id), sanitize_log_data(owner), sanitize_log_data(abs_id),
+            )
+            return
+        if database_service.ensure_linked_kosync_document(doc_id, abs_id):
+            logger.info(
+                "🔗 Adopted existing KoSync document '%s' for '%s'",
+                sanitize_log_data(kosync_doc_id), sanitize_log_data(abs_id),
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to adopt KoSync document for '{abs_id}': {e}", exc_info=True)
 
 
 def _upsert_storyteller_mapping(
@@ -2580,6 +2661,7 @@ def _upsert_storyteller_mapping(
         kosync_doc_id=kosync_doc_id,
         ebook_filename=resolved_ebook_filename,
         storyteller_uuid=selected_storyteller_uuid,
+        ebook_source=selected_ebook_source,
         ebook_source_id=selected_ebook_source_id,
     )
     target_book.abs_title = abs_title or target_book.abs_title or Path(resolved_ebook_filename).stem
@@ -2674,6 +2756,7 @@ def _upsert_storyteller_mapping(
     database_service.dismiss_suggestion(saved_book.abs_id)
     if isinstance(saved_book.kosync_doc_id, str) and saved_book.kosync_doc_id.strip():
         database_service.dismiss_suggestion(saved_book.kosync_doc_id)
+    _adopt_kosync_progress_for_book(saved_book.abs_id, saved_book.kosync_doc_id)
 
     return saved_book, None, None
 
@@ -3307,20 +3390,7 @@ def _build_bridge_key(audio_source, audio_source_id):
 
 
 def _normalize_text_source_type(raw_source):
-    source_text = str(raw_source or "").strip()
-    if not source_text:
-        return ""
-    source_map = {
-        "booklore": "Booklore",
-        "grimmory": "Booklore",
-        "bookorbit": "BookOrbit",
-        "kavita": "Kavita",
-        "bookfusion": "BookFusion",
-        "abs": "ABS",
-        "cwa": "CWA",
-        "local file": "Local File",
-    }
-    return source_map.get(source_text.lower(), source_text)
+    return normalize_ebook_source(raw_source)
 
 
 def _safe_local_source_path(raw_path) -> str:
@@ -3436,7 +3506,7 @@ def _create_or_update_library_audio_mapping(
         return None, "Please select a text source (Storyteller or Standard Ebook)", 400
 
     booklore_ebook_id = None
-    if ebook_source == "BookLore":
+    if is_grimmory_source(ebook_source):
         booklore_ebook_id = ebook_source_id
     elif uc().booklore_client.is_configured():
         bl_book = uc().booklore_client.find_book_by_filename(original_ebook_filename or resolved_ebook_filename)
@@ -3471,8 +3541,11 @@ def _create_or_update_library_audio_mapping(
         if audio_source == "BookOrbit"
         else f"/api/booklore/audiobook-cover/{audio_source_id}"
     )
+    # An existing mapping keeps the id it was stored under. `get_book_by_audio_source`
+    # can return a row whose abs_id is not the bridge key, and re-keying it here would
+    # strand the states, annotations and per-user claims filed against the old id.
+    # Consolidating a genuine duplicate is `absorb_duplicate_mapping`'s job, below.
     target_book = existing_book or Book(abs_id=bridge_key, sync_mode="audiobook")
-    target_book.abs_id = bridge_key
     target_book.abs_title = audio_title or target_book.abs_title or bridge_key
     _preserve_or_reset_mapping_status(
         target_book,
@@ -3480,6 +3553,7 @@ def _create_or_update_library_audio_mapping(
         ebook_filename=resolved_ebook_filename,
         audio_source_id=str(audio_source_id),
         storyteller_uuid=storyteller_uuid,
+        ebook_source=ebook_source,
         ebook_source_id=ebook_source_id,
     )
     target_book.audio_source = audio_source
@@ -3512,7 +3586,37 @@ def _create_or_update_library_audio_mapping(
             storyteller_manifest,
         )
 
+    # Resolve series from the owning library so the mapping collapses into its series
+    # card immediately. The other match paths already do this (ABS metadata; the
+    # shelf-watch / book_mapping_service path), but the library-audio path (BookOrbit/
+    # Grimmory) did not, so a freshly matched book had no series until a manual
+    # backfill. One detail call per match; matches are infrequent.
+    if not target_book.series_name:
+        try:
+            resolution = resolve_series_details(
+                target_book,
+                abs_client=uc().abs_client,
+                bookorbit_client=uc().bookorbit_client,
+                booklore_client=uc().booklore_client,
+                kavita_client=uc().kavita_client,
+                ebook_parser=container.ebook_parser(),
+            )
+            if resolution.name:
+                target_book.series_name = resolution.name
+                target_book.series_sequence = resolution.sequence
+        except Exception as series_err:
+            logger.warning(
+                "Series resolve on match failed for '%s': %s",
+                sanitize_log_data(target_book.abs_title), series_err, exc_info=True,
+            )
+
     saved_book = database_service.save_book(target_book)
+
+    # An ebook-only mapping for this same ebook may already exist -- adding an
+    # audiobook to a book you already had as an ebook is exactly this path. Without
+    # this, both rows survive and only one can own the KOSync document hash, so the
+    # loser is served to devices but can never receive progress.
+    database_service.absorb_duplicate_mapping(saved_book)
 
     if uc().storyteller_client.is_configured() and saved_book.storyteller_uuid:
         try:
@@ -3534,6 +3638,7 @@ def _create_or_update_library_audio_mapping(
     database_service.dismiss_suggestion(saved_book.abs_id)
     if isinstance(saved_book.kosync_doc_id, str) and saved_book.kosync_doc_id.strip():
         database_service.dismiss_suggestion(saved_book.kosync_doc_id)
+    _adopt_kosync_progress_for_book(saved_book.abs_id, saved_book.kosync_doc_id)
 
     return saved_book, None, None
 
@@ -3814,6 +3919,10 @@ def _create_or_update_bookfusion_progress_mapping(
         saved_book = target_book
 
     if getattr(saved_book, "kosync_doc_id", None):
+        # Fold in any older mapping for this same ebook before claiming the hash
+        # below -- two rows can each carry the hash, but only one can be the book
+        # a device's progress resolves to.
+        database_service.absorb_duplicate_mapping(saved_book)
         try:
             database_service.ensure_linked_kosync_document(saved_book.kosync_doc_id, saved_book.abs_id)
         except Exception as e:
@@ -3903,6 +4012,7 @@ def settings():
             'KOSYNC_XPATH_ORDER_ENABLED',
             'KOREADER_ANNOTATION_SYNC',
             'SYNC_FRESHNESS_GUARDS',
+            'SYNC_TRUST_CORROBORATED_REWIND',
             'SYNC_COMPLETION_PROPAGATION',
             'SYNC_ABS_EBOOK',
             'XPATH_FALLBACK_TO_PREVIOUS_SEGMENT',
@@ -3955,6 +4065,9 @@ def settings():
             'OLLAMA_EBOOK_TEXT_FALLBACK',
             'DIAGNOSTICS_OPT_IN',
             'WHISPER_CPP_SEND_ORIGINAL',
+            'CTC_ENABLED',
+            'ALIGNMENT_SEGMENTED_MAPS',
+            'CONTENT_MATCH_GUARD',
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',
             'REMOTE_AUTH_ENABLED',
         ]
@@ -4227,7 +4340,7 @@ def _finalize_series_group(group: dict) -> None:
         "last_sync_unix": last_sync_unix,
         "added_at_unix": added_at_unix,
         "stack_cover_urls": [c.get("cover_url") for c in children[:3] if c.get("cover_url")],
-        "section_bucket": "finished" if finished == total else "not_started",
+        "section_bucket": "finished" if finished == total else "in_progress" if in_progress else "not_started",
         "dom_id": "series-" + re.sub(r"[^a-z0-9]+", "-", group["series_key"]).strip("-"),
     })
 
@@ -4480,6 +4593,7 @@ def _resolve_dashboard_display_metadata(
     base_author,
     cached_booklore_by_filename=None,
     storyteller_meta=None,
+    bookorbit_author=None,
 ):
     title = _normalize_dashboard_display_value(base_title)
     subtitle = _normalize_dashboard_display_value(base_subtitle)
@@ -4511,6 +4625,12 @@ def _resolve_dashboard_display_metadata(
             subtitle = storyteller_subtitle
         if not author and storyteller_author:
             author = storyteller_author
+
+    # Ranked below the Grimmory/Storyteller caches but above the filename guess:
+    # it is real library metadata, so it should only ever fill a gap, never
+    # displace an author another source already resolved.
+    if not author and bookorbit_author:
+        author = _normalize_dashboard_display_value(bookorbit_author)
 
     filename_fallback = _parse_dashboard_filename_fallback(display_filename)
     if should_override_base_title and not title:
@@ -4887,14 +5007,15 @@ def _browser_cover_url(
         return raw
 
     source = (audio_source or "").strip()
+    normalized_audio_source = _normalize_text_source_type(source)
     src_id = (audio_source_id or "").strip()
     aid = (abs_id or "").strip()
 
-    if source == "BookLore" and src_id:
+    if normalized_audio_source == "Booklore" and src_id:
         return f"/api/booklore/audiobook-cover/{src_id}"
-    if source == "BookOrbit" and src_id:
+    if normalized_audio_source == "BookOrbit" and src_id:
         return f"/api/bookorbit/audiobook-cover/{src_id}"
-    if source not in _LIBRARY_AUDIO_SOURCES:
+    if normalized_audio_source not in ("Booklore", "BookOrbit"):
         proxy_id = aid or src_id
         if proxy_id and not _is_synthetic_bridge_key(proxy_id):
             return f"/api/cover-proxy/{proxy_id}"
@@ -4902,9 +5023,10 @@ def _browser_cover_url(
     ebook_src = (ebook_source or "").strip()
     ebook_id = (ebook_source_id or "").strip()
     if ebook_id:
-        if ebook_src == "BookLore":
-            return f"/api/booklore/audiobook-cover/{ebook_id}"
-        if ebook_src == "BookOrbit":
+        normalized_ebook_source = _normalize_text_source_type(ebook_src)
+        if normalized_ebook_source == "Booklore":
+            return f"/api/booklore/book-cover/{ebook_id}"
+        if normalized_ebook_source == "BookOrbit":
             return f"/api/bookorbit/audiobook-cover/{ebook_id}"
     return ""
 
@@ -4989,6 +5111,74 @@ def _prefetch_bookfusion_links(books: list, integrations: dict | None) -> dict:
         return {}
 
 
+def _bookorbit_source_ids(books: list) -> set:
+    """BookOrbit book ids referenced by these mappings, either side."""
+    ids = set()
+    for book in books or []:
+        for attr, source in (("ebook_source_id", "ebook_source"),
+                             ("audio_source_id", "audio_source")):
+            if getattr(book, source, None) == "BookOrbit":
+                value = getattr(book, attr, None)
+                if value:
+                    ids.add(str(value))
+    return ids
+
+
+def _prefetch_bookorbit_authors(books: list, integrations: dict | None) -> dict:
+    """Resolve BookOrbit's own author metadata in one bulk read.
+
+    Returns ``{bookorbit_book_id: author}``, empty when BookOrbit is unconfigured
+    or nothing in the library came from it.
+
+    BookOrbit is the only author source for a BookOrbit-sourced ebook on an
+    install without Grimmory: ``base_author`` is always empty here,
+    ``_get_cached_ebook_display_metadata`` reads the Grimmory cache alone, and the
+    filename fallback needs a literal ``Title - Author`` stem that BookOrbit's
+    filenames ("03. Other Worlds Than These (2026).epub") do not use. The client
+    keeps its own TTL'd light-info cache behind a non-blocking refresh lock, so
+    this is a dict read once warm and a couple of paginated calls when cold.
+    """
+    if not integrations or not integrations.get('bookorbit'):
+        return {}
+    wanted = _bookorbit_source_ids(books)
+    if not wanted:
+        return {}
+    try:
+        client = uc().bookorbit_client
+        if not client or not client.is_configured():
+            return {}
+        authors = {}
+        for info in client.get_all_books() or []:
+            book_id = info.get("id")
+            if book_id is None:
+                continue
+            key = str(book_id)
+            if key not in wanted:
+                continue
+            author = _normalize_dashboard_display_value(info.get("authors"))
+            if author:
+                authors[key] = author
+        return authors
+    except Exception as exc:
+        logger.debug("BookOrbit dashboard author prefetch failed: %s", exc, exc_info=True)
+        return {}
+
+
+def _bookorbit_author_for_book(book, bookorbit_authors: dict | None) -> str:
+    """The prefetched author for whichever side of this book BookOrbit supplies."""
+    if not bookorbit_authors:
+        return ""
+    for attr, source in (("ebook_source_id", "ebook_source"),
+                         ("audio_source_id", "audio_source")):
+        if getattr(book, source, None) == "BookOrbit":
+            value = getattr(book, attr, None)
+            if value:
+                found = bookorbit_authors.get(str(value))
+                if found:
+                    return found
+    return ""
+
+
 def _build_dashboard_mapping(
     book,
     states_by_book,
@@ -4999,6 +5189,7 @@ def _build_dashboard_mapping(
     cached_booklore_by_filename,
     claim_times_by_book=None,
     bookfusion_by_book=None,
+    bookorbit_authors=None,
 ):
     states = states_by_book.get(book.abs_id, [])
     state_by_client = {state.client_name: state for state in states}
@@ -5010,6 +5201,7 @@ def _build_dashboard_mapping(
         "",
         cached_booklore_by_filename=cached_booklore_by_filename,
         storyteller_meta=_get_cached_storyteller_display_metadata(book),
+        bookorbit_author=_bookorbit_author_for_book(book, bookorbit_authors),
     )
     display_title = display_meta["display_title"]
     display_subtitle = display_meta["display_subtitle"]
@@ -5247,6 +5439,7 @@ def _build_dashboard_mappings(
     cached_booklore_by_filename=None,
     claim_times_by_book=None,
     bookfusion_by_book=None,
+    bookorbit_authors=None,
 ):
     hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
     storygraph_by_book = {s.abs_id: s for s in (all_storygraph or [])}
@@ -5256,7 +5449,10 @@ def _build_dashboard_mappings(
     claim_times_by_book = claim_times_by_book or {}
     if bookfusion_by_book is None:
         bookfusion_by_book = _prefetch_bookfusion_links(books, integrations)
+    if bookorbit_authors is None:
+        bookorbit_authors = _prefetch_bookorbit_authors(books, integrations)
 
+    ctc_aligned_book_ids = database_service.get_ctc_aligned_book_ids()
     mappings = []
     total_duration = 0
     total_listened = 0
@@ -5272,7 +5468,9 @@ def _build_dashboard_mappings(
             cached_booklore_by_filename,
             claim_times_by_book,
             bookfusion_by_book=bookfusion_by_book,
+            bookorbit_authors=bookorbit_authors,
         )
+        mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
         mappings.append(mapping)
 
         duration = mapping.get("duration", 0)
@@ -5925,6 +6123,9 @@ def alignments_llm_status():
         # Self-heal legacy maps: classify NULL provenance by map shape (no re-transcription)
         # so the report and the re-align target list are accurate.
         database_service.backfill_alignment_methods()
+        # Score maps stored before quality tracking existed, a bounded batch per call
+        # so the health panel's scores fill in over a few page loads (issue #426 phase 4).
+        database_service.backfill_alignment_quality()
         return jsonify(database_service.get_alignment_provenance())
     except Exception as e:
         logger.error(f"❌ Failed to read alignment provenance: {e}", exc_info=True)
@@ -5958,6 +6159,27 @@ def alignments_realign():
         return jsonify({"queued": queued})
     except Exception as e:
         logger.error(f"❌ Failed to queue re-align: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+def alignments_restore():
+    """API: Restore a book's alignment map to the backup taken before its last
+    overwrite (issue #426 phase 4).
+
+    Body: {"abs_id": "..."}. Returns {"restored": bool} — False when there is no
+    backup on file for that book.
+    """
+    data = request.get_json(silent=True) or {}
+    abs_id = (data.get("abs_id") or "").strip()
+    if not abs_id:
+        return jsonify({"error": "Provide 'abs_id'"}), 400
+
+    try:
+        alignment_service = getattr(manager, "alignment_service", None) if manager else None
+        restored = bool(alignment_service and alignment_service.restore_previous_alignment(abs_id))
+        return jsonify({"restored": restored})
+    except Exception as e:
+        logger.error(f"❌ Failed to restore alignment for {abs_id}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -6347,6 +6569,22 @@ def match():
             or preserved_transcript_source
         )
         transcript_file = storyteller_manifest or preserved_transcript_file
+        # The replacement Book below overwrites the stored mapping wholesale, so the
+        # guard has to weigh the identity it is about to lose while it is still on
+        # disk. Without this, re-matching an already-aligned book queued it for
+        # transcription again — the exact regression the guard was written to stop.
+        resolved_status = "pending"
+        if current_book_entry is not None:
+            _preserve_or_reset_mapping_status(
+                current_book_entry,
+                kosync_doc_id=kosync_doc_id,
+                ebook_filename=ebook_filename,
+                audio_source_id=abs_id,
+                storyteller_uuid=effective_storyteller_uuid,
+                ebook_source=ebook_source,
+                ebook_source_id=ebook_source_id,
+            )
+            resolved_status = current_book_entry.status or "pending"
         book = Book(
             abs_id=abs_id,
             abs_title=abs_title,
@@ -6359,7 +6597,7 @@ def match():
             ebook_filename=ebook_filename,
             kosync_doc_id=kosync_doc_id,
             transcript_file=transcript_file,
-            status="pending",
+            status=resolved_status,
             duration=manager.get_duration(selected_ab),
             transcript_source=transcript_source,
             storyteller_uuid=effective_storyteller_uuid,
@@ -6408,6 +6646,7 @@ def match():
         # Need to dismiss by BOTH abs_id (audiobook-triggered) and kosync_doc_id (ebook-triggered)
         database_service.dismiss_suggestion(abs_id)
         database_service.dismiss_suggestion(kosync_doc_id)
+        _adopt_kosync_progress_for_book(abs_id, kosync_doc_id)
         
         # Check for a different hash for this filename, such as one reported by a device.
         try:
@@ -6415,6 +6654,13 @@ def match():
             if device_doc and device_doc.document_hash != kosync_doc_id:
                 logger.info(f"🔄 Dismissing additional suggestion/hash for '{ebook_filename}': '{device_doc.document_hash}'")
                 database_service.dismiss_suggestion(device_doc.document_hash)
+                if not device_doc.linked_abs_id:
+                    # A device-served build of the same book carries its own hash and its
+                    # own stored progress, so adopt it as a durable sibling. Only when it
+                    # is unclaimed -- a hash already pointing at another book is never
+                    # re-pointed from here.
+                    database_service.link_kosync_document(device_doc.document_hash, abs_id)
+                    logger.info(f"🔗 Linked device hash '{device_doc.document_hash}' to '{abs_id}'")
         except Exception as e:
             logger.warning(f"⚠️ Failed to check/dismiss device hash: {e}", exc_info=True)
 
@@ -8424,6 +8670,9 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
             remaining_filename = getattr(remaining_book, 'ebook_filename', None)
             if remaining_filename:
                 remaining_cache_filenames.add(remaining_filename)
+            remaining_local_filename = local_ebook_filename(remaining_book)
+            if remaining_local_filename:
+                remaining_cache_filenames.add(remaining_local_filename)
 
             remaining_uuid = getattr(remaining_book, 'storyteller_uuid', None)
             if not remaining_uuid and remaining_filename:
@@ -8458,11 +8707,12 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
         except Exception as e:
             logger.warning(f"⚠️ Failed to delete transcript directory: {e}", exc_info=True)
 
+    cached_ebook_filename = local_ebook_filename(book)
     preserve_cached_ebook = (
         remaining_books is None
-        or book.ebook_filename in remaining_cache_filenames
+        or cached_ebook_filename in remaining_cache_filenames
     )
-    if book.ebook_filename and not preserve_cached_ebook:
+    if cached_ebook_filename and not preserve_cached_ebook:
         cache_dirs = []
         try:
             cache_dirs.append(container.epub_cache_dir())
@@ -8481,13 +8731,13 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
                 continue
             seen_dirs.add(cache_dir_key)
 
-            cached_path = safe_cache_path(cache_dir_path, book.ebook_filename)
+            cached_path = safe_cache_path(cache_dir_path, cached_ebook_filename)
             if cached_path and cached_path.exists():
                 try:
                     cached_path.unlink()
-                    logger.info(f"🗑️ Deleted cached ebook file: {book.ebook_filename}")
+                    logger.info(f"🗑️ Deleted cached ebook file: {cached_ebook_filename}")
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to delete cached ebook {book.ebook_filename}: {e}", exc_info=True)
+                    logger.warning(f"⚠️ Failed to delete cached ebook {cached_ebook_filename}: {e}", exc_info=True)
 
     # KoSync progress must not outlive the mapping. The document hash comes from
     # the EPUB's content, so re-matching the same file re-links the identical hash
@@ -8849,6 +9099,80 @@ def clear_progress(abs_id):
         logger.error(f"❌ Failed to clear progress for '{abs_id}': {e}", exc_info=True)
 
     return redirect(url_for('index'))
+
+
+def remap_alignment(abs_id):
+    """Rebuild a book's audio↔text alignment with the best available backend.
+
+    Unlike Clear Position, Remap never touches the reader's saved progress — it only
+    rebuilds the audio↔ebook map:
+      - CTC configured and the current map is not already CTC -> rebuild with CTC.
+      - otherwise an estimated map (no measured word timings) -> force a fresh
+        word-timestamped transcription and re-anchor.
+      - a map already at the best available backend -> nothing to do.
+
+    The rebuild runs through the normal pending -> forge pipeline, exactly like
+    ``/api/alignments/realign`` (single scope).
+    """
+    book = database_service.get_book(abs_id)
+    if not book:
+        return jsonify({"success": False, "error": "Book not found"}), 404
+
+    user = current_user()
+    if not _user_may_modify_book(user, abs_id):
+        return _forbidden_book_response(json_response=True)
+
+    # Audio→text alignment only exists for mappings that have an audiobook side.
+    if getattr(book, "sync_mode", "audiobook") == "ebook_only":
+        return jsonify({
+            "success": False,
+            "error": "This mapping has no audiobook to align.",
+        }), 400
+
+    # None = no stored map; "" = map with unrecorded (legacy) method.
+    current_method = database_service.get_alignment_method(abs_id)
+    ctc_available = env_truthy("CTC_ENABLED")
+
+    # Methods that are already word-accurate and need no word-level rebuild. Coarse
+    # fallbacks ('lexical', 'linear', 'llm_anchor', 'storyteller[_linear]', legacy '')
+    # are all improvable, so they are deliberately absent here.
+    _word_accurate = ("ctc", "lexical_timed")
+
+    target = None
+    if ctc_available and current_method != "ctc":
+        target = "ctc"
+    elif (current_method or "") not in _word_accurate:
+        target = "word_level"
+
+    if target is None:
+        return jsonify({
+            "success": False,
+            "status": "up_to_date",
+            "message": "Alignment already uses the best available backend.",
+        })
+
+    # A rebuild reuses the cached transcript to skip Whisper; a transcript captured
+    # before word-level timing has no per-word times, so drop it to force a fresh,
+    # word-timestamped transcription. (CTC ignores the transcript entirely.)
+    if target == "word_level":
+        transcriber = getattr(manager, "transcriber", None) if manager else None
+        if transcriber is not None:
+            try:
+                transcriber.invalidate_transcript_cache(abs_id)
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ Remap: could not invalidate transcript for '{abs_id}': {e}",
+                    exc_info=True,
+                )
+
+    if not database_service.set_book_status(abs_id, "pending"):
+        return jsonify({"success": False, "error": "Could not queue remap."}), 500
+
+    logger.info(
+        f"🔁 Remap queued for {sanitize_log_data(book.abs_title or abs_id)} "
+        f"(backend='{target}', from='{current_method or 'none'}')"
+    )
+    return jsonify({"success": True, "backend": target})
 
 
 
@@ -9939,11 +10263,12 @@ def api_status():
 def _build_dashboard_progress_rows(books, all_states):
     """The per-book fields the dashboard's periodic refresh actually redraws.
 
-    Deliberately derived from Book and State rows alone: no display-metadata
+    Derived from Book/State rows and scalar alignment status: no display-metadata
     resolution, no per-book service lookups, and above all no alignment map —
     which the full dashboard build loads per book to compute the drift badge
     (issue #412)."""
     states_by_book = _group_dashboard_states_by_book(all_states)
+    ctc_aligned_book_ids = database_service.get_ctc_aligned_book_ids()
     rows = []
 
     for book in books or []:
@@ -9967,6 +10292,7 @@ def _build_dashboard_progress_rows(books, all_states):
 
         rows.append({
             "abs_id": abs_id,
+            "ctc_aligned": abs_id in ctc_aligned_book_ids,
             "unified_progress": min(max_progress, 100.0),
             "last_sync": _format_dashboard_last_sync(latest_update_time),
             "last_sync_unix": latest_update_time,
@@ -10421,6 +10747,7 @@ def _series_backfill_clients() -> dict:
         "bookorbit_client": container.bookorbit_client(),
         "booklore_client": container.booklore_client(),
         "kavita_client": container.kavita_client(),
+        "ebook_parser": container.ebook_parser(),
     }
 
 
@@ -10512,7 +10839,7 @@ def api_series_backfill():
 
     columns = (
         "SELECT abs_id, abs_title, audio_source, audio_source_id, "
-        "ebook_source, ebook_source_id, series_name, series_sequence FROM books"
+        "ebook_source, ebook_source_id, ebook_filename, series_name, series_sequence FROM books"
     )
     query = columns if refresh else (
         columns + " WHERE series_name IS NULL OR series_name = ''"
@@ -10530,7 +10857,7 @@ def api_series_backfill():
     failed = 0
 
     for (abs_id, abs_title, audio_source, audio_source_id,
-         ebook_source, ebook_source_id, stored_name, stored_seq) in rows:
+         ebook_source, ebook_source_id, ebook_filename, stored_name, stored_seq) in rows:
         book_row = SimpleNamespace(
             abs_id=abs_id,
             abs_title=abs_title,
@@ -10538,6 +10865,7 @@ def api_series_backfill():
             audio_source_id=audio_source_id,
             ebook_source=ebook_source,
             ebook_source_id=ebook_source_id,
+            ebook_filename=ebook_filename,
         )
         try:
             resolution = resolve_series_details(book_row, force_refresh=refresh, **clients)
@@ -10773,6 +11101,38 @@ def proxy_booklore_audiobook_cover(book_id):
         return "Error loading cover", 500
 
 
+def proxy_booklore_book_cover(book_id):
+    """Stream a regular Grimmory ebook cover through the backend."""
+    user = current_user()
+    # Older mappings use each of these spellings. Keep the ownership gate
+    # source-agnostic while the client request remains server-side.
+    book = None
+    if database_service:
+        for source in ("BookLore", "Booklore", "Grimmory"):
+            book = database_service.get_book_by_ebook_source(source, str(book_id))
+            if book:
+                break
+    if book and book.abs_id:
+        if not _user_may_modify_book(user, book.abs_id):
+            return _forbidden_book_response(json_response=True)
+    elif user is not None and not getattr(user, 'is_admin', False):
+        return _forbidden_book_response(json_response=True)
+
+    client = container.booklore_client()
+    if not client.is_configured():
+        return "Grimmory not configured", 400
+
+    try:
+        content, content_type = client.get_book_cover_bytes(book_id)
+        if not content:
+            return "Cover not found", 404
+        from flask import Response
+        return Response(content, content_type=content_type or "image/jpeg")
+    except Exception as e:
+        logger.error(f"❌ Error proxying Grimmory book cover for '{book_id}': {e}", exc_info=True)
+        return "Error loading cover", 500
+
+
 def proxy_bookorbit_audiobook_cover(book_id):
     """Stream a BookOrbit book cover through the backend."""
     user = current_user()
@@ -10841,6 +11201,10 @@ def api_booklore_refresh():
 
     if not refreshed:
         return jsonify({"success": False, "error": "Grimmory refresh failed"}), 500
+
+    reconcile = getattr(client, "reconcile_mapping_filename_drift", None)
+    if callable(reconcile):
+        reconcile()
 
     return jsonify({"success": True, "message": "Grimmory cache refreshed successfully"})
 
@@ -12176,6 +12540,7 @@ def create_app(test_container=None):
     app.add_url_rule('/suggestions', 'suggestions', suggestions_page, methods=['GET', 'POST'])
     app.add_url_rule('/delete/<abs_id>', 'delete_mapping', delete_mapping, methods=['POST'])
     app.add_url_rule('/clear-progress/<abs_id>', 'clear_progress', clear_progress, methods=['POST'])
+    app.add_url_rule('/api/remap-alignment/<abs_id>', 'remap_alignment', remap_alignment, methods=['POST'])
     app.add_url_rule('/api/sync-now/<abs_id>', 'sync_now', sync_now, methods=['POST'])
     app.add_url_rule('/api/mark-complete/<abs_id>', 'mark_complete', mark_complete, methods=['POST'])
     app.add_url_rule('/api/me/kosync-documents', 'api_me_kosync_documents', api_me_kosync_documents, methods=['GET'])
@@ -12210,6 +12575,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/cache/clean', 'clean_cache', clean_inactive_cache, methods=['POST'])
     app.add_url_rule('/api/cover-proxy/<abs_id>', 'proxy_cover', proxy_cover)
     app.add_url_rule('/api/booklore/audiobook-cover/<book_id>', 'proxy_booklore_audiobook_cover', proxy_booklore_audiobook_cover, methods=['GET'])
+    app.add_url_rule('/api/booklore/book-cover/<book_id>', 'proxy_booklore_book_cover', proxy_booklore_book_cover, methods=['GET'])
     app.add_url_rule('/api/bookorbit/audiobook-cover/<book_id>', 'proxy_bookorbit_audiobook_cover', proxy_bookorbit_audiobook_cover, methods=['GET'])
     app.add_url_rule('/api/kavita/cover/<series_id>', 'proxy_kavita_cover', proxy_kavita_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
@@ -12244,6 +12610,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/forge/process', 'forge_process', forge_process, methods=['POST'])
     app.add_url_rule('/api/alignments/llm-status', 'alignments_llm_status', alignments_llm_status, methods=['GET'])
     app.add_url_rule('/api/alignments/realign', 'alignments_realign', alignments_realign, methods=['POST'])
+    app.add_url_rule('/api/alignments/restore', 'alignments_restore', alignments_restore, methods=['POST'])
 
     @app.route('/api/forge/active', methods=['GET'])
     def forge_active_tasks():

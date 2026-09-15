@@ -187,3 +187,66 @@ def test_kosync_compute_no_booklore_id_returns_none():
     svc, _db, _bl, _ep, _abs = _build_service()
     assert svc._compute_kosync_id('x.epub', None) is None
     assert svc._compute_kosync_id('x.epub', '') is None
+
+
+def test_audio_mapping_absorbs_an_existing_ebook_only_entry():
+    """An ebook-only mapping upgraded to audiobook must be folded in, not doubled.
+
+    The duplicate-merge check lived only in the manual match route, so matching
+    through Suggestions produced two rows for one ebook -- observed live as
+    an ebook-only row alongside its new audiobook row, both carrying
+    kosync_doc_id a real ebook's content hash. Since
+    KosyncDocument.linked_abs_id holds a single book, the loser of such a pair is
+    listed and served but can never receive progress.
+    """
+    svc, db, _bl, _ep, _abs = _build_service()
+    stale = Book(
+        abs_id='ebook-abcdef0123456789',
+        abs_title="Winter's Tale",
+        sync_mode='ebook_only',
+        kosync_doc_id='abcdef0123456789',
+        storyteller_uuid='st-uuid-1',
+        transcript_file='stale-transcript.json',
+    )
+    db.get_book_by_kosync_id.return_value = stale
+
+    saved = svc.create_audio_mapping_from_match(
+        audio_source='BookOrbit',
+        audio_source_id='1002',
+        audio_title="Winter's Tale",
+        ebook_filename='test.epub',
+        ebook_source='Grimmory',
+        ebook_source_id='5951',
+    )
+
+    assert saved.abs_id == 'bookorbit:1002'
+    db.absorb_duplicate_mapping.assert_called_once_with(saved)
+    # What only the ebook-only row knew has to survive the merge.
+    assert saved.storyteller_uuid == 'st-uuid-1'
+    assert saved.transcript_file == 'stale-transcript.json'
+
+
+def test_audio_mapping_does_not_absorb_itself_on_a_re_match():
+    """Re-matching the same book must not try to absorb its own row."""
+    existing = Book(
+        abs_id='bookorbit:1002',
+        abs_title="Winter's Tale",
+        sync_mode='audiobook',
+        kosync_doc_id='abcdef0123456789',
+    )
+    svc, db, _bl, _ep, _abs = _build_service(db_existing=existing)
+    db.get_book_by_kosync_id.return_value = existing
+
+    saved = svc.create_audio_mapping_from_match(
+        audio_source='BookOrbit',
+        audio_source_id='1002',
+        audio_title="Winter's Tale",
+        ebook_filename='test.epub',
+        ebook_source='Grimmory',
+        ebook_source_id='5951',
+    )
+
+    assert saved.abs_id == 'bookorbit:1002'
+    # The guard lives in absorb_duplicate_mapping, which is still called -- what
+    # must not happen is the field-preservation loop treating the row as stale.
+    db.absorb_duplicate_mapping.assert_called_once_with(saved)

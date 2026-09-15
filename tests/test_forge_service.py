@@ -241,8 +241,8 @@ class TestForgeService(unittest.TestCase):
             dest = tmp_path / "dest.epub"
             source.write_bytes(b"source")
 
-            with patch("src.services.forge_service.os.link") as mock_link, patch(
-                "src.services.forge_service.shutil.copy2"
+            with patch("src.services.forge_service.hardlink_file_to_path") as mock_link, patch(
+                "src.services.forge_service.copy_file_to_path"
             ) as mock_copy:
                 result = self.service._stage_local_file(source, dest, "hardlink", "Forge")
 
@@ -257,13 +257,14 @@ class TestForgeService(unittest.TestCase):
             dest = tmp_path / "dest.epub"
             source.write_bytes(b"source")
 
-            with patch("src.services.forge_service.os.link", side_effect=OSError("no hardlink")), patch(
-                "src.services.forge_service.shutil.copy2"
-            ) as mock_copy:
+            with patch(
+                "src.services.forge_service.hardlink_file_to_path",
+                side_effect=OSError("no hardlink"),
+            ), patch("src.services.forge_service.copy_file_to_path") as mock_copy:
                 result = self.service._stage_local_file(source, dest, "hardlink", "Forge")
 
             self.assertEqual(result, "copy")
-            mock_copy.assert_called_once_with(str(source), dest)
+            mock_copy.assert_called_once_with(source, dest)
 
     def test_booklore_hardlink_uses_local_exact_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,13 +383,14 @@ class TestForgeService(unittest.TestCase):
                 ],
             }
 
-            with patch("src.services.forge_service.os.link", side_effect=OSError("no hardlink")), patch(
-                "src.services.forge_service.shutil.copy2"
-            ) as mock_copy:
+            with patch(
+                "src.services.forge_service.hardlink_file_to_path",
+                side_effect=OSError("no hardlink"),
+            ), patch("src.services.forge_service.copy_file_to_path") as mock_copy:
                 result = self.service._copy_booklore_audio_files("bl-1", dest_folder, stage_mode="hardlink")
 
             self.assertTrue(result)
-            mock_copy.assert_called_once_with(str(source), dest_folder / "track_000.m4b")
+            mock_copy.assert_called_once_with(source, dest_folder / "track_000.m4b")
             self.mock_booklore.download_book_to_path.assert_not_called()
             self.mock_booklore.download_audiobook_track.assert_not_called()
 

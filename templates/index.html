@@ -14,7 +14,10 @@
         data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
         data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
         data-added="{{ mapping.added_at_unix|default(0) }}"
-        data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}">
+        data-rating="{% if mapping.storygraph_rating is not none and mapping.goodreads_rating is not none %}{{ ((mapping.storygraph_rating + mapping.goodreads_rating) / 2) }}{% elif mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% elif mapping.goodreads_rating is not none %}{{ mapping.goodreads_rating }}{% endif %}"
+        data-last-sync-unix="{{ mapping.last_sync_unix|default(0) }}"
+        data-series-name="{{ mapping.series_name if mapping.series_name is not none else '' }}"
+        data-series-sequence="{{ mapping.series_sequence if mapping.series_sequence is not none else '' }}">
 
         {# Cover image section - prioritize ebook cover, fallback to ABS cover #}
         <div class="book-media-column">
@@ -350,17 +353,30 @@
             {% endif %}
 
             <div class="card-footer">
-                <div class="last-sync">Synced {{ mapping.last_sync }}</div>
+                <div class="last-sync">
+                    <span class="last-sync-age">Synced {{ mapping.last_sync }}</span>
+                    <span class="ctc-alignment-badge" title="CTC word alignment is ready"
+                        {% if not mapping.ctc_aligned %}hidden{% endif %}>CTC</span>
+                </div>
                 <div class="quick-actions">
                     <button type="button" class="action-btn" onclick="syncNow('{{ mapping.abs_id }}', this)"
                         title="Sync Now">⚡</button>
                     <button type="button" class="action-btn"
                         onclick='markComplete({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
                         title="Mark Complete">✅</button>
-                    <form method="POST" action="/clear-progress/{{ mapping.abs_id }}">
-                        <button type="submit" class="action-btn warning" aria-label="Clear Progress"
-                            title="Clear progress" onclick="return confirm('Clear all progress for this book?')">🔄</button>
-                    </form>
+                    <div class="reset-menu">
+                        <button type="button" class="action-btn warning" aria-haspopup="true"
+                            aria-expanded="false" aria-label="Reset options"
+                            title="Reset / remap" onclick="toggleResetMenu(event, this)">🔄</button>
+                        <div class="reset-menu-dropdown" role="menu" hidden>
+                            <button type="button" role="menuitem" class="reset-menu-item"
+                                onclick='clearPosition({{ mapping.abs_id|tojson }})'>🧹 Clear position</button>
+                            <button type="button" role="menuitem" class="reset-menu-item remap-alignment-btn"
+                                data-ctc-aligned="{{ 'true' if mapping.ctc_aligned else 'false' }}"
+                                {% if mapping.ctc_aligned %}disabled title="This book already has a CTC alignment map"{% endif %}
+                                onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{{ '✓ Already using CTC' if mapping.ctc_aligned else '🎯 Remap alignment' }}</button>
+                        </div>
+                    </div>
                     <form method="POST" action="/delete/{{ mapping.abs_id }}">
                         <button type="submit" class="action-btn danger" aria-label="Delete Mapping"
                             title="Delete mapping" onclick="return confirm('Delete this mapping?')">🗑️</button>
@@ -378,6 +394,7 @@
          data-author="{{ group.series_author }}"
          data-progress="{{ group.avg_progress }}"
          data-last-sync="{{ group.last_sync_unix }}"
+         data-last-sync-unix="{{ group.last_sync_unix|default(0) }}"
          data-added="{{ group.added_at_unix|default(0) }}"
          data-child-count="{{ group.child_count }}">
       <div class="series-header" role="button" tabindex="0"
@@ -482,6 +499,9 @@
             cursor: pointer;
             -webkit-user-select: none;
             user-select: none;
+            display: flex;
+            justify-content: flex-start;
+            gap: 12px;
         }
 
         .section-chevron {
@@ -563,6 +583,17 @@
 
         .controls-bar .form-select {
             width: auto;
+        }
+
+        /* Pushed to the far end of the bar; wraps with everything else on narrow screens. */
+        .filter-count-group {
+            margin-left: auto;
+        }
+
+        .filter-count {
+            font-size: 13px;
+            color: var(--muted-soft);
+            white-space: nowrap;
         }
 
         .controls-bar select.form-select option {
@@ -1008,6 +1039,44 @@
         .action-btn.warning:hover {
             background: rgba(255, 209, 102, 0.25);
         }
+
+        .reset-menu { position: relative; display: inline-block; }
+        .ctc-alignment-badge {
+            margin-left: 5px;
+            padding: 2px 5px;
+            border-radius: 4px;
+            background: rgba(79, 195, 247, 0.18);
+            color: var(--reading, #4fc3f7);
+            font-size: 9px;
+            font-weight: 700;
+        }
+        /* Portaled to <body> and positioned in JS (position:fixed) so the card's
+           overflow:hidden and hover transform can neither clip it nor paint over it. */
+        .reset-menu-dropdown {
+            position: fixed;
+            z-index: 1000;
+            min-width: 180px;
+            padding: 4px;
+            text-align: left;
+            background: var(--card-bg, #1e1e2e);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 8px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+        }
+        .reset-menu-item {
+            display: block;
+            width: 100%;
+            padding: 8px 10px;
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 13px;
+            text-align: left;
+            cursor: pointer;
+            border-radius: 6px;
+        }
+        .reset-menu-item:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+        .reset-menu-item:disabled { opacity: 0.6; cursor: default; }
 
         /* Empty State: base centering/padding comes from app.css's shared .empty-state */
         .empty-state-icon {
@@ -2118,22 +2187,67 @@
           {% if m.unified_progress == 0 %}{% set section_flags.has_not_started = true %}{% endif %}
           {% if m.unified_progress >= 100 %}{% set section_flags.has_finished = true %}{% endif %}
         {% endfor %}
+        {# Keep a section available for every group as well as every individual book. #}
+        {% for entry in grouped_mappings %}
+          {% if entry.is_series_group %}
+            {% if entry.section_bucket == 'in_progress' %}{% set section_flags.has_in_progress = true %}{% endif %}
+            {% if entry.section_bucket == 'not_started' %}{% set section_flags.has_not_started = true %}{% endif %}
+            {% if entry.section_bucket == 'finished' %}{% set section_flags.has_finished = true %}{% endif %}
+          {% endif %}
+        {% endfor %}
+        {# Distinct series in the library, for the series filter. Includes a series
+           whose only owned volume renders as a flat card, since it is still a series. #}
+        {% set series_options = mappings | map(attribute='series_name') | reject('none') | unique | sort(case_sensitive=False) %}
+        {# Distinct authors, same idea. display_author is '' rather than None when
+           unknown, so reject the blanks too. #}
+        {% set author_options = mappings | map(attribute='display_author') | reject('none') | reject('equalto', '') | unique | sort(case_sensitive=False) %}
         <div class="controls-bar">
             <div class="control-group">
                 <input type="text" id="dashboard-search" class="form-input" placeholder="Search books...">
             </div>
             <div class="control-group">
-                <label for="filter-select">Show:</label>
+                <label for="filter-select">Format:</label>
                 <select id="filter-select" class="form-select">
+                    <option value="all">All Formats</option>
+                    <option value="has_audio">Has Audio</option>
+                    <option value="audiobook_only">Audiobook Only</option>
+                    <option value="ebook_only">Ebook Only</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="series-filter">Series:</label>
+                <select id="series-filter" class="form-select">
                     <option value="all">All Books</option>
-                    <option value="audiobook">Audiobooks</option>
-                    <option value="ebook_only">Ebooks Only</option>
+                    <option value="none">No Series</option>
+                    {% if series_options %}
+                    <optgroup label="Series">
+                        {% for series_option_name in series_options %}
+                        <option value="series:{{ series_option_name }}">{{ series_option_name }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="author-filter">Author:</label>
+                <select id="author-filter" class="form-select">
+                    <option value="all">All Authors</option>
+                    <option value="none">No Author</option>
+                    {% if author_options %}
+                    <optgroup label="Authors">
+                        {% for author_option_name in author_options %}
+                        <option value="author:{{ author_option_name }}">{{ author_option_name }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
                 </select>
             </div>
             <div class="control-group">
                 <label for="sort-select">Sort by:</label>
                 <select id="sort-select" class="form-select">
                     <option value="title">Title</option>
+                    <option value="author">Author</option>
+                    <option value="series">Series</option>
                     <option value="progress">Progress</option>
                     <option value="status">Status</option>
                     <option value="last_sync">Last Synced</option>
@@ -2147,6 +2261,9 @@
                     <input type="checkbox" id="series-grouping-toggle" checked>
                     <span>Group series</span>
                 </label>
+            </div>
+            <div class="control-group filter-count-group">
+                <span id="filter-count" class="filter-count" role="status" aria-live="polite"></span>
             </div>
         </div>
 
@@ -2162,8 +2279,12 @@
             </div>
 
             <div class="book-grid" id="in-progress-grid">
-                {% for m in mappings %}
-                  {% if m.unified_progress > 0 and m.unified_progress < 100 %}{{ render_book_card(m, integrations) }}{% endif %}
+                {% for entry in grouped_mappings %}
+                {% if entry.is_series_group %}
+                  {% if entry.section_bucket == 'in_progress' %}{{ render_series_card(entry, integrations) }}{% endif %}
+                {% else %}
+                  {% if entry.unified_progress > 0 and entry.unified_progress < 100 %}{{ render_book_card(entry, integrations) }}{% endif %}
+                {% endif %}
                 {% endfor %}
             </div>
         </div>
@@ -2198,7 +2319,14 @@
             <div class="book-grid" id="finished-grid">
                 {% for entry in grouped_mappings %}
                 {% if entry.is_series_group %}
-                  {% if entry.section_bucket == 'finished' %}{{ render_series_card(entry, integrations) }}{% endif %}
+                  {% if entry.section_bucket == 'finished' %}{{ render_series_card(entry, integrations) }}
+                  {% else %}
+                  {# Keep finished volumes reachable here as well as inside their series.
+                     Fully finished groups already render here, so do not duplicate them. #}
+                    {% for child in entry.children %}
+                      {% if child.unified_progress >= 100 %}{{ render_book_card(child, integrations) }}{% endif %}
+                    {% endfor %}
+                  {% endif %}
                 {% else %}
                   {% if entry.unified_progress >= 100 %}{{ render_book_card(entry, integrations) }}{% endif %}
                 {% endif %}
@@ -2222,6 +2350,9 @@
             const dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));
             const sortSelect = document.getElementById('sort-select');
             const filterSelect = document.getElementById('filter-select');
+            const seriesFilter = document.getElementById('series-filter');
+            const authorFilter = document.getElementById('author-filter');
+            const filterCount = document.getElementById('filter-count');
             const directionBtn = document.getElementById('sort-direction');
             const dashboardSearch = document.getElementById('dashboard-search');
             const searchHandoff = document.getElementById('search-handoff');
@@ -2257,6 +2388,101 @@
                     }
                 });
             }
+            // Finished volumes can appear in their series and under Finished.
+            // Count each book once, regardless of grouping or duplicate cards.
+            function distinctBookCards() {
+                const seen = new Map();
+                document.querySelectorAll('.book-card').forEach(card => {
+                    const absId = card.dataset.absId;
+                    if (absId && !seen.has(absId)) seen.set(absId, card);
+                });
+                return Array.from(seen.values());
+            }
+
+            function updateFilteredCount() {
+                if (!filterCount) return;
+
+                const cards = distinctBookCards();
+                const total = cards.length;
+                const shown = cards.reduce(
+                    (n, card) => n + (card.classList.contains('hidden') ? 0 : 1), 0);
+                const noun = total === 1 ? 'book' : 'books';
+                filterCount.textContent = shown === total
+                    ? total + ' ' + noun
+                    : shown + ' of ' + total + ' ' + noun;
+            }
+
+            // Narrow the Series and Author lists to what the OTHER filters leave
+            // reachable, with a count of distinct books per option.
+            //
+            // Three deliberate rules:
+            //  * A list is never computed from its own selection. Otherwise choosing an
+            //    author would leave that author as the only option and you could never
+            //    switch without resetting.
+            //  * The search box is excluded. It is logically another filter, but feeding
+            //    it in would make both lists churn on every keystroke.
+            //  * Format is an input to the other two but is never itself narrowed --
+            //    it has a handful of fixed options and hiding them reads as breakage.
+            function facetOptionBaseLabel(option) {
+                if (option.dataset.facetLabel === undefined) {
+                    option.dataset.facetLabel = option.textContent.trim();
+                }
+                return option.dataset.facetLabel;
+            }
+
+            function applyFacetCounts(select, cards, matches) {
+                if (!select) return;
+                const selected = select.value;
+
+                Array.from(select.querySelectorAll('option')).forEach(option => {
+                    const label = facetOptionBaseLabel(option);
+                    if (option.value === 'all') {
+                        option.textContent = label;
+                        option.hidden = false;
+                        option.disabled = false;
+                        return;
+                    }
+                    let count = 0;
+                    cards.forEach(card => {
+                        if (matches(card, option.value)) count += 1;
+                    });
+                    option.textContent = label + ' (' + count + ')';
+                    // Never hide the current selection: the reader has to be able to
+                    // see what they picked and undo it, even once it matches nothing.
+                    const keep = count > 0 || option.value === selected;
+                    option.hidden = !keep;
+                    option.disabled = !keep;
+                });
+
+                // An optgroup whose every option is hidden would still render its label.
+                Array.from(select.querySelectorAll('optgroup')).forEach(group => {
+                    const usable = Array.from(group.querySelectorAll('option'))
+                        .some(option => !option.hidden);
+                    group.hidden = !usable;
+                });
+            }
+
+            function updateFacetOptions() {
+                if (!seriesFilter && !authorFilter) return;
+                const cards = distinctBookCards();
+                const formatValue = filterSelect ? filterSelect.value : 'all';
+                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
+                const authorValue = authorFilter ? authorFilter.value : 'all';
+
+                applyFacetCounts(
+                    seriesFilter,
+                    cards.filter(card => matchesFormatFilter(card, formatValue)
+                        && matchesAuthorFilter(card, authorValue)),
+                    matchesSeriesFilter,
+                );
+                applyFacetCounts(
+                    authorFilter,
+                    cards.filter(card => matchesFormatFilter(card, formatValue)
+                        && matchesSeriesFilter(card, seriesValue)),
+                    matchesAuthorFilter,
+                );
+            }
+
             // Offers a route into Add Book's library search for a title the dashboard
             // filter can't show, because it isn't synced yet.
             function updateSearchHandoff(rawQuery) {
@@ -2292,23 +2518,72 @@
                 }
             };
 
+            // Format and series are orthogonal axes, so each is its own predicate over
+            // one card rather than a branch in a single mutually-exclusive filter.
+            function matchesFormatFilter(card, formatValue) {
+                if (formatValue === 'all') return true;
+                const syncMode = card.dataset.syncMode || 'audiobook';
+                if (formatValue === 'has_audio') {
+                    return syncMode === 'audiobook' || syncMode === 'audiobook_only';
+                }
+                return syncMode === formatValue;
+            }
+
+            // 'all', 'none' (no series at all), or 'series:<name>' for one named series.
+            // The prefix keeps a series actually called "all" or "none" addressable.
+            // A book counts as being in a series whenever the server gave it a name --
+            // including the sole owned volume of one, which is rendered as a flat card
+            // because single-child groups are demoted server-side.
+            const SERIES_FILTER_PREFIX = 'series:';
+
+            function matchesSeriesFilter(card, seriesValue) {
+                if (!seriesValue || seriesValue === 'all') return true;
+                const seriesName = card.dataset.seriesName || '';
+                if (seriesValue === 'none') return !seriesName;
+                if (seriesValue.indexOf(SERIES_FILTER_PREFIX) === 0) {
+                    return seriesName === seriesValue.slice(SERIES_FILTER_PREFIX.length);
+                }
+                return true;
+            }
+
+            // 'all', 'none' (no author recorded), or 'author:<name>'. Prefixed for the
+            // same reason as the series filter: an author actually called "all" stays
+            // addressable. A series group card carries its most common author, so
+            // selecting an author keeps that author's series intact.
+            const AUTHOR_FILTER_PREFIX = 'author:';
+
+            function matchesAuthorFilter(card, authorValue) {
+                if (!authorValue || authorValue === 'all') return true;
+                const author = card.dataset.author || '';
+                if (authorValue === 'none') return !author;
+                if (authorValue.indexOf(AUTHOR_FILTER_PREFIX) === 0) {
+                    return author === authorValue.slice(AUTHOR_FILTER_PREFIX.length);
+                }
+                return true;
+            }
+
             function filterBooks() {
                 const filterValue = filterSelect.value;
+                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
+                const authorValue = authorFilter ? authorFilter.value : 'all';
                 const searchString = dashboardSearch ? dashboardSearch.value.toLowerCase() : '';
+
+                // Cards clearing every non-search predicate. A series-name search may stand
+                // in for the search term on a group's children, but never for the filters.
+                const passesFilters = new Set();
 
                 // Filter flat book cards
                 const cards = document.querySelectorAll('.book-card');
                 cards.forEach(card => {
-                    const syncMode = card.dataset.syncMode || 'audiobook';
                     const title = (card.dataset.title || '').toLowerCase();
                     const author = (card.dataset.author || '').toLowerCase();
                     const filename = (card.dataset.filename || '').toLowerCase();
 
-                    let isVisible = true;
-                    if (filterValue === 'audiobook' && syncMode !== 'audiobook') {
-                        isVisible = false;
-                    } else if (filterValue === 'ebook_only' && syncMode !== 'ebook_only') {
-                        isVisible = false;
+                    let isVisible = matchesFormatFilter(card, filterValue)
+                        && matchesSeriesFilter(card, seriesValue)
+                        && matchesAuthorFilter(card, authorValue);
+                    if (isVisible) {
+                        passesFilters.add(card);
                     }
                     if (isVisible && searchString) {
                         if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {
@@ -2333,7 +2608,7 @@
                     const childCards = group.querySelectorAll('.book-card');
                     let anyChildVisible = false;
                     childCards.forEach(child => {
-                        if (seriesNameMatchesSearch) {
+                        if (seriesNameMatchesSearch && passesFilters.has(child)) {
                             child.classList.remove('hidden');
                             child.style.display = '';
                             anyChildVisible = true;
@@ -2352,10 +2627,20 @@
                 });
 
                 updateDashboardSectionVisibility();
+                updateFacetOptions();
+                updateFilteredCount();
                 updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
 
                 // Persist choice
-                localStorage.setItem('abs_kosync_filter', filterValue);
+                try {
+                    localStorage.setItem('abs_kosync_filters', JSON.stringify({
+                        format: filterValue,
+                        series: seriesValue,
+                        author: authorValue
+                    }));
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
             }
 
             window.toggleSeries = function (domId) {
@@ -2460,6 +2745,8 @@
             // Initial Sort Defaults
             let sortState = {
                 title: 'asc',      // A-Z default
+                author: 'asc',     // A-Z default
+                series: 'asc',     // Series A-Z, then reading order
                 progress: 'desc',  // Highest progress first
                 status: 'asc',
                 last_sync: 'desc', // Newest sync first
@@ -2507,23 +2794,74 @@
                 return Infinity;
             }
 
-            function sortCards(grid, sortBy, direction) {
-                if (!grid) return;
-                const items = Array.from(grid.children);
+            // Returns age in seconds for sorting (smaller = more recent).
+            // Prefers data-last-sync-unix; falls back to parseLastSync on data-last-sync.
+            function getLastSyncAge(el) {
+                const unixStr = el.dataset.lastSyncUnix;
+                if (unixStr !== undefined && unixStr !== '') {
+                    const unixVal = parseFloat(unixStr);
+                    if (!isNaN(unixVal) && unixVal > 0) {
+                        return Math.max(0, Date.now() / 1000 - unixVal);
+                    }
+                }
+                // Fallback: never-synced (0 or missing) or unparseable -> parse humanized string
+                return parseLastSync(el.dataset.lastSync || '');
+            }
 
-                const sorted = items.sort((a, b) => {
+            // Title value used by the tie-breaks. A series group card carries its series
+            // name rather than a title, so it still compares against book cards.
+            function sortTitleOf(el) {
+                return (el.dataset.title || el.dataset.seriesName || '').toLowerCase();
+            }
+
+            // Returns the comparator for one sort key so both sortCards and the author
+            // view order entries identically.
+            function makeSortComparator(sortBy, direction) {
+                return (a, b) => {
                     let comparison = 0;
                     const isSeries = (el) => el.classList.contains('series-group');
 
                     let valA, valB;
                     if (sortBy === 'last_sync') {
-                        valA = a.dataset.lastSync || '';
-                        valB = b.dataset.lastSync || '';
-                        comparison = parseLastSync(valA) - parseLastSync(valB);
+                        comparison = getLastSyncAge(a) - getLastSyncAge(b);
                     } else if (sortBy === 'title') {
                         valA = (a.dataset.title || a.dataset.seriesName || '').toLowerCase();
                         valB = (b.dataset.title || b.dataset.seriesName || '').toLowerCase();
                         comparison = valA.localeCompare(valB);
+                    } else if (sortBy === 'author') {
+                        const authorA = (a.dataset.author || '').toLowerCase();
+                        const authorB = (b.dataset.author || '').toLowerCase();
+                        // Unattributed books trail the named ones either way, like the
+                        // unrated branch below.
+                        if (!authorA && authorB) return 1;
+                        if (authorA && !authorB) return -1;
+                        comparison = authorA.localeCompare(authorB);
+                        if (comparison === 0) {
+                            // Returned directly, like the added branch: one author's books
+                            // read A-Z whichever way the author column is pointing.
+                            return sortTitleOf(a).localeCompare(sortTitleOf(b));
+                        }
+                    } else if (sortBy === 'series') {
+                        const seriesA = (a.dataset.seriesName || '').toLowerCase();
+                        const seriesB = (b.dataset.seriesName || '').toLowerCase();
+                        // Standalone books trail every series either way.
+                        if (!seriesA && seriesB) return 1;
+                        if (seriesA && !seriesB) return -1;
+                        comparison = seriesA.localeCompare(seriesB);
+                        if (comparison === 0) {
+                            // Within one series, reading order stays ascending whichever way
+                            // the series column points. Sequence 0 is valid, so test for a
+                            // finite number rather than truthiness; a series group card has
+                            // no sequence and trails its own volumes.
+                            const seqA = parseFloat(a.dataset.seriesSequence);
+                            const seqB = parseFloat(b.dataset.seriesSequence);
+                            const hasSeqA = Number.isFinite(seqA);
+                            const hasSeqB = Number.isFinite(seqB);
+                            if (hasSeqA && hasSeqB && seqA !== seqB) return seqA - seqB;
+                            if (hasSeqA && !hasSeqB) return -1;
+                            if (!hasSeqA && hasSeqB) return 1;
+                            return sortTitleOf(a).localeCompare(sortTitleOf(b));
+                        }
                     } else if (sortBy === 'progress') {
                         valA = parseFloat(a.dataset.progress || '0') || 0;
                         valB = parseFloat(b.dataset.progress || '0') || 0;
@@ -2560,7 +2898,13 @@
                     }
 
                     return direction === 'asc' ? comparison : -comparison;
-                });
+                };
+            }
+
+            function sortCards(grid, sortBy, direction) {
+                if (!grid) return;
+                const items = Array.from(grid.children);
+                const sorted = items.sort(makeSortComparator(sortBy, direction));
 
                 sorted.forEach(el => grid.appendChild(el));
             }
@@ -2761,8 +3105,48 @@
             // Filter Logic initialization
             if (filterSelect) {
                 filterSelect.addEventListener('change', filterBooks);
-                const savedFilter = localStorage.getItem('abs_kosync_filter') || 'all';
-                filterSelect.value = savedFilter;
+                if (seriesFilter) seriesFilter.addEventListener('change', filterBooks);
+                if (authorFilter) authorFilter.addEventListener('change', filterBooks);
+
+                let savedFormat = 'all';
+                let savedSeries = 'all';
+                let savedAuthor = 'all';
+                try {
+                    const savedFilters = localStorage.getItem('abs_kosync_filters');
+                    if (savedFilters) {
+                        const parsed = JSON.parse(savedFilters);
+                        savedFormat = parsed.format || 'all';
+                        savedSeries = parsed.series || 'all';
+                        // An earlier iteration of this control was a yes/no pair, and
+                        // those values can still be sitting in a reader's localStorage.
+                        // 'standalone' has a direct equivalent; 'in a series' no longer
+                        // does, so widen to all rather than silently hiding books.
+                        if (savedSeries === 'standalone') savedSeries = 'none';
+                        else if (savedSeries === 'in_series') savedSeries = 'all';
+                        savedAuthor = parsed.author || 'all';
+                    } else {
+                        // Migrate the pre-multi-filter scalar key. Its "audiobook" meant
+                        // sync_mode 'audiobook' alone, which silently hid audiobook-only
+                        // books; "Has Audio" is the option that now covers both.
+                        const legacy = localStorage.getItem('abs_kosync_filter');
+                        if (legacy) savedFormat = legacy === 'audiobook' ? 'has_audio' : legacy;
+                    }
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
+
+                filterSelect.value = savedFormat;
+                if (seriesFilter) {
+                    seriesFilter.value = savedSeries;
+                    // A remembered series that is no longer in the library matches no
+                    // option, which leaves the select with no selection at all. Show
+                    // everything rather than stranding the reader on a blank filter.
+                    if (!seriesFilter.value) seriesFilter.value = 'all';
+                }
+                if (authorFilter) {
+                    authorFilter.value = savedAuthor;
+                    if (!authorFilter.value) authorFilter.value = 'all';
+                }
                 // Apply filter initially
                 filterBooks();
             }
@@ -2781,7 +3165,7 @@
                 }
 
                 // Compact position feed, not the full dashboard payload: this
-                // handler only redraws progress numbers and the synced line.
+                // handler redraws progress, the synced line and CTC status.
                 fetch('/api/status/progress')
                     .then(r => r.json())
                     .then(data => {
@@ -2789,6 +3173,7 @@
                         data.mappings.forEach(book => {
                             const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);
                             if (!card) return;
+                            updateCtcAlignmentStatus(card, book.ctc_aligned === true);
 
                             // Update progress percentage text
                             const progressPercent = card.querySelector('.progress-percent');
@@ -2823,7 +3208,7 @@
                             }
 
                             // Update last sync text
-                            const lastSync = card.querySelector('.last-sync');
+                            const lastSync = card.querySelector('.last-sync-age');
                             if (lastSync && book.last_sync) {
                                 lastSync.textContent = `Synced ${book.last_sync}`;
                             }
@@ -2978,7 +3363,7 @@
                 {% endif %}
             </span>
             {% if update_available %}
-            <a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank"
+            <a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank" rel="noopener noreferrer"
                 style="font-size: 11px; color: var(--accent); text-decoration: none; background: rgba(102,126,234,0.15); border: 1px solid rgba(102,126,234,0.3); border-radius: 4px; padding: 3px 8px; white-space: nowrap; transition: all 0.2s; font-weight: 600;"
                 onmouseover="this.style.background='rgba(102,126,234,0.25)'"
                 onmouseout="this.style.background='rgba(102,126,234,0.15)'">
@@ -3018,6 +3403,111 @@
                             btn.innerHTML = originalText;
                             btn.disabled = false;
                         }, 2000);
+                    });
+            }
+
+            function updateCtcAlignmentStatus(card, isCtc) {
+                const badge = card.querySelector('.ctc-alignment-badge');
+                if (badge) badge.hidden = !isCtc;
+                const owner = card.querySelector('.reset-menu > button');
+                const menu = owner?._menu || card.querySelector('.reset-menu-dropdown');
+                const btn = menu?.querySelector('.remap-alignment-btn');
+                if (!btn || btn.dataset.ctcAligned === String(isCtc)) return;
+                btn.dataset.ctcAligned = String(isCtc);
+                btn.disabled = isCtc;
+                btn.textContent = isCtc ? '✓ Already using CTC' : '🎯 Remap alignment';
+                btn.title = isCtc ? 'This book already has a CTC alignment map' : '';
+            }
+
+            function _positionResetMenu(btn, menu) {
+                const r = btn.getBoundingClientRect();
+                const mw = menu.offsetWidth || 190;
+                const mh = menu.offsetHeight || 88;
+                let left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8));
+                let top = r.bottom + 4;
+                if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4);
+                menu.style.left = left + 'px';
+                menu.style.top = top + 'px';
+            }
+
+            function _closeResetMenu(btn, menu) {
+                menu.hidden = true;
+                if (btn) btn.setAttribute('aria-expanded', 'false');
+                if (menu._home && menu.parentElement !== menu._home) menu._home.appendChild(menu);
+                if (menu._cleanup) { menu._cleanup(); menu._cleanup = null; }
+            }
+
+            function toggleResetMenu(event, btn) {
+                event.stopPropagation();
+                const menu = btn._menu || btn.parentElement.querySelector('.reset-menu-dropdown');
+                if (!menu) return;
+                btn._menu = menu;
+                if (!menu.hidden) { _closeResetMenu(btn, menu); return; }
+                // Close any other open reset menus first.
+                document.querySelectorAll('.reset-menu-dropdown').forEach(m => {
+                    if (m !== menu && !m.hidden && m._ownerBtn) _closeResetMenu(m._ownerBtn, m);
+                });
+                // Portal to <body> so the card's overflow/transform can't clip or cover it.
+                if (menu.parentElement !== document.body) {
+                    menu._home = menu.parentElement;
+                    document.body.appendChild(menu);
+                }
+                menu._ownerBtn = btn;
+                menu.hidden = false;
+                btn.setAttribute('aria-expanded', 'true');
+                _positionResetMenu(btn, menu);
+                const onDoc = (e) => { if (!menu.contains(e.target) && e.target !== btn) _closeResetMenu(btn, menu); };
+                const onMove = () => _closeResetMenu(btn, menu);
+                menu._cleanup = () => {
+                    document.removeEventListener('click', onDoc);
+                    window.removeEventListener('scroll', onMove, true);
+                    window.removeEventListener('resize', onMove);
+                };
+                setTimeout(() => document.addEventListener('click', onDoc), 0);
+                window.addEventListener('scroll', onMove, true);
+                window.addEventListener('resize', onMove);
+            }
+
+            function clearPosition(absId) {
+                if (!confirm('Clear all progress for this book?')) {
+                    return;
+                }
+                // Preserve the original redirect-to-home behaviour of the POST form.
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/clear-progress/' + absId;
+                document.body.appendChild(form);
+                form.submit();
+            }
+
+            function remapAlignment(absId, btn) {
+                btn.disabled = true;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ Remapping…';
+                fetch('/api/remap-alignment/' + absId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }).then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            const label = data.backend === 'ctc' ? 'CTC forced alignment' : 'word-level alignment';
+                            btn.innerHTML = '✅ Queued (' + label + ')';
+                        } else if (data.status === 'up_to_date') {
+                            btn.innerHTML = 'ℹ️ Already optimal';
+                        } else {
+                            btn.innerHTML = '❌ ' + (data.error || 'Failed');
+                        }
+                        setTimeout(() => {
+                            if (btn.dataset.ctcAligned === 'true') return;
+                            btn.innerHTML = originalText; btn.disabled = false;
+                        }, 3000);
+                    }).catch(error => {
+                        console.error('Remap error:', error);
+                        btn.innerHTML = '❌ Failed';
+                        setTimeout(() => {
+                            if (btn.dataset.ctcAligned === 'true') return;
+                            btn.innerHTML = originalText; btn.disabled = false;
+                        }, 3000);
                     });
             }
 

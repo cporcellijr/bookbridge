@@ -170,11 +170,31 @@ class TestEbookOnlyCoverDerivation(unittest.TestCase):
         _assert_browser_safe(self, result)
 
     def test_grimmory_ebook_source_derives_same_origin_cover(self):
-        result = self.sanitize(
-            None, abs_id="ebook-abc123",
-            ebook_source="BookLore", ebook_source_id="42",
-        )
-        self.assertEqual(result, "/api/booklore/audiobook-cover/42")
+        for source in ("BookLore", "Booklore", "Grimmory"):
+            with self.subTest(source=source):
+                result = self.sanitize(
+                    None, abs_id="ebook-abc123",
+                    ebook_source=source, ebook_source_id="4",
+                )
+                self.assertEqual(result, "/api/booklore/book-cover/4")
+
+    def test_grimmory_cbz_and_epub_ebooks_use_the_regular_book_proxy(self):
+        for filename in ("De Vliegende Aap.cbz", "book.epub"):
+            with self.subTest(filename=filename):
+                result = self.sanitize(
+                    None, abs_id="ebook-abc123", ebook_source="Grimmory",
+                    ebook_source_id="4",
+                )
+                self.assertEqual(result, "/api/booklore/book-cover/4")
+
+    def test_grimmory_audiobook_keeps_the_audiobook_proxy(self):
+        for source in ("BookLore", "Grimmory"):
+            with self.subTest(source=source):
+                result = self.sanitize(
+                    None, audio_source=source, audio_source_id="9",
+                    ebook_source="Grimmory", ebook_source_id="4",
+                )
+                self.assertEqual(result, "/api/booklore/audiobook-cover/9")
 
     def test_audio_cover_still_wins_over_the_ebook_library(self):
         """A matched book keeps its audiobook art; the ebook is only a fallback."""

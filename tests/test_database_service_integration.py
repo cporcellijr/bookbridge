@@ -64,6 +64,173 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertIsNotNone(self.db_service)
         self.assertTrue(Path(self.test_db_path).exists())
 
+    def test_catalog_change_callbacks_fire_on_real_mutations(self):
+        """Anything derived from the catalog (the KOReader device-sync manifest)
+        has to learn that a book was added, deleted or re-statused. Before this
+        the manifest only refreshed on a timer, so a match added or deleted on
+        the bridge stayed invisible to the device until the next tick."""
+        fired = []
+        self.db_service.register_catalog_change_callback(lambda: fired.append(1))
+
+        self.db_service.save_book(self.Book(abs_id="cat-1", abs_title="Cat 1", status="active"))
+        self.assertEqual(len(fired), 1, "save_book must announce a catalog change")
+
+        self.assertTrue(self.db_service.set_book_status("cat-1", "pending"))
+        self.assertEqual(len(fired), 2, "set_book_status must announce a catalog change")
+
+        self.assertTrue(self.db_service.delete_book("cat-1"))
+        self.assertEqual(len(fired), 3, "delete_book must announce a catalog change")
+
+    def test_absorb_duplicate_mapping_folds_the_stale_mapping_in(self):
+        """Two mappings for one ebook: the KOSync hash links to exactly one book,
+        so the loser is served but can never receive progress. Absorbing moves its
+        data across and removes the row."""
+        self.db_service.save_book(self.Book(
+            abs_id="ebook-dup", abs_title="Dup (ebook-only)", status="active",
+            sync_mode="ebook_only", kosync_doc_id="a" * 32,
+        ))
+        self.db_service.save_book(self.Book(
+            abs_id="bookorbit:99", abs_title="Dup (audiobook)", status="active",
+            sync_mode="audiobook", kosync_doc_id="a" * 32,
+        ))
+
+        absorbed = self.db_service.absorb_duplicate_mapping(
+            self.db_service.get_book("bookorbit:99"))
+
+        self.assertEqual(absorbed, "ebook-dup")
+        self.assertIsNone(self.db_service.get_book("ebook-dup"), "the stale row must be gone")
+        self.assertIsNotNone(self.db_service.get_book("bookorbit:99"), "the keeper must survive")
+
+    def test_absorb_duplicate_matches_on_source_ebook_when_hashes_differ(self):
+        """The same file can carry two different hashes, so hash equality is not
+        enough. Observed live: adding audio to Harbour Lights 2 produced
+        ebook-1111111111111111 (hash d088f672...) beside bookorbit:1001 (hash
+        009147e1...), both pointing at BookOrbit ebook 5103 -- one file, one
+        stored hash and one served hash. The source ebook id is the stable
+        identity."""
+        self.db_service.save_book(self.Book(
+            abs_id="ebook-1111111111111111", abs_title="Harbour Lights 2", status="active",
+            sync_mode="ebook_only", kosync_doc_id="d" * 32,
+            ebook_source="BookOrbit", ebook_source_id="5103",
+        ))
+        self.db_service.save_book(self.Book(
+            abs_id="bookorbit:1001", abs_title="Harbour Lights 2", status="active",
+            sync_mode="audiobook", kosync_doc_id="0" * 32,
+            ebook_source="BookOrbit", ebook_source_id="5103",
+        ))
+
+        absorbed = self.db_service.absorb_duplicate_mapping(
+            self.db_service.get_book("bookorbit:1001"))
+
+        self.assertEqual(absorbed, "ebook-1111111111111111")
+        self.assertIsNone(self.db_service.get_book("ebook-1111111111111111"))
+        self.assertIsNotNone(self.db_service.get_book("bookorbit:1001"))
+
+    def test_absorb_duplicate_never_merges_two_audiobooks(self):
+        """Two audiobook mappings sharing one source ebook is a mis-match, not a
+        duplicate -- two distinct books were linked to the same ebook. Observed
+        live as Northern Reach + Salt Marsh, both on one shared source ebook. Folding
+        them together would destroy one."""
+        self.db_service.save_book(self.Book(
+            abs_id="uuid-north", abs_title="Northern Reach", status="active",
+            sync_mode="audiobook", ebook_source="BookOrbit", ebook_source_id="2182",
+        ))
+        self.db_service.save_book(self.Book(
+            abs_id="uuid-salt", abs_title="Salt Marsh", status="active",
+            sync_mode="audiobook", ebook_source="BookOrbit", ebook_source_id="2182",
+        ))
+
+        absorbed = self.db_service.absorb_duplicate_mapping(
+            self.db_service.get_book("uuid-salt"))
+
+        self.assertIsNone(absorbed, "a mis-matched audiobook pair must never be merged")
+        self.assertIsNotNone(self.db_service.get_book("uuid-north"))
+        self.assertIsNotNone(self.db_service.get_book("uuid-salt"))
+
+    def test_absorb_duplicate_is_a_no_op_without_a_real_duplicate(self):
+        """It must never delete the book it was told to keep, and must tolerate
+        a hash nothing claims."""
+        self.db_service.save_book(self.Book(
+            abs_id="bookorbit:100", abs_title="Solo", status="active",
+            sync_mode="audiobook", kosync_doc_id="b" * 32,
+        ))
+
+        # The only claimant is the keeper itself.
+        keeper = self.db_service.get_book("bookorbit:100")
+        self.assertIsNone(self.db_service.absorb_duplicate_mapping(keeper))
+        self.assertIsNotNone(self.db_service.get_book("bookorbit:100"))
+
+        # A book with no hash and no ebook source has nothing to match on.
+        self.assertIsNone(self.db_service.absorb_duplicate_mapping(
+            self.Book(abs_id="bookorbit:100", abs_title="Solo", status="active")))
+        self.assertIsNone(self.db_service.absorb_duplicate_mapping(self.Book(abs_id="")))
+        self.assertIsNotNone(self.db_service.get_book("bookorbit:100"))
+
+    def test_routine_save_book_does_not_announce_a_catalog_change(self):
+        """save_book is the sync cycle's and the transcription jobs' write-back
+        path -- it runs constantly. Announcing every call rebuilt the whole
+        device-sync manifest back to back (two ~10-minute rebuilds observed
+        end-to-end, both producing revision=5f919f28). Only a column the
+        manifest is built from counts."""
+        self.db_service.save_book(self.Book(
+            abs_id="hot-1", abs_title="Hot", status="active",
+            original_ebook_filename="hot.epub",
+        ))
+
+        fired = []
+        self.db_service.register_catalog_change_callback(lambda: fired.append(1))
+
+        # Routine write-back of fields the manifest never reads.
+        self.db_service.save_book(self.Book(
+            abs_id="hot-1", abs_title="Hot", status="active",
+            original_ebook_filename="hot.epub",
+            duration=1234, audio_title="Hot (audio)", transcript_file="hot.json",
+        ))
+        self.assertEqual(fired, [], "a save touching no manifest column must not notify")
+
+        # A column the manifest is built from.
+        self.db_service.save_book(self.Book(
+            abs_id="hot-1", abs_title="Hot RETITLED", status="active",
+            original_ebook_filename="hot.epub",
+        ))
+        self.assertEqual(len(fired), 1, "a title change must notify")
+
+        self.db_service.save_book(self.Book(
+            abs_id="hot-1", abs_title="Hot RETITLED", status="inactive",
+            original_ebook_filename="hot.epub",
+        ))
+        self.assertEqual(len(fired), 2, "a status change must notify")
+
+        self.db_service.save_book(self.Book(
+            abs_id="hot-1", abs_title="Hot RETITLED", status="inactive",
+            original_ebook_filename="different.epub",
+        ))
+        self.assertEqual(len(fired), 3, "an ebook filename change must notify")
+
+    def test_catalog_change_callbacks_stay_quiet_when_nothing_changed(self):
+        """A no-op mutation must not trigger a manifest rebuild."""
+        fired = []
+        self.db_service.register_catalog_change_callback(lambda: fired.append(1))
+
+        self.assertFalse(self.db_service.set_book_status("no-such-book", "pending"))
+        self.assertFalse(self.db_service.delete_book("no-such-book"))
+        self.assertEqual(fired, [], "a mutation that changed no row must not notify")
+
+    def test_catalog_change_callback_failure_cannot_break_the_write(self):
+        """A subscriber is downstream of a committed write, so its failure must
+        never propagate into the caller or stop later subscribers."""
+        def boom():
+            raise RuntimeError("subscriber exploded")
+
+        later = []
+        self.db_service.register_catalog_change_callback(boom)
+        self.db_service.register_catalog_change_callback(lambda: later.append(1))
+
+        self.db_service.save_book(self.Book(abs_id="cat-2", abs_title="Cat 2", status="active"))
+
+        self.assertIsNotNone(self.db_service.get_book("cat-2"), "the write must still have landed")
+        self.assertEqual(len(later), 1, "one failing subscriber must not skip the rest")
+
     def test_kosync_user_progress_is_per_user(self):
         """Per-user KoSync progress isolates two users on the same hash, upserts
         in place, and the per-book join returns only the requested user's rows."""
@@ -171,6 +338,38 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         self.assertTrue(lin_entry['needs_realign'])
         # Re-running is a no-op (nothing left NULL).
         self.assertEqual(self.db_service.backfill_alignment_methods(), 0)
+
+    def test_backfill_alignment_methods_does_not_disturb_last_updated(self):
+        """backfill_alignment_methods classifies a pre-existing map by shape
+        (see _seed_alignment); it never rebuilds the map, so last_updated
+        must not move. BookAlignment.last_updated carries onupdate=utcnow,
+        which fires on any UPDATE touching the row -- including the bulk
+        classification UPDATE this method issues -- unless last_updated is
+        itself named in that UPDATE's SET clause. Fails against a bulk
+        update that only sets align_method."""
+        from src.db.models import BookAlignment
+
+        self._seed_alignment('lin-ts', 'Linear Timestamp', points=2)
+        old_stamp = datetime(2020, 1, 1)
+        with self.db_service.get_session() as session:
+            session.query(BookAlignment).filter_by(abs_id='lin-ts').update(
+                {'last_updated': old_stamp}, synchronize_session=False
+            )
+        with self.db_service.get_session() as session:
+            before = session.query(BookAlignment).filter_by(abs_id='lin-ts').first()
+            self.assertEqual(before.last_updated, old_stamp)
+
+        updated = self.db_service.backfill_alignment_methods()
+        self.assertEqual(updated, 1)
+
+        with self.db_service.get_session() as session:
+            after = session.query(BookAlignment).filter_by(abs_id='lin-ts').first()
+            self.assertEqual(after.align_method, 'linear')
+            self.assertEqual(
+                after.last_updated, old_stamp,
+                "backfill_alignment_methods must not disturb last_updated "
+                "(it classifies by shape, it does not rebuild the map)",
+            )
 
     def test_alignment_provenance_never_selects_map_blob(self):
         """Regression test: get_alignment_provenance must not SELECT alignment_map_json.

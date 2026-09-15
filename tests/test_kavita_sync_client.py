@@ -86,3 +86,41 @@ def test_zero_progress_uses_locator_kavita_accepts_and_records_own_write():
         "deadbeef", 0.0, "/body/DocFragment[1].0"
     )
     record_write.assert_called_once_with("Kavita", "book-1", 0.0)
+
+
+def test_cbz_does_not_enter_inherited_kosync_fixed_page_protocol():
+    api = MagicMock()
+    api.update_progress.return_value = True
+    parser = MagicMock()
+    parser.get_sentence_level_ko_xpath.side_effect = AssertionError("CBZ must not generate EPUB XPath")
+    parser.extract_text_and_map.side_effect = AssertionError("CBZ must not use EPUB parsing")
+    client = KavitaSyncClient(api, parser)
+    book = _book(ebook_filename="comic.cbz")
+
+    result = client.update_progress(
+        book, UpdateProgressRequest(LocatorResult(percentage=0.5, page=16))
+    )
+
+    assert client.supports_fixed_page_progress() is False
+    assert result.success is True
+    assert result.skipped is True
+    api.update_progress.assert_not_called()
+    parser.get_sentence_level_ko_xpath.assert_not_called()
+    parser.extract_text_and_map.assert_not_called()
+
+
+def test_cbz_read_is_percentage_only_without_epub_xpath_resolution():
+    api = MagicMock()
+    api.is_configured.return_value = True
+    api.get_progress_with_metadata.return_value = (0.4, "16", {"timestamp": 123})
+    parser = MagicMock()
+    parser.resolve_xpath_to_index.side_effect = AssertionError("CBZ must not resolve EPUB XPath")
+    parser.extract_text_and_map.side_effect = AssertionError("CBZ must not use EPUB parsing")
+    client = KavitaSyncClient(api, parser)
+
+    state = client.get_service_state(_book(ebook_filename="comic.cbz"), None)
+
+    assert state.current["pct"] == 0.4
+    assert state.current["xpath"] is None
+    parser.resolve_xpath_to_index.assert_not_called()
+    parser.extract_text_and_map.assert_not_called()

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 from src.services.alignment_service import (
@@ -38,7 +39,7 @@ def test_align_and_store_success(service, mock_db):
     # Mock lower-level alignment logic (tested separately in test_generate_alignment_map)
     # We only want to verify the storage flow here
     service._generate_alignment_map_with_method = MagicMock(
-        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical')
+        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical', None)
     )
 
     # Ensure DB query returns None (Simulate no existing record)
@@ -278,8 +279,8 @@ def test_probe_storyteller_transcripts_returns_ready_when_validated():
 def test_resolve_storyteller_title_dir_prefers_suffixed_dir_with_transcriptions_over_bare_dir_without_transcriptions():
     with tempfile.TemporaryDirectory() as tmp:
         assets_root = Path(tmp)
-        bare_dir = assets_root / "assets" / "Trad Wife"
-        suffixed_dir = assets_root / "assets" / "Trad Wife [5j7RKcRZ]"
+        bare_dir = assets_root / "assets" / "Home Maker"
+        suffixed_dir = assets_root / "assets" / "Home Maker [5j7RKcRZ]"
         bare_dir.mkdir(parents=True, exist_ok=True)
         transcriptions_dir = suffixed_dir / "transcriptions"
         transcriptions_dir.mkdir(parents=True, exist_ok=True)
@@ -288,7 +289,7 @@ def test_resolve_storyteller_title_dir_prefers_suffixed_dir_with_transcriptions_
             encoding="utf-8",
         )
 
-        result = _resolve_storyteller_title_dir(assets_root, "Trad Wife")
+        result = _resolve_storyteller_title_dir(assets_root, "Home Maker")
 
     assert result == suffixed_dir
 
@@ -296,8 +297,8 @@ def test_resolve_storyteller_title_dir_prefers_suffixed_dir_with_transcriptions_
 def test_probe_storyteller_transcripts_uses_suffixed_storyteller_assets_dir():
     with tempfile.TemporaryDirectory() as tmp:
         assets_root = Path(tmp)
-        (assets_root / "assets" / "Trad Wife").mkdir(parents=True, exist_ok=True)
-        transcriptions_dir = assets_root / "assets" / "Trad Wife [5j7RKcRZ]" / "transcriptions"
+        (assets_root / "assets" / "Home Maker").mkdir(parents=True, exist_ok=True)
+        transcriptions_dir = assets_root / "assets" / "Home Maker [5j7RKcRZ]" / "transcriptions"
         transcriptions_dir.mkdir(parents=True, exist_ok=True)
         for idx in range(2):
             (transcriptions_dir / f"00001-{idx + 1:05d}.json").write_text(
@@ -308,7 +309,7 @@ def test_probe_storyteller_transcripts_uses_suffixed_storyteller_assets_dir():
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("STORYTELLER_ASSETS_DIR", str(assets_root))
             result = probe_storyteller_transcripts(
-                "Trad Wife",
+                "Home Maker",
                 [{"start": 0.0, "end": 1.0}, {"start": 1.0, "end": 2.0}],
             )
 
@@ -319,10 +320,10 @@ def test_probe_storyteller_transcripts_uses_suffixed_storyteller_assets_dir():
 def test_resolve_storyteller_title_dir_matches_title_with_bracket_suffix_when_only_suffixed_dir_exists():
     with tempfile.TemporaryDirectory() as tmp:
         assets_root = Path(tmp)
-        suffixed_dir = assets_root / "assets" / "Trad Wife [5j7RKcRZ]"
+        suffixed_dir = assets_root / "assets" / "Home Maker [5j7RKcRZ]"
         suffixed_dir.mkdir(parents=True, exist_ok=True)
 
-        result = _resolve_storyteller_title_dir(assets_root, "Trad Wife")
+        result = _resolve_storyteller_title_dir(assets_root, "Home Maker")
 
     assert result == suffixed_dir
 
@@ -330,8 +331,8 @@ def test_resolve_storyteller_title_dir_matches_title_with_bracket_suffix_when_on
 def test_resolve_storyteller_title_dir_returns_none_when_multiple_transcript_ready_suffix_variants_exist():
     with tempfile.TemporaryDirectory() as tmp:
         assets_root = Path(tmp)
-        first_dir = assets_root / "assets" / "Trad Wife [5j7RKcRZ]"
-        second_dir = assets_root / "assets" / "Trad Wife [ABCD1234]"
+        first_dir = assets_root / "assets" / "Home Maker [5j7RKcRZ]"
+        second_dir = assets_root / "assets" / "Home Maker [ABCD1234]"
         for folder in (first_dir, second_dir):
             transcriptions_dir = folder / "transcriptions"
             transcriptions_dir.mkdir(parents=True, exist_ok=True)
@@ -340,7 +341,7 @@ def test_resolve_storyteller_title_dir_returns_none_when_multiple_transcript_rea
                 encoding="utf-8",
             )
 
-        result = _resolve_storyteller_title_dir(assets_root, "Trad Wife")
+        result = _resolve_storyteller_title_dir(assets_root, "Home Maker")
 
     assert result is None
 
@@ -398,10 +399,11 @@ def test_anchor_rescue_builds_map_when_lexical_fails(mock_db):
     service = AlignmentService(mock_db, Polisher(), ollama_client=_TopicOllama())
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), _topic_book_text()
         )
     assert method == "llm_anchor"
+    assert map_segments is None
     assert len(alignment_map) >= 2
     chars = [p["char"] for p in alignment_map]
     assert chars == sorted(chars)  # monotonic in char
@@ -412,10 +414,11 @@ def test_anchor_rescue_noop_when_disabled(mock_db):
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
         mp.setenv("OLLAMA_ALIGN_ANCHOR_RESCUE", "false")
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), _topic_book_text()
         )
     assert method == "linear"
+    assert map_segments is None
     assert alignment_map == [
         {"char": 0, "ts": 0.0},
         {"char": len(_topic_book_text()), "ts": 20.0},
@@ -444,7 +447,7 @@ def test_anchor_rescue_caps_embedded_window_length(mock_db):
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
         mp.setenv("OLLAMA_ALIGN_CONTENT_GUARD", "false")
-        alignment_map, method = service._generate_alignment_map_with_method(
+        alignment_map, method, _map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), long_text
         )
     assert method == "llm_anchor"
@@ -470,7 +473,7 @@ def test_anchor_rescue_noop_without_client(mock_db):
     service = AlignmentService(mock_db, Polisher(), ollama_client=None)
     with pytest.MonkeyPatch.context() as mp:
         _topic_env(mp)
-        _map, method = service._generate_alignment_map_with_method(
+        _map, method, _map_segments = service._generate_alignment_map_with_method(
             _topic_segments(), _topic_book_text()
         )
     assert method == "linear"
@@ -627,7 +630,7 @@ def test_align_and_store_records_ebook_length(mock_db):
 
     service = AlignmentService(mock_db, Polisher())
     service._generate_alignment_map_with_method = MagicMock(
-        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical')
+        return_value=([{'char': 0, 'ts': 0.0}, {'char': 5, 'ts': 1.0}], 'lexical', None)
     )
 
     assert service.align_and_store("test_id", [{'start': 0.0, 'end': 1.0, 'text': "Alice"}], ebook_text)
@@ -695,6 +698,41 @@ def test_backfill_persists_against_a_real_database():
 
         # A book with no alignment row at all is simply skipped.
         assert service.record_total_chars_if_missing("abs-unknown", 100_000) is False
+    finally:
+        if hasattr(db, 'db_manager'):
+            db.db_manager.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_backfill_total_chars_does_not_disturb_last_updated():
+    """set_alignment_total_chars_if_missing is a metadata backfill (it only
+    fills a NULL total_chars, never rebuilds the map), so it must not stamp
+    BookAlignment.last_updated to "now" via onupdate=utcnow. Fails against a
+    plain `row.total_chars = ...` ORM assignment, which fires onupdate on the
+    resulting UPDATE regardless of whether last_updated itself changed."""
+    import shutil
+    from src.db.database_service import DatabaseService
+
+    tmp = tempfile.mkdtemp()
+    try:
+        db = DatabaseService(str(Path(tmp) / "align_total_chars.db"))
+        old_stamp = datetime(2020, 1, 1)
+        with db.get_session() as session:
+            row = BookAlignment(
+                abs_id="abs-legacy",
+                alignment_map_json=json.dumps(
+                    [{"char": 0, "ts": 0.0}, {"char": 75_470, "ts": 76_726.9}]
+                ),
+            )
+            row.last_updated = old_stamp
+            session.add(row)
+
+        assert db.set_alignment_total_chars_if_missing("abs-legacy", 100_000) is True
+
+        with db.get_session() as session:
+            after = session.query(BookAlignment).filter_by(abs_id="abs-legacy").first()
+            assert after.total_chars == 100_000
+            assert after.last_updated == old_stamp
     finally:
         if hasattr(db, 'db_manager'):
             db.db_manager.close()
