@@ -1,0 +1,865 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The ultimate bridge for cross-platform reading and listening synchronization.">
+      
+      
+        <meta name="author" content="cporcellijr">
+      
+      
+        <link rel="canonical" href="https://cporcellijr.github.io/bookbridge/PLAN_CTC_SECOND_PASS_OPTION_C/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/icon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Plan: Option C — Recover chunk-skipped regions with a second CTC pass (#426) - BookBridge</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#plan-option-c-recover-chunk-skipped-regions-with-a-second-ctc-pass-426" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="BookBridge" class="md-header__button md-logo" aria-label="BookBridge" data-md-component="logo">
+      
+  <img src="../assets/icon.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            BookBridge
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Plan: Option C — Recover chunk-skipped regions with a second CTC pass (#426)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/cporcellijr/bookbridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    cporcellijr/bookbridge
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../getting-started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../user-guide/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  User Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../configuration/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Configuration
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../backup-restore/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Backup & Restore
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../changelog/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="BookBridge" class="md-nav__button md-logo" aria-label="BookBridge" data-md-component="logo">
+      
+  <img src="../assets/icon.png" alt="logo">
+
+    </a>
+    BookBridge
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/cporcellijr/bookbridge" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    cporcellijr/bookbridge
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../backup-restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backup & Restore
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#root-cause-why-c-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Root cause (why C works)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-two-passes-inside-_chunked_word_times" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Design (two passes inside _chunked_word_times)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-instrument-pass-1-small-no-behavior-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1 — Instrument Pass 1 (small, no behavior change)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-second-pass-over-skipped-runs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2 — Second pass over skipped runs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-guards-monotonicity-provenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3 — Guards, monotonicity, provenance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-tests-teststest_forced_alignerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 4 — Tests (tests/test_forced_aligner.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-5-live-verification-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 5 — Live verification &amp; deploy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks-mitigations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risks &amp; mitigations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#handoff-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Handoff notes
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="plan-option-c-recover-chunk-skipped-regions-with-a-second-ctc-pass-426">Plan: Option C — Recover chunk-skipped regions with a second CTC pass (#426)</h1>
+<p><strong>Status:</strong> Handoff-ready. Grounded in commits <code>7ffc966</code> (mid-chapter) + <code>a8b1ce6</code> (item 3). No dependencies on unmerged branches.</p>
+<p><strong>For:</strong> Codex or Haiku implementation. Can be handed off or implemented inline.</p>
+<hr />
+<h2 id="root-cause-why-c-works">Root cause (why C works)</h2>
+<p><code>ForcedAligner._chunked_word_times</code> derives each chunk's audio window from the <strong>lexical map</strong> (<code>boundaries</code>) via <code>_interp_ts</code>. When a region's lexical timestamps are compressed (e.g. ~1,600 words mapped to ~32 s), the window is smaller than the token count, so the guard <code>if f_hi - f_lo &lt;= seg_tokens:</code> skips the chunk → that span is interpolated. The audio is actually there (region is narrated; truly-unnarrated spans were already removed upstream by <code>_detect_unnarrated_spans</code>). C re-windows those spans from the <strong>first pass's own CTC anchor times</strong>, which are reliable, and proportionally sub-chunks across that true time span.</p>
+<hr />
+<h2 id="design-two-passes-inside-_chunked_word_times">Design (two passes inside <code>_chunked_word_times</code>)</h2>
+<p>Pass 1 = today's loop, but record per-word times so skipped runs and their reliable bracketing anchors are recoverable. Pass 2 = for each skipped run, align it inside <code>[ts_before, ts_after]</code> taken from Pass 1 results.</p>
+<hr />
+<h2 id="phase-1-instrument-pass-1-small-no-behavior-change">Phase 1 — Instrument Pass 1 (small, no behavior change)</h2>
+<p>Replace the ad-hoc <code>results</code> accumulation with a dense <code>word_ts: List[Optional[float]] = [None] * n</code>. In the aligned branch set <code>word_ts[i+k] = ts</code>; in the skip/fail branches leave <code>None</code>. Keep the existing skipped/failed counters and the summary WARNING (item 3).</p>
+<p>Build <code>results</code> at the end from <code>word_ts</code> (<code>[(kept[k][1], word_ts[k]) for k if word_ts[k] is not None]</code>).</p>
+<p><strong>Acceptance:</strong> existing chunked tests pass unchanged (byte-identical maps when nothing is skipped). No second pass yet.</p>
+<hr />
+<h2 id="phase-2-second-pass-over-skipped-runs">Phase 2 — Second pass over skipped runs</h2>
+<p>Add <code>_recover_skipped_spans(F, torch, emission, kept, word_tokens, seconds_per_frame, word_ts)</code> called after Pass 1, before building <code>results</code>. Algorithm:</p>
+<ol>
+<li>Find maximal runs of consecutive <code>None</code> in <code>word_ts</code> → <code>[i, j)</code> word-index ranges.</li>
+<li>For each run: <code>a = last index &lt; i with word_ts not None</code>; <code>b = first index ≥ j with word_ts not None</code>. If either is missing (run touches book start/end), skip recovery (leave interpolated).</li>
+<li><code>fa = word_ts[a] / spf</code>, <code>fb = word_ts[b] / spf</code>. <code>T = sum(len(word_tokens[k]) for k in range(i, j))</code>. If <code>fb - fa &lt;= T</code> → genuinely too little audio (likely truly unnarrated) → leave interpolated. <em>(This is C's built-in cram guard: no real audio ⇒ no forced alignment.)</em></li>
+<li>Sub-chunk <code>[i, j)</code> by <code>_MAX_CHUNK_TOKENS</code>. For sub-chunk <code>[p, q)</code> with cumulative token offsets <code>c0..c1</code> within the run, allocate a <strong>proportional</strong> window <code>wlo = fa + (fb-fa)*c0/T - margin</code>, <code>whi = fa + (fb-fa)*c1/T + margin</code> (clamp to <code>[max(0,fa-margin), min(total_frames, fb+margin)]</code>). If <code>whi - wlo &lt;= (c1-c0)</code> still, or <code>_single_pass_fits</code> is violated, split further / skip that sub-chunk.</li>
+<li><code>times = self._segment_word_times(F, torch, emission[:, wlo:whi], word_tokens[p:q], spf, frame_offset=wlo)</code>; on success write <code>word_ts[p+k] = t</code>.</li>
+</ol>
+<p><strong>Acceptance:</strong> a new unit test (below) shows a compressed-boundary region that Pass 1 skips is recovered by Pass 2 to the correct frames; the no-skip case is untouched.</p>
+<hr />
+<h2 id="phase-3-guards-monotonicity-provenance">Phase 3 — Guards, monotonicity, provenance</h2>
+<ul>
+<li><strong>Monotonicity:</strong> <code>_stitch_char_times</code> already drops ts inversions at seams — keep relying on it as the backstop, but Pass 2 should produce monotonic times by construction (proportional windows are ordered).</li>
+<li><strong>One recovery pass only</strong> (no looping). Cap total Pass-2 work (e.g. bail out of recovery if a run's <code>T</code> or <code>fb-fa</code> implies a cost over <code>_single_pass_fits</code> even after max sub-chunking — leave interpolated).</li>
+<li><strong>No new <code>align_method</code></strong>; still <code>'ctc'</code>. No change to <code>align()</code>'s caller contract or the acceptance gate.</li>
+<li><strong>Interaction with <code>exclude_spans</code>:</strong> Pass 2 only touches <code>None</code> runs that are <strong>not</strong> inside an excluded span (excluded words were never added to <code>kept</code>, so they can't appear as runs — verify with a test that a book with both an excluded span and a compressed region handles each correctly).</li>
+</ul>
+<hr />
+<h2 id="phase-4-tests-teststest_forced_alignerpy">Phase 4 — Tests (<code>tests/test_forced_aligner.py</code>)</h2>
+<p>Copy the synthetic-emission harness from <code>test_chunked_align_covers_whole_book_via_boundaries</code>. Add:</p>
+<ol>
+<li>
+<p><strong>Recovery:</strong> build 26 single-letter "words"; give <code>boundaries</code> correct times <strong>except</strong> compress a middle run (map its chars into a tiny ts range) so Pass 1 skips those chunks; assert the returned map (a) has anchors for the middle letters at their true frames (±tolerance), (b) is monotonic, (c) equals the all-correct result within tolerance. Force small <code>_MAX_CHUNK_TOKENS</code> (as the existing test does) to exercise sub-chunking.</p>
+</li>
+<li>
+<p><strong>Truly-unnarrated stays a gap:</strong> a run where <code>fb - fa &lt;= T</code> (no audio) → those words remain unaligned (interpolated), not crammed.</p>
+</li>
+<li>
+<p><strong>No-op:</strong> a book with no skipped chunks returns the exact Pass-1 result (guard against regressions).</p>
+</li>
+<li>
+<p><strong>Exclusion + compression together:</strong> one excluded span and one compressed region in the same book; excluded span stays a gap, compressed region is recovered.</p>
+</li>
+</ol>
+<p><strong>Acceptance:</strong> full suite green (<code>pytest tests/ -q</code>; current baseline <strong>3734 passed, 9 skipped</strong>), no test weakened.</p>
+<hr />
+<h2 id="phase-5-live-verification-deploy">Phase 5 — Live verification &amp; deploy</h2>
+<ul>
+<li><strong>In-container</strong> (bind-mounted <code>src</code>, fresh <code>python3</code> picks up edits): remap <strong>Four Past Midnight</strong> (<code>bookorbit</code>/abs_id <code>56126442-75fd-462e-83ae-66d743880f41</code>) and confirm the middle region (words ~62k–124k) now gets anchors — the skip summary count drops sharply and <code>_max_gap_fraction</code> of the stored map falls below today's 0.210.</li>
+<li>Confirm the acceptance gate still accepts (should be strictly better) and the backup/rollback path is intact.</li>
+<li>Re-run the 356-map detection sweep is <strong>not</strong> needed (C doesn't touch detection), but spot-check a couple of previously-clean books remap identically (no new gaps).</li>
+<li><strong>Deploy:</strong> <code>docker compose restart</code> (src-only; no migration).</li>
+</ul>
+<hr />
+<h2 id="risks-mitigations">Risks &amp; mitigations</h2>
+<ul>
+<li><strong>Cramming a genuinely-unnarrated run</strong> → prevented by Phase 3's <code>fb - fa &lt;= T</code> guard (no audio ⇒ no alignment) and by <code>_detect_unnarrated_spans</code> already removing real gaps upstream.</li>
+<li><strong>Wrong proportional split within a run</strong> → forced_align refines onsets within each sub-window; a generous <code>margin</code> absorbs the proportional estimate's error; <code>_stitch_char_times</code> drops any residual inversion.</li>
+<li><strong>Cost blowup on a slow-narrated long run</strong> → per-sub-chunk <code>_single_pass_fits</code> check + further splitting.</li>
+</ul>
+<hr />
+<h2 id="handoff-notes">Handoff notes</h2>
+<ul>
+<li>Treat this as <strong>additive to <code>_chunked_word_times</code></strong> (Phase 1 refactor + one helper).</li>
+<li>Must run the full suite plus the in-container Four Past Midnight remap before calling it done — the mid-chapter work proved that only a real remap surfaces the timing-edge cases.</li>
+<li>All phases are self-contained; Phase 1 can land separately (no-op behavior change) and Phase 2 can follow.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

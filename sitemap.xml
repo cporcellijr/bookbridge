@@ -2,34 +2,50 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
+    </url>
+    <url>
+         <loc>https://cporcellijr.github.io/bookbridge/OPTION_C_IMPLEMENTATION_REVIEW/</loc>
+         <lastmod>2026-09-16</lastmod>
+    </url>
+    <url>
+         <loc>https://cporcellijr.github.io/bookbridge/PLAN_CTC_SECOND_PASS_OPTION_C/</loc>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/backup-restore/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/changelog/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/configuration/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/diagnostics/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/getting-started/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
+    </url>
+    <url>
+         <loc>https://cporcellijr.github.io/bookbridge/reading-session-aggregation/</loc>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/troubleshooting/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
     </url>
     <url>
          <loc>https://cporcellijr.github.io/bookbridge/user-guide/</loc>
-         <lastmod>2026-09-01</lastmod>
+         <lastmod>2026-09-16</lastmod>
+    </url>
+    <url>
+         <loc>https://cporcellijr.github.io/bookbridge/word-level-alignment/</loc>
+         <lastmod>2026-09-16</lastmod>
     </url>
 </urlset>

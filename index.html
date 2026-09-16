@@ -979,19 +979,19 @@
 <li><strong>Multi-service sync</strong> across the supported progress paths for Audiobookshelf, KOReader, BookFusion, Storyteller, Grimmory, BookOrbit, Kavita, CWA/Kobo sync, and reading trackers.</li>
 <li><strong>Flexible source support</strong>: use Audiobookshelf, Grimmory, or BookOrbit as the audio source; use Audiobookshelf ebooks, BookFusion-linked books, Grimmory, BookOrbit, Kavita, CWA, or local files as the text side; or create ebook-only links when no audiobook is needed.</li>
 <li><strong>Split-port security</strong> so the KOSync endpoint can be exposed separately from the dashboard.</li>
-<li><strong>Smart conflict handling</strong> with anti-regression guardrails and a deadband to avoid tiny cross-format bounce-backs.</li>
+<li><strong>Smart conflict handling</strong> with anti-regression guardrails, a deadband for tiny cross-format bounce-backs, and deliberate rewinds that stick once you continue from the new position.</li>
 <li><strong>Highlight and note sync</strong> for KOReader devices using the current Bridge Sync plugin, with optional Grimmory, BookOrbit, BookFusion, Readest, and Hardcover relay.</li>
 <li><strong>Book upload to Readest</strong> (optional, per reader) that copies matched books, or just the
   ones you are currently reading, into your Readest cloud library and files them into a group.</li>
 <li><strong>Rich locators</strong> using timestamps, href/fragment data, XPath, and EPUB CFI where available.</li>
-<li><strong>Built-in audio ↔ text alignment</strong> using Whisper transcription and EPUB SMIL timing data — no extra services required. Storyteller transcript assets are used as a premium alignment source when you happen to run Storyteller.</li>
+<li><strong>Built-in audio ↔ text alignment</strong> using Whisper transcription and EPUB SMIL timing data — no extra services required. Content-match protection catches wrong pairings, Alignment Health scores and restores maps, and Storyteller transcript assets remain a premium source when available.</li>
 <li><strong>Resumable jobs</strong> for background processing and transcript work.</li>
 </ul>
 <h3 id="management-web-ui">Management Web UI</h3>
 <ul>
 <li><strong>Multiple readers</strong> with their own sign-in, their own service logins, and their own progress — each person sees only the books they are reading.</li>
 <li><strong>Self-service integrations</strong> so each reader can manage their own usernames, passwords, tokens, API keys, and sync toggles from Account -&gt; My Integrations, while admins can still manage them centrally.</li>
-<li><strong>Dashboard</strong> for live sync status, reading session details, direct service links, source badges, sorting by date added, and a <strong>Show position</strong> excerpt of the text where you are currently synced.</li>
+<li><strong>Dashboard</strong> for live sync status, reading session details, direct service links, source badges, author/series/format filters, richer sorting, and a <strong>Show position</strong> excerpt of the text where you are currently synced.</li>
 <li><strong>Add / Update Book</strong> for ABS, Grimmory, or BookOrbit audio; ABS, Grimmory, BookOrbit, Kavita, CWA, BookFusion, or local ebook sources; Storyteller links; ebook-only flows; and reader document fixes.</li>
 <li><strong>A match queue</strong> inside Add / Update Book for reviewing and linking books in bulk.</li>
 <li><strong>Library Suggestions</strong> for background scanning, review, and queue building.</li>

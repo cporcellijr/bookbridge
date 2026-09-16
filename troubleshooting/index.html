@@ -624,6 +624,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#an-alignment-is-rejected-or-opens-at-the-wrong-place" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An alignment is rejected, or opens at the wrong place
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-deliberate-rewind-does-not-stick" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deliberate rewind does not stick
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#books-are-not-showing-up" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -694,6 +716,17 @@
     <span class="md-ellipsis">
       
         Highlights or notes are not syncing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bridge-sync-uses-too-much-memory-or-a-device-download-fails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bridge Sync uses too much memory or a device download fails
       
     </span>
   </a>
@@ -867,6 +900,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#an-alignment-is-rejected-or-opens-at-the-wrong-place" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An alignment is rejected, or opens at the wrong place
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#a-deliberate-rewind-does-not-stick" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A deliberate rewind does not stick
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#books-are-not-showing-up" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -937,6 +992,17 @@
     <span class="md-ellipsis">
       
         Highlights or notes are not syncing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bridge-sync-uses-too-much-memory-or-a-device-download-fails" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bridge Sync uses too much memory or a device download fails
       
     </span>
   </a>
@@ -1053,6 +1119,28 @@ using built-in Whisper transcription (or the EPUB's SMIL data), so cross-format 
 with just an audio source and an ebook client. Add Storyteller only if you actually use the
 Storyteller read-along app — the bridge will then sync its position and use its transcripts
 as a bonus alignment source.</p>
+<h3 id="an-alignment-is-rejected-or-opens-at-the-wrong-place">An alignment is rejected, or opens at the wrong place</h3>
+<ul>
+<li>Confirm that the selected ebook and audiobook are the same edition. The
+  <strong>Content-Match Guard</strong> deliberately refuses maps with too little shared wording;
+  leave it enabled unless you know the pairing is a rough but intended match.</li>
+<li>Open <strong>Settings -&gt; Sync -&gt; Alignment Health</strong>. A low-quality map can be rebuilt with
+  <strong>Remap alignment</strong>, and <strong>Restore previous</strong> returns to the last saved map if the
+  replacement is worse.</li>
+<li>If a collection's audiobook narrates chapters in a different order from the EPUB,
+  enable experimental <strong>Segmented Alignment Maps</strong> in Settings, then remap that book.
+  It is off by default and is not needed for normally ordered books.</li>
+<li>CTC forced alignment is optional and unavailable in published images. It requires a
+  custom <code>INSTALL_CTC=true</code> build and is not the first troubleshooting step.</li>
+</ul>
+<h3 id="a-deliberate-rewind-does-not-stick">A deliberate rewind does not stick</h3>
+<ul>
+<li>Confirm <strong>Honor a Deliberate Rewind</strong> is enabled under <strong>Settings -&gt; Sync</strong>.</li>
+<li>After going back, make some forward progress in the same app. One isolated backward
+  report is intentionally held so a stale or echoed position cannot pull every reader
+  backward.</li>
+<li>If you want the furthest position to win in every case, turn the setting off.</li>
+</ul>
 <h3 id="books-are-not-showing-up">Books are not showing up</h3>
 <ul>
 <li>Make sure your <code>/books</code> volume is mounted correctly in <code>docker-compose.yml</code>.</li>
@@ -1107,6 +1195,12 @@ as a bonus alignment source.</p>
 <li>For BookFusion, enable <strong>BookFusion -&gt; Highlight Sync</strong> in that reader's Integrations and confirm the book is linked to BookFusion.</li>
 <li>For Readest, enable <strong>Readest -&gt; Highlight Sync</strong> and enter that reader's Readest email/password.</li>
 <li>For Hardcover, enable <strong>Hardcover -&gt; Highlight Sync</strong> and enter that reader's Hardcover API token.</li>
+</ul>
+<h3 id="bridge-sync-uses-too-much-memory-or-a-device-download-fails">Bridge Sync uses too much memory or a device download fails</h3>
+<ul>
+<li>Update the Bridge Sync plugin to <strong>0.6.10</strong> or newer, then restart KOReader.</li>
+<li>A failed replacement leaves the previous good book on the device. Run <strong>Sync books</strong>
+  again after fixing network access; do not delete the existing copy first.</li>
 </ul>
 <h3 id="books-are-not-appearing-in-readest">Books are not appearing in Readest</h3>
 <ul>

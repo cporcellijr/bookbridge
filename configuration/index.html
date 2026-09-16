@@ -906,6 +906,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#ctc-forced-alignment-experimental" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CTC forced alignment (experimental)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1380,6 +1391,17 @@
     <span class="md-ellipsis">
       
         4. Configure the bridge
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ctc-forced-alignment-experimental" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CTC forced alignment (experimental)
       
     </span>
   </a>
@@ -2890,6 +2912,42 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td><code>60</code></td>
 <td>Minimum token match percentage for accepting SMIL timing data.</td>
 </tr>
+<tr>
+<td>Content-Match Guard</td>
+<td><code>CONTENT_MATCH_GUARD</code></td>
+<td><code>true</code></td>
+<td>Refuses to store an alignment when transcript and ebook wording overlap too little, even without Ollama.</td>
+</tr>
+<tr>
+<td>Content-Match Min Overlap</td>
+<td><code>CONTENT_MATCH_MIN_OVERLAP</code></td>
+<td><code>0.15</code></td>
+<td>Minimum direct word n-gram overlap required by the guard. Raise only when you knowingly align a rough edition.</td>
+</tr>
+<tr>
+<td>Segmented Alignment Maps</td>
+<td><code>ALIGNMENT_SEGMENTED_MAPS</code></td>
+<td><code>false</code></td>
+<td>Experimental. Enable only for a collection whose audiobook narrates sections in a different order from the EPUB spine, then remap that book.</td>
+</tr>
+<tr>
+<td>Use CTC Forced Alignment</td>
+<td><code>CTC_ENABLED</code></td>
+<td><code>false</code></td>
+<td>Experimental and available only in a self-built image with <code>INSTALL_CTC=true</code>; leave off for the standard Whisper/lexical pipeline.</td>
+</tr>
+<tr>
+<td>CTC Model</td>
+<td><code>CTC_MODEL</code></td>
+<td><code>mms_fa</code></td>
+<td>The only supported forced-alignment model bundle. Visible after enabling CTC.</td>
+</tr>
+<tr>
+<td>CTC Device</td>
+<td><code>CTC_DEVICE</code></td>
+<td><code>auto</code></td>
+<td>Uses an NVIDIA GPU when available; CPU is practical only for short books. Visible after enabling CTC.</td>
+</tr>
 </tbody>
 </table>
 <p>Transcription notes:</p>
@@ -2898,6 +2956,9 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <li>The <code>whispercpp</code> provider works with any OpenAI-compatible transcription endpoint — whisper.cpp server, speaches, parakeet, or a proxy such as llama-swap — not just whisper.cpp itself. Use the 🔗 <strong>Test</strong> button next to the URL to check the endpoint before saving. Inside Docker, do not use <code>localhost</code>; use the host's LAN IP or the whisper container's service name.</li>
 <li><strong>Split Uploads</strong> exists for servers that return one merged segment per request (parakeet does this). Alignment can only be as precise as the segments it gets back, so on those servers set it low — 2 or 3 minutes — and leave it at <code>0</code> for servers that already return fine-grained segments.</li>
 <li><strong>Send Original Audio</strong> skips local ffmpeg normalization and splitting, which saves minutes per book, but only works on servers that decode arbitrary formats <em>and</em> chunk long audio themselves (e.g. parakeet with <code>-long-audio</code>). Leave it off for whisper.cpp, which requires 16kHz WAV input. When it is on, <strong>Audio Split Length</strong> no longer applies — the server controls chunking.</li>
+<li><strong>Content-Match Guard</strong> is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.</li>
+<li><strong>Segmented Alignment Maps</strong> is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use <strong>Remap alignment</strong> for the affected book.</li>
+<li><strong>CTC forced alignment</strong> is a separate experimental backend, not an upgrade to the standard or <code>-cuda</code> image. It is disabled by default and requires the custom build described below.</li>
 </ul>
 <h3 id="sync-tuning">Sync Tuning</h3>
 <p>Found under <strong>Settings -&gt; Sync</strong>, alongside instant-sync options and Alignment Health.</p>
@@ -2960,6 +3021,12 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td>Delay before retrying failed jobs.</td>
 </tr>
 <tr>
+<td>Reading Session Merge Gap (Minutes)</td>
+<td><code>READING_SESSION_MERGE_MINUTES</code></td>
+<td><code>5</code></td>
+<td>Groups non-KOReader progress into one session. The effective idle gap is at least twice the sync period and at most 30 minutes.</td>
+</tr>
+<tr>
 <td>Cross-Format Deadband (Seconds)</td>
 <td><code>CROSSFORMAT_DEADBAND_SECONDS</code></td>
 <td><code>2.0</code></td>
@@ -2970,6 +3037,18 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td><code>CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS</code></td>
 <td><code>2</code></td>
 <td>Locator roundtrip tolerance used when stabilizing cross-format locators.</td>
+</tr>
+<tr>
+<td>Honor a Deliberate Rewind</td>
+<td><code>SYNC_TRUST_CORROBORATED_REWIND</code></td>
+<td><code>true</code></td>
+<td>Lets a rewind lead after the same app reports you continuing from the new position; an isolated stale backward report is held briefly.</td>
+</tr>
+<tr>
+<td>Locator Round-Trip Tolerance (Seconds)</td>
+<td><code>LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS</code></td>
+<td><code>30</code></td>
+<td>Rejects an otherwise character-close rebuilt locator when it lands far away on the audio timeline, which protects segmented maps at a section seam.</td>
 </tr>
 </tbody>
 </table>
@@ -3127,6 +3206,16 @@ library BookBridge only reads from does not need write access.</p>
 <h3 id="4-configure-the-bridge">4. Configure the bridge</h3>
 <p>In <strong>Settings</strong>, set <strong>Transcription Provider</strong> to <code>local</code>. <strong>Whisper Device</strong> defaults to <code>auto</code>, which uses the GPU once the three steps above are done, so there is nothing else to set. Compute type follows the device (<code>float16</code> on GPU, <code>int8</code> on CPU).</p>
 <p>Consider raising <strong>Whisper Model</strong> to <code>small</code> or <code>medium</code> if your GPU can handle it.</p>
+<h3 id="ctc-forced-alignment-experimental">CTC forced alignment (experimental)</h3>
+<p>The published standard and <code>-cuda</code> images do not include CTC's torch and torchaudio
+dependencies. To try it, build your own image, then enable <strong>Use CTC forced alignment</strong>
+in Settings and use <strong>Remap alignment</strong> on a book:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>build<span class="w"> </span>--build-arg<span class="w"> </span><span class="nv">INSTALL_CTC</span><span class="o">=</span><span class="nb">true</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<p>Use an NVIDIA GPU for full-length audiobooks. CPU mode is available for short books but
+is very slow. CTC remains opt-in; leaving it off keeps the normal Whisper/lexical
+pipeline unchanged.</p>
 
 
 
