@@ -907,10 +907,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#ctc-forced-alignment-experimental" class="md-nav__link">
+  <a href="#forced-alignment-for-non-english-books-mms" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CTC forced alignment (experimental)
+        Forced alignment for non-English books (MMS)
       
     </span>
   </a>
@@ -1398,10 +1398,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#ctc-forced-alignment-experimental" class="md-nav__link">
+  <a href="#forced-alignment-for-non-english-books-mms" class="md-nav__link">
     <span class="md-ellipsis">
       
-        CTC forced alignment (experimental)
+        Forced alignment for non-English books (MMS)
       
     </span>
   </a>
@@ -1628,6 +1628,18 @@ service back on restores everyone's settings exactly as they were.</p>
 <td>Enables bridge-side annotation exchange for the Bridge Sync KOReader plugin. Requires the current Bridge Sync plugin on each device.</td>
 </tr>
 <tr>
+<td>Sync Reading Status Between Devices</td>
+<td><code>KOREADER_STATUS_SYNC_ENABLED</code></td>
+<td><code>true</code></td>
+<td>Shares each book's KOReader status (reading / finished / abandoned) across your devices — including filling it in from your reading position, marking a book finished when the bridge decides it is complete, and clearing it when you clear progress. Requires the <strong>BridgeSync 0.9.6</strong> plugin (or newer) on each device.</td>
+</tr>
+<tr>
+<td>Share Recently-Read Books Between Devices</td>
+<td><code>KOREADER_SYNC_READ_HISTORY</code></td>
+<td><code>false</code></td>
+<td>Adds a book you read on one device into KOReader's History on your others, so views built from History (like a "Recent" shelf) look the same everywhere. Bounded per sync: only books whose file is already on the device, nothing read more than 30 days ago, and at most 25 books. Requires the <strong>BridgeSync 0.9.6</strong> plugin (or newer) on each device.</td>
+</tr>
+<tr>
 <td>Target KOSync URL</td>
 <td><code>KOSYNC_SERVER</code></td>
 <td>empty</td>
@@ -1639,12 +1651,28 @@ service back on restores everyone's settings exactly as they were.</p>
 <td>empty</td>
 <td>Optional dedicated KOSync port for internet-safe exposure.</td>
 </tr>
+<tr>
+<td>When Two KOReader Devices Disagree</td>
+<td><code>KOSYNC_ACTIVE_DEVICE_WINS</code></td>
+<td><code>shadow</code></td>
+<td>Under <strong>Advanced — cross-device progress</strong>. <code>shadow</code> (<strong>Watch and log only</strong>) records the choice the arbiter would make without changing anything readers receive; <code>on</code> (<strong>Let the device you are reading on win</strong>) lets the device you are actively reading — proven by several forward page turns in a row — outrank a stale device sitting at the furthest position; <code>off</code> (<strong>Always use the furthest position</strong>) keeps the original behavior.</td>
+</tr>
 </tbody>
 </table>
 <p>KOSync notes:</p>
 <ul>
 <li>Each reader's KoSync <strong>username and password</strong> are per-reader — set them under <strong>Account -&gt; My Integrations -&gt; KOReader / KoSync</strong> (with a <strong>Test</strong> button), or as an admin under <strong>Settings -&gt; Users -&gt; Integrations</strong>.</li>
-<li>Plain KOReader/KOSync progress sync does not need the Bridge Sync plugin. Highlight and note sync does.</li>
+<li>Plain KOReader/KOSync progress sync does not need the Bridge Sync plugin. Highlight and note sync, status sync, and History sharing all do.</li>
+<li>Tapping <strong>Register</strong> against the bridge's KoSync server only succeeds for an account that
+  already exists in <strong>My Account -&gt; My Integrations</strong>; it does not create one. Use <strong>Login</strong>
+  once the username and password are saved there.</li>
+<li><strong>Sync Reading Status</strong> and <strong>Share Recently-Read Books</strong> never touch your reading
+  <em>position</em> — only KOReader's own status field and History list. When two devices disagree
+  on status, the one whose status changed most recently wins, and "finished" breaks a
+  same-day tie so simply reopening a finished book cannot quietly un-finish it.</li>
+<li><strong>When Two KOReader Devices Disagree</strong> only matters once a book is linked to more than one
+  reader file. It ships on <code>shadow</code> deliberately, so you can check its logged decisions
+  against your own devices before switching it to <code>on</code>.</li>
 </ul>
 <h4 id="bookfusion">BookFusion</h4>
 <p>BookFusion is a supported ebook progress and highlight source. BookBridge can also upload a book's local EPUB into your BookFusion bookshelf when a link search finds no match.</p>
@@ -2208,6 +2236,18 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td><code>false</code></td>
 <td>Recommended while listening: holds the sync until playback pauses or stops, instead of writing on every poll.</td>
 </tr>
+<tr>
+<td>When BookOrbit Syncs Read-Along Books Itself</td>
+<td><code>BOOKORBIT_READALONG_POLICY</code></td>
+<td><code>defer</code></td>
+<td><code>defer</code> (<strong>Let BookOrbit handle it</strong>) writes only the ebook side and lets BookOrbit's own 3.0+ read-along sync move the audio position on a book where BookBridge maps both formats onto the same BookOrbit entry; <code>takeover</code> (<strong>Turn BookOrbit's off and drive both sides</strong>) switches that entry's own sync off so BookBridge owns both; <code>ignore</code> lets both write, which can conflict. Only matters when a book's audio and text are the same BookOrbit entry — the usual separate-entry setup is unaffected either way. See <a href="../troubleshooting/#a-read-along-book-keeps-shifting-position-or-bookorbit-and-bookbridge-disagree">troubleshooting</a>.</td>
+</tr>
+<tr>
+<td>Read-Along Audio Bitrate</td>
+<td><code>READALONG_AUDIO_BITRATE</code></td>
+<td><code>32k</code></td>
+<td>Bitrate ffmpeg encodes into a generated read-along EPUB's embedded audio (mono AAC), e.g. <code>32k</code>, <code>48k</code>. Lower saves storage and download size (roughly 14MB per hour of audio at the default); higher improves quality at the cost of both. An invalid value falls back to the default. Applies only to read-alongs generated after the change — existing ones are not re-encoded.</td>
+</tr>
 </tbody>
 </table>
 <p>Optional "Up Next" collection watch — drop a book onto a collection in BookOrbit and the bridge auto-matches it on the next poll:</p>
@@ -2256,6 +2296,12 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <p><strong>Moving from Grimmory to BookOrbit?</strong> You do not need to rematch. A helper script, <code>scripts/migrate_grimmory_to_bookorbit.py</code>, re-points your existing Grimmory ebook links at BookOrbit by filename, leaving the audio link and reading progress untouched. Enable and scan BookOrbit first, then run it from inside the container (it is a dry run by default; add <code>--apply</code> to commit):</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>abs_kosync<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>scripts.migrate_grimmory_to_bookorbit<span class="w"> </span>--apply
 </code></pre></div>
+</li>
+<li>
+<p><strong>Generating a read-along EPUB</strong> for BookOrbit needs a mapping whose audio source is
+  BookOrbit and that already has an alignment map (forced alignment or the standard Whisper/lexical one).
+  See <a href="../user-guide/#read-along-epubs-for-bookorbit">Read-Along EPUBs for BookOrbit</a> in the
+  User Guide.</p>
 </li>
 </ul>
 <h4 id="kavita">Kavita</h4>
@@ -2931,22 +2977,28 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td>Experimental. Enable only for a collection whose audiobook narrates sections in a different order from the EPUB spine, then remap that book.</td>
 </tr>
 <tr>
-<td>Use CTC Forced Alignment</td>
+<td>Use Forced Alignment</td>
 <td><code>CTC_ENABLED</code></td>
-<td><code>false</code></td>
-<td>Experimental and available only in a self-built image with <code>INSTALL_CTC=true</code>; leave off for the standard Whisper/lexical pipeline.</td>
+<td><code>true</code></td>
+<td>Recommended. Aligns each audiobook directly against its ebook's text, word by word, instead of transcribing it first; also locates each chapter directly in the audio, so long books skip Whisper entirely. Runs on the CPU in every image via the default QuartzNet model. Off always uses transcription (Whisper/lexical). New installs default on; existing installs keep whatever they had.</td>
 </tr>
 <tr>
 <td>CTC Model</td>
 <td><code>CTC_MODEL</code></td>
-<td><code>mms_fa</code></td>
-<td>The only supported forced-alignment model bundle. Visible after enabling CTC.</td>
+<td><code>quartznet</code></td>
+<td><code>quartznet</code> (NVIDIA QuartzNet15x5, English only) runs on the CPU in every image. <code>mms_fa</code> (Meta MMS, ~1000 languages) needs a self-built image with <code>INSTALL_CTC=true</code> and effectively an NVIDIA GPU. Visible under Advanced once forced alignment is on.</td>
+</tr>
+<tr>
+<td>QuartzNet Model File</td>
+<td><code>CTC_QUARTZNET_MODEL_PATH</code></td>
+<td>empty</td>
+<td>Optional path to a local <code>model.onnx</code> (or the folder holding it). Empty downloads it once (77 MB) from Storyteller's package registry into <code>/data/models/quartznet15x5-en/</code>; set this if that download fails.</td>
 </tr>
 <tr>
 <td>CTC Device</td>
 <td><code>CTC_DEVICE</code></td>
 <td><code>auto</code></td>
-<td>Uses an NVIDIA GPU when available; CPU is practical only for short books. Visible after enabling CTC.</td>
+<td>MMS only — QuartzNet always runs on the CPU. Uses an NVIDIA GPU when available; CPU is practical only for short books with MMS.</td>
 </tr>
 </tbody>
 </table>
@@ -2958,7 +3010,8 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <li><strong>Send Original Audio</strong> skips local ffmpeg normalization and splitting, which saves minutes per book, but only works on servers that decode arbitrary formats <em>and</em> chunk long audio themselves (e.g. parakeet with <code>-long-audio</code>). Leave it off for whisper.cpp, which requires 16kHz WAV input. When it is on, <strong>Audio Split Length</strong> no longer applies — the server controls chunking.</li>
 <li><strong>Content-Match Guard</strong> is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.</li>
 <li><strong>Segmented Alignment Maps</strong> is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use <strong>Remap alignment</strong> for the affected book.</li>
-<li><strong>CTC forced alignment</strong> is a separate experimental backend, not an upgrade to the standard or <code>-cuda</code> image. It is disabled by default and requires the custom build described below.</li>
+<li><strong>Forced alignment</strong> is the recommended, default-on method: it runs on the CPU in every published image (standard and <code>-cuda</code>) using QuartzNet, and it finds each chapter directly in the audio, so long books skip the Whisper transcript entirely — a 22-hour audiobook takes about 7.5 minutes on a modern 8-thread CPU, a 39-hour one about 15. It falls back to transcription automatically, with no user action needed, for a book that is not in English, whose audio does not follow the text closely enough, whose chapters are narrated out of order, or that appears to be a different book — that fallback is expected, not an error. New installs default it on; existing installs keep whatever they had.</li>
+<li>For a non-English book, switch <strong>CTC Model</strong> to <code>mms_fa</code> under <strong>Advanced — forced alignment model</strong>. MMS needs a self-built image (<code>INSTALL_CTC=true</code>) and effectively an NVIDIA GPU — see <a href="#forced-alignment-for-non-english-books-mms">Forced alignment for non-English books (MMS)</a> below.</li>
 </ul>
 <h3 id="sync-tuning">Sync Tuning</h3>
 <p>Found under <strong>Settings -&gt; Sync</strong>, alongside instant-sync options and Alignment Health.</p>
@@ -3206,16 +3259,19 @@ library BookBridge only reads from does not need write access.</p>
 <h3 id="4-configure-the-bridge">4. Configure the bridge</h3>
 <p>In <strong>Settings</strong>, set <strong>Transcription Provider</strong> to <code>local</code>. <strong>Whisper Device</strong> defaults to <code>auto</code>, which uses the GPU once the three steps above are done, so there is nothing else to set. Compute type follows the device (<code>float16</code> on GPU, <code>int8</code> on CPU).</p>
 <p>Consider raising <strong>Whisper Model</strong> to <code>small</code> or <code>medium</code> if your GPU can handle it.</p>
-<h3 id="ctc-forced-alignment-experimental">CTC forced alignment (experimental)</h3>
-<p>The published standard and <code>-cuda</code> images do not include CTC's torch and torchaudio
-dependencies. To try it, build your own image, then enable <strong>Use CTC forced alignment</strong>
-in Settings and use <strong>Remap alignment</strong> on a book:</p>
+<h3 id="forced-alignment-for-non-english-books-mms">Forced alignment for non-English books (MMS)</h3>
+<p>Forced alignment's default model, QuartzNet, needs no build and already runs on the
+CPU in every published image — see <a href="#transcription-settings">Transcription Settings</a>
+above. For a book that is not in English, switch <strong>CTC Model</strong> to <code>mms_fa</code> (Meta MMS,
+~1000 languages) instead. MMS is not included in the published images; build your own
+with its torch and torchaudio dependencies, then select <code>mms_fa</code> under <strong>Advanced —
+forced alignment model</strong> in Settings and use <strong>Remap alignment</strong> on the book:</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>build<span class="w"> </span>--build-arg<span class="w"> </span><span class="nv">INSTALL_CTC</span><span class="o">=</span><span class="nb">true</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
-<p>Use an NVIDIA GPU for full-length audiobooks. CPU mode is available for short books but
-is very slow. CTC remains opt-in; leaving it off keeps the normal Whisper/lexical
-pipeline unchanged.</p>
+<p>Use an NVIDIA GPU for full-length audiobooks with MMS. CPU mode is available for short
+books but is very slow. Leaving <strong>CTC Model</strong> on <code>quartznet</code> keeps the default
+CPU-only pipeline unchanged.</p>
 
 
 

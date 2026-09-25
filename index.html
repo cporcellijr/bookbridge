@@ -919,7 +919,7 @@
 <tr>
 <td style="text-align: left;"><strong>KOReader / KOSync</strong></td>
 <td style="text-align: left;">Ebooks</td>
-<td style="text-align: left;">Reading progress sync; highlights/notes through the current Bridge Sync plugin</td>
+<td style="text-align: left;">Reading progress sync; highlights/notes, reading-status sync, and recently-read History sharing through the current Bridge Sync plugin</td>
 </tr>
 <tr>
 <td style="text-align: left;"><strong>BookFusion</strong></td>
@@ -939,7 +939,7 @@
 <tr>
 <td style="text-align: left;"><strong>BookOrbit</strong></td>
 <td style="text-align: left;">Ebooks + audiobooks</td>
-<td style="text-align: left;">Ebook progress, audiobook-source sync, reading sessions, optional highlight relay</td>
+<td style="text-align: left;">Ebook progress, audiobook-source sync, reading sessions, optional highlight relay, read-along EPUB generation</td>
 </tr>
 <tr>
 <td style="text-align: left;"><strong>Kavita</strong></td>
@@ -984,7 +984,7 @@
 <li><strong>Book upload to Readest</strong> (optional, per reader) that copies matched books, or just the
   ones you are currently reading, into your Readest cloud library and files them into a group.</li>
 <li><strong>Rich locators</strong> using timestamps, href/fragment data, XPath, and EPUB CFI where available.</li>
-<li><strong>Built-in audio ↔ text alignment</strong> using Whisper transcription and EPUB SMIL timing data — no extra services required. Content-match protection catches wrong pairings, Alignment Health scores and restores maps, and Storyteller transcript assets remain a premium source when available.</li>
+<li><strong>Built-in audio ↔ text alignment</strong>: forced alignment matches each audiobook directly against its ebook and finds every chapter in the audio itself, running on the CPU in every image with no extra services required. Whisper transcription and EPUB SMIL timing data are the automatic fallback for books it can't follow. Content-match protection catches wrong pairings, Alignment Health scores and restores maps, and Storyteller transcript assets remain a premium source when available.</li>
 <li><strong>Resumable jobs</strong> for background processing and transcript work.</li>
 </ul>
 <h3 id="management-web-ui">Management Web UI</h3>
@@ -996,6 +996,8 @@
 <li><strong>A match queue</strong> inside Add / Update Book for reviewing and linking books in bulk.</li>
 <li><strong>Library Suggestions</strong> for background scanning, review, and queue building.</li>
 <li><strong>Storyteller Editions</strong> for building and uploading read-along books.</li>
+<li><strong>Read-along EPUBs for BookOrbit</strong>, built from BookBridge's own alignment with no
+  Storyteller server required, with dashboard pills showing CTC and read-along status.</li>
 <li><strong>Watched collections</strong> in Grimmory, BookOrbit, and Kavita that auto-match anything you drop into them.</li>
 <li><strong>Dynamic Settings</strong> with live connection tests and automatic restart after saving.</li>
 <li><strong>Flexible setup</strong> including an intentional Audiobookshelf-off mode for ebook-only or maintenance-focused use.</li>

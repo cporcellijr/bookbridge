@@ -642,10 +642,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#optional-ctc-backend" class="md-nav__link">
+  <a href="#optional-mms-backend-non-english-books" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional CTC backend
+        Optional MMS backend (non-English books)
       
     </span>
   </a>
@@ -728,28 +728,33 @@ recover word timestamps: that book needs fresh transcription first. Storyteller
 maps can be rebuilt from existing wordTimeline data without running Whisper again.
 Use the isolated excerpt comparison first; do not clear the whole library's cache
 just to evaluate this change.</p>
-<h2 id="optional-ctc-backend">Optional CTC backend</h2>
-<p>Build with <code>--build-arg INSTALL_CTC=true</code> to include torch and torchaudio, enable
-<strong>Use CTC forced alignment</strong> in Settings, and use <strong>Remap alignment</strong> on the book's
-reset menu. <code>CTC_DEVICE=auto</code> selects CUDA when available. Both model emissions and
-target tokens remain on that device through <code>forced_align</code>; only the finished path
-and scores move to CPU for word-span reduction. This follows the device requirements
-in <a href="https://github.com/pytorch/audio/blob/main/src/libtorchaudio/forced_align/gpu/compute.cu">torchaudio's CUDA implementation</a>.
+<h2 id="optional-mms-backend-non-english-books">Optional MMS backend (non-English books)</h2>
+<p>Forced alignment defaults to QuartzNet, which needs no build and runs on the CPU in
+every published image, English only. For a book that is not in English, switch <strong>CTC
+Model</strong> to <code>mms_fa</code> (Meta MMS, ~1000 languages) under <strong>Advanced — forced alignment
+model</strong> in Settings. MMS is not included in the published images: build with
+<code>--build-arg INSTALL_CTC=true</code> to include torch and torchaudio, select <code>mms_fa</code>, and
+use <strong>Remap alignment</strong> on the book's reset menu. <code>CTC_DEVICE=auto</code> selects CUDA when
+available. Both model emissions and target tokens remain on that device through
+<code>forced_align</code>; only the finished path and scores move to CPU for word-span reduction.
+This follows the device requirements in <a href="https://github.com/pytorch/audio/blob/main/src/libtorchaudio/forced_align/gpu/compute.cu">torchaudio's CUDA implementation</a>.
 Logs distinguish audio decoding, emission progress and the final alignment device.</p>
 <p>For an existing lexical map with matching EPUB length and transcript matches spanning
 at least 90% of its recorded audio duration, remapping uses the EPUB chapters containing
 those matches. Synthetic head/tail anchors do not count as narration evidence. This
-keeps an unnarrated bonus excerpt out of the CTC target without changing canonical EPUB
+keeps an unnarrated bonus excerpt out of the MMS target without changing canonical EPUB
 offsets or the stored full-text length. The final anchor stays at the narrated section's
 end. Without this evidence, the backend uses the complete text; automatic matching of
 different editions or interior omissions remains outside this boundary selection.</p>
-<p>Long books still require substantial host memory even with CUDA. On CPU, maps exceeding
-the signed 32-bit back-pointer index limit fall back to lexical alignment before calling
-the native implementation. Listen at representative mapped positions before claiming
-an accuracy improvement; successful GPU execution alone does not measure accuracy.</p>
-<p>Deploy these source fixes with a restart if the running image already includes the CTC
-dependencies. Otherwise rebuild with the CTC build argument first. Keep <code>TORCH_HOME</code>
-under a persisted model-cache directory to reuse the downloaded MMS model.</p>
+<p>Long books still require substantial host memory with MMS even on CUDA. On CPU, maps
+exceeding the signed 32-bit back-pointer index limit fall back to lexical alignment
+before calling the native implementation. Listen at representative mapped positions
+before claiming an accuracy improvement; successful GPU execution alone does not
+measure accuracy.</p>
+<p>Deploy these source fixes with a restart if the running image already includes the MMS
+dependencies. Otherwise rebuild with the CTC build argument first. <code>TORCH_HOME</code> only
+matters for MMS; keep it under a persisted model-cache directory to reuse the downloaded
+MMS model. QuartzNet does not use it.</p>
 
 
 

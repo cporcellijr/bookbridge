@@ -1189,10 +1189,14 @@ same-folder matches.</p>
 <ol>
 <li><strong>Point KOReader at the bridge.</strong> Copy the sync-server address shown on the card into
    KOReader's <strong>Tools → Progress sync → Custom sync server</strong>, then sign in on the device with
-   the KoSync username/password from My Integrations. The suggestion keeps the public HTTPS
-   origin when you use a reverse proxy, or uses the configured KoSync port for direct LAN
-   access. If you opened BookBridge through localhost, replace that host with the server's LAN
-   hostname or IP address before copying. This alone gives you progress sync.</li>
+   the KoSync username/password from My Integrations. The suggestion is built from the address
+   you are browsing BookBridge on, so it already carries the right port — including the host
+   port you published (<code>8080</code> in the compose file above) and a reverse proxy's HTTPS origin.
+   Only in split-port mode (<code>KOSYNC_PORT</code>) does it point at that separate port instead. Enter
+   the base address only, with no <code>/api</code> or <code>/koreader</code> suffix. If you opened BookBridge
+   through localhost, replace that host with the server's LAN hostname or IP address (or its
+   Tailscale address for a device that leaves the network) before copying. This alone gives
+   you progress sync.</li>
 <li><strong>Install the Bridge Sync plugin</strong> (download on the same card). The plugin delivers books
    from the bridge byte-for-byte — so KOReader progress auto-links with no manual matching —
    and adds reading-stats sync plus highlight and note sync. Unzip it into
@@ -1204,6 +1208,9 @@ close-capture need the Bridge Sync plugin from the current release or newer. Wit
 installed, each reader's integrations can also turn Grimmory shelves or Hardcover lists into
 KOReader collections for synced books.</p>
 <p>This is optional. The bridge works without it.</p>
+<p>If KOReader reports <strong>Unknown server error</strong> when you sign in, the address or the network
+path is wrong rather than the password — see
+<a href="../troubleshooting/#koreader-cannot-connect-unknown-server-error">KOReader cannot connect</a>.</p>
 
 
 
