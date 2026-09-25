@@ -359,6 +359,203 @@ class TestSeriesGrouping(unittest.TestCase):
         self.assertIn(True, types)
 
 
+class TestSeriesLeadSelection(unittest.TestCase):
+    """The single-card series design (#449): which child leads the collapsed
+    card, and what's left for the 'other books' strip once it's picked."""
+
+    def setUp(self):
+        from src.web_server import _group_dashboard_mappings_by_series
+        self.group = _group_dashboard_mappings_by_series
+
+    def test_in_progress_beats_an_earlier_unfinished_book(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0,
+                          display_title="Book 1", unified_progress=100),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0,
+                          display_title="Book 2", unified_progress=0),
+            _make_mapping(abs_id="b3", series_name="S", series_sequence=3.0,
+                          display_title="Book 3", unified_progress=40),
+        ]
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 3")
+
+    def test_two_in_progress_the_more_recently_synced_wins(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0,
+                          display_title="Book 1", unified_progress=30, last_sync_unix=1000.0),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0,
+                          display_title="Book 2", unified_progress=55, last_sync_unix=5000.0),
+        ]
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 2")
+
+    def test_tied_last_sync_falls_back_to_series_order(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0,
+                          display_title="Book 1", unified_progress=30, last_sync_unix=1000.0),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0,
+                          display_title="Book 2", unified_progress=55, last_sync_unix=1000.0),
+        ]
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 1")
+
+    def test_none_in_progress_leads_with_first_unfinished(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0,
+                          display_title="Book 1", unified_progress=100),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0,
+                          display_title="Book 2", unified_progress=0),
+            _make_mapping(abs_id="b3", series_name="S", series_sequence=3.0,
+                          display_title="Book 3", unified_progress=0),
+        ]
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 2")
+
+    def test_not_started_series_leads_with_book_one(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0,
+                          display_title="Book 1", unified_progress=0),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0,
+                          display_title="Book 2", unified_progress=0),
+        ]
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 1")
+
+    def test_fully_finished_series_has_no_lead(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0, unified_progress=100),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0, unified_progress=100),
+        ]
+        g = self.group(flat)[0]
+        self.assertIsNone(g["lead_book"])
+        self.assertEqual(g["other_children"], [])
+        self.assertEqual(g["other_preview_books"], [])
+
+    def test_other_preview_books_never_contains_the_lead(self):
+        flat = [
+            _make_mapping(abs_id=f"b{i}", series_name="S", series_sequence=float(i),
+                          display_title=f"Book {i}", unified_progress=0)
+            for i in range(1, 4)
+        ]
+        flat[1]["unified_progress"] = 40  # Book 2 is in progress -> lead
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 2")
+        titles = [b["title"] for b in g["other_preview_books"]]
+        self.assertNotIn("Book 2", titles)
+
+    def test_other_children_excludes_the_lead(self):
+        flat = [
+            _make_mapping(abs_id="b1", series_name="S", series_sequence=1.0,
+                          display_title="Book 1", unified_progress=100),
+            _make_mapping(abs_id="b2", series_name="S", series_sequence=2.0,
+                          display_title="Book 2", unified_progress=0),
+            _make_mapping(abs_id="b3", series_name="S", series_sequence=3.0,
+                          display_title="Book 3", unified_progress=0),
+        ]
+        g = self.group(flat)[0]
+        self.assertEqual(g["lead_book"]["display_title"], "Book 2")
+        other_titles = [c["display_title"] for c in g["other_children"]]
+        self.assertEqual(other_titles, ["Book 1", "Book 3"])
+
+
+class TestSingleCardSeriesTemplate(unittest.TestCase):
+    """Source-text checks for the opt-in single-card series markup (#449).
+    A real Jinja render of index.html needs base.html/_nav.html globals, so
+    (like the rest of this file) these assert on the template source instead.
+    """
+
+    def setUp(self):
+        self.source = (Path(__file__).parent.parent / "templates" / "index.html").read_text(
+            encoding="utf-8"
+        )
+
+    def test_series_strip_spans_the_full_card_width(self):
+        """The strip sits after .book-info closes (a direct child of the card, not
+        inside the right-hand info column) and the card wraps to give it a row."""
+        macro_start = self.source.index("{% macro render_book_card(")
+        macro_end = self.source.index("{% endmacro %}", macro_start)
+        body = self.source[macro_start:macro_end]
+        strip_at = body.index("{% if series_strip %}\n        {#")
+        self.assertIn("        </div>\n        {% if series_strip %}", body)
+        self.assertLess(body.index('<div class="card-footer">'), strip_at)
+        self.assertIn("{% if series_strip %} has-series-strip{% endif %}", body)
+        self.assertIn(".book-card.has-series-strip { flex-wrap: wrap; }", self.source)
+        rule = self.source[self.source.index(".series-header.series-strip {"):]
+        self.assertIn("flex: 0 0 100%", rule[:rule.index("}")])
+
+    def test_dashboard_grids_use_masonry_packing(self):
+        """Cards keep their natural height and pack under each other: no
+        stretched space inside cards and no gaps below them."""
+        rule_start = self.source.index(".book-grid.masonry {")
+        rule = self.source[rule_start:self.source.index("}", rule_start)]
+        self.assertIn("grid-auto-rows: 4px", rule)
+        self.assertIn("row-gap: 0", rule)
+        self.assertIn("align-items: start", rule)
+        script = self.source[self.source.index("function layoutGrid(grid)"):]
+        self.assertIn("getComputedStyle(grid).columnGap", script)
+        self.assertIn("item.style.gridRowEnd = 'span '", script)
+        self.assertIn("new ResizeObserver(", script)
+        self.assertIn("grid.classList.add('masonry')", script)
+        self.assertIn(".observe(grid, { childList: true })", script)
+
+    def test_collapsed_lead_card_hides_its_per_service_grid(self):
+        self.assertIn(
+            ".series-group:not(.expanded) .has-series-strip .service-progress { display: none; }",
+            self.source,
+        )
+
+    def test_new_branch_is_gated_by_the_setting_and_a_lead_book(self):
+        macro_start = self.source.index("{% macro render_series_card(group, integrations) %}")
+        macro_end = self.source.index("{% endmacro %}", macro_start)
+        macro_body = self.source[macro_start:macro_end]
+        self.assertIn(
+            "{% if get_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}",
+            macro_body,
+        )
+
+    def test_lead_renders_via_render_book_card_with_the_series_strip(self):
+        self.assertIn(
+            "{{ render_book_card(group.lead_book, integrations, series_strip=group) }}",
+            self.source,
+        )
+
+    def test_other_children_render_below_the_lead_not_repeating_it(self):
+        macro_start = self.source.index("{% macro render_series_card(group, integrations) %}")
+        lead_call = self.source.index(
+            "{{ render_book_card(group.lead_book, integrations, series_strip=group) }}", macro_start
+        )
+        other_loop = self.source.index("{% for child in group.other_children %}", lead_call)
+        self.assertGreater(other_loop, lead_call)
+
+    def test_series_strip_is_clickable_via_toggle_series(self):
+        strip_start = self.source.index('<div class="series-header series-strip"')
+        strip_block = self.source[strip_start:self.source.index("{% endif %}", strip_start)]
+        self.assertIn("onclick=\"toggleSeries('{{ series_strip.dom_id }}')\"", strip_block)
+        self.assertIn("role=\"button\"", strip_block)
+
+    def test_off_branch_still_has_todays_markup(self):
+        """The gate's else branch must be untouched so OFF stays byte-for-byte today's output."""
+        macro_start = self.source.index("{% macro render_series_card(group, integrations) %}")
+        macro_end = self.source.index("{% endmacro %}", macro_start)
+        macro_body = self.source[macro_start:macro_end]
+        self.assertIn("{% else %}", macro_body)
+        self.assertIn('<div class="series-header" role="button" tabindex="0"', macro_body)
+        self.assertIn("{% for child in group.children %}", macro_body)
+
+    def test_render_book_card_series_strip_param_defaults_to_none(self):
+        self.assertIn(
+            "{% macro render_book_card(mapping, integrations, series_strip=none) %}", self.source
+        )
+
+    def test_lead_card_is_tagged_for_the_grouping_off_flatten_restore(self):
+        """The lead card is a duplicate of a flat card just like the other children,
+        so the grouping-off toggle must tag+restore it the same way (see
+        flattenSeriesGroups / restoreSeriesGroups)."""
+        self.assertIn("leadCard.dataset.seriesLead = '1';", self.source)
+        self.assertIn("card.dataset.seriesLead === '1'", self.source)
+        self.assertIn("container.insertBefore(card, container.firstChild);", self.source)
+
+
 class TestExtractSeriesFromAbsMetadata(unittest.TestCase):
 
     def setUp(self):

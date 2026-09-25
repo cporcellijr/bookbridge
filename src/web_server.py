@@ -4110,6 +4110,7 @@ def settings():
             'CONTENT_MATCH_GUARD',
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',
             'REMOTE_AUTH_ENABLED',
+            'SERIES_SHOW_CURRENT_BOOK_DETAIL',
         ]
 
         # Current settings in DB
@@ -4349,6 +4350,36 @@ def _finalize_series_group(group: dict) -> None:
     next_book = children[next_index] if next_index is not None else None
     preview_books, preview_hidden_count = _series_preview_books(children, next_index)
 
+    # Single-card series design (issue #449): which child leads the collapsed
+    # card. An in-progress child wins over an unstarted one -- readers care
+    # about where they actually are, not just the next unread volume -- and
+    # among several in-progress children the most recently synced one wins,
+    # ties broken toward the earlier one in series order (children is already
+    # sequence-sorted, and max() keeps the first maximal element).
+    in_progress_indexed = [
+        (i, c) for i, c in enumerate(children) if 0 < (c.get("unified_progress") or 0) < 100
+    ]
+    if in_progress_indexed:
+        lead_index, lead_book = max(in_progress_indexed, key=lambda pair: pair[1].get("last_sync_unix") or 0.0)
+    elif next_book is not None:
+        lead_index, lead_book = next_index, next_book
+    else:
+        lead_index, lead_book = None, None
+
+    if lead_book is not None:
+        other_children = [c for i, c in enumerate(children) if i != lead_index]
+        other_next_index = next(
+            (i for i, c in enumerate(other_children) if (c.get("unified_progress") or 0) < 100),
+            None,
+        )
+        other_preview_books, other_preview_hidden_count = _series_preview_books(
+            other_children, other_next_index
+        )
+    else:
+        other_children = []
+        other_preview_books = []
+        other_preview_hidden_count = 0
+
     last_sync_unix = 0.0
     for c in children:
         ts = c.get("last_sync_unix") or 0.0
@@ -4377,6 +4408,10 @@ def _finalize_series_group(group: dict) -> None:
         "next_book": next_book,
         "preview_books": preview_books,
         "preview_hidden_count": preview_hidden_count,
+        "lead_book": lead_book,
+        "other_children": other_children,
+        "other_preview_books": other_preview_books,
+        "other_preview_hidden_count": other_preview_hidden_count,
         "last_sync_unix": last_sync_unix,
         "added_at_unix": added_at_unix,
         "stack_cover_urls": [c.get("cover_url") for c in children[:3] if c.get("cover_url")],

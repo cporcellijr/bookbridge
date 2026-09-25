@@ -4,6 +4,26 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Show each series as the book you're reading (#449).** With **Show each series as
+  the book you're reading** on (Settings → Series Display, off by default), a series
+  on the Library is one card: the full card of the book you are on — the one in
+  progress, or the next unread one — with the series name and author, how many are
+  finished and the other books listed along its bottom. Click that strip to open the
+  rest of the series below it. While the series is closed, the card leaves out its
+  per-service progress; it comes back when you open the series. Finished series keep
+  their usual card.
+
+### Changed
+
+- **Library cards pack together instead of lining up in rows.** Each card keeps its
+  own height and the next one sits directly under it, so short cards no longer stretch
+  to match a tall neighbour and no gaps open up below them. Opening a series, or a
+  book's reading position, moves only the cards beneath it.
+
 ## [7.8.0] - 2026-09-25
 
 ### Added

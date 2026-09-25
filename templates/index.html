@@ -2,14 +2,14 @@
 {% set active_page = 'library' %}
 
 {# Macro for rendering a book card - used by both currently-reading and all-books grids #}
-{% macro render_book_card(mapping, integrations) %}
+{% macro render_book_card(mapping, integrations, series_strip=none) %}
     {% set sync_warning_pct = mapping.sync_warning_pct|default(0) %}
     {% set full_display_title = mapping.display_title %}
     {% if mapping.display_subtitle %}
     {% set full_display_title = mapping.display_title ~ ': ' ~ mapping.display_subtitle %}
     {% endif %}
 
-    <div class="book-card {% if mapping.is_out_of_sync %}out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}"
+    <div class="book-card {% if mapping.is_out_of_sync %}out-of-sync{% endif %}{% if series_strip %} has-series-strip{% endif %}" data-progress="{{ mapping.unified_progress }}"
         data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ full_display_title }}"
         data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}"
         data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}"
@@ -404,11 +404,66 @@
                     </form>
                 </div>
             </div>
+
         </div>
+        {% if series_strip %}
+        {# Single-card series design (issue #449): the series strip is folded into
+           the bottom of the lead book's own card, inside its border, rather than
+           living in a separate header element. #}
+        <div class="series-header series-strip" role="button" tabindex="0"
+            aria-controls="{{ series_strip.dom_id }}-children" aria-expanded="false"
+            onclick="toggleSeries('{{ series_strip.dom_id }}')"
+            onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSeries('{{ series_strip.dom_id }}');}">
+            <div class="series-strip-title-row">
+                <span class="series-strip-name">{{ series_strip.series_name }}{% if series_strip.series_author %} &middot; {{ series_strip.series_author }}{% endif %}</span>
+                <span class="series-chevron" aria-hidden="true">&#9654;</span>
+            </div>
+            <div class="series-strip-count">{{ series_strip.finished_count }}/{{ series_strip.child_count }} finished</div>
+            {% if series_strip.other_preview_books %}
+            <div class="series-book-list">
+                {% for book in series_strip.other_preview_books %}
+                <div class="series-book-row{% if book.is_next %} is-next{% endif %}">
+                    <span class="series-book-index">{{ book.label }}</span>
+                    <span class="series-book-title" title="{{ book.title }}">{{ book.title }}</span>
+                    <span class="series-book-bar">
+                        <span class="series-book-fill" style="width: {{ book.progress }}%"></span>
+                    </span>
+                    <span class="series-book-pct">{{ '%.0f'|format(book.progress) }}%</span>
+                </div>
+                {% endfor %}
+                {% if series_strip.other_preview_hidden_count %}
+                <div class="series-book-more">+{{ series_strip.other_preview_hidden_count }} more in series</div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
     </div>
     {% endmacro %}
 
     {% macro render_series_card(group, integrations) %}
+    {% if get_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}
+    {# Single-card series design (issue #449): the lead book's own full card
+       carries a series strip folded into its bottom (see the series_strip
+       branch of render_book_card). The "other" children -- everyone but the
+       lead -- live in the expandable list below, same as before. #}
+    <div class="series-group" id="{{ group.dom_id }}"
+         data-series-name="{{ group.series_name }}"
+         data-title="{{ group.series_name }}"
+         data-author="{{ group.series_author }}"
+         data-progress="{{ group.avg_progress }}"
+         data-last-sync="{{ group.last_sync_unix }}"
+         data-last-sync-unix="{{ group.last_sync_unix|default(0) }}"
+         data-added="{{ group.added_at_unix|default(0) }}"
+         data-child-count="{{ group.child_count }}">
+      {{ render_book_card(group.lead_book, integrations, series_strip=group) }}
+      <div class="series-children" id="{{ group.dom_id }}-children">
+        {% for child in group.other_children %}
+        {{ render_book_card(child, integrations) }}
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
     <div class="series-group" id="{{ group.dom_id }}"
          data-series-name="{{ group.series_name }}"
          data-title="{{ group.series_name }}"
@@ -487,6 +542,7 @@
         {% endfor %}
       </div>
     </div>
+    {% endif %}
     {% endmacro %}
 
 {% block head %}
@@ -658,6 +714,17 @@
             grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
             gap: 20px;
             margin-bottom: 60px;
+        }
+
+        /* Masonry: each card keeps its natural height and the next card in its
+           column tucks up under it, so there is neither stretched space inside
+           cards nor gaps below them. The script at the end of this page sets each
+           item's row span from its measured height; the vertical spacing comes
+           from that span, so the grid's own row gap is zero. */
+        .book-grid.masonry {
+            grid-auto-rows: 4px;
+            row-gap: 0;
+            align-items: start;
         }
 
         /* Book Card - Horizontal Layout */
@@ -2011,6 +2078,50 @@
         .series-group.expanded .series-children { display: flex; }
         .series-children .book-card { width: auto; }
 
+        /* Single-card series design (issue #449): the strip folded into the
+           bottom of the lead book's own card. It reuses .series-header for the
+           clickable/toggle behavior (see toggleSeries) but is visually a fold,
+           not a standalone card, since it already lives inside the book-card's
+           border. */
+        .book-card.has-series-strip { flex-wrap: wrap; }
+        /* Collapsed, the lead card leaves out its per-service grid; it returns
+           when the series is expanded. */
+        .series-group:not(.expanded) .has-series-strip .service-progress { display: none; }
+        .series-header.series-strip {
+            flex: 0 0 100%;
+            margin: 0;
+            padding: 10px 12px 12px;
+            background: transparent;
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0;
+        }
+        .series-header.series-strip:hover {
+            background: transparent;
+            border-top-color: rgba(102, 126, 234, 0.4);
+        }
+        .series-strip-title-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .series-strip-name {
+            flex: 1;
+            min-width: 0;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .series-strip-count {
+            margin-top: 2px;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .series-strip .series-book-list { margin-top: 8px; padding-top: 8px; }
+
         /* Series grouping toggle */
         .series-grouping-label {
             display: inline-flex;
@@ -3087,6 +3198,20 @@
                 });
             });
 
+            // The single-card series design (issue #449) renders the lead book as a
+            // full .book-card directly inside .series-group, a sibling of
+            // .series-children rather than a child of it -- it is a duplicate of a
+            // flat card just like the others, so it needs the same tag-and-restore
+            // treatment. Its "container" is the series-group itself, and restore
+            // must put it back in front of .series-children rather than appending.
+            document.querySelectorAll('.series-group').forEach(group => {
+                if (!group.id) return;
+                const leadCard = group.querySelector(':scope > .book-card');
+                if (!leadCard) return;
+                leadCard.dataset.seriesContainerId = group.id;
+                leadCard.dataset.seriesLead = '1';
+            });
+
             function flattenSeriesGroups() {
                 const inProgressGrid = document.getElementById('in-progress-grid');
                 const notStartedGridEl = document.getElementById('not-started-grid');
@@ -3121,11 +3246,17 @@
                 document.querySelectorAll('.book-card.flatten-duplicate').forEach(card => {
                     card.classList.remove('flatten-duplicate');
                 });
-                // Reparent any card that was moved out of its series-children.
+                // Reparent any card that was moved out of its series-children -- or,
+                // for a lead card, out of its series-group. A lead card must land
+                // back in front of .series-children, not after it.
                 document.querySelectorAll('.book-card[data-series-container-id]').forEach(card => {
                     const container = document.getElementById(card.dataset.seriesContainerId);
                     if (!container || card.parentNode === container) return;
-                    container.appendChild(card);
+                    if (card.dataset.seriesLead === '1') {
+                        container.insertBefore(card, container.firstChild);
+                    } else {
+                        container.appendChild(card);
+                    }
                 });
                 // Restore original sibling order within each series-children container.
                 document.querySelectorAll('.series-children').forEach(container => {
@@ -3959,4 +4090,64 @@
             });
         </script>
         {% endif %}
+        <script>
+            // Masonry for the dashboard grids (see .book-grid.masonry). Each direct
+            // child gets a row span from its measured height plus the column gap.
+            // A ResizeObserver on every child re-packs its grid whenever a card
+            // changes height (series expand/collapse, filters hiding cards, the
+            // position preview, window resizes); a MutationObserver picks up cards
+            // moved in or out (series grouping toggle). Items are top-aligned, so
+            // setting a span never changes an item's own size and cannot loop.
+            (function () {
+                const ROW_PX = 4;
+
+                function layoutGrid(grid) {
+                    const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+                    for (const item of grid.children) {
+                        if (item.offsetParent === null) {
+                            item.style.gridRowEnd = '';
+                            continue;
+                        }
+                        const height = item.getBoundingClientRect().height;
+                        item.style.gridRowEnd = 'span ' + Math.max(1, Math.ceil((height + gap) / ROW_PX));
+                    }
+                }
+
+                function initMasonry() {
+                    if (!('ResizeObserver' in window)) return;
+                    const pending = new Set();
+                    let frame = 0;
+                    const schedule = (grid) => {
+                        pending.add(grid);
+                        if (frame) return;
+                        frame = requestAnimationFrame(() => {
+                            frame = 0;
+                            pending.forEach(layoutGrid);
+                            pending.clear();
+                        });
+                    };
+                    const resizeObserver = new ResizeObserver((entries) => {
+                        entries.forEach((entry) => {
+                            const grid = entry.target.parentElement;
+                            if (grid && grid.classList.contains('masonry')) schedule(grid);
+                        });
+                    });
+                    document.querySelectorAll('.book-grid').forEach((grid) => {
+                        grid.classList.add('masonry');
+                        Array.from(grid.children).forEach((child) => resizeObserver.observe(child));
+                        new MutationObserver(() => {
+                            Array.from(grid.children).forEach((child) => resizeObserver.observe(child));
+                            schedule(grid);
+                        }).observe(grid, { childList: true });
+                        schedule(grid);
+                    });
+                }
+
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', initMasonry);
+                } else {
+                    initMasonry();
+                }
+            })();
+        </script>
 {% endblock %}

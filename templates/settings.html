@@ -1730,6 +1730,25 @@
                 </div>
             </div>
 
+            <!-- Series display -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h3>Series Display</h3>
+                </div>
+                <div class="section-body">
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="series_show_current_book_detail"
+                            name="SERIES_SHOW_CURRENT_BOOK_DETAIL" {% if
+                            get_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') %}checked{% endif %}>
+                        <label for="series_show_current_book_detail">Show each series as the book you're
+                            reading</label>
+                        <div class="help-text">The series appears as the full card of the book you are on (the
+                            one in progress, or the next unfinished), with the series name, how many are finished
+                            and the other books listed at its bottom; click the series line to open the rest.</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Telegram (Optional) -->
             <div class="settings-section">
                 {% set telegram_configured = get_val('TELEGRAM_BOT_TOKEN') != '' %}

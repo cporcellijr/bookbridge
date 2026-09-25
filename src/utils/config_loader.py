@@ -173,6 +173,7 @@ ALL_SETTINGS = [
     'SMIL_VALIDATION_THRESHOLD', 'TRANSCRIPT_MIN_COVERAGE',
     'DIAGNOSTICS_MAX_PAYLOAD_BYTES',
     'SHARE_ALL_BOOKS_WITH_ALL_USERS',
+    'SERIES_SHOW_CURRENT_BOOK_DETAIL',
 ]
 
 # Default values
@@ -243,6 +244,12 @@ DEFAULT_CONFIG = {
     # would resend and re-fail forever. 0 disables shedding.
     'DIAGNOSTICS_MAX_PAYLOAD_BYTES': '800000',
     'SHARE_ALL_BOOKS_WITH_ALL_USERS': 'false',
+    # Issue #449: a collapsed series card previews every child book as a compact
+    # row by default. When enabled, the series card IS the full card of the
+    # book you're on (in progress, or next unfinished), with the other books
+    # folded into a strip at its bottom. Default 'false' keeps today's
+    # compact-preview series card for existing installs.
+    'SERIES_SHOW_CURRENT_BOOK_DETAIL': 'false',
     'DEEPGRAM_API_KEY': '',
     'DEEPGRAM_MODEL': 'nova-2',
     'JOB_MAX_RETRIES': '5',
