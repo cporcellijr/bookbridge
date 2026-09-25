@@ -8,6 +8,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Books you start reading in BookOrbit get matched automatically.** Turn it on
+  in Settings → BookOrbit. Once you're past 1% of an ebook the bridge hasn't
+  matched, it looks for the audiobook: a match lands in Suggestions for you to
+  confirm, and a book with no audiobook is added as ebook-only so its progress
+  syncs.
+
 - **Show each series as the book you're reading (#449).** With **Show each series as
   the book you're reading** on (Settings → Series Display, off by default), a series
   on the Library is one card: the full card of the book you are on — the one in
@@ -23,6 +29,12 @@ All notable changes to BookBridge will be documented in this file.
   own height and the next one sits directly under it, so short cards no longer stretch
   to match a tall neighbour and no gaps open up below them. Opening a series, or a
   book's reading position, moves only the cards beneath it.
+
+### Fixed
+
+- **Dismissed Up Next suggestions no longer come back after the daily re-scan.**
+  Once you dismiss a match suggestion, it stays dismissed — the periodic re-scan
+  used to resurrect it.
 
 ## [7.8.0] - 2026-09-25
 

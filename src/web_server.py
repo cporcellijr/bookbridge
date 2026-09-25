@@ -4089,6 +4089,7 @@ def settings():
             'BOOKORBIT_ENABLED',
             'BOOKORBIT_READING_SESSIONS',
             'BOOKORBIT_SHELF_WATCH_ENABLED',
+            'BOOKORBIT_READING_WATCH_ENABLED',
             'KAVITA_ENABLED',
             'KAVITA_SHELF_WATCH_ENABLED',
             'CALIBRE_USE_ABS_IDENTIFIER',

@@ -1689,6 +1689,51 @@ class BookOrbitClient:
             })
         return out
 
+    def list_continue_reading_books(self, min_progress: float = 0.0, limit: int = 100) -> list:
+        """List this user's in-progress ebooks via the Continue Reading scroller.
+
+        ``GET /api/v1/dashboard/scrollers/continue-reading`` returns only this
+        user's in-progress non-audio books (0 < progress < 100, not marked
+        read/abandoned) as ``{"books": [...], "total": N}``. Entries below
+        *min_progress* (percent, 0-100; a null/invalid value coerces to 0) are
+        dropped before resolving each kept book's primary ebook filename via
+        its detail — the same lookup ``list_books_on_shelf`` uses.
+
+        Returns dicts shaped for ShelfWatchService's reading-watch pass:
+        ``{id, title, author, fileName, progress}``.
+        """
+        resp = self._make_request(
+            "GET", f"/api/v1/dashboard/scrollers/continue-reading?limit={limit}"
+        )
+        if not resp or resp.status_code != 200:
+            return []
+        data = self._parse_json(resp)
+        items = data.get("books") if isinstance(data, dict) else None
+        out = []
+        for raw in items or []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                progress = float(raw.get("readingProgress") or 0.0)
+            except (TypeError, ValueError):
+                progress = 0.0
+            if progress < min_progress:
+                continue
+            book_id = raw.get("id")
+            detail = self.get_book_detail(book_id)
+            filename = ""
+            if detail:
+                pf = self._primary_file(detail, kind="ebook") or self._primary_file(detail)
+                filename = (pf or {}).get("filename") or ""
+            out.append({
+                "id": book_id,
+                "title": (raw.get("title") or "").strip(),
+                "author": self._format_authors(raw.get("authors")),
+                "fileName": filename,
+                "progress": progress,
+            })
+        return out
+
     def _resolve_book_id_for_filename(self, filename: str) -> Optional[int]:
         with self._cache_lock:
             bid = self._filename_index.get(Path(filename).name.lower())

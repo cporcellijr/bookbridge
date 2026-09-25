@@ -1276,6 +1276,17 @@
                         </div>
                     </div>
 
+                    <!-- Separator -->
+                    <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
+                    <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Books You Start Reading</h4>
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="bookorbit_reading_watch" name="BOOKORBIT_READING_WATCH_ENABLED"
+                            {% if get_bool('BOOKORBIT_READING_WATCH_ENABLED') %}checked{% endif %}>
+                        <label for="bookorbit_reading_watch">Auto-match books you start reading in BookOrbit</label>
+                    </div>
+                    <div class="help-text full-width">When you start reading a BookOrbit ebook the bridge hasn't matched yet (past 1%), it looks for the audiobook. A match is added to Suggestions for you to confirm; with no audiobook found, the book is added as ebook-only so its progress syncs.</div>
+
                     <!-- Annotation / highlight sync -->
                     <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
                     <h4 class="full-width" style="font-size: 14px; color: #fff; margin-bottom: -10px;">Highlight Sync</h4>

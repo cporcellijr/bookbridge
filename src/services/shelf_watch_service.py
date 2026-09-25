@@ -28,6 +28,10 @@ from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
+# Percent-scale (0-100) minimum ebook progress before the reading-watch pass will
+# scan a book — ignores quick peeks (opening a book and reading a few lines).
+READING_WATCH_MIN_PROGRESS_PCT = 1.0
+
 
 def shelf_watch_scan_key(source_name: str, source_book_id: str) -> str:
     """Single definition of the shelf-watch throttle-table key.
@@ -133,6 +137,13 @@ class ShelfWatchService:
         raw = os.environ.get(f'{self._env_prefix}_SHELF_WATCH_ENABLED', 'false')
         return str(raw).strip().lower() in ('true', '1', 'yes', 'on')
 
+    def _reading_watch_enabled(self) -> bool:
+        # Reading-watch only exists for BookOrbit's Continue Reading scroller.
+        if self._source_name != 'BookOrbit':
+            return False
+        raw = os.environ.get(f'{self._env_prefix}_READING_WATCH_ENABLED', 'false')
+        return str(raw).strip().lower() in ('true', '1', 'yes', 'on')
+
     def _watch_shelf_name(self) -> str:
         return (os.environ.get(f'{self._env_prefix}_SHELF_WATCH_NAME') or 'Up Next').strip()
 
@@ -228,9 +239,18 @@ class ShelfWatchService:
     # ---- main entry point ----------------------------------------------
 
     def process_watch_shelf(self, user_id: int = None) -> dict:
-        """Run a shelf scan with the requested user's clients and context."""
+        """Run a shelf scan with the requested user's clients and context.
+
+        Also runs the BookOrbit reading-watch pass (Continue Reading
+        auto-match) right after the shelf-watch pass, in the same user
+        binding. A reading-watch failure never breaks the shelf-watch
+        result — this method's return value is always the shelf-watch
+        stats dict.
+        """
         if user_id is None or self._user_client_registry is None:
-            return self._process_watch_shelf(user_id=user_id)
+            stats = self._process_watch_shelf(user_id=user_id)
+            self._run_reading_watch(user_id=user_id)
+            return stats
 
         bundle = self._resolve_user_bundle(user_id)
         client = self._resolve_client_for_user(user_id, bundle=bundle)
@@ -244,7 +264,9 @@ class ShelfWatchService:
             from src.utils.user_context import set_current_user_id, set_current_user_credentials
             user_token = set_current_user_id(user_id)
             credentials_token = set_current_user_credentials(getattr(bundle, 'credentials', None))
-            return self._process_watch_shelf(user_id=user_id, active_client=client)
+            stats = self._process_watch_shelf(user_id=user_id, active_client=client)
+            self._run_reading_watch(user_id=user_id, active_client=client)
+            return stats
         finally:
             if credentials_token is not None:
                 from src.utils.user_context import reset_current_user_credentials
@@ -261,6 +283,14 @@ class ShelfWatchService:
             'auto_matched': 0, 'suggested': 0, 'ebook_only': 0,
             'skipped_existing': 0, 'skipped_throttled': 0, 'errors': 0,
         }
+
+    def _run_reading_watch(self, user_id: int = None, active_client=None) -> None:
+        """Run the reading-watch pass, never letting a failure break the
+        shelf-watch result the caller is about to return."""
+        try:
+            self._process_reading_watch(user_id=user_id, active_client=active_client)
+        except Exception:
+            logger.warning("Reading-watch: pass failed", exc_info=True)
 
     def _process_watch_shelf(self, user_id: int = None, active_client=None) -> dict:
         """Scan the watch shelf and act on each book.
@@ -521,15 +551,212 @@ class ShelfWatchService:
         logger.info(f"Shelf-watch: created ebook-only mapping for '{filename}' (abs_id={saved.abs_id})")
         self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client)
 
+    # ---- reading-watch (BookOrbit "Continue Reading" auto-match) --------
+
+    def _process_reading_watch(self, user_id: int = None, active_client=None) -> dict:
+        """Scan BookOrbit's Continue Reading list and route each unmapped book.
+
+        Runs after the shelf-watch pass, in the same user binding. Any
+        audiobook match found ALWAYS becomes a PendingSuggestion — never an
+        auto-mapping, regardless of score — and a book with no candidates
+        gets an ebook-only mapping instead. No shelf moves happen here.
+        """
+        stats = {
+            'enabled': False,
+            'scanned': 0,
+            'suggested': 0,
+            'ebook_only': 0,
+            'skipped_existing': 0,
+            'skipped_throttled': 0,
+            'skipped_dismissed': 0,
+            'errors': 0,
+        }
+
+        if not self._reading_watch_enabled():
+            return stats
+
+        active_client = active_client or self._resolve_client_for_user(user_id)
+
+        if (active_client is None or not active_client.is_configured()
+                or not hasattr(active_client, 'list_continue_reading_books')):
+            logger.debug("Reading-watch: %s client not configured, skipping", self._display_name())
+            return stats
+
+        stats['enabled'] = True
+
+        try:
+            books = active_client.list_continue_reading_books(
+                min_progress=READING_WATCH_MIN_PROGRESS_PCT
+            ) or []
+        except Exception as e:
+            logger.error(f"Reading-watch: failed to list continue-reading books: {e}", exc_info=True)
+            stats['errors'] += 1
+            return stats
+
+        if not books:
+            return stats
+
+        rescan_window = timedelta(hours=self._rescan_hours())
+        now = utcnow()
+
+        candidate_pool = None  # Lazy-built on first non-skipped book
+
+        for book in books:
+            stats['scanned'] += 1
+            raw_id = book.get('id')
+            source_id = '' if raw_id is None else str(raw_id).strip()
+            filename = self._extract_filename(book)
+            if not source_id or not filename:
+                logger.debug(f"Reading-watch: skipping book with missing id/filename: {book.get('title')}")
+                continue
+
+            if self._is_already_mapped(source_id, filename, user_id=user_id):
+                stats['skipped_existing'] += 1
+                continue
+
+            if self._is_throttled(source_id, now, rescan_window):
+                stats['skipped_throttled'] += 1
+                continue
+
+            if candidate_pool is None:
+                candidate_pool = self._get_suggestions_service()._build_audiobook_candidate_pool()
+                if not candidate_pool:
+                    # Pool unavailable (no adapters returning, transient API failure, etc.).
+                    # Defer processing rather than create ebook-only mappings or set throttle
+                    # entries based on a degenerate scan. The next cycle will retry.
+                    logger.warning(
+                        "Reading-watch: audiobook candidate pool is empty; deferring all "
+                        "books in progress until next cycle. (Was %d book(s) waiting.)",
+                        len(books) - (stats['scanned'] - 1),
+                    )
+                    stats['errors'] += 1
+                    return stats
+
+            try:
+                outcome = self._process_one_reading_book(
+                    book, filename, source_id, candidate_pool, user_id=user_id,
+                )
+            except Exception as e:
+                logger.exception(f"Reading-watch: unexpected error processing '{filename}': {e}")
+                stats['errors'] += 1
+                continue
+
+            stats[outcome] = stats.get(outcome, 0) + 1
+
+        # This pass runs every ~60s alongside the poller — stay quiet when nothing
+        # happened, and only speak up at INFO when it actually did something.
+        total_actioned = stats['suggested'] + stats['ebook_only'] + stats['errors']
+        logger.log(
+            logging.INFO if total_actioned > 0 else logging.DEBUG,
+            "Reading-watch: scanned=%d suggested=%d ebook_only=%d skipped_existing=%d "
+            "skipped_throttled=%d skipped_dismissed=%d errors=%d",
+            stats['scanned'], stats['suggested'], stats['ebook_only'],
+            stats['skipped_existing'], stats['skipped_throttled'],
+            stats['skipped_dismissed'], stats['errors'],
+        )
+        return stats
+
+    def _process_one_reading_book(self, book: dict, filename: str, source_id: str,
+                                  candidate_pool: list, user_id: int = None) -> str:
+        """Scan one Continue Reading book and route it.
+
+        Mirrors `_process_one_book`'s scan + routing, except a match is
+        ALWAYS a suggestion (never auto-mapped) and there is no shelf move.
+        """
+        ebook_anchor = {
+            'filename': filename,
+            'title': (book.get('title') or '').strip(),
+            'authors': self._extract_author(book),
+            'grimmory_id': source_id,
+            'path': book.get('filePath') or book.get('filepath') or book.get('path') or '',
+        }
+
+        scan_result = self._get_suggestions_service()._scan_single_ebook(ebook_anchor, candidate_pool)
+        matches = (scan_result or {}).get('matches') or []
+        if matches:
+            top_preview = matches[0]
+            logger.info(
+                "Reading-watch scan: '%s' top match = %s:%s '%s' score=%s",
+                filename,
+                top_preview.get('audio_source'),
+                top_preview.get('audio_source_id'),
+                top_preview.get('audio_title'),
+                top_preview.get('score'),
+            )
+
+        if not matches:
+            outcome_status = 'ebook_only'
+            self._create_ebook_only_for_reading(book, filename, source_id, user_id=user_id)
+            self.database_service.upsert_shelf_watch_scan(
+                self._scan_key(source_id), filename, top_score=None, status=outcome_status,
+            )
+            return outcome_status
+
+        top = matches[0]
+        top_score = float(top.get('score') or 0.0)
+        saved = self._create_pending_suggestion(
+            book, filename, source_id, matches, origin='reading_watch',
+        )
+        outcome_status = 'suggested' if saved else 'skipped_dismissed'
+
+        self.database_service.upsert_shelf_watch_scan(
+            self._scan_key(source_id), filename, top_score=top_score, status=outcome_status,
+        )
+        return outcome_status
+
+    def _create_ebook_only_for_reading(self, book: dict, filename: str, source_id: str,
+                                       user_id: int = None) -> None:
+        """Same as `_create_ebook_only_and_move`, but for the reading-watch flow:
+        no shelf move — the book was never placed on a watch shelf."""
+        saved = self.book_mapping_service.create_ebook_only_mapping(
+            ebook_filename=filename,
+            ebook_title=book.get('title'),
+            ebook_source=self._source_name,
+            ebook_source_id=source_id,
+            booklore_ebook_id=source_id,
+            kosync_doc_id=book.get('koreader_hash'),
+            user_id=user_id,
+        )
+        if not saved:
+            logger.warning(f"Reading-watch: ebook-only save failed for '{filename}'")
+            return
+        if user_id is not None:
+            try:
+                self.database_service.link_user_book(user_id, saved.abs_id)
+            except Exception:
+                pass
+        logger.info(f"Reading-watch: created ebook-only mapping for '{filename}' (abs_id={saved.abs_id})")
+
     def _create_pending_suggestion(self, grimmory_book: dict, filename: str,
-                                  grimmory_id: str, matches: list) -> None:
+                                  grimmory_id: str, matches: list,
+                                  origin: str = 'shelf_watch') -> bool:
+        """Save a PendingSuggestion for the top match.
+
+        Returns True if saved, False if there was no bridge key or an
+        earlier suggestion for this same bridge key was already dismissed.
+        """
         top = matches[0]
         bridge_key = top.get('bridge_key') or top.get('audio_source_id') or ''
+        log_prefix = 'Reading-watch' if origin == 'reading_watch' else 'Shelf-watch'
         if not bridge_key:
             logger.warning(
-                f"Shelf-watch: cannot create suggestion for '{filename}' — top match has no bridge key"
+                f"{log_prefix}: cannot create suggestion for '{filename}' — top match has no bridge key"
             )
-            return
+            return False
+
+        # save_pending_suggestion() overwrites status on an existing row, which used to
+        # resurrect a suggestion the user had already dismissed on the next periodic
+        # re-scan. A dismissed/ignored row still exists (suggestion_exists) but no
+        # longer comes back from get_pending_suggestion (pending-only) — that
+        # combination is the dismissal signal.
+        if (self.database_service.suggestion_exists(bridge_key)
+                and self.database_service.get_pending_suggestion(bridge_key) is None):
+            logger.info(
+                "%s: suggestion for '%s' was dismissed earlier; not re-suggesting (bridge_key=%s)",
+                log_prefix, filename, bridge_key,
+            )
+            return False
+
         origin_payload = {
             'grimmory_id': grimmory_id,
             'grimmory_filename': filename,
@@ -544,14 +771,15 @@ class ShelfWatchService:
             matches_json=json.dumps(matches),
             status='pending',
             source=(top.get('audio_source') or 'ABS').lower(),
-            origin='shelf_watch',
+            origin=origin,
             origin_metadata_json=json.dumps(origin_payload),
         )
         self.database_service.save_pending_suggestion(suggestion)
         logger.info(
-            f"Shelf-watch: created suggestion for '{filename}' "
+            f"{log_prefix}: created suggestion for '{filename}' "
             f"(top_score={top.get('score')}, bridge_key={bridge_key})"
         )
+        return True
 
     # ---- guards ---------------------------------------------------------
 
