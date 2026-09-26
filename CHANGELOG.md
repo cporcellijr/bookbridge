@@ -32,6 +32,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Positions no longer jump back to near the start of some books.** In EPUBs
+  that put quotation marks in their own formatting, a position read from
+  KOReader, BookOrbit, Grimmory or the ABS reader could be matched to an
+  earlier line of dialogue — or to the title page — so the other apps were
+  sent to the wrong place (or the sync was skipped).
+
 - **Dismissed Up Next suggestions no longer come back after the daily re-scan.**
   Once you dismiss a match suggestion, it stays dismissed — the periodic re-scan
   used to resurrect it.
