@@ -50,7 +50,7 @@ services:
       # - ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID=false # Or set this directly to a library ID
 
       # Integrations
-      # - KOSYNC_SERVER=https://koreader.example.com
+      # - KOSYNC_SERVER=http://127.0.0.1:5757 # Built-in server (use your KOSYNC_PORT if set); an external URL only to relay
       # - BOOKLORE_SERVER=http://grimmory.example.com
       # - STORYTELLER_API_URL=http://storyteller.example.com
       # - STORYTELLER_ASSETS_DIR=/storyteller
