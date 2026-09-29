@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Goodreads tracker setup (local branch, Phase 1).** Settings now include a
+  Goodreads enable switch, cooldown, and per-user cookie/refresher credentials.
+  The client can read signed-in book metadata and refresh an expired cookie;
+  automatic shelf and progress sync will be connected in the next phase.
+
 - **Books you start reading in BookOrbit get matched automatically.** Turn it on
   in Settings → BookOrbit. Once you're past 1% of an ebook the bridge hasn't
   matched, it looks for the audiobook: a match lands in Suggestions for you to

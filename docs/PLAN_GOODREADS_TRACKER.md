@@ -1,6 +1,6 @@
 # Plan: Goodreads as a write-only tracker
 
-Status: **Phase 0 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
+Status: **Phase 1 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
 Bring changes from local `dev` into this branch as `dev` advances; do not push this
 branch. This integration is for personal use and does not need a public release.
 
@@ -278,8 +278,11 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
       so verify the profile-menu link instead. A direct cookie replay hit an AWS
       WAF challenge before login and timed out after login; Phase 1 must test and
       handle that path. No Goodreads shelf or progress writes were made.
-- [ ] **Phase 1 — client and settings.** `goodreads_client.py`, all five settings,
-      client tests. Commit `[Feature] Goodreads client with cookie-refresher support`.
+- [x] **Phase 1 — client and settings.** `goodreads_client.py`, all five settings,
+      client tests. The full suite passed (4965 passed, 17 skipped, 357 subtests).
+      Authentication and parser behavior is fixture-tested; live read-only connection
+      and all Goodreads writes remain for Phase 5. Commit
+      `[Feature] Goodreads client with cookie-refresher support`.
 - [ ] **Phase 2 — data and sync.** Model, migration, `DatabaseService` methods, sync
       client, automatch, `sync_manager` and DI wiring, cooldown tests. Commit.
 - [ ] **Phase 3 — UI.** Routes, modal, dashboard row, integration pages, connection

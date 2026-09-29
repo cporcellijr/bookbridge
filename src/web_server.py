@@ -4102,6 +4102,7 @@ def settings():
             'HARDCOVER_ENABLED',
             'HARDCOVER_ANNOTATION_SYNC',
             'STORYGRAPH_ENABLED',
+            'GOODREADS_ENABLED',
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',

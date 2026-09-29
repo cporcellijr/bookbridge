@@ -61,6 +61,8 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "HARDCOVER_GRIMMORY_LIST_SYNC", "HARDCOVER_GRIMMORY_LIST_PREFIX",
     "HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES",
     "STORYGRAPH_SESSION_COOKIE", "STORYGRAPH_REMEMBER_USER_TOKEN", "STORYGRAPH_ENABLED",
+    "GOODREADS_ENABLED", "GOODREADS_SESSION_COOKIE",
+    "GOODREADS_COOKIE_REFRESH_URL", "GOODREADS_COOKIE_REFRESH_TOKEN",
 })
 
 
@@ -181,6 +183,12 @@ PER_USER_FIELD_GROUPS = [
         ("STORYGRAPH_SESSION_COOKIE", "Session cookie", "secret"),
         ("STORYGRAPH_REMEMBER_USER_TOKEN", "Remember-user token", "secret"),
     ]),
+    ("Goodreads", [
+        ("GOODREADS_ENABLED", "Enabled", "bool"),
+        ("GOODREADS_SESSION_COOKIE", "Browser Cookie header", "secret"),
+        ("GOODREADS_COOKIE_REFRESH_URL", "Cookie refresher URL", "text"),
+        ("GOODREADS_COOKIE_REFRESH_TOKEN", "Cookie refresher token", "secret"),
+    ]),
 ]
 
 
@@ -209,6 +217,7 @@ SERVICE_ENABLE_KEYS = frozenset({
     "CWA_ENABLED",
     "HARDCOVER_ENABLED",
     "STORYGRAPH_ENABLED",
+    "GOODREADS_ENABLED",
 })
 
 _FALSEY_SETTING_VALUES = frozenset({"false", "0", "no", "off"})
