@@ -29,6 +29,7 @@ from src.api.booklore_client import BookloreClient
 from src.api.kavita_client import KavitaClient, KavitaKoSyncClient
 from src.api.hardcover_client import HardcoverClient
 from src.api.storygraph_client import StorygraphClient
+from src.api.goodreads_client import GoodreadsClient
 
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
@@ -43,6 +44,7 @@ from src.sync_clients.bookorbit_audio_sync_client import BookOrbitAudioSyncClien
 from src.sync_clients.cwa_sync_client import CWASyncClient
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
 from src.sync_clients.storygraph_sync_client import StorygraphSyncClient
+from src.sync_clients.goodreads_sync_client import GoodreadsSyncClient
 from src.services.library_service import LibraryService
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ class UserClients:
     booklore_client: object
     hardcover_client: object
     storygraph_client: object
+    goodreads_client: object = None
     kavita_client: object = None
     library_service: object = None
     sync_clients: dict = field(default_factory=dict)
@@ -144,6 +147,7 @@ class UserClientRegistry:
         kavita_kosync_client = KavitaKoSyncClient(credentials=creds)
         hardcover_client = HardcoverClient(credentials=creds)
         storygraph_client = StorygraphClient(credentials=creds)
+        goodreads_client = GoodreadsClient(credentials=creds, database_service=db, user_id=user_id)
 
         # Per-user library service for ebook acquisition/search (uses this
         # user's abs/cwa/booklore/bookorbit clients). Requires an epub cache dir.
@@ -173,6 +177,7 @@ class UserClientRegistry:
             "CWA": CWASyncClient(cwa_sync_api, cwa_client, ep),
             "Hardcover": HardcoverSyncClient(hardcover_client, ep, abs_client, db, ollama_client=self.ollama_client, booklore_client=booklore_client, bookorbit_client=bookorbit_client, kavita_client=kavita_client),
             "StoryGraph": StorygraphSyncClient(storygraph_client, ep, abs_client, db, ollama_client=self.ollama_client, booklore_client=booklore_client, bookorbit_client=bookorbit_client, kavita_client=kavita_client),
+            "Goodreads": GoodreadsSyncClient(goodreads_client, ep, abs_client, db, ollama_client=self.ollama_client, booklore_client=booklore_client, bookorbit_client=bookorbit_client, kavita_client=kavita_client),
         }
 
         return UserClients(
@@ -188,6 +193,7 @@ class UserClientRegistry:
             kavita_client=kavita_client,
             hardcover_client=hardcover_client,
             storygraph_client=storygraph_client,
+            goodreads_client=goodreads_client,
             library_service=library_service,
             sync_clients=sync_clients,
             credentials=creds,

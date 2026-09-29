@@ -1,6 +1,6 @@
 # Plan: Goodreads as a write-only tracker
 
-Status: **Phase 1 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
+Status: **Phase 2 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
 Bring changes from local `dev` into this branch as `dev` advances; do not push this
 branch. This integration is for personal use and does not need a public release.
 
@@ -283,8 +283,11 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
       Authentication and parser behavior is fixture-tested; live read-only connection
       and all Goodreads writes remain for Phase 5. Commit
       `[Feature] Goodreads client with cookie-refresher support`.
-- [ ] **Phase 2 — data and sync.** Model, migration, `DatabaseService` methods, sync
-      client, automatch, `sync_manager` and DI wiring, cooldown tests. Commit.
+- [x] **Phase 2 — data and sync.** Model, additive migration, `DatabaseService`
+      methods, per-user and global sync clients, automatch, cooldown dispatch,
+      completion exclusion, and tests. Full suite: 4972 passed, 17 skipped,
+      360 subtests. Goodreads is not deployed; live reads and writes remain
+      for Phase 5. Commit `[Feature] Wire Goodreads as a write-only tracker`.
 - [ ] **Phase 3 — UI.** Routes, modal, dashboard row, integration pages, connection
       test. Commit.
 - [ ] **Phase 4 — ratings.** Goodreads-sourced rating with Grimmory fallback. Commit.

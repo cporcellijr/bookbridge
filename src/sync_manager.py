@@ -90,7 +90,7 @@ logger = logging.getLogger(__name__)
 _STATE_FETCH_SLOW_SECONDS = 15.0
 
 # Clients that must not receive completion propagation writes.
-# StoryGraph and Hardcover are write-only trackers driven exclusively by the
+# StoryGraph, Hardcover, and Goodreads are write-only trackers driven by the
 # trailing-edge idle-cooldown handlers (_handle_tracker_cooldown), which bypass
 # their cooldown and post immediately at completion. Writing to them here would
 # be a layering violation and redundant.
@@ -106,6 +106,7 @@ _KOREADER_READING_MIN_PCT: float = 0.01
 _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "StoryGraph",
     "Hardcover",
+    "Goodreads",
     "ABSEbook",
 })
 
@@ -259,6 +260,8 @@ class SyncManager:
         # Hardcover idle-cooldown tracker (same trailing-edge scheme as StoryGraph).
         self._hardcover_cooldown: dict[tuple[int | None, str], dict] = {}
         self._hardcover_cooldown_lock = threading.Lock()
+        self._goodreads_cooldown: dict[tuple[int | None, str], dict] = {}
+        self._goodreads_cooldown_lock = threading.Lock()
         # One follow-up timer per user/book; both trackers are evaluated by the
         # targeted cycle, so matching deadlines must not launch duplicate cycles.
         self._tracker_cooldown_timers: dict[tuple[int | None, str], dict] = {}
@@ -485,7 +488,7 @@ class SyncManager:
         """Mark a book finished on non-leader clients once the leader crosses
         the configured completion threshold.
 
-        Trackers (StoryGraph, Hardcover) and ABSEbook are excluded: trackers
+        Trackers (StoryGraph, Hardcover, Goodreads) and ABSEbook are excluded: trackers
         are driven by trailing-edge idle-cooldown handlers, and ABSEbook rejects
         a percentage-only locator. ABS uses mark_finished instead of
         update_progress.
@@ -3612,6 +3615,20 @@ class SyncManager:
             schedule_followup=schedule_followup,
         )
 
+    def _handle_goodreads_cooldown(
+        self, book, config, now: float, schedule_followup: bool = True
+    ) -> None:
+        """Post Goodreads progress on the shared trailing-edge idle cooldown."""
+        self._handle_tracker_cooldown(
+            book, config, now,
+            client_key='Goodreads',
+            state_name='goodreads',
+            cooldown_env='GOODREADS_UPDATE_COOLDOWN_MINS',
+            cooldown_store_attr='_goodreads_cooldown',
+            cooldown_lock_attr='_goodreads_cooldown_lock',
+            schedule_followup=schedule_followup,
+        )
+
     def _handle_hardcover_cooldown(
         self, book, config, now: float, schedule_followup: bool = True
     ) -> None:
@@ -3674,7 +3691,7 @@ class SyncManager:
                                  schedule_followup: bool) -> None:
         """Post a write-only tracker's progress on a trailing-edge idle cooldown.
 
-        The tracker (StoryGraph/Hardcover) is intentionally excluded from the normal
+        The tracker is intentionally excluded from the normal
         per-cycle dispatch and driven here instead. While a book keeps progressing the
         timer resets and no write happens; once the book has been idle (no new progress)
         for ``<cooldown_env>`` minutes we post the latest position. Completion (~100%)
@@ -4855,7 +4872,7 @@ class SyncManager:
                         exc_info=True,
                     )
 
-                # StoryGraph and Hardcover are driven by an idle cooldown rather than the
+                # Write-only trackers are driven by an idle cooldown rather than the
                 # per-cycle dispatch. Evaluate them for every active book each cycle
                 # (including idle books that early-skip below) so the trailing-edge post
                 # can fire.
@@ -4867,6 +4884,9 @@ class SyncManager:
                     book, config, time.time(), schedule_followup=tracker_followup
                 )
                 self._handle_hardcover_cooldown(
+                    book, config, time.time(), schedule_followup=tracker_followup
+                )
+                self._handle_goodreads_cooldown(
                     book, config, time.time(), schedule_followup=tracker_followup
                 )
 
@@ -5226,7 +5246,7 @@ class SyncManager:
                 results: dict[str, SyncResult] = {}
                 for client_name, client in self._iter_update_targets(active_clients, leader):
                     try:
-                        if client_name in ('StoryGraph', 'Hardcover'):
+                        if client_name in ('StoryGraph', 'Hardcover', 'Goodreads'):
                             # Driven by the idle-cooldown handlers, not the dispatch loop.
                             continue
                         client_state = config.get(client_name)

@@ -249,6 +249,12 @@ class ForgeService:
                 storygraph._automatch_storygraph(book)
             except Exception as e:
                 logger.warning(f"Auto-Forge: StoryGraph automatch failed for '{book.abs_id}': {e}", exc_info=True)
+        goodreads = sync_clients.get('Goodreads')
+        if goodreads and goodreads.is_configured():
+            try:
+                goodreads._automatch(book)
+            except Exception as e:
+                logger.warning("Auto-Forge: Goodreads automatch failed for '%s': %s", book.abs_id, e, exc_info=True)
 
     def generate_readalong_if_requested(self, book) -> None:
         """Start read-along generation for ``book`` if it was matched with that

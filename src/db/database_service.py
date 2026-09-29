@@ -23,6 +23,7 @@ from .models import (
     Job,
     HardcoverDetails,
     StorygraphDetails,
+    GoodreadsDetails,
     Setting,
     KosyncDocument,
     KosyncUserProgress,
@@ -1190,6 +1191,7 @@ class DatabaseService:
                     session.query(BookAlignment).filter(BookAlignment.abs_id == old_abs_id).delete(synchronize_session=False)
                     session.query(HardcoverDetails).filter(HardcoverDetails.abs_id == old_abs_id).delete(synchronize_session=False)
                     session.query(StorygraphDetails).filter(StorygraphDetails.abs_id == old_abs_id).delete(synchronize_session=False)
+                    session.query(GoodreadsDetails).filter(GoodreadsDetails.abs_id == old_abs_id).delete(synchronize_session=False)
                 except Exception: pass
                 
                 logger.info(f"✅ Migrated data from '{old_abs_id}' to '{new_abs_id}'")
@@ -2151,6 +2153,54 @@ class DatabaseService:
         """Get all StoryGraph details."""
         with self.get_session() as session:
             details = session.query(StorygraphDetails).all()
+            for detail in details:
+                session.expunge(detail)
+            return details
+
+    def get_goodreads_details(self, abs_id: str) -> Optional[GoodreadsDetails]:
+        """Get a book's Goodreads link."""
+        with self.get_session() as session:
+            details = session.query(GoodreadsDetails).filter_by(abs_id=abs_id).first()
+            if details:
+                session.expunge(details)
+            return details
+
+    def save_goodreads_details(self, details: GoodreadsDetails) -> GoodreadsDetails:
+        """Save or update a Goodreads link and its cached metadata."""
+        with self.get_session() as session:
+            existing = session.query(GoodreadsDetails).filter_by(abs_id=details.abs_id).first()
+            if existing:
+                for key in (
+                    "goodreads_book_id", "goodreads_url", "goodreads_pages",
+                    "goodreads_rating", "goodreads_review_count",
+                    "goodreads_rating_updated_at", "isbn", "asin", "matched_by",
+                ):
+                    value = getattr(details, key)
+                    if value is not None:
+                        setattr(existing, key, value)
+                session.flush()
+                session.refresh(existing)
+                session.expunge(existing)
+                return existing
+            session.add(details)
+            session.flush()
+            session.refresh(details)
+            session.expunge(details)
+            return details
+
+    def delete_goodreads_details(self, abs_id: str) -> bool:
+        """Delete a book's Goodreads link."""
+        with self.get_session() as session:
+            details = session.query(GoodreadsDetails).filter_by(abs_id=abs_id).first()
+            if not details:
+                return False
+            session.delete(details)
+            return True
+
+    def get_all_goodreads_details(self) -> List[GoodreadsDetails]:
+        """Return all cached Goodreads links."""
+        with self.get_session() as session:
+            details = session.query(GoodreadsDetails).all()
             for detail in details:
                 session.expunge(detail)
             return details

@@ -219,6 +219,7 @@ class Book(Base):
     jobs = relationship("Job", back_populates="book", cascade="all, delete-orphan")
     hardcover_details = relationship("HardcoverDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     storygraph_details = relationship("StorygraphDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
+    goodreads_details = relationship("GoodreadsDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
     reading_sessions = relationship("ReadingSession", back_populates="book", cascade="all, delete-orphan")
 
@@ -350,6 +351,43 @@ class StorygraphDetails(Base):
 
     def __repr__(self):
         return f"<StorygraphDetails(abs_id='{self.abs_id}', storygraph_book_id='{self.storygraph_book_id}')>"
+
+
+class GoodreadsDetails(Base):
+    """A BookBridge book's Goodreads match and cached metadata."""
+
+    __tablename__ = 'goodreads_details'
+
+    abs_id = Column(String(255), ForeignKey('books.abs_id', ondelete='CASCADE'), primary_key=True)
+    goodreads_book_id = Column(String(255), nullable=False)
+    goodreads_url = Column(String(1000))
+    goodreads_pages = Column(Integer)
+    goodreads_rating = Column(Float)
+    goodreads_review_count = Column(Integer)
+    goodreads_rating_updated_at = Column(Float)
+    isbn = Column(String(255))
+    asin = Column(String(255))
+    matched_by = Column(String(50))
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    book = relationship("Book", back_populates="goodreads_details")
+
+    def __init__(self, abs_id: str, goodreads_book_id: str, goodreads_url: str = None,
+                 goodreads_pages: int = None, goodreads_rating: float = None,
+                 goodreads_review_count: int = None,
+                 goodreads_rating_updated_at: float = None, isbn: str = None,
+                 asin: str = None, matched_by: str = None):
+        self.abs_id = abs_id
+        self.goodreads_book_id = goodreads_book_id
+        self.goodreads_url = goodreads_url
+        self.goodreads_pages = goodreads_pages
+        self.goodreads_rating = goodreads_rating
+        self.goodreads_review_count = goodreads_review_count
+        self.goodreads_rating_updated_at = goodreads_rating_updated_at
+        self.isbn = isbn
+        self.asin = asin
+        self.matched_by = matched_by
 
 
 class State(Base):

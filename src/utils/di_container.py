@@ -21,6 +21,7 @@ from src.api.hardcover_client import HardcoverClient
 from src.api.llm_client import create_llm_client
 from src.api.kavita_client import KavitaClient, KavitaKoSyncClient
 from src.api.storygraph_client import StorygraphClient
+from src.api.goodreads_client import GoodreadsClient
 from src.api.storyteller_api import StorytellerAPIClient
 from src.db.database_service import DatabaseService
 from src.services.audio_repoint_service import AudioRepointService
@@ -51,6 +52,7 @@ from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
 from src.sync_clients.cwa_sync_client import CWASyncClient
 from src.sync_clients.hardcover_sync_client import HardcoverSyncClient
 from src.sync_clients.storygraph_sync_client import StorygraphSyncClient
+from src.sync_clients.goodreads_sync_client import GoodreadsSyncClient
 from src.sync_manager import SyncManager
 
 logger = logging.getLogger(__name__)
@@ -121,6 +123,7 @@ class Container(containers.DeclarativeContainer):
 
     hardcover_client = providers.Singleton(HardcoverClient)
     storygraph_client = providers.Singleton(StorygraphClient)
+    goodreads_client = providers.Singleton(GoodreadsClient, database_service=database_service)
 
     cwa_client = providers.Singleton(CWAClient)
 
@@ -301,6 +304,18 @@ class Container(containers.DeclarativeContainer):
         kavita_client=kavita_client,
     )
 
+    goodreads_sync_client = providers.Singleton(
+        GoodreadsSyncClient,
+        goodreads_client,
+        ebook_parser,
+        abs_client,
+        database_service,
+        ollama_client=ollama_client,
+        booklore_client=booklore_client,
+        bookorbit_client=bookorbit_client,
+        kavita_client=kavita_client,
+    )
+
     abs_audio_source_adapter = providers.Singleton(
         ABSAudioSourceAdapter,
         abs_client=abs_client,
@@ -339,7 +354,8 @@ class Container(containers.DeclarativeContainer):
         BookOrbitAudio=bookorbit_audio_sync_client,
         CWA=cwa_sync_client,
         Hardcover=hardcover_sync_client,
-        StoryGraph=storygraph_sync_client
+        StoryGraph=storygraph_sync_client,
+        Goodreads=goodreads_sync_client,
     )
 
     # Constructed after the sync clients so forge completion can run the same
@@ -359,6 +375,7 @@ class Container(containers.DeclarativeContainer):
         sync_clients=providers.Dict(
             Hardcover=hardcover_sync_client,
             StoryGraph=storygraph_sync_client,
+            Goodreads=goodreads_sync_client,
         ),
     )
 
@@ -394,6 +411,7 @@ class Container(containers.DeclarativeContainer):
         sync_clients=providers.Dict(
             Hardcover=hardcover_sync_client,
             StoryGraph=storygraph_sync_client,
+            Goodreads=goodreads_sync_client,
         ),
         user_client_registry=user_client_registry,
     )

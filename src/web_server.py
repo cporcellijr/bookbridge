@@ -691,6 +691,12 @@ def _tracker_automatch_worker():
                     storygraph._automatch_storygraph(book)
                 except Exception as e:
                     logger.warning("Deferred StoryGraph automatch failed for '%s': %s", abs_id, e, exc_info=True)
+            goodreads = sync_clients.get("Goodreads")
+            if goodreads and goodreads.is_configured():
+                try:
+                    goodreads._automatch(book)
+                except Exception as e:
+                    logger.warning("Deferred Goodreads automatch failed for '%s': %s", abs_id, e, exc_info=True)
         except Exception as e:
             logger.error("Deferred tracker automatch worker error: %s", e, exc_info=True)
         finally:

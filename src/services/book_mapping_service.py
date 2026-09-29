@@ -148,6 +148,12 @@ class BookMappingService:
                 storygraph._automatch_storygraph(book)
             except Exception as e:
                 logger.warning(f"Shelf-watch: StoryGraph automatch failed for '{book.abs_id}': {e}", exc_info=True)
+        goodreads = sync_clients.get('Goodreads')
+        if goodreads and goodreads.is_configured():
+            try:
+                goodreads._automatch(book)
+            except Exception as e:
+                logger.warning("Shelf-watch: Goodreads automatch failed for '%s': %s", book.abs_id, e, exc_info=True)
 
     def create_audio_mapping_from_match(
         self,
