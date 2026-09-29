@@ -24,15 +24,19 @@ class GoodreadsClient:
     base_url = "https://www.goodreads.com"
     timeout = 15
 
-    def __init__(self, credentials: dict | None = None, database_service=None, user_id=None):
+    def __init__(self, credentials: dict | None = None, database_service=None, user_id=None,
+                 enforce_global_gate: bool = True):
         self._creds = credentials
         self._db = database_service
         self._user_id = user_id
+        self._enforce_global_gate = enforce_global_gate
         self._auth_expired_cookie: str | None = None
         self._known_shelves: dict[str, str | None] = {}
 
     def _setting(self, key: str) -> str:
-        return str(resolve_setting(self._creds, key, "") or "").strip()
+        return str(resolve_setting(
+            self._creds, key, "", enforce_global_gate=self._enforce_global_gate,
+        ) or "").strip()
 
     def _cookie_header(self) -> str:
         return self._setting("GOODREADS_SESSION_COOKIE")

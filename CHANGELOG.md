@@ -8,11 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **Goodreads tracker (local branch, Phases 1–2).** Settings include an enable
+- **Goodreads tracker (local branch, Phases 1–3).** Settings include an enable
   switch, idle cooldown, and per-user cookie/refresher credentials. Goodreads
   is a write-only follower: it matches books, keeps the reading shelf in step,
-  and posts whole-percent progress after the cooldown or at completion. Manual
-  linking and dashboard controls follow in Phase 3.
+  and posts whole-percent progress after the cooldown or at completion. The
+  dashboard now offers manual book linking and a read-only connection check.
 
 - **Books you start reading in BookOrbit get matched automatically.** Turn it on
   in Settings → BookOrbit. Once you're past 1% of an ebook the bridge hasn't

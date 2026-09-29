@@ -33,7 +33,7 @@ _RECENT_LOGS_CAP = 200
 _RECENT_LOG_LINE_CAP = 400
 _TRACEBACK_CAP = 1600
 _ENV_VALUE_CAP = 60
-_KNOWN_SERVICE_KEYS = {"abs", "kosync", "storyteller", "booklore", "bookfusion", "book_orbit", "cwa", "hardcover", "storygraph", "slash_books"}
+_KNOWN_SERVICE_KEYS = {"abs", "kosync", "storyteller", "booklore", "bookfusion", "book_orbit", "cwa", "hardcover", "storygraph", "goodreads", "slash_books"}
 _ENV_KEYS = {"python", "platform", "machine", "container", "journal_override"}
 
 

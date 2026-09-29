@@ -157,6 +157,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
         self.mock_database_service.get_all_reading_stats.return_value = {}
         self.mock_database_service.get_booklore_book.return_value = None
@@ -206,6 +207,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         cwa=False,
         hardcover=False,
         storygraph=False,
+        goodreads=False,
     ):
         clients_dict = {
             'ABS': Mock(is_configured=Mock(return_value=True)),
@@ -216,6 +218,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             'CWA': Mock(is_configured=Mock(return_value=cwa)),
             'Hardcover': Mock(is_configured=Mock(return_value=hardcover)),
             'StoryGraph': Mock(is_configured=Mock(return_value=storygraph)),
+            'Goodreads': Mock(is_configured=Mock(return_value=goodreads)),
         }
         self.mock_container.mock_sync_clients.items.return_value = clients_dict.items()
 
@@ -388,6 +391,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.mock_database_service.get_hardcover_details.return_value = None
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []
 
         # Mock the sync_clients call for integrations
@@ -2612,6 +2616,27 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('StoryGraph', html)
         self.assertIn('linkStorygraph(event)', html)
         self.assertIn('https://app.thestorygraph.com/books/sg-1', html)
+
+    def test_goodreads_card_renders_saved_link_and_progress(self):
+        from src.db.models import Book, GoodreadsDetails, State
+
+        self._set_dashboard_integrations(goodreads=True)
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='abs-goodreads-1', abs_title='Goodreads Book', ebook_filename='book.epub')
+        ]
+        self.mock_database_service.get_all_states.return_value = [
+            State(abs_id='abs-goodreads-1', client_name='goodreads', percentage=0.42, last_updated=1)
+        ]
+        self.mock_database_service.get_all_goodreads_details.return_value = [
+            GoodreadsDetails('abs-goodreads-1', '123', 'https://www.goodreads.com/book/show/123')
+        ]
+
+        html = self._render_index_template_source()
+
+        self.assertIn('Goodreads', html)
+        self.assertIn('linkGoodreads(event)', html)
+        self.assertIn('https://www.goodreads.com/book/show/123', html)
+        self.assertIn('42%', html)
 
     def test_api_storygraph_resolve_uses_abs_metadata(self):
         from src.db.models import Book

@@ -20,6 +20,7 @@ class MockContainer:
         self.mock_database_service.get_all_states.return_value = []
         self.mock_database_service.get_all_hardcover_details.return_value = []
         self.mock_database_service.get_all_storygraph_details.return_value = []
+        self.mock_database_service.get_all_goodreads_details.return_value = []
         self.mock_database_service.get_all_reading_stats.return_value = []
         self.mock_database_service.get_all_booklore_books.return_value = []
         self.mock_database_service.get_all_pending_suggestions.return_value = []

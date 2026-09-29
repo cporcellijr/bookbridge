@@ -49,8 +49,7 @@ class TestServiceTaxonomyParity(unittest.TestCase):
     def test_user_test_services_use_canonical_names(self):
         from src.web_server import _USER_TEST_SERVICES
 
-        # The Goodreads connection action is added with its routes in Phase 3.
-        self.assertEqual(list(_USER_TEST_SERVICES.keys()), CANONICAL_SERVICES[:-1])
+        self.assertEqual(list(_USER_TEST_SERVICES.keys()), CANONICAL_SERVICES)
 
     def test_integration_templates_gate_keys_use_canonical_names(self):
         for template_name in ('account_integrations.html', 'admin_user_integrations.html'):

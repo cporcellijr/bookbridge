@@ -51,6 +51,7 @@ from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
+from src.api.goodreads_routes import goodreads_bp, init_goodreads_routes
 from src.api.bookfusion_upload_client import extract_epub_metadata, _S3_TIMEOUT_LARGE
 from src.version import APP_VERSION, get_update_status
 from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
@@ -431,6 +432,8 @@ def setup_dependencies(app, test_container=None):
     app.register_blueprint(hardcover_bp)
     init_storygraph_routes(database_service, container)
     app.register_blueprint(storygraph_bp)
+    init_goodreads_routes(database_service, container)
+    app.register_blueprint(goodreads_bp)
 
     logger.info(f"🚀 Web server dependencies initialized (DATA_DIR={DATA_DIR})")
 
@@ -1374,6 +1377,7 @@ _USER_TEST_SERVICES = {
     "Calibre-Web Automated": "cwa",
     "Hardcover": "hardcover",
     "StoryGraph": "storygraph",
+    "Goodreads": "goodreads",
 }
 
 
@@ -1392,6 +1396,7 @@ _TEST_CONNECTION_FIELDS = {
     'readest': ['READEST_ANNOTATION_SYNC', 'READEST_EMAIL', 'READEST_PASSWORD', 'READEST_SUPABASE_URL'],
     'hardcover': ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
     'storygraph': ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
+    'goodreads': ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN'],
 }
 
 
@@ -1817,6 +1822,7 @@ def _run_diagnostics_send(
         'cwa': _flag(lambda: container.cwa_client().is_configured()),
         'hardcover': _flag(lambda: container.hardcover_client().is_configured()),
         'storygraph': _flag(lambda: container.storygraph_client().is_configured()),
+        'goodreads': _flag(lambda: container.goodreads_client().is_configured()),
         'slash_books': os.path.isdir(os.environ.get('EBOOK_IMPORT_DIR', '/books')),
     }
     try:
@@ -5306,6 +5312,7 @@ def _build_dashboard_mapping(
     claim_times_by_book=None,
     bookfusion_by_book=None,
     bookorbit_authors=None,
+    goodreads_by_book=None,
 ):
     states = states_by_book.get(book.abs_id, [])
     state_by_client = {state.client_name: state for state in states}
@@ -5441,6 +5448,17 @@ def _build_dashboard_mapping(
             "storygraph_review_count": None,
         })
 
+    goodreads_details = (goodreads_by_book or {}).get(book.abs_id)
+    mapping.update({
+        "goodreads_book_id": goodreads_details.goodreads_book_id if goodreads_details else None,
+        "goodreads_linked": bool(goodreads_details),
+        "goodreads_url": goodreads_details.goodreads_url if goodreads_details else None,
+        "goodreads_title": book.abs_title if goodreads_details else None,
+        "goodreads_matched_by": goodreads_details.matched_by if goodreads_details else None,
+        "goodreads_rating": _coerce_dashboard_rating(goodreads_details.goodreads_rating) if goodreads_details else None,
+        "goodreads_review_count": _coerce_dashboard_count(goodreads_details.goodreads_review_count) if goodreads_details else None,
+    })
+
     bookfusion_link = (bookfusion_by_book or {}).get(book.abs_id)
     if not isinstance(bookfusion_link, dict):
         bookfusion_link = None
@@ -5556,9 +5574,11 @@ def _build_dashboard_mappings(
     claim_times_by_book=None,
     bookfusion_by_book=None,
     bookorbit_authors=None,
+    all_goodreads=None,
 ):
     hardcover_by_book = {h.abs_id: h for h in (all_hardcover or [])}
     storygraph_by_book = {s.abs_id: s for s in (all_storygraph or [])}
+    goodreads_by_book = {g.abs_id: g for g in (all_goodreads or [])}
     states_by_book = _group_dashboard_states_by_book(all_states)
     reading_stats_by_book = reading_stats_by_book or {}
     cached_booklore_by_filename = cached_booklore_by_filename or {}
@@ -5587,6 +5607,7 @@ def _build_dashboard_mappings(
             claim_times_by_book,
             bookfusion_by_book=bookfusion_by_book,
             bookorbit_authors=bookorbit_authors,
+            goodreads_by_book=goodreads_by_book,
         )
         mapping["ctc_aligned"] = book.abs_id in ctc_aligned_book_ids
         mapping["readalong_ready"] = book.abs_id in readalong_ready_book_ids
@@ -5850,6 +5871,7 @@ def index():
     books = _dashboard_visible_books_for_user(books, user)
     all_hardcover = database_service.get_all_hardcover_details()
     all_storygraph = database_service.get_all_storygraph_details()
+    all_goodreads = database_service.get_all_goodreads_details()
     all_reading_stats = database_service.get_all_reading_stats(user_id=user_id)
     cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
     claim_times_by_book = database_service.get_book_claim_times(user_id=user_id)
@@ -5860,6 +5882,7 @@ def index():
         integrations,
         all_hardcover=all_hardcover,
         all_storygraph=all_storygraph,
+        all_goodreads=all_goodreads,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
         claim_times_by_book=claim_times_by_book,
@@ -10847,6 +10870,7 @@ def api_status():
     books = _dashboard_visible_books_for_user(books, user)
     all_hardcover = database_service.get_all_hardcover_details()
     all_storygraph = database_service.get_all_storygraph_details()
+    all_goodreads = database_service.get_all_goodreads_details()
     all_reading_stats = database_service.get_all_reading_stats(user_id=user_id)
     cached_booklore_by_filename = _index_cached_booklore_books(database_service.get_all_booklore_books())
     integrations = _build_dashboard_integrations()
@@ -10856,6 +10880,7 @@ def api_status():
         integrations,
         all_hardcover=all_hardcover,
         all_storygraph=all_storygraph,
+        all_goodreads=all_goodreads,
         reading_stats_by_book=all_reading_stats,
         cached_booklore_by_filename=cached_booklore_by_filename,
     )
@@ -11953,6 +11978,12 @@ def _run_test_connection(service: str, payload: dict):
             _coerce_test_str(data.get('STORYGRAPH_SESSION_COOKIE')),
             _coerce_test_str(data.get('STORYGRAPH_REMEMBER_USER_TOKEN')),
         ),
+        'goodreads': lambda data: _test_goodreads(
+            _coerce_test_bool(data.get('GOODREADS_ENABLED')),
+            _coerce_test_str(data.get('GOODREADS_SESSION_COOKIE')),
+            _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_URL')),
+            _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_TOKEN')),
+        ),
         'telegram': lambda data: _test_telegram(
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
             _coerce_test_str(data.get('TELEGRAM_BOT_TOKEN')),
@@ -12864,6 +12895,24 @@ def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: st
     if r.status_code in (302, 303) and "/users/sign_in" in location:
         return {"ok": False, "message": "Invalid StoryGraph session cookies"}
     return {"ok": False, "message": f"StoryGraph returned {r.status_code}"}
+
+
+def _test_goodreads(enabled: bool, cookie: str, refresher_url: str, token: str) -> dict:
+    """Test a Goodreads account without saving a cookie or posting progress."""
+    from src.api.goodreads_client import GoodreadsClient
+
+    if not enabled:
+        return {"ok": False, "message": "Goodreads is disabled"}
+    credentials = {
+        "GOODREADS_ENABLED": "true",
+        "GOODREADS_SESSION_COOKIE": cookie,
+        "GOODREADS_COOKIE_REFRESH_URL": refresher_url,
+        "GOODREADS_COOKIE_REFRESH_TOKEN": token,
+        "__allow_global_fallback__": False,
+    }
+    client = GoodreadsClient(credentials, user_id=-1, enforce_global_gate=False)
+    client.check_connection()
+    return {"ok": True, "message": "Goodreads session accepted"}
 
 
 def _test_telegram(enabled: bool, token: str) -> dict:
