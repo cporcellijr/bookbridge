@@ -81,13 +81,16 @@ class GoodreadsSyncClient(SyncClient):
         return str(book_id) if book_id and str(book_id).isdigit() else None
 
     @staticmethod
-    def _best(candidates: list[dict], title: str, author: str) -> dict | None:
+    def _best(candidates: list[dict], title: str, author: str,
+              min_title_similarity: float = 0) -> dict | None:
         if not candidates:
             return None
         target = clean_book_title(title)
         ordered = sorted(candidates, key=lambda item: calculate_similarity(
             target, clean_book_title(item.get("title", ""))), reverse=True)
         for item in ordered:
+            if calculate_similarity(target, clean_book_title(item.get("title", ""))) < min_title_similarity:
+                continue
             if not author or not item.get("author") or calculate_similarity(
                 author, item["author"]) >= author_match_floor():
                 return item
@@ -119,7 +122,7 @@ class GoodreadsSyncClient(SyncClient):
                         matched_by = strategy
                         break
         if not match and not use_llm:
-            match = self._best(self.goodreads_client.search_books(f"{title} {author}"), title, author)
+            match = self._best(self.goodreads_client.search_books(f"{title} {author}"), title, author, 0.65)
             matched_by = "title_author" if match else None
         if not match and use_llm:
             craft_title, craft_author = craft_search_terms(self.ollama_client, title, author)

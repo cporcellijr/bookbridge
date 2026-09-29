@@ -14,7 +14,8 @@ All notable changes to BookBridge will be documented in this file.
   and posts whole-percent progress after the cooldown or at completion. The
   dashboard now offers manual book linking and a read-only connection check.
   Linked Goodreads ratings take priority on book cards, with cached Grimmory
-  ratings filling any missing values.
+  ratings filling any missing values. This local setup can use its signed-in
+  Selenium browser for Goodreads requests when direct cookie replay hits WAF.
 
 - **Books you start reading in BookOrbit get matched automatically.** Turn it on
   in Settings → BookOrbit. Once you're past 1% of an ebook the bridge hasn't

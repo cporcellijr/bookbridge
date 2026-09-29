@@ -70,6 +70,16 @@ class TestGoodreadsSyncClient(unittest.TestCase):
         details = self.sync._automatch(self.book)
         self.assertEqual(details.matched_by, "title_author")
 
+    def test_title_automatch_rejects_collection_with_same_author(self):
+        self.booklore.find_book_by_filename.return_value = {}
+        self.sync._match_metadata = Mock(return_value=("Dungeon Crawler Carl", "Matt Dinniman", "", ""))
+        self.client.search_books.return_value = [{
+            "book_id": "123", "title": "Dungeon Crawler Carl Series by Matt Dinniman 3 Books Collection Set",
+            "author": "Matt Dinniman",
+        }]
+        self.assertIsNone(self.sync._automatch(self.book))
+        self.db.save_goodreads_details.assert_not_called()
+
     def test_saved_link_posts_shelf_thresholds_and_progress(self):
         self.db.get_goodreads_details.return_value = GoodreadsDetails("a1", "123")
         for fraction, shelf in ((0.02, "to-read"), (0.03, "currently-reading"), (0.99, "read")):

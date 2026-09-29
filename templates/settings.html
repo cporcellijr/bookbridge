@@ -1733,7 +1733,7 @@
                 <div id="goodreads_body" class="section-body {% if not goodreads_enabled %}collapsed{% endif %}">
                     <div class="form-group full-width">
                         <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
-                            🔒 Set each user's Goodreads browser cookie or cookie refresher in
+                            🔒 Set each user's Goodreads browser cookie, cookie refresher, or signed-in Selenium URL in
                             <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>.
                             Progress posts appear in the user's public Goodreads feed.
                         </div>
@@ -3356,7 +3356,7 @@
             cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
             hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
             storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
-            goodreads: ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN'],
+            goodreads: ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN', 'GOODREADS_BROWSER_URL'],
             telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
             ollama: [
                 'OLLAMA_ENABLED', 'LLM_PROVIDER', 'LLM_BASE_URL', 'LLM_API_KEY',

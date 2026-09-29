@@ -1396,7 +1396,7 @@ _TEST_CONNECTION_FIELDS = {
     'readest': ['READEST_ANNOTATION_SYNC', 'READEST_EMAIL', 'READEST_PASSWORD', 'READEST_SUPABASE_URL'],
     'hardcover': ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
     'storygraph': ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
-    'goodreads': ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN'],
+    'goodreads': ['GOODREADS_ENABLED', 'GOODREADS_SESSION_COOKIE', 'GOODREADS_COOKIE_REFRESH_URL', 'GOODREADS_COOKIE_REFRESH_TOKEN', 'GOODREADS_BROWSER_URL'],
 }
 
 
@@ -11982,6 +11982,7 @@ def _run_test_connection(service: str, payload: dict):
             _coerce_test_str(data.get('GOODREADS_SESSION_COOKIE')),
             _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_URL')),
             _coerce_test_str(data.get('GOODREADS_COOKIE_REFRESH_TOKEN')),
+            _coerce_test_str(data.get('GOODREADS_BROWSER_URL')),
         ),
         'telegram': lambda data: _test_telegram(
             _coerce_test_bool(data.get('TELEGRAM_ENABLED')),
@@ -12896,7 +12897,7 @@ def _test_storygraph(enabled: bool, session_cookie: str, remember_user_token: st
     return {"ok": False, "message": f"StoryGraph returned {r.status_code}"}
 
 
-def _test_goodreads(enabled: bool, cookie: str, refresher_url: str, token: str) -> dict:
+def _test_goodreads(enabled: bool, cookie: str, refresher_url: str, token: str, browser_url: str = "") -> dict:
     """Test a Goodreads account without saving a cookie or posting progress."""
     from src.api.goodreads_client import GoodreadsClient
 
@@ -12907,6 +12908,7 @@ def _test_goodreads(enabled: bool, cookie: str, refresher_url: str, token: str) 
         "GOODREADS_SESSION_COOKIE": cookie,
         "GOODREADS_COOKIE_REFRESH_URL": refresher_url,
         "GOODREADS_COOKIE_REFRESH_TOKEN": token,
+        "GOODREADS_BROWSER_URL": browser_url,
         "__allow_global_fallback__": False,
     }
     client = GoodreadsClient(credentials, user_id=-1, enforce_global_gate=False)

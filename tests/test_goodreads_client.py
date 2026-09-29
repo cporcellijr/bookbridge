@@ -40,7 +40,8 @@ class TestGoodreadsClient(unittest.TestCase):
     def test_settings_are_registered_and_secrets_encrypted(self):
         keys = {
             "GOODREADS_ENABLED", "GOODREADS_SESSION_COOKIE", "GOODREADS_COOKIE_REFRESH_URL",
-            "GOODREADS_COOKIE_REFRESH_TOKEN", "GOODREADS_UPDATE_COOLDOWN_MINS",
+            "GOODREADS_COOKIE_REFRESH_TOKEN", "GOODREADS_BROWSER_URL",
+            "GOODREADS_UPDATE_COOLDOWN_MINS",
         }
         self.assertTrue(keys <= set(ALL_SETTINGS))
         self.assertEqual(DEFAULT_CONFIG["GOODREADS_ENABLED"], "false")
@@ -72,6 +73,7 @@ class TestGoodreadsClient(unittest.TestCase):
         with patch.object(self.client, "_request", return_value=response(text=unsigned)):
             with self.assertRaisesRegex(RuntimeError, "authentication failed"):
                 self.client.check_connection()
+        self.assertTrue(self.client._is_sign_in(response(200, url="https://www.goodreads.com/user/sign_in")))
 
     def test_search_and_book_parse_scrubbed_live_shapes(self):
         with patch.object(self.client, "_request", return_value=response(text=self.fixture("search"))):
@@ -84,6 +86,88 @@ class TestGoodreadsClient(unittest.TestCase):
         self.assertEqual(book["pages"], 320)
         self.assertEqual(book["rating"], 4.2)
         self.assertEqual(book["review_count"], 120)
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
+    def test_signed_in_browser_transport_reads_without_cookie(self, get, post):
+        get.side_effect = [
+            Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}}),
+            Mock(json=lambda: {"value": "https://www.goodreads.com/"}),
+        ]
+        post.return_value.json.return_value = {"value": {
+            "status": 200, "url": "https://www.goodreads.com/",
+            "body": self.fixture("home"), "location": None, "waf": None,
+        }}
+        client = GoodreadsClient({
+            "GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium:4444",
+            "GOODREADS_SESSION_COOKIE": "", "__allow_global_fallback__": False,
+        }, user_id=7, enforce_global_gate=False)
+        with patch("src.api.goodreads_client.requests.request") as direct:
+            self.assertTrue(client.check_connection())
+            direct.assert_not_called()
+        self.assertEqual(post.call_args.args[0], "http://selenium:4444/session/live/execute/async")
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
+    def test_browser_transport_rejects_session_on_other_site(self, get, post):
+        get.side_effect = [
+            Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}}),
+            Mock(json=lambda: {"value": "https://www.amazon.com/"}),
+        ]
+        client = GoodreadsClient({
+            "GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium:4444",
+        }, user_id=7, enforce_global_gate=False)
+        self.assertIsNone(client._request("/"))
+        post.assert_not_called()
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
+    def test_browser_transport_passes_progress_form_and_csrf(self, get, post):
+        get.side_effect = [
+            Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}}),
+            Mock(json=lambda: {"value": "https://www.goodreads.com/"}),
+        ]
+        post.return_value.json.return_value = {"value": {
+            "status": 204, "url": "https://www.goodreads.com/user_status.json",
+            "body": "", "location": None, "waf": None,
+        }}
+        client = GoodreadsClient({
+            "GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium:4444",
+        }, user_id=7, enforce_global_gate=False)
+        result = client._request(
+            "/user_status.json", method="POST",
+            data={"user_status[book_id]": "123", "user_status[percent]": "42"},
+            extra_headers={"X-CSRF-Token": "csrf", "Referer": client.book_url("123")},
+        )
+        self.assertEqual(result.status_code, 204)
+        args = post.call_args.kwargs["json"]["args"]
+        self.assertEqual(args[:3], ["https://www.goodreads.com/user_status.json", "POST",
+                                    {"user_status[book_id]": "123", "user_status[percent]": "42"}])
+        self.assertEqual(args[3]["X-CSRF-Token"], "csrf")
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
+    def test_browser_navigates_when_same_origin_fetch_hits_waf(self, get, post):
+        get.side_effect = [
+            Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}}),
+            Mock(json=lambda: {"value": "https://www.goodreads.com/"}),
+            Mock(json=lambda: {"value": "https://www.goodreads.com/book/show/123"}),
+            Mock(json=lambda: {"value": self.fixture("book")}),
+        ]
+        post.side_effect = [
+            Mock(json=lambda: {"value": {
+                "status": 202, "url": "https://www.goodreads.com/book/show/123",
+                "body": "challenge", "waf": "challenge",
+            }}),
+            Mock(status_code=200),
+        ]
+        client = GoodreadsClient({
+            "GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium:4444",
+        }, user_id=7, enforce_global_gate=False)
+        result = client._request("/book/show/123")
+        self.assertEqual(result.status_code, 200)
+        self.assertIn("application/ld+json", result.text)
+        self.assertEqual(post.call_args.args[0], "http://selenium:4444/session/live/url")
 
     @patch("src.api.goodreads_client.requests.request")
     def test_bootstrap_redirect_merges_set_cookie_for_next_hop(self, request):
@@ -200,6 +284,12 @@ class TestGoodreadsClient(unittest.TestCase):
     def test_author_mismatch_rejected(self):
         with patch.object(self.client, "search_books", return_value=[{"book_id": "123", "title": "Example Book", "author": "Other Person"}]):
             self.assertIsNone(self.client.resolve_book("Example Book", "Example Author"))
+
+    def test_title_search_rejects_collection_with_same_author(self):
+        collection = {"book_id": "123", "title": "Dungeon Crawler Carl Series by Matt Dinniman 3 Books Collection Set",
+                      "author": "Matt Dinniman"}
+        with patch.object(self.client, "search_books", return_value=[collection]):
+            self.assertIsNone(self.client.resolve_book("Dungeon Crawler Carl", "Matt Dinniman"))
 
 
 if __name__ == "__main__":

@@ -42,9 +42,12 @@ class GoodreadsClient:
         return self._setting("GOODREADS_SESSION_COOKIE")
 
     def is_configured(self) -> bool:
-        """Return whether Goodreads is enabled with a cookie or refresher."""
+        """Return whether Goodreads is enabled with an authenticated transport."""
         enabled = self._setting("GOODREADS_ENABLED").lower() in {"true", "1", "yes", "on"}
-        return enabled and bool(self._cookie_header() or self._setting("GOODREADS_COOKIE_REFRESH_URL"))
+        return enabled and bool(
+            self._cookie_header() or self._setting("GOODREADS_COOKIE_REFRESH_URL")
+            or self._setting("GOODREADS_BROWSER_URL")
+        )
 
     def _persist_cookie(self, cookie: str) -> None:
         if cookie == self._cookie_header():
@@ -107,7 +110,7 @@ class GoodreadsClient:
     def _is_sign_in(resp) -> bool:
         if resp is None:
             return False
-        location = str(resp.headers.get("Location", "")).lower()
+        location = (str(resp.headers.get("Location", "")) + " " + str(getattr(resp, "url", ""))).lower()
         return resp.status_code == 401 or "sign_in" in location or "signin" in location
 
     @staticmethod
@@ -163,10 +166,82 @@ class GoodreadsClient:
         logger.warning("Goodreads GET exceeded five redirects")
         return None, cookie
 
+    def _browser_request(self, path: str, method: str, data: dict | None,
+                         extra_headers: dict | None) -> requests.Response | None:
+        """Fetch through the signed-in Chrome session when Goodreads challenges HTTP clients."""
+        base = self._setting("GOODREADS_BROWSER_URL").rstrip("/")
+        parsed = urlparse(base)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            logger.warning("Goodreads browser URL is invalid")
+            return None
+        try:
+            status = requests.get(base + "/status", timeout=self.timeout).json()["value"]
+            sessions = [slot["session"]["sessionId"] for node in status.get("nodes", [])
+                        for slot in node.get("slots", []) if slot.get("session")]
+            if len(sessions) != 1:
+                logger.warning("Goodreads browser needs exactly one active session")
+                return None
+            endpoint = f"{base}/session/{sessions[0]}"
+            current_url = requests.get(endpoint + "/url", timeout=self.timeout).json()["value"]
+            if urlparse(current_url).netloc != urlparse(self.base_url).netloc:
+                logger.warning("Goodreads browser is not on the Goodreads site")
+                return None
+            script = """
+                const [url, method, data, headers, referrer, done] = arguments;
+                fetch(url, {
+                    method, credentials: 'include', mode: 'same-origin',
+                    headers: method === 'POST' ? headers : {},
+                    referrer: referrer || undefined,
+                    body: method === 'POST' ? new URLSearchParams(data) : undefined
+                }).then(async response => done({
+                    status: response.status, url: response.url,
+                    body: await response.text(),
+                    location: response.headers.get('Location'),
+                    waf: response.headers.get('x-amzn-waf-action')
+                })).catch(error => done({error: String(error)}));
+            """
+            headers = {"X-Requested-With": "XMLHttpRequest"}
+            if extra_headers and extra_headers.get("X-CSRF-Token"):
+                headers["X-CSRF-Token"] = extra_headers["X-CSRF-Token"]
+            result = requests.post(
+                endpoint + "/execute/async",
+                json={"script": script, "args": [urljoin(self.base_url + "/", path), method, data or {},
+                                                  headers, (extra_headers or {}).get("Referer")]},
+                timeout=60,
+            ).json()["value"]
+            if not isinstance(result, dict) or "status" not in result:
+                logger.warning("Goodreads browser request failed")
+                return None
+            if method == "GET" and result.get("waf"):
+                target = urljoin(self.base_url + "/", path)
+                requests.post(endpoint + "/url", json={"url": target}, timeout=60).raise_for_status()
+                current = requests.get(endpoint + "/url", timeout=self.timeout).json()["value"]
+                if urlparse(current).netloc != urlparse(self.base_url).netloc:
+                    return None
+                source = requests.get(endpoint + "/source", timeout=30).json()["value"]
+                logger.info("Goodreads browser retried GET as navigation after WAF")
+                result = {"status": 200, "url": current, "body": source}
+            resp = requests.Response()
+            resp.status_code = result["status"]
+            resp.url = result["url"]
+            resp._content = result["body"].encode("utf-8")
+            resp.encoding = "utf-8"
+            if result.get("location"):
+                resp.headers["Location"] = result["location"]
+            if result.get("waf"):
+                resp.headers["x-amzn-waf-action"] = result["waf"]
+                logger.warning("Goodreads browser hit WAF; open its noVNC view to sign in")
+            return resp
+        except (requests.RequestException, KeyError, TypeError, ValueError):
+            logger.warning("Goodreads browser request failed")
+            return None
+
     def _request(self, path: str, *, method: str = "GET", data: dict | None = None,
                  extra_headers: dict | None = None) -> requests.Response | None:
         if method not in {"GET", "POST"} or not self.is_configured():
             return None
+        if self._setting("GOODREADS_BROWSER_URL"):
+            return self._browser_request(path, method, data, extra_headers)
         cookie = self._cookie_header()
         if not cookie:
             cookie = self._fetch_refresher_cookie(False) or ""
@@ -295,9 +370,9 @@ class GoodreadsClient:
         resp = self._request("/search?q=" + quote(query.strip()))
         if resp is None or resp.status_code != 200:
             return []
-        redirected_id = self._book_id(getattr(resp, "url", ""))
+        redirected_id = self._book_id(getattr(resp, "url", "")) or self._book_id(resp.headers.get("Location"))
         if redirected_id:
-            book = self._parse_book(redirected_id, resp.text)
+            book = self._parse_book(redirected_id, resp.text) or self.get_book(redirected_id)
             return [book] if book else []
         soup = BeautifulSoup(resp.text, "html.parser")
         results = []
@@ -326,6 +401,8 @@ class GoodreadsClient:
                 continue
             clean_title = clean_book_title(title)
             best = max(candidates, key=lambda item: calculate_similarity(clean_title, clean_book_title(item.get("title", ""))))
+            if query != isbn and calculate_similarity(clean_title, clean_book_title(best.get("title", ""))) < 0.65:
+                continue
             if author and best.get("author") and calculate_similarity(author, best["author"]) < author_match_floor():
                 logger.info("Rejected Goodreads match for '%s': author mismatch", title)
                 continue

@@ -1,6 +1,7 @@
 # Plan: Goodreads as a write-only tracker
 
-Status: **Phase 4 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
+Status: **Phase 5 complete; automatic Goodreads sync remains off** (2026-09-29).
+Branch: `local/goodreads-tracker`, local only.
 Bring changes from local `dev` into this branch as `dev` advances; do not push this
 branch. This integration is for personal use and does not need a public release.
 
@@ -18,7 +19,10 @@ and quirks; the Python here is written fresh.
 ## 2. How Goodreads works (from ShelfSync, to be confirmed live)
 
 Goodreads has no public API. ShelfSync, like BookBridge's StoryGraph client, replays a
-logged-in browser session against the classic Rails pages.
+logged-in browser session against the classic Rails pages. On this host, Goodreads
+returns an AWS WAF challenge to Python even with the refreshed cookie. The optional
+Selenium transport runs same-origin requests inside the already signed-in Chrome
+session, using only the existing `requests` dependency.
 
 | Need | Request | Notes |
 |---|---|---|
@@ -88,6 +92,16 @@ on `blackcat-net`, so BookBridge reaches it at `http://<refresher-service>:8080`
 port 5080 never needs publishing. Set a real `VNC_PASSWORD` and an `AUTH_TOKEN`.
 Publish 7900 (noVNC) to the LAN only. Chrome needs `shm_size: 2gb`.
 
+**Working local transport.** The running Chrome session is reachable from BookBridge
+at `http://selenium:4444` on `blackcat-net`. Set `GOODREADS_BROWSER_URL` to that
+internal URL for the Goodreads account's BookBridge user. Keep Selenium off host
+ports; the browser session is authenticated. The client requires exactly one active
+session on that Selenium service and confirms it is on `www.goodreads.com` before
+fetching. Direct cookie replay remains available when the browser URL is blank.
+Each Goodreads account needs its own browser session and URL.
+If an in-browser fetch still hits WAF for a numeric book URL, the client retries
+that GET as a normal Chrome navigation and reads the rendered page source.
+
 ## 4. Design decisions
 
 - **Internal key `Goodreads`**, state name `goodreads`, display name "Goodreads".
@@ -117,8 +131,9 @@ Publish 7900 (noVNC) to the LAN only. Chrome needs `shm_size: 2gb`.
 `GoodreadsClient(credentials: dict | None = None, database_service=None, user_id=None)`,
 modelled on `StorygraphClient`:
 
-- `is_configured()`: `GOODREADS_ENABLED` not false, and either a session cookie or a
-  refresher URL is set. Read settings per call through `resolve_setting`.
+- `is_configured()`: `GOODREADS_ENABLED` not false, and a session cookie, refresher
+  URL, or signed-in Selenium URL is set. Read settings per call through
+  `resolve_setting`.
 - `_request(path, method, data, extra_headers)`: a `requests` call with browser-shaped
   headers, manual redirect following for GET (max 5 hops, merging `Set-Cookie`), the
   `200` + `Location` quirk, WAF detection and the refresher retry from §3, and
@@ -126,6 +141,9 @@ modelled on `StorygraphClient`:
 - Auth circuit breaker keyed by cookie fingerprint, copied from
   `StorygraphClient._note_auth_expired`. It warns once per dead cookie, then
   short-circuits writes until the cookie changes.
+- When `GOODREADS_BROWSER_URL` is set, `_request` uses the existing signed-in
+  Selenium session for same-origin `fetch`. This avoids the WAF challenge returned
+  to Python's HTTP stack on this host. It refuses a browser on another site.
 - `check_connection()`: `GET /`, require a `/user/show/<id>` link.
 - `_session_meta()`: `GET /` → `(csrf, user_id)`.
 - `search_books(query)`: parses results and the redirect-to-book case. Returns
@@ -198,6 +216,7 @@ Automatch does **not** set an initial shelf. The first cooldown post does that.
 | `GOODREADS_SESSION_COOKIE` | secret | per user | empty |
 | `GOODREADS_COOKIE_REFRESH_URL` | text | per user | empty |
 | `GOODREADS_COOKIE_REFRESH_TOKEN` | secret | per user | empty |
+| `GOODREADS_BROWSER_URL` | text | per user | empty |
 | `GOODREADS_UPDATE_COOLDOWN_MINS` | int | global | `60` |
 
 Touchpoints: `ALL_SETTINGS`, `DEFAULT_CONFIG`, `bool_keys`, `PER_USER_CREDENTIAL_KEYS`,
@@ -244,7 +263,9 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
 - **Sync:** cooldown holds while progressing and posts at idle and at completion.
   Goodreads is excluded from dispatch and from completion propagation.
 - **Automatch:** order is Grimmory id → ISBN → title/author, and the author gate
-  rejects a same-title/different-author book.
+  rejects a same-title/different-author book. Title-only matches also require
+  0.65 title similarity, so a search hit for a multi-book collection is not
+  accepted as the individual book.
 - **Multi-user:** a regular user never falls back to admin cookies, and one user's
   refreshed cookie never lands in another's credentials.
 - **Settings:** booleans accept `'true'` and `'on'`; keys grep in every touchpoint.
@@ -264,6 +285,31 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
    one progress post, read both back, and restore the shelf if it changed.
 5. Force a WAF path if one occurs naturally, or simulate it by pointing at a stale
    cookie, and capture the refresh-and-retry log lines.
+
+### 7.1 Observed on this host, 2026-09-29
+
+- The restart applied migration `a4f7c8d2e901`; startup logged
+  `✅ Database Migrations Completed`, `➕ Added 1 new setting(s) to existing config:
+  ['GOODREADS_BROWSER_URL']`, and `⚙️  Loaded 273 settings from database`.
+- Direct cookie replay received AWS WAF HTTP 202 twice, including after `/refresh`.
+  The signed-in Chrome session returned the profile menu and handled the same-origin
+  reads. A numeric book GET challenged the browser fetch; normal Chrome navigation
+  retrieved its metadata and `currently-reading` shelf.
+- Read-only lookups resolved `The Terror` by cached Goodreads id `3974`,
+  `A Desolation Called Peace` by ISBN `9781250186485`, and
+  `Songbird of the Sorrows` by title. The title-only search for
+  `Dungeon Crawler Carl` returned a three-book collection; the 0.65 title gate
+  rejects that match.
+- With the user's go-ahead, `Good Intentions` (Goodreads `11764721`) was checked
+  on its existing `currently-reading` shelf. BookBridge was at 71.718%; one
+  `/user_status.json` POST sent 72% and returned HTTP 200. Its Goodreads shelf
+  remained `currently-reading`, and the signed-in profile contained one 72%
+  activity entry. No shelf POST, other service position, or local link row changed.
+  The 72% entry was left as the real progress for a book the user is reading.
+- `GOODREADS_BROWSER_URL=http://selenium:4444` is saved only for local user 1.
+  Global `GOODREADS_ENABLED` remains `false`, so scheduled sync cannot post other
+  books. An automatic manager-triggered cycle was not exercised; the live write
+  verified the client transport and payload for the selected book.
 
 ## 8. Phases and commits
 
@@ -299,10 +345,10 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
       badges and rating sort use the resolved fields. Backfill skipped because
       Grimmory already covers 390 of 400 books. Full suite: 4981 passed,
       17 skipped, 360 subtests. Commit `[UX] Prefer linked Goodreads ratings`.
-- [ ] **Phase 5 — local notes and live.** Record the working auth and refresher
-      setup in this plan, update `CHANGELOG.md` for the user-visible behavior,
-      run live verification from §7, and update `BRANCH_STATUS.md`.
-      **Deploy: migration + restart.**
+- [x] **Phase 5 — local notes and live.** Documented the working browser setup,
+      WAF result, read-only lookups, and the user-approved single progress post
+      in §7.1. Full suite: 4987 passed, 17 skipped, 360 subtests. Global sync
+      remains off; no automatic cycle was tested. **Deploy: migration + restart.**
 
 ## 9. Risks and open questions
 
