@@ -5513,11 +5513,10 @@ def _build_dashboard_mapping(
         else None
     )
 
-    mapping.update({
-        "goodreads_rating": None,
-        "goodreads_review_count": None,
-    })
-    mapping.update(_get_cached_goodreads_rating(book, cached_booklore_by_filename=cached_booklore_by_filename))
+    cached_goodreads = _get_cached_goodreads_rating(book, cached_booklore_by_filename=cached_booklore_by_filename)
+    for key in ("goodreads_rating", "goodreads_review_count"):
+        if mapping[key] is None:
+            mapping[key] = cached_goodreads.get(key)
 
     if mapping.get("hardcover_slug"):
         mapping["hardcover_url"] = f"https://hardcover.app/books/{mapping['hardcover_slug']}"

@@ -1,6 +1,6 @@
 # Plan: Goodreads as a write-only tracker
 
-Status: **Phase 3 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
+Status: **Phase 4 complete** (2026-09-29). Branch: `local/goodreads-tracker`, local only.
 Bring changes from local `dev` into this branch as `dev` advances; do not push this
 branch. This integration is for personal use and does not need a public release.
 
@@ -294,7 +294,11 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
       Goodreads shelf or progress post. Full suite: 4979 passed, 17 skipped,
       360 subtests; modal JavaScript passed `node --check`. Commit
       `[UX] Add Goodreads linking and connection controls`.
-- [ ] **Phase 4 — ratings.** Goodreads-sourced rating with Grimmory fallback. Commit.
+- [x] **Phase 4 — ratings.** Linked Goodreads rating and review count take priority;
+      missing fields fall back individually to the cached Grimmory values. Existing
+      badges and rating sort use the resolved fields. Backfill skipped because
+      Grimmory already covers 390 of 400 books. Full suite: 4981 passed,
+      17 skipped, 360 subtests. Commit `[UX] Prefer linked Goodreads ratings`.
 - [ ] **Phase 5 — local notes and live.** Record the working auth and refresher
       setup in this plan, update `CHANGELOG.md` for the user-visible behavior,
       run live verification from §7, and update `BRANCH_STATUS.md`.

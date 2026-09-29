@@ -1568,6 +1568,33 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['goodreads_review_count'], 3456)
         self.mock_storygraph_client.get_book_rating.assert_not_called()
 
+    def test_index_endpoint_prefers_linked_goodreads_rating(self):
+        from src.db.models import Book, BookloreBook, GoodreadsDetails
+
+        self.mock_database_service.get_all_books.return_value = [
+            Book(abs_id='ratings-linked', abs_title='Linked Ratings', ebook_filename='linked.epub', status='active')
+        ]
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_booklore_books.return_value = [
+            BookloreBook(filename='linked.epub', raw_metadata=json.dumps({
+                'metadata': {'goodreadsRating': 4.12, 'goodreadsReviewCount': 3456}
+            }))
+        ]
+        self.mock_database_service.get_all_goodreads_details.return_value = [
+            GoodreadsDetails(
+                abs_id='ratings-linked', goodreads_book_id='123',
+                goodreads_url='https://www.goodreads.com/book/show/123',
+                goodreads_rating=4.73, goodreads_review_count=None,
+            )
+        ]
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storygraph=False)
+
+        mapping = self._capture_index_mapping()
+
+        self.assertEqual(mapping['goodreads_rating'], 4.73)
+        self.assertEqual(mapping['goodreads_review_count'], 3456)
+
     def test_index_template_renders_rating_badges_under_cover(self):
         from src.db.models import Book, BookloreBook, StorygraphDetails
 
