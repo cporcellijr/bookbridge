@@ -3719,12 +3719,17 @@ class SyncManager:
             current_pct = max(pcts)
 
             is_completion = current_pct >= COMPLETION_THRESHOLD
-            # Skip near-zero progress (reuses the 1% suggestion-eligibility floor),
-            # but completion always bypasses the floor.
-            if not is_completion and current_pct <= 0.01:
+            near_zero = not is_completion and current_pct <= 0.01
+            if near_zero and client_key != 'Goodreads':
                 return
 
             abs_id = book.abs_id
+            posted = self.database_service.get_state(abs_id, state_name)
+            posted_pct = posted.percentage if posted else None
+            # An untouched Goodreads book stays unshelved; a prior post can reset.
+            if near_zero and (posted_pct is None or posted_pct <= 0.01):
+                return
+
             user_id = get_current_user_id()
             cooldown_key = (user_id, abs_id)
             # Resolved lazily (only once the tracker is configured and progress is real)
@@ -3739,8 +3744,6 @@ class SyncManager:
                     cooldown_store[cooldown_key] = rec
                 changed_at = rec['changed_at']
 
-            posted = self.database_service.get_state(abs_id, state_name)
-            posted_pct = posted.percentage if posted else None
             if posted_pct is not None and abs(current_pct - posted_pct) <= EPS:
                 return  # Already in sync with the tracker.
 

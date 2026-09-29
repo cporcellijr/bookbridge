@@ -99,6 +99,27 @@ class TestGoodreadsSyncClient(unittest.TestCase):
 
 
 class TestGoodreadsCooldown(unittest.TestCase):
+    def test_zero_progress_resets_previous_goodreads_post(self):
+        manager = SyncManager.__new__(SyncManager)
+        tracker = Mock()
+        tracker.is_configured.return_value = True
+        tracker.update_progress.return_value = SyncResult(0, True)
+        manager.sync_clients = {"Goodreads": tracker}
+        manager.database_service = Mock()
+        manager.database_service.get_state.return_value = SimpleNamespace(percentage=1.0)
+        manager._goodreads_cooldown = {}
+        manager._goodreads_cooldown_lock = threading.Lock()
+        book = SimpleNamespace(abs_id="a1")
+        config = {"ABS": SimpleNamespace(current={"pct": 0.0})}
+        with patch.dict(os.environ, {"GOODREADS_UPDATE_COOLDOWN_MINS": "0"}):
+            manager._handle_goodreads_cooldown(book, config, 0, schedule_followup=False)
+        tracker.update_progress.assert_called_once()
+        self.assertEqual(manager.database_service.save_state.call_args.args[0].percentage, 0)
+        manager.database_service.get_state.return_value = None
+        tracker.update_progress.reset_mock()
+        manager._handle_goodreads_cooldown(book, config, 1, schedule_followup=False)
+        tracker.update_progress.assert_not_called()
+
     def test_posts_after_idle_and_immediately_at_completion(self):
         manager = SyncManager.__new__(SyncManager)
         tracker = Mock()

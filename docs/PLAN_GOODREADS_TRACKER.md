@@ -272,7 +272,7 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
 - **Migration:** base → head on fresh SQLite.
 - Full suite passes in order and random order. Record new counts.
 
-## 7. Live verification (needs the user)
+## 7. Live verification
 
 1. Bring up the refresher stack. The user logs in through noVNC once.
    `GET /health` shows `logged_in: true`.
@@ -308,8 +308,23 @@ ids and cookies scrubbed. Each case listed below must fail with its change rever
   The 72% entry was left as the real progress for a book the user is reading.
 - `GOODREADS_BROWSER_URL=http://selenium:4444` is saved only for local user 1.
   Global `GOODREADS_ENABLED` remains `false`, so scheduled sync cannot post other
-  books. An automatic manager-triggered cycle was not exercised; the live write
-  verified the client transport and payload for the selected book.
+  books. The first live write verified the client transport and payload.
+- The subsequent end-to-end run used real BookOrbit updates and targeted
+  `sync_cycle(..., user_id=1)` calls in a one-off process with only BookOrbit
+  and Goodreads enabled for the two selected books. `A Box Full of Darkness`
+  moved from unshelved to `to-read`, then 100%/`read`, then 0%/`to-read`.
+  `A Psalm for the Wild-Built` moved from `to-read` to 50%/`currently-reading`,
+  then 0%/`to-read`. Shelf and posted percentage readbacks passed at every
+  step. The production daemon was paused during progress changes, then resumed.
+  The targeted cycle logged `Goodreads cooldown post: 100.0% (completion)`,
+  `Goodreads cooldown post: 50.0% (idle≥0m)`, and a
+  `Goodreads cooldown post: 0.0% (idle≥0m)` for each reset.
+  BookOrbit progress and the one test reading session were cleared; all test
+  local links, states, KOReader statuses, and session rows were removed.
+  Goodreads read counts remain by user preference; public activity entries
+  from the progress posts may remain. The 0% return required a
+  Goodreads-specific exception to the shared
+  1% tracker floor; the regression test and full suite passed.
 
 ## 8. Phases and commits
 

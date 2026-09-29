@@ -54,6 +54,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Goodreads resets return a previously posted book to to-read.** A 0% reset
+  now reaches Goodreads after an earlier progress post. An untouched 0% book
+  still stays off Goodreads until it has reading activity.
+
 - **Russian and other non-Latin books are no longer refused by the Content-Match
   Guard (#460).** The guard only recognised Latin letters, so a Russian book was
   compared on its page numbers and stray markup and every correct pairing failed
