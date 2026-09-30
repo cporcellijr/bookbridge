@@ -25,6 +25,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
+- **Read-alongs can preserve the audiobook's audio quality.** Set Read-Along Audio
+  Bitrate to `source` to reuse a single AAC LC audiobook without another lossy
+  encode. Other formats and multi-file audiobooks use 64 kbps mono AAC. Numeric
+  bitrate choices and the 32k default remain available. Regenerate existing
+  read-alongs to apply the setting.
+
 - **Mounted Audiobookshelf audio avoids a duplicate download (#455).** If an ABS
   track exists inside the configured Audiobooks Directory and its size matches
   ABS metadata, BookBridge uses it for CTC or transcription. Unavailable or

@@ -108,10 +108,10 @@ per-sentence highlight-range upgrade this module's docstring already floats
 as a later step -- extending it there would quietly repurpose it into
 "how long to keep highlighting", a different value.
 
-**Phase 4 Part B -- audio packaging.** Source audio is transcoded to mono AAC
-via ``ffmpeg`` (budget: Storyteller ships 141MB for a 10.1h book, ~31kbps) at
-a configurable ``READALONG_AUDIO_BITRATE``, and, for a multi-file audiobook,
-concatenated into the single physical file the embedded SMIL references.
+**Phase 4 Part B -- audio packaging.** ``READALONG_AUDIO_BITRATE=source``
+copies compatible single-file AAC without re-encoding. Numeric bitrates
+transcode to mono AAC; source mode uses 64k when transcoding is necessary.
+Multi-file audiobooks are concatenated into one continuous audio timeline.
 Concatenation uses ffmpeg's ``concat`` *filter* (full decode of every part,
 then concatenate the decoded samples) rather than the ``concat`` demuxer,
 because that is exactly what ``ForcedAligner._load_audio`` already does to
@@ -177,6 +177,7 @@ a book that is one enormous chapter still splits.
 """
 import bisect
 import html
+import json
 import logging
 import mimetypes
 import os
@@ -359,11 +360,9 @@ class ReadalongBuildResult:
     (or, for the book's very last clip, the real embedded audio's own probed
     length), so this should land close to the full audio duration rather than
     running short by the sum of every inter-sentence pause. ``audio_bitrate``
-    (Phase 4 Part B) is the ``READALONG_AUDIO_BITRATE`` value actually used
-    for this build (the configured value, or the safe default if the
-    configured value did not parse as an ffmpeg bitrate) -- recorded here so
-    a caller/test can confirm which one took effect without re-reading the
-    setting itself.
+    is the configured numeric bitrate (or the safe default for an invalid
+    setting). In source mode it is the prepared file's measured average
+    bits per second, including container overhead used to size chunks.
 
     ``sentences_crossing_inline_elements`` counts sentences whose own text
     spans more than one DOM node (crosses an ``<em>``/``<a>``/... boundary),
@@ -494,16 +493,10 @@ def _audio_media_type(path: Union[str, Path]) -> str:
 # rejected by _resolve_audio_bitrate rather than handed to the subprocess.
 _BITRATE_RE = re.compile(r'^\d+(\.\d+)?[kKmM]?$')
 
-# Default READALONG_AUDIO_BITRATE (see src/utils/config_loader.py's
-# DEFAULT_CONFIG, which must match this value). 32kbps mono AAC is the
-# reference point from real data: Storyteller ships 141MB for a 10.1h
-# read-along book, ~31kbps -- almost exactly the ~14.4MB/hour this bitrate
-# works out to (32,000 bits/s / 8 / 3600s). Spoken-word audio (the only
-# content this file ever carries -- it exists to drive playback position for
-# a highlight, not to be listened to on its own merits) stays intelligible
-# well below music bitrates, and every device that downloads a generated
-# read-along book pays this size across the whole library.
+# Keep the existing storage-saving default; source mode avoids re-encoding
+# compatible AAC and uses a higher bitrate when transcoding is necessary.
 _DEFAULT_AUDIO_BITRATE = "32k"
+_SOURCE_FALLBACK_AUDIO_BITRATE = "64k"
 
 
 def _resolve_audio_bitrate() -> str:
@@ -513,15 +506,17 @@ def _resolve_audio_bitrate() -> str:
     it without a restart).
 
     Falls back to :data:`_DEFAULT_AUDIO_BITRATE` -- logging a warning, never
-    raising -- for anything that is not a value ffmpeg's ``-b:a`` accepts.
+    raising -- for anything other than ``source`` or an ffmpeg bitrate.
     An admin typo in this setting must degrade generation to a safe default,
     not abort it.
     """
     raw = os.environ.get("READALONG_AUDIO_BITRATE", _DEFAULT_AUDIO_BITRATE).strip()
+    if raw.lower() == "source":
+        return "source"
     if not _BITRATE_RE.match(raw):
         logger.warning(
             "⚠️ READALONG_AUDIO_BITRATE=%s is not a valid ffmpeg bitrate "
-            "(expected e.g. '32k'); using default %s",
+            "(expected 'source' or e.g. '32k'); using default %s",
             raw, _DEFAULT_AUDIO_BITRATE,
         )
         return _DEFAULT_AUDIO_BITRATE
@@ -808,12 +803,32 @@ def _run_ffmpeg_with_progress(
         raise subprocess.CalledProcessError(returncode, cmd, output="\n".join(tail))
 
 
+def _can_copy_source_aac(path: Path) -> bool:
+    """Check the first audio stream for browser-compatible AAC LC."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name,profile", "-of", "json", str(path)],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        streams = json.loads(result.stdout).get("streams", [])
+        return bool(
+            streams and streams[0].get("codec_name") == "aac"
+            and streams[0].get("profile") == "LC"
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
+        logger.warning("Could not probe source AAC for '%s': %s", path, e, exc_info=True)
+        return False
+
+
 def _transcode_audio_for_embed(
     audio_paths: List[Path], bitrate: str, output_path: Path,
     progress_callback: Optional[Callable[[float], None]] = None,
 ) -> bool:
-    """Transcode (and, for more than one part, concatenate) source audio into
-    a single mono AAC file at ``output_path``.
+    """Prepare one AAC file, copying compatible single-file AAC in source mode.
+
+    Numeric bitrates transcode to mono AAC. Source mode falls back to 64k
+    mono AAC for other codecs, multiple inputs, or a failed stream copy.
 
     Multi-file audiobooks (Grimmory/BookOrbit both stage tracks to disk as
     ``track_000.<ext>``, ``track_001.<ext>``, ... -- see
@@ -842,6 +857,12 @@ def _transcode_audio_for_embed(
     way every other guard in this module does.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    copy_source = (
+        bitrate == "source" and len(audio_paths) == 1
+        and _can_copy_source_aac(audio_paths[0])
+    )
+    if bitrate == "source" and not copy_source:
+        bitrate = _SOURCE_FALLBACK_AUDIO_BITRATE
     cmd = ["ffmpeg", "-y", "-nostdin", "-loglevel", "error"]
     for path in audio_paths:
         cmd += ["-i", str(path)]
@@ -853,7 +874,11 @@ def _transcode_audio_for_embed(
         ]
     else:
         cmd += ["-map", "0:a:0"]
-    cmd += ["-vn", "-sn", "-ac", "1", "-c:a", "aac", "-b:a", bitrate]
+    cmd += ["-vn", "-sn"]
+    if copy_source:
+        cmd += ["-c:a", "copy"]
+    else:
+        cmd += ["-ac", "1", "-c:a", "aac", "-b:a", bitrate]
 
     total_duration: Optional[float] = None
     if progress_callback is not None:
@@ -874,8 +899,20 @@ def _transcode_audio_for_embed(
             _run_ffmpeg_with_progress(cmd, total_duration, progress_callback)
         else:
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if copy_source:
+            logger.info(
+                "Read-along audio preserved source AAC without re-encoding: '%s'", audio_paths[0],
+            )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if copy_source:
+            logger.warning(
+                "Read-along source AAC copy failed; retrying at %s: %s",
+                _SOURCE_FALLBACK_AUDIO_BITRATE, e, exc_info=True,
+            )
+            return _transcode_audio_for_embed(
+                audio_paths, _SOURCE_FALLBACK_AUDIO_BITRATE, output_path, progress_callback,
+            )
         logger.error(
             "Read-along audio transcode failed for %d part(s) at bitrate %s: %s",
             len(audio_paths), bitrate, e, exc_info=True,
@@ -1941,13 +1978,11 @@ def build_readalong_epub(
     short by every inter-sentence pause. The book's last clip is extended to
     the real, probed duration of whatever audio actually gets embedded.
 
-    **Phase 4 Part B:** ``audio_paths`` (one file, or several in book reading
-    order for a multi-file audiobook) is transcoded -- and, for more than one
-    file, concatenated -- to mono AAC via ``ffmpeg`` at ``READALONG_AUDIO_BITRATE``
-    (see :func:`_resolve_audio_bitrate`), and that transcoded file, not the
-    original(s), is what gets embedded. See :func:`_transcode_audio_for_embed`
-    for why concatenation is safe against the alignment map's absolute
-    timestamps.
+    **Phase 4 Part B:** ``audio_paths`` is prepared as AAC according to
+    ``READALONG_AUDIO_BITRATE`` (see :func:`_resolve_audio_bitrate`). Source
+    mode preserves compatible single-file AAC. See
+    :func:`_transcode_audio_for_embed` for the transcoding fallback and why
+    multi-file concatenation preserves the alignment map's timeline.
 
     Returns ``None`` (refuses, does not raise) rather than emit a broken or
     empty book when: ``audio_paths`` is empty; Phase 2's fitted-EPUB guard
@@ -2200,6 +2235,7 @@ def _build_readalong_epub_impl(
         return None
 
     audio_bitrate = _resolve_audio_bitrate()
+    source_mode = audio_bitrate == "source"
     with tempfile.TemporaryDirectory(prefix="readalong-audio-") as tmp_dir:
         transcoded_audio_path = Path(tmp_dir) / "audio.m4a"
         _safe_progress(progress_callback, "transcoding_audio", _STAGE_START["transcoding_audio"])
@@ -2221,6 +2257,12 @@ def _build_readalong_epub_impl(
             )
             return None
         audio_duration = _probe_duration_seconds(transcoded_audio_path)
+        if source_mode:
+            # Include container overhead in the chunk-size estimate for copied VBR audio.
+            audio_bitrate = (
+                str(max(1, round(transcoded_audio_path.stat().st_size * 8 / audio_duration)))
+                if audio_duration and audio_duration > 0 else _SOURCE_FALLBACK_AUDIO_BITRATE
+            )
 
         if standalone_audio_output_path is not None:
             standalone_audio_output_path = Path(standalone_audio_output_path)
@@ -2266,6 +2308,10 @@ def _build_readalong_epub_impl(
         # the corresponding list of (path, real_probed_duration).
         if audio_duration and audio_duration > 0:
             target_seconds = _target_audio_file_seconds(audio_bitrate)
+            if source_mode:
+                target_seconds = min(
+                    target_seconds, _TARGET_AUDIO_FILE_BYTES * 8 / _bitrate_to_bps(audio_bitrate),
+                )
             boundaries = _compute_audio_file_boundaries(flat_clips, audio_duration, target_seconds)
         else:
             boundaries = [(0.0, audio_duration or 0.0)]

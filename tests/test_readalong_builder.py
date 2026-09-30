@@ -16,6 +16,7 @@ and skipping if it is not on PATH, rather than mocking subprocess. _make_audio
 below generates real, tiny, silent audio via ffmpeg's lavfi anullsrc source so
 every test's input is something ffmpeg can actually decode.
 """
+import json
 import os
 import posixpath
 import re
@@ -1640,6 +1641,98 @@ def test_invalid_bitrate_degrades_to_default_instead_of_crashing():
 # ---------------------------------------------------------------------------
 # Phase 4 Part B: multi-file audio concatenation
 # ---------------------------------------------------------------------------
+
+
+def _probe_audio_packets(path: Path) -> dict:
+    """Inspect actual encoded packets and playback format, without decoding."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_packets", "-show_data_hash", "sha256", "-show_entries",
+         "packet=data_hash:stream=codec_name,profile,channels,sample_rate:format=duration",
+         "-of", "json", str(path)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def test_source_bitrate_preserves_aac_quality_and_sizes_playback_chunks(tmp_path, monkeypatch):
+    """AAC must retain its packet data instead of suffering the reported quality loss."""
+    parser = _parser(tmp_path)
+    epub_path = tmp_path / "books" / "book.epub"
+    _write_epub(epub_path, {"ch1": b"<html><body><p>" + b"Alpha bravo. " * 16 + b"</p></body></html>"})
+    combined_text, _ = parser.extract_text_and_map(str(epub_path))
+    source = tmp_path / "audiobook.m4b"
+    subprocess.run(
+        ["ffmpeg", "-y", "-nostdin", "-loglevel", "error", "-f", "lavfi",
+         "-i", "sine=frequency=440:sample_rate=48000", "-t", "4", "-ac", "2",
+         "-c:a", "aac", "-b:a", "128k", str(source)],
+        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    original = _probe_audio_packets(source)
+    original_hashes = [p["data_hash"] for p in original["packets"]]
+    monkeypatch.setenv("READALONG_AUDIO_BITRATE", " SOURCE ")
+    result, output = _build(tmp_path, parser, epub_path, source, combined_text, total_seconds=4)
+    assert result is not None
+    with zipfile.ZipFile(output) as archive:
+        extracted = tmp_path / "embedded.m4a"
+        extracted.write_bytes(archive.read("OEBPS/" + result.audio_hrefs[0]))
+    embedded = _probe_audio_packets(extracted)
+    assert [p["data_hash"] for p in embedded["packets"]] == original_hashes
+    assert embedded["streams"] == original["streams"]
+    assert int(result.audio_bitrate) > 100_000
+
+    # A copied source can exceed the numeric mode's three-minute size floor.
+    monkeypatch.setattr(_readalong_builder_module, "_TARGET_AUDIO_FILE_BYTES", 32_000)
+    result, output = _build(
+        tmp_path, parser, epub_path, source, combined_text,
+        total_seconds=4, output_name="split.epub",
+    )
+    assert result is not None
+    assert len(result.audio_hrefs) >= 2
+    with zipfile.ZipFile(output) as archive:
+        for href in result.audio_hrefs:
+            data = archive.read("OEBPS/" + href)
+            assert len(data) < 32_000 * 1.5
+            extracted.write_bytes(data)
+            chunk = _probe_audio_packets(extracted)
+            assert chunk["streams"] == original["streams"]
+            assert all(p["data_hash"] in original_hashes for p in chunk["packets"])
+
+
+@pytest.mark.parametrize("bitrate,suffix,parts", [
+    ("source", ".mp3", 1), ("source", ".m4a", 2), ("64k", ".m4a", 1),
+])
+def test_source_fallback_and_numeric_mode_transcode_to_mono_aac(tmp_path, bitrate, suffix, parts):
+    inputs = [_make_audio(tmp_path, suffix=suffix, duration=1, name=f"part{i}") for i in range(parts)]
+    output = tmp_path / "prepared.m4a"
+    real_run = subprocess.run
+    with patch.object(_readalong_builder_module.subprocess, "run", wraps=real_run) as run:
+        assert _transcode_audio_for_embed(inputs, bitrate, output)
+    encode_cmd = next(call.args[0] for call in run.call_args_list if call.args[0][0] == "ffmpeg")
+    assert encode_cmd[encode_cmd.index("-b:a") + 1] == "64k"
+    embedded = _probe_audio_packets(output)
+    assert embedded["streams"][0]["codec_name"] == "aac"
+    assert embedded["streams"][0]["channels"] == 1
+    assert float(embedded["format"]["duration"]) == pytest.approx(parts, abs=0.2)
+
+
+def test_failed_source_copy_retries_transcode(tmp_path):
+    source = _make_audio(tmp_path, suffix=".m4a")
+    output = tmp_path / "prepared.m4a"
+    real_run = subprocess.run
+
+    def fail_copy(cmd, *args, **kwargs):
+        if cmd[0] == "ffmpeg" and "copy" in cmd:
+            raise subprocess.CalledProcessError(1, cmd, stderr="copy failed")
+        return real_run(cmd, *args, **kwargs)
+
+    with patch.object(_readalong_builder_module.subprocess, "run", side_effect=fail_copy) as run:
+        assert _transcode_audio_for_embed([source], "source", output)
+    ffmpeg_commands = [call.args[0] for call in run.call_args_list if call.args[0][0] == "ffmpeg"]
+    assert len(ffmpeg_commands) == 2
+    assert ffmpeg_commands[1][ffmpeg_commands[1].index("-b:a") + 1] == "64k"
+    assert _probe_audio_packets(output)["streams"][0]["codec_name"] == "aac"
+
 
 def test_multi_file_audio_is_concatenated_into_one_embedded_file():
     """A multi-file audiobook's parts, given in order, are concatenated into
