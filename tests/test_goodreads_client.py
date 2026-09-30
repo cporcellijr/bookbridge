@@ -1,8 +1,12 @@
 import os
+import threading
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from src.api import goodreads_client
 from src.api.goodreads_client import GoodreadsClient
 from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG
 from src.utils.secret_store import is_secret_key
@@ -20,6 +24,17 @@ def response(status=200, text="", headers=None, url="https://www.goodreads.com/"
     result.url = url
     result.cookies = cookies or {}
     return result
+
+
+class FakeClock:
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+    def patch(self):
+        return patch("src.api.goodreads_client.time", SimpleNamespace(monotonic=self.monotonic))
 
 
 class TestGoodreadsClient(unittest.TestCase):
@@ -269,7 +284,7 @@ class TestGoodreadsClient(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
 
     def test_shelf_posts_only_on_change_and_progress_is_whole_percent(self):
-        self.client._known_shelves["123456"] = "currently-reading"
+        self.client._known_shelves["123456"] = ("currently-reading", time.monotonic())
         with patch.object(self.client, "_request") as request:
             self.assertTrue(self.client.set_shelf("123456", "currently-reading"))
             request.assert_not_called()
@@ -280,6 +295,170 @@ class TestGoodreadsClient(unittest.TestCase):
                 self.assertTrue(self.client.update_progress("123456", 0.424))
                 self.assertEqual(request.call_args.kwargs["data"]["user_status[percent]"], "42")
                 self.assertEqual(request.call_args.kwargs["data"]["user_status[body]"], "")
+
+    def test_shelf_cache_expires_and_rereads_before_deciding_to_skip(self):
+        clock = FakeClock()
+        book_page = self.fixture("book")
+        moved_page = book_page.replace('"name":"currently-reading"', '"name":"read"')
+        self.assertNotEqual(book_page, moved_page)
+        with clock.patch():
+            with patch.object(self.client, "_request", return_value=response(text=book_page)) as request:
+                self.assertTrue(self.client.set_shelf("123456", "currently-reading"))
+                self.assertEqual(request.call_count, 1)
+                clock.now += 599
+                self.assertTrue(self.client.set_shelf("123456", "currently-reading"))
+                self.assertEqual(request.call_count, 1)
+            clock.now += 2
+            with patch.object(self.client, "_session_meta", return_value=("csrf", "12345")):
+                with patch.object(self.client, "_request", side_effect=[
+                    response(text=moved_page), response(),
+                ]) as request:
+                    self.assertTrue(self.client.set_shelf("123456", "currently-reading"))
+                    self.assertEqual(request.call_count, 2)
+                    self.assertEqual(request.call_args.kwargs["data"]["name"], "currently-reading")
+                    clock.now += 599
+                    self.assertTrue(self.client.set_shelf("123456", "currently-reading"))
+                    self.assertEqual(request.call_count, 2)
+        self.assertEqual(self.client._known_shelves["123456"][0], "currently-reading")
+
+    def test_cookie_database_writes_are_throttled_but_memory_and_forced_writes_are_not(self):
+        key = "GOODREADS_SESSION_COOKIE"
+        creds = {"GOODREADS_ENABLED": "true", key: "session=old", "__allow_global_fallback__": False}
+        db = Mock()
+        user_client = GoodreadsClient(creds, db, user_id=7)
+        clock = FakeClock()
+        with clock.patch(), patch("src.api.goodreads_client.logger") as log:
+            user_client._persist_cookie("session=one")
+            clock.now += 60
+            user_client._persist_cookie("session=two")
+            self.assertEqual(creds[key], "session=two")
+            db.set_user_credential.assert_called_once_with(7, key, "session=one")
+            self.assertEqual(log.info.call_count, 1)
+            self.assertEqual(log.debug.call_count, 1)
+            user_client._persist_cookie("session=three", force=True)
+            self.assertEqual(db.set_user_credential.call_args.args, (7, key, "session=three"))
+            self.assertEqual(db.set_user_credential.call_count, 2)
+            clock.now += 899
+            user_client._persist_cookie("session=four")
+            self.assertEqual(db.set_user_credential.call_count, 2)
+            self.assertEqual(creds[key], "session=four")
+            clock.now += 1
+            user_client._persist_cookie("session=five")
+            self.assertEqual(db.set_user_credential.call_args.args, (7, key, "session=five"))
+        global_db = Mock()
+        global_client = GoodreadsClient(database_service=global_db)
+        with clock.patch():
+            global_client._persist_cookie("session=g1")
+            global_client._persist_cookie("session=g2")
+            self.assertEqual(os.environ[key], "session=g2")
+            global_db.set_setting.assert_called_once_with(key, "session=g1")
+
+    @patch("src.api.goodreads_client.requests.request")
+    def test_rotating_response_cookies_write_once_but_refresher_cookie_always_saves(self, request):
+        db = Mock()
+        client = GoodreadsClient(database_service=db)
+        with patch.dict(os.environ, {"GOODREADS_COOKIE_REFRESH_URL": "http://refresher:8080"}):
+            request.side_effect = [
+                response(200, headers={"Set-Cookie": "a=1; Path=/"}),
+                response(200, headers={"Set-Cookie": "a=2; Path=/"}),
+                response(200, headers={"Set-Cookie": "a=3; Path=/"}),
+                response(202, headers={"x-amzn-waf-action": "challenge"}),
+                response(200, text="session=fresh"),
+                response(200),
+            ]
+            for _ in range(3):
+                self.assertEqual(client._request("/").status_code, 200)
+            self.assertEqual(db.set_setting.call_count, 1)
+            self.assertIn("a=3", os.environ["GOODREADS_SESSION_COOKIE"])
+            self.assertEqual(client._request("/").status_code, 200)
+        self.assertEqual(db.set_setting.call_count, 2)
+        db.set_setting.assert_called_with("GOODREADS_SESSION_COOKIE", "session=fresh")
+
+    def test_browser_lock_is_shared_per_browser_url(self):
+        self.assertIs(goodreads_client._browser_lock("http://selenium-a:4444"),
+                      goodreads_client._browser_lock("http://selenium-a:4444"))
+        self.assertIsNot(goodreads_client._browser_lock("http://selenium-a:4444"),
+                         goodreads_client._browser_lock("http://selenium-b:4444"))
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
+    def test_browser_session_is_serialized_across_client_instances(self, get, post):
+        first_in_script = threading.Event()
+        release_first = threading.Event()
+        second_started = threading.Event()
+        self.addCleanup(release_first.set)
+
+        def fake_get(url, timeout=None):
+            if url.endswith("/status"):
+                if threading.current_thread().name == "second":
+                    second_started.set()
+                return Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}})
+            return Mock(json=lambda: {"value": "https://www.goodreads.com/"})
+
+        def fake_post(url, **kwargs):
+            if threading.current_thread().name == "first":
+                first_in_script.set()
+                release_first.wait(5)
+            return Mock(json=lambda: {"value": {
+                "status": 200, "url": "https://www.goodreads.com/", "body": "ok",
+            }})
+
+        get.side_effect = fake_get
+        post.side_effect = fake_post
+        creds = {"GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium-serial:4444"}
+        clients = {name: GoodreadsClient(dict(creds), user_id=7, enforce_global_gate=False)
+                   for name in ("first", "second")}
+        results = {}
+
+        def run(name):
+            results[name] = clients[name]._request("/")
+
+        first = threading.Thread(target=run, args=("first",), name="first", daemon=True)
+        second = threading.Thread(target=run, args=("second",), name="second", daemon=True)
+        first.start()
+        self.assertTrue(first_in_script.wait(5))
+        second.start()
+        self.assertFalse(second_started.wait(0.3))
+        release_first.set()
+        first.join(5)
+        second.join(5)
+        self.assertTrue(second_started.is_set())
+        self.assertEqual({name: result.status_code for name, result in results.items()},
+                         {"first": 200, "second": 200})
+
+    def test_session_meta_is_cached_and_dropped_on_failed_post_or_expired_auth(self):
+        clock = FakeClock()
+        home = response(text=self.fixture("home"))
+        with clock.patch(), patch.object(self.client, "_request", return_value=home) as request:
+            self.assertEqual(self.client._session_meta(), ("SCRUBBED_CSRF", "12345"))
+            clock.now += 599
+            self.assertEqual(self.client._session_meta(), ("SCRUBBED_CSRF", "12345"))
+            self.assertEqual(request.call_count, 1)
+            clock.now += 2
+            self.client._session_meta()
+            self.assertEqual(request.call_count, 2)
+
+        def routed(path, **kwargs):
+            return response(500) if kwargs.get("method") == "POST" else home
+
+        with clock.patch(), patch.object(self.client, "_request", side_effect=routed) as request:
+            self.client._session_meta_cache = None
+            self.assertFalse(self.client.update_progress("123456", 0.5))
+            self.assertEqual(request.call_count, 2)
+            self.assertFalse(self.client.update_progress("123456", 0.5))
+            self.assertEqual(request.call_count, 4)
+            self.client._known_shelves["123456"] = ("to-read", clock.now)
+            self.assertFalse(self.client.set_shelf("123456", "read"))
+            self.assertEqual(request.call_count, 6)
+            self.assertFalse(self.client.set_shelf("123456", "read"))
+            self.assertEqual(request.call_count, 8)
+        with clock.patch(), patch.object(self.client, "_request", return_value=home) as request:
+            self.client._session_meta()
+            self.client._session_meta()
+            self.assertEqual(request.call_count, 1)
+            self.client._note_auth_expired("session=old")
+            self.client._session_meta()
+            self.assertEqual(request.call_count, 2)
 
     def test_author_mismatch_rejected(self):
         with patch.object(self.client, "search_books", return_value=[{"book_id": "123", "title": "Example Book", "author": "Other Person"}]):

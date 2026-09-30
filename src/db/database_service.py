@@ -1931,6 +1931,18 @@ class DatabaseService:
             query.delete()
             return count
 
+    def delete_state(self, abs_id: str, client_name: str, user_id: int = None) -> bool:
+        """Delete one book+client state (scoped to a user like get_state)."""
+        uid = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            query = session.query(State).filter(
+                State.abs_id == abs_id,
+                State.client_name == client_name,
+            )
+            if uid is not None:
+                query = query.filter(State.user_id == uid)
+            return query.delete() > 0
+
     # Job operations
     def get_latest_job(self, abs_id: str, kind: Optional[str] = None) -> Optional[Job]:
         """Get the latest job for a book.

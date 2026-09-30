@@ -83,7 +83,7 @@ def api_goodreads_resolve():
             "message": "Could not find book. Enter a Goodreads URL, book ID, or search text.",
         }), 404
     book_id = str(match["book_id"])
-    details = client.get_book(book_id) or match
+    details = match if "pages" in match else (client.get_book(book_id) or match)
     return jsonify({
         "found": True, "book_id": book_id,
         "title": details.get("title") or match.get("title") or "",
@@ -127,5 +127,11 @@ def link_goodreads(abs_id: str):
         isbn=isbn or match.get("isbn"), asin=asin or match.get("asin"),
         matched_by="manual",
     )
+    existing = db.get_goodreads_details(abs_id)
+    if existing and str(existing.goodreads_book_id) != book_id:
+        db.delete_goodreads_details(abs_id)
+        db.delete_state(abs_id, "goodreads")
+        logger.info("Goodreads: relinked '%s' from %s to %s; cleared posted progress",
+                    book.abs_title or abs_id, existing.goodreads_book_id, book_id)
     db.save_goodreads_details(details)
     return jsonify({"success": True, "title": match.get("title") or book.abs_title})

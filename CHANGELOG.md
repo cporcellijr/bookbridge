@@ -8,15 +8,6 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **Goodreads tracker (local branch, Phases 1–4).** Settings include an enable
-  switch, idle cooldown, and per-user cookie/refresher credentials. Goodreads
-  is a write-only follower: it matches books, keeps the reading shelf in step,
-  and posts whole-percent progress after the cooldown or at completion. The
-  dashboard now offers manual book linking and a read-only connection check.
-  Linked Goodreads ratings take priority on book cards, with cached Grimmory
-  ratings filling any missing values. This local setup can use its signed-in
-  Selenium browser for Goodreads requests when direct cookie replay hits WAF.
-
 - **Books you start reading in BookOrbit get matched automatically.** Turn it on
   in Settings → BookOrbit. Once you're past 1% of an ebook the bridge hasn't
   matched, it looks for the audiobook: a match lands in Suggestions for you to
@@ -53,10 +44,6 @@ All notable changes to BookBridge will be documented in this file.
   book's reading position, moves only the cards beneath it.
 
 ### Fixed
-
-- **Goodreads resets return a previously posted book to to-read.** A 0% reset
-  now reaches Goodreads after an earlier progress post. An untouched 0% book
-  still stays off Goodreads until it has reading activity.
 
 - **Russian and other non-Latin books are no longer refused by the Content-Match
   Guard (#460).** The guard only recognised Latin letters, so a Russian book was

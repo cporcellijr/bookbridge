@@ -6,6 +6,8 @@ import logging
 import math
 import os
 import re
+import threading
+import time
 from http.cookies import SimpleCookie
 from urllib.parse import quote, urljoin, urlparse
 
@@ -16,6 +18,18 @@ from src.utils.string_utils import author_match_floor, calculate_similarity, cle
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
+
+_COOKIE_PERSIST_INTERVAL_SECONDS = 900
+_SHELF_CACHE_SECONDS = 600
+_SESSION_META_SECONDS = 600
+_BROWSER_LOCKS: dict[str, threading.Lock] = {}
+_BROWSER_LOCKS_GUARD = threading.Lock()
+
+
+def _browser_lock(base_url: str) -> threading.Lock:
+    """Return the lock shared by every client driving the same browser session."""
+    with _BROWSER_LOCKS_GUARD:
+        return _BROWSER_LOCKS.setdefault(base_url, threading.Lock())
 
 
 class GoodreadsClient:
@@ -31,7 +45,9 @@ class GoodreadsClient:
         self._user_id = user_id
         self._enforce_global_gate = enforce_global_gate
         self._auth_expired_cookie: str | None = None
-        self._known_shelves: dict[str, str | None] = {}
+        self._known_shelves: dict[str, tuple[str | None, float]] = {}
+        self._last_cookie_db_write: float | None = None
+        self._session_meta_cache: tuple[tuple[str, str], float] | None = None
 
     def _setting(self, key: str) -> str:
         return str(resolve_setting(
@@ -49,19 +65,26 @@ class GoodreadsClient:
             or self._setting("GOODREADS_BROWSER_URL")
         )
 
-    def _persist_cookie(self, cookie: str) -> None:
+    def _persist_cookie(self, cookie: str, *, force: bool = False) -> None:
+        """Keep the cookie in memory always; write it to the database at most every 15 minutes unless forced."""
         if cookie == self._cookie_header():
             return
-        if self._user_id is not None:
-            if self._db is not None:
-                self._db.set_user_credential(self._user_id, "GOODREADS_SESSION_COOKIE", cookie)
-        else:
-            os.environ["GOODREADS_SESSION_COOKIE"] = cookie
-            if self._db is not None:
-                self._db.set_setting("GOODREADS_SESSION_COOKIE", cookie)
         if self._creds is not None:
             self._creds["GOODREADS_SESSION_COOKIE"] = cookie
+        if self._user_id is None:
+            os.environ["GOODREADS_SESSION_COOKIE"] = cookie
         self._auth_expired_cookie = None
+        now = time.monotonic()
+        if (not force and self._last_cookie_db_write is not None
+                and now - self._last_cookie_db_write < _COOKIE_PERSIST_INTERVAL_SECONDS):
+            logger.debug("Goodreads cookie updated in memory (%d characters)", len(cookie))
+            return
+        if self._db is not None:
+            if self._user_id is not None:
+                self._db.set_user_credential(self._user_id, "GOODREADS_SESSION_COOKIE", cookie)
+            else:
+                self._db.set_setting("GOODREADS_SESSION_COOKIE", cookie)
+        self._last_cookie_db_write = now
         logger.info("Goodreads cookie saved (%d characters)", len(cookie))
 
     def _fetch_refresher_cookie(self, force: bool) -> str | None:
@@ -118,6 +141,7 @@ class GoodreadsClient:
         return hashlib.sha256(cookie.encode("utf-8")).hexdigest()
 
     def _note_auth_expired(self, cookie: str) -> None:
+        self._session_meta_cache = None
         fingerprint = self._fingerprint(cookie)
         if self._auth_expired_cookie != fingerprint:
             self._auth_expired_cookie = fingerprint
@@ -174,6 +198,12 @@ class GoodreadsClient:
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
             logger.warning("Goodreads browser URL is invalid")
             return None
+        with _browser_lock(base):
+            return self._browser_session_request(base, path, method, data, extra_headers)
+
+    def _browser_session_request(self, base: str, path: str, method: str, data: dict | None,
+                                 extra_headers: dict | None) -> requests.Response | None:
+        """Drive the shared browser session; callers must hold its lock."""
         try:
             status = requests.get(base + "/status", timeout=self.timeout).json()["value"]
             sessions = [slot["session"]["sessionId"] for node in status.get("nodes", [])
@@ -247,7 +277,7 @@ class GoodreadsClient:
             cookie = self._fetch_refresher_cookie(False) or ""
             if not cookie:
                 return None
-            self._persist_cookie(cookie)
+            self._persist_cookie(cookie, force=True)
         if method == "POST" and self._auth_expired_cookie == self._fingerprint(cookie):
             return None
         waf_retried = False
@@ -266,7 +296,7 @@ class GoodreadsClient:
                 fresh = self._fetch_refresher_cookie(True)
                 if not fresh or fresh == cookie:
                     return resp
-                self._persist_cookie(fresh)
+                self._persist_cookie(fresh, force=True)
                 cookie = fresh
                 waf_retried = True
                 continue
@@ -275,7 +305,7 @@ class GoodreadsClient:
                     fresh = self._fetch_refresher_cookie(False)
                     signin_retried = True
                     if fresh and fresh != cookie:
-                        self._persist_cookie(fresh)
+                        self._persist_cookie(fresh, force=True)
                         cookie = fresh
                         continue
                 self._note_auth_expired(cookie)
@@ -298,13 +328,20 @@ class GoodreadsClient:
         return True
 
     def _session_meta(self) -> tuple[str, str] | None:
+        cached = self._session_meta_cache
+        if cached is not None and time.monotonic() - cached[1] < _SESSION_META_SECONDS:
+            return cached[0]
         resp = self._request("/")
         if resp is None or resp.status_code != 200:
             return None
         soup = BeautifulSoup(resp.text, "html.parser")
         csrf = soup.select_one('meta[name="csrf-token"]')
         user_id = self._account_id(resp.text)
-        return (csrf.get("content", ""), user_id) if csrf and user_id else None
+        if not (csrf and user_id):
+            return None
+        meta = (csrf.get("content", ""), user_id)
+        self._session_meta_cache = (meta, time.monotonic())
+        return meta
 
     def book_url(self, book_id: str) -> str:
         """Return the Goodreads page for a book id."""
@@ -348,7 +385,7 @@ class GoodreadsClient:
                     shelf = (state.get(ref) or {}).get("shelf", {}).get("name") if ref else None
             except (ValueError, TypeError, KeyError, AttributeError):
                 pass
-        self._known_shelves[book_id] = shelf
+        self._known_shelves[book_id] = (shelf, time.monotonic())
         return {
             "book_id": book_id, "title": data.get("name", ""), "author": author,
             "cover_url": data.get("image"), "url": self.book_url(book_id),
@@ -425,9 +462,16 @@ class GoodreadsClient:
             return False
         if self._auth_expired_cookie == self._fingerprint(self._cookie_header()):
             return False
-        if book_id not in self._known_shelves and self.get_book(book_id) is None:
-            return False
-        if self._known_shelves[book_id] == shelf:
+        key = str(book_id)
+        known = self._known_shelves.get(key)
+        if known is None or time.monotonic() - known[1] > _SHELF_CACHE_SECONDS:
+            book = self.get_book(key)
+            if book is None:
+                return False
+            current = book.get("shelf")
+        else:
+            current = known[0]
+        if current == shelf:
             return True
         meta = self._session_meta()
         if not meta:
@@ -439,7 +483,9 @@ class GoodreadsClient:
         )
         ok = resp is not None and resp.status_code in (200, 204) and not self._is_sign_in(resp)
         if ok:
-            self._known_shelves[book_id] = shelf
+            self._known_shelves[key] = (shelf, time.monotonic())
+        else:
+            self._session_meta_cache = None
         return ok
 
     def update_progress(self, book_id: str, fraction: float) -> bool:
@@ -458,4 +504,7 @@ class GoodreadsClient:
                   "user_status[body]": ""},
             extra_headers={"X-CSRF-Token": meta[0], "Referer": self.book_url(book_id)},
         )
-        return resp is not None and resp.status_code in (200, 204) and not self._is_sign_in(resp)
+        ok = resp is not None and resp.status_code in (200, 204) and not self._is_sign_in(resp)
+        if not ok:
+            self._session_meta_cache = None
+        return ok

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 import time
 
 from src.api.goodreads_client import GoodreadsClient
@@ -13,6 +14,8 @@ from src.utils.string_utils import author_match_floor, calculate_similarity, cle
 
 
 logger = logging.getLogger(__name__)
+
+_MATCH_MISS_RETRY_SECONDS = 6 * 3600
 
 
 class GoodreadsSyncClient(SyncClient):
@@ -29,6 +32,8 @@ class GoodreadsSyncClient(SyncClient):
         self.booklore_client = booklore_client
         self.bookorbit_client = bookorbit_client
         self.kavita_client = kavita_client
+        self._match_misses: dict[str, float] = {}
+        self._match_misses_lock = threading.Lock()
 
     def is_configured(self) -> bool:
         """Check the current user's Goodreads settings."""
@@ -96,14 +101,38 @@ class GoodreadsSyncClient(SyncClient):
                 return item
         return None
 
+    def _match_miss_active(self, abs_id: str) -> bool:
+        with self._match_misses_lock:
+            retry_after = self._match_misses.get(abs_id)
+            if retry_after is None:
+                return False
+            if time.monotonic() >= retry_after:
+                del self._match_misses[abs_id]
+                return False
+            return True
+
+    def _record_match_miss(self, abs_id: str, label: str) -> None:
+        with self._match_misses_lock:
+            self._match_misses[abs_id] = time.monotonic() + _MATCH_MISS_RETRY_SECONDS
+        logger.info("Goodreads: no match for '%s'; next automatch attempt in %dh",
+                    label, _MATCH_MISS_RETRY_SECONDS // 3600)
+
+    def _clear_match_miss(self, abs_id: str) -> None:
+        with self._match_misses_lock:
+            self._match_misses.pop(abs_id, None)
+
     def _automatch(self, book: Book) -> GoodreadsDetails | None:
         if not self.database_service or not self.is_configured():
             return None
         existing = self.database_service.get_goodreads_details(book.abs_id)
         if existing:
             return existing
+        if self._match_miss_active(book.abs_id):
+            logger.debug("Goodreads: automatch for '%s' skipped after a recent miss", book.abs_id)
+            return None
         title, author, isbn, asin = self._match_metadata(book)
         if not title:
+            self._record_match_miss(book.abs_id, book.abs_title or book.abs_id)
             return None
         match = None
         matched_by = None
@@ -134,6 +163,7 @@ class GoodreadsSyncClient(SyncClient):
                 match = candidates[index]
                 matched_by = "title_author_llm"
         if not match or not match.get("book_id"):
+            self._record_match_miss(book.abs_id, title)
             return None
         book_id = str(match["book_id"])
         full = self.goodreads_client.get_book(book_id) or match
@@ -147,6 +177,7 @@ class GoodreadsSyncClient(SyncClient):
             matched_by=matched_by,
         )
         saved = self.database_service.save_goodreads_details(details)
+        self._clear_match_miss(book.abs_id)
         logger.info("Goodreads: automatched '%s' to %s (%s)", title, book_id, matched_by)
         return saved
 

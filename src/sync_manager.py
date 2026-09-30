@@ -3627,6 +3627,7 @@ class SyncManager:
             cooldown_store_attr='_goodreads_cooldown',
             cooldown_lock_attr='_goodreads_cooldown_lock',
             schedule_followup=schedule_followup,
+            allow_reset=True,
         )
 
     def _handle_hardcover_cooldown(
@@ -3688,14 +3689,16 @@ class SyncManager:
     def _handle_tracker_cooldown(self, book, config, now: float, *, client_key: str,
                                  state_name: str, cooldown_env: str,
                                  cooldown_store_attr: str, cooldown_lock_attr: str,
-                                 schedule_followup: bool) -> None:
+                                 schedule_followup: bool, allow_reset: bool = False) -> None:
         """Post a write-only tracker's progress on a trailing-edge idle cooldown.
 
         The tracker is intentionally excluded from the normal
         per-cycle dispatch and driven here instead. While a book keeps progressing the
         timer resets and no write happens; once the book has been idle (no new progress)
         for ``<cooldown_env>`` minutes we post the latest position. Completion (~100%)
-        bypasses the cooldown and posts at once.
+        bypasses the cooldown and posts at once. Near-zero progress is never posted
+        unless ``allow_reset`` is set, in which case a previously posted position is
+        reset to the start.
         """
         EPS = 1e-4
         COMPLETION_THRESHOLD = 0.99
@@ -3720,13 +3723,13 @@ class SyncManager:
 
             is_completion = current_pct >= COMPLETION_THRESHOLD
             near_zero = not is_completion and current_pct <= 0.01
-            if near_zero and client_key != 'Goodreads':
+            if near_zero and not allow_reset:
                 return
 
             abs_id = book.abs_id
             posted = self.database_service.get_state(abs_id, state_name)
             posted_pct = posted.percentage if posted else None
-            # An untouched Goodreads book stays unshelved; a prior post can reset.
+            # An untouched book stays unposted; only a prior post can be reset.
             if near_zero and (posted_pct is None or posted_pct <= 0.01):
                 return
 
