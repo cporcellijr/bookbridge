@@ -5,6 +5,7 @@ from typing import Optional
 from src.api.bookorbit_client import BookOrbitClient
 from src.db.models import Book, State
 from src.utils.ebook_utils import EbookParser
+from src.utils.fixed_page_progress import is_cbz_book
 from src.utils.progress_metadata import parse_service_timestamp
 from src.sync_clients.sync_client_interface import (
     SyncClient,
@@ -149,6 +150,9 @@ class BookOrbitSyncClient(SyncClient):
         )
 
     def get_text_from_current_state(self, book: Book, state: ServiceState) -> Optional[str]:
+        # Comics have no text positions; the manager handles CBZ via page locators.
+        if is_cbz_book(book):
+            return None
         cfi = state.current.get("cfi")
         pct = state.current.get("pct")
         epub = self._resolve_epub_filename(book)

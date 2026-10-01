@@ -40,7 +40,12 @@ from src.utils.user_config import SERVICE_ENABLE_KEYS
 
 from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
 from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename
-from src.utils.ebook_utils import LRUCache
+from src.utils.ebook_utils import (
+    LINKABLE_EBOOK_EXTENSIONS,
+    LRUCache,
+    is_comic_ebook_filename,
+    is_linkable_ebook_filename,
+)
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
@@ -3131,7 +3136,9 @@ def _build_local_ebook_title_index():
     index = {}
     try:
         if EBOOK_DIR.exists():
-            for eb in EBOOK_DIR.glob("**/*.epub"):
+            for eb in EBOOK_DIR.rglob('*'):
+                if not eb.is_file() or eb.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS:
+                    continue
                 stem = eb.stem
                 title_part = stem.split(" - ", 1)[0]
                 for key in (_ebook_title_key(title_part), _ebook_title_key(stem)):
@@ -3163,7 +3170,7 @@ def get_searchable_ebooks(search_term):
             if books:
                 for b in books:
                     fname = b.get('fileName', '')
-                    if fname.lower().endswith('.epub'):
+                    if is_linkable_ebook_filename(fname):
                         found_filenames.add(fname.lower())
                         found_stems.add(Path(fname).stem.lower())
                         results.append(EbookResult(
@@ -3196,7 +3203,7 @@ def get_searchable_ebooks(search_term):
                 fname = b.get('fileName') or ''
                 if not fname and local_index is not None:
                     fname = local_index.get(_ebook_title_key(b.get('title'))) or ''
-                if not fname.lower().endswith('.epub'):
+                if not is_linkable_ebook_filename(fname):
                     continue
                 if fname.lower() in found_filenames:
                     continue
@@ -3254,7 +3261,7 @@ def get_searchable_ebooks(search_term):
             )
             for book in kavita_books or []:
                 filename = book.get('fileName') or book.get('filename') or ''
-                if not filename.lower().endswith('.epub'):
+                if not is_linkable_ebook_filename(filename):
                     continue
                 if filename.lower() in found_filenames:
                     continue
@@ -3343,8 +3350,11 @@ def get_searchable_ebooks(search_term):
     # 4. Search filesystem (Local) - LOW PRIORITY
     if EBOOK_DIR.exists():
         try:
-            all_epubs = list(EBOOK_DIR.glob("**/*.epub"))
-            for eb in all_epubs:
+            all_ebooks = [
+                eb for eb in EBOOK_DIR.rglob('*')
+                if eb.is_file() and eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS
+            ]
+            for eb in all_ebooks:
                 fname_lower = eb.name.lower()
                 stem_lower = eb.stem.lower()
 
@@ -6407,6 +6417,12 @@ def match():
         forge_stage_mode = (request.form.get('forge_stage_mode') or '').strip() or None
         ebook_filename = selected_filename
         original_ebook_filename = selected_filename
+        if selected_filename and audio_source and is_comic_ebook_filename(selected_filename):
+            return (
+                "Comic archives (CBZ) cannot be linked to an audiobook: the audio path "
+                "would see empty ebook text. Link the comic as an ebook-only mapping instead.",
+                400,
+            )
         clients = uc()
         if request.form.get('action') == 'forge_match' and not clients.storyteller_client.is_configured():
             return "Storyteller is not configured", 409
@@ -7654,6 +7670,15 @@ def _queue_item_from_match_form(clients) -> "dict | None":
     ebook_source_path = (
         request.form.get('ebook_source_path') or request.form.get('source_path') or ''
     ).strip() or None
+    if audio_source and ebook_filename and is_comic_ebook_filename(ebook_filename):
+        # Comics cannot pair with audiobooks: the audio path would see empty ebook
+        # text and could queue a pointless Whisper transcription. Queue the comic
+        # as an ebook-only item instead.
+        audio_source = None
+        audio_source_id = None
+        audio_provider_book_id = None
+        audio_provider_file_id = None
+        audio_duration = None
     storyteller_uuid = request.form.get('storyteller_uuid', '') or ''
     audio_only = (request.form.get('audio_only') or '').strip().lower() in {
         'true', '1', 'yes', 'on'

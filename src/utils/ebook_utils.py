@@ -39,6 +39,24 @@ logger = logging.getLogger(__name__)
 # Import epubcfi library for accurate CFI parsing
 import epubcfi
 
+# Comic archives: '.cbz' only, matching is_cbz_filename() in fixed_page_progress.
+# The other CBX containers (.cbr/.cbt/.cb7) are invisible outside the Grimmory
+# client, and the zipfile-based page counter cannot open RAR/7z/tar archives,
+# so a linked .cbr would be sent to the EPUB parser and fail to sync.
+COMIC_EBOOK_EXTENSIONS = frozenset({'.cbz'})
+LINKABLE_EBOOK_EXTENSIONS = frozenset({'.epub', *COMIC_EBOOK_EXTENSIONS})
+
+
+def is_linkable_ebook_filename(name: str | None) -> bool:
+    """True for filenames BookBridge can link (EPUB plus CBZ comics)."""
+    return str(name or '').strip().lower().endswith(tuple(LINKABLE_EBOOK_EXTENSIONS))
+
+
+def is_comic_ebook_filename(name: str | None) -> bool:
+    """True for comic archive filenames (currently CBZ only)."""
+    return str(name or '').strip().lower().endswith(tuple(COMIC_EBOOK_EXTENSIONS))
+
+
 # Names the bridge writes into the epub cache when it acquires an ebook for an
 # ABS item: ``<item_id>_direct.<ext>``, ``<item_id>_cwa.<ext>`` and
 # ``<item_id>_abs_search.<ext>`` (see LibraryService.acquire_ebook).
