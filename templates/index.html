@@ -76,6 +76,9 @@
         {# Info section - always visible #}
         <div class="book-info">
             <div class="book-header">
+                <input type="checkbox" class="book-select" name="abs_ids" value="{{ mapping.abs_id }}"
+                    form="bulk-delete-form" aria-label="Select {{ full_display_title }}"
+                    onchange="selectBook(this)">
                 <div class="book-title">
                     <span class="book-title-main">{{ mapping.display_title }}</span>{% if mapping.display_subtitle %}<span
                         class="book-title-subtitle">: {{ mapping.display_subtitle }}</span>{% endif %}
@@ -2525,6 +2528,14 @@
             </div>
         </div>
 
+        <form id="bulk-delete-form" method="POST" action="{{ url_for('delete_selected_mappings') }}"
+            class="controls-bar" onsubmit="return confirmBulkDelete(this)">
+            <button type="button" class="btn btn-secondary" onclick="selectFilteredBooks()">Select all filtered</button>
+            <button type="button" class="btn btn-secondary" onclick="clearBookSelection()">Clear selection</button>
+            <span id="selected-count" role="status" aria-live="polite">0 selected</span>
+            <button type="submit" id="bulk-delete-button" class="btn btn-danger" disabled>Delete selected</button>
+        </form>
+
         <div class="search-handoff hidden" id="search-handoff">
             <span class="search-handoff-msg" id="search-handoff-msg"></span>
             <a class="btn btn-secondary" id="search-handoff-link" href="{{ url_for('add_book') }}"></a>
@@ -2820,6 +2831,52 @@
                 return true;
             }
 
+            function filteredBookIds() {
+                return new Set(Array.from(document.querySelectorAll('.book-card:not(.hidden):not(.flatten-duplicate)'))
+                    .map(card => card.dataset.absId));
+            }
+
+            function updateBookSelection() {
+                const allowed = filteredBookIds();
+                const selected = new Set(Array.from(document.querySelectorAll('.book-select:checked'))
+                    .map(input => input.value).filter(id => allowed.has(id)));
+                document.querySelectorAll('.book-select').forEach(input => {
+                    input.checked = selected.has(input.value);
+                });
+                const count = document.getElementById('selected-count');
+                const button = document.getElementById('bulk-delete-button');
+                if (count) count.textContent = `${selected.size} selected`;
+                if (button) button.disabled = selected.size === 0;
+                return selected.size;
+            }
+
+            function selectBook(input) {
+                document.querySelectorAll('.book-select').forEach(other => {
+                    if (other.value === input.value) other.checked = input.checked;
+                });
+                updateBookSelection();
+            }
+
+            function selectFilteredBooks() {
+                const allowed = filteredBookIds();
+                document.querySelectorAll('.book-select').forEach(input => {
+                    input.checked = allowed.has(input.value);
+                });
+                updateBookSelection();
+            }
+
+            function clearBookSelection() {
+                document.querySelectorAll('.book-select').forEach(input => { input.checked = false; });
+                updateBookSelection();
+            }
+
+            function confirmBulkDelete(form) {
+                const count = updateBookSelection();
+                if (!count || !confirm(`Delete ${count} selected book(s) from your dashboard? This uses the same cleanup as deleting each mapping individually, including cached files and sync data. Shared books remain available to other users.`)) return false;
+                form.querySelector('button[type="submit"]').disabled = true;
+                return true;
+            }
+
             function filterBooks() {
                 const filterValue = filterSelect.value;
                 const seriesValue = seriesFilter ? seriesFilter.value : 'all';
@@ -2887,6 +2944,7 @@
                 updateDashboardSectionVisibility();
                 updateFacetOptions();
                 updateFilteredCount();
+                updateBookSelection();
                 updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
 
                 // Persist choice

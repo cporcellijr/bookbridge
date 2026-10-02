@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 import requests
 import schedule
 from dependency_injector import providers
-from flask import Flask, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash
+from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash
 from functools import wraps
 from src.utils.user_context import (
     set_current_user_id, reset_current_user_id,
@@ -9345,6 +9345,34 @@ def delete_mapping(abs_id):
     return redirect(url_for('index'))
 
 
+def delete_selected_mappings() -> Response | tuple[str, int]:
+    """Delete selected mappings using the same ownership and cleanup rules as one delete."""
+    abs_ids = list(dict.fromkeys(request.form.getlist('abs_ids')))
+    if not abs_ids or any(not abs_id.strip() for abs_id in abs_ids):
+        return ("Select at least one book", 400)
+
+    user = current_user()
+    # Authorize the entire selection before deleting any of it.
+    if any(not _user_may_modify_book(user, abs_id) for abs_id in abs_ids):
+        return ("Forbidden: you have not claimed every selected book", 403)
+
+    removed = failed = 0
+    for abs_id in abs_ids:
+        try:
+            book = database_service.get_book(abs_id)
+            if book:
+                _delete_or_unlink_book(user, abs_id, book)
+                removed += 1
+        except Exception:
+            failed += 1
+            logger.exception("Failed to delete selected mapping '%s'", sanitize_log_data(abs_id))
+
+    flash(f"Removed {removed} book(s) from your dashboard.", "success")
+    if failed:
+        flash(f"Could not fully remove {failed} book(s). Check the logs before retrying.", "error")
+    return redirect(url_for('index'))
+
+
 def clear_progress(abs_id):
     """Clear progress for a mapping by setting all systems to 0%"""
     # Get book from database service
@@ -13196,6 +13224,7 @@ def create_app(test_container=None):
     app.add_url_rule('/batch-match', 'batch_match', batch_match, methods=['GET', 'POST'])
     app.add_url_rule('/suggestions', 'suggestions', suggestions_page, methods=['GET', 'POST'])
     app.add_url_rule('/delete/<abs_id>', 'delete_mapping', delete_mapping, methods=['POST'])
+    app.add_url_rule('/delete-selected', 'delete_selected_mappings', delete_selected_mappings, methods=['POST'])
     app.add_url_rule('/clear-progress/<abs_id>', 'clear_progress', clear_progress, methods=['POST'])
     app.add_url_rule('/api/remap-alignment/<abs_id>', 'remap_alignment', remap_alignment, methods=['POST'])
     app.add_url_rule('/api/readalong-epub/<abs_id>', 'generate_readalong_epub', generate_readalong_epub, methods=['POST'])

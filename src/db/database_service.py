@@ -2365,19 +2365,19 @@ class DatabaseService:
         missing (instead of returning False), and (re)links it when it points
         elsewhere. Lets manually pinned, previous-primary, and device-served hashes
         remain durable siblings for the same book. Returns True if a row was created
-        or its link changed.
+        or its link changed. Missing books are never linked, even by stale workers.
         """
         if not document_hash or not abs_id:
             return False
+        from sqlalchemy import literal, select
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         now = utcnow()
         with self.get_session() as session:
-            stmt = sqlite_insert(KosyncDocument).values(
-                document_hash=document_hash,
-                linked_abs_id=abs_id,
-                first_seen=now,
-                last_updated=now,
+            stmt = sqlite_insert(KosyncDocument).from_select(
+                ["document_hash", "linked_abs_id", "first_seen", "last_updated"],
+                select(literal(document_hash), Book.abs_id, literal(now), literal(now))
+                .where(Book.abs_id == abs_id),
             )
             result = session.execute(stmt.on_conflict_do_update(
                 index_elements=["document_hash"],

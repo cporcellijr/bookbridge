@@ -609,6 +609,8 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertEqual(primary_doc.linked_abs_id, "abs-1")
 
     def test_ensure_linked_kosync_document_upserts_and_relinks(self):
+        for abs_id in ("abs-1", "abs-2"):
+            self.db.save_book(Book(abs_id=abs_id, status="active"))
         # Creates a row when missing.
         self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-1"))
         doc = self.db.get_kosync_document("h1")
@@ -619,6 +621,58 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         # Relinks when pointing elsewhere.
         self.assertTrue(self.db.ensure_linked_kosync_document("h1", "abs-2"))
         self.assertEqual(self.db.get_kosync_document("h1").linked_abs_id, "abs-2")
+
+    def test_reconcile_skips_book_deleted_after_catalog_snapshot(self):
+        """A running pass must not resolve or link an already deleted snapshot entry."""
+        self._write_book_file("deleted.epub")
+        book = self.db.save_book(Book(abs_id="deleted", abs_title="Pattern Recognition",
+                                     original_ebook_filename="deleted.epub", status="active"))
+        snapshot = self.service._get_active_books()
+        self.db.delete_book(book.abs_id)
+        with patch.object(self.service, '_get_active_books', return_value=snapshot), \
+                patch.object(self.service, '_resolve_source_path') as resolve:
+            summary = self.service.reconcile_hashes()
+        resolve.assert_not_called()
+        self.assertEqual(summary['skipped'], 1)
+        self.assertEqual(summary['linked'], 0)
+        self.assertEqual(self.db.get_all_kosync_documents(), [])
+
+    def test_reconcile_cannot_link_book_deleted_during_resolution(self):
+        """Deletion during slow hashing must not recreate the reported orphan link."""
+        self._write_book_file("deleted.epub")
+        self.db.save_book(Book(abs_id="deleted", abs_title="Pattern Recognition",
+                               original_ebook_filename="deleted.epub", status="active"))
+        def hash_then_delete(path):
+            self.db.delete_book('deleted')
+            return 'stale-hash'
+        self.service.ebook_parser.get_kosync_id.side_effect = hash_then_delete
+        with self.assertLogs('src.services.koreader_device_sync_service', level='INFO') as logs:
+            summary = self.service.reconcile_hashes()
+        self.assertEqual(summary['linked'], 0)
+        self.assertFalse(any("bound new hash stale-hash to 'Pattern Recognition'" in line for line in logs.output))
+        self.assertIsNone(self.db.get_kosync_document('stale-hash'))
+
+    def test_stale_user_snapshot_does_not_resolve_unclaimed_shared_book(self):
+        user = self.db.create_user('removed-reader', 'password')
+        other = self.db.create_user('remaining-reader', 'password')
+        self.db.save_book(Book(abs_id='shared', original_ebook_filename='shared.epub',
+                               status='active', user_id=user.id))
+        self.db.link_user_book(other.id, 'shared')
+        self.service.user_id = user.id
+        snapshot = self.service._get_active_books()
+        self.db.unlink_user_book(user.id, 'shared')
+        with patch.object(self.service, '_get_active_books', return_value=snapshot), \
+                patch.object(self.service, '_resolve_source_path') as resolve:
+            summary = self.service.reconcile_hashes()
+        resolve.assert_not_called()
+        self.assertEqual(summary['skipped'], 1)
+        self.assertIsNotNone(self.db.get_book('shared'))
+
+    def test_missing_book_cannot_steal_existing_hash_link(self):
+        self.db.save_book(Book(abs_id='remaining', status='active'))
+        self.assertTrue(self.db.ensure_linked_kosync_document('existing-hash', 'remaining'))
+        self.assertFalse(self.db.ensure_linked_kosync_document('existing-hash', 'deleted'))
+        self.assertEqual(self.db.get_kosync_document('existing-hash').linked_abs_id, 'remaining')
 
     def test_content_hash_not_recomputed_when_ebook_unchanged(self):
         """Regression for #342: the 60s prebuilder loop must not re-hash

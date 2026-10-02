@@ -8,6 +8,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Bulk-delete dashboard books.** Select individual books or all books matching
+  the current filters, then use Delete selected with one confirmation. Existing
+  mapping cleanup and per-user shared-book protection apply.
+
 - **Books you start reading in BookOrbit get matched automatically.** Turn it on
   in Settings → BookOrbit. Once you're past 1% of an ebook the bridge hasn't
   matched, it looks for the audiobook: a match lands in Suggestions for you to
@@ -50,6 +54,9 @@ All notable changes to BookBridge will be documented in this file.
   book's reading position, moves only the cards beneath it.
 
 ### Fixed
+
+- Hash reconciliation skips books removed during a running pass and cannot
+  recreate hash links to deleted mappings.
 
 - **Russian and other non-Latin books are no longer refused by the Content-Match
   Guard (#460).** The guard only recognised Latin letters, so a Russian book was
