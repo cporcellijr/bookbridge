@@ -1007,6 +1007,13 @@ class DatabaseService:
             session.refresh(book)
             session.expunge(book)
 
+        if os.environ.get("SHARE_ALL_BOOKS_WITH_ALL_USERS", "false").strip().lower() in ("true", "1", "yes", "on"):
+            try:
+                created = self.link_book_to_all_active_users(book.abs_id)
+                if created:
+                    logger.info("🔗 Shared new book '%s' with %d user(s) (share-all-books)", book.abs_id, created)
+            except Exception as e:
+                logger.warning("Could not share new book '%s' with all users: %s", book.abs_id, e)
         self._notify_catalog_change()
         return book
 

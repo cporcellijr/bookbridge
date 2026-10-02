@@ -918,6 +918,10 @@ class ABSClient:
             collections_url = f"{self.base_url}/api/collections"
             r = self.session.get(collections_url)
             if r.status_code != 200:
+                logger.warning(
+                    "Failed to add item to ABS collection '%s': listing collections returned %s",
+                    collection_name, r.status_code
+                )
                 return False
 
             collections = r.json().get('collections', [])
@@ -965,10 +969,34 @@ class ABSClient:
                     title = None
                 logger.info(f"🏷️ Added '{sanitize_log_data(title or str(item_id))}' to ABS Collection: {collection_name}")
                 return True
+            logger.warning(
+                "Failed to add item to ABS collection '%s': add returned %s - %s",
+                collection_name, r_add.status_code, sanitize_log_data(r_add.text)
+            )
             return False
         except Exception as e:
             logger.error(f"❌ Error adding item to ABS collection: {e}", exc_info=True)
             return False
+
+    def list_collection_item_ids(self, collection_name):
+        if not self.is_configured():
+            return None
+        self._update_session_headers()
+        try:
+            r = self.session.get(f"{self.base_url}/api/collections", timeout=self.timeout)
+        except requests.RequestException as e:
+            logger.warning("Could not list ABS collections: %s", e)
+            return None
+        if r.status_code != 200:
+            logger.warning("Could not list ABS collections: status %s", r.status_code)
+            return None
+        for collection in r.json().get('collections', []):
+            if collection.get('name') == collection_name:
+                return {
+                    book.get('id') for book in (collection.get('books') or [])
+                    if isinstance(book, dict) and book.get('id')
+                }
+        return set()
 
     def remove_from_collection(self, item_id, collection_name="abs-kosync"):
         """Remove an audiobook from a collection."""

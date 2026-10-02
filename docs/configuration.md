@@ -95,6 +95,7 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | API Token | `ABS_KEY` | empty | Per-user (set in **Account -> My Integrations**). The admin's token also powers global library scans. |
 | Library ID | `ABS_LIBRARY_ID` | empty | Per-user (set in user Integrations). Used by the matcher and search scoping. |
 | Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup. |
+| Keep Collection Complete | `ABS_COLLECTION_RECONCILE` | `false` | Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. Add-only: while on, a book removed from the collection by hand is added back. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
 | Enable ABS Ebook Sync | `SYNC_ABS_EBOOK` | `false` | Turns on bidirectional reading-progress sync with the ebook file attached to an Audiobookshelf item. |
@@ -123,6 +124,7 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 | --- | --- | --- | --- |
 | Enable | `KOSYNC_ENABLED` | `false` | Turns on KOSync support. |
 | Hash Method | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
+| Sync Login From Grimmory | `KOSYNC_CREDENTIALS_FROM_GRIMMORY` | `false` | Global. Each sync cycle, every active reader's KOReader sync username and password are copied from their Grimmory account's KOReader login into their per-reader KoSync credentials. |
 | PUT Debounce | `KOSYNC_PUT_DEBOUNCE_SECONDS` | `300` | Wait this long after KOReader stops pushing before running the sync cycle. |
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Highlight Sync | `KOREADER_ANNOTATION_SYNC` | `true` | Enables bridge-side annotation exchange for the Bridge Sync KOReader plugin. Requires the current Bridge Sync plugin on each device. |
@@ -524,6 +526,9 @@ Enabled under **Settings -> Features**. The Suggestions page is a review workspa
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable Suggestions | `SUGGESTIONS_ENABLED` | `false` | Enables the Suggestions page and background suggestion discovery. |
+| Scheduled Scan Interval | `SUGGESTIONS_AUTO_SCAN_MINUTES` | `0` | Minutes between scheduled library scans (0 = off). Runs as the primary admin, reusing cached results like a normal scan. |
+| Weekly Full Refresh Day | `SUGGESTIONS_FULL_REFRESH_DAY` | `off` | `off` or a weekday. Once a week the scan cache is cleared and the whole unmatched library is rescanned. |
+| Weekly Full Refresh Time | `SUGGESTIONS_FULL_REFRESH_TIME` | `04:00` | Local time (HH:MM) at or after which the weekly full refresh runs. |
 
 Suggestions notes:
 

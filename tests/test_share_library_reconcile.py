@@ -120,3 +120,62 @@ class TestShareLibraryAdminAction(ShareLibraryReconcileTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScheduledSharedLibraryReconcile(ShareLibraryReconcileTestCase):
+    def test_disabled_setting_does_not_touch_the_db(self):
+        web_server._reconcile_shared_library()
+        self.db.share_all_books_with_active_users.assert_not_called()
+
+    def test_enabled_setting_reconciles(self):
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+        self.db.share_all_books_with_active_users.return_value = {"users": 3, "links": 2}
+
+        web_server._reconcile_shared_library()
+
+        self.db.share_all_books_with_active_users.assert_called_once_with()
+
+    def test_db_failure_does_not_raise(self):
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+        self.db.share_all_books_with_active_users.side_effect = RuntimeError("boom")
+
+        web_server._reconcile_shared_library()
+
+
+class TestCreateBookFanOut(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        import tempfile
+        from src.db.database_service import DatabaseService
+
+        self._saved_setting = os.environ.get("SHARE_ALL_BOOKS_WITH_ALL_USERS")
+        os.environ.pop("SHARE_ALL_BOOKS_WITH_ALL_USERS", None)
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+        self.db = DatabaseService(str(Path(self.temp_dir) / "share.db"))
+        self.alice = self.db.create_user("alice", "pw")
+        self.bob = self.db.create_user("bob", "pw")
+
+    def tearDown(self):
+        if self._saved_setting is None:
+            os.environ.pop("SHARE_ALL_BOOKS_WITH_ALL_USERS", None)
+        else:
+            os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = self._saved_setting
+
+    def _create(self, abs_id):
+        from src.db.models import Book
+        return self.db.create_book(Book(abs_id=abs_id, abs_title="T", ebook_filename=abs_id + ".epub"))
+
+    def test_enabled_links_every_active_user(self):
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+
+        self._create("abs-1")
+
+        self.assertEqual(set(self.db.get_linked_abs_ids(self.alice.id)), {"abs-1"})
+        self.assertEqual(set(self.db.get_linked_abs_ids(self.bob.id)), {"abs-1"})
+
+    def test_disabled_links_nobody(self):
+        self._create("abs-2")
+
+        self.assertEqual(set(self.db.get_linked_abs_ids(self.alice.id)), set())
+        self.assertEqual(set(self.db.get_linked_abs_ids(self.bob.id)), set())

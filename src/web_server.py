@@ -1838,8 +1838,14 @@ def sync_daemon():
         schedule.every(1).minutes.do(manager.check_pending_jobs)
         schedule.every(1).minutes.do(manager.flush_reading_sessions_for_all_users)
         schedule.every(1).hours.do(_run_diagnostics_send)
+        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_shared_library)
+        schedule.every(1).minutes.do(_suggestions_auto_scan_tick)
+        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_mirror_kosync_logins_from_grimmory)
+        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_abs_collection)
 
         logger.info(f"🔄 Sync daemon started (period: {SYNC_PERIOD_MINS} minutes)")
+
+        _reconcile_shared_library()
 
         # Run initial sync cycle (per user)
         try:
@@ -1853,6 +1859,9 @@ def sync_daemon():
         except Exception:
             pass
 
+        _mirror_kosync_logins_from_grimmory()
+        _reconcile_abs_collection()
+
         # Main daemon loop
         while True:
             try:
@@ -1865,6 +1874,102 @@ def sync_daemon():
 
     except Exception as e:
         logger.error(f"❌ Sync daemon crashed: {e}", exc_info=True)
+
+
+def _reconcile_shared_library():
+    if not env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
+        return
+    try:
+        result = database_service.share_all_books_with_active_users()
+        links = int(result.get('links', 0) or 0)
+        if links:
+            logger.info(
+                "🔗 Shared %d book link(s) across %d user(s) (share-all-books schedule)",
+                links, result.get('users', 0),
+            )
+    except Exception as e:
+        logger.warning("Shared-library reconcile failed: %s", e)
+
+
+def _mirror_kosync_logins_from_grimmory():
+    if not env_truthy('KOSYNC_CREDENTIALS_FROM_GRIMMORY') or database_service is None:
+        return
+    try:
+        registry = container.user_client_registry()
+        users = [u for u in database_service.list_users() if u.active]
+    except Exception as e:
+        logger.warning("KoSync login mirror: could not list users: %s", e)
+        return
+    updated = 0
+    for user in users:
+        try:
+            client = registry.get_clients(user.id).booklore_client
+            if client is None or not client.is_configured():
+                continue
+            login = client.get_koreader_sync_login()
+            if not login:
+                continue
+            username, password = login
+            creds = database_service.get_user_credentials(user.id) or {}
+            changed = []
+            if (creds.get("KOSYNC_USER") or "") != username:
+                database_service.set_user_credential(user.id, "KOSYNC_USER", username)
+                changed.append("username")
+            if (creds.get("KOSYNC_KEY") or "") != password:
+                database_service.set_user_credential(user.id, "KOSYNC_KEY", password)
+                changed.append("password")
+            if changed:
+                registry.invalidate(user.id)
+                updated += 1
+                logger.info("🔑 KoSync login for '%s' taken from Grimmory (%s)",
+                            sanitize_log_data(user.username), ", ".join(changed))
+        except Exception as e:
+            logger.warning("KoSync login mirror failed for user %s: %s", user.id, e)
+    return updated
+
+
+def _is_abs_audio_book(book):
+    if (book.sync_mode or '') == 'ebook_only':
+        return False
+    if (book.audio_source or 'ABS').strip().lower() != 'abs':
+        return False
+    return not str(book.abs_id).startswith(('booklore:', 'bookorbit:', 'ebook-'))
+
+
+def _reconcile_abs_collection():
+    if not env_truthy('ABS_COLLECTION_RECONCILE') or database_service is None:
+        return
+    try:
+        default_owner = database_service._default_user_id()
+        by_owner = {}
+        for book in database_service.get_books_by_status('active'):
+            if _is_abs_audio_book(book):
+                by_owner.setdefault(book.user_id or default_owner, []).append(book)
+        registry = container.user_client_registry()
+        added = 0
+        for owner, books in by_owner.items():
+            if owner is None:
+                continue
+            client = registry.get_clients(owner).abs_client
+            if client is None or not client.is_configured():
+                continue
+            creds = database_service.get_user_credentials(owner) or {}
+            collection = (creds.get('ABS_COLLECTION_NAME') or os.environ.get('ABS_COLLECTION_NAME')
+                          or 'Synced with KOReader').strip()
+            present = client.list_collection_item_ids(collection)
+            if present is None:
+                continue
+            for book in books:
+                if book.abs_id in present:
+                    continue
+                if client.add_to_collection(book.abs_id, collection):
+                    present.add(book.abs_id)
+                    added += 1
+        if added:
+            logger.info("🏷️ ABS collection reconcile added %d matched audiobook(s)", added)
+        return added
+    except Exception as e:
+        logger.warning("ABS collection reconcile failed: %s", e, exc_info=True)
 
 
 # ---------------- ORIGINAL ABS-KOSYNC HELPERS ----------------
@@ -4077,6 +4182,7 @@ def settings():
             return redirect(url_for('settings') + '#users')
 
         bool_keys = [
+            'KOSYNC_CREDENTIALS_FROM_GRIMMORY',
             'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
             'KOSYNC_AUTO_MAP_ON_AGREEMENT',
             'KOSYNC_HASH_RECONCILE_ENABLED',
@@ -4106,6 +4212,7 @@ def settings():
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
+            'ABS_COLLECTION_RECONCILE',
             'REPROCESS_ON_CLEAR_IF_NO_ALIGNMENT',
             'INSTANT_SYNC_ENABLED',
             'STORYTELLER_POLL_WAIT_FOR_SETTLE',
@@ -7865,6 +7972,77 @@ def _prune_suggestions_scan_jobs():
         ]
         for job_id in stale_ids:
             SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
+
+
+_SUGGESTIONS_AUTO_SCAN_STATE = {"last_incremental": 0.0, "last_full_date": None}
+
+
+def _suggestions_auto_scan_due(now=None, state=None):
+    if not env_truthy('SUGGESTIONS_ENABLED'):
+        return None
+    now = now or datetime.now()
+    state = _SUGGESTIONS_AUTO_SCAN_STATE if state is None else state
+
+    day = (os.environ.get('SUGGESTIONS_FULL_REFRESH_DAY') or 'off').strip().lower()
+    at = (os.environ.get('SUGGESTIONS_FULL_REFRESH_TIME') or '04:00').strip()
+    if now.strftime('%A').lower() == day and now.strftime('%H:%M') >= at \
+            and state.get("last_full_date") != now.date().isoformat():
+        return 'full'
+
+    try:
+        minutes = int(float(os.environ.get('SUGGESTIONS_AUTO_SCAN_MINUTES') or 0))
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes > 0 and now.timestamp() - float(state.get("last_incremental") or 0) >= minutes * 60:
+        return 'incremental'
+    return None
+
+
+def _run_scheduled_suggestions_scan(full: bool):
+    from src.utils.user_config import _ALLOW_GLOBAL_FALLBACK_KEY
+
+    user_id = database_service._default_user_id()
+    creds = dict(database_service.get_user_credentials(user_id) or {}) if user_id is not None else {}
+    creds[_ALLOW_GLOBAL_FALLBACK_KEY] = True
+    bundle = container.user_client_registry().get_clients(user_id) if user_id is not None else _global_clients
+
+    tok_bundle = _active_bundle.set(bundle)
+    tok_uid = set_current_user_id(user_id)
+    tok_creds = set_current_user_credentials(creds)
+    try:
+        if full:
+            _save_persisted_suggestions_cache(_empty_suggestions_cache_payload())
+            cached_by_abs, cached_no_match = {}, []
+        else:
+            persisted = _load_persisted_suggestions_cache()
+            cached_by_abs = persisted.get('scan_cache_by_abs', {}) or {}
+            cached_no_match = persisted.get('scan_cache_no_match_abs_ids', []) or []
+        return _start_suggestions_scan_job(
+            cached_suggestions_by_abs=cached_by_abs,
+            cached_no_match_abs_ids=cached_no_match,
+        )
+    finally:
+        reset_current_user_credentials(tok_creds)
+        reset_current_user_id(tok_uid)
+        _active_bundle.reset(tok_bundle)
+
+
+def _suggestions_auto_scan_tick():
+    try:
+        due = _suggestions_auto_scan_due()
+        if not due:
+            return
+        with SUGGESTIONS_SCAN_JOBS_LOCK:
+            if any(job.get("status") == "running" for job in SUGGESTIONS_SCAN_JOBS.values()):
+                return
+        now = datetime.now()
+        _run_scheduled_suggestions_scan(full=(due == 'full'))
+        _SUGGESTIONS_AUTO_SCAN_STATE["last_incremental"] = now.timestamp()
+        if due == 'full':
+            _SUGGESTIONS_AUTO_SCAN_STATE["last_full_date"] = now.date().isoformat()
+        logger.info("🔎 Scheduled suggestions scan started (%s)", due)
+    except Exception as e:
+        logger.warning("Scheduled suggestions scan could not start: %s", e, exc_info=True)
 
 
 def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None):
