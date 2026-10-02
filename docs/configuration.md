@@ -241,6 +241,8 @@ Grimmory is a supported ebook and audiobook source. You can use it for ebook syn
 | Username | `BOOKLORE_USER` | empty | Grimmory username. |
 | Password | `BOOKLORE_PASSWORD` | empty | Grimmory password. |
 | Shelf Name | `BOOKLORE_SHELF_NAME` | `Kobo` | Shelf used for matched ebooks. |
+| Shelve Only When Aligned | `BOOKLORE_SHELF_REQUIRE_ALIGNMENT` | `false` | Global. A matched book joins the shelf only once BookBridge holds an alignment map for it, checked every sync cycle. |
+| Shelf Owner | `BOOKLORE_SHELF_OWNER` | empty | Global, used with Shelve Only When Aligned. The BookBridge user whose own Grimmory login adds aligned books to the shelf and removes a book when its match is deleted; use the account that owns the shelf in Grimmory. Empty uses the global Grimmory login. |
 | Library ID | `BOOKLORE_LIBRARY_ID` | empty | Optional library restriction. |
 | Record Reading Sessions | `GRIMMORY_READING_SESSIONS` | `true` | Sends reading or listening session updates back to Grimmory. |
 | Highlight Sync | `BOOKLORE_ANNOTATION_SYNC` | `false` | Enables Grimmory web-reader highlight/note relay for this reader. Requires the current Bridge Sync plugin for KOReader device annotations. |
@@ -266,6 +268,7 @@ Grimmory notes:
 - When the source is Grimmory, **Collection Syncing** controls which Grimmory shelves become KOReader collections. **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
 - **Excluded Shelves** lets you list Grimmory shelf names you do not want turned into KOReader collections.
 - **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
+- **Only download books on these Grimmory shelves** (under **KOReader / KoSync**) limits what Bridge Sync puts on the device, independently of collections. It can name your sync shelf (for example `Kobo`), which collections always skip. Books whose ebook doesn't come from Grimmory are left out while a filter is set, and shelf changes reach the device on its next sync. If none of the named shelves exist, or Grimmory can't be reached and nothing is cached, the manifest request fails instead of returning an empty list, so the device never deletes its books because of a typo or an outage.
 
 KOReader Collections per-reader settings:
 
@@ -274,6 +277,7 @@ KOReader Collections per-reader settings:
 | Collection Source | `DEVICE_SYNC_COLLECTION_SOURCE` | `grimmory` | `off`, `grimmory`, or `hardcover`. Choose one source to avoid collection-name collisions. |
 | Grimmory Shelf Mode | `DEVICE_SYNC_COLLECTIONS` | `off` | `off`, `all`, `magic`, or `shelf`. Used when Collection Source is `grimmory`. |
 | Excluded Grimmory Shelves | `DEVICE_SYNC_EXCLUDED_SHELVES` | empty | Comma-separated shelf names to skip. |
+| Download Shelf Filter | `DEVICE_SYNC_SHELF_FILTER` | empty | Comma-separated Grimmory shelf names, case-insensitive. Blank downloads every matched book. |
 | Hardcover List Mode | `DEVICE_SYNC_HARDCOVER_LISTS` | `all` | `all` or `selected`. Used when Collection Source is `hardcover`. |
 | Hardcover List Names | `DEVICE_SYNC_HARDCOVER_LIST_NAMES` | empty | Comma-separated list names when Hardcover List Mode is `selected`. |
 

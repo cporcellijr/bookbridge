@@ -89,6 +89,9 @@ _BOOKLORE_SHELF_MAPPING_TTL_SECONDS = 86400
 _hardcover_list_mapping_cache: dict = {}
 _hardcover_list_mapping_cache_lock = threading.Lock()
 _HARDCOVER_LIST_MAPPING_TTL_SECONDS = 86400
+_booklore_shelf_filter_cache: dict = {}
+_booklore_shelf_filter_cache_lock = threading.Lock()
+_BOOKLORE_SHELF_FILTER_TTL_SECONDS = 60
 
 # KoSync PUT debounce state
 _kosync_debounce: dict = {}  # {(abs_id, user_id): {'last_event': float, 'title': str, 'synced': bool, 'user_id', 'abs_id'}}
@@ -571,6 +574,74 @@ def _apply_user_collection_source(manifest: dict, user_id) -> None:
         _apply_hardcover_list_collections(manifest, user_id)
 
 
+class ManifestShelfFilterUnavailable(Exception):
+    pass
+
+
+def _booklore_shelf_members(user_id, credentials: Optional[dict], shelf_names: list[str],
+                            target_book_ids: list[str]) -> set[str]:
+    wanted = {name.casefold() for name in shelf_names}
+    targets = tuple(sorted(set(target_book_ids)))
+    cache_key = (_booklore_shelf_cache_key(user_id, credentials), tuple(sorted(wanted)), targets)
+    now = time.time()
+    with _booklore_shelf_filter_cache_lock:
+        cached = _booklore_shelf_filter_cache.get(cache_key)
+        if cached and (now - cached["time"]) < _BOOKLORE_SHELF_FILTER_TTL_SECONDS:
+            return cached["members"]
+
+    try:
+        client = BookloreClient(database_service=_database_service, credentials=credentials)
+        if not client.is_configured():
+            raise ManifestShelfFilterUnavailable("Grimmory is not configured for this reader")
+        regular = [str(shelf.get("name") or "") for shelf in client.get_all_shelves()]
+        magic = [str(shelf.get("name") or "") for shelf in client.get_all_magic_shelves()]
+        selected = {name for name in regular + magic if name.strip().casefold() in wanted}
+        if not selected:
+            raise ManifestShelfFilterUnavailable(
+                "none of the shelves %s exist in Grimmory" % ", ".join(sorted(shelf_names))
+            )
+        members = set()
+        if targets:
+            mapping = client.get_book_shelf_mapping(
+                mode="all" if selected.intersection(magic) else "shelf",
+                excludes=[name for name in regular + magic if name not in selected],
+                target_book_ids=list(targets),
+            )
+            members = {str(book_id) for book_id in mapping}
+    except Exception as e:
+        with _booklore_shelf_filter_cache_lock:
+            cached = _booklore_shelf_filter_cache.get(cache_key)
+        if cached:
+            logger.warning("Manifest shelf filter using stale membership (user_id=%s): %s", user_id, e)
+            return cached["members"]
+        if isinstance(e, ManifestShelfFilterUnavailable):
+            raise
+        raise ManifestShelfFilterUnavailable(str(e)) from e
+
+    with _booklore_shelf_filter_cache_lock:
+        _booklore_shelf_filter_cache[cache_key] = {"time": now, "members": members}
+    return members
+
+
+def _apply_manifest_shelf_filter(items: list, user_id, credentials: Optional[dict],
+                                 active_books: Optional[list] = None) -> list:
+    shelf_names = _split_csv(str(resolve_setting(credentials, "DEVICE_SYNC_SHELF_FILTER", "") or ""))
+    if not shelf_names:
+        return items
+    if active_books is None:
+        active_books = _database_service.get_books_by_status("active")
+    grimmory_ids = {
+        str(book.abs_id): str(book.ebook_source_id)
+        for book in active_books
+        if _is_booklore_manifest_book(book)
+    }
+    members = _booklore_shelf_members(user_id, credentials, shelf_names, list(grimmory_ids.values()))
+    return [
+        item for item in items
+        if grimmory_ids.get(str(item.get("abs_id") or "")) in members
+    ]
+
+
 def _scope_manifest_to_user(manifest, user_id):
     """Return a copy of the manifest containing only the books owned by `user_id`.
 
@@ -584,20 +655,20 @@ def _scope_manifest_to_user(manifest, user_id):
     if user_id is None:
         scoped = dict(manifest)
         scoped["books"] = [dict(item) for item in manifest.get("books") or []]
+        scoped["books"] = _apply_manifest_shelf_filter(scoped["books"], user_id, None)
         _apply_user_collection_source(scoped, user_id)
         scoped["revision"] = _compute_manifest_revision(scoped["books"])
         return scoped
     try:
-        owned_ids = {
-            str(book.abs_id)
-            for book in _database_service.get_books_by_status("active", user_id=user_id)
-        }
+        owned_books = _database_service.get_books_by_status("active", user_id=user_id)
     except Exception as e:
         logger.warning("Manifest user-scoping failed (user_id=%s): %s", user_id, e, exc_info=True)
         return manifest
+    owned_ids = {str(book.abs_id) for book in owned_books}
     all_books = manifest.get("books") or []
     books = [dict(item) for item in all_books if str(item.get("abs_id")) in owned_ids]
     credentials = _booklore_credentials_for_manifest(user_id)
+    books = _apply_manifest_shelf_filter(books, user_id, credentials, owned_books)
     if len(books) == len(all_books) and _device_collection_source(credentials) == "off":
         return manifest
     scoped = dict(manifest)
@@ -1958,6 +2029,14 @@ def kosync_put_progress():
     }), 200
 
 
+def _scoped_manifest_response(manifest, user_id):
+    try:
+        return jsonify(_scope_manifest_to_user(manifest, user_id)), 200
+    except ManifestShelfFilterUnavailable as e:
+        logger.warning("Device-sync manifest withheld, shelf filter unavailable (user_id=%s): %s", user_id, e)
+        return jsonify({"error": "Shelf filter unavailable", "detail": str(e)}), 503
+
+
 @kosync_sync_bp.route('/device-sync/manifest', methods=['GET'])
 @kosync_sync_bp.route('/koreader/device-sync/manifest', methods=['GET'])
 @kosync_auth_required
@@ -1981,7 +2060,7 @@ def koreader_device_sync_manifest():
         cached = _manifest_cache
 
     if cached is not None:
-        return jsonify(_scope_manifest_to_user(cached, user_id)), 200
+        return _scoped_manifest_response(cached, user_id)
 
     # Cold start after a restart: serve the last manifest written to disk rather
     # than rebuilding inline. A rebuild walks the whole catalogue (minutes on a
@@ -1994,7 +2073,7 @@ def koreader_device_sync_manifest():
             _manifest_cache = persisted
         signal_manifest_rebuild()
         logger.info("📄 Served the persisted device-sync manifest while the cache rebuilds")
-        return jsonify(_scope_manifest_to_user(persisted, user_id)), 200
+        return _scoped_manifest_response(persisted, user_id)
 
     # Never built before (fresh install): no choice but to build inline.
     service = _get_koreader_device_sync_service()
@@ -2006,7 +2085,7 @@ def koreader_device_sync_manifest():
         _manifest_cache = manifest
     _persist_manifest_cache(manifest)
 
-    return jsonify(_scope_manifest_to_user(manifest, user_id)), 200
+    return _scoped_manifest_response(manifest, user_id)
 
 
 @kosync_sync_bp.route('/device-sync/books/<path:abs_id>/download', methods=['GET'])

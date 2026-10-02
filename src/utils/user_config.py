@@ -30,7 +30,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     # KOReader / KoSync (server URL global; account is per-user)
     "KOSYNC_USER", "KOSYNC_KEY", "KOSYNC_ENABLED", "KOSYNC_AUTH_METHOD",
     "DEVICE_SYNC_COLLECTION_SOURCE", "DEVICE_SYNC_COLLECTIONS",
-    "DEVICE_SYNC_EXCLUDED_SHELVES", "DEVICE_SYNC_HARDCOVER_LISTS",
+    "DEVICE_SYNC_EXCLUDED_SHELVES", "DEVICE_SYNC_SHELF_FILTER", "DEVICE_SYNC_HARDCOVER_LISTS",
     "DEVICE_SYNC_HARDCOVER_LIST_NAMES",
     # Storyteller
     "STORYTELLER_USER", "STORYTELLER_PASSWORD", "STORYTELLER_ENABLED",
@@ -95,6 +95,11 @@ PER_USER_FIELD_GROUPS = [
         ),
         ("KOSYNC_USER", "Sync username", "text"),
         ("KOSYNC_KEY", "Sync password", "secret"),
+        (
+            "DEVICE_SYNC_SHELF_FILTER",
+            "Bridge Sync: only download books on these Grimmory shelves (comma-separated, blank = all)",
+            "text",
+        ),
     ]),
     ("KOReader Collections", [
         (

@@ -1837,6 +1837,7 @@ def sync_daemon():
         schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(manager.run_sync_for_all_users)
         schedule.every(1).minutes.do(manager.check_pending_jobs)
         schedule.every(1).minutes.do(manager.flush_reading_sessions_for_all_users)
+        schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_aligned_shelf)
         schedule.every(1).hours.do(_run_diagnostics_send)
 
         logger.info(f"🔄 Sync daemon started (period: {SYNC_PERIOD_MINS} minutes)")
@@ -1846,6 +1847,8 @@ def sync_daemon():
             manager.run_sync_for_all_users()
         except Exception as e:
             logger.error(f"❌ Initial sync cycle failed: {e}", exc_info=True)
+
+        _reconcile_aligned_shelf()
 
         # Catch-up diagnostics send on startup (24h guard inside is a no-op when not due)
         try:
@@ -2115,6 +2118,55 @@ def _is_abs_hosted_ebook_filename(filename) -> bool:
         return False
     return "_abs." in filename
 
+
+def _grimmory_book_id(book):
+    source = (book.ebook_source or '').strip().lower()
+    return str(book.ebook_source_id) if source in ('booklore', 'grimmory') and book.ebook_source_id else None
+
+
+def _sync_shelf_client():
+    owner = (os.environ.get('BOOKLORE_SHELF_OWNER') or '').strip()
+    if not owner:
+        return _global_clients.booklore_client
+    user = database_service.get_user_by_username(owner)
+    if user is None or not user.active:
+        logger.warning("⚠️ Grimmory shelf owner '%s' is not an active BookBridge user", sanitize_log_data(owner))
+        return None
+    return container.user_client_registry().get_clients(user.id).booklore_client
+
+
+def _reconcile_aligned_shelf():
+    if not env_truthy('BOOKLORE_SHELF_REQUIRE_ALIGNMENT'):
+        return
+    if database_service is None:
+        return
+    try:
+        client = _sync_shelf_client()
+        if client is None or not client.is_configured():
+            return
+        shelf = (os.environ.get('BOOKLORE_SHELF_NAME') or 'Kobo').strip()
+        books = database_service.get_books_by_status('active')
+        aligned = {}
+        for book in books:
+            book_id = _grimmory_book_id(book)
+            if book_id and database_service.has_alignment(book.abs_id):
+                aligned[book_id] = book
+        if not aligned:
+            return
+        on_shelf = {str(item.get('id')) for item in (client.list_books_on_shelf(shelf) or []) if isinstance(item, dict)}
+        added = 0
+        for source_id, book in aligned.items():
+            if source_id in on_shelf:
+                continue
+            if client.add_book_id_to_shelf(source_id, shelf):
+                added += 1
+                logger.info("🏷️ '%s' is aligned - added to Grimmory shelf '%s'",
+                            sanitize_log_data(book.abs_title or book.abs_id), shelf)
+        return added
+    except Exception as e:
+        logger.warning("Aligned-shelf reconcile failed: %s", e, exc_info=True)
+
+
 def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=None):
     """Add a newly matched ebook to the Kobo shelf and clear it from the
     shelf-watch "Up Next" shelf, on whichever library hosts the ebook.
@@ -2174,17 +2226,26 @@ def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=Non
     # Prefer the known BookOrbit book id (filenames like "Title - Author.epub"
     # don't reliably resolve via BookOrbit's title-based search).
     use_id = (is_bookorbit or is_kavita) and ebook_source_id and hasattr(client, "add_book_id_to_shelf")
-    try:
-        if use_id:
-            added = client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
-        else:
-            added = client.add_to_shelf(shelf_filename, kobo_shelf)
-    except Exception as e:
-        logger.warning(
-            f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}",
-            exc_info=True
+    defer_to_alignment = (
+        not (is_bookorbit or is_kavita) and env_truthy('BOOKLORE_SHELF_REQUIRE_ALIGNMENT')
+    )
+    if defer_to_alignment:
+        logger.debug(
+            f"Deferring Grimmory shelf add for '{sanitize_log_data(shelf_filename)}' until it is aligned"
         )
-        return
+        added = True
+    else:
+        try:
+            if use_id:
+                added = client.add_book_id_to_shelf(ebook_source_id, kobo_shelf)
+            else:
+                added = client.add_to_shelf(shelf_filename, kobo_shelf)
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}': {e}",
+                exc_info=True
+            )
+            return
     if not added:
         logger.warning(
             f"⚠️ Failed to add '{sanitize_log_data(shelf_filename)}' to '{kobo_shelf}'"
@@ -4119,6 +4180,7 @@ def settings():
             'STORYTELLER_LISTENING_SESSIONS',
             'STORYTELLER_NO_EPUB_CACHE',
             'BOOKLORE_SHELF_WATCH_ENABLED',
+            'BOOKLORE_SHELF_REQUIRE_ALIGNMENT',
             'BOOKORBIT_ENABLED',
             'BOOKORBIT_READING_SESSIONS',
             'BOOKORBIT_SHELF_WATCH_ENABLED',
@@ -9073,6 +9135,12 @@ def cleanup_mapping_resources(book, defer_audio_cache: bool = False):
                         client.remove_book_id_from_shelf(ebook_source_id, shelf_name)
                     else:
                         client.remove_from_shelf(shelf_filename, shelf_name)
+            elif env_truthy('BOOKLORE_SHELF_REQUIRE_ALIGNMENT') and (os.environ.get('BOOKLORE_SHELF_OWNER') or '').strip():
+                client = _sync_shelf_client()
+                book_id = _grimmory_book_id(book)
+                if client is not None and client.is_configured() and book_id:
+                    shelf_name = (os.environ.get('BOOKLORE_SHELF_NAME') or 'Kobo').strip()
+                    client.remove_book_id_from_shelf(book_id, shelf_name)
             else:
                 client = clients.booklore_client
                 if client.is_configured():
