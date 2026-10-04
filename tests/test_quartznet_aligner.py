@@ -397,10 +397,69 @@ def _sine(tmp_path, name, seconds, frequency):
     return path
 
 
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_pcm_windows_completes_when_decoder_stderr_exceeds_pipe_capacity(monkeypatch, returncode):
+    """Replay #467 with a real child writing errors before it can produce PCM."""
+    import subprocess
+    import sys
+    import threading
+
+    popen = subprocess.Popen
+    processes = []
+    timers = []
+    timed_out = threading.Event()
+    samples = np.arange(7, dtype="<f4")
+    diagnostic = "Header missing\nError while decoding MPEG audio frame\n"
+    script = (
+        "import sys; "
+        f"sys.stderr.buffer.write({diagnostic.encode()!r} * 40000); "
+        "sys.stderr.buffer.flush(); "
+        f"sys.stdout.buffer.write({samples.tobytes()!r}); "
+        f"sys.stdout.buffer.flush(); sys.exit({returncode})"
+    )
+
+    def start_decoder(command, **kwargs):
+        assert command[0] == "ffmpeg"
+        proc = popen([sys.executable, "-u", "-c", script], **kwargs)
+        processes.append(proc)
+
+        def stop_hung_decoder():
+            if proc.poll() is None:
+                timed_out.set()
+                proc.kill()
+
+        timer = threading.Timer(5, stop_hung_decoder)
+        timers.append(timer)
+        timer.start()
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", start_decoder)
+    monkeypatch.setattr(qn, "_WINDOW_SAMPLES", 4)
+    try:
+        if returncode:
+            with pytest.raises(RuntimeError, match="ffmpeg could not decode damaged.mp3") as error:
+                list(QuartzNetAligner._pcm_windows("damaged.mp3"))
+            assert str(error.value).endswith(diagnostic.strip())
+            assert len(str(error.value)) < 400
+        else:
+            windows = list(QuartzNetAligner._pcm_windows(["damaged.mp3", "second.mp3"]))
+            assert [len(window) for window in windows] == [4, 4, 4, 2]
+            np.testing.assert_array_equal(np.concatenate(windows), np.tile(samples, 2))
+    finally:
+        for timer in timers:
+            timer.cancel()
+            timer.join()
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+        assert not timed_out.is_set(), "Decoder deadlocked on an unread stderr pipe (#467)"
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not on PATH -- decodes real audio")
 def test_audio_streams_window_by_window_with_no_temp_file(tmp_path):
     """Two parts decode to exactly the samples the whole-book temp-file decode gives,
-    in 38 s windows across the part boundary, and no temp file is written."""
+    in 38 s windows across the part boundary, without a whole-book audio temp file."""
     parts = [_sine(tmp_path, "a.wav", 25, 440), _sine(tmp_path, "b.wav", 25, 660)]
     whole = np.array(QuartzNetAligner()._decode_to_memmap(parts))
 

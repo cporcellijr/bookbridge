@@ -226,6 +226,7 @@ class QuartzNetAligner(ForcedAligner):
         book), which a small NAS may not have to spare.
         """
         import subprocess
+        import tempfile
 
         import numpy as np
 
@@ -234,29 +235,31 @@ class QuartzNetAligner(ForcedAligner):
         window_bytes = _WINDOW_SAMPLES * 4
         pending = bytearray()
         for path in audio_paths:
-            proc = subprocess.Popen(
-                ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path),
-                 "-f", "f32le", "-ac", "1", "-ar", str(_SAMPLE_RATE), "pipe:1"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            try:
-                while True:
-                    chunk = proc.stdout.read(window_bytes - len(pending))
-                    if not chunk:
-                        break
-                    pending += chunk
-                    if len(pending) == window_bytes:
-                        yield np.frombuffer(bytes(pending), dtype="<f4")
-                        pending.clear()
-            finally:
-                proc.stdout.close()
-                errors = proc.stderr.read()
-                proc.stderr.close()
-                returncode = proc.wait()
-            if returncode != 0:
-                raise RuntimeError(
-                    f"ffmpeg could not decode {path}: {errors.decode('utf-8', 'replace').strip()[-300:]}"
+            # Decode errors must not fill an unread pipe while stdout is streamed.
+            with tempfile.TemporaryFile() as errors_file:
+                proc = subprocess.Popen(
+                    ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path),
+                     "-f", "f32le", "-ac", "1", "-ar", str(_SAMPLE_RATE), "pipe:1"],
+                    stdout=subprocess.PIPE, stderr=errors_file,
                 )
+                try:
+                    while True:
+                        chunk = proc.stdout.read(window_bytes - len(pending))
+                        if not chunk:
+                            break
+                        pending += chunk
+                        if len(pending) == window_bytes:
+                            yield np.frombuffer(bytes(pending), dtype="<f4")
+                            pending.clear()
+                finally:
+                    proc.stdout.close()
+                    returncode = proc.wait()
+                if returncode != 0:
+                    errors_file.seek(max(0, errors_file.seek(0, os.SEEK_END) - 4096))
+                    errors = errors_file.read()
+                    raise RuntimeError(
+                        f"ffmpeg could not decode {path}: {errors.decode('utf-8', 'replace').strip()[-300:]}"
+                    )
         if pending:
             yield np.frombuffer(bytes(pending), dtype="<f4")
 

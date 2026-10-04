@@ -55,6 +55,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Forced alignment no longer stalls on noisy FFmpeg decode errors (#467).**
+  QuartzNet streams audio while capturing decoder errors in a temporary file,
+  preventing a full stderr pipe from blocking the job. Decode failures retain
+  their error details. After updating and restarting, retry affected jobs;
+  existing reading progress needs no repair.
+
 - Hash reconciliation skips books removed during a running pass and cannot
   recreate hash links to deleted mappings.
 
