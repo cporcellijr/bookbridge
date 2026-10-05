@@ -2883,6 +2883,8 @@ def _clear_stale_kosync_metadata(cached_doc, filename=None, booklore_id=None):
 
 def _cache_kosync_metadata(document_hash, filename, source, mtime=None, booklore_id=None, cached_doc=None):
     """Cache hash metadata without mutating a primary key into an existing hash."""
+    if not document_hash:
+        return None
     existing = _database_service.get_kosync_document(document_hash)
     if existing:
         existing.filename = filename

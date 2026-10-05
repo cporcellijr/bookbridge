@@ -12426,7 +12426,9 @@ def _resolve_duplicate_bookfusion_id(upload_client, title: str, author: str = ""
             item_authors = item.get("authors") or item.get("author") or ""
             first_author = ""
             if isinstance(item_authors, list):
-                first_author = (item_authors[0] or "").strip().lower() if item_authors else ""
+                item_authors = item_authors[0] if item_authors else ""
+            if isinstance(item_authors, dict):
+                first_author = str(item_authors.get("name") or item_authors.get("authorName") or "").strip().lower()
             elif isinstance(item_authors, str):
                 first_author = item_authors.strip().lower()
             if first_author != author_lower:
