@@ -194,9 +194,12 @@ class EbookParser:
         with self._path_cache_lock:
             cached = self._path_cache.get(filename)
             if cached is not None:
-                if cached.exists():
-                    self._path_cache.move_to_end(filename)
-                    return cached
+                try:
+                    if cached.exists():
+                        self._path_cache.move_to_end(filename)
+                        return cached
+                except OSError as e:
+                    logger.debug("Could not check cached ebook path '%s': %s", cached, e)
                 # Stale entry (file moved/deleted) — drop and re-resolve.
                 self._path_cache.pop(filename, None)
 
@@ -207,11 +210,14 @@ class EbookParser:
         #    the library costs two full walks — over a minute on a network
         #    share, past the device-sync download stall timeout (#454).
         if is_managed_cache_filename(filename):
-            if self.epub_cache_dir.exists():
-                cached_path = safe_cache_path(self.epub_cache_dir, filename)
-                if cached_path and cached_path.exists():
-                    self._remember_resolved_path(filename, cached_path)
-                    return cached_path
+            try:
+                if self.epub_cache_dir.exists():
+                    cached_path = safe_cache_path(self.epub_cache_dir, filename)
+                    if cached_path and cached_path.exists():
+                        self._remember_resolved_path(filename, cached_path)
+                        return cached_path
+            except OSError as e:
+                logger.debug("Could not check managed ebook cache path for '%s': %s", filename, e)
 
         # 3. Recursive library scans (existing precedence: glob before rglob).
         safe_name = glob.escape(filename)
@@ -223,24 +229,31 @@ class EbookParser:
                     return result
             except StopIteration:
                 continue
+            except OSError as e:
+                logger.debug("Could not glob ebook directory '%s' for '%s': %s", d, filename, e)
+                continue
 
         for d in self.search_dirs():
             try:
                 if not d.exists():
                     continue
-            except OSError:
+                for f in d.rglob("*"):
+                    if f.name == filename:
+                        self._remember_resolved_path(filename, f)
+                        return f
+            except OSError as e:
+                logger.debug("Could not scan ebook directory '%s' for '%s': %s", d, filename, e)
                 continue
-            for f in d.rglob("*"):
-                if f.name == filename:
-                    self._remember_resolved_path(filename, f)
-                    return f
 
         # 4. Fall back to cache directory for ordinary filenames too.
-        if self.epub_cache_dir.exists():
-            cached_path = safe_cache_path(self.epub_cache_dir, filename)
-            if cached_path and cached_path.exists():
-                self._remember_resolved_path(filename, cached_path)
-                return cached_path
+        try:
+            if self.epub_cache_dir.exists():
+                cached_path = safe_cache_path(self.epub_cache_dir, filename)
+                if cached_path and cached_path.exists():
+                    self._remember_resolved_path(filename, cached_path)
+                    return cached_path
+        except OSError as e:
+            logger.debug("Could not check ebook cache path for '%s': %s", filename, e)
 
         raise FileNotFoundError(f"Could not locate {filename}")
 
