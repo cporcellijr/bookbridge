@@ -55,6 +55,16 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Hardcover, StoryGraph and Goodreads are no longer called every sync cycle for
+  books they can't update (#468).** When a tracker couldn't take a post (for
+  example, a book with no Hardcover match), BookBridge retried every few minutes,
+  even with nothing being read. One unmatched book could use hundreds of
+  Hardcover API requests a night. Failed posts now retry after 15 minutes, then
+  wait twice as long each time, up to every 6 hours. New reading progress still
+  gets posted after the usual cooldown. Hardcover also re-detects a re-read of a
+  finished book again: starting the book over now opens a new read once you're
+  2% further in.
+
 - **Forced alignment no longer stalls on noisy FFmpeg decode errors (#467).**
   QuartzNet streams audio while capturing decoder errors in a temporary file,
   preventing a full stderr pipe from blocking the job. Decode failures retain

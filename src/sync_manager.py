@@ -110,6 +110,12 @@ _COMPLETION_PROPAGATION_EXCLUDED_CLIENTS: frozenset[str] = frozenset({
     "ABSEbook",
 })
 
+# A write-only tracker post that fails (no match, no usable edition, book missing
+# from the account, service outage) is retried on an exponential backoff rather
+# than on every sync cycle, which burned tracker API quota while idle (#468).
+_TRACKER_RETRY_BASE_SECONDS: float = 15 * 60
+_TRACKER_RETRY_MAX_SECONDS: float = 6 * 3600
+
 # How far behind its peers a client must fall, on the normalized audio timeline,
 # before a lone backward move is treated as a rollback rather than ordinary drift.
 # Module-level because both the single-delta guard and the zero-delta discrepancy
@@ -3686,6 +3692,27 @@ class SyncManager:
             del self._tracker_cooldown_timers[key]
         self.sync_cycle(target_abs_id=abs_id, user_id=user_id)
 
+    @staticmethod
+    def _defer_tracker_retry(rec: dict, lock: threading.Lock, now: float, abs_id: str,
+                             client_key: str, current_pct: float) -> None:
+        """Push a failed tracker post's next attempt out on an exponential backoff.
+
+        ``rec`` is the book's cooldown record; it is replaced when progress moves,
+        so the backoff only ever holds back re-posting the same position (#468).
+        """
+        with lock:
+            failures = rec.get('failures', 0) + 1
+            delay = min(
+                _TRACKER_RETRY_BASE_SECONDS * 2 ** min(failures - 1, 16),
+                _TRACKER_RETRY_MAX_SECONDS,
+            )
+            rec['failures'] = failures
+            rec['retry_at'] = now + delay
+        logger.info(
+            f"⏸️ '{abs_id}' {client_key} post failed at {current_pct * 100:.1f}%; "
+            f"retrying in {delay / 60:.0f}m (attempt {failures})"
+        )
+
     def _handle_tracker_cooldown(self, book, config, now: float, *, client_key: str,
                                  state_name: str, cooldown_env: str,
                                  cooldown_store_attr: str, cooldown_lock_attr: str,
@@ -3698,7 +3725,8 @@ class SyncManager:
         for ``<cooldown_env>`` minutes we post the latest position. Completion (~100%)
         bypasses the cooldown and posts at once. Near-zero progress is never posted
         unless ``allow_reset`` is set, in which case a previously posted position is
-        reset to the start.
+        reset to the start. A failed post backs off exponentially instead of being
+        retried every cycle; new progress starts a fresh cooldown and attempt.
         """
         EPS = 1e-4
         COMPLETION_THRESHOLD = 0.99
@@ -3746,6 +3774,7 @@ class SyncManager:
                     rec = {'pct': current_pct, 'changed_at': now}
                     cooldown_store[cooldown_key] = rec
                 changed_at = rec['changed_at']
+                retry_at = rec.get('retry_at')
 
             if posted_pct is not None and abs(current_pct - posted_pct) <= EPS:
                 return  # Already in sync with the tracker.
@@ -3763,19 +3792,36 @@ class SyncManager:
                         )
                 return
 
-            request = UpdateProgressRequest(LocatorResult(percentage=current_pct))
-            result = client.update_progress(book, request)
-            if result and result.success:
-                self.database_service.save_state(State(
-                    abs_id=abs_id,
-                    client_name=state_name,
-                    last_updated=now,
-                    percentage=current_pct,
-                ))
-                reason = 'completion' if is_completion else f'idle≥{cooldown_mins}m'
-                logger.info(
-                    f"📈 '{abs_id}' {client_key} cooldown post: {current_pct * 100:.1f}% ({reason})"
+            if retry_at is not None and now < retry_at:
+                logger.debug(
+                    f"⏸️ '{abs_id}' {client_key} post deferred after a failed attempt; "
+                    f"retry in {retry_at - now:.0f}s"
                 )
+                return
+
+            request = UpdateProgressRequest(LocatorResult(percentage=current_pct))
+            try:
+                result = client.update_progress(book, request)
+            except Exception:
+                self._defer_tracker_retry(rec, cooldown_lock, now, abs_id, client_key, current_pct)
+                raise
+            if not (result and result.success):
+                self._defer_tracker_retry(rec, cooldown_lock, now, abs_id, client_key, current_pct)
+                return
+
+            # Persist the client's metadata too: Hardcover's re-read candidate lives in
+            # locator_json and must survive to the next post to ever be confirmed.
+            self.database_service.save_state(State(
+                abs_id=abs_id,
+                client_name=state_name,
+                last_updated=now,
+                percentage=current_pct,
+                **state_metadata_kwargs(result.updated_state),
+            ))
+            reason = 'completion' if is_completion else f'idle≥{cooldown_mins}m'
+            logger.info(
+                f"📈 '{abs_id}' {client_key} cooldown post: {current_pct * 100:.1f}% ({reason})"
+            )
         except Exception as e:
             logger.warning(f"⚠️ '{getattr(book, 'abs_id', '?')}' {client_key} cooldown handler failed: {e}", exc_info=True)
 

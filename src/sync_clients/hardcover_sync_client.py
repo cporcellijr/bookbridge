@@ -548,6 +548,13 @@ class HardcoverSyncClient(SyncClient):
             return SyncResult(None, False)
         self._sync_grimmory_shelves_to_hardcover_lists(book, hardcover_details)
 
+        # Check if this is an audiobook edition
+        audio_seconds = getattr(hardcover_details, 'hardcover_audio_seconds', None) or 0
+        total_pages = hardcover_details.hardcover_pages or 0
+        if audio_seconds <= 0 and total_pages == -1:
+            # Already verified no valid edition exists; don't spend an API call on it.
+            return SyncResult(None, False)
+
         # Get user book from Hardcover
         ub = self.hardcover_client.get_user_book(hardcover_details.hardcover_book_id)
         if not ub:
@@ -557,20 +564,12 @@ class HardcoverSyncClient(SyncClient):
             )
             return SyncResult(None, False)
 
-        # Check if this is an audiobook edition
-        audio_seconds = getattr(hardcover_details, 'hardcover_audio_seconds', None) or 0
-
         if audio_seconds > 0:
             return self._update_audiobook_progress(book, hardcover_details, ub, percentage, audio_seconds)
 
         # --- PAGE-BASED PATH ---
-        total_pages = hardcover_details.hardcover_pages or 0
-
         # Attempt to refresh if pages are missing
         if total_pages <= 0:
-            if total_pages == -1:
-                return SyncResult(None, False)  # Already verified no valid edition exists
-
             logger.info(f"Hardcover: Pages are 0 for {sanitize_log_data(book.abs_title)}, attempting to refresh details...")
             refreshed_edition = self.hardcover_client.get_default_edition(hardcover_details.hardcover_book_id)
 
