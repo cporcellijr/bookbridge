@@ -723,6 +723,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardcover or StoryGraph gets many requests, or a book never updates there
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#highlights-or-notes-are-not-syncing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1054,6 +1065,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardcover or StoryGraph gets many requests, or a book never updates there
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#highlights-or-notes-are-not-syncing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1327,6 +1349,19 @@ move the audio position. You will see a line like:</p>
   server in its own right, so a device syncing to BookOrbit <em>and</em> to BookBridge for the
   same book will see the two servers hand back different positions.</li>
 </ul>
+<h3 id="hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there">Hardcover or StoryGraph gets many requests, or a book never updates there</h3>
+<p>BookBridge posts a book's progress to a tracker once the book has been idle for that
+tracker's <strong>Update Cooldown</strong>. If the post fails — usually because the book has no match
+on Hardcover or StoryGraph — it retries after 15 minutes, then waits twice as long each
+time, up to every 6 hours, so an unmatched book costs only a few requests a day. Before
+7.9.0 it retried on every sync cycle, which could add up to hundreds of Hardcover
+requests a night (#468).</p>
+<p>To find the books affected, look in <strong>Logs</strong> for the reason followed by the retry:</p>
+<div class="highlight"><pre><span></span><code>⚠️ Hardcover: No match found for '&lt;title&gt;'
+⏸️ '&lt;book id&gt;' Hardcover post failed at 42.0%; retrying in 15m (attempt 1)
+</code></pre></div>
+<p>Match the book by hand with <strong>Link to Hardcover</strong> or <strong>Link to StoryGraph</strong> on its card.
+New progress posts after the usual cooldown once the book is matched.</p>
 <h3 id="highlights-or-notes-are-not-syncing">Highlights or notes are not syncing</h3>
 <ul>
 <li>Update the <strong>Bridge Sync</strong> KOReader plugin to the current release or newer on every KOReader device that should sync annotations.</li>

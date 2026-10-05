@@ -764,6 +764,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#series-display" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Series Display
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#ai-llm-providers-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1255,6 +1266,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#series-display" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Series Display
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#ai-llm-providers-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1643,7 +1665,7 @@ service back on restores everyone's settings exactly as they were.</p>
 <td>Target KOSync URL</td>
 <td><code>KOSYNC_SERVER</code></td>
 <td>empty</td>
-<td>Under <strong>Advanced</strong> on the card. Leave on the built-in server; only set this to relay through a separate external KoSync instance.</td>
+<td>Under <strong>Advanced</strong> on the card. An empty value uses the built-in server at <code>http://127.0.0.1:&lt;KOSYNC_PORT or 5757&gt;</code>, including installs configured only through environment variables. Set another URL only to relay through a separate external KoSync instance.</td>
 </tr>
 <tr>
 <td>Split-Port Listener</td>
@@ -2246,7 +2268,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td>Read-Along Audio Bitrate</td>
 <td><code>READALONG_AUDIO_BITRATE</code></td>
 <td><code>32k</code></td>
-<td>Bitrate ffmpeg encodes into a generated read-along EPUB's embedded audio (mono AAC), e.g. <code>32k</code>, <code>48k</code>. Lower saves storage and download size (roughly 14MB per hour of audio at the default); higher improves quality at the cost of both. An invalid value falls back to the default. Applies only to read-alongs generated after the change — existing ones are not re-encoded.</td>
+<td>Use <code>source</code> to preserve a single AAC LC audiobook without another lossy encode, including its channels and sample rate. Other codecs, multiple input files, or a failed copy fall back to 64 kbps mono AAC. Numeric values such as <code>32k</code> or <code>64k</code> always encode mono AAC; lower saves space (roughly 14MB per hour at 32k). Invalid values fall back to 32k. Regenerate existing read-alongs to apply a change.</td>
 </tr>
 </tbody>
 </table>
@@ -2284,6 +2306,25 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td><code>BOOKORBIT_SHELF_WATCH_RESCAN_HOURS</code></td>
 <td><code>24</code></td>
 <td>How often a still-unmatched book on the watch collection is retried.</td>
+</tr>
+</tbody>
+</table>
+<p>Optional matching of books you start reading — under <strong>Books You Start Reading</strong> on the BookOrbit card:</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Env Var</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auto-match books you start reading in BookOrbit</td>
+<td><code>BOOKORBIT_READING_WATCH_ENABLED</code></td>
+<td><code>false</code></td>
+<td>Once you are past 1% of a BookOrbit ebook that BookBridge has not matched, it looks for the audiobook. A match is added to <strong>Suggestions</strong> for you to confirm; a book with no audiobook becomes an ebook-only mapping so its progress syncs. A suggestion you dismiss is not offered again.</td>
 </tr>
 </tbody>
 </table>
@@ -2543,6 +2584,12 @@ bridge auto-matches it on the next poll:</p>
 <td>Per-reader personal API token from Hardcover.</td>
 </tr>
 <tr>
+<td>Update Cooldown (minutes)</td>
+<td><code>HARDCOVER_UPDATE_COOLDOWN_MINS</code></td>
+<td><code>60</code></td>
+<td>Global. Minutes of no new progress before a book's position is posted; new progress restarts the wait. Finishing a book posts at once. <code>0</code> posts on every sync cycle.</td>
+</tr>
+<tr>
 <td>Highlight Sync</td>
 <td><code>HARDCOVER_ANNOTATION_SYNC</code></td>
 <td><code>false</code></td>
@@ -2612,6 +2659,12 @@ bridge auto-matches it on the next poll:</p>
 <td>empty</td>
 <td><code>remember_user_token</code> cookie value.</td>
 </tr>
+<tr>
+<td>Update Cooldown (minutes)</td>
+<td><code>STORYGRAPH_UPDATE_COOLDOWN_MINS</code></td>
+<td><code>60</code></td>
+<td>Global. Minutes of no new progress before a book's position is posted; new progress restarts the wait. Finishing a book posts at once. <code>0</code> posts on every sync cycle.</td>
+</tr>
 </tbody>
 </table>
 <p>StoryGraph notes:</p>
@@ -2619,12 +2672,22 @@ bridge auto-matches it on the next poll:</p>
 <li>Requires browser cookies for authentication. See the <a href="../user-guide/#storygraph-authentication">User Guide</a> for instructions on how to retrieve these.</li>
 <li>Supports <strong>Edition Picking</strong>: Select specific editions (Paperback, Kindle, etc.) to ensure accurate page counts.</li>
 <li><strong>Switch Editions</strong>: The bridge can automatically "switch" your tracked edition on StoryGraph to match your selection.</li>
+<li>When the selected edition has a page count, BookBridge reports estimated page
+  progress and selects <strong>Pages</strong> on the next progress update, even if the book
+  previously used Percentage. This cannot guarantee the exact print page for a
+  reflowable ebook or audiobook. Books without a page count continue using
+  percent.</li>
 </ul>
 <h4 id="progress-trackers">Progress Trackers</h4>
 <p>Hardcover and StoryGraph are independent - enable either or both on their cards in
 <strong>Settings -&gt; Integrations</strong>. Each reader then picks which they use, and supplies their own
 token/cookies, under <strong>Account -&gt; My Integrations</strong>. Admins can also manage those values under
 <strong>Settings -&gt; Users -&gt; Integrations</strong>.</p>
+<p>When a tracker cannot take a book's update — most often because the book has no match
+there, but also when the edition has no page count, the book is missing from the account, or
+the service is down — BookBridge retries after 15 minutes, then waits twice as long each
+time, up to every 6 hours. New reading progress gets a fresh attempt once its cooldown has
+passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there">troubleshooting</a>.</p>
 <h4 id="telegram-notifications">Telegram Notifications</h4>
 <p>Found under <strong>Settings -&gt; Features</strong>.</p>
 <table>
@@ -2680,6 +2743,26 @@ token/cookies, under <strong>Account -&gt; My Integrations</strong>. Admins can 
 <td><code>SHELFMARK_URL</code></td>
 <td>empty</td>
 <td>Adds the Shelfmark shortcut when configured.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="series-display">Series Display</h4>
+<p>Found under <strong>Settings -&gt; Features</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Env Var</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Show each series as the book you're reading</td>
+<td><code>SERIES_SHOW_CURRENT_BOOK_DETAIL</code></td>
+<td><code>false</code></td>
+<td>Each series on the Library becomes the full card of the book you are on (in progress, or the next unread one), with the series name, how many are finished and the other books listed along its bottom. Click that strip to open the rest of the series. Finished series keep their usual card. When off, a closed series shows each book as a compact row.</td>
 </tr>
 </tbody>
 </table>
@@ -3194,7 +3277,7 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td>Audiobooks Directory</td>
 <td><code>AUDIOBOOKS_DIR</code></td>
 <td><code>/audiobooks</code></td>
-<td>Optional local audiobook path.</td>
+<td>Local audiobook root. When ABS reports a track path inside this directory and its size matches, BookBridge reads that mounted file directly instead of downloading an audio cache copy. Other tracks keep the existing stream/download path.</td>
 </tr>
 <tr>
 <td>Storyteller Library Directory</td>
@@ -3222,6 +3305,9 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 </tr>
 </tbody>
 </table>
+<p>For the ABS audio shortcut, mount the same underlying audiobook files at the
+same container paths in ABS and BookBridge. A path and size match cannot detect
+different files of the same size on unrelated mounts.</p>
 <h3 id="local-ebook-sources-are-confined-to-these-directories">Local ebook sources are confined to these directories</h3>
 <p><code>BOOKS_DIR</code>, everything listed in <code>EXTRA_EBOOK_DIRS</code>, and the internal EPUB cache
 are the only places BookBridge will read a <strong>Local File</strong> ebook source from. A
