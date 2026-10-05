@@ -460,23 +460,21 @@ class DatabaseService:
     def set_user_credential(self, user_id: int, key: str, value: str) -> UserCredential:
         """Store a per-user credential. Secret keys are encrypted at rest; the
         returned (detached) row carries the plaintext the caller passed in."""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
         plain = str(value) if value is not None else None
         value_str = self._store_value(key, value)
         with self.get_session() as session:
-            existing = session.query(UserCredential).filter(
+            statement = sqlite_insert(UserCredential).values(
+                user_id=user_id, key=key, value=value_str
+            ).on_conflict_do_update(
+                index_elements=[UserCredential.user_id, UserCredential.key],
+                set_={"value": value_str},
+            )
+            session.execute(statement)
+            cred = session.query(UserCredential).filter(
                 UserCredential.user_id == user_id, UserCredential.key == key
-            ).first()
-            if existing:
-                existing.value = value_str
-                session.flush()
-                session.refresh(existing)
-                session.expunge(existing)
-                existing.value = plain
-                return existing
-            cred = UserCredential(user_id=user_id, key=key, value=value_str)
-            session.add(cred)
-            session.flush()
-            session.refresh(cred)
+            ).one()
             session.expunge(cred)
             cred.value = plain
             return cred
@@ -2948,25 +2946,37 @@ class DatabaseService:
 
     def save_booklore_book(self, booklore_book: BookloreBook) -> BookloreBook:
         """Save or update a Grimmory book."""
+        from sqlalchemy import insert, select, update
+
         with self.get_session() as session:
-            existing = session.query(BookloreBook).filter(
+            existing_id = select(BookloreBook.id).where(
+                BookloreBook.filename == booklore_book.filename
+            ).limit(1).scalar_subquery()
+            updated = session.execute(
+                update(BookloreBook).where(BookloreBook.id == existing_id).values(
+                    title=booklore_book.title,
+                    authors=booklore_book.authors,
+                    raw_metadata=booklore_book.raw_metadata,
+                    last_updated=utcnow(),
+                )
+            )
+            if updated.rowcount == 0:
+                values = {
+                    "filename": booklore_book.filename,
+                    "title": booklore_book.title,
+                    "authors": booklore_book.authors,
+                    "raw_metadata": booklore_book.raw_metadata,
+                    "last_updated": booklore_book.last_updated or utcnow(),
+                }
+                if booklore_book.id is not None:
+                    values["id"] = booklore_book.id
+                session.execute(insert(BookloreBook).values(**values))
+
+            saved = session.query(BookloreBook).filter(
                 BookloreBook.filename == booklore_book.filename
             ).first()
-
-            if existing:
-                for attr in ['title', 'authors', 'raw_metadata']:
-                    if hasattr(booklore_book, attr):
-                        setattr(existing, attr, getattr(booklore_book, attr))
-                session.flush()
-                session.refresh(existing)
-                session.expunge(existing)
-                return existing
-            else:
-                session.add(booklore_book)
-                session.flush()
-                session.refresh(booklore_book)
-                session.expunge(booklore_book)
-                return booklore_book
+            session.expunge(saved)
+            return saved
 
     def delete_booklore_book(self, filename: str) -> bool:
         """Delete a Grimmory book from the cache table."""
