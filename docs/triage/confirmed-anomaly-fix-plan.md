@@ -36,4 +36,6 @@ without changing existing progress. Detailed results are recorded in
 - [x] Full suite passes: 5057 passed, 11 skipped, 377 subtests passed.
 - [x] Primary container restarted and live verification evidence captured; probe artifacts cleaned up.
 - [x] Current-branch fix commits created, with no unrelated files included.
-- [ ] User verification received before transfer to `dev`.
+- [x] User verification received before transfer to `dev`.
+- [x] Three fix commits cherry-picked to local `dev`; full dev suite passed
+  (4988 passed, 11 skipped, 373 subtests). Nothing pushed.

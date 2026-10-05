@@ -1,8 +1,9 @@
 # Confirmed anomaly fix verification — 2026-10-05
 
 Implemented and deployed on `local/goodreads-tracker`. The six IDs below are
-diagnostics receiver findings, not GitHub issue numbers. Transfer to `dev` is
-pending the user's own verification. Nothing was pushed.
+diagnostics receiver findings, not GitHub issue numbers. After the user's own
+verification, the three fix commits were transferred to local `dev` and its full
+suite passed. Nothing was pushed.
 
 ## Fix commits
 
@@ -106,11 +107,30 @@ Raw local test/probe logs are in the host's temporary directory
 `bookbridge-anomaly-fixes-20261005`. Credentials and session cookies are omitted
 from this report.
 
-## Deployment and remaining gate
+## Deployment and dev transfer
 
 Deploy requirement: **restart** for source-bind installations. The daughter and
 other prebuilt-image installations receive these fixes only through a future
 published image. No rebuild or plugin re-download is needed for this primary
-instance. The user must verify this current-branch deployment before these three
-fix commits are cherry-picked to `dev`; the Goodreads branch must not be merged
-wholesale. Pushes require separate explicit authorization.
+instance. The user confirmed normal use looked good on 2026-10-05. Only the three
+fix commits were cherry-picked to `dev`, using a separate temporary checkout to
+preserve the current branch and running deployment:
+
+| Current-branch commit | Local dev commit |
+|---|---|
+| `6f20f56` | `ab3bd22` |
+| `f411c9e` | `adb6b13` |
+| `7fe6971` | `f542a08` |
+
+The third transfer commit puts the fix entries under **Unreleased**, preserving
+the already-published 7.9.0 changelog. No Goodreads feature changes were included.
+The full dev suite exited 0 using the same project virtual environment and
+process-local Git Bash PATH:
+
+```text
+4988 passed, 11 skipped, 6 warnings, 373 subtests passed in 224.91s
+```
+
+Dev delta from its recorded baseline: +11 tests, +3 subtests. The temporary dev
+checkout was removed after verification. The live checkout remains
+`local/goodreads-tracker`. Pushes require separate explicit authorization.
