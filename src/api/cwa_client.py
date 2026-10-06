@@ -3,6 +3,7 @@ import requests
 import logging
 import base64
 from typing import Sequence
+from xml.etree.ElementTree import Element
 from defusedxml import ElementTree as ET
 from urllib.parse import quote
 
@@ -161,7 +162,7 @@ class CWAClient:
                 logger.warning(f"⚠️ CWA OPDS Root failed {r.status_code}")
                 return None
 
-            root = ET.fromstring(r.text)
+            root = self._parse_opds_xml(r.text)
             ns = {'atom': 'http://www.w3.org/2005/Atom'}
             
             # Find proper search link (prefer atom+xml)
@@ -253,6 +254,33 @@ class CWAClient:
             logger.error(f"❌ CWA Search Error: {e}", exc_info=True)
             return []
 
+    @staticmethod
+    def _parse_opds_xml(xml_content: str) -> Element:
+        """Parse securely, tolerating Calibre-Web's bare HTML breaks in XHTML."""
+        try:
+            return ET.fromstring(xml_content, forbid_dtd=True)
+        except ET.ParseError:
+            # Calibre custom reviews can emit HTML <br> inside XML content (#477).
+            # Keep every other field strict, including identifiers and links.
+            content_pattern = re.compile(
+                r'(<content\s+type=([\"\'])xhtml\2\s*>)(.*?)(</content\s*>)',
+                re.DOTALL,
+            )
+
+            def repair_content(match: re.Match[str]) -> str:
+                body = match.group(3)
+                if re.search(r'</?(?:\w+:)?(?:content|entry|feed)\b', body):
+                    return match.group(0)
+                body = re.sub(r'<br\s*>', '<br/>', body)
+                return match.group(1) + body + match.group(4)
+
+            repaired = content_pattern.sub(repair_content, xml_content)
+            if repaired == xml_content:
+                raise
+            root = ET.fromstring(repaired, forbid_dtd=True)
+            logger.warning("⚠️ CWA OPDS: Repaired bare HTML breaks in XHTML content.")
+            return root
+
     def _parse_opds(self, xml_content):
         """Parse Atom XML response from OPDS feed."""
         results = []
@@ -271,7 +299,7 @@ class CWAClient:
                 'dcterms': 'http://purl.org/dc/terms/',
             }
             
-            root = ET.fromstring(xml_content)
+            root = self._parse_opds_xml(xml_content)
             
             entries = []
             # Check if root is a feed or an entry
@@ -563,7 +591,7 @@ class CWAClient:
         if r.status_code != 200:
             return None
 
-        root = ET.fromstring(r.text)
+        root = self._parse_opds_xml(r.text)
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
 
         uuid_re = re.compile(
