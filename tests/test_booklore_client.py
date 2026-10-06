@@ -2148,3 +2148,107 @@ def test_session_pool_sized_above_detail_fetch_workers(booklore_client):
         adapter = booklore_client.session.get_adapter(prefix)
         assert adapter._pool_maxsize > DETAIL_FETCH_WORKERS
         assert adapter._pool_connections > DETAIL_FETCH_WORKERS
+
+
+def _shelf_requests(booklore_client, responses):
+    booklore_client._make_request = MagicMock(side_effect=lambda method, endpoint: responses.get(endpoint))
+    return booklore_client
+
+
+def test_get_shelf_book_ids_matches_regular_shelves_case_insensitively(booklore_client):
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": MockResponse([{"id": 7, "name": "Kobo"}, {"id": 8, "name": "Favorites"}]),
+        "/api/v1/shelves/7/books": MockResponse([{"id": 1}, {"id": 2}]),
+    })
+
+    assert client.get_shelf_book_ids([" kobo "]) == {"Kobo": {"1", "2"}}
+    assert [call.args[1] for call in client._make_request.call_args_list] == [
+        "/api/v1/shelves", "/api/v1/shelves/7/books",
+    ]
+
+
+def test_get_shelf_book_ids_tells_an_empty_shelf_from_an_unreadable_one(booklore_client):
+    shelves = MockResponse([{"id": 7, "name": "Kobo"}])
+
+    client = _shelf_requests(booklore_client, {"/api/v1/shelves": shelves, "/api/v1/shelves/7/books": MockResponse([])})
+    assert client.get_shelf_book_ids(["Kobo"]) == {"Kobo": set()}
+
+    client = _shelf_requests(booklore_client, {"/api/v1/shelves": shelves})
+    assert client.get_shelf_book_ids(["Kobo"]) is None
+
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": shelves, "/api/v1/shelves/7/books": MockResponse({}, status_code=503),
+    })
+    assert client.get_shelf_book_ids(["Kobo"]) is None
+
+    client = _shelf_requests(booklore_client, {})
+    assert client.get_shelf_book_ids(["Kobo"]) is None
+
+
+def test_get_shelf_book_ids_rejects_unrecognized_membership_shapes(booklore_client):
+    shelves = MockResponse([{"id": 7, "name": "Kobo"}])
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": shelves,
+        "/api/v1/shelves/7/books": MockResponse({"unexpected": "not a book list"}),
+    })
+    assert client.get_shelf_book_ids(["Kobo"]) is None
+
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": shelves,
+        "/api/v1/shelves/7/books": MockResponse([{"title": "missing id"}]),
+    })
+    assert client.get_shelf_book_ids(["Kobo"]) is None
+
+
+@pytest.mark.parametrize("filter_json", [
+    "{invalid-json", '{"rules": "invalid-schema"}',
+    '{"rules": [{"field": "title", "operator": "unsupported"}]}',
+    '{"unexpected": true}',
+])
+def test_get_shelf_book_ids_rejects_invalid_magic_filter_without_changing_display_evaluator(booklore_client, filter_json):
+    shelves = MockResponse([])
+    magic = MockResponse([{"id": 9, "name": "Unread", "filterJson": filter_json}])
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": shelves,
+        "/api/magic-shelves": magic,
+        "/api/v1/books": MockResponse([{"id": 4}]),
+    })
+    assert client.get_shelf_book_ids(["Unread"]) is None
+    if filter_json == "{invalid-json":
+        assert client._evaluate_magic_shelf({"name": "Unread", "filterJson": filter_json}, [{"id": 4}]) == []
+
+
+def test_get_shelf_book_ids_accepts_single_shelf_and_empty_magic_filter(booklore_client):
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": MockResponse({"id": 7, "name": "Kobo"}),
+        "/api/v1/shelves/7/books": MockResponse([]),
+    })
+    assert client.get_shelf_book_ids(["Kobo"]) == {"Kobo": set()}
+
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": MockResponse([]),
+        "/api/magic-shelves": MockResponse([{"id": 9, "name": "Unread", "filterJson": '{"rules": []}'}]),
+        "/api/v1/books": MockResponse([{"id": 4}]),
+    })
+    assert client.get_shelf_book_ids(["Unread"]) == {"Unread": {"4"}}
+
+
+def test_get_shelf_book_ids_falls_back_to_magic_shelves(booklore_client):
+    shelves = MockResponse([{"id": 7, "name": "Kobo"}])
+    magic = MockResponse([{"id": 9, "name": "Unread", "filterJson": "{}"}])
+
+    client = _shelf_requests(booklore_client, {
+        "/api/v1/shelves": shelves,
+        "/api/magic-shelves": magic,
+        "/api/v1/books": MockResponse([{"id": 4}, {"id": 5}]),
+    })
+    assert client.get_shelf_book_ids(["unread"]) == {"Unread": {"4", "5"}}
+
+    client = _shelf_requests(booklore_client, {"/api/v1/shelves": shelves, "/api/magic-shelves": magic})
+    assert client.get_shelf_book_ids(["Unread"]) is None
+
+    client = _shelf_requests(booklore_client, {"/api/v1/shelves": shelves})
+    assert client.get_shelf_book_ids(["Unread"]) is None
+
+    client = _shelf_requests(booklore_client, {"/api/v1/shelves": shelves, "/api/magic-shelves": MockResponse([])})
+    assert client.get_shelf_book_ids(["Kobbo"]) == {}

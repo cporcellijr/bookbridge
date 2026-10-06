@@ -895,7 +895,7 @@ class ABSClient:
         if library_id:
             return library_id
 
-        r_lib = self.session.get(f"{self.base_url}/api/libraries")
+        r_lib = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
         if r_lib.status_code != 200:
             logger.warning("⚠️ ABS: Failed to list libraries (status %s)", r_lib.status_code)
             return None
@@ -916,8 +916,12 @@ class ABSClient:
         self._update_session_headers()
         try:
             collections_url = f"{self.base_url}/api/collections"
-            r = self.session.get(collections_url)
+            r = self.session.get(collections_url, timeout=self.timeout)
             if r.status_code != 200:
+                logger.warning(
+                    "Failed to add item to ABS collection '%s': listing collections returned %s",
+                    collection_name, r.status_code
+                )
                 return False
 
             collections = r.json().get('collections', [])
@@ -936,7 +940,8 @@ class ABSClient:
 
                 r_create = self.session.post(collections_url,
                                              json={"libraryId": library_id, "name": collection_name,
-                                                   "books": [item_id]})
+                                                   "books": [item_id]},
+                                             timeout=self.timeout)
                 if r_create.status_code in [200, 201]:
                     logger.info("Added item to newly created ABS Collection: %s", collection_name)
                     return True
@@ -956,7 +961,7 @@ class ABSClient:
                 return False
 
             add_url = f"{self.base_url}/api/collections/{collection_id}/book"
-            r_add = self.session.post(add_url, json={"id": item_id})
+            r_add = self.session.post(add_url, json={"id": item_id}, timeout=self.timeout)
             if r_add.status_code in [200, 201, 204]:
                 try:
                     details = self.get_item_details(item_id)
@@ -965,10 +970,74 @@ class ABSClient:
                     title = None
                 logger.info(f"🏷️ Added '{sanitize_log_data(title or str(item_id))}' to ABS Collection: {collection_name}")
                 return True
+            logger.warning(
+                "Failed to add item to ABS collection '%s': add returned %s - %s",
+                collection_name, r_add.status_code, sanitize_log_data(r_add.text)
+            )
             return False
         except Exception as e:
             logger.error(f"❌ Error adding item to ABS collection: {e}", exc_info=True)
             return False
+
+    def add_missing_to_collection(self, item_ids: list[str], collection_name: str) -> tuple[int, list[str]]:
+        """Add the items that are not yet in ``collection_name``.
+
+        An ABS collection belongs to one library, so the collection is matched or
+        created in each item's own library. Returns the number of items added and
+        one line per item that could not be. Raises when the listing fails or ABS
+        stops answering, so nothing is added blind and a stalled server costs a
+        single timeout.
+        """
+        if not self.is_configured():
+            return 0, []
+        self._update_session_headers()
+        collections_url = f"{self.base_url}/api/collections"
+        r = self.session.get(collections_url, timeout=self.timeout)
+        r.raise_for_status()
+        collection_ids = {}
+        present = set()
+        for collection in r.json().get('collections', []):
+            if collection.get('name') == collection_name:
+                collection_ids.setdefault(collection.get('libraryId'), collection.get('id'))
+                present.update(book.get('id') for book in collection.get('books') or [])
+
+        refused = []
+        missing = {}
+        for item_id in item_ids:
+            if item_id in present:
+                continue
+            r_item = self.session.get(f"{self.base_url}/api/items/{item_id}", timeout=self.timeout)
+            library_id = r_item.json().get('libraryId') if r_item.status_code == 200 else None
+            if library_id:
+                missing.setdefault(library_id, []).append(item_id)
+            else:
+                refused.append(f"{item_id}: no library (item lookup returned {r_item.status_code})")
+
+        added = 0
+        for library_id, library_items in missing.items():
+            if library_id not in collection_ids:
+                r_create = self.session.post(collections_url,
+                                             json={"libraryId": library_id, "name": collection_name,
+                                                   "books": library_items},
+                                             timeout=self.timeout)
+                if r_create.status_code in [200, 201]:
+                    added += len(library_items)
+                else:
+                    refused.extend(
+                        f"{item_id}: create returned {r_create.status_code} - {sanitize_log_data(r_create.text)}"
+                        for item_id in library_items
+                    )
+                continue
+            add_url = f"{collections_url}/{collection_ids[library_id]}/book"
+            for item_id in library_items:
+                r_add = self.session.post(add_url, json={"id": item_id}, timeout=self.timeout)
+                if r_add.status_code in [200, 201, 204]:
+                    added += 1
+                else:
+                    refused.append(
+                        f"{item_id}: add returned {r_add.status_code} - {sanitize_log_data(r_add.text)}"
+                    )
+        return added, refused
 
     def remove_from_collection(self, item_id, collection_name="abs-kosync"):
         """Remove an audiobook from a collection."""

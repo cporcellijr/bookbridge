@@ -112,6 +112,25 @@ move the audio position. You will see a line like:
   server in its own right, so a device syncing to BookOrbit *and* to BookBridge for the
   same book will see the two servers hand back different positions.
 
+### Hardcover or StoryGraph gets many requests, or a book never updates there
+
+BookBridge posts a book's progress to a tracker once the book has been idle for that
+tracker's **Update Cooldown**. If the post fails — usually because the book has no match
+on Hardcover or StoryGraph — it retries after 15 minutes, then waits twice as long each
+time, up to every 6 hours, so an unmatched book costs only a few requests a day. Before
+7.9.0 it retried on every sync cycle, which could add up to hundreds of Hardcover
+requests a night (#468).
+
+To find the books affected, look in **Logs** for the reason followed by the retry:
+
+```text
+⚠️ Hardcover: No match found for '<title>'
+⏸️ '<book id>' Hardcover post failed at 42.0%; retrying in 15m (attempt 1)
+```
+
+Match the book by hand with **Link to Hardcover** or **Link to StoryGraph** on its card.
+New progress posts after the usual cooldown once the book is matched.
+
 ### Highlights or notes are not syncing
 
 - Update the **Bridge Sync** KOReader plugin to the current release or newer on every KOReader device that should sync annotations.

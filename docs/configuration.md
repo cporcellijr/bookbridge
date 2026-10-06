@@ -95,6 +95,7 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | API Token | `ABS_KEY` | empty | Per-user (set in **Account -> My Integrations**). The admin's token also powers global library scans. |
 | Library ID | `ABS_LIBRARY_ID` | empty | Per-user (set in user Integrations). Used by the matcher and search scoping. |
 | Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup. |
+| Keep Collection Complete | `ABS_COLLECTION_RECONCILE` | `false` | Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. An Audiobookshelf collection only holds books from one library, so with several audiobook libraries a collection of that name is kept in each. Add-only: while on, a book removed from the collection by hand is added back. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
 | Enable ABS Ebook Sync | `SYNC_ABS_EBOOK` | `false` | Turns on bidirectional reading-progress sync with the ebook file attached to an Audiobookshelf item. |
@@ -123,6 +124,7 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 | --- | --- | --- | --- |
 | Enable | `KOSYNC_ENABLED` | `false` | Turns on KOSync support. |
 | Hash Method | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
+| Sync Login From Grimmory | `KOSYNC_CREDENTIALS_FROM_GRIMMORY` | `false` | Global. At startup and each sync cycle, an active reader's KoSync username and password are taken from the KOReader login of their Grimmory account, and keep following it when it changes there. A reader who already has a different KoSync login set in BookBridge keeps it — clear their KoSync username to switch to the Grimmory one. A Grimmory username that another BookBridge user already has is skipped. Both cases are logged as warnings; readers without a Grimmory KOReader login are left alone. |
 | PUT Debounce | `KOSYNC_PUT_DEBOUNCE_SECONDS` | `300` | Wait this long after KOReader stops pushing before running the sync cycle. |
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Highlight Sync | `KOREADER_ANNOTATION_SYNC` | `true` | Enables bridge-side annotation exchange for the Bridge Sync KOReader plugin. Requires the current Bridge Sync plugin on each device. |
@@ -241,6 +243,8 @@ Grimmory is a supported ebook and audiobook source. You can use it for ebook syn
 | Username | `BOOKLORE_USER` | empty | Grimmory username. |
 | Password | `BOOKLORE_PASSWORD` | empty | Grimmory password. |
 | Shelf Name | `BOOKLORE_SHELF_NAME` | `Kobo` | Shelf used for matched ebooks. |
+| Shelve Only When Aligned | `BOOKLORE_SHELF_REQUIRE_ALIGNMENT` | `false` | Global. A newly matched audiobook-and-ebook pair joins the shelf only once it has a fine-grained alignment map (forced alignment or the standard Whisper/lexical one, the same bar as read-along generation; a coarse fallback map does not count), checked every sync cycle. Covers manual matches, approved and auto-matched suggestions, "Up Next" auto-matches and Forge & Match. Each book is added once, with the matching reader's own Grimmory login and Shelf Name, so taking it off the shelf later sticks. Ebook-only matches and ebooks without a recorded Grimmory id are shelved at match time as before. Turning the option off shelves every book still waiting. |
+| Shelf Owner | `BOOKLORE_SHELF_OWNER` | empty | Global, used with Shelve Only When Aligned, for a shelf that one Grimmory account owns and other readers only see. The BookBridge user whose own Grimmory login adds the waiting books, to the global Shelf Name, and removes such a book when its match is deleted. While the name is not an active BookBridge user the shelf is left alone and the books keep waiting. Empty uses each reader's own login and shelf. |
 | Library ID | `BOOKLORE_LIBRARY_ID` | empty | Optional library restriction. |
 | Record Reading Sessions | `GRIMMORY_READING_SESSIONS` | `true` | Sends reading or listening session updates back to Grimmory. |
 | Highlight Sync | `BOOKLORE_ANNOTATION_SYNC` | `false` | Enables Grimmory web-reader highlight/note relay for this reader. Requires the current Bridge Sync plugin for KOReader device annotations. |
@@ -266,6 +270,7 @@ Grimmory notes:
 - When the source is Grimmory, **Collection Syncing** controls which Grimmory shelves become KOReader collections. **Magic Shelves Only** means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.
 - **Excluded Shelves** lets you list Grimmory shelf names you do not want turned into KOReader collections.
 - **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
+- **Only download books on these Grimmory shelves** (under **KOReader / KoSync**) limits what Bridge Sync puts on the device, independently of collections. It can name your sync shelf (for example `Kobo`), which collections always skip. Books whose ebook doesn't come from Grimmory are left out while a filter is set, and shelf changes reach the device within a couple of minutes. If none of the named shelves exist, or a shelf can't be read and BookBridge has no earlier answer to reuse, the manifest request fails instead of returning an empty list, so the device never deletes its books because of a typo or an outage.
 
 KOReader Collections per-reader settings:
 
@@ -274,6 +279,7 @@ KOReader Collections per-reader settings:
 | Collection Source | `DEVICE_SYNC_COLLECTION_SOURCE` | `grimmory` | `off`, `grimmory`, or `hardcover`. Choose one source to avoid collection-name collisions. |
 | Grimmory Shelf Mode | `DEVICE_SYNC_COLLECTIONS` | `off` | `off`, `all`, `magic`, or `shelf`. Used when Collection Source is `grimmory`. |
 | Excluded Grimmory Shelves | `DEVICE_SYNC_EXCLUDED_SHELVES` | empty | Comma-separated shelf names to skip. |
+| Download Shelf Filter | `DEVICE_SYNC_SHELF_FILTER` | empty | Comma-separated Grimmory shelf names, case-insensitive. Blank downloads every matched book. |
 | Hardcover List Mode | `DEVICE_SYNC_HARDCOVER_LISTS` | `all` | `all` or `selected`. Used when Collection Source is `hardcover`. |
 | Hardcover List Names | `DEVICE_SYNC_HARDCOVER_LIST_NAMES` | empty | Comma-separated list names when Hardcover List Mode is `selected`. |
 
@@ -320,6 +326,12 @@ Optional "Up Next" collection watch — drop a book onto a collection in BookOrb
 | Collection Name | `BOOKORBIT_SHELF_WATCH_NAME` | `Up Next` | Create this collection in BookOrbit. Books placed on it are auto-matched and moved to the collection above on success. |
 | Match Threshold | `BOOKORBIT_SHELF_WATCH_THRESHOLD` | `95` | Minimum match confidence (60–100) before a book is auto-linked. |
 | Rescan Interval (Hours) | `BOOKORBIT_SHELF_WATCH_RESCAN_HOURS` | `24` | How often a still-unmatched book on the watch collection is retried. |
+
+Optional matching of books you start reading — under **Books You Start Reading** on the BookOrbit card:
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Auto-match books you start reading in BookOrbit | `BOOKORBIT_READING_WATCH_ENABLED` | `false` | Once you are past 1% of a BookOrbit ebook that BookBridge has not matched, it looks for the audiobook. A match is added to **Suggestions** for you to confirm; a book with no audiobook becomes an ebook-only mapping so its progress syncs. A suggestion you dismiss is not offered again. |
 
 BookOrbit notes:
 
@@ -412,6 +424,7 @@ Hardcover provides modern reading tracking with a beautiful UI. BookBridge can p
 | --- | --- | --- | --- |
 | Enable | `HARDCOVER_ENABLED` | `false` | Turns on Hardcover updates. |
 | API Token | `HARDCOVER_TOKEN` | empty | Per-reader personal API token from Hardcover. |
+| Update Cooldown (minutes) | `HARDCOVER_UPDATE_COOLDOWN_MINS` | `60` | Global. Minutes of no new progress before a book's position is posted; new progress restarts the wait. Finishing a book posts at once. `0` posts on every sync cycle. |
 | Highlight Sync | `HARDCOVER_ANNOTATION_SYNC` | `false` | Per-reader. Pushes supported KOReader highlights to Hardcover. |
 | Highlight Sync Interval | `HARDCOVER_ANNOTATION_SYNC_MINUTES` | `30` | Minutes between background Hardcover annotation relay cycles. |
 | Grimmory Shelves to Hardcover Lists | `HARDCOVER_GRIMMORY_LIST_SYNC` | `off` | Per-reader. `off`, `all`, `magic`, or `shelf`. |
@@ -435,6 +448,7 @@ StoryGraph is a popular alternative to Goodreads that focuses on reading data an
 | Enable | `STORYGRAPH_ENABLED` | `false` | Turns on StoryGraph updates. |
 | Session Cookie | `STORYGRAPH_SESSION_COOKIE` | empty | `_storygraph_session` cookie value. |
 | Remember User Token | `STORYGRAPH_REMEMBER_USER_TOKEN` | empty | `remember_user_token` cookie value. |
+| Update Cooldown (minutes) | `STORYGRAPH_UPDATE_COOLDOWN_MINS` | `60` | Global. Minutes of no new progress before a book's position is posted; new progress restarts the wait. Finishing a book posts at once. `0` posts on every sync cycle. |
 
 StoryGraph notes:
 
@@ -454,6 +468,12 @@ Hardcover and StoryGraph are independent - enable either or both on their cards 
 token/cookies, under **Account -> My Integrations**. Admins can also manage those values under
 **Settings -> Users -> Integrations**.
 
+When a tracker cannot take a book's update — most often because the book has no match
+there, but also when the edition has no page count, the book is missing from the account, or
+the service is down — BookBridge retries after 15 minutes, then waits twice as long each
+time, up to every 6 hours. New reading progress gets a fresh attempt once its cooldown has
+passed. See [troubleshooting](troubleshooting.md#hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there).
+
 #### Telegram Notifications
 
 Found under **Settings -> Features**.
@@ -472,6 +492,14 @@ Found under **Settings -> Features**.
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Shelfmark URL | `SHELFMARK_URL` | empty | Adds the Shelfmark shortcut when configured. |
+
+#### Series Display
+
+Found under **Settings -> Features**.
+
+| Setting | Env Var | Default | Notes |
+| --- | --- | --- | --- |
+| Show each series as the book you're reading | `SERIES_SHOW_CURRENT_BOOK_DETAIL` | `false` | Each series on the Library becomes the full card of the book you are on (in progress, or the next unread one), with the series name, how many are finished and the other books listed along its bottom. Click that strip to open the rest of the series. Finished series keep their usual card. When off, a closed series shows each book as a compact row. |
 
 #### AI / LLM Providers (Optional)
 
@@ -524,11 +552,16 @@ Enabled under **Settings -> Features**. The Suggestions page is a review workspa
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable Suggestions | `SUGGESTIONS_ENABLED` | `false` | Enables the Suggestions page and background suggestion discovery. |
+| Scheduled Scan Interval | `SUGGESTIONS_AUTO_SCAN_MINUTES` | `0` | Minutes between scheduled library scans, counted from the end of the previous one (0 = off, minimum 5). Runs as the primary admin, reusing cached results like a normal scan. |
+| Weekly Full Refresh Day | `SUGGESTIONS_FULL_REFRESH_DAY` | `off` | `off` or a weekday. Once a week the scan cache is cleared and the whole unmatched library is rescanned. |
+| Weekly Full Refresh Time | `SUGGESTIONS_FULL_REFRESH_TIME` | `04:00` | Time of day (`HH:MM`, in the `TZ` timezone) at or after which the weekly full refresh runs. An invalid value turns the weekly refresh off and logs a warning. |
 
 Suggestions notes:
 
 - A normal scan reuses cached results so repeat scans are faster.
 - **Full Refresh** rescans the whole unmatched library from scratch.
+- Scheduled scans never overlap a running scan, and a slow scan pushes the next one back instead of queueing it. The time of the last scheduled scan and the day of the last weekly refresh are stored, so a restart neither scans straight away nor repeats a refresh already done that day.
+- A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on the Suggestions page. An open Suggestions page shows the scheduled results the next time it loads.
 - Suggestions can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.
 - If your audio and ebook providers expose the same mounted `/books` tree,
   sibling files in the same title folder are treated as same-folder matches

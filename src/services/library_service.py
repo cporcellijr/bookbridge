@@ -4,6 +4,7 @@ Handles high-level book management, bridging the gap between
 AudioBookShelf (ABS), Grimmory (Metadata), and our local database.
 """
 
+import glob
 import logging
 import os
 from typing import List, Optional
@@ -12,7 +13,7 @@ from src.db.models import Book
 from src.db.database_service import DatabaseService
 from src.api.api_clients import ABSClient
 from src.api.cwa_client import CWAClient
-from src.utils.cache_paths import safe_cache_path
+from src.utils.cache_paths import library_roots, safe_cache_path, safe_library_path
 from src.utils.ebook_sources import (
     is_grimmory_source,
     is_storyteller_filename,
@@ -88,6 +89,20 @@ class LibraryService:
                     if local_filename:
                         cache_path = safe_cache_path(self.epub_cache_dir, local_filename)
                         if cache_path:
+                            # Mounted library files take precedence over duplicate downloads.
+                            for filename in dict.fromkeys((local_filename, book.ebook_filename)):
+                                if not filename or safe_cache_path(self.epub_cache_dir, filename) is None:
+                                    continue
+                                for root in library_roots():
+                                    try:
+                                        for local_path in root.glob(f"**/{glob.escape(filename)}"):
+                                            safe_path = safe_library_path(local_path)
+                                            if safe_path and safe_path.is_file() and safe_path.stat().st_size > 1024:
+                                                logger.info("Using mounted ebook: %s", safe_path)
+                                                return str(safe_path)
+                                    except OSError as e:
+                                        logger.warning("Could not search ebook directory %s: %s", root, e)
+
                             # Return cached file if it exists and is substantial
                             if cache_path.exists() and cache_path.stat().st_size > 1024:
                                 logger.info(f"   ✅ Priority 0 (Explicit mapping): Using cached ebook: {cache_path}")

@@ -52,6 +52,7 @@ def _extra_secret_keys() -> frozenset:
         "DEEPGRAM_API_KEY",
         "TELEGRAM_BOT_TOKEN",
         "DIAGNOSTICS_INGEST_TOKEN",
+        "KOSYNC_MIRRORED_LOGIN",
         # Flask session signing key — leaking it allows session forgery.
         "WEB_SECRET_KEY",
         # Rotating Readest session tokens, cached by the client, never typed.

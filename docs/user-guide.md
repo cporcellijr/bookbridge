@@ -39,6 +39,19 @@ audiobook-only mappings; **Audiobook Only** excludes books with an ebook. The co
 shows either the whole library or the filtered total, and a series-name search still
 respects the active filters.
 
+### Series
+
+Books in a series are grouped under the series name; a closed series shows each book
+as a compact row. Turn on **Show each series as the book you're reading** (**Settings ->
+Features -> Series Display**) to show each series as one card instead: the full card of
+the book you are on — the one in progress, or the next unread one — with the series
+name, how many you have finished and the other books listed along its bottom. Click
+that strip to open the rest of the series below it. Finished series keep their usual
+card.
+
+Library cards pack together, each at its own height, so opening a series or a book's
+reading position only moves the cards beneath it.
+
 ### Show position
 
 On any book with an ebook, **Show position** opens a short excerpt with a marker
@@ -555,6 +568,19 @@ your audiobook sources for a partner, and takes one of three actions:
 Each book is only reconsidered once per rescan window (24 hours by default), so a book
 that stays in the collection is not reworked on every poll. Turn this on per service in
 **Settings -> Integrations**.
+
+### Books you start reading in BookOrbit
+
+With **Auto-match books you start reading in BookOrbit** on (BookOrbit card, **Settings
+-> Integrations**), you don't need to drop a book into a collection first. Once you are
+past 1% of a BookOrbit ebook that BookBridge hasn't matched, it looks for the
+audiobook:
+
+- **A match** always goes to **Suggestions** for you to confirm; nothing is linked
+  without you.
+- **No audiobook** — the book is added as **ebook-only**, so its progress syncs.
+
+A suggestion you dismiss is not offered again. Nothing is moved between collections.
 
 ### KOReader auto-discovery
 

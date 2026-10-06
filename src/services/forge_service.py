@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 import requests
 
+from src.services.aligned_shelf import defer_shelf_add
 from src.services.alignment_service import ingest_storyteller_transcripts
 from src.utils.cache_paths import safe_library_path
 from src.utils.file_transfers import copy_file_to_path, hardlink_file_to_path
@@ -223,6 +224,8 @@ class ForgeService:
                         shelf_filename,
                     )
         elif self.booklore_client and self.booklore_client.is_configured():
+            if defer_shelf_add(self.database_service, book, getattr(book, 'user_id', None)):
+                return
             added = self.booklore_client.add_to_shelf(shelf_filename)
             if added is False:
                 logger.warning(

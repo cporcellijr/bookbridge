@@ -8,14 +8,18 @@ existing users instead.
 """
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import src.web_server as web_server
+from src.db.database_service import DatabaseService
+from src.db.models import Book
 
 
 class ShareLibraryReconcileTestCase(unittest.TestCase):
@@ -116,6 +120,134 @@ class TestShareLibraryAdminAction(ShareLibraryReconcileTestCase):
 
         self.assertIn('share_library', settings_html, "settings.html must have share_library action")
         self.assertIn('share_library', admin_users_html, "admin_users.html must have share_library action")
+
+
+class SharedLibraryDatabaseTestCase(unittest.TestCase):
+    """Real-SQLite DatabaseService behind web_server, with the setting unset."""
+
+    def setUp(self):
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, True)
+        self.db = DatabaseService(str(Path(temp_dir) / "share.db"))
+        self.alice = self.db.create_user("alice", "pw", role="admin")
+        self.bob = self.db.create_user("bob", "pw")
+
+        for patcher in (
+            patch.dict(os.environ),
+            patch.object(web_server, "database_service", self.db),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        os.environ.pop("SHARE_ALL_BOOKS_WITH_ALL_USERS", None)
+
+    def _save_book(self, abs_id):
+        return self.db.save_book(Book(abs_id=abs_id, abs_title=abs_id, user_id=self.alice.id))
+
+    def _toggle_active(self, user):
+        return web_server._apply_user_admin_action({'action': 'toggle_active', 'user_id': str(user.id)})
+
+
+class TestNewBooksAreShared(SharedLibraryDatabaseTestCase):
+    def test_enabled_links_a_new_book_to_every_active_user(self):
+        """Covers 'true' and the 'on' a settings checkbox posts."""
+        carol = self.db.create_user("carol", "pw", active=0)
+        for value in ("true", "on"):
+            with self.subTest(value=value):
+                os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = value
+                abs_id = f"abs-{value}"
+
+                self._save_book(abs_id)
+
+                self.assertTrue(self.db.is_user_linked(self.alice.id, abs_id))
+                self.assertTrue(self.db.is_user_linked(self.bob.id, abs_id))
+                self.assertFalse(self.db.is_user_linked(carol.id, abs_id))
+
+    def test_setting_off_links_only_the_creator(self):
+        self._save_book("abs-unset")
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "false"
+        self._save_book("abs-false")
+
+        self.assertEqual(self.db.get_linked_abs_ids(self.alice.id), {"abs-unset", "abs-false"})
+        self.assertEqual(self.db.get_linked_abs_ids(self.bob.id), set())
+
+    def test_saving_an_existing_book_links_nobody(self):
+        self._save_book("abs-1")
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+
+        self._save_book("abs-1")
+
+        self.assertEqual(self.db.get_linked_abs_ids(self.bob.id), set())
+
+    def test_removed_book_stays_removed(self):
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+        book = self._save_book("abs-1")
+
+        web_server._delete_or_unlink_book(self.bob, "abs-1", book)
+        self._save_book("abs-1")
+        self._save_book("abs-2")
+
+        self.assertEqual(self.db.get_linked_abs_ids(self.bob.id), {"abs-2"})
+        self.assertEqual(self.db.get_linked_abs_ids(self.alice.id), {"abs-1", "abs-2"})
+
+
+class TestNewAndReenabledUsersSeeTheLibrary(SharedLibraryDatabaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self._save_book("abs-1")
+        self._save_book("abs-2")
+
+    def _create_carol(self):
+        message, error = web_server._apply_user_admin_action(
+            {'action': 'create', 'username': 'carol', 'password': 'pw', 'role': 'user'}
+        )
+        self.assertIsNone(error)
+        return self.db.get_user_by_username("carol"), message
+
+    def test_created_user_starts_with_the_whole_library(self):
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+
+        carol, message = self._create_carol()
+
+        self.assertEqual(self.db.get_linked_abs_ids(carol.id), {"abs-1", "abs-2"})
+        self.assertIn("shared 2 book(s)", message)
+
+    def test_created_user_starts_empty_when_the_setting_is_off(self):
+        carol, _ = self._create_carol()
+
+        self.assertEqual(self.db.get_linked_abs_ids(carol.id), set())
+
+    def test_reenabled_user_gets_the_books_added_while_disabled(self):
+        """Covers 'true' and the 'on' a settings checkbox posts."""
+        for value in ("true", "on"):
+            with self.subTest(value=value):
+                os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = value
+                abs_id = f"abs-{value}"
+                self._toggle_active(self.bob)
+                self._save_book(abs_id)
+                self.assertFalse(self.db.is_user_linked(self.bob.id, abs_id))
+
+                message, error = self._toggle_active(self.bob)
+
+                self.assertIsNone(error)
+                self.assertTrue(self.db.is_user_linked(self.bob.id, abs_id))
+                self.assertIn("shared", message)
+
+    def test_reenabling_links_nothing_when_the_setting_is_off(self):
+        self._toggle_active(self.bob)
+
+        message, error = self._toggle_active(self.bob)
+
+        self.assertIsNone(error)
+        self.assertEqual(message, "Enabled 'bob'")
+        self.assertEqual(self.db.get_linked_abs_ids(self.bob.id), set())
+
+    def test_disabling_a_user_links_nothing(self):
+        os.environ["SHARE_ALL_BOOKS_WITH_ALL_USERS"] = "true"
+
+        self._toggle_active(self.bob)
+
+        self.assertFalse(self.db.get_user(self.bob.id).active)
+        self.assertEqual(self.db.get_linked_abs_ids(self.bob.id), set())
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from src.db.models import PendingSuggestion
+from src.services.aligned_shelf import defer_shelf_add
 from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.time_utils import utcnow
 
@@ -521,7 +522,8 @@ class ShelfWatchService:
             f"Shelf-watch: auto-matched '{filename}' -> {saved.audio_source}:{saved.audio_source_id} "
             f"(score={top_match.get('score')})"
         )
-        self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client)
+        self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client,
+                         book=saved, user_id=user_id)
 
     def _create_ebook_only_and_move(self, grimmory_book: dict, filename: str,
                                     grimmory_id: str,
@@ -549,7 +551,8 @@ class ShelfWatchService:
             except Exception:
                 pass
         logger.info(f"Shelf-watch: created ebook-only mapping for '{filename}' (abs_id={saved.abs_id})")
-        self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client)
+        self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client,
+                         book=saved, user_id=user_id)
 
     # ---- reading-watch (BookOrbit "Continue Reading" auto-match) --------
 
@@ -857,12 +860,16 @@ class ShelfWatchService:
         return str(author or '').strip()
 
     def _move_shelf(self, filename: str, from_shelf: str, to_shelf: str,
-                    client=None) -> None:
+                    client=None, book=None, user_id: int = None) -> None:
         if not from_shelf or not to_shelf or from_shelf == to_shelf:
             return
         lib_client = client or self.booklore_client
         try:
-            if not lib_client.move_between_shelves(filename, from_shelf, to_shelf):
+            if defer_shelf_add(self.database_service, book, user_id):
+                moved = lib_client.remove_from_shelf(filename, from_shelf)
+            else:
+                moved = lib_client.move_between_shelves(filename, from_shelf, to_shelf)
+            if not moved:
                 logger.warning(
                     f"Shelf-watch: move_between_shelves returned False for '{filename}' "
                     f"({from_shelf} -> {to_shelf})"

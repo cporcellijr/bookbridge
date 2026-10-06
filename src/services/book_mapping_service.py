@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 from src.db.models import Book
+from src.utils.ebook_utils import is_comic_ebook_filename
 from src.utils.series_metadata import resolve_series_for_book
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,9 @@ class BookMappingService:
         audio_source = str(audio_source).strip()
         audio_source_id = str(audio_source_id).strip()
         ebook_filename = str(ebook_filename).strip()
+        if is_comic_ebook_filename(ebook_filename):
+            logger.warning("Shelf-watch: comic '%s' cannot be paired with audio", ebook_filename)
+            return None
 
         # Callers that already know the KOSync hash (e.g. the filesystem read path) pass it
         # directly; library-anchored callers compute it from the source download.

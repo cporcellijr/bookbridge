@@ -3004,6 +3004,20 @@ class BookloreClient:
             logger.debug("Grimmory: Reading session error for book %s: %s", book_id, e)
             return False
 
+    def get_koreader_sync_login(self) -> Optional[tuple[str, str]]:
+        """Return this account's KOReader sync username and plaintext password, or None if it has none."""
+        response = self._make_request("GET", "/api/v1/koreader-users/me")
+        if not response or response.status_code != 200:
+            return None
+        payload = self._parse_json_response(response, "Grimmory KOReader sync login")
+        if not isinstance(payload, dict):
+            return None
+        username = str(payload.get("username") or "").strip()
+        password = str(payload.get("password") or "")
+        if not username or not password:
+            return None
+        return username, password
+
     def get_all_shelves(self) -> list[dict]:
         """Fetch all regular shelves from Grimmory."""
         response = self._make_request("GET", "/api/v1/shelves")
@@ -3374,6 +3388,130 @@ class BookloreClient:
 
         return mapping
 
+    def _get_json_or_none(self, endpoint: str, context: str):
+        response = self._make_request("GET", endpoint)
+        if response is None or response.status_code != 200:
+            logger.debug("Grimmory: Could not read %s (status=%s)", context, getattr(response, "status_code", None))
+            return None
+        return self._parse_json_response(response, context)
+
+    def get_shelf_book_ids(self, shelf_names: list[str]) -> Optional[dict[str, set[str]]]:
+        """Return shelf name -> ids of the books on it, for the named shelves.
+
+        Names match regular shelves case-insensitively, then magic shelves for
+        any name no regular shelf has. A name that matches no shelf is left out
+        of the result. Returns None when a shelf list or a shelf's books could
+        not be read, so an unreadable shelf is never mistaken for an empty one.
+        """
+        wanted = {name.strip().casefold() for name in shelf_names if name.strip()}
+        payload = self._get_json_or_none("/api/v1/shelves", "Grimmory shelves list")
+        if payload is None:
+            return None
+        shelves = self._shelf_list_payload(payload, "shelves", fields=("id", "name"), allow_single=True)
+        if shelves is None:
+            return None
+        members: dict[str, set[str]] = {}
+        for shelf in shelves:
+            shelf_name = str(shelf.get("name") or "").strip()
+            if shelf_name.casefold() not in wanted:
+                continue
+            data = self._get_json_or_none(
+                f"/api/v1/shelves/{shelf.get('id')}/books", f"Grimmory shelf {shelf_name} books"
+            )
+            if data is None:
+                return None
+            books = self._shelf_list_payload(data, "content", "books", fields=("id",))
+            if books is None:
+                return None
+            members.setdefault(shelf_name, set()).update(
+                str(book["id"]) for book in books if isinstance(book, dict) and book.get("id") is not None
+            )
+
+        missing = wanted - {shelf_name.casefold() for shelf_name in members}
+        if not missing:
+            return members
+        payload = self._get_json_or_none("/api/magic-shelves", "Grimmory magic shelves list")
+        if payload is None:
+            return None
+        magic_shelves = self._shelf_list_payload(payload, "shelves", fields=("id", "name"), allow_single=True)
+        if magic_shelves is None:
+            return None
+        magic_shelves = [
+            shelf for shelf in magic_shelves
+            if str(shelf.get("name") or "").strip().casefold() in missing
+        ]
+        if not magic_shelves:
+            return members
+        data = self._get_json_or_none("/api/v1/books", "Grimmory all books for filter")
+        if data is None:
+            return None
+        all_books = self._shelf_list_payload(data, "content", "books", fields=("id",))
+        if all_books is None:
+            return None
+        for shelf in magic_shelves:
+            filter_raw = shelf.get("filterJson")
+            if not filter_raw:
+                return None
+            try:
+                filter_tree = json.loads(filter_raw) if isinstance(filter_raw, str) else filter_raw
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if not self._valid_magic_shelf_filter(filter_tree):
+                return None
+            members.setdefault(str(shelf["name"]).strip(), set()).update(
+                str(book["id"]) for book in self._evaluate_magic_shelf(shelf, all_books)
+                if isinstance(book, dict) and book.get("id") is not None
+            )
+        return members
+
+    @staticmethod
+    def _shelf_list_payload(payload, *keys, fields=(), allow_single=False):
+        def valid(items):
+            return all(
+                isinstance(item, dict) and all(item.get(field) not in (None, "") for field in fields)
+                for item in items
+            )
+
+        if isinstance(payload, list):
+            return payload if valid(payload) else None
+        if isinstance(payload, dict):
+            for key in keys:
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value if valid(value) else None
+            if allow_single and valid([payload]):
+                return [payload]
+        return None
+
+    @classmethod
+    def _valid_magic_shelf_filter(cls, group):
+        if not isinstance(group, dict):
+            return False
+        if set(group) - {"type", "join", "rules"}:
+            return False
+        if group.get("type", "group") != "group":
+            return False
+        if group.get("join", "and") not in ("and", "or"):
+            return False
+        rules = group.get("rules", [])
+        if not isinstance(rules, list):
+            return False
+        operators = {
+            "equals", "not_equals", "contains", "not_contains", "does_not_contain",
+            "starts_with", "ends_with", "includes_any", "includes_all", "excludes_all",
+            "is_empty", "is_not_empty", "gt", "gte", "lt", "lte",
+            "greater_than", "greater_than_equal_to", "less_than", "less_than_equal_to",
+        }
+        return all(
+            cls._valid_magic_shelf_filter(rule)
+            if rule.get("type") == "group"
+            else not (set(rule) - {"type", "field", "operator", "value"})
+            and rule.get("type") in (None, "rule")
+            and isinstance(rule.get("field"), str) and bool(rule["field"])
+            and rule.get("operator") in operators
+            for rule in rules if isinstance(rule, dict)
+        ) and all(isinstance(rule, dict) for rule in rules)
+
     def _normalize_shelves_payload(self, payload):
         if isinstance(payload, list):
             return [item for item in payload if isinstance(item, dict)]
@@ -3492,6 +3630,60 @@ class BookloreClient:
 
         except Exception as e:
             logger.error(f"❌ Error adding book to Grimmory shelf: {e}", exc_info=True)
+            return False
+
+    def add_book_id_to_shelf(self, book_id: str | int, shelf_name: Optional[str] = None) -> bool:
+        """Add a known Grimmory book id to a shelf, creating the shelf if it doesn't exist."""
+        shelf_name = (
+            shelf_name or resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "")
+        ).strip() or "Kobo"
+        if book_id in (None, ""):
+            return False
+        try:
+            shelf_id = self._get_or_create_shelf_id(shelf_name)
+            if not shelf_id:
+                logger.error(f"❌ Failed to resolve Grimmory shelf id for '{shelf_name}'")
+                return False
+            response = self._make_request("POST", "/api/v1/books/shelves", {
+                "bookIds": [int(book_id)],
+                "shelvesToAssign": [shelf_id],
+                "shelvesToUnassign": []
+            })
+            if response is not None and response.status_code in (200, 201, 204):
+                logger.info(f"🏷️ Added Grimmory book {book_id} to shelf: {shelf_name}")
+                return True
+            logger.error(f"❌ Failed to add Grimmory book {book_id} to '{shelf_name}'. Status: "
+                         f"{response.status_code if response is not None else 'No response'}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error adding Grimmory book {book_id} to shelf: {e}", exc_info=True)
+            return False
+
+    def remove_book_id_from_shelf(self, book_id: str | int, shelf_name: Optional[str] = None) -> bool:
+        """Remove a known Grimmory book id from a shelf."""
+        shelf_name = (
+            shelf_name or resolve_setting(self._creds, "BOOKLORE_SHELF_NAME", "")
+        ).strip() or "Kobo"
+        if book_id in (None, ""):
+            return False
+        try:
+            shelf_id = self._get_shelf_id(shelf_name)
+            if not shelf_id:
+                logger.warning(f"⚠️ Shelf '{shelf_name}' not found")
+                return False
+            response = self._make_request("POST", "/api/v1/books/shelves", {
+                "bookIds": [int(book_id)],
+                "shelvesToAssign": [],
+                "shelvesToUnassign": [shelf_id]
+            })
+            if response is not None and response.status_code in (200, 201, 204):
+                logger.info(f"🗑️ Removed Grimmory book {book_id} from shelf: {shelf_name}")
+                return True
+            logger.error(f"❌ Failed to remove Grimmory book {book_id} from '{shelf_name}'. Status: "
+                         f"{response.status_code if response is not None else 'No response'}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error removing Grimmory book {book_id} from shelf: {e}", exc_info=True)
             return False
 
     def remove_from_shelf(self, ebook_filename, shelf_name=None):

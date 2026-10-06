@@ -781,6 +781,15 @@
                             (including your own). The server URL and engine settings here stay global.
                         </div>
                     </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="abs_collection_reconcile" name="ABS_COLLECTION_RECONCILE"
+                            {% if get_bool('ABS_COLLECTION_RECONCILE') %}checked{% endif %}>
+                        <label for="abs_collection_reconcile">Keep every match in its auto-add collection</label>
+                        <small>Every sync cycle, any matched audiobook missing from its owner's auto-add collection
+                            is added again, so an add that failed when the book was matched is not lost. With several
+                            audiobook libraries, a collection of that name is kept in each one. While this is on, a
+                            book removed from the collection by hand is added back.</small>
+                    </div>
 
                     <div class="form-group">
                         <label>Progress Offset (Seconds)</label>
@@ -846,6 +855,17 @@
                             <option value="filename" {% if get_val('KOSYNC_HASH_METHOD')=='filename' %}selected{% endif
                                 %}>Filename (Fast)</option>
                         </select>
+                    </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="kosync_creds_from_grimmory" name="KOSYNC_CREDENTIALS_FROM_GRIMMORY"
+                            {% if get_bool('KOSYNC_CREDENTIALS_FROM_GRIMMORY') %}checked{% endif %}>
+                        <label for="kosync_creds_from_grimmory">Take each reader's sync login from Grimmory</label>
+                        <div class="help-text">Every sync cycle, a reader's KoSync username and password are taken from
+                            the KOReader login of their Grimmory account and keep following it, so the login is
+                            managed on Grimmory's KOReader settings page. A reader who already has a different
+                            KoSync login set here keeps it (clear their KoSync username to switch to the Grimmory
+                            one), and a Grimmory username another user here already has is skipped; both are
+                            logged as warnings. Readers without a Grimmory KOReader login are left alone.</div>
                     </div>
                     <div class="form-group full-width">
                         <label>KoSync PUT debounce seconds</label>
@@ -1076,6 +1096,28 @@
                     </div>
 
                     <!-- Highlight sync is per-user: Settings → Users → (user) → Integrations → Grimmory. -->
+
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="booklore_shelf_require_alignment" name="BOOKLORE_SHELF_REQUIRE_ALIGNMENT"
+                            {% if get_bool('BOOKLORE_SHELF_REQUIRE_ALIGNMENT') %}checked{% endif %}>
+                        <label for="booklore_shelf_require_alignment">Add matched books to the shelf only once they are aligned</label>
+                        <small>A newly matched audiobook-and-ebook pair joins the shelf only once it has a
+                            fine-grained alignment map (the same bar as read-along generation; a coarse fallback map
+                            does not count), so the shelf lists only books whose audio&harr;text sync is precise.
+                            Checked every sync cycle. Each book is added once, with the matching reader's own
+                            Grimmory login and shelf name, so taking it off the shelf later sticks. Ebook-only
+                            matches are shelved at match time as before, and turning this off shelves every book
+                            still waiting.</small>
+                    </div>
+                    <div class="form-group full-width">
+                        <label>Shelf Owner</label>
+                        <input type="text" name="BOOKLORE_SHELF_OWNER"
+                            value="{{ get_val('BOOKLORE_SHELF_OWNER', '') }}" placeholder="BookBridge username">
+                        <div class="help-text">With the option above on, the BookBridge user whose own Grimmory login
+                            adds the waiting books, to the global shelf name, and removes such a book when its match
+                            is deleted. Use the account that owns the shelf in Grimmory when readers share one shelf;
+                            blank uses each reader's own login and shelf.</div>
+                    </div>
 
                     <!-- Separator -->
                     <div class="full-width" style="margin: 10px 0; border-top: 1px solid rgba(255,255,255,0.1);"></div>
@@ -1767,9 +1809,9 @@
                 <div class="section-body">
                     <div class="form-group full-width">
                         <div class="help-text">
-                            Every matched book becomes visible to every user, and new accounts start
-                            with the whole library — nobody has to re-match a book someone else already
-                            processed. For a household reading one shared library.
+                            Every matched book becomes visible to every user, and new or re-enabled
+                            accounts start with the whole library — nobody has to re-match a book someone
+                            else already processed. For a household reading one shared library.
                             <strong>Visibility only:</strong> reading progress, KOSync documents and
                             stats stay per-user exactly as they are today, and removing a book still
                             only drops the claim of the user who removed it. Leave off if each user
@@ -1904,6 +1946,30 @@
                             ⚠️ Below 95% the top candidate is often a different book — a sequel, another edition, or
                             another title in the same series. A wrong link syncs your position into the wrong book.
                         </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Scheduled scan interval (minutes)</label>
+                        <input type="number" min="0" step="1" name="SUGGESTIONS_AUTO_SCAN_MINUTES"
+                            value="{{ get_val('SUGGESTIONS_AUTO_SCAN_MINUTES') or '0' }}">
+                        <small>0 turns scheduled scans off; anything from 1 to 4 runs every 5 minutes. The
+                            interval is counted from the end of the previous scheduled scan and survives a restart.
+                            A scheduled scan behaves like pressing Scan on the Suggestions page (cached results
+                            reused, auto-match applied) and runs as the primary admin.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Weekly full refresh</label>
+                        <div style="display:flex;gap:10px;align-items:center;">
+                            <select name="SUGGESTIONS_FULL_REFRESH_DAY">
+                                {% for day in ['off','monday','tuesday','wednesday','thursday','friday','saturday','sunday'] %}
+                                <option value="{{ day }}" {% if (get_val('SUGGESTIONS_FULL_REFRESH_DAY') or 'off')|lower == day %}selected{% endif %}>{{ day|capitalize }}</option>
+                                {% endfor %}
+                            </select>
+                            <input type="time" name="SUGGESTIONS_FULL_REFRESH_TIME"
+                                value="{{ (get_val('SUGGESTIONS_FULL_REFRESH_TIME') or '04:00').rjust(5, '0') }}">
+                        </div>
+                        <small>Once a week, at or after this time in the Timezone set under System, clear the scan
+                            cache and rescan the whole unmatched library from scratch, the same as Full Refresh on
+                            the Suggestions page. It runs once on that day, even across restarts.</small>
                     </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="kosync_auto_map" name="KOSYNC_AUTO_MAP_ON_AGREEMENT"

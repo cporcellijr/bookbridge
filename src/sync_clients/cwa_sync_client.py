@@ -7,6 +7,7 @@ and a stock Kobo e-reader, using CWA as the intermediary.
 """
 
 import os
+import re
 from typing import Optional
 import logging
 
@@ -23,6 +24,9 @@ from src.sync_clients.sync_client_interface import (
 
 logger = logging.getLogger(__name__)
 
+_TITLE_DECORATION_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]")
+_SUBTITLE_SEPARATOR_RE = re.compile(r"\s*(?::\s|\s[-–—]\s)")
+
 
 class CWASyncClient(SyncClient):
     def __init__(self, cwa_sync_api: CWASyncApi, cwa_client: CWAClient, ebook_parser: EbookParser):
@@ -33,6 +37,7 @@ class CWASyncClient(SyncClient):
         # Span maps are library-global and expensive to fetch (the kepub is ~1 MB),
         # so they are cached per Calibre id rather than re-downloaded each cycle.
         self._span_maps = LRUCache(capacity=8)
+        self._epub_titles = LRUCache(capacity=1024)
 
     def is_configured(self) -> bool:
         return self.cwa_sync_api.is_configured()
@@ -48,39 +53,86 @@ class CWASyncClient(SyncClient):
         return getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
 
     @staticmethod
-    def _resolve_search_hints(book: Book) -> list[str]:
+    def _main_title(title: str) -> str:
+        """``title`` without bracketed decoration or a trailing subtitle.
+
+        "Dungeon Crawler Carl (Unabridged)" -> "Dungeon Crawler Carl",
+        "The Dare - Harley Laroux" -> "The Dare", "Mistborn: The Final Empire"
+        -> "Mistborn". A colon only separates a subtitle when a space follows
+        it, so "Re:Zero" is left whole.
+        """
+        stripped = _TITLE_DECORATION_RE.sub("", title or "")
+        return _SUBTITLE_SEPARATOR_RE.split(stripped, maxsplit=1)[0].strip()
+
+    def _epub_title(self, filename: str) -> str:
+        """The title embedded in the book's own EPUB, or "" when unreadable.
+
+        The file is the one CWA served, and CWA stamps Calibre's metadata into
+        what it serves, so this tracks CWA's catalog title where the audiobook
+        title does not (#462). Cached per filename: the hint chain is rebuilt
+        every cycle, and the file does not change once downloaded.
+        """
+        if not filename or not self.ebook_parser:
+            return ""
+        cached = self._epub_titles.get(filename)
+        if cached is not None:
+            return cached
+        title = ""
+        try:
+            metadata = self.ebook_parser.get_book_metadata(filename)
+            if isinstance(metadata, dict):
+                title = str(metadata.get("title") or "").strip()
+        except Exception as e:
+            logger.debug(f"📖 CWA Sync: could not read the EPUB title of '{filename}': {e}", exc_info=True)
+        self._epub_titles.put(filename, title)
+        return title
+
+    def _resolve_search_hints(self, book: Book) -> list[str]:
         """Ordered OPDS search-term fallbacks for locating a CWA book.
 
-        Measured against a live CWA library (#427 follow-up, 6 real books):
-        the filename-derived term resolved 4 of 6 and ``book.abs_title``
-        resolved the other 2, so the two sources are complementary rather than
-        redundant and both are worth trying. The filename-derived term comes
-        FIRST because ``book.abs_title`` is the AUDIOBOOK title and routinely
-        carries decoration CWA's ebook catalog does not have (e.g. "Dungeon
-        Crawler Carl (Unabridged)", "The Dare - Harley Laroux"), whereas the
-        stored ebook filename (CWA-sourced files are named
-        ``cwa_<title>.epub``) tracks CWA's own title slug far more often.
+        ``CWAClient.get_book_uuid`` selects the entry by exact numeric id (or
+        exact title slug), never by the term, so a term only has to make the
+        book appear in the search results. CWA's search is a substring match
+        on title, author, series, tag, and publisher, so a term fails when it
+        carries text CWA's title lacks.
 
-        Each term is derived by stripping a leading ``cwa_`` prefix, dropping
-        the extension, and replacing underscores with spaces for the
-        filename; empties are skipped and the result is de-duplicated
+        Order, measured against a live CWA library re-keyed the way every match
+        since #427 stores it (numeric id, ``cwa_<id>.epub``), where the old
+        chain resolved 2 of 6 books (#462):
+
+        1. The EPUB's own title — the file CWA served, so its catalog title.
+        2. The filename-derived term, for legacy matches whose file is named
+           ``cwa_<title slug>.epub``. A numeric stem is the Calibre id itself,
+           and a bare number matches nothing on a CWA search, so it is skipped.
+        3. ``book.abs_title`` — the AUDIOBOOK title, which routinely carries
+           decoration the ebook catalog lacks ("(Unabridged)", "- Author").
+        4. That title's main part (``_main_title``), which is a substring of
+           CWA's title in exactly the cases the decorated title is not.
+
+        Empties are skipped and the result is de-duplicated
         (case-insensitive) while preserving order. Returns ``[]`` when nothing
-        is derivable, so the caller falls back to searching by the raw
-        Calibre id (today's behavior).
+        is derivable.
         """
         hints: list[str] = []
 
-        filename = CWASyncClient._resolve_epub_filename(book) or ""
+        filename = self._resolve_epub_filename(book) or ""
+        epub_title = self._epub_title(filename)
+        if epub_title:
+            hints.append(epub_title)
+
         stem = os.path.splitext(filename)[0]
         if stem.startswith("cwa_"):
             stem = stem[len("cwa_"):]
         derived = stem.replace("_", " ").strip()
-        if derived:
+        if derived and not derived.isdigit():
             hints.append(derived)
 
         title = (getattr(book, "abs_title", None) or "").strip()
         if title:
             hints.append(title)
+            main_title = self._main_title(title)
+            if main_title:
+                hints.append(main_title)
 
         seen_cf: set[str] = set()
         ordered: list[str] = []

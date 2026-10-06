@@ -89,6 +89,9 @@ def _manifest_signature(book) -> tuple:
 # Use 500 to stay well under the cap with room for other query parameters.
 _SQL_IN_CHUNK = 500
 
+_PENDING_SHELF_ADDS_KEY = "BOOKLORE_SHELF_PENDING_ADDS"
+_SHELF_ASSIGNMENTS_KEY = "BOOKLORE_SHELF_ASSIGNMENTS"
+
 
 class DatabaseService:
     """
@@ -106,6 +109,7 @@ class DatabaseService:
         self._default_uid = None  # cached default (admin) user id for state scoping
         self._catalog_change_callbacks: list[Callable[[], None]] = []
         self._ebook_source_claim_lock = threading.Lock()
+        self._pending_shelf_adds_lock = threading.Lock()
 
         # Run Alembic migrations to ensure schema is up to date
         self._run_alembic_migrations()
@@ -299,6 +303,72 @@ class DatabaseService:
                 return True
             return False
 
+    def get_pending_shelf_adds(self) -> list[tuple[str, Optional[int]]]:
+        """Grimmory shelf adds deferred until alignment, as (abs_id, user_id) pairs.
+
+        ``user_id`` is the reader whose login and shelf the add belongs to; None
+        is the global login.
+        """
+        return [
+            (abs_id, user_id)
+            for abs_id, user_id in self.get_json_setting(_PENDING_SHELF_ADDS_KEY, default=[])
+        ]
+
+    def add_pending_shelf_add(self, abs_id: str, user_id: Optional[int]) -> None:
+        """Defer a book's Grimmory shelf add for ``user_id`` until it is aligned."""
+        with self._pending_shelf_adds_lock:
+            pending = self.get_pending_shelf_adds()
+            if (abs_id, user_id) not in pending:
+                self.set_json_setting(_PENDING_SHELF_ADDS_KEY, pending + [(abs_id, user_id)])
+
+    def remove_pending_shelf_adds(
+        self, abs_id: str, user_id: Optional[int] = None, all_users: bool = False
+    ) -> None:
+        """Forget a book's deferred Grimmory shelf add for one user, or for every user."""
+        with self._pending_shelf_adds_lock:
+            pending = self.get_pending_shelf_adds()
+            kept = [
+                entry for entry in pending
+                if entry[0] != abs_id or not (all_users or entry[1] == user_id)
+            ]
+            if len(kept) != len(pending):
+                self.set_json_setting(_PENDING_SHELF_ADDS_KEY, kept)
+
+    def get_shelf_assignments(self, abs_id: Optional[str] = None) -> list[dict]:
+        """Return recorded successful Grimmory shelf targets."""
+        assignments = self.get_json_setting(_SHELF_ASSIGNMENTS_KEY, default=[])
+        if not isinstance(assignments, list):
+            return []
+        valid = [entry for entry in assignments if isinstance(entry, dict)
+                 and isinstance(entry.get("abs_id"), str)
+                 and isinstance(entry.get("shelf_name"), str)
+                 and (entry.get("reader_id") is None or isinstance(entry.get("reader_id"), int))
+                 and (entry.get("target_user_id") is None or isinstance(entry.get("target_user_id"), int))]
+        return [entry for entry in valid if abs_id is None or entry["abs_id"] == abs_id]
+
+    def record_shelf_assignment(
+        self, abs_id: str, reader_id: Optional[int], target_user_id: Optional[int],
+        shelf_name: str, source_id: Optional[str] = None,
+    ) -> None:
+        """Remember where a deferred Grimmory shelf add actually succeeded."""
+        entry = {
+            "abs_id": abs_id, "reader_id": reader_id,
+            "target_user_id": target_user_id, "shelf_name": shelf_name,
+            "source_id": source_id,
+        }
+        with self._pending_shelf_adds_lock:
+            assignments = self.get_shelf_assignments()
+            if entry not in assignments:
+                self.set_json_setting(_SHELF_ASSIGNMENTS_KEY, assignments + [entry])
+
+    def remove_shelf_assignments(self, abs_id: str) -> None:
+        """Forget recorded Grimmory targets after mapping cleanup succeeds."""
+        with self._pending_shelf_adds_lock:
+            assignments = self.get_shelf_assignments()
+            kept = [entry for entry in assignments if entry["abs_id"] != abs_id]
+            if len(kept) != len(assignments):
+                self.set_json_setting(_SHELF_ASSIGNMENTS_KEY, kept)
+
     # ------------------------------------------------------------------
     # Users (multi-user)
     # ------------------------------------------------------------------
@@ -478,6 +548,20 @@ class DatabaseService:
             session.expunge(cred)
             cred.value = plain
             return cred
+
+    def set_user_credentials(self, user_id: int, values: dict[str, str]) -> None:
+        """Save related credentials atomically, encrypting secret values at rest."""
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        with self.get_session() as session:
+            for key, value in values.items():
+                stored = self._store_value(key, value)
+                session.execute(sqlite_insert(UserCredential).values(
+                    user_id=user_id, key=key, value=stored,
+                ).on_conflict_do_update(
+                    index_elements=[UserCredential.user_id, UserCredential.key],
+                    set_={"value": stored},
+                ))
 
     def encrypt_plaintext_secrets(self) -> int:
         """Wrap any secret still sitting in plaintext, in both credential stores.
@@ -1012,6 +1096,7 @@ class DatabaseService:
     def save_book(self, book: Book) -> Book:
         """Save or update a book model."""
         from sqlalchemy.exc import IntegrityError
+        from src.utils.config_loader import env_truthy
 
         with self.get_session() as session:
             existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
@@ -1037,6 +1122,22 @@ class DatabaseService:
                     ).first()
                     if not exists:
                         session.add(UserBook(user_id=creator_uid, abs_id=book.abs_id))
+                if existing is None and env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
+                    user_ids = {
+                        row[0] for row in session.query(User.id).filter(User.active == 1).all()
+                    }
+                    claimed = {
+                        row[0] for row in
+                        session.query(UserBook.user_id).filter(UserBook.abs_id == book.abs_id).all()
+                    }
+                    missing = user_ids - claimed
+                    for user_id in missing:
+                        session.add(UserBook(user_id=user_id, abs_id=book.abs_id))
+                    if missing:
+                        logger.info(
+                            "🔗 Shared new book '%s' with %d additional user(s) (share-all-books enabled)",
+                            book.abs_id, len(missing),
+                        )
 
             if existing:
                 # Update existing book
@@ -1376,8 +1477,8 @@ class DatabaseService:
     def backfill_user_books_for_user(self, user_id: int) -> int:
         """Claim every catalog book for one user. Returns links created.
 
-        Used when a new account is created while share-all-books is on, so they
-        start with the same library everyone else already sees.
+        Used when an account is created or re-enabled while share-all-books is on,
+        so they start with the same library everyone else already sees.
         """
         if user_id is None:
             return 0

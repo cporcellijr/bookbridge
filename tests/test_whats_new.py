@@ -283,11 +283,14 @@ class TestWhatsNewRoutes(unittest.TestCase):
         self.assertIsNone(creds.get('WHATS_NEW_SEEN_VERSION'))
 
     def test_index_action_required_bullet_shown_inline(self):
-        # Uses the real repo RELEASE_NOTES.md (fallback path resolution),
-        # which currently ships one Action Required bullet about BridgeSync.
+        # Synthetic notes: the repo's RELEASE_NOTES.md only has an Action
+        # Required section in releases that need one.
+        notes_path = Path(self.tmp) / "RELEASE_NOTES.md"
+        notes_path.write_text(TestReleaseNotesParsing.SAMPLE_NOTES, encoding="utf-8")
         self.svc.set_user_credential(self.user.id, 'WHATS_NEW_SEEN_VERSION', '7.7.0')
         self._login()
-        with patch('src.web_server.APP_VERSION', '7.8.0'):
+        with patch('src.web_server.APP_VERSION', '7.8.0'), \
+                patch.object(whats_new, "_find_notes_path", return_value=notes_path):
             resp = self.client.get('/')
         html = resp.get_data(as_text=True)
         self.assertIn("Re-download BridgeSync", html)

@@ -4,6 +4,97 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.9.0]
+
+A series can show as the book you're reading, Library cards pack together, and BookOrbit
+can find the audiobook for a book you have just started reading. Hardcover and StoryGraph
+stop spending API requests on books they cannot update, and forced alignment now works
+with Audiobookshelf audio.
+
+### What's New
+
+- **Show each series as the book you're reading (#449).** Optional, under **Settings ->
+  Features -> Series Display**: each series becomes the full card of the book you are on,
+  with the rest of the series listed along its bottom.
+- **Library cards pack together**, each at its own height, so opening a series moves only
+  the cards beneath it.
+- **Books you start reading in BookOrbit get matched automatically.** Optional: past 1% of
+  an unmatched ebook, BookBridge suggests its audiobook or adds it as ebook-only.
+- **StoryGraph tracks pages (#458)** when the matched edition has a page count.
+- **Read-alongs can keep the audiobook's own audio** with **Read-Along Audio Bitrate** set
+  to `source`.
+- **Audiobookshelf audio on a shared mount is read in place (#455)** instead of being
+  downloaded again.
+
+### Fixed
+
+- **Hardcover and StoryGraph are no longer called every sync cycle for books they cannot
+  update (#468).** Failed updates now back off from 15 minutes to every 6 hours, and
+  Hardcover detects a re-read of a finished book again.
+- **Forced alignment works with Audiobookshelf audio (#455)** and no longer stalls on audio
+  that makes FFmpeg print many decode errors (#467).
+- **Positions no longer jump back to near the start** of EPUBs that style their own
+  quotation marks.
+- **CWA Kobo sync finds books whose audiobook title differs from Calibre's (#462).**
+- **Russian and other non-Latin books pass the Content-Match Guard (#460).**
+- **The built-in KoSync server works with an empty server URL (#456).**
+- **BridgeSync downloads no longer time out on network-mounted libraries (#454).**
+- **Add Book** shows full ebook titles and finds titles that differ only in punctuation,
+  and **dismissed suggestions stay dismissed** after the periodic re-scan.
+
+### Operational Notes
+
+- No database migration and no BridgeSync update; BridgeSync **0.9.6** remains current.
+- StoryGraph switches books whose edition has a page count to **Pages** on the next update.
+- Retry alignment jobs that kept failing with "Interrupted by restart" (#467).
+- Series display and BookOrbit auto-matching are off until you turn them on.
+
+---
+
+## [7.8.0]
+
+BookBridge builds read-along EPUBs for BookOrbit itself, and forced alignment is a regular,
+recommended option that runs on any CPU. KOReader devices also share reading status and,
+optionally, recently-read history.
+
+### What's New
+
+- **See what's new after an upgrade.** A Library banner names the new version, links to the
+  release notes and lists anything you need to do.
+- **Read-along EPUBs for BookOrbit, built by BookBridge**, from the book's own alignment,
+  with no Storyteller server involved.
+- **Forced alignment is recommended and runs on any CPU.** The QuartzNet model finds each
+  chapter in the audio itself; a 22-hour audiobook aligns in about 7 minutes. English only;
+  other languages use transcription automatically.
+- **Reading status is shared between your KOReader devices**, and finishing a book anywhere
+  marks it finished on them.
+- **Share recently-read books between devices** (optional) so KOReader's History matches
+  everywhere.
+- **The device you are reading on can win over the furthest one (#215)**, starting in
+  watch-and-log mode.
+
+### Fixed
+
+- **Synced ebook positions land in the right place** instead of the previous paragraph or
+  the start of a chapter.
+- **Reading on in Storyteller after listening no longer snaps you back (#447).**
+- **A missing CWA ebook is no longer re-downloaded as the wrong book (#448).**
+- **Registering from KOReader or Readest no longer pretends to succeed (#446).**
+- **EPUBs that bold part of each word extract correctly.** Contributed by
+  [@mehalter](https://github.com/mehalter) in #445.
+- **BookBridge and BookOrbit 3.0 no longer both drive a read-along book.**
+- **BookOrbit reads and writes the same ebook when a book has several formats (#443).**
+- **Going back on a second KOReader device sticks once you carry on reading (#215).**
+
+### Operational Notes
+
+- Re-download BridgeSync **0.9.6** on every KOReader device and restart KOReader.
+- Forced alignment is on by default for new installs only; the QuartzNet model downloads
+  once on first use.
+- Read-along EPUBs need BookOrbit as the audiobook source.
+
+---
+
 ## [7.7.0]
 
 Deliberate rewinds now stick, alignment can handle editions whose sections appear in

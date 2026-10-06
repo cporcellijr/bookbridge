@@ -231,7 +231,7 @@ class TestABSCollectionCleanup(unittest.TestCase):
 
             client.session.get.side_effect = get_response
 
-            def create_collection(_url, json):
+            def create_collection(_url, json, **_kwargs):
                 return MagicMock(
                     status_code=201 if json.get("books") == ["item-1"] else 400
                 )

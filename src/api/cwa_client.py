@@ -457,10 +457,12 @@ class CWAClient:
         bare number like "1519" returns zero entries on a live CWA OPDS search
         (verified live) — so a numeric key is never used as a search term;
         only ``search_hints`` are tried for it. Those hints are supplied by the
-        caller in the order that measurement found best: on the same six-book
-        sample, a filename-derived term resolved 4 of 6 and the audiobook title
-        resolved the other 2 — the two sources are complementary, so trying
-        both in order resolves all six.
+        caller in a measured order (see
+        ``CWASyncClient._resolve_search_hints``; the EPUB's own title leads).
+        There is no exact id-to-entry OPDS route to use instead:
+        ``/opds/book/<id>`` and ``/opds/books/<id>`` serve CWA's HTML page
+        (verified live, #427 and #462), so ``get_book_by_id`` never yields a
+        UUID.
 
         For each term, in order, we search CWA and run the SAME selection rule
         (see ``_select_uuid_for_term``): numeric-id match first, then
