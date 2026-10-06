@@ -2368,6 +2368,9 @@ def _reconcile_aligned_shelf():
     try:
         pending = database_service.get_pending_shelf_adds()
         if not pending:
+            get_persistent_condition_logger().resolve(
+                logger, "aligned_shelf_reconcile", "Aligned-shelf reconcile recovered"
+            )
             return
         required = env_truthy('BOOKLORE_SHELF_REQUIRE_ALIGNMENT')
         aligned = database_service.get_readalong_alignment_book_ids() if required else set()

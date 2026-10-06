@@ -449,6 +449,21 @@ class TestReconcile:
         assert failures[0].exc_info is not None
         assert any("recovered after 2 occurrences" in r.getMessage() for r in caplog.records)
 
+    def test_an_empty_queue_after_failures_announces_recovery(self, required, monkeypatch, caplog):
+        get_pending = required.db.get_pending_shelf_adds
+        monkeypatch.setattr(required.db, "get_pending_shelf_adds", MagicMock(side_effect=OSError("database is locked")))
+
+        with caplog.at_level(logging.DEBUG, logger=web_server.logger.name):
+            web_server._reconcile_aligned_shelf()
+            monkeypatch.setattr(required.db, "get_pending_shelf_adds", get_pending)
+            assert web_server._reconcile_aligned_shelf() is None
+            monkeypatch.setattr(required.db, "get_pending_shelf_adds", MagicMock(side_effect=OSError("database is locked")))
+            web_server._reconcile_aligned_shelf()
+
+        failures = [r for r in caplog.records if "Aligned-shelf reconcile failed" in r.getMessage()]
+        assert [r.levelno for r in failures] == [logging.WARNING, logging.WARNING]
+        assert any("recovered after 1 occurrence" in r.getMessage() for r in caplog.records)
+
     def test_inactive_reader_waits_and_deleted_reader_is_forgotten(self, required):
         required.book(align_method="lexical")
         inactive, inactive_client = required.user("inactive", active=False)
