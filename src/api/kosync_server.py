@@ -3422,6 +3422,7 @@ def _respond_from_book_states(doc_id, book):
 
         if (
             env_truthy("KOSYNC_XPATH_ORDER_ENABLED")
+            and not is_cbz_book(book)
             and same_document
             and sibling_xpath
             and synced_xpath

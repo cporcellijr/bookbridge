@@ -286,6 +286,46 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data["progress"], synced_xpath)
         self.assertAlmostEqual(float(data["percentage"]), 0.23)
+        self.assertEqual(parser.resolve_xpath_to_index.call_count, 2)
+        parser.resolve_xpath_to_index.assert_any_call("test.epub", device_xpath)
+        parser.resolve_xpath_to_index.assert_any_call("test.epub", synced_xpath)
+
+    def test_cbz_skips_xpath_order_and_keeps_percentage_fallback(self):
+        """CBZ pages and stale EPUB locators must never trigger EPUB parsing."""
+        for filename, synced_progress, device_progress in (
+            ("comic.cbz", "15", "16"),
+            ("comic.CBZ", "/body/DocFragment[20]/body/p[20]/text().0",
+             "/body/DocFragment[20]/body/p[15]/text().0"),
+        ):
+            with self.subTest(filename=filename):
+                book, primary_doc = self._setup_book_with_states(
+                    kosync_state_pct=0.23,
+                    kosync_xpath=synced_progress,
+                    sibling_exists=False,
+                )
+                book.ebook_filename = filename
+                self._db().save_book(book)
+                primary_doc.percentage = 0.24
+                primary_doc.progress = device_progress
+                primary_doc.filename = filename
+                self._db().save_kosync_document(primary_doc)
+
+                parser = MagicMock()
+                parser.resolve_xpath_to_index.side_effect = [100, 200]
+                container = MagicMock()
+                container.ebook_parser.return_value = parser
+
+                with patch.object(kosync_server, "_container", container):
+                    response = self.client.get(
+                        "/syncs/progress/" + ("a" * 32),
+                        headers=self.auth_headers,
+                    )
+
+                self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+                data = response.get_json()
+                self.assertEqual(data["progress"], device_progress)
+                self.assertAlmostEqual(float(data["percentage"]), 0.24)
+                parser.resolve_xpath_to_index.assert_not_called()
 
     def test_same_hash_unresolved_xpath_keeps_percentage_fallback(self):
         """Unresolvable XPaths preserve the existing percentage comparison."""
