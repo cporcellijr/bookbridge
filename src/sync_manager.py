@@ -2694,7 +2694,7 @@ class SyncManager:
                     clean_title = search_title.lower()
                     fs_matches = 0
                     for epub in self.books_dir.rglob('*'):
-                        if not epub.is_file() or epub.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS:
+                        if epub.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS or not epub.is_file():
                             continue
                         if epub.name in found_filenames:
                             continue

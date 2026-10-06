@@ -89,6 +89,12 @@ class LibraryService:
                     if local_filename:
                         cache_path = safe_cache_path(self.epub_cache_dir, local_filename)
                         if cache_path:
+                            # An existing cache copy wins: it fixed this book's KoSync
+                            # identity, and checking it first skips the library walk.
+                            if cache_path.exists() and cache_path.stat().st_size > 1024:
+                                logger.info(f"   ✅ Priority 0 (Explicit mapping): Using cached ebook: {cache_path}")
+                                return str(cache_path)
+
                             # Mounted library files take precedence over duplicate downloads.
                             for filename in dict.fromkeys((local_filename, book.ebook_filename)):
                                 if not filename or safe_cache_path(self.epub_cache_dir, filename) is None:
@@ -101,12 +107,7 @@ class LibraryService:
                                                 logger.info("Using mounted ebook: %s", safe_path)
                                                 return str(safe_path)
                                     except OSError as e:
-                                        logger.warning("Could not search ebook directory %s: %s", root, e)
-
-                            # Return cached file if it exists and is substantial
-                            if cache_path.exists() and cache_path.stat().st_size > 1024:
-                                logger.info(f"   ✅ Priority 0 (Explicit mapping): Using cached ebook: {cache_path}")
-                                return str(cache_path)
+                                        logger.warning("Could not search ebook directory %s: %s", root, e, exc_info=True)
 
                             # Download from the source library
                             try:

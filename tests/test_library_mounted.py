@@ -28,13 +28,22 @@ class TestMountedLibrary(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def test_mounted_file_precedes_existing_cache(self):
+    def test_existing_cache_precedes_mounted_file_without_walking_library(self):
+        nested = self.books / 'author'
+        nested.mkdir()
+        (nested / self.book.ebook_filename).write_bytes(b'x' * 2048)
+        self.cache.mkdir(exist_ok=True)
+        cached = self.cache / self.book.ebook_filename
+        cached.write_bytes(b'y' * 2048)
+        with patch.object(Path, 'glob', side_effect=AssertionError('library walked')):
+            self.assertEqual(self.service.acquire_ebook({}, self.book), str(cached))
+        self.client.download_book.assert_not_called()
+
+    def test_mounted_file_precedes_new_download(self):
         nested = self.books / 'author'
         nested.mkdir()
         local = nested / self.book.ebook_filename
         local.write_bytes(b'x' * 2048)
-        self.cache.mkdir(exist_ok=True)
-        (self.cache / self.book.ebook_filename).write_bytes(b'y' * 2048)
         self.assertEqual(self.service.acquire_ebook({}, self.book), str(local))
         self.client.download_book.assert_not_called()
 

@@ -38,7 +38,6 @@ from src.utils.user_context import (
 from src.utils.user_config import resolve_setting, user_setting
 from src.utils.user_config import global_fallback_allowed as _global_fallback_allowed
 from src.utils.user_config import SERVICE_ENABLE_KEYS
-from src.utils.user_config import resolve_setting
 
 from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
 from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename
@@ -2400,9 +2399,15 @@ def _reconcile_aligned_shelf():
                 added += 1
                 logger.info("🏷️ '%s' added to Grimmory shelf '%s'",
                             sanitize_log_data(book.abs_title or book.abs_id), shelf)
+        get_persistent_condition_logger().resolve(
+            logger, "aligned_shelf_reconcile", "Aligned-shelf reconcile recovered"
+        )
         return added
     except Exception as e:
-        logger.warning("Aligned-shelf reconcile failed: %s", e, exc_info=True)
+        get_persistent_condition_logger().warn(
+            logger, "aligned_shelf_reconcile",
+            "Aligned-shelf reconcile failed: %s", e, exc_info=True,
+        )
 
 
 def _shelve_matched_ebook(shelf_filename, ebook_source=None, ebook_source_id=None, book=None):
@@ -3425,7 +3430,7 @@ def _build_local_ebook_title_index():
     try:
         if EBOOK_DIR.exists():
             for eb in EBOOK_DIR.rglob('*'):
-                if not eb.is_file() or eb.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS:
+                if eb.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
                     continue
                 stem = eb.stem
                 title_part = stem.split(" - ", 1)[0]
@@ -3640,7 +3645,7 @@ def get_searchable_ebooks(search_term):
         try:
             all_ebooks = [
                 eb for eb in EBOOK_DIR.rglob('*')
-                if eb.is_file() and eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS
+                if eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS and eb.is_file()
             ]
             for eb in all_ebooks:
                 fname_lower = eb.name.lower()

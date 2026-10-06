@@ -432,6 +432,23 @@ class TestReconcile:
         required.global_client.add_book_id_to_shelf.assert_not_called()
         owner_client.add_book_id_to_shelf.assert_called_once_with("45", "ABS Synced")
 
+    def test_a_failure_every_cycle_warns_once_then_announces_recovery(self, required, monkeypatch, caplog):
+        required.book(align_method="lexical")
+        required.db.add_pending_shelf_add("a1", None)
+        get_book = required.db.get_book
+        monkeypatch.setattr(required.db, "get_book", MagicMock(side_effect=OSError("database is locked")))
+
+        with caplog.at_level(logging.DEBUG, logger=web_server.logger.name):
+            web_server._reconcile_aligned_shelf()
+            web_server._reconcile_aligned_shelf()
+            monkeypatch.setattr(required.db, "get_book", get_book)
+            assert web_server._reconcile_aligned_shelf() == 1
+
+        failures = [r for r in caplog.records if "Aligned-shelf reconcile failed" in r.getMessage()]
+        assert [r.levelno for r in failures] == [logging.WARNING, logging.DEBUG]
+        assert failures[0].exc_info is not None
+        assert any("recovered after 2 occurrences" in r.getMessage() for r in caplog.records)
+
     def test_inactive_reader_waits_and_deleted_reader_is_forgotten(self, required):
         required.book(align_method="lexical")
         inactive, inactive_client = required.user("inactive", active=False)
