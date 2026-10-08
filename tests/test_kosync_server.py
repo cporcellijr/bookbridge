@@ -434,6 +434,95 @@ class TestKosyncEndpoints(unittest.TestCase):
         # It linked to the existing book rather than auto-creating an ebook-only mapping.
         self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
 
+    def _cwa_library_with_checksum(self, calibre_book_id, checksum):
+        """A Calibre library whose metadata.db has CWA's checksum history (#302)."""
+        import sqlite3
+        import tempfile
+        library = tempfile.mkdtemp(prefix="cwa_library_")
+        self.addCleanup(shutil.rmtree, library, True)
+        with sqlite3.connect(os.path.join(library, "metadata.db")) as conn:
+            conn.execute(
+                "CREATE TABLE book_format_checksums (id INTEGER PRIMARY KEY, book INTEGER, "
+                "format TEXT, checksum TEXT(32), version TEXT, created TIMESTAMP)"
+            )
+            conn.execute(
+                "INSERT INTO book_format_checksums (book, format, checksum, version, created) "
+                "VALUES (?, 'EPUB', ?, 'koreader', '2026-10-08T00:07:26')",
+                (calibre_book_id, checksum),
+            )
+        return library
+
+    def _save_cwa_book(self, abs_id, calibre_book_id, matched_hash, percentage):
+        from src import web_server
+        db = web_server.database_service
+        db.save_book(Book(
+            abs_id=abs_id,
+            abs_title="CWA Book",
+            ebook_source="CWA",
+            ebook_source_id=str(calibre_book_id),
+            ebook_filename=f"cwa_{calibre_book_id}.epub",
+            kosync_doc_id=matched_hash,
+            status="active",
+            sync_mode="ebook_only",
+        ))
+        db.save_kosync_document(KosyncDocument(
+            document_hash=matched_hash,
+            progress='/body/chapter[3]',
+            percentage=percentage,
+            device='Bridge',
+            device_id='BR',
+            timestamp=utcnow(),
+            linked_abs_id=abs_id,
+        ))
+        return db
+
+    def test_get_resolves_cwa_download_via_checksum_history(self):
+        """A copy downloaded from CWA after a metadata edit has a hash BookBridge never
+        computed. CWA recorded it when it served the file, so the first GET resolves."""
+        matched_hash = 'a3' * 16
+        device_hash = 'c4' * 16
+        db = self._save_cwa_book("abs-cwa-get", 95, matched_hash, 0.37)
+        library = self._cwa_library_with_checksum(95, device_hash)
+
+        with patch.dict(os.environ, {"CALIBRE_LIBRARY_PATH": library}):
+            response = self.client.get('/syncs/progress/' + device_hash, headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertAlmostEqual(response.get_json()['percentage'], 0.37)
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, "abs-cwa-get")
+
+    def test_put_links_cwa_download_via_checksum_history(self):
+        matched_hash = 'a5' * 16
+        device_hash = 'c6' * 16
+        db = self._save_cwa_book("abs-cwa-put", 96, matched_hash, 0.10)
+        library = self._cwa_library_with_checksum(96, device_hash)
+
+        with patch.dict(os.environ, {"CALIBRE_LIBRARY_PATH": library}):
+            response = self.client.put(
+                '/syncs/progress',
+                headers=self.auth_headers,
+                json={
+                    'document': device_hash,
+                    'progress': '/body/chapter[9]',
+                    'percentage': 0.55,
+                    'device': 'Kindle',
+                    'device_id': 'KPW',
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.get_kosync_document(device_hash).linked_abs_id, "abs-cwa-put")
+        self.assertIsNone(db.get_book("ebook-" + device_hash[:16]))
+
+    def test_get_unknown_hash_still_404_when_cwa_has_no_record(self):
+        self._save_cwa_book("abs-cwa-miss", 97, 'a7' * 16, 0.20)
+        library = self._cwa_library_with_checksum(97, 'c8' * 16)
+
+        with patch.dict(os.environ, {"CALIBRE_LIBRARY_PATH": library}):
+            response = self.client.get('/syncs/progress/' + 'c9' * 16, headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 404)
+
     def test_get_progress_returns_404_for_missing(self):
         """Test that GET returns 404 (not 502) for missing document."""
         response = self.client.get(

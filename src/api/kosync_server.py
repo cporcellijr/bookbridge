@@ -3568,7 +3568,25 @@ def _resolve_book_by_sibling_hash(doc_id: str, existing_doc=None):
             logger.info(f"🔗 KOSync: Resolved {doc_id} to '{book.abs_title}' via ebook filename match")
             return book
 
-    return None
+    # CWA re-exports with embedded metadata on every download, so a reader's copy
+    # rarely matches our hash. CWA records each served copy's hash in metadata.db.
+    return _resolve_book_by_cwa_checksum(doc_id)
+
+
+def _resolve_book_by_cwa_checksum(doc_id: str):
+    """Resolve a hash through CWA's checksum history (needs CALIBRE_LIBRARY_PATH)."""
+    from src.services.cwa_checksum_resolver import find_calibre_book_id
+
+    calibre_book_id = find_calibre_book_id(doc_id)
+    if not calibre_book_id:
+        return None
+    book = _database_service.get_book_by_ebook_source("CWA", calibre_book_id)
+    if book:
+        logger.info(
+            f"🔗 KOSync: Resolved {doc_id} to '{book.abs_title}' via CWA checksum history "
+            f"(Calibre book {calibre_book_id})"
+        )
+    return book
 
 
 _epub_identifier_cache: dict = {}

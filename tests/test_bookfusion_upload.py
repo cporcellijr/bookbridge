@@ -275,7 +275,7 @@ class UploadEpubHappyPathTest(unittest.TestCase):
             "language": "en",
             "isbn": "",
             "issued_on": "",
-            "authors": ["Test Author"],
+            "authors": [{"name": "Test Author"}],
             "tags": [],
             "series": [],
         }
@@ -485,7 +485,8 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
     def _run_route(self, book_has_epub=True, client_configured=True,
                    upload_result=None, ebook_path_exists=True,
                    storyteller_uuid=None, storyteller_configured=None,
-                   request_data=None, storyteller_epub_bytes=None):
+                   request_data=None, storyteller_epub_bytes=None,
+                   reader_search_results=None):
         """Call ``api_bookfusion_upload`` with mocked dependencies.
 
         Parameters
@@ -556,6 +557,20 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         user_clients = MagicMock()
         user_clients.bookfusion_upload_client = upload_client
         user_clients.storyteller_client = storyteller_client
+        reader_client = MagicMock()
+        reader_client.is_configured.return_value = True
+        reader_id = int(upload_result.book_id or 456) + 10_000
+        reader_title = "ReadAloud Route Test Book" if request_data and request_data.get("variant") == "readaloud" else "Route Test Book"
+        default_reader_results = ([] if upload_result.status == "duplicate" else [{
+            "id": reader_id,
+            "title": reader_title,
+            "authors": ["Test Author"],
+            "read_url": f"https://reader.bookfusion.com/books/{upload_result.book_id}-{reader_title.lower().replace(' ', '-')}",
+        }])
+        reader_client.search_books.return_value = (
+            default_reader_results if reader_search_results is None else reader_search_results
+        )
+        user_clients.bookfusion_client = reader_client
         ws.uc = MagicMock(return_value=user_clients)
 
         # --- Mock set_user_bookfusion_link ---
@@ -592,16 +607,19 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         self.assertEqual(result[1], 400)
         self.assertIn("API key", result[0].json["error"])
 
-    def test_created_calls_set_user_bookfusion_link(self):
+    def test_created_resolves_and_persists_user_api_id(self):
         result = self._run_route(
             book_has_epub=True,
             client_configured=True,
             upload_result=BookFusionUploadResult("created", book_id=456, message="ok"),
         )
         self.assertEqual(result.json["success"], True)
-        self.assertEqual(result.json["bookfusion_id"], 456)
+        self.assertEqual(result.json["bookfusion_id"], 10456)
         self.assertEqual(result.json["created"], True)
-        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "456")
+        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "10456")
+        self._ws.uc.return_value.bookfusion_client.search_books.assert_called_once_with(
+            page=1, per_page=10, q="Route Test Book",
+        )
 
     def test_duplicate_without_search_returns_409(self):
         result = self._run_route(
@@ -610,6 +628,42 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             upload_result=BookFusionUploadResult("duplicate", message="already exists"),
         )
         self.assertEqual(result[1], 409)
+
+    def test_created_without_user_api_id_does_not_persist_calibre_id(self):
+        """A successful Calibre upload must not create an unusable progress link."""
+        with patch.object(self._ws.time, "sleep") as sleep:
+            result = self._run_route(
+                book_has_epub=True,
+                client_configured=True,
+                upload_result=BookFusionUploadResult("created", book_id=456, message="ok"),
+                reader_search_results=[],
+            )
+        self.assertEqual(result[1], 502)
+        self.assertEqual(self.saved_link_kwargs, {})
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(self._ws.uc.return_value.bookfusion_client.search_books.call_count, 3)
+
+    def test_created_authorless_epub_links_by_exact_reader_id(self):
+        with patch.object(self._ws, "extract_epub_metadata", return_value={
+            "title": "Route Test Book", "authors": [],
+        }):
+            result = self._run_route(reader_search_results=[{
+                "id": 10456, "title": "Route Test Book", "authors": [],
+                "read_url": "https://reader.bookfusion.com/books/456-route-test-book",
+            }])
+        self.assertTrue(result.json["success"])
+        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "10456")
+
+    def test_created_authorless_epub_rejects_another_reader_id(self):
+        with patch.object(self._ws, "extract_epub_metadata", return_value={
+            "title": "Route Test Book", "authors": [],
+        }), patch.object(self._ws.time, "sleep"):
+            result = self._run_route(reader_search_results=[{
+                "id": 10457, "title": "Route Test Book", "authors": [],
+                "read_url": "https://reader.bookfusion.com/books/457-route-test-book",
+            }])
+        self.assertEqual(result[1], 502)
+        self.assertEqual(self.saved_link_kwargs, {})
 
     # ------------------------------------------------------------------
     # ReadAloud variant tests (§7)
@@ -637,7 +691,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             request_data={"variant": "readaloud"},
         )
         self.assertEqual(result.json["success"], True)
-        self.assertEqual(result.json["bookfusion_id"], 789)
+        self.assertEqual(result.json["bookfusion_id"], 10789)
         self.assertEqual(result.json["created"], True)
 
         # Verify the storyteller client was called correctly
@@ -655,7 +709,7 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
         self.assertEqual(upload_kwargs.get("s3_timeout"), 600)
 
         # Verify link was created
-        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "789")
+        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "10789")
 
     def test_readaloud_variant_rejects_missing_mp4_before_upload(self):
         """A SMIL reference to a missing MP4 must never reach BookFusion."""
@@ -795,9 +849,18 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             st_client = MagicMock()
             st_client.is_configured.return_value = True
             st_client.download_book.side_effect = _fake_download
+            reader_client = MagicMock()
+            reader_client.is_configured.return_value = True
+            reader_client.search_books.return_value = [{
+                "id": 10789,
+                "title": "ReadAloud Route Test Book",
+                "authors": ["Test Author"],
+                "read_url": "https://reader.bookfusion.com/books/789-readaloud-route-test-book",
+            }]
             user_clients = MagicMock()
             user_clients.bookfusion_upload_client = bf_client
             user_clients.storyteller_client = st_client
+            user_clients.bookfusion_client = reader_client
             ws.uc = MagicMock(return_value=user_clients)
 
             # Patch _cleanup_temp to track the path
@@ -908,9 +971,9 @@ class ApiBookfusionUploadRouteUnitTest(unittest.TestCase):
             upload_result=BookFusionUploadResult("created", book_id=456, message="ok"),
         )
         self.assertEqual(result.json["success"], True)
-        self.assertEqual(result.json["bookfusion_id"], 456)
+        self.assertEqual(result.json["bookfusion_id"], 10456)
         self.assertEqual(result.json["created"], True)
-        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "456")
+        self.assertEqual(self.saved_link_kwargs["bookfusion_id"], "10456")
 
 
 class S3SizeLimitErrorTest(unittest.TestCase):

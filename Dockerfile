@@ -50,11 +50,11 @@ COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini
 COPY plugins/ /app/plugins/
 COPY RELEASE_NOTES.md /app/RELEASE_NOTES.md
-COPY scripts/backup_db.sh /app/scripts/backup_db.sh
+COPY scripts/backup_db.sh scripts/repair_bookfusion_user_api_ids.py /app/scripts/
 
 COPY start.sh /app/start.sh
-RUN sed -i 's/\r$//' /app/start.sh /app/scripts/backup_db.sh && \
-    chmod +x /app/start.sh /app/scripts/backup_db.sh
+RUN sed -i 's/\r$//' /app/start.sh /app/scripts/backup_db.sh /app/scripts/repair_bookfusion_user_api_ids.py && \
+    chmod +x /app/start.sh /app/scripts/backup_db.sh /app/scripts/repair_bookfusion_user_api_ids.py
 
 EXPOSE 5757
 

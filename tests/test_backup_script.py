@@ -144,7 +144,7 @@ def test_backup_fails_without_database(tmp_path):
 
 def test_backup_helper_is_packaged_in_container_image():
     dockerfile = (_ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY scripts/backup_db.sh /app/scripts/backup_db.sh" in dockerfile
+    assert "COPY scripts/backup_db.sh scripts/repair_bookfusion_user_api_ids.py /app/scripts/" in dockerfile
     assert "chmod +x /app/start.sh /app/scripts/backup_db.sh" in dockerfile
 
 

@@ -407,13 +407,14 @@ CWA is a supported ebook source and optional Kobo-sync progress source. Use it t
 | Kobo Sync Poll Interval | `CWA_SYNC_POLL_SECONDS` | `300` | Used when Kobo Sync Poll Mode is `custom`. |
 | Wait for Position to Settle | `CWA_SYNC_POLL_WAIT_FOR_SETTLE` | `false` | Holds the sync back while your position is still moving between polls, and runs it once it stops. |
 | Use Calibre ABS Identifier | `CALIBRE_USE_ABS_IDENTIFIER` | `false` | Uses Calibre's `audiobookshelf_id` identifier to make suggestion matching authoritative when available. |
-| Calibre Library Path | `CALIBRE_LIBRARY_PATH` | empty | Optional path to the Calibre library containing `metadata.db` for identifier lookup. |
+| Calibre Library Path | `CALIBRE_LIBRARY_PATH` | empty | Optional path to the Calibre library containing `metadata.db`, mounted read-only. Used for identifier lookup, and to recognise KOReader copies downloaded from CWA (see below). |
 
 CWA notes:
 
 - CWA appears as a standard ebook source in Add / Update Book, the match queue, and Suggestions.
 - Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.
 - The CWA username/password and Kobo sync token are per-reader integration credentials.
+- With **Embed Metadata** on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When `CALIBRE_LIBRARY_PATH` points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (`book_format_checksums`, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync.
 - If you use the Audiobookshelf Calibre plugin, the bridge can read the `audiobookshelf_id` identifier from Calibre metadata or CWA as a fallback to avoid fuzzy matching already-linked books.
 
 #### Hardcover

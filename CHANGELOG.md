@@ -27,6 +27,13 @@ All notable changes to BookBridge will be documented in this file.
 
 - Goodreads tracker failures use the same retry backoff as Hardcover and StoryGraph.
 - Hash reconciliation cannot recreate links to mappings deleted during a pass.
+- BookFusion uploads link the reader API ID used by progress endpoints, including
+  EPUBs without author metadata. Existing invalid links can be repaired with
+  `scripts/repair_bookfusion_user_api_ids.py --user-id USER --abs-id BOOK`;
+  add `--apply` to save changes (#478, #480).
+- KOReader copies downloaded from CWA sync on first open. CWA embeds metadata on
+  download, so the device's hash differs from the matched file; BookBridge now looks
+  unknown hashes up in CWA's checksum history when `CALIBRE_LIBRARY_PATH` is set (#302).
 - CWA search and UUID lookup tolerate bare HTML line breaks in Calibre-Web's
   XHTML review content while retaining strict metadata and XML security checks (#477).
 - Malformed shelf membership and filter data no longer appears as a valid empty
