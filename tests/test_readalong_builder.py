@@ -161,14 +161,19 @@ class _FakeAlignmentService:
         time_for_char: Callable[[int], Optional[float]],
         total_chars: Optional[int] = None,
         segments: Optional[list] = None,
+        word_offsets: Optional[list] = None,
     ):
         self._terminal_char = terminal_char
         self._time_for_char = time_for_char
         self.database_service = self._FakeDatabaseService(total_chars)
         self._segments = segments
+        self._word_offsets = word_offsets
 
     def get_map_terminal_char(self, abs_id: str) -> Optional[int]:
         return self._terminal_char
+
+    def aligned_word_offsets(self, abs_id: str) -> Optional[list]:
+        return self._word_offsets
 
     def get_time_for_char(self, abs_id: str, char_offset: int) -> Optional[float]:
         return self._time_for_char(char_offset)
@@ -272,15 +277,10 @@ def test_marker_lands_at_correct_sentence_start_character():
 
 
 def test_marker_injection_into_node_with_inline_tags():
-    """A sentence whose text is split across <em>/<strong> inline tags gets
-    its marker anchored to the FIRST run it overlaps ("Hello", before the
-    <em>), wrapping that run's text up to its own end since the sentence
-    continues past it -- a deliberate, counted partial highlight (this
-    module's corrected "Anchor strategy": the target must contain real
-    sentence text, and a sentence crossing an inline element is handled by
-    wrapping the first run rather than splitting the inline element or
-    leaving an empty target). The inline tags themselves are left completely
-    intact (never split/wrapped) and no marker is injected inside them."""
+    """A sentence whose text is split across <em>/<strong> inline tags gets one
+    marker span wrapping the WHOLE sentence, inline elements included: the
+    marker is not injected inside <em>/<strong>, and nothing is counted as a
+    partial highlight."""
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = Path(tmp_str)
         parser = _parser(tmp)
@@ -297,30 +297,18 @@ def test_marker_injection_into_node_with_inline_tags():
         assert result is not None
         assert result.dropped_no_location == 0
         assert result.total_sentences == 2
-        # Sentence 0 ("Hello brave new world.") crosses the <em> starting
-        # right after "Hello"; sentence 1 ("A second sentence with emphasis
-        # here.") crosses the second <em> too.
-        assert result.sentences_crossing_inline_elements == 2
+        assert result.sentences_crossing_inline_elements == 0
 
         with zipfile.ZipFile(output_path) as zf:
             xhtml = zf.read("OEBPS/ch1.xhtml").decode("utf-8")
 
-        # The <em>/<strong> structure around "brave new" is untouched.
-        assert "<em>brave <strong>new</strong></em>" in xhtml
-        # Sentence 0's marker wraps "Hello" (the first, and only fully
-        # available, run before the sentence crosses into <em>) -- a real,
-        # non-empty highlight target, just a partial one.
-        assert _marker_span_text(xhtml, "c1-s0") == "Hello"
-        assert _marker_span_text(xhtml, "c1-s1") == "A second sentence with"
-        assert _marker_start(xhtml, "c1-s0") < xhtml.index("Hello")
-        assert _marker_start(xhtml, "c1-s1") < xhtml.index("A second sentence")
-        # Only one marker was needed for sentence 0 even though it spans two
-        # inline elements -- no marker was injected inside <em>/<strong>.
+        assert (
+            '<span id="c1-s0">Hello <em>brave <strong>new</strong></em> world.</span>' in xhtml
+        )
+        assert (
+            '<span id="c1-s1">A second sentence with <em>emphasis</em> here.</span>' in xhtml
+        )
         assert len(re.findall(r'<span id="c1-s0"', xhtml)) == 1
-        em_start = xhtml.index("<em>brave")
-        em_end = xhtml.index("</em>", em_start)
-        assert "c1-s0" not in xhtml[em_start:em_end]
-        assert "c1-s1" not in xhtml[em_start:em_end]
 
 
 def test_finding1_preserves_stylesheet_links_body_attrs_and_xml_case():
@@ -2463,3 +2451,153 @@ def test_transcode_without_progress_callback_never_adds_progress_flags():
         audio_path = _make_audio(tmp, duration=1.0)
         ok = _transcode_audio_for_embed([audio_path], "32k", tmp / "out.m4a")
         assert ok is True
+
+
+# ---------------------------------------------------------------------------
+# Unnarrated pages (narration-rate cap) and the per-build quality report
+# ---------------------------------------------------------------------------
+
+def _sentences(count: int, label: str = "Sentence") -> str:
+    return " ".join(f"{label} number {i} goes here." for i in range(count))
+
+
+def _paced_alignment(spine_map, seconds_per_item: List[float], total_chars: int) -> _FakeAlignmentService:
+    """Each spine item's chars map linearly onto its own consecutive slice of
+    audio, so every item's narration rate is chosen by the test."""
+    starts, cursor = [], 0.0
+    for secs in seconds_per_item:
+        starts.append(cursor)
+        cursor += secs
+
+    def time_for_char(char_offset: int) -> float:
+        for entry, t0, secs in zip(spine_map, starts, seconds_per_item):
+            if char_offset < entry["end"]:
+                frac = max(0.0, (char_offset - entry["start"]) / (entry["end"] - entry["start"]))
+                return t0 + frac * secs
+        return cursor
+
+    return _FakeAlignmentService(
+        terminal_char=total_chars, time_for_char=time_for_char, total_chars=total_chars,
+    )
+
+
+def _build_paced(tmp: Path, bodies: List[str], seconds_per_item: List[float]):
+    parser = _parser(tmp)
+    epub_path = tmp / "books" / "book.epub"
+    _write_epub(epub_path, {
+        f"ch{i + 1}": f"<html><body><p>{body}</p></body></html>".encode()
+        for i, body in enumerate(bodies)
+    })
+    combined_text, spine_map = parser.extract_text_and_map(str(epub_path))
+    audio_path = _make_audio(tmp, duration=sum(seconds_per_item))
+    output_path = tmp / "out.epub"
+    result = build_readalong_epub(
+        parser=parser,
+        alignment_service=_paced_alignment(spine_map, seconds_per_item, len(combined_text)),
+        epub_path=epub_path,
+        audio_paths=audio_path,
+        abs_id="abs1",
+        output_path=output_path,
+    )
+    return result, output_path, spine_map
+
+
+def test_a_page_squeezed_into_two_seconds_gets_no_overlay_but_a_normal_chapter_keeps_it():
+    """~490 chars in 2s is ~245 chars/s: front matter the aligner forced
+    through, not narration. A ~15 chars/s chapter beside it keeps its overlay."""
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        normal = _sentences(5)
+        squeezed = _sentences(17, "Copyright")
+        result, output_path, _ = _build_paced(
+            tmp, [normal, squeezed, normal], [10.0, 2.0, 10.0],
+        )
+        assert result is not None
+        with zipfile.ZipFile(output_path) as zf:
+            smils = sorted(n for n in zf.namelist() if n.endswith(".smil"))
+        assert [Path(n).stem for n in smils] == ["1", "3"], smils
+        assert {p["id"].split("-")[0] for p in _all_pars_with_audio(output_path)} == {"c1", "c3"}
+        assert result.unnarrated_spine_items_skipped == 1
+        assert result.unnarrated_sentences_skipped == 17
+
+
+def test_a_chapter_at_25_chars_per_second_keeps_its_overlay():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        body = _sentences(9)
+        parser = _parser(tmp)
+        probe = tmp / "books" / "probe.epub"
+        _write_epub(probe, {"ch1": f"<html><body><p>{body}</p></body></html>".encode()})
+        _, probe_map = parser.extract_text_and_map(str(probe))
+        secs = (probe_map[0]["end"] - probe_map[0]["start"]) / 25.0
+        tmp2 = tmp / "second"
+        tmp2.mkdir()
+        result, output_path, _ = _build_paced(tmp2, [body, _sentences(5)], [secs, 10.0])
+        assert result is not None
+        assert result.unnarrated_spine_items_skipped == 0
+        with zipfile.ZipFile(output_path) as zf:
+            assert len([n for n in zf.namelist() if n.endswith(".smil")]) == 2
+
+
+def test_quality_report_fields_are_carried_into_the_build_result():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        result, _output, _ = _build_paced(Path(tmp_str), [_sentences(5)], [10.0])
+        assert result is not None
+        assert result.sentences_interpolated is None  # fake service: non-CTC
+        assert result.zero_length_clips == 0
+        assert result.unnarrated_spine_items_skipped == 0
+
+
+def test_build_result_carries_interpolated_count_from_a_ctc_map():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        parser = _parser(tmp)
+        epub_path = tmp / "books" / "book.epub"
+        _write_epub(epub_path, {"ch1": f"<html><body><p>{_sentences(5)}</p></body></html>".encode()})
+        combined_text, _ = parser.extract_text_and_map(str(epub_path))
+        total = len(combined_text)
+        # Only the first word of the book is anchored: every later sentence
+        # has no aligned word inside it.
+        result = build_readalong_epub(
+            parser=parser,
+            alignment_service=_FakeAlignmentService(
+                terminal_char=total,
+                time_for_char=lambda c: c / total * 10.0,
+                total_chars=total,
+                word_offsets=[0],
+            ),
+            epub_path=epub_path,
+            audio_paths=_make_audio(tmp, duration=10.0),
+            abs_id="abs1",
+            output_path=tmp / "out.epub",
+        )
+        assert result is not None
+        assert result.sentences_interpolated == 4
+
+
+def test_zero_length_clips_are_counted_in_the_build_result():
+    """A flat stretch of the map gives its sentences zero-length clips."""
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        parser = _parser(tmp)
+        epub_path = tmp / "books" / "book.epub"
+        _write_epub(epub_path, {"ch1": f"<html><body><p>{_sentences(6)}</p></body></html>".encode()})
+        combined_text, _ = parser.extract_text_and_map(str(epub_path))
+        total = len(combined_text)
+        mid = total // 2
+
+        def time_for_char(c: int) -> float:
+            return 0.0 if c <= mid else (c - mid) / (total - mid) * 10.0
+
+        result = build_readalong_epub(
+            parser=parser,
+            alignment_service=_FakeAlignmentService(
+                terminal_char=total, time_for_char=time_for_char, total_chars=total,
+            ),
+            epub_path=epub_path,
+            audio_paths=_make_audio(tmp, duration=10.0),
+            abs_id="abs1",
+            output_path=tmp / "out.epub",
+        )
+        assert result is not None
+        assert result.zero_length_clips >= 2

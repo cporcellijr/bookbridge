@@ -28,7 +28,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-from src.utils.forced_aligner import ForcedAligner
+from src.utils.forced_aligner import ForcedAligner, container_timeline_filter
 
 logger = logging.getLogger(__name__)
 
@@ -236,9 +236,11 @@ class QuartzNetAligner(ForcedAligner):
         pending = bytearray()
         for path in audio_paths:
             # Decode errors must not fill an unread pipe while stdout is streamed.
+            timeline = container_timeline_filter(path)
             with tempfile.TemporaryFile() as errors_file:
                 proc = subprocess.Popen(
                     ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path),
+                     *(["-af", timeline] if timeline else []),
                      "-f", "f32le", "-ac", "1", "-ar", str(_SAMPLE_RATE), "pipe:1"],
                     stdout=subprocess.PIPE, stderr=errors_file,
                 )

@@ -1921,6 +1921,22 @@ class AlignmentService:
         except (IndexError, TypeError, ValueError):
             return None
 
+    def aligned_word_offsets(self, abs_id: str) -> Optional[List[int]]:
+        """Sorted character offsets of every aligned word in a CTC map.
+
+        Returns ``None`` for any other alignment method: those store sparse
+        anchors, so "a sentence with no anchor inside it" carries no meaning.
+        """
+        if self.database_service.get_alignment_method(abs_id) != "ctc":
+            return None
+        alignment = self._get_alignment(abs_id)
+        if not alignment:
+            return None
+        try:
+            return sorted(self._point_char(p) for p in alignment)
+        except (TypeError, ValueError, KeyError):
+            return None
+
     def record_total_chars_if_missing(self, abs_id: str, total_chars: int) -> bool:
         """Backfill the ebook length for a map stored before it was captured.
 

@@ -435,6 +435,8 @@ def test_pcm_windows_completes_when_decoder_stderr_exceeds_pipe_capacity(monkeyp
 
     monkeypatch.setattr(subprocess, "Popen", start_decoder)
     monkeypatch.setattr(qn, "_WINDOW_SAMPLES", 4)
+    # The container-timeline header probe is its own subprocess; this replays the decoder pipe only.
+    monkeypatch.setattr(qn, "container_timeline_filter", lambda path: None)
     try:
         if returncode:
             with pytest.raises(RuntimeError, match="ffmpeg could not decode damaged.mp3") as error:
