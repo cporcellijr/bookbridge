@@ -8094,6 +8094,7 @@ def _add_book_view():
 
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
+    storyteller_search_failed = False
     if search:
         audiobooks = _search_audiobooks_with_fallback(search)
 
@@ -8106,11 +8107,16 @@ def _add_book_view():
         if storyteller_enabled:
             try:
                 storyteller_books = clients.storyteller_client.search_books(search)
+                if storyteller_books is None:
+                    storyteller_books = []
+                    storyteller_search_failed = True
             except Exception as e:
                 logger.warning(f"⚠️ Storyteller search failed in add_book route: {e}", exc_info=True)
+                storyteller_search_failed = True
 
     return render_template('add_book.html', audiobooks=audiobooks, ebooks=ebooks,
                            storyteller_books=storyteller_books,
+                           storyteller_search_failed=storyteller_search_failed,
                            queue=_load_match_queue(), search=search,
                            storyteller_enabled=storyteller_enabled)
 
@@ -10554,6 +10560,8 @@ def api_storyteller_search():
     if not query:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
     results = uc().storyteller_client.search_books(query)
+    if results is None:
+        return jsonify({"error": "Storyteller didn't respond in time or returned an error. If your library is large, raise Settings → Storyteller → Library Timeout."}), 502
     return jsonify(results)
 
 

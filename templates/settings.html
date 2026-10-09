@@ -1023,6 +1023,13 @@
                             (including your own). The API URL above stays global.
                         </div>
                     </div>
+                    <div class="form-group">
+                        <label>Library Timeout (seconds)</label>
+                        <input type="number" name="STORYTELLER_LIBRARY_TIMEOUT"
+                            value="{{ get_val('STORYTELLER_LIBRARY_TIMEOUT', '10') }}"
+                            min="5" max="300">
+                        <div class="help-text">How long to wait for Storyteller to send its whole book list, which searching and matching need. Raise this if Storyteller searches come back empty or time out on a large library. 5–300 seconds. Default: 10.</div>
+                    </div>
                     <div class="form-group" style="align-items: center;">
                         <label>Skip ReadAloud EPUB Cache</label>
                         <label class="toggle-switch">

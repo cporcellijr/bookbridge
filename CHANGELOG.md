@@ -20,9 +20,19 @@ All notable changes to BookBridge will be documented in this file.
 - Reconcile Audiobookshelf collections with the configured mappings (#474).
 - Optionally mirror Grimmory KoSync logins while preserving manually managed
   credentials (#475).
+- Set how long BookBridge waits for Storyteller's book list in Settings →
+  Storyteller → Library Timeout, for large libraries or slow servers (#483).
 
 ### Fixed
 
+- Ebooks with no Audiobookshelf item no longer stop syncing when ABS Ebook Sync
+  is on. BookBridge sent their progress to an Audiobookshelf item that didn't
+  exist, then marked the book 'error' as a stale mapping. Books that use
+  Grimmory or BookOrbit audiobooks had the same problem. Re-match any book
+  already showing the error once after updating (#486).
+- A Storyteller search that times out or fails now says so instead of showing
+  no matches. Searching also downloads the Storyteller library once instead of
+  once per match when the Storyteller assets path is set (#483).
 - Normal sync cycles check for stored alignment maps without loading them;
   recovery still validates a map before completing an unfinished job (#484, #485).
 - BookFusion uploads link the reader API ID used by progress endpoints, including
