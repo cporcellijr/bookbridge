@@ -14,7 +14,10 @@ All notable changes to BookBridge will be documented in this file.
   when no safe mounted file is available (#470).
 - Defer optional Grimmory shelf additions until alignment is ready, using the
   configured shelf owner's account when enabled (#471).
-- Scan for suggestions on a schedule as the default user (#472).
+- Scan for suggestions on a schedule as the default user. Full rescans can follow a
+  cron schedule (Settings → Features → Scheduled full refresh); an existing weekly
+  day and time carries over. Contributed by [@benjitobz](https://github.com/benjitobz)
+  in #472 and #488.
 - Share automatic ebook matches across users. Re-enabling an account restores its
   catalog, including books that account previously removed (#473).
 - Reconcile Audiobookshelf collections with the configured mappings (#474).
@@ -25,6 +28,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Suggestions match an audiobook to an ebook whose title differs only by a subtitle,
+  using the Audiobookshelf subtitle when there is one. A match found only by dropping
+  the subtitle scores below the default auto-keep and auto-match cutoffs, so a bare
+  series title can't link the wrong volume unverified. Contributed by
+  [@benjitobz](https://github.com/benjitobz) in #487.
 - **Read-along highlights cover the whole sentence.** A sentence with italics, bold,
   a link, a drop cap, small caps or a page marker inside it was only partly
   highlighted, up to one sentence in ten in some books. Pages the narrator never
