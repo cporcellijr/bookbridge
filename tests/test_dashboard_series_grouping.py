@@ -33,20 +33,21 @@ def _make_mapping(abs_id="test", series_name=None, series_sequence=None,
 
 class TestSeriesGroupingLayout(unittest.TestCase):
 
-    def test_expanded_visible_series_does_not_stretch_neighboring_cards(self):
+    def test_visible_series_keeps_neighboring_cards_compact_before_and_after_expand(self):
         source = (Path(__file__).parent.parent / "templates" / "index.html").read_text(
             encoding="utf-8"
         )
         selector = (
             "body:not(.series-grouping-off) "
-            ".book-grid:has(> .series-group.expanded:not(.hidden))"
+            ".book-grid:has(> .series-group:not(.hidden))"
         )
 
         start = source.index(selector)
         self.assertIn("align-items: start", source[start:source.index("}", start)])
+        self.assertNotIn(".series-group.expanded:not(.hidden)", source)
 
-    def test_collapsed_series_header_fills_its_grid_row(self):
-        """A collapsed series must not sit short inside its stretched grid cell."""
+    def test_series_header_fills_its_group(self):
+        """The series header remains a flex column that fills its group shell."""
         source = (Path(__file__).parent.parent / "templates" / "index.html").read_text(
             encoding="utf-8"
         )
