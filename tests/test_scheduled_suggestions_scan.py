@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -28,6 +29,8 @@ SCHEDULE_ENV = {
     "SUGGESTIONS_ENABLED": "true",
     "SUGGESTIONS_AUTO_MATCH_ENABLED": "false",
     "SUGGESTIONS_AUTO_SCAN_MINUTES": "0",
+    "SUGGESTIONS_FULL_REFRESH_ENABLED": "false",
+    "SUGGESTIONS_FULL_REFRESH_CRON": "",
     "SUGGESTIONS_FULL_REFRESH_DAY": "off",
     "SUGGESTIONS_FULL_REFRESH_TIME": "04:00",
     "TZ": "UTC",
@@ -183,6 +186,114 @@ class TestDue(ScheduledScanTestCase):
         self.assertEqual("full", web_server._suggestions_auto_scan_due(datetime(2026, 9, 27, 4, 30), {}))
 
 
+class TestCronSchedule(ScheduledScanTestCase):
+    def fires(self, expression, when):
+        return web_server.cron_matches(web_server.parse_cron_expression(expression), when)
+
+    def test_fields_ranges_steps_lists_and_names(self):
+        self.assertTrue(self.fires("*/15 9-17 * * mon-fri", datetime(2026, 9, 21, 9, 45)))
+        self.assertFalse(self.fires("*/15 9-17 * * mon-fri", datetime(2026, 9, 21, 9, 50)))
+        self.assertFalse(self.fires("*/15 9-17 * * mon-fri", datetime(2026, 9, 27, 9, 45)))
+        self.assertTrue(self.fires("0 2 1,15 * *", datetime(2026, 9, 15, 2, 0)))
+        self.assertTrue(self.fires("0 0 * jan,jul *", datetime(2026, 7, 4, 0, 0)))
+        self.assertFalse(self.fires("0 0 * jan,jul *", datetime(2026, 8, 4, 0, 0)))
+
+    def test_seven_and_zero_are_both_sunday(self):
+        self.assertTrue(self.fires("0 4 * * 7", datetime(2026, 9, 27, 4, 0)))
+        self.assertTrue(self.fires("0 4 * * 0", datetime(2026, 9, 27, 4, 0)))
+
+    def test_restricted_day_of_month_and_week_fire_on_either(self):
+        self.assertTrue(self.fires("0 4 1 * sun", datetime(2026, 9, 27, 4, 0)))
+        self.assertTrue(self.fires("0 4 1 * sun", datetime(2026, 10, 1, 4, 0)))
+        self.assertFalse(self.fires("0 4 1 * sun", datetime(2026, 10, 2, 4, 0)))
+
+    def test_invalid_expressions_raise(self):
+        for expression in ("", "* * * *", "60 * * * *", "* 24 * * *", "*/0 * * * *", "5-1 * * * *", "0 4 * * funday"):
+            with self.subTest(expression=expression):
+                with self.assertRaises(ValueError):
+                    web_server.parse_cron_expression(expression)
+
+    def test_cron_runs_every_fire_once(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "0 3 * * *"
+        self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 21, 2, 59), {"last_full_fire": "2026-09-20T03:00:00"}))
+        self.assertEqual("full", web_server._suggestions_auto_scan_due(datetime(2026, 9, 21, 3, 0), {"last_full_fire": "2026-09-20T03:00:00"}))
+        self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 21, 9, 0), {"last_full_fire": "2026-09-21T03:00:00"}))
+
+    def test_missed_fire_runs_up_to_a_day_late(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "20 4 * * sun"
+        self.assertEqual("full", web_server._suggestions_auto_scan_due(datetime(2026, 9, 28, 4, 19), {}))
+        self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 28, 4, 21), {}))
+
+    def test_cron_is_off_until_enabled(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "0 3 * * *"
+        self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 22, 3, 0), {}))
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = ""
+        self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 22, 3, 0), {}))
+
+    def test_cron_overrides_the_weekly_day(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "0 3 * * *"
+        os.environ["SUGGESTIONS_FULL_REFRESH_DAY"] = "sunday"
+        self.assertEqual("full", web_server._suggestions_auto_scan_due(datetime(2026, 9, 22, 3, 0), {}))
+        self.assertIsNone(web_server._suggestions_auto_scan_due(
+            datetime(2026, 9, 27, 5, 0), {"last_full_fire": "2026-09-27T03:00:00"},
+        ))
+
+    def test_a_legacy_refresh_already_run_that_day_is_not_repeated(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "20 4 * * sun"
+        self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 27, 9, 0), {"last_full_date": "2026-09-27"}))
+
+    def test_invalid_cron_is_off_and_warns_once(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "every sunday"
+        with self.assertLogs("src.web_server", level="DEBUG") as logs:
+            self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 27, 4, 20), {}))
+            self.assertIsNone(web_server._suggestions_auto_scan_due(datetime(2026, 9, 27, 4, 21), {}))
+        warnings = [record for record in logs.records if record.levelno >= logging.WARNING]
+        self.assertEqual(1, len(warnings))
+        self.assertIn("SUGGESTIONS_FULL_REFRESH_CRON 'every sunday'", warnings[0].getMessage())
+
+    def test_stepped_wildcards_leave_their_day_field_unrestricted(self):
+        tuesday = datetime(2026, 9, 22, 4, 0)
+        self.assertFalse(self.fires("0 4 */1 * sun", tuesday))
+        self.assertTrue(self.fires("0 4 */1 * sun", datetime(2026, 9, 27, 4, 0)))
+        self.assertFalse(self.fires("0 4 1 * */1", tuesday))
+        self.assertTrue(self.fires("0 4 1 * */1", datetime(2026, 10, 1, 4, 0)))
+
+    def _fall_back(self, minute, fold):
+        return datetime(2026, 11, 1, 1, minute, tzinfo=ZoneInfo("America/New_York"), fold=fold)
+
+    def test_fall_back_does_not_replay_the_earlier_fire_after_the_later_one_ran(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "30 1 * * sun"
+        state = {"last_full_fire": self._fall_back(30, fold=1).isoformat()}
+        self.assertIsNone(web_server._suggestions_full_refresh_due(self._fall_back(31, fold=1), state))
+
+    def test_fall_back_runs_the_repeated_wall_clock_fire_once(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "30 1 * * sun"
+        self.assertEqual(
+            self._fall_back(30, fold=0).isoformat(),
+            web_server._suggestions_full_refresh_due(self._fall_back(45, fold=0), {}),
+        )
+        state = {"last_full_fire": self._fall_back(30, fold=0).isoformat()}
+        self.assertIsNone(web_server._suggestions_full_refresh_due(self._fall_back(31, fold=1), state))
+
+    def test_an_aware_missed_fire_is_still_owed(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "0 3 * * *"
+        zone = ZoneInfo("America/New_York")
+        state = {"last_full_fire": datetime(2026, 9, 20, 3, 0, tzinfo=zone).isoformat()}
+        self.assertEqual(
+            datetime(2026, 9, 21, 3, 0, tzinfo=zone).isoformat(),
+            web_server._suggestions_full_refresh_due(datetime(2026, 9, 21, 9, 0, tzinfo=zone), state),
+        )
+
+
 class TestTick(ScheduledScanTestCase):
     def setUp(self):
         super().setUp()
@@ -269,7 +380,9 @@ class TestTick(ScheduledScanTestCase):
         clock.advance(minutes=1)
         web_server._suggestions_auto_scan_tick()
 
-        self.assertEqual({"last_finished": finished_at, "last_full_date": "2026-09-27"}, self.stored_state())
+        self.assertEqual(
+            {"last_finished": finished_at, "last_full_fire": "2026-09-27T04:00:00+00:00"}, self.stored_state(),
+        )
         self.assertEqual(1, self.run_scan.call_count)
 
     def test_restart_does_not_repeat_a_full_refresh_done_that_day(self):
@@ -295,7 +408,7 @@ class TestTick(ScheduledScanTestCase):
         os.environ["TZ"] = "Europe/Paris"
         web_server._suggestions_auto_scan_tick()
         self.run_scan.assert_called_once_with(full=True)
-        self.assertEqual("2026-09-27", web_server._SUGGESTIONS_AUTO_SCAN_JOB["full_date"])
+        self.assertEqual("2026-09-27T01:00:00+02:00", web_server._SUGGESTIONS_AUTO_SCAN_JOB["full_fire"])
 
     def test_invalid_timezone_warns_once(self):
         os.environ["TZ"] = "Not/AZone"
