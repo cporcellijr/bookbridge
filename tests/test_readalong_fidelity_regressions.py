@@ -38,7 +38,7 @@ def test_original_mapping_preserves_body_text_and_uses_child_structure():
     dom_entry, soup, nodes = resolved
     assert [run.node_index for run in dom_entry.runs] == [1, 2]
     modified = _inject_markers_into_original(
-        soup, nodes, [(dom_entry.runs[0].node_index, 0, len("Repeat once."), "c1-s0")]
+        soup, nodes, [(dom_entry.runs[0].node_index, 0, dom_entry.runs[0].node_index, len("Repeat once."), "c1-s0")]
     )
     assert b'Leading text. ' in modified
     assert b'data-book="keep"' in modified
@@ -136,7 +136,7 @@ def test_marker_verification_merges_wrapped_marker_split_before_text_compare():
     nodes = content_string_nodes(original_body_scope(soup))
     wrap_start = len("First sentence.\xa0 ")
     wrap_end = wrap_start + len("Second sentence.")
-    modified = _inject_markers_into_original(soup, nodes, [(0, wrap_start, wrap_end, "c1-s0")])
+    modified = _inject_markers_into_original(soup, nodes, [(0, wrap_start, 0, wrap_end, "c1-s0")])
 
     _verify_marker_injection(original, modified, spine_index=1, href="ch1.xhtml")
 
@@ -170,8 +170,8 @@ def test_marker_verification_tolerates_an_ascii_double_space_at_the_split():
     second_start = len("First sentence.  ")
     second_end = second_start + len("Second sentence.")
     modified = _inject_markers_into_original(soup, nodes, [
-        (0, 0, first_end, "c1-s0"),
-        (0, second_start, second_end, "c1-s1"),
+        (0, 0, 0, first_end, "c1-s0"),
+        (0, second_start, 0, second_end, "c1-s1"),
     ])
     assert b'</span>  <span' in modified, "fixture must isolate the double space"
 
@@ -188,8 +188,8 @@ def test_marker_verification_tolerates_a_tab_at_the_split():
     second_start = len("First sentence.	")
     second_end = second_start + len("Second sentence.")
     modified = _inject_markers_into_original(soup, nodes, [
-        (0, 0, first_end, "c1-s0"),
-        (0, second_start, second_end, "c1-s1"),
+        (0, 0, 0, first_end, "c1-s0"),
+        (0, second_start, 0, second_end, "c1-s1"),
     ])
 
     _verify_marker_injection(original, modified, spine_index=1, href="ch1.xhtml")
@@ -244,7 +244,7 @@ def test_marker_verification_pre_content_survives_a_legitimate_injection_elsewhe
     soup = parse_original_spine_xml(original)
     assert soup is not None
     nodes = content_string_nodes(original_body_scope(soup))
-    modified = _inject_markers_into_original(soup, nodes, [(0, 0, len("Hello world."), "c1-s0")])
+    modified = _inject_markers_into_original(soup, nodes, [(0, 0, 0, len("Hello world."), "c1-s0")])
 
     _verify_marker_injection(original, modified, spine_index=1, href="ch1.xhtml")
 
@@ -258,7 +258,7 @@ def test_prefixed_xhtml_gets_marker_in_the_source_namespace():
     assert soup is not None
     nodes = content_string_nodes(original_body_scope(soup))
     modified = _inject_markers_into_original(
-        soup, nodes, [(0, 0, len("First sentence."), "c1-s0")]
+        soup, nodes, [(0, 0, 0, len("First sentence."), "c1-s0")]
     )
 
     assert b"<h:span id=\"c1-s0\"" in modified

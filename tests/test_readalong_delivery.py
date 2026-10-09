@@ -111,6 +111,9 @@ class _FakeAlignmentService:
     def get_map_terminal_char(self, abs_id: str) -> Optional[int]:
         return self._total_chars
 
+    def aligned_word_offsets(self, abs_id: str) -> Optional[list]:
+        return None
+
     def get_time_for_char(self, abs_id: str, char_offset: int) -> Optional[float]:
         frac = max(0.0, min(1.0, char_offset / self._total_chars)) if self._total_chars else 0.0
         return frac * self._total_seconds

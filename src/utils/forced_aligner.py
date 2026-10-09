@@ -26,7 +26,7 @@ import bisect
 import logging
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,55 @@ _EMIT_WINDOW_SECONDS = 30
 # Consecutive full-length windows are grouped into one forward call of up to this
 # many rows; fewer, larger forward calls cut Python/kernel-launch overhead on GPU.
 _EMIT_BATCH_WINDOWS = 4
+# Decode on the container's timeline. An m4b stitched from separately encoded
+# chapters declares longer durations on the packets at the joins than they decode
+# to: What Lies in the Woods' 41 such packets add 1.57 s that players, seeks and
+# copied audio honour but a plain decode drops, so every timestamp after a join
+# ran early (1.3 s by the end against Whisper word times). This fills each gap
+# over 10 ms with silence. 60 of 761 AAC books on the reference install have such
+# gaps.
+CONTAINER_TIMELINE_FILTER = "aresample=async=1:min_hard_comp=0.01:first_pts=0"
+# The opposite defect -- packets stamped shorter than the audio they hold (Dark
+# Resurrection: 5,235 one-sample durations, 121 s) -- would make the same filter
+# DROP real audio, so it is applied only when the container declares more time
+# than the frames decode to, by more than this.
+_CONTAINER_GAP_MIN_SECONDS = 0.05
+
+
+def container_timeline_filter(path: Union[str, os.PathLike]) -> Optional[str]:
+    """The ffmpeg ``-af`` filter that keeps ``path``'s decode on its container
+    timeline, or ``None`` when it needs none (or cannot be probed).
+
+    Reads only the stream header: an AAC track whose declared duration exceeds
+    ``nb_frames`` x samples-per-frame has timestamp gaps a plain decode would
+    drop (see :data:`CONTAINER_TIMELINE_FILTER`). Anything else decodes as before.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+             "stream=codec_name,profile,sample_rate,duration_ts,nb_frames,time_base",
+             "-of", "default=nw=1", str(path)],
+            capture_output=True, text=True, timeout=60, check=True,
+        ).stdout
+        fields = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        if fields.get("codec_name") != "aac":
+            return None
+        num, den = (int(x) for x in fields["time_base"].split("/"))
+        declared = int(fields["duration_ts"]) * num / den
+        samples_per_frame = 2048 if fields.get("profile", "").startswith("HE-AAC") else 1024
+        decoded = int(fields["nb_frames"]) * samples_per_frame / int(fields["sample_rate"])
+    except (subprocess.SubprocessError, OSError, KeyError, ValueError, ZeroDivisionError) as e:
+        logger.debug("Could not probe the container timeline of '%s': %s", path, e)
+        return None
+    if declared - decoded > _CONTAINER_GAP_MIN_SECONDS:
+        logger.info(
+            "⏱️ Audio '%s' declares %.2fs more than its frames hold; decoding on the "
+            "container timeline", path, declared - decoded,
+        )
+        return CONTAINER_TIMELINE_FILTER
+    return None
 
 
 class ForcedAligner:
@@ -255,9 +304,11 @@ class ForcedAligner:
         try:
             with open(tmp_path, "wb") as out:
                 for path in audio_paths:
+                    timeline = container_timeline_filter(path)
                     subprocess.run(
                         [
                             "ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path),
+                            *(["-af", timeline] if timeline else []),
                             "-f", "f32le", "-ac", "1", "-ar", str(self._sample_rate), "pipe:1",
                         ],
                         stdout=out, stderr=subprocess.PIPE, check=True,

@@ -82,14 +82,19 @@ class _FakeAlignmentService:
         time_for_char: Callable[[int], Optional[float]],
         total_chars: Optional[int] = None,
         segments: Optional[List[Dict]] = None,
+        word_offsets: Optional[List[int]] = None,
     ):
         self._terminal_char = terminal_char
         self._time_for_char = time_for_char
         self.database_service = self._FakeDatabaseService(total_chars)
         self._segments = segments
+        self._word_offsets = word_offsets
 
     def get_map_terminal_char(self, abs_id: str) -> Optional[int]:
         return self._terminal_char
+
+    def aligned_word_offsets(self, abs_id: str) -> Optional[list]:
+        return self._word_offsets
 
     def get_time_for_char(self, abs_id: str, char_offset: int) -> Optional[float]:
         return self._time_for_char(char_offset)
@@ -745,3 +750,67 @@ def test_sentence_spanning_a_segment_boundary_clamps_to_its_own_start_segment():
         assert clip.ts_start == 0.0
         assert clip.ts_end == 2.0
         assert clip.ts_end >= clip.ts_start
+
+
+# ---------------------------------------------------------------------------
+# Interpolation count (per-build quality report)
+# ---------------------------------------------------------------------------
+
+def _two_sentence_epub(tmp: Path):
+    parser = _parser(tmp)
+    epub_path = tmp / "books" / "book.epub"
+    _write_epub(epub_path, {"ch1": b"<html><body><p>First sentence here. Second sentence here.</p></body></html>"})
+    combined_text, _ = parser.extract_text_and_map(str(epub_path))
+    return parser, epub_path, combined_text
+
+
+def test_sentence_with_no_anchor_inside_is_counted_interpolated_for_a_ctc_map():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        parser, epub_path, text = _two_sentence_epub(Path(tmp_str))
+        second = text.index("Second")
+        fake = _FakeAlignmentService(
+            terminal_char=len(text), time_for_char=lambda c: c / 10.0,
+            total_chars=len(text), word_offsets=[0, 6, second - 1],
+        )
+        result = build_sentence_clips(parser, str(epub_path), fake, "abs1")
+        assert [c.char_start for c in result.clips] == [0, second]
+        # the first sentence holds offsets 0 and 6; the second holds none
+        assert result.interpolated_count == 1
+
+
+def test_interpolated_count_is_none_for_a_non_ctc_map():
+    with tempfile.TemporaryDirectory() as tmp_str:
+        parser, epub_path, text = _two_sentence_epub(Path(tmp_str))
+        fake = _FakeAlignmentService(
+            terminal_char=len(text), time_for_char=lambda c: c / 10.0,
+            total_chars=len(text), word_offsets=None,
+        )
+        result = build_sentence_clips(parser, str(epub_path), fake, "abs1")
+        assert result.interpolated_count is None
+
+
+def test_aligned_word_offsets_returns_sorted_offsets_for_ctc_and_none_otherwise():
+    import json
+    import shutil
+    from src.db.database_service import DatabaseService
+    from src.db.models import BookAlignment
+    from src.services.alignment_service import AlignmentService
+    from src.utils.polisher import Polisher
+
+    temp_dir = tempfile.mkdtemp()
+    db = DatabaseService(str(Path(temp_dir) / "offsets.db"))
+    try:
+        points = [{"char": 30, "ts": 3.0}, {"char": 0, "ts": 0.0}, {"char": 12, "ts": 1.2}]
+        with db.get_session() as session:
+            for abs_id, method in (("ctc-book", "ctc"), ("lex-book", "lexical")):
+                session.add(BookAlignment(
+                    abs_id=abs_id, alignment_map_json=json.dumps(points),
+                    align_method=method, total_chars=40,
+                ))
+        service = AlignmentService(db, Polisher())
+        assert service.aligned_word_offsets("ctc-book") == [0, 12, 30]
+        assert service.aligned_word_offsets("lex-book") is None
+        assert service.aligned_word_offsets("missing") is None
+    finally:
+        db.db_manager.close()
+        shutil.rmtree(temp_dir, ignore_errors=True)

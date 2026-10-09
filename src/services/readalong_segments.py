@@ -40,7 +40,7 @@ the monotonic clamp in :func:`build_sentence_clips`.
 """
 import logging
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union, TYPE_CHECKING
@@ -283,11 +283,15 @@ class SentenceClipResult:
     whose interpolated start and/or end had to be pulled forward to keep the
     book monotonic and non-overlapping -- a diagnostic, not an error; see
     :func:`build_sentence_clips`.
+    ``interpolated_count`` counts emitted clips with no aligned word inside
+    their ``[char_start, char_end)`` span -- only meaningful for CTC maps
+    (one entry per aligned word); ``None`` for any other alignment method.
     """
     abs_id: str
     clips: List[SentenceClip]
     dropped_no_timestamp: int
     clamped_count: int
+    interpolated_count: Optional[int] = None
 
 
 def _map_fits_epub(alignment_service: "AlignmentService", abs_id: str, combined_text_len: int) -> bool:
@@ -439,6 +443,12 @@ def build_sentence_clips(
         return None
 
     segments = alignment_service._get_segments(abs_id)
+    # Anything but a real list (a test double's auto-attribute) means "no
+    # per-word offsets", the same as a non-CTC map.
+    word_offsets = alignment_service.aligned_word_offsets(abs_id)
+    if not isinstance(word_offsets, list):
+        word_offsets = None
+    interpolated = 0
 
     clips: List[SentenceClip] = []
     dropped = 0
@@ -536,10 +546,15 @@ def build_sentence_clips(
                 segment_scoped=bool(segments),
             ))
             floor_ts = ts_end
+            if word_offsets is not None:
+                first = bisect_left(word_offsets, char_start)
+                if first >= len(word_offsets) or word_offsets[first] >= char_end:
+                    interpolated += 1
 
     return SentenceClipResult(
         abs_id=abs_id,
         clips=clips,
         dropped_no_timestamp=dropped,
         clamped_count=clamped,
+        interpolated_count=interpolated if word_offsets is not None else None,
     )

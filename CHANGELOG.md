@@ -25,6 +25,18 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Read-along highlights cover the whole sentence.** A sentence with italics, bold,
+  a link, a drop cap, small caps or a page marker inside it was only partly
+  highlighted, up to one sentence in ten in some books. Pages the narrator never
+  reads (copyright notices, newsletter sign-ups, acknowledgments, about the author)
+  no longer get a highlight that races through them in a second or two. Regenerate
+  a read-along to pick up both fixes.
+- **Forced alignment stays on time to the end of the book.** Some audiobook files,
+  often ones stitched together from separately encoded chapters, mark more time
+  than their audio holds at each chapter join. The aligner skipped those gaps, so
+  timings drifted early through the book: a read-along's highlight ran more than a
+  second ahead of the narrator by the last chapter, and minutes ahead in a few badly
+  built files. Re-align an affected book, then regenerate its read-along.
 - Ebooks with no Audiobookshelf item no longer stop syncing when ABS Ebook Sync
   is on. BookBridge sent their progress to an Audiobookshelf item that didn't
   exist, then marked the book 'error' as a stale mapping. Books that use
