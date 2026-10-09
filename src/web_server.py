@@ -18,7 +18,7 @@ import time
 import uuid
 import zipfile
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urljoin, urlparse
@@ -8232,7 +8232,8 @@ def parse_cron_expression(expression: str):
         allowed.append(values)
     if 7 in allowed[4]:
         allowed[4].add(0)
-    return allowed, fields[2] != '*', fields[4] != '*'
+    # As in cronie, a field starting with '*' (including '*/n') leaves its day unrestricted.
+    return allowed, not fields[2].startswith('*'), not fields[4].startswith('*')
 
 
 def cron_matches(cron, when) -> bool:
@@ -8290,15 +8291,36 @@ def _suggestions_full_refresh_due(now, state) -> Optional[str]:
     get_persistent_condition_logger().resolve(
         logger, "suggestions-full-refresh-schedule", "Full refresh schedule is valid again",
     )
+    # Step back through real instants (UTC) so the repeated hour of a fall-back change is
+    # walked in order instead of being skipped by wall-clock arithmetic.
     fire = now.replace(second=0, microsecond=0)
+    instant = fire.astimezone(timezone.utc) if fire.tzinfo else None
     for _ in range(24 * 60 + 1):
         if cron_matches(cron, fire):
-            if state.get("last_full_fire") == fire.isoformat() \
-                    or state.get("last_full_date") == fire.date().isoformat():
-                return None
-            return fire.isoformat()
-        fire -= timedelta(minutes=1)
+            return None if _suggestions_full_refresh_done(fire, state) else fire.isoformat()
+        if instant is None:
+            fire -= timedelta(minutes=1)
+        else:
+            instant -= timedelta(minutes=1)
+            fire = instant.astimezone(fire.tzinfo)
     return None
+
+
+def _suggestions_full_refresh_done(fire: datetime, state: dict) -> bool:
+    """Whether a full refresh already covers the cron fire at `fire`.
+
+    A recorded fire covers every fire at or before it, and also the same wall-clock time
+    repeated by a fall-back change, so one schedule slot never runs twice.
+    """
+    if state.get("last_full_date") == fire.date().isoformat():
+        return True
+    try:
+        last = datetime.fromisoformat(state.get("last_full_fire") or "")
+    except (TypeError, ValueError):
+        return False
+    if last.tzinfo is None or fire.tzinfo is None:
+        return fire.replace(tzinfo=None) <= last.replace(tzinfo=None)
+    return fire <= last or fire.replace(tzinfo=None) == last.replace(tzinfo=None)
 
 
 def _suggestions_auto_scan_due(now, state):

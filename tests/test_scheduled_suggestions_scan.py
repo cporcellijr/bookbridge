@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -255,6 +256,42 @@ class TestCronSchedule(ScheduledScanTestCase):
         warnings = [record for record in logs.records if record.levelno >= logging.WARNING]
         self.assertEqual(1, len(warnings))
         self.assertIn("SUGGESTIONS_FULL_REFRESH_CRON 'every sunday'", warnings[0].getMessage())
+
+    def test_stepped_wildcards_leave_their_day_field_unrestricted(self):
+        tuesday = datetime(2026, 9, 22, 4, 0)
+        self.assertFalse(self.fires("0 4 */1 * sun", tuesday))
+        self.assertTrue(self.fires("0 4 */1 * sun", datetime(2026, 9, 27, 4, 0)))
+        self.assertFalse(self.fires("0 4 1 * */1", tuesday))
+        self.assertTrue(self.fires("0 4 1 * */1", datetime(2026, 10, 1, 4, 0)))
+
+    def _fall_back(self, minute, fold):
+        return datetime(2026, 11, 1, 1, minute, tzinfo=ZoneInfo("America/New_York"), fold=fold)
+
+    def test_fall_back_does_not_replay_the_earlier_fire_after_the_later_one_ran(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "30 1 * * sun"
+        state = {"last_full_fire": self._fall_back(30, fold=1).isoformat()}
+        self.assertIsNone(web_server._suggestions_full_refresh_due(self._fall_back(31, fold=1), state))
+
+    def test_fall_back_runs_the_repeated_wall_clock_fire_once(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "30 1 * * sun"
+        self.assertEqual(
+            self._fall_back(30, fold=0).isoformat(),
+            web_server._suggestions_full_refresh_due(self._fall_back(45, fold=0), {}),
+        )
+        state = {"last_full_fire": self._fall_back(30, fold=0).isoformat()}
+        self.assertIsNone(web_server._suggestions_full_refresh_due(self._fall_back(31, fold=1), state))
+
+    def test_an_aware_missed_fire_is_still_owed(self):
+        os.environ["SUGGESTIONS_FULL_REFRESH_ENABLED"] = "true"
+        os.environ["SUGGESTIONS_FULL_REFRESH_CRON"] = "0 3 * * *"
+        zone = ZoneInfo("America/New_York")
+        state = {"last_full_fire": datetime(2026, 9, 20, 3, 0, tzinfo=zone).isoformat()}
+        self.assertEqual(
+            datetime(2026, 9, 21, 3, 0, tzinfo=zone).isoformat(),
+            web_server._suggestions_full_refresh_due(datetime(2026, 9, 21, 9, 0, tzinfo=zone), state),
+        )
 
 
 class TestTick(ScheduledScanTestCase):
