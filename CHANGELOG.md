@@ -27,6 +27,8 @@ All notable changes to BookBridge will be documented in this file.
 
 - Goodreads tracker failures use the same retry backoff as Hardcover and StoryGraph.
 - Hash reconciliation cannot recreate links to mappings deleted during a pass.
+- Normal sync cycles check for stored alignment maps without loading them;
+  recovery still validates a map before completing an unfinished job (#484, #485).
 - BookFusion uploads link the reader API ID used by progress endpoints, including
   EPUBs without author metadata. Existing invalid links can be repaired with
   `scripts/repair_bookfusion_user_api_ids.py --user-id USER --abs-id BOOK`;
