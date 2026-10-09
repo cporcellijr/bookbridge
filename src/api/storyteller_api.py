@@ -216,7 +216,7 @@ class StorytellerAPIClient:
                 elif method.upper() == "DELETE":
                     response = self.session.delete(url, headers=headers, json=json_data, timeout=timeout)
             return response
-        except requests.exceptions.Timeout as e:
+        except requests.exceptions.ReadTimeout as e:
             logger.error(f"❌ Storyteller API request failed ('{method}' '{endpoint}'): {e}", exc_info=True)
             read_timeout = timeout[1] if isinstance(timeout, tuple) else timeout
             logger.warning(

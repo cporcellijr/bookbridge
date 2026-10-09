@@ -105,7 +105,7 @@ class TestLibraryTimeoutPlumbing(StorytellerLibraryTimeoutBase):
         self.assertEqual(self.client.session.get.call_args.kwargs["timeout"], 10)
 
     def test_timeout_logs_distinct_warning(self):
-        self.client.session.get.side_effect = requests.exceptions.Timeout("slow")
+        self.client.session.get.side_effect = requests.exceptions.ReadTimeout("slow")
         with self.assertLogs("src.api.storyteller_api", level="WARNING") as logs:
             result = self.client._make_request(
                 "GET", "/api/v2/books", timeout=self.client._library_request_timeout())
@@ -113,6 +113,18 @@ class TestLibraryTimeoutPlumbing(StorytellerLibraryTimeoutBase):
         joined = "\n".join(logs.output)
         self.assertIn("Storyteller API request failed ('GET' '/api/v2/books')", joined)
         self.assertIn("did not answer '/api/v2/books' within 45s", joined)
+
+    def test_unreachable_server_does_not_suggest_raising_timeout(self):
+        # A connect timeout means the server is unreachable; a longer read
+        # timeout cannot help, so the hint would send the user the wrong way.
+        self.client.session.get.side_effect = requests.exceptions.ConnectTimeout("unreachable")
+        with self.assertLogs("src.api.storyteller_api", level="WARNING") as logs:
+            result = self.client._make_request(
+                "GET", "/api/v2/books", timeout=self.client._library_request_timeout())
+        self.assertIsNone(result)
+        joined = "\n".join(logs.output)
+        self.assertIn("Storyteller API request failed ('GET' '/api/v2/books')", joined)
+        self.assertNotIn("Library Timeout", joined)
 
 
 class TestSearchBooksFailureVsEmpty(StorytellerLibraryTimeoutBase):
