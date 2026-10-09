@@ -292,6 +292,7 @@ class SuggestionsService:
     # title alone survives even when the author string differs in format.
     _SUGGEST_FUZZY_FLOOR = 45.0
     _SUGGEST_TITLE_STRONG = 85.0
+    _SUBTITLE_STRIPPED_SCORE_CAP = 89.0
 
     # A same-folder pair is auto-trusted (exact 100, pinned ahead of and skipping the
     # Ollama judge) only when the titles ALSO loosely agree. Without this, a lone
@@ -323,6 +324,21 @@ class SuggestionsService:
         if m:
             s = f"{m.group(2)} {m.group(1)}".strip()
         return s
+
+    @staticmethod
+    def _title_score(audio_title: str, audio_full_title: str, candidate_title: str) -> tuple[float, bool]:
+        from rapidfuzz import fuzz
+
+        score = float(fuzz.token_sort_ratio(audio_title, candidate_title))
+        if audio_full_title:
+            score = max(score, float(fuzz.token_sort_ratio(audio_full_title, candidate_title)))
+        if (":" in audio_title) != (":" in candidate_title):
+            stripped = float(fuzz.token_sort_ratio(
+                audio_title.split(":", 1)[0].strip(), candidate_title.split(":", 1)[0].strip()
+            ))
+            if stripped > score:
+                return stripped, True
+        return score, False
 
     @staticmethod
     def _match_from_pool(candidate_info: dict, score: float) -> dict:
@@ -558,6 +574,12 @@ class SuggestionsService:
             return self._suggestion_shell(ab, [authoritative])
 
         norm_audio_title = self._normalize_title_for_match(audio_title)
+        subtitle = str(
+            ab.get("audio_subtitle")
+            or ((ab.get("media") or {}).get("metadata") or {}).get("subtitle")
+            or ""
+        ).strip()
+        norm_audio_full_title = self._normalize_title_for_match(f"{audio_title}: {subtitle}") if subtitle else ""
         matches = []
         audio_path = self._audio_path(ab)
         same_folder_count = sum(
@@ -568,20 +590,24 @@ class SuggestionsService:
             candidate_author = candidate_info["author"]
             norm_candidate_title = self._normalize_title_for_match(candidate_info["title"])
 
+            title_score, subtitle_stripped = self._title_score(
+                norm_audio_title, norm_audio_full_title, norm_candidate_title
+            )
+
             if self._paths_share_parent(audio_path, candidate_info.get("path")):
-                title_score = float(fuzz.token_sort_ratio(norm_audio_title, norm_candidate_title))
                 score, match_reason = self._same_folder_tier(same_folder_count, title_score)
                 match = self._match_from_pool(candidate_info, score)
                 match["match_reason"] = match_reason
                 matches.append(match)
                 continue
 
-            title_score = float(fuzz.token_sort_ratio(norm_audio_title, norm_candidate_title))
             if audio_author:
                 author_score = float(fuzz.token_sort_ratio(audio_author, candidate_author)) if candidate_author else 0.0
                 score = (title_score * 0.7) + (author_score * 0.3)
             else:
                 score = title_score
+            if subtitle_stripped:
+                score = min(score, self._SUBTITLE_STRIPPED_SCORE_CAP)
 
             # Low floor on purpose; a strong title also survives a weak/format-mismatched
             # author. Embedding retrieval + the judge gate enforce precision downstream.
