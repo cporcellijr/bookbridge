@@ -30,6 +30,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Opening an unmatched KOReader book now runs audiobook matching, searches
+  BookOrbit beyond already-linked books within the existing discovery budget,
+  and retains its BookOrbit identity for ebook-only sync. Discovery uses the
+  requesting reader's clients, including when an unlinked document already has
+  stored progress.
 - Suggestions match an audiobook to an ebook whose title differs only by a subtitle,
   using the Audiobookshelf subtitle when there is one. A match found only by dropping
   the subtitle scores below the default auto-keep and auto-match cutoffs, so a bare

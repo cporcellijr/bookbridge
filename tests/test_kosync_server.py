@@ -3234,6 +3234,9 @@ class TestResolveLibraryEbookSource(unittest.TestCase):
         with patch.object(kosync_server, '_container', container):
             source, source_id = kosync_server._resolve_library_ebook_source("Ember (2016).epub")
         self.assertEqual((source, source_id), ("BookOrbit", "3530"))
+        container.bookorbit_client.return_value.find_book_by_filename.assert_called_once_with(
+            "Ember (2016).epub", allow_refresh=True,
+        )
 
     def test_none_when_no_library_configured(self):
         from src.api import kosync_server
