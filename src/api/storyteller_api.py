@@ -8,7 +8,7 @@ import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import unquote
 
 import requests
@@ -20,7 +20,7 @@ from src.utils.file_transfers import (
     stream_response_to_path,
 )
 from src.sync_clients.sync_client_interface import LocatorResult
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -164,20 +164,42 @@ class StorytellerAPIClient:
                 logger.error(f"Storyteller login error via {endpoint}: {e}", exc_info=True)
         return None
 
-    def _make_request(self, method: str, endpoint: str, json_data: dict = None) -> Optional[requests.Response]:
+    @staticmethod
+    def _library_timeout() -> float:
+        """Read timeout (seconds) for whole-library requests, from STORYTELLER_LIBRARY_TIMEOUT."""
+        raw = os.environ.get("STORYTELLER_LIBRARY_TIMEOUT", "10")
+        try:
+            value = float(str(raw).strip())
+        except (TypeError, ValueError):
+            value = float("nan")
+        if value != value:
+            get_persistent_condition_logger().warn(
+                logger,
+                "storyteller_library_timeout_invalid",
+                "⚠️ Invalid STORYTELLER_LIBRARY_TIMEOUT value, using 10s",
+            )
+            return 10.0
+        return min(300.0, max(5.0, value))
+
+    def _library_request_timeout(self) -> tuple:
+        """requests timeout tuple (connect, read) for whole-library requests."""
+        return (10, self._library_timeout())
+
+    def _make_request(self, method: str, endpoint: str, json_data: dict = None,
+                      timeout: Any = 10) -> Optional[requests.Response]:
         token = self._get_fresh_token()
         if not token: return None
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         try:
             url = f"{self.base_url}{endpoint}"
             if method.upper() == "GET":
-                response = self.session.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=headers, timeout=timeout)
             elif method.upper() == "POST":
-                response = self.session.post(url, headers=headers, json=json_data, timeout=10)
+                response = self.session.post(url, headers=headers, json=json_data, timeout=timeout)
             elif method.upper() == "PUT":
-                response = self.session.put(url, headers=headers, json=json_data, timeout=10)
+                response = self.session.put(url, headers=headers, json=json_data, timeout=timeout)
             elif method.upper() == "DELETE":
-                response = self.session.delete(url, headers=headers, json=json_data, timeout=10)
+                response = self.session.delete(url, headers=headers, json=json_data, timeout=timeout)
             else: return None
 
             if response.status_code == 401:
@@ -186,14 +208,23 @@ class StorytellerAPIClient:
                 if not token: return None
                 headers["Authorization"] = f"Bearer {token}"
                 if method.upper() == "GET":
-                    response = self.session.get(url, headers=headers, timeout=10)
+                    response = self.session.get(url, headers=headers, timeout=timeout)
                 elif method.upper() == "POST":
-                    response = self.session.post(url, headers=headers, json=json_data, timeout=10)
+                    response = self.session.post(url, headers=headers, json=json_data, timeout=timeout)
                 elif method.upper() == "PUT":
-                    response = self.session.put(url, headers=headers, json=json_data, timeout=10)
+                    response = self.session.put(url, headers=headers, json=json_data, timeout=timeout)
                 elif method.upper() == "DELETE":
-                    response = self.session.delete(url, headers=headers, json=json_data, timeout=10)
+                    response = self.session.delete(url, headers=headers, json=json_data, timeout=timeout)
             return response
+        except requests.exceptions.Timeout as e:
+            logger.error(f"❌ Storyteller API request failed ('{method}' '{endpoint}'): {e}", exc_info=True)
+            read_timeout = timeout[1] if isinstance(timeout, tuple) else timeout
+            logger.warning(
+                f"⚠️ Storyteller did not answer '{endpoint}' within {read_timeout:g}s — "
+                f"raise Settings → Storyteller → Library Timeout if your library is large",
+                exc_info=True,
+            )
+            return None
         except Exception as e:
             logger.error(f"❌ Storyteller API request failed ('{method}' '{endpoint}'): {e}", exc_info=True)
             return None
@@ -202,7 +233,7 @@ class StorytellerAPIClient:
         return bool(self._get_fresh_token())
 
     def _refresh_book_cache(self) -> bool:
-        response = self._make_request("GET", "/api/v2/books")
+        response = self._make_request("GET", "/api/v2/books", timeout=self._library_request_timeout())
         if response and response.status_code == 200:
             books = response.json()
             self._book_cache = {}
@@ -256,7 +287,7 @@ class StorytellerAPIClient:
         if not book_uuid:
             return None
 
-        response = self._make_request("GET", "/api/v2/books")
+        response = self._make_request("GET", "/api/v2/books", timeout=self._library_request_timeout())
         if not response or response.status_code != 200:
             return None
 
@@ -730,9 +761,9 @@ class StorytellerAPIClient:
 
         return False
 
-    def search_books(self, query: str) -> list:
-        """Search for books in Storyteller."""
-        response = self._make_request("GET", "/api/v2/books", None)
+    def search_books(self, query: str) -> Optional[list]:
+        """Search Storyteller's library. Returns [] for no matches, None if the request failed."""
+        response = self._make_request("GET", "/api/v2/books", None, timeout=self._library_request_timeout())
         if response and response.status_code == 200:
             all_books = response.json()
             stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'is'}
@@ -763,10 +794,10 @@ class StorytellerAPIClient:
                         'title': title,
                         'authors': [a.get('name') for a in book.get('authors', [])],
                         'cover_url': f"/api/v2/books/{book_uuid}/cover",
-                        'has_transcript': self._has_transcript_on_disk(title, book_uuid),
+                        'has_transcript': self._has_transcript_on_disk(title),
                     })
             return results
-        return []
+        return None
 
     @staticmethod
     def _is_readaloud_not_ready(status_code: int, body: str) -> bool:

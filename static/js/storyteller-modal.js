@@ -31,7 +31,17 @@ async function searchStoryteller() {
 
     try {
         const response = await fetch(`/api/storyteller/search?q=${encodeURIComponent(query)}`);
-        const books = await response.json();
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok) {
+            resultsDiv.innerHTML = '';
+            const errDiv = document.createElement('div');
+            errDiv.className = 'st-no-results';
+            errDiv.textContent = (payload && payload.error) || 'Storyteller search failed.';
+            resultsDiv.appendChild(errDiv);
+            return;
+        }
+        const books = Array.isArray(payload) ? payload : [];
 
         resultsDiv.innerHTML = '';
 

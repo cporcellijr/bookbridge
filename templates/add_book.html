@@ -1083,6 +1083,10 @@
                     {% endfor %}
                     </div>
                 </div>
+                {% elif storyteller_search_failed %}
+                <div class="st-search-failed" style="margin: 12px 0; padding: 10px 14px; border: 1px solid rgba(255,180,0,0.5); border-radius: 8px; color: #ffb400; font-size: 13px;">
+                    Storyteller didn't respond in time or returned an error, so its results are missing. If your library is large, raise Settings → Storyteller → Library Timeout.
+                </div>
                 {% endif %}
 
                 {% set single_eb_match = ebooks|length == 1 %}

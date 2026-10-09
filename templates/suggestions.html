@@ -517,9 +517,15 @@
 
         const query = queryParts.join(' ');
         fetch(`/api/storyteller/search?q=${encodeURIComponent(query)}`)
-            .then((response) => response.json())
-            .then((results) => {
+            .then((response) => response.json().catch(() => null).then((body) => ({ ok: response.ok, body })))
+            .then(({ ok, body }) => {
                 if (token !== storytellerFetchToken) return;
+                if (!ok) {
+                    emptyLabel.textContent = (body && body.error) || 'Storyteller search failed.';
+                    emptyLabel.classList.remove('hidden');
+                    return;
+                }
+                const results = body;
                 if (!Array.isArray(results) || results.length === 0) {
                     emptyLabel.textContent = 'No Storyteller matches found.';
                     emptyLabel.classList.remove('hidden');

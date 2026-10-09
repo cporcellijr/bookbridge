@@ -10,6 +10,10 @@ from src.utils.logging_utils import sanitize_log_data
 
 logger = logging.getLogger(__name__)
 
+# Bridge-minted book keys: ebook-only mappings (`ebook-<kosync hash>`, `ebook:<key>`)
+# and library audiobooks served by Grimmory/BookOrbit. None names an ABS item.
+_SYNTHETIC_KEY_PREFIXES = ("ebook-", "ebook:", "booklore:", "bookorbit:")
+
 class ABSEbookSyncClient(SyncClient):
     def __init__(self, abs_client: ABSClient, ebook_parser: EbookParser):
         super().__init__(ebook_parser)
@@ -32,11 +36,23 @@ class ABSEbookSyncClient(SyncClient):
         Combined audiobook+ebook entries sync in 'audiobook' mode; advertising only
         'ebook' excluded this client from them, so ABS ebook progress was never read
         or written for same-folder/combined matches (issue #300). Mirrors the other
-        ebook-capable clients (KoSync, Storyteller, Grimmory, BookOrbit, CWA). No
-        supports_book gate is needed: get_service_state returns None when the ABS item
-        has no ebookProgress, which drops this client from books without an ABS ebook.
+        ebook-capable clients (KoSync, Storyteller, Grimmory, BookOrbit, CWA). Books
+        with no ABS item at all are excluded by `supports_book`.
         """
         return {'audiobook', 'ebook'}
+
+    def supports_book(self, book: Book) -> bool:
+        """Return whether this book maps to a real Audiobookshelf item.
+
+        A `None` read does not keep a client out of the write loop, so a book keyed by
+        a bridge-minted id (an ebook-only match, or a Grimmory/BookOrbit audiobook)
+        would be written to an ABS item that cannot exist. ABS answers that write and
+        the follow-up existence probe with 404, and the book was marked 'error' as a
+        stale mapping (issue #486). An explicit ABS ebook target still qualifies.
+        """
+        if self._is_explicit_abs_ebook(book):
+            return True
+        return not str(book.abs_id or "").strip().lower().startswith(_SYNTHETIC_KEY_PREFIXES)
 
     @staticmethod
     def _resolve_target_id(book: Book) -> str:
