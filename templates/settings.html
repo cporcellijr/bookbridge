@@ -1924,20 +1924,25 @@
                             A scheduled scan behaves like pressing Scan on the Suggestions page (cached results
                             reused, auto-match applied) and runs as the primary admin.</small>
                     </div>
-                    <div class="form-group">
-                        <label>Weekly full refresh</label>
-                        <div style="display:flex;gap:10px;align-items:center;">
-                            <select name="SUGGESTIONS_FULL_REFRESH_DAY">
-                                {% for day in ['off','monday','tuesday','wednesday','thursday','friday','saturday','sunday'] %}
-                                <option value="{{ day }}" {% if (get_val('SUGGESTIONS_FULL_REFRESH_DAY') or 'off')|lower == day %}selected{% endif %}>{{ day|capitalize }}</option>
-                                {% endfor %}
-                            </select>
-                            <input type="time" name="SUGGESTIONS_FULL_REFRESH_TIME"
-                                value="{{ (get_val('SUGGESTIONS_FULL_REFRESH_TIME') or '04:00').rjust(5, '0') }}">
-                        </div>
-                        <small>Once a week, at or after this time in the Timezone set under System, clear the scan
-                            cache and rescan the whole unmatched library from scratch, the same as Full Refresh on
-                            the Suggestions page. It runs once on that day, even across restarts.</small>
+                    {% set legacy_days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'] %}
+                    {% set legacy_day = (get_val('SUGGESTIONS_FULL_REFRESH_DAY') or 'off')|lower %}
+                    {% set legacy_time = (get_val('SUGGESTIONS_FULL_REFRESH_TIME') or '04:00').split(':') %}
+                    {% set legacy_cron = (legacy_time[1]|int ~ ' ' ~ legacy_time[0]|int ~ ' * * ' ~ legacy_day[:3]) if legacy_day in legacy_days and legacy_time|length == 2 else '' %}
+                    {% set full_refresh_on = get_bool('SUGGESTIONS_FULL_REFRESH_ENABLED') or (legacy_cron and not get_val('SUGGESTIONS_FULL_REFRESH_CRON')) %}
+                    <input type="hidden" name="SUGGESTIONS_FULL_REFRESH_DAY" value="off">
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="suggestions_full_refresh" name="SUGGESTIONS_FULL_REFRESH_ENABLED"
+                            onchange="updateFullRefreshFields()"
+                            {% if full_refresh_on %}checked{% endif %}>
+                        <label for="suggestions_full_refresh">Scheduled full refresh</label>
+                        <small>Clear the scan cache and rescan the whole unmatched library from scratch, the same as
+                            Full Refresh on the Suggestions page.</small>
+                    </div>
+                    <div class="form-group{% if not full_refresh_on %} hidden{% endif %}"
+                        id="full_refresh_schedule_group">
+                        <label>Full refresh schedule (cron)</label>
+                        <input type="text" name="SUGGESTIONS_FULL_REFRESH_CRON" placeholder="20 4 * * sun"
+                            value="{{ get_val('SUGGESTIONS_FULL_REFRESH_CRON') or legacy_cron }}">
                     </div>
                     <div class="checkbox-wrapper full-width">
                         <input type="checkbox" id="kosync_auto_map" name="KOSYNC_AUTO_MAP_ON_AGREEMENT"
@@ -4120,6 +4125,15 @@
             }
             window.updateAutoMatchFields = updateAutoMatchFields;
             updateAutoMatchFields();
+
+            function updateFullRefreshFields() {
+                const toggle = document.getElementById('suggestions_full_refresh');
+                const group = document.getElementById('full_refresh_schedule_group');
+                if (!toggle || !group) return;
+                group.classList.toggle('hidden', !toggle.checked);
+            }
+            window.updateFullRefreshFields = updateFullRefreshFields;
+            updateFullRefreshFields();
 
             // 1. ABS Library ID Toggle
             const absCheckbox = document.getElementById('abs_only_lib');
