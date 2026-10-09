@@ -2274,12 +2274,25 @@ class SyncManager:
         if not book or not self.alignment_service:
             return False
 
-        # Existence check only: the map's contents aren't used here, and this
-        # runs for every active book on every sync cycle, so loading and parsing
-        # each full map (10-20 MB for a long book, a miss in the 3-entry map
-        # cache every time) dominated the cycle.
+        # Steady-state sync must not load every map and churn the parsed-map cache.
         if not self.database_service.has_alignment(book.abs_id):
             return False
+
+        latest_job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
+        repair_job = latest_job and (
+            (latest_job.progress or 0.0) < 1.0
+            or latest_job.retry_count
+            or latest_job.last_error
+        )
+        if (getattr(book, "transcript_file", None) != "DB_MANAGED"
+                or getattr(book, "status", None) != "active" or repair_job):
+            # A row alone cannot prove that an unfinished job produced a usable map.
+            try:
+                if not self.alignment_service._get_alignment(book.abs_id):
+                    return False
+            except (ValueError, TypeError):
+                logger.warning("Cannot repair '%s': stored alignment map is unreadable", book.abs_id, exc_info=True)
+                return False
 
         changed = False
         if getattr(book, "transcript_file", None) != "DB_MANAGED":
@@ -2292,12 +2305,7 @@ class SyncManager:
         if changed:
             self.database_service.save_book(book)
 
-        latest_job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
-        if latest_job and (
-            (latest_job.progress or 0.0) < 1.0
-            or latest_job.retry_count
-            or latest_job.last_error
-        ):
+        if repair_job:
             self.database_service.update_latest_job(
                 book.abs_id,
                 kind=JOB_KIND_ALIGNMENT,

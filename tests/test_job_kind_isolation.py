@@ -14,13 +14,9 @@ from unittest.mock import patch
 from src.db.database_service import DatabaseService
 from src.db.models import Book, BookAlignment, Job, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.services.forge_service import ForgeService
+from src.services.alignment_service import AlignmentService
+from src.services.migration_service import MigrationService
 from src.sync_manager import SyncManager
-
-
-class _StubAlignmentService:
-    """Stands in for `AlignmentService`. `_promote_alignment_backed_book` only
-    needs one to be configured: whether a book has a map is answered by the
-    database (`has_alignment`), from the `book_alignments` row each setUp stores."""
 
 
 def _store_alignment(db: DatabaseService, abs_id: str) -> None:
@@ -35,7 +31,7 @@ class TestJobKindIsolation(unittest.TestCase):
         self.db = DatabaseService(self.db_path)
         self.manager = SyncManager(
             database_service=self.db,
-            alignment_service=_StubAlignmentService(),
+            alignment_service=AlignmentService(self.db, polisher=None),
             sync_clients={},
             epub_cache_dir=Path(self.temp_dir) / "epub_cache",
             data_dir=Path(self.temp_dir),
@@ -79,6 +75,59 @@ class TestJobKindIsolation(unittest.TestCase):
         self.assertEqual(alignment_job.progress, 1.0)
         self.assertEqual(alignment_job.retry_count, 0)
         self.assertIsNone(alignment_job.last_error)
+
+    def test_empty_legacy_maps_preserve_failed_jobs_for_retry(self) -> None:
+        """An imported empty map must not erase a failed job's recovery state."""
+        transcripts = Path(self.temp_dir) / "transcripts"
+        transcripts.mkdir()
+        for index, raw in enumerate(("[]", "{}", "null")):
+            with self.subTest(map=raw):
+                abs_id = f"legacy-empty-{index}"
+                self.db.save_book(Book(abs_id=abs_id, status="failed_retry_later", transcript_file="old.json"))
+                self.db.save_job(Job(abs_id=abs_id, progress=0.4, retry_count=2,
+                                     last_error="retry pending", kind=JOB_KIND_ALIGNMENT))
+                (transcripts / f"{abs_id}_alignment.json").write_text(raw, encoding="utf-8")
+                MigrationService(self.db, self.manager.alignment_service, Path(self.temp_dir))._migrate_alignments()
+
+                self.manager.cleanup_stale_jobs()
+
+                book = self.db.get_book(abs_id)
+                job = self.db.get_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT)
+                self.assertEqual(book.status, "failed_retry_later")
+                self.assertEqual(book.transcript_file, "old.json")
+                self.assertEqual((job.progress, job.retry_count, job.last_error), (0.4, 2, "retry pending"))
+                self.assertIsNone(self.manager.alignment_service.get_time_for_char(abs_id, 200))
+
+    def test_unreadable_map_does_not_abort_other_startup_recovery(self) -> None:
+        """A malformed stored map leaves its job retryable and recovery continues."""
+        for abs_id, raw in (("broken-map", "["), ("valid-map", '[{"char": 0, "ts": 0.0}]')):
+            self.db.save_book(Book(abs_id=abs_id, status="processing"))
+            with self.db.get_session() as session:
+                session.add(BookAlignment(abs_id=abs_id, alignment_map_json=raw))
+
+        self.manager.cleanup_stale_jobs()
+
+        broken = self.db.get_book("broken-map")
+        self.assertEqual(broken.status, "failed_retry_later")
+        self.assertIsNone(broken.transcript_file)
+        self.assertEqual(self.db.get_latest_job("broken-map").last_error, "Interrupted by restart")
+        self.assertEqual(self.db.get_book("valid-map").status, "active")
+        self.assertEqual(self.db.get_book("valid-map").transcript_file, "DB_MANAGED")
+
+    def test_unfinished_job_with_finalized_metadata_still_validates_map(self) -> None:
+        """Finalized book metadata alone must not complete a failed alignment job."""
+        book = self.db.get_book(self.abs_id)
+        book.transcript_file = "DB_MANAGED"
+        self.db.save_book(book)
+        with self.db.get_session() as session:
+            session.query(BookAlignment).filter_by(abs_id=self.abs_id).first().alignment_map_json = "[]"
+        self.db.save_job(Job(abs_id=self.abs_id, progress=0.4, retry_count=2,
+                             last_error="retry pending", kind=JOB_KIND_ALIGNMENT))
+
+        self.assertFalse(self.manager._promote_alignment_backed_book(book))
+
+        job = self.db.get_latest_job(self.abs_id, kind=JOB_KIND_ALIGNMENT)
+        self.assertEqual((job.progress, job.retry_count, job.last_error), (0.4, 2, "retry pending"))
 
     def test_readalong_failure_survives_a_subsequent_sync(self) -> None:
         """A generation failure recorded on the read-along job must still be
@@ -172,7 +221,7 @@ class TestCheckPendingJobsRetryKindIsolation(unittest.TestCase):
         self.db = DatabaseService(self.db_path)
         self.manager = SyncManager(
             database_service=self.db,
-            alignment_service=_StubAlignmentService(),
+            alignment_service=AlignmentService(self.db, polisher=None),
             sync_clients={},
             epub_cache_dir=Path(self.temp_dir) / "epub_cache",
             data_dir=Path(self.temp_dir),

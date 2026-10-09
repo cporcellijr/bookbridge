@@ -254,6 +254,22 @@ def test_promote_alignment_backed_book_returns_false_without_alignment(tmp_path)
     manager.database_service.update_latest_job.assert_not_called()
 
 
+def test_promote_alignment_backed_book_completed_job_never_loads_map(tmp_path):
+    manager = _build_manager(tmp_path)
+    manager.alignment_service = MagicMock()
+    manager.database_service.has_alignment.return_value = True
+    manager.database_service.get_latest_job.return_value = SimpleNamespace(
+        progress=1.0, retry_count=0, last_error=None,
+    )
+    book = Book(abs_id="complete", transcript_file="DB_MANAGED", status="active")
+
+    assert manager._promote_alignment_backed_book(book) is True
+
+    manager.alignment_service._get_alignment.assert_not_called()
+    manager.database_service.save_book.assert_not_called()
+    manager.database_service.update_latest_job.assert_not_called()
+
+
 def test_promote_alignment_backed_book_never_touches_a_readalong_kind_job(tmp_path):
     """The regression this exists for: a normal sync cycle calling
     `_promote_alignment_backed_book` must not falsely complete an in-flight
