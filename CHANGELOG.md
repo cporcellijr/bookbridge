@@ -23,6 +23,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Ebooks with no Audiobookshelf item no longer stop syncing when ABS Ebook Sync
+  is on. BookBridge sent their progress to an Audiobookshelf item that didn't
+  exist, then marked the book 'error' as a stale mapping. Books that use
+  Grimmory or BookOrbit audiobooks had the same problem. Re-match any book
+  already showing the error once after updating (#486).
 - Normal sync cycles check for stored alignment maps without loading them;
   recovery still validates a map before completing an unfinished job (#484, #485).
 - BookFusion uploads link the reader API ID used by progress endpoints, including
