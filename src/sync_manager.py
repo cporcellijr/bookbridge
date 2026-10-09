@@ -2274,8 +2274,11 @@ class SyncManager:
         if not book or not self.alignment_service:
             return False
 
-        alignment = self.alignment_service._get_alignment(book.abs_id)
-        if not alignment:
+        # Existence check only: the map's contents aren't used here, and this
+        # runs for every active book on every sync cycle, so loading and parsing
+        # each full map (10-20 MB for a long book, a miss in the 3-entry map
+        # cache every time) dominated the cycle.
+        if not self.database_service.has_alignment(book.abs_id):
             return False
 
         changed = False

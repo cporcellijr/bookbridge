@@ -12,20 +12,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.db.database_service import DatabaseService
-from src.db.models import Book, Job, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
+from src.db.models import Book, BookAlignment, Job, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.services.forge_service import ForgeService
 from src.sync_manager import SyncManager
 
 
 class _StubAlignmentService:
-    """Stands in for `AlignmentService`: `_get_alignment` is the only method
-    `_promote_alignment_backed_book` calls on it."""
+    """Stands in for `AlignmentService`. `_promote_alignment_backed_book` only
+    needs one to be configured: whether a book has a map is answered by the
+    database (`has_alignment`), from the `book_alignments` row each setUp stores."""
 
-    def __init__(self, has_alignment: bool = True):
-        self.has_alignment = has_alignment
 
-    def _get_alignment(self, abs_id: str):
-        return {"ok": True} if self.has_alignment else None
+def _store_alignment(db: DatabaseService, abs_id: str) -> None:
+    with db.get_session() as session:
+        session.add(BookAlignment(abs_id=abs_id, alignment_map_json='[{"char": 0, "ts": 0.0}]'))
 
 
 class TestJobKindIsolation(unittest.TestCase):
@@ -35,7 +35,7 @@ class TestJobKindIsolation(unittest.TestCase):
         self.db = DatabaseService(self.db_path)
         self.manager = SyncManager(
             database_service=self.db,
-            alignment_service=_StubAlignmentService(has_alignment=True),
+            alignment_service=_StubAlignmentService(),
             sync_clients={},
             epub_cache_dir=Path(self.temp_dir) / "epub_cache",
             data_dir=Path(self.temp_dir),
@@ -43,6 +43,7 @@ class TestJobKindIsolation(unittest.TestCase):
         )
         self.abs_id = "book-overlap"
         self.db.save_book(Book(abs_id=self.abs_id, abs_title="Overlap Book", status="active"))
+        _store_alignment(self.db, self.abs_id)
 
     def tearDown(self) -> None:
         self.db.db_manager.close()
@@ -171,7 +172,7 @@ class TestCheckPendingJobsRetryKindIsolation(unittest.TestCase):
         self.db = DatabaseService(self.db_path)
         self.manager = SyncManager(
             database_service=self.db,
-            alignment_service=_StubAlignmentService(has_alignment=True),
+            alignment_service=_StubAlignmentService(),
             sync_clients={},
             epub_cache_dir=Path(self.temp_dir) / "epub_cache",
             data_dir=Path(self.temp_dir),
@@ -186,6 +187,7 @@ class TestCheckPendingJobsRetryKindIsolation(unittest.TestCase):
             abs_id=self.abs_id, abs_title="Retry Overlap Book",
             status="failed_retry_later", sync_mode="audiobook_only",
         ))
+        _store_alignment(self.db, self.abs_id)
 
     def tearDown(self) -> None:
         self.db.db_manager.close()

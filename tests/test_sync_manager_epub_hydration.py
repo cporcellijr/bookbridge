@@ -188,7 +188,7 @@ def test_iter_update_targets_keeps_kosync_last(tmp_path):
 def test_promote_alignment_backed_book_repairs_storyteller_marker_and_job(tmp_path):
     manager = _build_manager(tmp_path)
     manager.alignment_service = MagicMock()
-    manager.alignment_service._get_alignment.return_value = {"ok": True}
+    manager.database_service.has_alignment.return_value = True
     manager.database_service.get_latest_job.return_value = SimpleNamespace(
         progress=0.91,
         retry_count=0,
@@ -218,10 +218,25 @@ def test_promote_alignment_backed_book_repairs_storyteller_marker_and_job(tmp_pa
     )
 
 
+def test_promote_alignment_backed_book_never_loads_the_map(tmp_path):
+    """Runs for every active book on every sync cycle: an existence check
+    through the database, never a load and parse of the full alignment map."""
+    manager = _build_manager(tmp_path)
+    manager.alignment_service = MagicMock()
+    manager.database_service.has_alignment.return_value = True
+    manager.database_service.get_latest_job.return_value = None
+
+    book = Book(abs_id="book-4", abs_title="Long Book", transcript_file="DB_MANAGED", status="active")
+
+    assert manager._promote_alignment_backed_book(book) is True
+    manager.database_service.has_alignment.assert_called_once_with("book-4")
+    manager.alignment_service._get_alignment.assert_not_called()
+
+
 def test_promote_alignment_backed_book_returns_false_without_alignment(tmp_path):
     manager = _build_manager(tmp_path)
     manager.alignment_service = MagicMock()
-    manager.alignment_service._get_alignment.return_value = None
+    manager.database_service.has_alignment.return_value = False
 
     book = Book(
         abs_id="book-2",
@@ -250,7 +265,7 @@ def test_promote_alignment_backed_book_never_touches_a_readalong_kind_job(tmp_pa
     fixture ignores them, so this fixture actually enforces the filter."""
     manager = _build_manager(tmp_path)
     manager.alignment_service = MagicMock()
-    manager.alignment_service._get_alignment.return_value = {"ok": True}
+    manager.database_service.has_alignment.return_value = True
 
     readalong_job = SimpleNamespace(progress=0.0, retry_count=0, last_error=None, kind=JOB_KIND_READALONG)
 
