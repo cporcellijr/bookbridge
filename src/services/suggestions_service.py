@@ -623,6 +623,8 @@ class SuggestionsService:
 
             match = self._match_from_pool(candidate_info, max(score, 0.0))
             match["_direct_match"] = direct_match
+            if subtitle_stripped:
+                match["match_reason"] = "subtitle_only"
             matches.append(match)
 
         if not matches:
@@ -1007,6 +1009,9 @@ class SuggestionsService:
             cand_vec = embedded.get(ct)
             cos = cosine_similarity(audio_vec, cand_vec) if cand_vec else 0.0
             m["score"] = round(0.6 * m.get("score", 0) + 40.0 * cos, 1)
+            if m.get("match_reason") == "subtitle_only":
+                # Semantic similarity must not lift a subtitle-only match past the judge.
+                m["score"] = min(m["score"], self._SUBTITLE_STRIPPED_SCORE_CAP)
 
         reordered = rerank + rest
         reordered.sort(key=lambda m: m.get("score", 0), reverse=True)

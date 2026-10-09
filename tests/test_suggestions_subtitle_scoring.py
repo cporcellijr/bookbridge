@@ -81,3 +81,55 @@ def test_scan_records_carry_the_abs_subtitle_into_scoring():
     assert records[0]["audio_subtitle"] == FULL.split(": ", 1)[1]
     result = _scan(_service(), records[0], FULL)
     assert result["matches"][0]["score"] == 100.0
+
+
+def _rerank_env(**extra):
+    env = {
+        'OLLAMA_RERANK_SUGGESTIONS': 'true', 'OLLAMA_JUDGE_SUGGESTIONS': 'true',
+        'OLLAMA_SUGGEST_JUDGE_GATE': 'true', 'OLLAMA_SUGGEST_AUTOKEEP_SCORE': '90',
+        'OLLAMA_RERANK_BAND_MIN': '60',
+    }
+    env.update(extra)
+    return patch.dict(os.environ, env)
+
+
+def _semantic_service():
+    svc = _service()
+    svc.ollama_client = MagicMock()
+    svc.ollama_client.is_configured.return_value = True
+    svc._embed_texts = lambda texts: {text: [1.0, 0.0] for text in texts}
+    return svc
+
+
+def test_subtitle_only_matches_still_reach_the_judge_after_batched_reranking():
+    svc = _semantic_service()
+    suggestion = _scan(svc, _abs_item("Mistborn"), "Mistborn: The Final Empire", "Mistborn: The Well of Ascension")
+    svc._run_judge = MagicMock(return_value=(None, 0))
+
+    with _rerank_env():
+        suppressed = svc._apply_ollama_reranking_batch([suggestion])
+
+    assert all(m["score"] <= SuggestionsService._SUBTITLE_STRIPPED_SCORE_CAP for m in suggestion["matches"])
+    assert svc._run_judge.call_count == 1
+    assert suggestion.get("bridge_key") in suppressed
+
+
+def test_single_suggestion_rerank_keeps_the_subtitle_cap():
+    svc = _semantic_service()
+    suggestion = _scan(svc, _abs_item("Mistborn"), "Mistborn: The Final Empire", "Mistborn: The Well of Ascension")
+
+    with _rerank_env():
+        matches = svc._ollama_rerank_band("Mistborn", "Hannah Ritchie", suggestion["matches"])
+
+    assert all(m["score"] <= SuggestionsService._SUBTITLE_STRIPPED_SCORE_CAP for m in matches)
+
+
+def test_full_title_matches_are_not_capped_by_reranking():
+    svc = _semantic_service()
+    suggestion = _scan(svc, _abs_item("Clearing the Air", FULL.split(": ", 1)[1]), FULL, "Clearing the Air Quality")
+
+    with _rerank_env():
+        matches = svc._ollama_rerank_band("Clearing the Air", "Hannah Ritchie", suggestion["matches"])
+
+    assert matches[0]["score"] > SuggestionsService._SUBTITLE_STRIPPED_SCORE_CAP
+    assert "match_reason" not in matches[0]
