@@ -24,6 +24,10 @@ ABS_DISABLED_SENTINEL = "disabled"
 def is_abs_disabled_value(value) -> bool:
     return str(value or "").strip().lower() == ABS_DISABLED_SENTINEL
 
+# User permissions (ABS API docs, "User Permissions") that together let a user
+# access every library item: all libraries, all tags, and explicit content.
+_ABS_ALL_ITEMS_PERMISSIONS = ("accessAllLibraries", "accessAllTags", "accessExplicitContent")
+
 class ABSClient:
     def __init__(self, credentials: dict = None):
         # Configuration is dynamic via properties (no caching). `credentials`
@@ -763,43 +767,55 @@ class ABSClient:
             return {"success": False, "code": None, "reason": str(e)}
 
     def get_all_progress_raw(self):
-        """Fetch all user progress in one API call."""
+        """Fetch all user progress in one API call (`mediaProgress` from GET /api/me).
+
+        Returns None when the read failed, so callers can tell it from "no progress".
+        """
+        self.can_access_all_items = False
         self._update_session_headers()
-        # Try specific progress endpoint first
-        url = f"{self.base_url}/api/me/progress"
+        url = f"{self.base_url}/api/me"
         try:
             r = self.session.get(url, timeout=self.timeout)
-            if r.status_code == 200:
-                data = r.json()
-                items = data if isinstance(data, list) else data.get('libraryItemsInProgress', [])
-                mapped_items = {item.get('libraryItemId'): item for item in items if item.get('libraryItemId')}
-                # logger.debug(f"📊 ABS Bulk Progress (Direct): {len(mapped_items)} items")
-                return mapped_items
-            elif r.status_code == 404:
-                # Fallback to /api/me (normal for older ABS versions)
-                url_fallback = f"{self.base_url}/api/me"
-                r2 = self.session.get(url_fallback, timeout=self.timeout)
-                if r2.status_code == 200:
-                    data = r2.json()
-                    
-                    # Try 'mediaInProgress' (some versions) or 'mediaProgress' (others)
-                    items = data.get('mediaInProgress', [])
-                    if not items:
-                        items = data.get('mediaProgress', [])
-                        
-                    return {item.get('libraryItemId'): item for item in items if item.get('libraryItemId')}
-                else:
-                    logger.warning(f"⚠️ Fallback to /api/me failed: {r2.status_code}")
-            else:
+            if r.status_code != 200:
                 logger.warning(f"⚠️ Failed to fetch all progress: {r.status_code}")
-                
-            return {}
+                return None
+            # The User object includes the user's token: keep only what is used here
+            user = r.json()
+            progress = {item.get('libraryItemId'): item for item in user['mediaProgress'] if item.get('libraryItemId')}
+            # librariesAccessible must also be empty: GET /api/libraries lists only those when set
+            permissions = user.get('permissions') or {}
+            self.can_access_all_items = not user.get('librariesAccessible') and all(
+                permissions.get(key) is True
+                for key in _ABS_ALL_ITEMS_PERMISSIONS
+            )
+            return progress
         except Exception as e:
             logger.error(f"❌ Error fetching all ABS progress: {e}", exc_info=True)
-            return {}
+            return None
+
+    def get_all_item_ids(self):
+        """Ids of every item in the user's libraries, or None when a listing failed."""
+        self._update_session_headers()
+        try:
+            r = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
+            r.raise_for_status()
+            item_ids = set()
+            for lib in r.json()['libraries']:
+                # limit=0 returns all of the library's items
+                r_items = self.session.get(
+                    f"{self.base_url}/api/libraries/{lib['id']}/items",
+                    params={"limit": 0, "minified": 1},
+                    timeout=self.timeout,
+                )
+                r_items.raise_for_status()
+                data = r_items.json()
+                if len(data['results']) != data['total']:
+                    raise ValueError(f"listed {len(data['results'])} of {data['total']} items")
+                item_ids.update(item['id'] for item in data['results'])
+            return item_ids
         except Exception as e:
-            logger.error(f"❌ Error fetching all ABS progress: {e}", exc_info=True)
-            return {}
+            logger.warning(f"⚠️ ABS: Failed to list library items: {e}")
+            return None
 
     def get_in_progress(self, min_progress=0.01):
         """Fetch in-progress items, optimized to avoid redundant detail fetches if possible."""

@@ -35,6 +35,10 @@ class _FakeABSApi:
         self.calls.append(abs_id)
         return {"id": abs_id} if abs_id in self.accessible else None
 
+    def get_all_item_ids(self):
+        self.calls.append("<listing>")
+        return self.listed
+
 
 class _FakeABSSyncClient(_FakeClient):
     def __init__(self, accessible=()):
@@ -49,12 +53,12 @@ class _FakeStateDB:
     def get_states_for_book(self, abs_id):
         return [object()] if abs_id in self.state_abs_ids else []
 
-    def is_user_linked(self, user_id, abs_id):
-        return abs_id in self.linked.get(user_id, set())
+    def get_linked_abs_ids(self, user_id):
+        return self.linked.get(user_id, set())
 
 
 class _FailingLinkDB(_FakeStateDB):
-    def is_user_linked(self, user_id, abs_id):
+    def get_linked_abs_ids(self, user_id):
         raise RuntimeError("db unavailable")
 
 
@@ -689,6 +693,31 @@ class TestSyncCycleUserScoping(unittest.TestCase):
 
         self.assertEqual([b.abs_id for b in visible], ["bulk-visible"])
         self.assertEqual(mgr.sync_clients["ABS"].abs_client.calls, [])
+
+    def test_user_filter_lists_items_once_when_api_me_grants_all_items(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr.sync_clients = {"ABS": _FakeABSSyncClient(accessible={"book-1"})}
+        abs_api = mgr.sync_clients["ABS"].abs_client
+        abs_api.can_access_all_items = True
+        abs_api.listed = {"book-1"}
+        mgr.database_service = _FakeStateDB(linked={2: {"book-1", "deleted"}})
+        books = [_FakeBook("book-1"), _FakeBook("deleted")]
+
+        def run(bulk_states_per_client):
+            abs_api.calls = []
+            token = set_current_user_id(2)
+            try:
+                visible = mgr._filter_books_for_current_user(books, bulk_states_per_client)
+            finally:
+                reset_current_user_id(token)
+            return [b.abs_id for b in visible], abs_api.calls
+
+        self.assertEqual(run({"ABS": {}}), (["book-1"], ["<listing>"]))
+        # Without this cycle's bulk read (Instant Sync) each item is checked
+        self.assertEqual(run({}), (["book-1"], ["book-1", "deleted"]))
+        # A failed listing falls back to checking each item
+        abs_api.listed = None
+        self.assertEqual(run({"ABS": {}}), (["book-1"], ["<listing>", "book-1", "deleted"]))
 
 
 class _FakeUser:

@@ -329,6 +329,7 @@ def _wire_database(manager, book):
     manager.database_service = MagicMock()
     manager.database_service.get_book.return_value = book
     manager.database_service.get_states_for_book.return_value = []
+    manager.database_service.get_linked_abs_ids.return_value = {book.abs_id}
     manager.database_service.save_state = MagicMock()
     manager.database_service.save_book = MagicMock()
 

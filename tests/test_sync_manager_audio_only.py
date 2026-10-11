@@ -60,3 +60,25 @@ def test_audio_only_cycle_uses_percentage_without_locating_epub(tmp_path):
     assert saved_state.abs_id == "audio-only-1"
     assert saved_state.client_name == "abs"
     assert saved_state.percentage == 0.5
+
+
+def test_cycle_keeps_empty_abs_bulk_state(tmp_path):
+    """An empty ABS map from a successful read means "no progress"; other empty results are dropped."""
+    clients = {"ABS": MagicMock(), "Storyteller": MagicMock()}
+    for client in clients.values():
+        client.fetch_bulk_state.return_value = {}
+    manager = SyncManager(
+        abs_client=MagicMock(),
+        booklore_client=MagicMock(),
+        transcriber=MagicMock(),
+        ebook_parser=MagicMock(),
+        database_service=MagicMock(),
+        sync_clients=clients,
+        data_dir=tmp_path,
+        books_dir=tmp_path,
+    )
+    manager._filter_books_for_current_user = MagicMock(return_value=[])
+
+    manager._sync_cycle_internal()
+
+    assert manager._filter_books_for_current_user.call_args[0][1] == {"ABS": {}}

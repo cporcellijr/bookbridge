@@ -3588,6 +3588,20 @@ def _respond_from_book_states(doc_id, book):
     return jsonify(response_data), 200
 
 
+def linked_documents_without_progress(username: str, key: str) -> Optional[dict[str, str]]:
+    """Map document hash -> abs_id for every linked document whose GET from this
+    login can only end in the read-only 404 of _respond_from_book_states: the
+    login's user may access the book, and the book has no State, per-user
+    progress or document progress. None when the login would be rejected."""
+    if _database_service is None:
+        return None
+    authenticated, user_id = authenticate_kosync(username, key)
+    if not authenticated:
+        return None
+
+    return _database_service.get_linked_kosync_documents_without_progress(user_id)
+
+
 def _resolve_book_by_sibling_hash(doc_id: str, existing_doc=None):
     """
     Try to resolve an unknown hash to a known book using DB-only lookups.

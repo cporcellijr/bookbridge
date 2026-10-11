@@ -30,6 +30,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Full sync cycles fetch Audiobookshelf progress and unrestricted item access in
+  bulk, skip built-in KoSync reads for linked books without progress, and reuse
+  database snapshots and one client-fetch worker pool. This reduces idle-cycle
+  work while preserving per-user access checks and individual-read fallbacks.
+  Contributed by [@nmackler](https://github.com/nmackler) in #491, #492, and #493
+  for #490.
 - Opening an unmatched KOReader book now runs audiobook matching, searches
   BookOrbit beyond already-linked books within the existing discovery budget,
   and retains its BookOrbit identity for ebook-only sync. Discovery uses the

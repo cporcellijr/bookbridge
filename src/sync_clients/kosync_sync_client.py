@@ -3,6 +3,7 @@ from typing import Optional
 import logging
 import re
 import time
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, Tag
 from lxml import html
@@ -69,10 +70,31 @@ class KoSyncSyncClient(SyncClient):
 
         return super().supports_book(book)
 
+    def fetch_bulk_state(self) -> Optional[dict]:
+        """With the built-in server, find the linked documents whose progress GET
+        would only 404, so the cycle doesn't send those requests to itself."""
+        try:
+            url = urlparse(self.kosync_client.base_url)
+            ports = {5757, int(os.environ.get("KOSYNC_PORT") or 5757)}
+            if url.hostname not in ("127.0.0.1", "localhost", "0.0.0.0", "::1") or url.port not in ports:
+                return None
+            # HTTP Basic sends no x-auth-* headers, which the built-in server rejects.
+            headers = self.kosync_client._request_kwargs().get("headers") or {}
+            from src.api import kosync_server
+            return kosync_server.linked_documents_without_progress(
+                headers.get("x-auth-user"), headers.get("x-auth-key")
+            )
+        except Exception as e:
+            logger.debug(f"KoSync: built-in progress lookup skipped: {e}")
+            return None
+
     def get_service_state(self, book: Book, prev_state: Optional[State], title_snip: str = "", bulk_context: dict = None) -> Optional[ServiceState]:
         ko_id = book.kosync_doc_id
         ko_metadata = {}
-        if hasattr(self.kosync_client, "get_progress_with_metadata"):
+        if bulk_context and bulk_context.get(ko_id) == book.abs_id:
+            # Built-in server with no progress for this book: the GET's 404 result.
+            ko_pct, ko_xpath = None, None
+        elif hasattr(self.kosync_client, "get_progress_with_metadata"):
             try:
                 ko_pct, ko_xpath, ko_metadata = self.kosync_client.get_progress_with_metadata(ko_id)
             except (TypeError, ValueError):

@@ -18,7 +18,9 @@ progress.
 import hashlib
 import os
 import shutil
+import time
 import unittest
+from unittest.mock import MagicMock, patch
 
 # Set test environment BEFORE importing web_server
 TEST_DIR = '/tmp/test_kosync_not_found_status'
@@ -151,6 +153,86 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
         data = follow_up.get_json()
         self.assertAlmostEqual(float(data['percentage']), 0.42)
         self.assertEqual(data['progress'], "/body/DocFragment[7]/body/p[12]")
+
+    def test_sync_cycle_skips_only_builtin_reads_that_would_404(self):
+        """With the built-in server, the cycle's KoSync bulk lists exactly the
+        linked documents whose GET 404s, and their HTTP read is skipped."""
+        from src import web_server
+        from src.api import kosync_server
+        from src.api.api_clients import KoSyncClient
+        from src.sync_clients.kosync_sync_client import KoSyncSyncClient
+
+        db = web_server.database_service
+        hashes = {name: _hex_hash(name) for name in ("empty", "state", "user", "legacy")}
+        for name, doc_hash in hashes.items():
+            db.save_book(Book(abs_id=name, abs_title=name, kosync_doc_id=doc_hash, status="active"))
+            db.save_kosync_document(KosyncDocument(
+                document_hash=doc_hash, linked_abs_id=name,
+                percentage=0.3 if name == "legacy" else 0,
+                progress="/body/p[1]" if name == "legacy" else "",
+            ))
+        db.save_state(State(abs_id="state", client_name="abs", percentage=0.2,
+                            xpath="/body/p[2]", last_updated=time.time()))
+        db.upsert_user_kosync_progress(hashes["user"], 0.4, progress="/body/p[3]")
+        db.save_kosync_document(KosyncDocument(document_hash=_hex_hash("unlinked"), percentage=0))
+
+        creds = {"KOSYNC_USER": "testuser", "KOSYNC_KEY": "testpass"}
+        kosync = KoSyncClient({**creds, "KOSYNC_SERVER": "http://127.0.0.1:5757"})
+        sync_client = KoSyncSyncClient(kosync, MagicMock())
+        bulk = sync_client.fetch_bulk_state()
+        self.assertEqual(bulk, {hashes["empty"]: "empty"})
+        for name, doc_hash in hashes.items():
+            status = self.client.get(f'/syncs/progress/{doc_hash}', headers=self.auth_headers).status_code
+            self.assertEqual(status, 404 if name == "empty" else 200, name)
+
+        with patch.object(kosync.session, "get") as http_get:
+            self.assertIsNone(sync_client.get_service_state(db.get_book("empty"), None, bulk_context=bulk))
+            http_get.assert_not_called()
+            sync_client.get_service_state(db.get_book("state"), None, bulk_context=bulk)
+            http_get.assert_called_once()
+
+        external = KoSyncClient({**creds, "KOSYNC_SERVER": "http://192.168.1.5:5757"})
+        self.assertIsNone(KoSyncSyncClient(external, MagicMock()).fetch_bulk_state())
+        self.assertIsNone(kosync_server.linked_documents_without_progress("testuser", "wrong"))
+
+    def test_empty_progress_bulk_delegates_only_after_authentication(self) -> None:
+        """The API helper leaves the authenticated progress query to the DB service."""
+        from src import web_server
+        from src.api import kosync_server
+
+        expected = {_hex_hash("empty"): "empty"}
+        with patch.object(kosync_server, "authenticate_kosync", return_value=(True, 17)) as authenticate, \
+             patch.object(web_server.database_service, "get_linked_kosync_documents_without_progress",
+                          return_value=expected, create=True) as query:
+            self.assertEqual(kosync_server.linked_documents_without_progress("reader", "key"), expected)
+            query.assert_called_once_with(17)
+            authenticate.return_value = (False, None)
+            self.assertIsNone(kosync_server.linked_documents_without_progress("reader", "bad"))
+            query.assert_called_once_with(17)
+
+    def test_empty_progress_bulk_keeps_other_users_progress_separate(self) -> None:
+        """A different user's progress never excludes this reader's empty document."""
+        from src import web_server
+        from src.api import kosync_server
+
+        db = web_server.database_service
+        admin_id = db._default_user_id()
+        reader = db.create_user("bulk-reader", "reader-password", role="user")
+        db.set_user_credentials(reader.id, {"KOSYNC_USER": "bulk-reader", "KOSYNC_KEY": "reader-key"})
+        doc_hash = _hex_hash("bulk-shared")
+        db.save_book(Book(abs_id="bulk-shared", abs_title="Shared", kosync_doc_id=doc_hash, status="active"))
+        db.link_user_book(reader.id, "bulk-shared")
+        db.save_kosync_document(KosyncDocument(document_hash=doc_hash, linked_abs_id="bulk-shared", percentage=0))
+        db.upsert_user_kosync_progress(doc_hash, 0.4, progress="/body/p[4]", user_id=admin_id)
+
+        self.assertEqual(kosync_server.linked_documents_without_progress("bulk-reader", "reader-key"),
+                         {doc_hash: "bulk-shared"})
+        self.assertEqual(db.get_linked_kosync_documents_without_progress(admin_id), {})
+        self.assertEqual(db.get_linked_kosync_documents_without_progress(None), {})
+        headers = {"x-auth-user": "bulk-reader", "x-auth-key": hashlib.md5(b"reader-key").hexdigest()}
+        self.assertEqual(self.client.get(f"/syncs/progress/{doc_hash}", headers=headers).status_code, 404)
+        db.unlink_user_book(reader.id, "bulk-shared")
+        self.assertEqual(db.get_linked_kosync_documents_without_progress(reader.id), {})
 
 
 if __name__ == '__main__':

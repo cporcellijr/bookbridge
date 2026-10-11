@@ -8,8 +8,9 @@ import shutil
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 
 from src.db.database_service import DatabaseService
 from src.db.models import Book, BookAlignment, Job, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
@@ -210,6 +211,46 @@ class TestJobKindIsolation(unittest.TestCase):
             )
         self.assertEqual(mapping["job_progress"], 25.0)
         self.assertEqual(mapping["job_last_error"], "alignment wait")
+
+    def test_bulk_alignment_and_job_reads_match_the_per_book_ones(self) -> None:
+        self.db.save_book(Book(abs_id="unaligned", abs_title="Unaligned", status="active"))
+        for last_attempt, kind in ((1000.0, JOB_KIND_ALIGNMENT), (3000.0, JOB_KIND_READALONG),
+                                   (2000.0, JOB_KIND_ALIGNMENT)):
+            self.db.save_job(Job(abs_id=self.abs_id, last_attempt=last_attempt, kind=kind))
+        self.db.save_job(Job(abs_id="unaligned", last_attempt=500.0, kind=JOB_KIND_ALIGNMENT))
+
+        self.assertEqual(self.db.get_aligned_book_ids(), {self.abs_id})
+        latest = self.db.get_latest_jobs(kind=JOB_KIND_ALIGNMENT)
+        for abs_id in (self.abs_id, "unaligned"):
+            self.assertEqual(latest[abs_id].id, self.db.get_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT).id)
+        self.assertEqual(self.db.get_latest_jobs()[self.abs_id].kind, JOB_KIND_READALONG)
+
+    def test_full_cycle_reads_states_and_alignment_once_with_one_pool(self) -> None:
+        """Only a book whose alignment needs a repair is re-read per book."""
+        book = self.db.get_book(self.abs_id)
+        book.transcript_file = "DB_MANAGED"
+        self.db.save_book(book)
+        self.db.save_job(Job(abs_id=self.abs_id, last_attempt=1000.0, progress=1.0, kind=JOB_KIND_ALIGNMENT))
+        self.db.save_book(Book(abs_id="needs-repair", abs_title="Repair", status="active"))
+        _store_alignment(self.db, "needs-repair")
+        self.db.save_job(Job(abs_id="needs-repair", last_attempt=1000.0, progress=0.4,
+                             last_error="retry pending", kind=JOB_KIND_ALIGNMENT))
+        client = MagicMock()
+        client.fetch_bulk_state.return_value = None
+        client.get_supported_sync_types.return_value = ["audiobook", "ebook"]
+        client.get_service_state.return_value = None
+        self.manager.sync_clients = {"KoSync": client}
+
+        with patch.object(self.db, "get_states_for_book", wraps=self.db.get_states_for_book) as per_book_states, \
+             patch.object(self.db, "has_alignment", wraps=self.db.has_alignment) as per_book_alignment, \
+             patch("src.sync_manager.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as pools:
+            self.manager._sync_cycle_internal()
+
+        self.assertEqual(client.get_service_state.call_count, 2)
+        self.assertEqual(pools.call_count, 1)
+        per_book_states.assert_not_called()
+        self.assertEqual(per_book_alignment.call_args_list, [call("needs-repair")])
+        self.assertEqual(self.db.get_latest_job("needs-repair", kind=JOB_KIND_ALIGNMENT).progress, 1.0)
 
 
 class TestCheckPendingJobsRetryKindIsolation(unittest.TestCase):

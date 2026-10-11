@@ -766,6 +766,11 @@ class DatabaseService:
                 return None
             return row[0] or ""
 
+    def get_aligned_book_ids(self) -> set[str]:
+        """Every book with a stored alignment map: ``has_alignment`` for all books in one query."""
+        with self.get_session() as session:
+            return {row[0] for row in session.query(BookAlignment.abs_id).all()}
+
     def get_ctc_aligned_book_ids(self) -> set[str]:
         """Return CTC-aligned book IDs in one query without loading map blobs."""
         with self.get_session() as session:
@@ -2062,6 +2067,19 @@ class DatabaseService:
                 session.expunge(job)
             return job
 
+    def get_latest_jobs(self, kind: Optional[str] = None) -> dict:
+        """``get_latest_job`` for all books in one query: abs_id -> latest job."""
+        with self.get_session() as session:
+            query = session.query(Job)
+            if kind is not None:
+                query = query.filter(Job.kind == kind)
+            latest = {}
+            for job in query.order_by(Job.last_attempt.desc()).all():
+                if job.abs_id not in latest:
+                    session.expunge(job)
+                    latest[job.abs_id] = job
+            return latest
+
     def get_jobs_for_book(self, abs_id: str) -> List[Job]:
         """Get all jobs for a book."""
         with self.get_session() as session:
@@ -2507,6 +2525,33 @@ class DatabaseService:
                 session.delete(doc)
                 return True
             return False
+
+    def get_linked_kosync_documents_without_progress(self, user_id: Optional[int] = None) -> dict[str, str]:
+        """Map accessible linked hashes to books with no state or device progress."""
+        from sqlalchemy.orm import aliased
+
+        # With no authenticated user, all users' rows conservatively exclude progress.
+        other = aliased(KosyncDocument)
+        with self.get_session() as session:
+            states = session.query(State.abs_id)
+            user_progress = session.query(other.linked_abs_id).join(
+                KosyncUserProgress, KosyncUserProgress.document_hash == other.document_hash
+            ).filter(other.linked_abs_id.isnot(None))
+            doc_progress = session.query(other.linked_abs_id).filter(
+                other.linked_abs_id.isnot(None), other.percentage > 0
+            )
+            docs = session.query(KosyncDocument.document_hash, KosyncDocument.linked_abs_id).filter(
+                KosyncDocument.linked_abs_id.isnot(None)
+            )
+            if user_id is not None:
+                states = states.filter(State.user_id == user_id)
+                user_progress = user_progress.filter(KosyncUserProgress.user_id == user_id)
+                docs = docs.filter(KosyncDocument.linked_abs_id.in_(
+                    session.query(UserBook.abs_id).filter(UserBook.user_id == user_id)
+                ))
+            for with_progress in (states, user_progress, doc_progress):
+                docs = docs.filter(KosyncDocument.linked_abs_id.notin_(with_progress))
+            return dict(docs.all())
 
     def get_kosync_document_by_linked_book(self, abs_id: str) -> Optional[KosyncDocument]:
         """Get a KOSync document linked to a specific ABS book."""

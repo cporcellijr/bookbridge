@@ -12,6 +12,7 @@ from unittest.mock import Mock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tests.base_sync_test import BaseSyncCycleTestCase
+from src.api.api_clients import ABSClient
 from src.db.models import State
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.sync_clients.kosync_sync_client import KoSyncSyncClient
@@ -152,6 +153,54 @@ class TestABSLeadsSync(BaseSyncCycleTestCase):
         self.assertEqual(state.current["pct"], 1.0)
         self.assertEqual(state.current["ts"], 37588.3)
         self.assertEqual(state.delta, 0.0)
+
+    def test_bulk_progress_reads_media_progress_and_permissions_from_api_me(self):
+        client = ABSClient()
+        client.session = Mock()
+        client.session.get.return_value.status_code = 200
+        client.session.get.return_value.json.return_value = {
+            "mediaProgress": [{"libraryItemId": "book-1", "currentTime": 12.0}],
+            "permissions": {"accessAllLibraries": True, "accessAllTags": True, "accessExplicitContent": True},
+        }
+
+        self.assertEqual(client.get_all_progress_raw(), {"book-1": {"libraryItemId": "book-1", "currentTime": 12.0}})
+        self.assertTrue(client.session.get.call_args[0][0].endswith("/api/me"))
+        self.assertTrue(client.can_access_all_items)
+
+        client.session.get.return_value.json.return_value["librariesAccessible"] = ["lib-1"]
+        client.get_all_progress_raw()
+        self.assertFalse(client.can_access_all_items)
+
+        client.session.get.return_value.status_code = 500
+        self.assertIsNone(client.get_all_progress_raw())
+        self.assertFalse(client.can_access_all_items)
+
+    def test_all_item_ids_lists_every_library(self):
+        client = ABSClient()
+        client.session = Mock()
+        client.session.get.return_value.json.side_effect = [
+            {"libraries": [{"id": "lib-1"}]},
+            {"results": [{"id": "book-1"}, {"id": "book-2"}], "total": 2},
+        ]
+        self.assertEqual(client.get_all_item_ids(), {"book-1", "book-2"})
+        self.assertEqual(client.session.get.call_args[1]["params"], {"limit": 0, "minified": 1})
+
+        client.session.get.return_value.json.side_effect = [
+            {"libraries": [{"id": "lib-1"}]},
+            {"results": [{"id": "book-1"}], "total": 2},
+        ]
+        self.assertIsNone(client.get_all_item_ids())
+
+    def test_book_missing_from_successful_bulk_read_has_no_progress(self):
+        abs_api = Mock()
+        abs_api.get_progress.return_value = None  # what a 404 gives
+        client = ABSSyncClient(abs_api, Mock(), Mock())
+        book = SimpleNamespace(abs_id="unstarted", duration=1000.0, transcript_file=None)
+        expected = client.get_service_state(book, None).current
+        abs_api.get_progress.reset_mock()
+
+        self.assertEqual(client.get_service_state(book, None, bulk_context={}).current, expected)
+        abs_api.get_progress.assert_not_called()
 
 
 if __name__ == '__main__':
