@@ -9,7 +9,8 @@ import pytest
 
 from src.db.database_service import DatabaseService
 from src.db.user_bootstrap import bootstrap_admin_user, create_initial_admin_user
-from src.db.models import Book, State
+from src.db.models import (Book, State, UserBook, KosyncDocument, KosyncUserProgress,
+                          ReadingSessionBuffer, KoreaderAnnotation, KoreaderAnnotationDeviceState)
 
 
 class TestUserDb(unittest.TestCase):
@@ -52,6 +53,51 @@ class TestUserDb(unittest.TestCase):
 
     def test_delete_and_disable_cannot_remove_all_active_admins(self):
         self._race_admin_changes(delete_first=True)
+
+    def test_delete_user_removes_scoped_progress_but_keeps_shared_catalog(self):
+        self.svc.create_user('owner', 'password', role='admin')
+        other = self.svc.create_user('other-reader', 'password')
+        reader = self.svc.create_user('deleted-reader', 'password')
+        self.svc.save_book(Book(abs_id='shared-book', abs_title='Shared', user_id=reader.id, status='active'))
+        for user, pct in [(reader, 0.4), (other, 0.7)]:
+            self.svc.link_user_book(user.id, 'shared-book')
+            self.svc.save_state(State(abs_id='shared-book', client_name='kosync', percentage=pct, user_id=user.id))
+            self.svc.upsert_user_kosync_progress('b' * 32, pct, user_id=user.id)
+        self.svc.save_kosync_document(KosyncDocument(document_hash='b' * 32, linked_abs_id='shared-book',
+                                                    filename='Shared.epub', user_id=reader.id,
+                                                    percentage=0.4, progress='deleted-reader-position'))
+        annotation_ids = {}
+        with self.svc.get_session() as session:
+            for user in (reader, other):
+                annotation = KoreaderAnnotation('b' * 32, 'note', '2026-10-12 00:00:00', '/body/p[1]', user_id=user.id)
+                session.add(annotation)
+                session.flush()
+                annotation_ids[user.id] = annotation.id
+                session.add(KoreaderAnnotationDeviceState(annotation.id, 'reader-device'))
+                session.add(ReadingSessionBuffer(user_id=user.id, abs_id='shared-book', session_type='reading',
+                                                 leader_client='KoSync', started_at=0, last_event_at=1,
+                                                 accumulated_seconds=1, start_progress=0.1, end_progress=0.2))
+        self.assertTrue(self.svc.delete_user(reader.id))
+        with self.svc.get_session() as session:
+            for model in (UserBook, State, KosyncUserProgress, ReadingSessionBuffer, KoreaderAnnotation):
+                self.assertEqual(session.query(model).filter(model.user_id == reader.id).count(), 0)
+            self.assertEqual(session.query(KoreaderAnnotationDeviceState).filter(
+                KoreaderAnnotationDeviceState.annotation_id == annotation_ids[reader.id]
+            ).count(), 0)
+            self.assertEqual(session.query(KoreaderAnnotationDeviceState).filter(
+                KoreaderAnnotationDeviceState.annotation_id == annotation_ids[other.id]
+            ).count(), 1)
+        self.assertTrue(self.svc.is_user_linked(other.id, 'shared-book'))
+        self.assertAlmostEqual(self.svc.get_state('shared-book', 'kosync', user_id=other.id).percentage, 0.7)
+        self.assertAlmostEqual(float(self.svc.get_user_kosync_progress('b' * 32, other.id).percentage), 0.7)
+        book = self.svc.get_book('shared-book')
+        self.assertIsNotNone(book)
+        self.assertIsNone(book.user_id)
+        doc = self.svc.get_kosync_document('b' * 32)
+        self.assertEqual((doc.filename, doc.linked_abs_id), ('Shared.epub', 'shared-book'))
+        self.assertIsNone(doc.user_id)
+        self.assertFalse(doc.percentage)
+        self.assertFalse(doc.progress)
 
     def test_create_and_lookup_user(self):
         u = self.svc.create_user("Admin", "secret", role="admin")

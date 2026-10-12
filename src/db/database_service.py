@@ -523,7 +523,7 @@ class DatabaseService:
             return True, None
 
     def delete_user(self, user_id: int) -> bool:
-        """Delete an account without racing a last-admin disable or demotion."""
+        """Delete scoped user data while retaining shared catalog and an active admin."""
         from sqlalchemy import text
 
         with self.get_session() as session:
@@ -535,6 +535,23 @@ class DatabaseService:
                 User.role == 'admin', User.active == 1
             ).count() <= 1
             if not blocked:
+                # SQLite may not enforce foreign keys; remove scoped data explicitly.
+                annotation_ids = session.query(KoreaderAnnotation.id).filter(KoreaderAnnotation.user_id == user_id)
+                session.query(KoreaderAnnotationDeviceState).filter(
+                    KoreaderAnnotationDeviceState.annotation_id.in_(annotation_ids)
+                ).delete(synchronize_session=False)
+                for model in (State, KosyncUserProgress, ReadingSessionBuffer, ReadingSession,
+                              KOReaderBookStat, KOReaderPageStat, KOReaderBookStatus, KoreaderAnnotation,
+                              UserCredential, UserBook, UserBookFusionLink, UserBookOrbitLink):
+                    session.query(model).filter(model.user_id == user_id).delete(synchronize_session=False)
+                session.query(Book).filter(Book.user_id == user_id).update(
+                    {Book.user_id: None}, synchronize_session=False
+                )
+                session.query(KosyncDocument).filter(KosyncDocument.user_id == user_id).update({
+                    KosyncDocument.user_id: None, KosyncDocument.percentage: 0,
+                    KosyncDocument.progress: None, KosyncDocument.timestamp: None,
+                    KosyncDocument.device: None, KosyncDocument.device_id: None,
+                }, synchronize_session=False)
                 session.delete(user)
         if blocked:
             raise ValueError("Can't delete the last active admin")

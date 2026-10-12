@@ -35,6 +35,7 @@ All notable changes to BookBridge will be documented in this file.
 
 - Apply account changes atomically in the admin API and dashboard, protecting the
   primary admin and retaining an active admin during concurrent updates or deletion.
+  Deleting an account removes its scoped data while retaining the shared catalog.
   Re-enabled readers regain shared books and cached access policies refresh. Integration
   updates save together and changing Readest credentials clears the old session (#494).
 - Resolve KOReader filename hashes when Calibre reorders title and author, with
