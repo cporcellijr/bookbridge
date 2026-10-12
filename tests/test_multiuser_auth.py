@@ -693,9 +693,30 @@ class TestMultiUserAuth(unittest.TestCase):
             )
 
             replacement = self.svc.create_user('queue-replacement', 'pw', role='user')
-            self.assertEqual(replacement.id, target.id)
+            self.assertGreater(replacement.id, target.id)
             with patch.object(web_server, 'get_current_user_id', return_value=replacement.id):
                 self.assertEqual(web_server._load_match_queue(), [])
+
+    def test_second_admin_cannot_delete_primary_admin(self):
+        self.mock_container.user_client_registry = MagicMock(return_value=MagicMock())
+        self.svc.create_user('second-admin', 'pw', role='admin')
+        primary = self.svc.get_user_by_username('admin')
+        self.client.post('/login', data={'username': 'second-admin', 'password': 'pw'})
+        resp = self.client.post('/admin/users', data={'action': 'delete', 'user_id': str(primary.id)})
+        self.assertIsNotNone(self.svc.get_user(primary.id))
+        self.assertIn(b'primary admin', resp.data)
+
+    def test_deleting_user_retires_their_abs_socket_listener(self):
+        import src.web_server as web_server
+
+        self.mock_container.user_client_registry = MagicMock(return_value=MagicMock())
+        target = self.svc.create_user('socket-target', 'pw', role='user')
+        socket_manager = MagicMock()
+        self._login()
+        with patch.object(web_server, 'abs_socket_manager', socket_manager):
+            self.client.post('/admin/users', data={'action': 'delete', 'user_id': str(target.id)})
+        self.assertIsNone(self.svc.get_user(target.id))
+        socket_manager.stop_user.assert_called_once_with(target.id)
 
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")

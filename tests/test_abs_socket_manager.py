@@ -311,6 +311,42 @@ class TestABSSocketManagerSupervise(unittest.TestCase):
         # The helper should have been called twice
         self.assertEqual(mgr._is_scope_enabled.call_count, 2)
 
+    def test_stop_user_disconnects_and_never_restarts_listener(self):
+        """Deleting an account mid-session stops its listener without the restart backoff."""
+        mgr = ABSSocketManager(self.db, self.sync, user_client_registry=None)
+        mgr._is_scope_enabled = MagicMock(return_value=True)
+        mgr._stop_event.wait = MagicMock()
+        events = []
+
+        class _FakeListener:
+            def __init__(self, **kwargs):
+                pass
+
+            def start(self_inner):
+                events.append("start")
+                mgr.stop_user(7)
+
+            def stop(self_inner):
+                events.append("stop")
+
+        with patch("src.services.abs_socket_manager.ABSSocketListener", _FakeListener):
+            mgr._supervise(7, "http://abs.local", "reader-token", "user 7")
+
+        self.assertEqual(events, ["start", "stop", "stop"])
+        self.assertNotIn("user 7", mgr._current_listeners)
+        mgr._stop_event.wait.assert_not_called()
+
+    def test_supervise_never_starts_a_retired_scope(self):
+        mgr = ABSSocketManager(self.db, self.sync, user_client_registry=None)
+        mgr._is_scope_enabled = MagicMock(return_value=True)
+        mgr.stop_user(9)
+
+        with patch("src.services.abs_socket_manager.ABSSocketListener") as MockListener:
+            MockListener.return_value.start.side_effect = lambda: mgr._stop_event.set()
+            mgr._supervise(9, "http://abs.local", "reader-token", "user 9")
+
+        MockListener.return_value.start.assert_not_called()
+
 
 class TestABSSocketManagerStart(unittest.TestCase):
     def setUp(self):

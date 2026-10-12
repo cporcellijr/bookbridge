@@ -523,7 +523,7 @@ class DatabaseService:
             return True, None
 
     def delete_user(self, user_id: int) -> bool:
-        """Delete scoped user data while retaining shared catalog and an active admin."""
+        """Delete scoped user data while retaining shared catalog, the primary admin and an active admin."""
         from sqlalchemy import text
 
         with self.get_session() as session:
@@ -531,30 +531,34 @@ class DatabaseService:
             user = session.query(User).filter(User.id == user_id).first()
             if not user:
                 return False
-            blocked = user.role == 'admin' and user.active and session.query(User).filter(
+            primary = session.query(User).filter(User.role == 'admin').order_by(User.id).first()
+            blocked = None
+            if primary and primary.id == user_id:
+                blocked = "Can't delete the primary admin — the global service settings belong to that account"
+            elif user.role == 'admin' and user.active and session.query(User).filter(
                 User.role == 'admin', User.active == 1
-            ).count() <= 1
+            ).count() <= 1:
+                blocked = "Can't delete the last active admin"
             if not blocked:
                 # SQLite may not enforce foreign keys; remove scoped data explicitly.
                 annotation_ids = session.query(KoreaderAnnotation.id).filter(KoreaderAnnotation.user_id == user_id)
                 session.query(KoreaderAnnotationDeviceState).filter(
                     KoreaderAnnotationDeviceState.annotation_id.in_(annotation_ids)
                 ).delete(synchronize_session=False)
-                for model in (State, KosyncUserProgress, ReadingSessionBuffer, ReadingSession,
-                              KOReaderBookStat, KOReaderPageStat, KOReaderBookStatus, KoreaderAnnotation,
-                              UserCredential, UserBook, UserBookFusionLink, UserBookOrbitLink):
-                    session.query(model).filter(model.user_id == user_id).delete(synchronize_session=False)
-                session.query(Book).filter(Book.user_id == user_id).update(
-                    {Book.user_id: None}, synchronize_session=False
-                )
+                # Shared catalog rows keep the retired id: ids are never reissued,
+                # while NULL would hand them to the default admin.
+                shared = (Book.__tablename__, KosyncDocument.__tablename__)
+                for table in reversed(Base.metadata.sorted_tables):
+                    if 'user_id' in table.c and table.name not in shared:
+                        session.execute(table.delete().where(table.c.user_id == user_id))
                 session.query(KosyncDocument).filter(KosyncDocument.user_id == user_id).update({
-                    KosyncDocument.user_id: None, KosyncDocument.percentage: 0,
-                    KosyncDocument.progress: None, KosyncDocument.timestamp: None,
-                    KosyncDocument.device: None, KosyncDocument.device_id: None,
+                    KosyncDocument.percentage: 0, KosyncDocument.progress: None,
+                    KosyncDocument.timestamp: None, KosyncDocument.device: None,
+                    KosyncDocument.device_id: None,
                 }, synchronize_session=False)
                 session.delete(user)
         if blocked:
-            raise ValueError("Can't delete the last active admin")
+            raise ValueError(blocked)
         self._default_uid = None
         return True
 
@@ -591,14 +595,19 @@ class DatabaseService:
             ).all()
             return {c.key: self._read_value(c.key, c.value) for c in creds}
 
-    def set_user_credential(self, user_id: int, key: str, value: str) -> UserCredential:
+    def set_user_credential(self, user_id: int, key: str, value: str) -> Optional[UserCredential]:
         """Store a per-user credential. Secret keys are encrypted at rest; the
-        returned (detached) row carries the plaintext the caller passed in."""
+        returned (detached) row carries the plaintext the caller passed in.
+        Returns None when the account no longer exists."""
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         plain = str(value) if value is not None else None
         value_str = self._store_value(key, value)
         with self.get_session() as session:
+            if session.query(User.id).filter(User.id == user_id).first() is None:
+                # An in-flight token refresh must not outlive its deleted account.
+                logger.info("🔐 Ignored credential write for missing user %s", user_id)
+                return None
             statement = sqlite_insert(UserCredential).values(
                 user_id=user_id, key=key, value=value_str
             ).on_conflict_do_update(

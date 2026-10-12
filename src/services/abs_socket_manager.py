@@ -38,6 +38,8 @@ class ABSSocketManager:
         self._lock = threading.Lock()
         # scope label -> the listener currently running for it (for clean stop()).
         self._current_listeners: dict = {}
+        # Scopes of deleted accounts: their listeners must never reconnect.
+        self._retired_scopes: set[str] = set()
         # Restart/backoff tuning (instance attrs so tests can zero them out).
         self._restart_base_secs = 5.0
         self._restart_max_secs = 60.0
@@ -279,7 +281,7 @@ class ABSSocketManager:
                 user_id=user_id,
             )
             with self._lock:
-                if self._stop_event.is_set():
+                if self._stop_event.is_set() or scope in self._retired_scopes:
                     break
                 self._current_listeners[scope] = listener
 
@@ -291,7 +293,7 @@ class ABSSocketManager:
             finally:
                 listener.stop()
 
-            if self._stop_event.is_set():
+            if self._stop_event.is_set() or scope in self._retired_scopes:
                 break
 
             elapsed = time.monotonic() - t0
@@ -305,6 +307,20 @@ class ABSSocketManager:
             )
             self._stop_event.wait(backoff)
             backoff = min(backoff * 2, self._restart_max_secs)
+
+    def stop_user(self, user_id: int) -> None:
+        """Disconnect a deleted account's listener and keep it from restarting."""
+        scope = f"user {user_id}"
+        with self._lock:
+            self._retired_scopes.add(scope)
+            listener = self._current_listeners.pop(scope, None)
+        if listener is None:
+            return
+        logger.info("🔌 ABS Socket.IO: %s listener stopping — account deleted", scope)
+        try:
+            listener.stop()
+        except Exception as e:
+            logger.debug("ABS Socket.IO: error stopping listener: %s", e)
 
     def stop(self) -> None:
         """Stop supervising and disconnect all listeners."""

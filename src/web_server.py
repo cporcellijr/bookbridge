@@ -100,6 +100,7 @@ def _reconfigure_logging():
 container = None
 manager = None
 database_service = None
+abs_socket_manager = None
 SUGGESTIONS_SCAN_JOBS = {}
 SUGGESTIONS_SCAN_JOBS_LOCK = threading.Lock()
 SUGGESTIONS_SCAN_JOB_TTL_SECONDS = 3600
@@ -1686,6 +1687,8 @@ def _apply_user_admin_action(form):
                 if database_service.delete_user(uid):
                     _clear_match_queue_for_user_id(uid)
                     _invalidate_user_clients(uid)
+                    if abs_socket_manager is not None:
+                        abs_socket_manager.stop_user(uid)
                     message = f"Deleted '{target.username}'"
                 else:
                     error = "User not found"

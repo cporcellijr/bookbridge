@@ -1077,6 +1077,8 @@ class User(Base):
     and alignments are shared across users.
     """
     __tablename__ = 'users'
+    # A deleted account's id must never be reissued (sessions + stamped rows).
+    __table_args__ = {'sqlite_autoincrement': True}
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(255), nullable=False, unique=True, index=True)
