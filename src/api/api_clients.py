@@ -1206,6 +1206,8 @@ class KoSyncClient:
                 # Grab the raw progress string (XPath)
                 xpath = data.get('progress')
                 return pct, xpath, data
+            # The status lets callers tell "no position stored" (404) from an outage.
+            return None, None, {"_http_status": r.status_code}
         except requests.exceptions.ConnectionError as e:
             if self._is_local_server():
                 logger.debug(

@@ -2,6 +2,8 @@ import os
 import tempfile
 import shutil
 import unittest
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -19,6 +21,38 @@ class TestUserDb(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # --- users ---
+    def _race_admin_changes(self, delete_first=False):
+        first = self.svc.create_user('first-admin', 'password', role='admin')
+        second = self.svc.create_user('second-admin', 'password', role='admin')
+        other = DatabaseService(str(self.svc.db_path))
+        barrier = threading.Barrier(2)
+
+        def change(svc, user_id, delete):
+            barrier.wait(timeout=5)
+            try:
+                if delete:
+                    svc.delete_user(user_id)
+                else:
+                    svc.update_user_account(user_id, active=False)
+                return 'changed'
+            except ValueError:
+                return 'blocked'
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(change, self.svc, first.id, delete_first),
+                           pool.submit(change, other, second.id, False)]
+                self.assertEqual(sorted(f.result() for f in futures), ['blocked', 'changed'])
+            self.assertEqual(sum(u.role == 'admin' and bool(u.active) for u in self.svc.list_users()), 1)
+        finally:
+            other.db_manager.engine.dispose()
+
+    def test_separate_database_instances_serialize_admin_disables(self):
+        self._race_admin_changes()
+
+    def test_delete_and_disable_cannot_remove_all_active_admins(self):
+        self._race_admin_changes(delete_first=True)
+
     def test_create_and_lookup_user(self):
         u = self.svc.create_user("Admin", "secret", role="admin")
         self.assertEqual(u.role, "admin")

@@ -1,8 +1,12 @@
 import os
 import re
+import zipfile
+from pathlib import Path
 from typing import Callable, List, Set, Any, Dict, Optional
+from xml.etree import ElementTree
 
 from src.services.llm_matching import craft_search_terms
+from src.utils.series_metadata import _locate_opf_path
 
 # Provider preference for collapsing the same physical audiobook when more than one
 # provider indexes the same shared library tree (#383): lower index wins ties. A
@@ -54,6 +58,109 @@ class SuggestionsService:
     def _candidate_author(candidate: Any) -> str:
         return (getattr(candidate, 'authors', None) or '').strip()
 
+    @staticmethod
+    def _split_title_author_stem(stem: str) -> tuple:
+        """Split a Calibre "Title - Author" filename stem at its last separator.
+
+        The author is the final part because titles can contain " - " themselves
+        ("Asian Saga 1 - Shogun - James Clavell"). A stem without one is all title.
+        """
+        title, sep, author = stem.rpartition(" - ")
+        if sep and title.strip() and author.strip():
+            return title.strip(), author.strip()
+        return stem, ""
+
+    @staticmethod
+    def _opf_title_authors(opf_xml: bytes) -> tuple:
+        """Return ``(title, "Author & Author")`` from OPF package XML.
+
+        Creators with a role other than author (translator, editor) are skipped; a
+        creator without a role counts as an author.
+        """
+        title, authors = "", []
+        root = ElementTree.fromstring(opf_xml)
+        refined_roles = {}
+        for element in root.iter():
+            tag = element.tag.rsplit("}", 1)[-1] if isinstance(element.tag, str) else ""
+            refines = element.attrib.get("refines", "")
+            role = (element.text or "").strip().lower()
+            if tag == "meta" and element.attrib.get("property") == "role" and refines.startswith("#") and role:
+                refined_roles.setdefault(refines[1:], set()).add(role)
+        for element in root.iter():
+            tag = element.tag.rsplit("}", 1)[-1] if isinstance(element.tag, str) else ""
+            text = (element.text or "").strip()
+            if not text:
+                continue
+            if tag == "title" and not title:
+                title = text
+            elif tag == "creator":
+                roles = set(refined_roles.get(element.attrib.get("id"), ()))
+                role = next((v for k, v in element.attrib.items() if k.rsplit("}", 1)[-1] == "role"), "").strip().lower()
+                if role:
+                    roles.add(role)
+                if not roles or "aut" in roles:
+                    authors.append(text)
+        return title, " & ".join(authors)
+
+    @classmethod
+    def _local_file_title_authors(cls, path: Any) -> tuple:
+        """Title and authors for a library file from Calibre's metadata.opf beside it,
+        else from the EPUB's own OPF. Empty strings when neither can be read."""
+        try:
+            opf_file = Path(path).parent / "metadata.opf"
+            if opf_file.is_file():
+                title, authors = cls._opf_title_authors(opf_file.read_bytes())
+                if title:
+                    return title, authors
+        except (OSError, ElementTree.ParseError):
+            pass
+        try:
+            with zipfile.ZipFile(path) as zf:
+                opf_path = _locate_opf_path(zf)
+                if opf_path:
+                    return cls._opf_title_authors(zf.read(opf_path))
+        except (OSError, KeyError, zipfile.BadZipFile, ElementTree.ParseError):
+            pass
+        return "", ""
+
+    # Role credits and list separators in author strings such as
+    # "Roberto Bolaño, Natasha Wimmer - translator" or "Terry Pratchett & Neil Gaiman".
+    _AUTHOR_ROLE_RE = re.compile(
+        r"\s*(?:-\s*|\()\s*(?:translator|narrator|editor|illustrator|contributor|foreword|introduction)s?\)?\s*$",
+        re.IGNORECASE,
+    )
+    _AUTHOR_LIST_SPLIT_RE = re.compile(r"\s*(?:&|;|\band\b)\s*", re.IGNORECASE)
+
+    @classmethod
+    def _author_names(cls, text: str) -> List[str]:
+        names = []
+        # shortcut: ambiguous comma lists stay intact until structured author metadata is available.
+        for part in cls._AUTHOR_LIST_SPLIT_RE.split(text or ""):
+            name = ", ".join(segment.strip() for segment in part.split(",")
+                             if segment.strip() and not cls._AUTHOR_ROLE_RE.search(segment))
+            if name:
+                names.append(name)
+        return names
+
+    @classmethod
+    def _author_score(cls, author: str, candidate_author: str) -> float:
+        """Best fuzzy score between complete authors, excluding non-author credits."""
+        from rapidfuzz import fuzz, utils
+
+        names = cls._author_names(author)
+        candidate_names = cls._author_names(candidate_author)
+        if not names or not candidate_names:
+            return 0.0
+
+        def ratio(a, b):
+            return fuzz.token_sort_ratio(a, b, processor=utils.default_process)
+
+        best = ratio(" & ".join(names), " & ".join(candidate_names))
+        for name in names:
+            for candidate_name in candidate_names:
+                best = max(best, ratio(name, candidate_name))
+        return float(best)
+
     def _build_ebook_candidate_pool(self) -> List[dict]:
         """
         Build searchable ebook candidates once per scan to avoid per-book provider calls.
@@ -79,6 +186,15 @@ class SuggestionsService:
             candidate_author = self._candidate_author(candidate)
             candidate_language = str(getattr(candidate, 'language', None) or '').strip()
             candidate_source = (getattr(candidate, 'source', None) or '').strip()
+            # The library scan builds Local File candidates from the filename alone.
+            if candidate_source == "Local File" and not candidate_author:
+                stem_title, stem_author = self._split_title_author_stem(candidate_title)
+                local_path = getattr(candidate, 'path', None)
+                meta_title, meta_authors = (
+                    self._local_file_title_authors(local_path) if local_path else ("", "")
+                )
+                candidate_title = meta_title or stem_title
+                candidate_author = meta_authors or stem_author
             source_id = getattr(candidate, 'source_id', None) or getattr(candidate, 'booklore_id', None)
             raw_path = getattr(candidate, 'path', None)
             path = str(raw_path) if raw_path else None
@@ -546,8 +662,6 @@ class SuggestionsService:
 
     def _scan_single_audiobook(self, ab: dict, candidate_pool: List[dict]) -> Optional[dict]:
         """Scan one unmatched audiobook and return a suggestion dict or None."""
-        from rapidfuzz import fuzz
-
         audio_source_id = self._audio_source_id(ab)
         bridge_key = self._audio_bridge_key(ab)
         audio_title = self._audio_title(ab)
@@ -602,7 +716,7 @@ class SuggestionsService:
                 continue
 
             if audio_author:
-                author_score = float(fuzz.token_sort_ratio(audio_author, candidate_author)) if candidate_author else 0.0
+                author_score = self._author_score(audio_author, candidate_author)
                 score = (title_score * 0.7) + (author_score * 0.3)
             else:
                 score = title_score
@@ -1287,7 +1401,7 @@ class SuggestionsService:
 
             title_score = float(fuzz.token_sort_ratio(ebook_title, cand_title))
             if ebook_author:
-                author_score = float(fuzz.token_sort_ratio(ebook_author, cand_author)) if cand_author else 0.0
+                author_score = self._author_score(ebook_author, cand_author)
                 score = (title_score * 0.7) + (author_score * 0.3)
             else:
                 score = title_score

@@ -94,6 +94,7 @@ class KoSyncSyncClient(SyncClient):
         if bulk_context and bulk_context.get(ko_id) == book.abs_id:
             # Built-in server with no progress for this book: the GET's 404 result.
             ko_pct, ko_xpath = None, None
+            ko_metadata = {"_http_status": 404}
         elif hasattr(self.kosync_client, "get_progress_with_metadata"):
             try:
                 ko_pct, ko_xpath, ko_metadata = self.kosync_client.get_progress_with_metadata(ko_id)
@@ -147,6 +148,13 @@ class KoSyncSyncClient(SyncClient):
                     )
                 ko_pct = canonical_pct
         book_label = f"'{title_snip}' " if title_snip else ""
+        if ko_pct is None and prev_state is None and ko_metadata.get("_http_status") == 404:
+            # The server has never stored a position for this mapped book. Joining at
+            # 0% lets the cycle write the leader's position here; staying out would
+            # leave the 404 in place forever. Only without a saved state: a 404 after
+            # one is not evidence the reader went back to the start.
+            logger.debug(f"{book_label}KoSync has no stored position yet; joining the cycle at 0%")
+            ko_pct = 0.0
         if ko_pct is None:
             if ko_xpath is None:
                 logger.debug(f"{book_label}KoSync state missing xpath and percentage; returning None")

@@ -74,6 +74,38 @@ ports:
   - "5758:5758"
 ```
 
+### Admin API (Optional)
+
+A small JSON API lets a script create readers and set their integrations, for
+example an invite system that onboards people. It is off unless you set
+`ADMIN_API_TOKEN` to a random string of at least 32 characters. Like
+`BOOKBRIDGE_SECRET_KEY`, it is read from the environment only and is not a
+Settings-page option.
+
+```yaml
+environment:
+  - ADMIN_API_TOKEN=a-long-random-string-only-your-script-knows
+```
+
+Send it as `Authorization: Bearer <token>`. The API is on the primary port
+only, never on the split-port sync server, so keep it on your LAN.
+
+| Method and path | Body | Does |
+| --- | --- | --- |
+| `GET /api/v1/admin/users` | | List users (id, username, role, active) |
+| `GET /api/v1/admin/users/<username>` | | One user |
+| `PUT /api/v1/admin/users/<username>` | `{"password", "role", "active"}`, all optional except `password` when creating | Create the user if missing, otherwise update it. Safe to repeat. A new user gets the shared library when Shared Library is on. `active` is set, not toggled. The last active admin can't be disabled or demoted (409) |
+| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account -> My Integrations**. Booleans take `true`/`false`; an empty string clears a field. Secret values are never returned |
+
+Disabling a user also stops their KOSync login, since KOSync authentication
+skips inactive users.
+
+Account updates protect the primary admin from demotion and retain at least one
+active admin, including concurrent requests. Re-enabling a reader restores shared
+books when Shared Library is enabled. Integration PATCH requests save all submitted
+fields together; changing a Readest email or password discards its previous session
+so the next sync authenticates with the updated credentials.
+
 ### Integrations
 
 Every integration card has an **Enable** switch, and that switch is server-wide: a

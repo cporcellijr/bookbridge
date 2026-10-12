@@ -10,6 +10,9 @@ All notable changes to BookBridge will be documented in this file.
 
 - Bulk-delete dashboard books with one confirmation and existing per-user
   shared-book protection.
+- Token-authenticated admin API to create readers and set their integrations from a
+  script, off unless `ADMIN_API_TOKEN` is set. Contributed by
+  [@splitsec2](https://github.com/splitsec2) in #494.
 - Link CBZ comics as ebooks without allowing them to become audiobook matches (#459).
 - Optionally filter KOReader device manifests to selected Grimmory shelves (#464).
 - Prefer ebooks already mounted in the configured library, with provider fallback
@@ -29,6 +32,23 @@ All notable changes to BookBridge will be documented in this file.
   Storyteller → Library Timeout, for large libraries or slow servers (#483).
 
 ### Fixed
+
+- Apply account changes atomically in the admin API and dashboard, protecting the
+  primary admin and retaining an active admin during concurrent updates or deletion.
+  Re-enabled readers regain shared books and cached access policies refresh. Integration
+  updates save together and changing Readest credentials clears the old session (#494).
+- Resolve KOReader filename hashes when Calibre reorders title and author, with
+  per-user matching and ambiguity guards; refresh filesystem hashes after changing
+  the hash method. Contributed by [@chemicalsno](https://github.com/chemicalsno)
+  in #497 and #500.
+- Initialize a missing KoSync follower from the current sync leader, including the
+  built-in server's skipped-read optimization. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #498.
+- Read Local File suggestion titles and authors from Calibre or EPUB metadata, then
+  filenames. Match complete authors while excluding translator/narrator credits and
+  EPUB 3 non-author roles. Ambiguous comma-separated names remain intact to avoid
+  perfect matches based on a shared surname. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #499.
 
 - Full sync cycles fetch Audiobookshelf progress and unrestricted item access in
   bulk, skip built-in KoSync reads for linked books without progress, and reuse

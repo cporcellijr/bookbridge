@@ -57,6 +57,9 @@ class _FakeDatabase:
     def get_book_by_kosync_id(self, _document_hash):
         return None
 
+    def get_books_by_status(self, _status, user_id=None):
+        return []
+
 
 class TestKoSyncCrossDeviceRewinds:
     @staticmethod

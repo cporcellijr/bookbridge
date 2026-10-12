@@ -462,6 +462,46 @@ class DatabaseService:
             self._default_uid = None
             return True
 
+    def update_user_account(self, user_id: int, *, password: Optional[str] = None,
+                            role: Optional[str] = None, active: Optional[bool] = None) -> Optional[User]:
+        """Update account fields atomically while retaining the primary and last admin."""
+        from sqlalchemy import text
+        from werkzeug.security import generate_password_hash
+
+        if role is not None:
+            role = role.strip().lower()
+            if role not in ('admin', 'user'):
+                raise ValueError(f"Invalid role: {role}")
+        policy_error = None
+        with self.get_session() as session:
+            # Reserve the SQLite writer before reading policy state across processes.
+            session.execute(text("BEGIN IMMEDIATE"))
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return None
+            role_changed = role is not None and role != user.role
+            if role_changed and role == 'user':
+                primary = session.query(User).filter(User.role == 'admin').order_by(User.id).first()
+                if primary and primary.id == user_id:
+                    policy_error = "Can't demote the primary admin — the global service settings belong to that account"
+            if not policy_error and user.role == 'admin' and user.active and (role == 'user' or active is False):
+                if session.query(User).filter(User.role == 'admin', User.active == 1).count() <= 1:
+                    policy_error = "Can't demote the last active admin" if role == 'user' else "Can't disable the last active admin"
+            if not policy_error:
+                if password is not None:
+                    user.password_hash = generate_password_hash(password) if password else None
+                if role is not None:
+                    user.role = role
+                if active is not None:
+                    user.active = int(active)
+                session.flush()
+            session.expunge(user)
+        if policy_error:
+            raise ValueError(policy_error)
+        if role_changed:
+            self._default_uid = None
+        return user
+
     def set_username(self, user_id: int, new_username: str) -> tuple:
         """Rename a user. Returns (ok, error_message). Enforces uniqueness
         (case-insensitive) and a non-empty name."""
@@ -483,16 +523,23 @@ class DatabaseService:
             return True, None
 
     def delete_user(self, user_id: int) -> bool:
+        """Delete an account without racing a last-admin disable or demotion."""
+        from sqlalchemy import text
+
         with self.get_session() as session:
+            session.execute(text("BEGIN IMMEDIATE"))
             user = session.query(User).filter(User.id == user_id).first()
             if not user:
                 return False
-            session.delete(user)
-            # The default-user id (owner of un-scoped state) is cached for the
-            # process lifetime; deleting a user — especially the original admin —
-            # can make it stale, so recompute it on next access.
-            self._default_uid = None
-            return True
+            blocked = user.role == 'admin' and user.active and session.query(User).filter(
+                User.role == 'admin', User.active == 1
+            ).count() <= 1
+            if not blocked:
+                session.delete(user)
+        if blocked:
+            raise ValueError("Can't delete the last active admin")
+        self._default_uid = None
+        return True
 
     def touch_user_login(self, user_id: int) -> None:
         with self.get_session() as session:
@@ -551,10 +598,26 @@ class DatabaseService:
 
     def set_user_credentials(self, user_id: int, values: dict[str, str]) -> None:
         """Save related credentials atomically, encrypting secret values at rest."""
+        from sqlalchemy import text
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+        updates = dict(values)
         with self.get_session() as session:
-            for key, value in values.items():
+            identity_keys = ('READEST_EMAIL', 'READEST_PASSWORD')
+            if any(key in updates for key in identity_keys):
+                # Serialize the identity read/reset with other credential writers.
+                session.execute(text("BEGIN IMMEDIATE"))
+                current = {
+                    row.key: self._read_value(row.key, row.value)
+                    for row in session.query(UserCredential).filter(
+                        UserCredential.user_id == user_id, UserCredential.key.in_(identity_keys)
+                    )
+                }
+                if any(updates[key] != current.get(key) for key in identity_keys if key in updates):
+                    updates.update({key: '' for key in (
+                        'READEST_ACCESS_TOKEN', 'READEST_REFRESH_TOKEN', 'READEST_TOKEN_EXPIRES_AT'
+                    )})
+            for key, value in updates.items():
                 stored = self._store_value(key, value)
                 session.execute(sqlite_insert(UserCredential).values(
                     user_id=user_id, key=key, value=stored,

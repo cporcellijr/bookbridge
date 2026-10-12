@@ -186,7 +186,8 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
             self.assertEqual(status, 404 if name == "empty" else 200, name)
 
         with patch.object(kosync.session, "get") as http_get:
-            self.assertIsNone(sync_client.get_service_state(db.get_book("empty"), None, bulk_context=bulk))
+            empty_state = sync_client.get_service_state(db.get_book("empty"), None, bulk_context=bulk)
+            self.assertEqual(empty_state.current, {"pct": 0.0, "xpath": None})
             http_get.assert_not_called()
             sync_client.get_service_state(db.get_book("state"), None, bulk_context=bulk)
             http_get.assert_called_once()

@@ -220,7 +220,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(error)
         self.assertIn("admin", message)
-        self.db.set_user_role.assert_called_once_with(2, 'admin')
+        self.db.update_user_account.assert_called_once_with(2, role='admin')
         self.registry.invalidate.assert_called_once_with(2)
 
     def test_promotion_message_says_they_keep_their_own_logins(self):
@@ -246,7 +246,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(error)
         self.assertIn("regular user", message)
-        self.db.set_user_role.assert_called_once_with(2, 'user')
+        self.db.update_user_account.assert_called_once_with(2, role='user')
 
     def test_primary_admin_cannot_be_demoted(self):
         target = self._user(1, "owner", "admin")
@@ -260,7 +260,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(message)
         self.assertIn("primary admin", error)
-        self.db.set_user_role.assert_not_called()
+        self.db.update_user_account.assert_not_called()
 
     def test_last_active_admin_cannot_be_demoted(self):
         target = self._user(2, "caitlin", "admin")
@@ -275,7 +275,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(message)
         self.assertIn("last active admin", error)
-        self.db.set_user_role.assert_not_called()
+        self.db.update_user_account.assert_not_called()
 
     def test_promotion_is_never_blocked_by_the_admin_count_guard(self):
         """The guards are about losing admins, so they must not block gaining one."""
@@ -288,7 +288,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
             {'action': 'set_role', 'user_id': '2', 'role': 'admin'}
         )
         self.assertIsNone(error)
-        self.db.set_user_role.assert_called_once_with(2, 'admin')
+        self.db.update_user_account.assert_called_once_with(2, role='admin')
 
     def test_unknown_role_is_rejected(self):
         target = self._user()
@@ -301,7 +301,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(message)
         self.assertIn("Invalid role", error)
-        self.db.set_user_role.assert_not_called()
+        self.db.update_user_account.assert_not_called()
 
     def test_no_op_when_the_role_already_matches(self):
         target = self._user(role="admin")
@@ -314,7 +314,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(message)
         self.assertIn("already", error)
-        self.db.set_user_role.assert_not_called()
+        self.db.update_user_account.assert_not_called()
 
     def test_missing_user(self):
         self.db.get_user.return_value = None
@@ -326,7 +326,7 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
 
         self.assertIsNone(message)
         self.assertEqual(error, "User not found")
-        self.db.set_user_role.assert_not_called()
+        self.db.update_user_account.assert_not_called()
 
 
 class UserAdminActionDispatchTestCase(unittest.TestCase):
