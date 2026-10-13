@@ -3471,15 +3471,18 @@ def _respond_from_book_states(doc_id, book):
         sibling_is_ahead = sibling_pct > synced_pct + 0.0001
 
         # KOReader's reported percentage and the bridge-synced percentage can
-        # use different position scales even for the same EPUB. The synced State
-        # XPath is generated for book.kosync_doc_id, so only compare resolved text
-        # positions when the request and device row refer to that exact hash.
+        # use different position scales even for the same EPUB. The bridge
+        # generates the synced State XPath for book.kosync_doc_id, so the gate
+        # resolves both positions in that hash's file, whether the device row is
+        # on that hash or on another one linked to the book.
         # If resolution is unavailable, keep the existing percentage-based behavior.
         state_doc_id = str(getattr(book, "kosync_doc_id", "") or "").strip()
+        device_doc_id = getattr(best_doc, "document_hash", None)
         same_document = (
-            getattr(best_doc, "document_hash", None) == doc_id
+            device_doc_id == doc_id
             and state_doc_id == doc_id
         )
+        cross_hash = bool(state_doc_id) and device_doc_id != state_doc_id
         sibling_xpath = str(getattr(best_doc, "progress", "") or "").strip()
         synced_xpath = str(getattr(kosync_state, "xpath", "") or "").strip() if kosync_state else ""
 
@@ -3502,14 +3505,17 @@ def _respond_from_book_states(doc_id, book):
         if (
             env_truthy("KOSYNC_XPATH_ORDER_ENABLED")
             and not is_cbz_book(book)
-            and same_document
+            and (same_document or cross_hash)
             and sibling_xpath
             and synced_xpath
             and within_pct_bound
         ):
             try:
-                document = _database_service.get_kosync_document(doc_id)
-                filename = str(getattr(document, "filename", "") or "").strip() if document else ""
+                def _cached_filename(document_hash):
+                    document = _database_service.get_kosync_document(document_hash)
+                    return str(getattr(document, "filename", "") or "").strip() if document else ""
+
+                filename = _cached_filename(state_doc_id)
 
                 # Both XPaths are resolved against this one file, but the synced
                 # State's XPath was generated against the book's own ebook file.
@@ -3523,8 +3529,15 @@ def _respond_from_book_states(doc_id, book):
                 }
                 book_files.discard("")
 
-                if filename and filename in book_files:
-                    cache_key = (doc_id, filename, sibling_xpath, synced_xpath)
+                comparable = bool(filename) and filename in book_files
+                if comparable and cross_hash:
+                    # Linked hashes can belong to different EPUB layouts, including
+                    # the book's original copy. Resolve only the same cached file.
+                    device_filename = _cached_filename(device_doc_id)
+                    comparable = device_filename == filename
+
+                if comparable:
+                    cache_key = (state_doc_id, filename, sibling_xpath, synced_xpath)
                     cached = _xpath_index_cache_get(cache_key)
                     if cached is not None:
                         sibling_index, synced_index = cached

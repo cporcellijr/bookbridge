@@ -37,6 +37,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Compare KoSync text positions across hashes identified as the same cached EPUB,
+  avoiding repeated percentage-scale rollback loops. Unknown copies and different
+  original/forged files keep percentage fallback to protect reading progress (#502).
 - Keep completed transcripts after alignment failure and reuse valid word timings
   on Remap. Content-match refusals show token counts, regional overlap and a
   neutral explanation on the dashboard, without weakening the guard (#503).

@@ -403,6 +403,192 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         self.assertAlmostEqual(float(data["percentage"]), 0.24)
         parser.resolve_xpath_to_index.assert_not_called()
 
+    def _setup_cross_hash_device(self, synced_xpath, device_xpath, synced_pct, device_pct,
+                                 device_filename="test.epub"):
+        """Cache the primary and device hashes against the same file by default."""
+        _, primary_doc = self._setup_book_with_states(
+            kosync_state_pct=synced_pct,
+            kosync_xpath=synced_xpath,
+            sibling_pct=device_pct,
+            sibling_progress=device_xpath,
+        )
+        primary_doc.filename = "test.epub"
+        self._db().save_kosync_document(primary_doc)
+        if device_filename:
+            device_doc = self._db().get_kosync_document("b" * 32)
+            device_doc.filename = device_filename
+            self._db().save_kosync_document(device_doc)
+
+    def _get_with_resolved_indexes(self, doc_id, indexes):
+        from src.api import kosync_server
+
+        parser = MagicMock()
+        parser.resolve_xpath_to_index.side_effect = lambda _filename, xpath: indexes[xpath]
+        container = MagicMock()
+        container.ebook_parser.return_value = parser
+        with patch.object(kosync_server, "_container", container):
+            response = self.client.get("/syncs/progress/" + doc_id, headers=self.auth_headers)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        return response.get_json(), parser
+
+    def test_cross_hash_device_behind_in_text_does_not_win_on_percentage(self):
+        """The bridge's own GET: a device hash at 24% that is earlier in the text
+        must not replace the synced 23% position."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, 0.23, 0.24)
+
+        data, parser = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["progress"], synced_xpath)
+        self.assertAlmostEqual(float(data["percentage"]), 0.23)
+        parser.resolve_xpath_to_index.assert_any_call("test.epub", device_xpath)
+        parser.resolve_xpath_to_index.assert_any_call("test.epub", synced_xpath)
+
+    def test_cross_hash_comparison_accepts_on_setting(self):
+        """HTML checkbox spelling enables the same cached-file comparison."""
+        os.environ["KOSYNC_XPATH_ORDER_ENABLED"] = "on"
+        self.test_cross_hash_device_behind_in_text_does_not_win_on_percentage()
+
+    def test_cross_hash_different_layout_keeps_ahead_device_progress(self):
+        """A device's p[1] can be paragraph 25 in its own copy, not paragraph 1."""
+        from bs4 import BeautifulSoup
+        from src.utils.ebook_utils import EbookParser
+
+        paras = [f'<p>Paragraph {i:03d} ' + 'x' * 80 + '</p>' for i in range(1, 101)]
+        primary_html = '<html><body>' + ''.join(paras) + '</body></html>'
+        device_html = '<html><body><div>' + ''.join(paras[:24]) + '</div>' + ''.join(paras[24:]) + '</body></html>'
+        synced_xpath = '/body/DocFragment[1]/body/p[24]/text().0'
+        device_xpath = '/body/DocFragment[1]/body/p[1]/text().0'
+
+        def parser_for(content: str) -> EbookParser:
+            parser = EbookParser.__new__(EbookParser)
+            text = BeautifulSoup(content, 'html.parser').get_text(separator=' ', strip=True)
+            parser.resolve_book_path = MagicMock(return_value='test.epub')
+            parser.extract_text_and_map = MagicMock(return_value=(text, [
+                {'spine_index': 1, 'start': 0, 'end': len(text), 'content': content},
+            ]))
+            return parser
+
+        primary_parser = parser_for(primary_html)
+        device_parser = parser_for(device_html)
+        synced_index = primary_parser.resolve_xpath_to_index('test.epub', synced_xpath)
+        real_device_index = device_parser.resolve_xpath_to_index('original.epub', device_xpath)
+        wrong_file_index = primary_parser.resolve_xpath_to_index('test.epub', device_xpath)
+        self.assertGreater(real_device_index, synced_index)
+        self.assertGreater(synced_index, wrong_file_index)
+
+        for filename in (None, 'original.epub'):
+            with self.subTest(device_filename=filename):
+                self._setup_cross_hash_device(
+                    synced_xpath, device_xpath, .23, .24, device_filename=filename,
+                )
+                book = self._db().get_book('test-book-equal')
+                book.original_ebook_filename = 'original.epub'
+                self._db().save_book(book)
+                primary_parser.resolve_xpath_to_index = MagicMock(
+                    wraps=EbookParser.resolve_xpath_to_index.__get__(primary_parser),
+                )
+                container = MagicMock()
+                container.ebook_parser.return_value = primary_parser
+                with patch.object(kosync_server, '_container', container):
+                    for doc_id in ('a' * 32, 'b' * 32):
+                        response = self.client.get('/syncs/progress/' + doc_id, headers=self.auth_headers)
+                        self.assertEqual(response.status_code, 200)
+                        data = response.get_json()
+                        self.assertAlmostEqual(float(data['percentage']), .24)
+                        self.assertEqual(data['progress'], device_xpath)
+                primary_parser.resolve_xpath_to_index.assert_not_called()
+
+    def test_cross_hash_device_is_pulled_forward_on_its_own_get(self):
+        """The device's own GET: a synced position later in the text reaches the
+        device even though the device's stale percentage is higher."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, 0.23, 0.24)
+
+        data, _ = self._get_with_resolved_indexes(
+            "b" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["progress"], synced_xpath)
+        self.assertAlmostEqual(float(data["percentage"]), 0.23)
+
+    def test_cross_hash_device_at_the_synced_xpath_is_not_ahead(self):
+        """KOReader reports the bridge's own XPath back on its page-based scale; the
+        same text position must not read as a change on every sync."""
+        xpath = "/body/DocFragment[5]/body/p[36].0"
+        self._setup_cross_hash_device(xpath, xpath, 0.1030, 0.1278)
+
+        data, _ = self._get_with_resolved_indexes("a" * 32, {xpath: 500})
+
+        self.assertEqual(data["progress"], xpath)
+        self.assertAlmostEqual(float(data["percentage"]), 0.1030)
+
+    def test_cross_hash_device_ahead_in_text_still_wins(self):
+        """Furthest-wins still applies when the device is genuinely later in the text."""
+        synced_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, 0.24, 0.23)
+
+        data, _ = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 200, synced_xpath: 100},
+        )
+
+        self.assertEqual(data["progress"], device_xpath)
+        self.assertAlmostEqual(float(data["percentage"]), 0.23)
+
+    def test_cross_hash_known_other_file_keeps_percentage_fallback(self):
+        """A device hash cached as a different file is a different EPUB build, so
+        its XPath is never resolved against the book's file."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(
+            synced_xpath, device_xpath, 0.23, 0.24, device_filename="other-build.epub",
+        )
+
+        data, parser = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["progress"], device_xpath)
+        self.assertAlmostEqual(float(data["percentage"]), 0.24)
+        parser.resolve_xpath_to_index.assert_not_called()
+
+    def test_cross_hash_primary_file_not_the_books_keeps_percentage_fallback(self):
+        """Without the book's own file cached on its primary hash there is no file to
+        resolve both XPaths in."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, 0.23, 0.24)
+        primary_doc = self._db().get_kosync_document("a" * 32)
+        primary_doc.filename = "unrelated.epub"
+        self._db().save_kosync_document(primary_doc)
+
+        data, parser = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["progress"], device_xpath)
+        parser.resolve_xpath_to_index.assert_not_called()
+
+    def test_cross_hash_comparison_stays_off_with_the_setting(self):
+        """The cross-hash comparison follows KOSYNC_XPATH_ORDER_ENABLED like the
+        same-hash one."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, 0.23, 0.24)
+        os.environ.pop("KOSYNC_XPATH_ORDER_ENABLED", None)
+
+        data, parser = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["progress"], device_xpath)
+        parser.resolve_xpath_to_index.assert_not_called()
+
     def test_no_valid_locator_returns_404(self):
         """No valid locator anywhere returns defensive 404."""
         self._setup_book_with_states(

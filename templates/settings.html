@@ -2000,8 +2000,9 @@
                             a stale spot on the reader can report a higher percentage than the position BookBridge
                             already synced there and win on the number alone — pulling you backwards. When enabled,
                             BookBridge compares where the two positions actually land in the text and lets that
-                            decide. Only applies when both refer to the exact same file and the two percentages are
-                            already close. Off by default: it has to open and read the book to compare, which can add
+                            decide. Only applies when both hashes identify the same cached EPUB file and the two
+                            percentages are already close. Unknown or different copies keep the percentage comparison.
+                            Off by default: it has to open and read the book to compare, which can add
                             a few seconds to the first sync after you move in a book.</small>
                     </div>
                     <div class="checkbox-wrapper full-width">
