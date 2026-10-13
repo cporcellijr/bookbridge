@@ -1,6 +1,7 @@
 """End-to-end recovery regressions from scheduler discovery through safe rebuild."""
 
 import json
+import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -321,6 +322,7 @@ def test_restart_keeps_recovery_stage_and_retained_cache_retryable(recovery):
     manager, db, _parser, transcriber, _alignment, _cache_dir = recovery
     book, epub_path, _pdf, _hash, _pdf_hash = _seed(recovery)
     manager._recover_ebook_input_candidates()
+    recovery_identity = db.get_latest_job(book.abs_id, kind="alignment").recovery_identity
     queued = db.get_book(book.abs_id)
     queued.status = "processing"
     db.save_book(queued)
@@ -332,6 +334,7 @@ def test_restart_keeps_recovery_stage_and_retained_cache_retryable(recovery):
     job = db.get_latest_job(book.abs_id, kind="alignment")
     assert interrupted.status == "failed_retry_later"
     assert job.stage == "ebook_input_recovery"
+    assert job.recovery_identity == recovery_identity
     assert job.retry_count == 1
     assert epub_path.is_file()
     assert transcriber.get_cached_word_timed_transcript(book.abs_id, 10.0)
@@ -399,3 +402,172 @@ def test_sync_cycle_blocks_suspicious_candidate_before_any_progress_fetch_or_wri
 
     manager._fetch_states_parallel.assert_not_called()
     manager.sync_clients["ABS"].update_progress.assert_not_called()
+
+
+def _set_recovery_map_sentinel(db, alignment, abs_id):
+    alignment._save_alignment(
+        abs_id, [{"char": 0, "ts": 0}, {"char": 999, "ts": 10}],
+        "new-map-sentinel", total_chars=999,
+    )
+    with db.get_session() as session:
+        session.merge(BookAlignmentBackup(
+            abs_id=abs_id,
+            alignment_map_json='[{"char":0,"ts":1},{"char":333,"ts":9}]',
+            align_method="backup-sentinel",
+            total_chars=333,
+        ))
+
+
+@pytest.mark.parametrize(
+    "race",
+    ["ebook_remap", "audio_remap", "newer_map", "deleted", "job_changed", "hash_relinked"],
+)
+def test_scheduler_recovery_does_not_publish_or_activate_stale_generation(recovery, race):
+    manager, db, _parser, _transcriber, alignment, _cache_dir = recovery
+    book, _epub_path, _pdf_path, _original_hash, _pdf_hash = _seed(recovery)
+    manager._recover_ebook_input_candidates()
+    queued = db.get_book(book.abs_id)
+    queued_job = db.get_latest_job(book.abs_id, kind="alignment")
+    queued_identity = queued_job.recovery_identity
+    assert len(queued_identity) == 64
+    assert queued_identity == db.ebook_input_recovery_identity(queued)
+
+    entered_generation = threading.Event()
+    resume_generation = threading.Event()
+    original_generate = alignment._generate_alignment_map_with_method
+
+    def gated_generate(*args, **kwargs):
+        result = original_generate(*args, **kwargs)
+        entered_generation.set()
+        assert resume_generation.wait(30), "race controller did not resume the recovery worker"
+        return result
+
+    with patch.object(alignment, "_generate_alignment_map_with_method", gated_generate):
+        manager.check_pending_jobs()
+        assert entered_generation.wait(30), "scheduler did not reach real alignment generation"
+        current = db.get_book(book.abs_id)
+        if race == "deleted":
+            db.delete_book(book.abs_id)
+        elif race == "ebook_remap":
+            current.ebook_source_id = "9999"
+            current.ebook_filename = "new-pairing.epub"
+            current.original_ebook_filename = "new-pairing.epub"
+            current.kosync_doc_id = "new-pairing-hash"
+            current.status = "pending"
+            db.save_book(current)
+            _set_recovery_map_sentinel(db, alignment, book.abs_id)
+        elif race == "audio_remap":
+            current.audio_source = "BookOrbit"
+            current.audio_source_id = "new-audio"
+            current.status = "pending"
+            db.save_book(current)
+            _set_recovery_map_sentinel(db, alignment, book.abs_id)
+        elif race == "newer_map":
+            _set_recovery_map_sentinel(db, alignment, book.abs_id)
+        elif race == "job_changed":
+            latest_job_id = db.get_latest_job(book.abs_id, kind="alignment").id
+            with db.get_session() as session:
+                latest = session.get(Job, latest_job_id)
+                latest.stage = "ebook_input_recovery_manual"
+                latest.last_error = "new manual review"
+            _set_recovery_map_sentinel(db, alignment, book.abs_id)
+        elif race == "hash_relinked":
+            other = Book(abs_id="other-pairing", ebook_filename="other.epub", status="pending")
+            db.save_book(other)
+            db.ensure_linked_kosync_document(current.kosync_doc_id, other.abs_id)
+            _set_recovery_map_sentinel(db, alignment, book.abs_id)
+
+        resume_generation.set()
+        manager._job_thread.join(30)
+        assert not manager._job_thread.is_alive()
+
+    if race == "deleted":
+        assert db.get_book(book.abs_id) is None
+        with db.get_session() as session:
+            assert session.query(BookAlignment).filter_by(abs_id=book.abs_id).count() == 0
+        return
+
+    saved = db.get_book(book.abs_id)
+    job = db.get_latest_job(book.abs_id, kind="alignment")
+    assert saved.status != "active"
+    assert alignment._get_alignment(book.abs_id) == [
+        {"char": 0, "ts": 0}, {"char": 999, "ts": 10},
+    ]
+    assert db.get_alignment_method(book.abs_id) == "new-map-sentinel"
+    with db.get_session() as session:
+        backup = session.query(BookAlignmentBackup).filter_by(abs_id=book.abs_id).one()
+        assert backup.align_method == "backup-sentinel"
+        assert backup.total_chars == 333
+    if race == "job_changed":
+        assert job.stage == "ebook_input_recovery_manual"
+        assert job.last_error == "new manual review"
+    if race == "hash_relinked":
+        assert db.get_kosync_document(saved.kosync_doc_id).linked_abs_id == "other-pairing"
+
+
+def test_same_duration_audio_remap_with_retained_stage_is_manual_on_next_scheduler_check(recovery):
+    manager, db, _parser, transcriber, alignment, _cache_dir = recovery
+    book, _epub_path, _pdf_path, _original_hash, _pdf_hash = _seed(recovery)
+    manager._recover_ebook_input_candidates()
+    old_identity = db.get_latest_job(book.abs_id, kind="alignment").recovery_identity
+    entered_generation = threading.Event()
+    resume_generation = threading.Event()
+    original_generate = alignment._generate_alignment_map_with_method
+
+    def gated_generate(*args, **kwargs):
+        result = original_generate(*args, **kwargs)
+        entered_generation.set()
+        assert resume_generation.wait(30), "race controller did not resume the recovery worker"
+        return result
+
+    with patch.object(alignment, "_generate_alignment_map_with_method", gated_generate):
+        manager.check_pending_jobs()
+        assert entered_generation.wait(30)
+        remapped = db.get_book(book.abs_id)
+        remapped.audio_source = "BookOrbit"
+        remapped.audio_source_id = "same-duration-new-audio"
+        remapped.status = "pending"
+        db.save_book(remapped)
+        resume_generation.set()
+        manager._job_thread.join(30)
+        assert not manager._job_thread.is_alive()
+
+    retained = db.get_latest_job(book.abs_id, kind="alignment")
+    assert retained.stage == "ebook_input_recovery"
+    assert retained.recovery_identity == old_identity
+    assert db.get_book(book.abs_id).duration == 10.0
+    manager._job_thread = None  # next scheduler tick after worker/restart
+    manager.check_pending_jobs()
+    assert manager._job_thread is not None
+    manager._job_thread.join(30)
+    assert not manager._job_thread.is_alive()
+
+    after = db.get_book(book.abs_id)
+    manual = db.get_latest_job(book.abs_id, kind="alignment")
+    assert after.status == "failed_permanent"
+    assert manual.stage == "ebook_input_recovery_manual"
+    assert manual.recovery_identity == old_identity
+    assert after.audio_source_id == "same-duration-new-audio"
+    assert transcriber.get_cached_word_timed_transcript(book.abs_id, 10.0)
+    manager.library_service.acquire_ebook.assert_not_called()
+
+
+def test_legacy_recovery_stage_without_identity_is_manual(recovery):
+    manager, db, _parser, _transcriber, _alignment, _cache_dir = recovery
+    book, _epub_path, _pdf_path, _original_hash, _pdf_hash = _seed(recovery)
+    manager._recover_ebook_input_candidates()
+    with db.get_session() as session:
+        job = session.query(Job).filter_by(abs_id=book.abs_id, kind="alignment").one()
+        job.recovery_identity = None
+
+    manager.check_pending_jobs()
+    assert manager._job_thread is not None
+    manager._job_thread.join(30)
+    assert not manager._job_thread.is_alive()
+
+    saved = db.get_book(book.abs_id)
+    job = db.get_latest_job(book.abs_id, kind="alignment")
+    assert saved.status == "failed_permanent"
+    assert job.stage == "ebook_input_recovery_manual"
+    assert job.recovery_identity is None
+    manager.library_service.acquire_ebook.assert_not_called()

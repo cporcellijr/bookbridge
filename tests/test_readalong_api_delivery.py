@@ -130,20 +130,20 @@ def test_combined_library_folder_under_books_dir_uploads_with_local_tracks(api_e
     assert not list((api_env.tmp / "books" / "Combined").glob("*.readalong.epub"))
 
 
-def test_name_conflict_deletes_stale_row_and_retries_once(api_env):
+def test_name_conflict_preserves_stale_row_and_fails_without_retry(api_env):
     client = _UploadClient(errors=[BookOrbitUploadError("name_conflict", 409, "x")])
     result = _deliver(api_env, client)
 
-    assert result is not None
-    assert client.deleted_file_ids == [99]
-    assert len(client.uploads) == 2
+    assert result is None
+    assert client.deleted_file_ids == []
+    assert len(client.uploads) == 1
     assert _no_staging_left(api_env)
 
 
-def test_persistent_name_conflict_is_not_retried_forever(api_env):
+def test_name_conflict_is_not_retried(api_env):
     client = _UploadClient(errors=[BookOrbitUploadError("name_conflict", 409, "x")] * 3)
     assert _deliver(api_env, client) is None
-    assert len(client.uploads) == 2
+    assert len(client.uploads) == 1
     assert _no_staging_left(api_env)
 
 

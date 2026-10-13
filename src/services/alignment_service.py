@@ -24,6 +24,7 @@ from src.utils.config_loader import env_truthy
 from src.utils.ebook_utils import INLINE_TEXT_JOINER, LRUCache
 from src.utils.polisher import Polisher
 from src.utils.logging_utils import time_execution
+from src.utils.transcriber import TranscriptionCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +233,8 @@ class AlignmentService:
     def align_and_store(self, abs_id: str, raw_segments: List[Dict], ebook_text: str,
                         spine_chapters: List[Dict] = None,
                         preserve_backup: bool = False,
-                        require_recovery_content_match: bool = False) -> bool:
+                        require_recovery_content_match: bool = False,
+                        recovery_snapshot: Optional[Tuple] = None) -> bool:
         """
         Main entry point for "Unified Alignment".
         
@@ -266,7 +268,6 @@ class AlignmentService:
         # We pass ebook_text to help (though rebuild_fragmented_sentences uses simple heuristics currently)
         rebuilt_segments = self.polisher.rebuild_fragmented_sentences(raw_segments, ebook_text)
         logger.info(f"   Rebuilt segments: {len(raw_segments)} -> {len(rebuilt_segments)}")
-
         # 2b. Content-match guard — refuse to persist a map when the audio and ebook are
         # clearly different content (wrong edition / abridged / translation / mis-match).
         if not self._verify_content_match(
@@ -274,6 +275,11 @@ class AlignmentService:
             raise_on_mismatch=True,
             require_lexical_overlap=require_recovery_content_match,
         ):
+            return False
+        if require_recovery_content_match and any(
+            not self._timed_segment_tokens(segment) for segment in rebuilt_segments
+        ):
+            logger.warning("Recovery word timings are incomplete for %s; refusing estimated timing", abs_id)
             return False
 
         # 3. Anchored Alignment
@@ -294,6 +300,25 @@ class AlignmentService:
                 return False
             if len(points) < 2 or max(points) <= min(points):
                 return False
+        if recovery_snapshot is not None:
+            expected_book, expected_job, expected_map_updated = recovery_snapshot
+            quality = map_quality.score_map(
+                alignment_map, segments=map_segments,
+            )
+            published = self.database_service.complete_ebook_input_recovery(
+                abs_id, expected_book, expected_map_updated,
+                expected_job=expected_job, alignment_map=alignment_map,
+                alignment_method=align_method, total_chars=ebook_len,
+                segments_json=_segments_to_json(map_segments) if map_segments is not None else None,
+                quality_score=quality.score,
+                quality_detail=map_quality.quality_detail_json(quality),
+            )
+            if published:
+                self._alignment_cache.delete(abs_id)
+                self._total_chars_cache.pop(abs_id, None)
+                self._segments_cache.pop(abs_id, None)
+                return True
+            raise TranscriptionCancelled(abs_id)
         published = self._publish_map(
             abs_id, alignment_map, align_method, total_chars=ebook_len,
             segments=map_segments, preserve_backup=preserve_backup,

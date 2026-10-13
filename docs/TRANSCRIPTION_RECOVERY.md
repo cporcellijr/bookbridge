@@ -54,6 +54,17 @@ reader progress/history and existing alignment backups, and resumes sync after a
 usable map is published. Only the proven wrong PDF document link is removed; its
 document and reader progress rows remain.
 
+Recovery approval records the inspected audiobook and ebook pairing. Retries and
+restarts retain that approval; changing either source requires manual review
+instead of applying the previous audiobook's cached timings. Older queued repairs
+without recorded approval also require review. Word timings must cover the
+normalized transcript text in order and stay within their segment bounds.
+The map, first backup, activation and job completion are committed together only
+while the inspected pairing, job, map version and document ownership still match.
+A remap, replacement map or deletion during calculation leaves newer state intact.
+Installations need the database migration and a bridge restart; prebuilt images
+receive these changes in the next published image.
+
 Suspicious mappings with incomplete proof show a manual-review error and stay out
 of sync. Verify the CWA ID, current/original filenames, retained EPUB and transcript,
 then correct the pairing and retry/Remap. A legitimate device hash is never replaced

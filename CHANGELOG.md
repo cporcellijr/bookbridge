@@ -37,6 +37,17 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Bind cached input recovery to its approved audiobook and ebook pairing across
+  retries and restarts. Commit its alignment, backup, activation and job completion
+  together; a changed pairing, job, map or document owner leaves the newer state
+  untouched. Incomplete or contradictory word timings require manual review.
+- Preserve the existing BookOrbit read-along when a replacement upload encounters
+  a filename conflict. Identical-content uploads still count as delivered.
+- Avoid matching a bare CWA title to a subtitle-qualified volume, and apply token
+  redaction and failure cooldown to CWA connection checks.
+- Withhold device manifests when reader ownership cannot be verified. Resolve
+  KOReader's unindexed `DocFragment` locators for single-spine EPUBs while retaining
+  the same-file cross-hash comparison guards.
 - Recover provable legacy CWA input failures automatically from the retained EPUB
   and a matching, complete word-timed transcript. Rebuild alignment without
   downloading audio or repeating transcription; preserve reader progress, history,

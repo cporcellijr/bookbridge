@@ -134,7 +134,9 @@ class CWASyncApi:
 
         try:
             url = f"{self._base_url}/initialization"
-            r = self._session.get(url, timeout=5)
+            r = self._send("get", url, timeout=5)
+            if r is None:
+                return False
             if r.status_code == 200:
                 get_persistent_condition_logger().resolve(
                     logger,

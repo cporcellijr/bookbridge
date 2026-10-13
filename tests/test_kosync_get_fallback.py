@@ -12,6 +12,7 @@ import os
 import shutil
 import time
 import hashlib
+import zipfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -501,6 +502,49 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
                         self.assertAlmostEqual(float(data['percentage']), .24)
                         self.assertEqual(data['progress'], device_xpath)
                 primary_parser.resolve_xpath_to_index.assert_not_called()
+
+    def test_cross_hash_mixed_indexed_and_unindexed_real_epub_paths(self):
+        """Single-spine KOReader paths may omit DocFragment[1] on one hash."""
+        from src.utils.ebook_utils import EbookParser
+
+        synced_xpath = "/body/DocFragment[1]/body/p[8]/text().0"
+        device_xpath = "/body/DocFragment/body/p[4]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, .23, .24)
+
+        path = os.path.join(TEST_DIR, "test.epub")
+        container = (
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>'
+        )
+        opf = (
+            '<package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            '<dc:title>Cross hash</dc:title><dc:identifier>cross</dc:identifier></metadata>'
+            '<manifest><item id="chapter" href="chapter.xhtml" '
+            'media-type="application/xhtml+xml"/></manifest>'
+            '<spine><itemref idref="chapter"/></spine></package>'
+        )
+        chapter = "<html><body>" + "".join(
+            f"<p>Paragraph {i} has a unique anchor for position ordering.</p>"
+            for i in range(1, 9)
+        ) + "</body></html>"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            archive.writestr("META-INF/container.xml", container)
+            archive.writestr("OEBPS/content.opf", opf)
+            archive.writestr("OEBPS/chapter.xhtml", chapter)
+
+        parser = EbookParser(books_dir=TEST_DIR, epub_cache_dir=os.path.join(TEST_DIR, "cache"))
+        container_mock = MagicMock()
+        container_mock.ebook_parser.return_value = parser
+        with patch.object(kosync_server, "_container", container_mock):
+            response = self.client.get("/syncs/progress/" + "a" * 32, headers=self.auth_headers)
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        data = response.get_json()
+        self.assertEqual(data["progress"], synced_xpath)
+        self.assertAlmostEqual(float(data["percentage"]), .23)
 
     def test_cross_hash_device_is_pulled_forward_on_its_own_get(self):
         """The device's own GET: a synced position later in the text reaches the

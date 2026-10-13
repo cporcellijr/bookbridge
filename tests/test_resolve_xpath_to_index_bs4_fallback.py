@@ -1,5 +1,7 @@
 import logging
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -181,6 +183,49 @@ def test_resolve_xpath_to_index_unbracketed_text_node_offset_still_works():
     assert index == 5
 
 
+def test_unindexed_docfragment_resolves_for_real_single_spine_epub():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        books = root / "books"
+        books.mkdir()
+        path = books / "single.epub"
+        container = (
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>'
+        )
+        opf = (
+            '<package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            '<dc:title>Single</dc:title><dc:identifier>single</dc:identifier></metadata>'
+            '<manifest><item id="chapter" href="chapter.xhtml" '
+            'media-type="application/xhtml+xml"/></manifest>'
+            '<spine><itemref idref="chapter"/></spine></package>'
+        )
+        chapter = (
+            "<html><body>" + "".join(
+                f"<p>Paragraph {i} contains a distinct readable anchor.</p>"
+                for i in range(1, 9)
+            ) + "</body></html>"
+        )
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            archive.writestr("META-INF/container.xml", container)
+            archive.writestr("OEBPS/content.opf", opf)
+            archive.writestr("OEBPS/chapter.xhtml", chapter)
+
+        parser = EbookParser(books_dir=str(books), epub_cache_dir=str(root / "cache"))
+        indexed = parser.resolve_xpath_to_index(
+            "single.epub", "/body/DocFragment[1]/body/p[4]/text().5"
+        )
+        unindexed = parser.resolve_xpath_to_index(
+            "single.epub", "/body/DocFragment/body/p[4]/text().5"
+        )
+
+        assert indexed is not None
+        assert unindexed == indexed
+
+
 def test_resolve_xpath_to_index_falls_back_to_nearby_spine_when_docfragment_drifts(caplog):
     caplog.set_level(logging.INFO)
     parser = _parser_for_spines(
@@ -208,6 +253,17 @@ def test_resolve_xpath_to_index_falls_back_to_nearby_spine_when_docfragment_drif
         "mapped reported DocFragment[13] to spine 12" in record.message
         for record in caplog.records
     )
+
+
+def test_unindexed_docfragment_is_ambiguous_for_multi_spine_epub():
+    parser = _parser_for_spines([
+        (1, "<html><body><p>First spine text.</p></body></html>"),
+        (2, "<html><body><p>Second spine text.</p></body></html>"),
+    ])
+
+    assert parser.resolve_xpath_to_index(
+        "book.epub", "/body/DocFragment/body/p[1]/text().0"
+    ) is None
 
 
 def test_resolve_xpath_to_index_empty_element_boundary_uses_lxml_position(caplog):

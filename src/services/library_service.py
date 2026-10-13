@@ -290,7 +290,7 @@ class LibraryService:
                     not exact
                     and bool(authors)
                     and title_key(candidate_base) == title_key(base)
-                    and bool(candidate_subtitle) != bool(_subtitle)
+                    and bool(_subtitle) and not candidate_subtitle
                 )
                 if not exact and not base_match:
                     continue

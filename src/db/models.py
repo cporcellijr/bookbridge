@@ -477,13 +477,15 @@ class Job(Base):
     # leaves it NULL, and callers treat
     # None the same as "no stage recorded" rather than an error.
     stage = Column(String(50), nullable=True)
+    recovery_identity = Column(String(64), nullable=True)
 
     # Relationship
     book = relationship("Book", back_populates="jobs")
 
     def __init__(self, abs_id: str, last_attempt: float = None,
                  retry_count: int = 0, last_error: str = None, progress: float = 0.0,
-                 kind: str = JOB_KIND_ALIGNMENT, stage: Optional[str] = None):
+                 kind: str = JOB_KIND_ALIGNMENT, stage: Optional[str] = None,
+                 recovery_identity: Optional[str] = None):
         self.abs_id = abs_id
         self.last_attempt = last_attempt
         self.retry_count = retry_count
@@ -491,6 +493,7 @@ class Job(Base):
         self.progress = progress
         self.kind = kind
         self.stage = stage
+        self.recovery_identity = recovery_identity
 
     def __repr__(self):
         return f"<Job(abs_id='{self.abs_id}', kind='{self.kind}', stage='{self.stage}', retries={self.retry_count})>"

@@ -3,6 +3,7 @@ Unified SQLAlchemy database service for abs-kosync-bridge.
 Direct model-based interface without dictionary conversions.
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -42,6 +43,7 @@ from .models import (
     ShelfWatchScan,
     EmbeddingCache,
     BookAlignment,
+    BookAlignmentBackup,
     User,
     UserCredential,
     UserBook,
@@ -60,6 +62,12 @@ logger = logging.getLogger(__name__)
 # Reading-session buffer delivery destinations, mapped to the status column each
 # one owns. A buffered session is delivered to these independently, so one being
 # unreachable never holds up or duplicates the other.
+_EBOOK_INPUT_RECOVERY_IDENTITY_FIELDS = (
+    "abs_id", "audio_source", "audio_source_id", "audio_duration", "duration",
+    "ebook_source", "ebook_source_id", "ebook_filename", "original_ebook_filename",
+    "kosync_doc_id", "sync_mode",
+)
+
 _READING_SESSION_DESTINATIONS = {
     "grimmory": "grimmory_status",
     "bookorbit": "bookorbit_status",
@@ -1592,6 +1600,18 @@ class DatabaseService:
                 session.expunge(book)
             return books
 
+    @staticmethod
+    def ebook_input_recovery_identity(book: Book | dict) -> str:
+        """Hash the stable audio/ebook pairing fields for recovery CAS checks."""
+        values = {
+            field: book[field] if isinstance(book, dict) else getattr(book, field, None)
+            for field in _EBOOK_INPUT_RECOVERY_IDENTITY_FIELDS
+        }
+        canonical = json.dumps(
+            values, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def get_ebook_input_recovery_candidates(self) -> list[dict]:
         """Return only CWA audiobook mappings with cheap evidence of bad EPUB input."""
         from sqlalchemy import func, or_, select
@@ -1686,6 +1706,12 @@ class DatabaseService:
                 stage="ebook_input_recovery", last_error=None,
                 new_kosync_doc_id=new_kosync_doc_id,
                 bad_kosync_doc_id=bad_kosync_doc_id,
+                recovery_identity=self.ebook_input_recovery_identity({
+                    **{field: getattr(expected_book, field, None)
+                       for field in _EBOOK_INPUT_RECOVERY_IDENTITY_FIELDS},
+                    "ebook_filename": new_ebook_filename,
+                    "kosync_doc_id": new_kosync_doc_id,
+                }),
             )
         if changed:
             self._notify_catalog_change()
@@ -1716,84 +1742,97 @@ class DatabaseService:
         self,
         abs_id: str,
         expected_book: Book,
-        expected_alignment_last_updated: datetime,
+        expected_alignment_last_updated: Optional[datetime],
+        *,
+        expected_job: Optional[Job] = None,
+        alignment_map: Optional[list] = None,
+        alignment_method: Optional[str] = None,
+        total_chars: Optional[int] = None,
+        segments_json: Optional[str] = None,
+        quality_score: Optional[float] = None,
+        quality_detail: Optional[str] = None,
     ) -> bool:
-        """Activate recovery only if its repaired identity and queued stage still match."""
+        """Commit the proven map and activate its repaired book in one transaction."""
         if (
             not abs_id or getattr(expected_book, "abs_id", None) != abs_id
-            or expected_alignment_last_updated is None
+            or expected_job is None or expected_job.stage != "ebook_input_recovery"
+            or not expected_job.recovery_identity
+            or expected_job.recovery_identity != self.ebook_input_recovery_identity(expected_book)
+            or not isinstance(alignment_map, list)
+            or isinstance(total_chars, bool) or not isinstance(total_chars, int) or total_chars <= 0
+            or (segments_json is not None and not isinstance(segments_json, str))
         ):
             return False
-        with self.get_session() as session:
-            latest_job_id = (
-                session.query(Job.id)
-                .filter(Job.abs_id == abs_id, Job.kind == "alignment")
-                .order_by(Job.last_attempt.desc())
-                .limit(1)
-                .scalar_subquery()
-            )
-            recovery_job = session.query(Job.id).filter(
-                Job.id == latest_job_id,
-                Job.stage == "ebook_input_recovery",
-            ).exists()
-            alignment_row = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
-            if (
-                not alignment_row or not alignment_row.last_updated
-                or alignment_row.last_updated != expected_alignment_last_updated
-                or alignment_row.total_chars is None or alignment_row.total_chars <= 0
-            ):
+        try:
+            if len(alignment_map) < 2:
                 return False
-            try:
-                alignment_map = json.loads(alignment_row.alignment_map_json or "[]")
-                if not isinstance(alignment_map, list) or any(
-                    not isinstance(point, dict) for point in alignment_map
-                ):
+            chars = []
+            for point in alignment_map:
+                if not isinstance(point, dict):
                     return False
-                anchors = [
-                    point.get("global_char", point.get("char"))
-                    for point in alignment_map
-                ]
+                char = point.get("global_char", point.get("char"))
+                timestamp = point.get("ts")
                 if (
-                    len(anchors) < 2
-                    or any(
-                        isinstance(value, bool)
-                        or not isinstance(value, (int, float))
-                        or not math.isfinite(value)
-                        or value < 0
-                        for value in anchors
-                    )
-                    or max(anchors) <= min(anchors)
+                    isinstance(char, bool) or not isinstance(char, (int, float))
+                    or not math.isfinite(char) or char < 0 or char > total_chars
+                    or isinstance(timestamp, bool) or not isinstance(timestamp, (int, float))
+                    or not math.isfinite(timestamp) or timestamp < 0
                 ):
                     return False
-            except (TypeError, ValueError):
+                chars.append(char)
+            if any(b < a for a, b in zip(chars, chars[1:])) or max(chars) <= min(chars):
                 return False
-            usable_alignment = session.query(BookAlignment.abs_id).filter(
-                BookAlignment.abs_id == abs_id,
-                BookAlignment.last_updated == alignment_row.last_updated,
-                BookAlignment.last_updated == expected_alignment_last_updated,
-                BookAlignment.total_chars > 0,
-            ).exists()
-            filters = [Book.abs_id == abs_id, recovery_job, usable_alignment]
-            for field in (
-                "status", "audio_source", "audio_source_id", "audio_duration",
-                "duration", "ebook_source", "ebook_source_id", "ebook_filename",
-                "original_ebook_filename", "kosync_doc_id", "sync_mode",
+            if quality_score is not None and (
+                isinstance(quality_score, bool) or not isinstance(quality_score, (int, float))
+                or not math.isfinite(quality_score)
             ):
-                value = getattr(expected_book, field, None)
-                column = getattr(Book, field)
-                filters.append(column.is_(None) if value is None else column == value)
-
-            updated = session.query(Book).filter(*filters).update(
-                {Book.status: "active", Book.transcript_file: "DB_MANAGED"},
-                synchronize_session=False,
-            )
-            if updated != 1:
                 return False
-            session.query(Job).filter(
-                Job.id == latest_job_id,
-                Job.stage == "ebook_input_recovery",
-            ).update(
-                {Job.retry_count: 0, Job.last_error: None, Job.progress: 1.0, Job.stage: None},
+            alignment_map_json = json.dumps(
+                alignment_map, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            )
+        except (TypeError, ValueError):
+            return False
+
+        with self.get_session() as session:
+            alignment_row = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
+            if alignment_row is None:
+                if expected_alignment_last_updated is not None:
+                    return False
+            elif (expected_alignment_last_updated is None
+                    or alignment_row.last_updated != expected_alignment_last_updated):
+                return False
+            if not self._commit_ebook_input_recovery_state(
+                session, abs_id, expected_book, expected_job,
+                expected_alignment_last_updated,
+                {"status": "active", "transcript_file": "DB_MANAGED"},
+                stage=None, last_error=None,
+                new_kosync_doc_id=expected_book.kosync_doc_id,
+            ):
+                return False
+
+            if alignment_row is None:
+                alignment_row = BookAlignment(abs_id=abs_id, alignment_map_json=alignment_map_json)
+                session.add(alignment_row)
+            elif not session.query(BookAlignmentBackup).filter_by(abs_id=abs_id).first():
+                session.add(BookAlignmentBackup(
+                    abs_id=abs_id,
+                    alignment_map_json=alignment_row.alignment_map_json,
+                    align_method=alignment_row.align_method,
+                    total_chars=alignment_row.total_chars,
+                    segments_json=alignment_row.segments_json,
+                ))
+            alignment_row.alignment_map_json = alignment_map_json
+            alignment_row.align_method = alignment_method
+            alignment_row.total_chars = total_chars
+            alignment_row.segments_json = segments_json
+            alignment_row.quality_score = quality_score
+            alignment_row.quality_detail = quality_detail
+            alignment_row.last_updated = utcnow()
+            session.query(Job).filter(Job.id == expected_job.id).update(
+                {
+                    Job.retry_count: 0, Job.last_error: None, Job.progress: 1.0,
+                    Job.stage: None, Job.recovery_identity: None,
+                },
                 synchronize_session=False,
             )
         self._notify_catalog_change()
@@ -1811,6 +1850,7 @@ class DatabaseService:
         last_error: Optional[str],
         new_kosync_doc_id: Optional[str] = None,
         bad_kosync_doc_id: Optional[str] = None,
+        recovery_identity: Optional[str] = None,
     ) -> bool:
         """Commit a recovery state only while every inspected row still matches."""
         from sqlalchemy import not_
@@ -1837,6 +1877,7 @@ class DatabaseService:
                 Job.progress == expected_job.progress,
                 Job.last_error == expected_job.last_error,
                 Job.stage == expected_job.stage,
+                Job.recovery_identity == expected_job.recovery_identity,
             ).exists()
         if expected_alignment_last_updated is None:
             alignment_unchanged = not_(
@@ -1890,6 +1931,8 @@ class DatabaseService:
                 Job.progress: 0.0 if new_kosync_doc_id else expected_job.progress,
                 Job.stage: stage,
             }
+            if recovery_identity is not None:
+                job_values[Job.recovery_identity] = recovery_identity
             if new_kosync_doc_id:
                 job_values[Job.retry_count] = 0
             session.query(Job).filter(Job.id == expected_job.id).update(
@@ -1899,6 +1942,7 @@ class DatabaseService:
             session.add(Job(
                 abs_id=abs_id, last_attempt=time.time(), retry_count=0,
                 last_error=last_error, progress=0.0, kind="alignment", stage=stage,
+                recovery_identity=recovery_identity,
             ))
         return True
 

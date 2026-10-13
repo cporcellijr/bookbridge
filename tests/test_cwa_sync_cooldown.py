@@ -62,6 +62,22 @@ class TestCwaCooldown(unittest.TestCase):
         self.assertIn("<token>", rendered)
         self.assertNotIn("s3cret-sync-token", rendered)
 
+    def test_connection_check_never_logs_the_sync_token(self):
+        self.api._token = "s3cret-sync-token"
+        self.api._session.get.side_effect = requests.ConnectionError(
+            "connection failed for /kobo/s3cret-sync-token/v1/initialization")
+        with self.assertLogs("src.api.cwa_sync_api", level="DEBUG") as logs:
+            self.assertFalse(self.api.check_connection())
+        rendered = "\n".join(logs.output) + "".join(
+            logging.Formatter().formatException(r.exc_info) for r in logs.records if r.exc_info)
+        self.assertIn("<token>", rendered)
+        self.assertNotIn("s3cret-sync-token", rendered)
+
+    def test_connection_check_skips_request_during_cooldown(self):
+        self.api._cooldown_until = self.now + 10
+        self.assertFalse(self.api.check_connection())
+        self.api._session.get.assert_not_called()
+
     def test_sync_cycle_calls_send_nothing_during_cooldown(self):
         self.api._session.get.side_effect = requests.Timeout()
         self.api.get_reading_state("u0")

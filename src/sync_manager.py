@@ -1819,6 +1819,10 @@ class SyncManager:
                             "ebook_input_recovery_manual" if manual_recovery
                             else stage
                         ),
+                        recovery_identity=(
+                            getattr(interrupted_job, "recovery_identity", None)
+                            if recovery_marker else None
+                        ),
                     )
                     self.database_service.save_job(job)
 
@@ -3249,6 +3253,10 @@ class SyncManager:
             last_error=None,
             progress=0.0,
             stage=prior_stage,
+            recovery_identity=(
+                getattr(prior_job, "recovery_identity", None)
+                if prior_stage == "ebook_input_recovery" else None
+            ),
         )
         self.database_service.save_job(job)
 
@@ -3285,6 +3293,13 @@ class SyncManager:
         self, book: Book, ensure_active, update_progress,
     ) -> None:
         """Rebuild a proven bad input mapping from retained EPUB and timed transcript caches."""
+        queued_job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
+        if (
+            not queued_job or not queued_job.recovery_identity
+            or queued_job.recovery_identity != self.database_service.ebook_input_recovery_identity(book)
+        ):
+            raise EbookInputError("Recovery pairing proof is missing or changed; recovery needs manual review.")
+        _, alignment_updated, _ = self.database_service.get_ebook_input_recovery_alignment(book.abs_id)
         original_name = str(getattr(book, "original_ebook_filename", "") or "").strip()
         if not original_name or book.ebook_filename != original_name:
             raise EbookInputError("Recovery input identity changed; choose the retained EPUB and retry.")
@@ -3321,45 +3336,19 @@ class SyncManager:
 
         update_progress(0.5, 3)
         ensure_active()
-        # The final Book/alignment CAS prevents a remap during alignment from
-        # activating this result. A raced map can remain stored, but the remap
-        # leaves the Book pending so the next explicit recovery rebuilds it.
-        # shortcut: make map publication atomic with remap if concurrent remaps become common.
+        current_job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
+        if (
+            not current_job or current_job.id != queued_job.id
+            or current_job.stage != "ebook_input_recovery"
+            or current_job.recovery_identity != queued_job.recovery_identity
+        ):
+            raise TranscriptionCancelled(book.abs_id)
         if not self.alignment_service.align_and_store(
             book.abs_id, transcript, ebook_text, spine_chapters,
             preserve_backup=True, require_recovery_content_match=True,
+            recovery_snapshot=(book, current_job, alignment_updated),
         ):
             raise EbookInputError("Cached transcript did not produce a usable recovery alignment; recovery needs manual review.")
-
-        alignment, alignment_updated, total_chars = (
-            self.database_service.get_ebook_input_recovery_alignment(book.abs_id)
-        )
-        if not isinstance(alignment, list) or len(alignment) < 2:
-            raise EbookInputError("Recovery alignment is incomplete; recovery needs manual review.")
-        anchors = []
-        for point in alignment:
-            if not isinstance(point, dict):
-                raise EbookInputError("Recovery alignment is malformed; recovery needs manual review.")
-            value = point.get("global_char", point.get("char"))
-            if (
-                isinstance(value, bool) or not isinstance(value, (int, float))
-                or not math.isfinite(value) or value < 0
-            ):
-                raise EbookInputError("Recovery alignment is malformed; recovery needs manual review.")
-            anchors.append(value)
-        if total_chars is None or total_chars <= 0 or max(anchors) <= min(anchors):
-            raise EbookInputError("Recovery alignment has no character extent; recovery needs manual review.")
-
-        ensure_active()
-        current_book = self.database_service.get_book(book.abs_id)
-        if not self._ebook_recovery_book_matches(book, current_book):
-            raise TranscriptionCancelled(book.abs_id)
-        complete_recovery = getattr(self.database_service, "complete_ebook_input_recovery", None)
-        if (
-            not callable(complete_recovery)
-            or not complete_recovery(book.abs_id, current_book, alignment_updated)
-        ):
-            raise TranscriptionCancelled(book.abs_id)
         self._dispatch_readalong_intent(book)
 
     @staticmethod
@@ -3897,6 +3886,7 @@ class SyncManager:
                     else "ebook_input_recovery" if recovery_mode
                     else getattr(job, "stage", None)
                 ),
+                recovery_identity=getattr(job, "recovery_identity", None) if recovery_mode else None,
             )
             self.database_service.save_job(updated_job)
 

@@ -22,6 +22,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from src.utils.polisher import Polisher
 from src.utils.transcriber import AudioTranscriber
 
 # The reporter's actual numbers (issue #362).
@@ -36,7 +37,7 @@ def _segments_to(end_ts):
 class TranscriptCoverageTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.transcriber = AudioTranscriber(self.tmp, MagicMock(), MagicMock())
+        self.transcriber = AudioTranscriber(self.tmp, MagicMock(), Polisher())
         self._saved_env = os.environ.get("TRANSCRIPT_MIN_COVERAGE")
         os.environ.pop("TRANSCRIPT_MIN_COVERAGE", None)
 

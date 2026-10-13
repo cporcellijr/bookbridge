@@ -1161,6 +1161,40 @@ class TestKosyncEndpoints(unittest.TestCase):
         ids = [b["abs_id"] for b in response.get_json()["books"]]
         self.assertEqual(ids, ["mine"])
 
+    def test_device_sync_manifest_fails_closed_when_ownership_lookup_fails(self):
+        from src.api import kosync_server
+        from src import web_server
+
+        manifest = {
+            "generated_at": 1,
+            "revision": "global",
+            "delete_mode": "mirror",
+            "books": [
+                {"abs_id": "owned", "filename": "owned.epub"},
+                {"abs_id": "private", "filename": "private.epub"},
+            ],
+        }
+        with kosync_server._manifest_cache_lock:
+            old_manifest = kosync_server._manifest_cache
+            kosync_server._manifest_cache = manifest
+        try:
+            with patch.object(web_server.database_service, "get_books_by_status",
+                              side_effect=RuntimeError("synthetic ownership lookup failure")), \
+                 patch.object(kosync_server, "_start_manifest_prebuilder"), \
+                 patch.object(kosync_server, "note_device_sync_activity"):
+                response = self.client.get(
+                    "/koreader/device-sync/manifest", headers=self.auth_headers,
+                )
+        finally:
+            with kosync_server._manifest_cache_lock:
+                kosync_server._manifest_cache = old_manifest
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json(), {
+            "error": "Manifest ownership unavailable",
+        })
+        self.assertNotIn("private", response.get_data(as_text=True))
+
     def test_device_sync_manifest_uses_grimmory_shelves_for_user_collections(self):
         from src.api import kosync_server
         from src import web_server

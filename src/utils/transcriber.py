@@ -92,24 +92,48 @@ class AudioTranscriber:
         except (OSError, ValueError, TypeError, AttributeError):
             return False
 
-    @staticmethod
-    def _valid_word_timed_segments(segments: object) -> bool:
-        """Validate the persisted shape before returning it to alignment code."""
-        return bool(
-            isinstance(segments, list) and segments
-            and all(
-                isinstance(segment, dict) and isinstance(segment.get('words'), list)
-                and segment['words'] and all(
-                    isinstance(word, dict) and isinstance(word.get('word'), str)
-                    and word['word'].strip()
-                    and isinstance(word.get('start'), (int, float))
-                    and isinstance(word.get('end'), (int, float))
-                    and math.isfinite(word['start']) and math.isfinite(word['end'])
-                    and 0 <= word['start'] <= word['end']
-                    for word in segment['words']
-                ) for segment in segments
+    def _valid_word_timed_segments(self, segments: object) -> bool:
+        """Require complete, ordered word timings bounded by each segment."""
+        if not isinstance(segments, list) or not segments:
+            return False
+        previous_word_start = 0.0
+        for segment in segments:
+            if not isinstance(segment, dict):
+                return False
+            start, end, text, words = (
+                segment.get('start'), segment.get('end'), segment.get('text'),
+                segment.get('words'),
             )
-        )
+            if (not isinstance(start, (int, float)) or isinstance(start, bool)
+                    or not isinstance(end, (int, float)) or isinstance(end, bool)
+                    or not math.isfinite(start) or not math.isfinite(end)
+                    or start < 0 or end < start or not isinstance(text, str)
+                    or not isinstance(words, list) or not words):
+                return False
+
+            expected = [self.polisher.normalize(token) for token in text.split()]
+            expected = [token for token in expected if token]
+            actual = []
+            for word in words:
+                if not isinstance(word, dict) or not isinstance(word.get('word'), str):
+                    return False
+                word_start, word_end = word.get('start'), word.get('end')
+                if (not word['word'].strip()
+                        or not isinstance(word_start, (int, float)) or isinstance(word_start, bool)
+                        or not isinstance(word_end, (int, float)) or isinstance(word_end, bool)
+                        or not math.isfinite(word_start) or not math.isfinite(word_end)
+                        or word_start < previous_word_start or word_end < word_start
+                        or word_start < start or word_end > end):
+                    return False
+                previous_word_start = word_start
+                actual.extend(
+                    token for token in (
+                        self.polisher.normalize(raw) for raw in word['word'].split()
+                    ) if token
+                )
+            if actual != expected:
+                return False
+        return True
 
     def get_cached_word_timed_transcript(
         self, abs_id: str, expected_duration: float

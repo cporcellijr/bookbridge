@@ -194,6 +194,15 @@ class TestCwaEbookAcquisition(unittest.TestCase):
 
         self.assertEqual(result, os.path.join(self.temp_dir, "abs-1_cwa.epub"))
 
+    def test_unqualified_source_does_not_match_subtitled_volume(self):
+        self.cwa.is_configured.return_value = True
+        self.cwa.search_ebooks.side_effect = lambda _query: [
+            self._cwa_match("Saga: Volume One"),
+        ]
+
+        self.assertIsNone(self.service.acquire_ebook(self._item("Saga")))
+        self.cwa.download_ebook.assert_not_called()
+
     def test_search_does_not_allow_subtitle_fallback_without_author(self):
         self.cwa.is_configured.return_value = True
         self.cwa.search_ebooks.side_effect = lambda _query: [

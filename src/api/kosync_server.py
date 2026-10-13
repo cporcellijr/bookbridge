@@ -580,6 +580,10 @@ class ManifestShelfFilterUnavailable(Exception):
     """The device-sync shelf filter cannot be evaluated, so no manifest may be served."""
 
 
+class ManifestOwnershipUnavailable(Exception):
+    """The device user's manifest ownership cannot be verified safely."""
+
+
 def _booklore_shelf_members(user_id, credentials: Optional[dict], shelf_names: list[str]) -> set[str]:
     wanted = tuple(sorted({name.casefold() for name in shelf_names}))
     cache_key = (_booklore_shelf_cache_key(user_id, credentials), wanted)
@@ -671,7 +675,7 @@ def _scope_manifest_to_user(manifest, user_id):
         owned_books = _database_service.get_books_by_status("active", user_id=user_id)
     except Exception as e:
         logger.warning("Manifest user-scoping failed (user_id=%s): %s", user_id, e, exc_info=True)
-        return manifest
+        raise ManifestOwnershipUnavailable from e
     owned_ids = {str(book.abs_id) for book in owned_books}
     all_books = manifest.get("books") or []
     books = [dict(item) for item in all_books if str(item.get("abs_id")) in owned_ids]
@@ -2120,6 +2124,13 @@ def kosync_put_progress():
 def _scoped_manifest_response(manifest, user_id):
     try:
         return jsonify(_scope_manifest_to_user(manifest, user_id)), 200
+    except ManifestOwnershipUnavailable:
+        get_persistent_condition_logger().warn(
+            logger, f"manifest-ownership-withheld:{user_id}",
+            "Device-sync manifest withheld because ownership lookup failed (user_id=%s)",
+            user_id, exc_info=True,
+        )
+        return jsonify({"error": "Manifest ownership unavailable"}), 503
     except ManifestShelfFilterUnavailable as e:
         get_persistent_condition_logger().warn(
             logger, f"manifest-shelf-filter-withheld:{user_id}",

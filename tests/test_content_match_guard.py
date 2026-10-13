@@ -192,10 +192,28 @@ def test_recovery_rejects_nonfinite_or_negative_map_positions(service, points):
     with pytest.MonkeyPatch.context() as mp:
         _guard_env(mp, ollama_guard="false", lexical_guard="false")
         assert service.align_and_store(
-            "invalid-recovery-map", [{"start": 0, "end": 10, "text": text}], text,
+            "invalid-recovery-map", [{"start": 0, "end": 10, "text": text,
+                                      "words": [{"word": word, "start": 0, "end": 10}
+                                                for word in text.split()]}], text,
             require_recovery_content_match=True,
         ) is False
     assert service._get_alignment("invalid-recovery-map") is None
+
+
+def test_recovery_refuses_timings_discarded_by_alignment(service):
+    from unittest.mock import Mock
+
+    text = _sequential_words(300)
+    service._generate_alignment_map_with_method = Mock(side_effect=AssertionError("must not estimate"))
+    segments = [{"start": 0, "end": 10, "text": text,
+                 "words": [{"word": "unrelated", "start": 0, "end": 10}]}]
+    with pytest.MonkeyPatch.context() as mp:
+        _guard_env(mp, ollama_guard="false", lexical_guard="false")
+        assert service.align_and_store(
+            "incomplete-recovery-timing", segments, text, require_recovery_content_match=True,
+        ) is False
+    service._generate_alignment_map_with_method.assert_not_called()
+    assert service._get_alignment("incomplete-recovery-timing") is None
 
 
 def test_recovery_content_proof_does_not_bypass_configured_guard(service, monkeypatch):

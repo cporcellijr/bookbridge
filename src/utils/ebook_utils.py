@@ -2054,19 +2054,25 @@ class EbookParser:
                 end = min(len(full_text), index + 600)
                 return strip_inline_joiner(full_text[start:end])
 
-            match = re.search(r'DocFragment\[(\d+)]', xpath_str)
+            match = re.search(r'DocFragment(?:\[(\d+)])?', xpath_str)
             if not match:
                 return None
-            spine_index = int(match.group(1))
 
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
+            if match.group(1) is None:
+                if len(spine_map) != 1:
+                    return None
+                spine_index = spine_map[0]["spine_index"]
+                relative_path = xpath_str.split("DocFragment", 1)[-1]
+            else:
+                spine_index = int(match.group(1))
+                relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
 
             # Parse path and offset. KOReader emits two forms for the trailing
             # character offset: "/text().NNN" (single text node) and
             # "/text()[N].MMM" (Nth text node when inline children split a
             # paragraph's text into multiple nodes). Both must be recognised.
-            relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
             clean_xpath, target_offset = self._split_xpath_char_offset(relative_path)
 
             if clean_xpath.startswith('/'):
@@ -2176,15 +2182,21 @@ class EbookParser:
                     return None, 2
                 return first, 1
 
-            match = re.search(r'DocFragment\[(\d+)]', xpath_str)
+            match = re.search(r'DocFragment(?:\[(\d+)])?', xpath_str)
             if not match:
                 return None
-            spine_index = int(match.group(1))
 
             book_path = self.resolve_book_path(filename)
             full_text, spine_map = self.extract_text_and_map(book_path)
+            if match.group(1) is None:
+                if len(spine_map) != 1:
+                    return None
+                spine_index = spine_map[0]["spine_index"]
+                relative_path = xpath_str.split("DocFragment", 1)[-1]
+            else:
+                spine_index = int(match.group(1))
+                relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
 
-            relative_path = xpath_str.split(f"DocFragment[{spine_index}]")[-1]
             clean_xpath, target_offset = self._split_xpath_char_offset(relative_path)
 
             if clean_xpath.startswith('/'):

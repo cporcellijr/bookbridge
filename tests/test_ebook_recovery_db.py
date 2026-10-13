@@ -39,9 +39,14 @@ def _snapshot(db, abs_id="recover-me"):
 
 
 def _queue(db, abs_id="recover-me", **overrides):
+    book = db.get_book(abs_id)
     job = Job(
         abs_id=abs_id, last_attempt=100.0, retry_count=2, last_error="old failure",
         progress=0.4, kind="alignment", stage=None,
+        recovery_identity=(
+            db.ebook_input_recovery_identity(book)
+            if overrides.get("stage") == "ebook_input_recovery" else None
+        ),
     )
     for key, value in overrides.items():
         setattr(job, key, value)
@@ -79,6 +84,7 @@ def test_recovery_repair_updates_catalog_and_queues_one_staged_job(db):
     assert queued.retry_count == 0
     assert queued.progress == 0.0
     assert queued.last_error is None
+    assert queued.recovery_identity == db.ebook_input_recovery_identity(saved)
 
 
 def test_recovery_relink_preserves_rows_and_leaves_unrelated_documents_alone(db):
@@ -214,7 +220,13 @@ def test_completion_cas_only_activates_queued_job_with_a_usable_map(db):
     expected = db.get_book(book.abs_id)
     map_timestamp = db.get_ebook_input_recovery_alignment(book.abs_id)[1]
 
-    assert db.complete_ebook_input_recovery(book.abs_id, expected, map_timestamp) is True
+    expected_job = db.get_latest_job(book.abs_id, kind="alignment")
+    assert db.complete_ebook_input_recovery(
+        book.abs_id, expected, map_timestamp,
+        expected_job=expected_job,
+        alignment_map=[{"char": 0, "ts": 0}, {"char": 40, "ts": 4}],
+        alignment_method="lexical_timed", total_chars=40,
+    ) is True
 
     saved = db.get_book(book.abs_id)
     job = db.get_latest_job(book.abs_id, kind="alignment")
@@ -224,8 +236,7 @@ def test_completion_cas_only_activates_queued_job_with_a_usable_map(db):
 
 @pytest.mark.parametrize(
     "invalidator", [
-        "remap", "manual_stage", "map_changed", "empty_map", "audio_identity",
-        "audio_duration", "nan_anchor", "infinite_anchor", "negative_anchor",
+        "remap", "manual_stage", "map_changed", "audio_identity", "audio_duration",
     ]
 )
 def test_completion_cas_refuses_stale_or_unusable_recovery(invalidator, db):
@@ -238,6 +249,7 @@ def test_completion_cas_refuses_stale_or_unusable_recovery(invalidator, db):
             total_chars=40,
         ))
     expected = db.get_book(book.abs_id)
+    expected_job = db.get_latest_job(book.abs_id, kind="alignment")
     map_timestamp = db.get_ebook_input_recovery_alignment(book.abs_id)[1]
     if invalidator == "remap":
         current = db.get_book(book.abs_id)
@@ -263,18 +275,12 @@ def test_completion_cas_refuses_stale_or_unusable_recovery(invalidator, db):
         current = db.get_book(book.abs_id)
         current.audio_duration = 123.0
         db.save_book(current)
-    elif invalidator in {"nan_anchor", "infinite_anchor", "negative_anchor"}:
-        malformed_maps = {
-            "nan_anchor": '[{"char":0,"ts":0},{"char":NaN,"ts":4}]',
-            "infinite_anchor": '[{"char":0,"ts":0},{"char":Infinity,"ts":4}]',
-            "negative_anchor": '[{"char":0,"ts":0},{"char":-1,"ts":4}]',
-        }
-        with db.get_session() as session:
-            alignment = session.query(BookAlignment).filter_by(abs_id=book.abs_id).one()
-            alignment.alignment_map_json = malformed_maps[invalidator]
-            alignment.last_updated = map_timestamp
-
-    assert db.complete_ebook_input_recovery(book.abs_id, expected, map_timestamp) is False
+    assert db.complete_ebook_input_recovery(
+        book.abs_id, expected, map_timestamp,
+        expected_job=expected_job,
+        alignment_map=[{"char": 0, "ts": 0}, {"char": 40, "ts": 4}],
+        alignment_method="lexical_timed", total_chars=40,
+    ) is False
     current = db.get_book(book.abs_id)
     assert current.status == "pending"
     if invalidator == "manual_stage":

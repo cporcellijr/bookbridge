@@ -357,31 +357,16 @@ def _upload_error_text(error: Optional[BookOrbitUploadError], size_mb: float) ->
 def _upload_replacing(
     bookorbit_client: "BookOrbitClient", audio_book_id: object, staged: Path, filename: str,
 ) -> Tuple[bool, Optional[BookOrbitUploadError]]:
-    """Upload ``staged``; on a name conflict delete the stale row and retry once.
+    """Upload ``staged`` once, preserving any existing attachment on conflict.
 
     ``duplicate`` (identical bytes already attached) counts as delivered.
     """
     book_id = int(audio_book_id) if str(audio_book_id).isdigit() else audio_book_id
-    error: Optional[BookOrbitUploadError] = None
-    for attempt in (1, 2):
-        try:
-            bookorbit_client.upload_book_file(book_id, staged, filename)
-            return True, None
-        except BookOrbitUploadError as e:
-            error = e
-        if error.kind == "duplicate":
-            return True, None
-        if error.kind != "name_conflict" or attempt == 2:
-            break
-        detail = bookorbit_client.get_book_detail(audio_book_id, force=True)
-        stale = next(
-            (f.get("id") for f in (detail or {}).get("files") or []
-             if isinstance(f, dict) and f.get("filename") == filename),
-            None,
-        )
-        if stale is None or not bookorbit_client.delete_book_file(stale):
-            break
-    return False, error
+    try:
+        bookorbit_client.upload_book_file(book_id, staged, filename)
+        return True, None
+    except BookOrbitUploadError as error:
+        return (True, None) if error.kind == "duplicate" else (False, error)
 
 
 def _deliver_by_upload(
