@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import gc
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 import math
 import re
 from bisect import bisect_right
@@ -85,25 +85,66 @@ class AudioTranscriber:
         """Whether a completed cache contains usable word timings for re-alignment."""
         try:
             progress = json.loads((self.cache_root / str(abs_id) / '_progress.json').read_text())
-            segments = progress.get('transcript')
             return bool(
                 progress.get('done') and progress.get('chunks_completed', 0) > 0
-                and isinstance(segments, list) and segments
-                and all(
-                    isinstance(segment, dict) and isinstance(segment.get('words'), list)
-                    and segment['words'] and all(
-                        isinstance(word, dict) and isinstance(word.get('word'), str)
-                        and word['word'].strip()
-                        and isinstance(word.get('start'), (int, float))
-                        and isinstance(word.get('end'), (int, float))
-                        and math.isfinite(word['start']) and math.isfinite(word['end'])
-                        and 0 <= word['start'] <= word['end']
-                        for word in segment['words']
-                    ) for segment in segments
-                )
+                and self._valid_word_timed_segments(progress.get('transcript'))
             )
         except (OSError, ValueError, TypeError, AttributeError):
             return False
+
+    @staticmethod
+    def _valid_word_timed_segments(segments: object) -> bool:
+        """Validate the persisted shape before returning it to alignment code."""
+        return bool(
+            isinstance(segments, list) and segments
+            and all(
+                isinstance(segment, dict) and isinstance(segment.get('words'), list)
+                and segment['words'] and all(
+                    isinstance(word, dict) and isinstance(word.get('word'), str)
+                    and word['word'].strip()
+                    and isinstance(word.get('start'), (int, float))
+                    and isinstance(word.get('end'), (int, float))
+                    and math.isfinite(word['start']) and math.isfinite(word['end'])
+                    and 0 <= word['start'] <= word['end']
+                    for word in segment['words']
+                ) for segment in segments
+            )
+        )
+
+    def get_cached_word_timed_transcript(
+        self, abs_id: str, expected_duration: float
+    ) -> Optional[List[Dict]]:
+        """Return a completed cached word transcript with adequate duration coverage."""
+        try:
+            progress = json.loads(
+                (self.cache_root / str(abs_id) / "_progress.json").read_text(encoding="utf-8")
+            )
+            segments = progress.get("transcript")
+            if (not progress.get("done") or progress.get("chunks_completed", 0) <= 0
+                    or not self._valid_word_timed_segments(segments)):
+                return None
+            duration = float(expected_duration)
+            if not math.isfinite(duration) or duration <= 0:
+                return None
+            final_word_end = max(
+                word["end"]
+                for segment in segments
+                for word in segment["words"]
+            )
+            actual_duration = (
+                progress.get("cumulative_duration")
+                if progress.get("vad_filter") is True else final_word_end
+            )
+            actual_duration = float(actual_duration)
+            if not math.isfinite(actual_duration):
+                return None
+            try:
+                self._check_audio_coverage(actual_duration, duration, stage="cached transcript")
+            except ValueError:
+                return None
+            return segments
+        except (OSError, ValueError, TypeError, AttributeError):
+            return None
 
     @property
     def split_duration(self) -> int:

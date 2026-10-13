@@ -45,13 +45,22 @@ transcription. The failed book's error names the file. Correct the selected eboo
 or replace its unusable cache copy, then retry/Remap. Preserve any existing timed
 transcript before replacing files; deleting the mapping also deletes cached data.
 
-Previously processed wrong files need explicit recovery: verify the chosen CWA ID,
-the current and original ebook filenames, and the cached EPUB. Correct those
-before rebuilding alignment. If the primary KoSync hash came from the wrong file,
-update it to the verified ebook/device hash using the existing hash-update action;
-Remap does not reset an existing hash. Hash updates retain the old hash as a linked
-document, so review an erroneous old document link separately in KoSync Documents.
-Keep reader progress and history; clearing them does not repair the input file.
+The job scheduler automatically repairs provable legacy CWA input failures. It
+requires a numeric mapped CWA ID, the retained original EPUB, and a complete
+word-timed transcript with matching text. It can replace a hash proven to belong
+to that book's cached ABS companion PDF, or rebuild an actually zero-position map
+whose hash already matches the retained EPUB. It uses cached files only, preserves
+reader progress/history and existing alignment backups, and resumes sync after a
+usable map is published. Only the proven wrong PDF document link is removed; its
+document and reader progress rows remain.
+
+Suspicious mappings with incomplete proof show a manual-review error and stay out
+of sync. Verify the CWA ID, current/original filenames, retained EPUB and transcript,
+then correct the pairing and retry/Remap. A legitimate device hash is never replaced
+merely because it differs from the cached EPUB. If manual verification proves a
+wrong primary hash, use the existing hash-update action; Remap alone does not reset
+it. Hash updates retain the old linked document, so review an erroneous link in
+KoSync Documents separately. Clearing reader progress does not repair an input file.
 
 ## Deliberately retrying transcription
 

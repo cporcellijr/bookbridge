@@ -37,6 +37,15 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Recover provable legacy CWA input failures automatically from the retained EPUB
+  and a matching, complete word-timed transcript. Rebuild alignment without
+  downloading audio or repeating transcription; preserve reader progress, history,
+  and existing alignment backups. Incomplete proof leaves a manual-review error
+  and blocks unsafe sync (#509, #510).
+- Record internal KoSync pushes for the authenticated reader so another reader's
+  device update cannot erase their position. Contributed by
+  [@benjitobz](https://github.com/benjitobz) in #512; retain the guarded comparison
+  across hashes of the same cached EPUB.
 - Honor explicitly mapped CWA ebooks from cache or by exact Calibre ID, and
   retry normalized CWA searches without selecting unrelated or ambiguous books
   (#509, #511).

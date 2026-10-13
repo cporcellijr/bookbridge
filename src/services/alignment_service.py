@@ -230,7 +230,9 @@ class AlignmentService:
 
     @time_execution
     def align_and_store(self, abs_id: str, raw_segments: List[Dict], ebook_text: str,
-                        spine_chapters: List[Dict] = None) -> bool:
+                        spine_chapters: List[Dict] = None,
+                        preserve_backup: bool = False,
+                        require_recovery_content_match: bool = False) -> bool:
         """
         Main entry point for "Unified Alignment".
         
@@ -267,8 +269,11 @@ class AlignmentService:
 
         # 2b. Content-match guard — refuse to persist a map when the audio and ebook are
         # clearly different content (wrong edition / abridged / translation / mis-match).
-        if not self._verify_content_match(rebuilt_segments, ebook_text, abs_id=abs_id,
-                                          raise_on_mismatch=True):
+        if not self._verify_content_match(
+            rebuilt_segments, ebook_text, abs_id=abs_id,
+            raise_on_mismatch=True,
+            require_lexical_overlap=require_recovery_content_match,
+        ):
             return False
 
         # 3. Anchored Alignment
@@ -280,12 +285,23 @@ class AlignmentService:
             return False
 
         # 4. Store to Database
-        self._publish_map(abs_id, alignment_map, align_method, total_chars=ebook_len,
-                          segments=map_segments)
-        # A vetoed write still leaves a valid, better incumbent map in place — only a
-        # genuinely missing/invalid map is a caller-visible failure (sync_manager marks
-        # the job failed_permanent and deletes the audio cache after retries exhaust).
-        return True
+        if require_recovery_content_match:
+            try:
+                points = [self._point_char(point) for point in alignment_map]
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return False
+            if any(point < 0 for point in points):
+                return False
+            if len(points) < 2 or max(points) <= min(points):
+                return False
+        published = self._publish_map(
+            abs_id, alignment_map, align_method, total_chars=ebook_len,
+            segments=map_segments, preserve_backup=preserve_backup,
+            force_replace=require_recovery_content_match,
+        )
+        # A normal rebuild can succeed by retaining a valid incumbent. Recovery must
+        # know whether its proof-backed replacement actually reached storage.
+        return published if require_recovery_content_match else True
 
     @staticmethod
     def ctc_enabled() -> bool:
@@ -1616,7 +1632,8 @@ class AlignmentService:
         return samples
 
     def _verify_content_match(self, segments: List[Dict], full_text: str, abs_id: str = None,
-                              raise_on_mismatch: bool = False) -> bool:
+                              raise_on_mismatch: bool = False,
+                              require_lexical_overlap: bool = False) -> bool:
         """Content-match guard: refuse to store a map when audio and ebook are clearly
         different content. Returns True (proceed) unless the evidence shows strong
         divergence. No-op (True) when the master switch (OLLAMA_ALIGN_CONTENT_GUARD)
@@ -1635,6 +1652,24 @@ class AlignmentService:
            were silently stored as maps on this repo's own live install before this
            existed).
         """
+        if require_lexical_overlap:
+            if not segments or not full_text:
+                raise ContentMatchRejected("Recovery content proof is unavailable")
+            transcript_text = " ".join((s.get("text") or "").strip() for s in segments).strip()
+            diagnostics = {}
+            overlap = map_quality.transcript_text_overlap(
+                transcript_text, full_text.replace(INLINE_TEXT_JOINER, ""),
+                diagnostics=diagnostics,
+            )
+            if diagnostics.get("sampled", 0) <= 0 or overlap < 0.25:
+                reason = (
+                    f"Recovery content proof failed for {abs_id or '?'} "
+                    f"(lexical overlap {overlap:.1%}, required 25.0%)"
+                )
+                if raise_on_mismatch:
+                    raise ContentMatchRejected(reason)
+                return False
+
         if not self._env_true("OLLAMA_ALIGN_CONTENT_GUARD"):
             return True
         if not segments or not full_text:
@@ -1721,7 +1756,9 @@ class AlignmentService:
     def _publish_map(self, abs_id: str, alignment_map: List[Dict], align_method: str,
                      total_chars: Optional[int] = None,
                      exclude_spans: Optional[List[Tuple[int, int]]] = None,
-                     segments: Optional[List[Segment]] = None) -> bool:
+                     segments: Optional[List[Segment]] = None,
+                     preserve_backup: bool = False,
+                     force_replace: bool = False) -> bool:
         """Store `alignment_map` unless doing so would regress a materially better incumbent.
 
         `segments` (issue #426 phase 2) is the per-chapter placement index to
@@ -1762,7 +1799,8 @@ class AlignmentService:
         incumbent_total_chars = self._get_alignment_total_chars(abs_id)
 
         skip_veto = (
-            not incumbent or len(incumbent) < 2
+            force_replace
+            or not incumbent or len(incumbent) < 2
             or incumbent_method in self._CTC_REPLACEABLE_METHODS
             or (total_chars is not None and incumbent_total_chars is not None
                 and incumbent_total_chars != total_chars)
@@ -1789,7 +1827,7 @@ class AlignmentService:
                 )
                 return False
 
-        self._backup_alignment(abs_id)
+        self._backup_alignment(abs_id, preserve_existing=preserve_backup)
         self._save_alignment(abs_id, alignment_map, align_method, total_chars=total_chars,
                              quality=challenger_quality, segments=segments)
         return True
@@ -1849,14 +1887,17 @@ class AlignmentService:
         self._total_chars_cache.pop(abs_id, None)
         self._segments_cache.pop(abs_id, None)
 
-    def _backup_alignment(self, abs_id: str) -> bool:
+    def _backup_alignment(self, abs_id: str, preserve_existing: bool = False) -> bool:
         """Copy a book's current stored map into the backup table before it is
-        overwritten (issue #426). No-op (returns False) when it has no map yet."""
+        overwritten (issue #426). No-op (returns False) when it has no map yet.
+        Recovery preserves an existing backup but still creates the first one."""
         with self.database_service.get_session() as session:
             current = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
             if not current:
                 return False
             backup = session.query(BookAlignmentBackup).filter_by(abs_id=abs_id).first()
+            if preserve_existing and backup:
+                return False
             if backup:
                 backup.alignment_map_json = current.alignment_map_json
                 backup.align_method = current.align_method

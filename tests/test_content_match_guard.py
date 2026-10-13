@@ -158,6 +158,70 @@ def test_align_and_store_refuses_mismatched_content_without_ollama(service):
     assert service.database_service.get_alignment_method("mismatched_book") is None
 
 
+def test_recovery_requires_content_proof_even_when_normal_guards_are_disabled(service, monkeypatch):
+    from unittest.mock import Mock
+
+    service._save_alignment("book", [{"char": 0, "ts": 0}, {"char": 100, "ts": 10}],
+                            "lexical", total_chars=100)
+    service._generate_alignment_map_with_method = Mock(side_effect=AssertionError("must not align"))
+
+    def weak_overlap(_transcript, _ebook, diagnostics=None):
+        diagnostics.update(sampled=20)
+        return 0.24
+
+    monkeypatch.setattr(map_quality, "transcript_text_overlap", weak_overlap)
+    with pytest.MonkeyPatch.context() as mp:
+        _guard_env(mp, ollama_guard="false", lexical_guard="false")
+        with pytest.raises(ContentMatchRejected, match="required 25.0%"):
+            service.align_and_store(
+                "book", [{"start": 0, "end": 10, "text": "some transcript"}],
+                "some ebook", require_recovery_content_match=True,
+            )
+
+    assert service._get_alignment("book") == [{"char": 0, "ts": 0}, {"char": 100, "ts": 10}]
+    service._generate_alignment_map_with_method.assert_not_called()
+
+
+@pytest.mark.parametrize("points", [
+    [{"char": 0, "ts": 0}, {"char": float("nan"), "ts": 1}],
+    [{"char": -1, "ts": 0}, {"char": 10, "ts": 1}],
+])
+def test_recovery_rejects_nonfinite_or_negative_map_positions(service, points):
+    text = _sequential_words(300)
+    service._generate_alignment_map_with_method = lambda *args, **kwargs: (points, "lexical", None)
+    with pytest.MonkeyPatch.context() as mp:
+        _guard_env(mp, ollama_guard="false", lexical_guard="false")
+        assert service.align_and_store(
+            "invalid-recovery-map", [{"start": 0, "end": 10, "text": text}], text,
+            require_recovery_content_match=True,
+        ) is False
+    assert service._get_alignment("invalid-recovery-map") is None
+
+
+def test_recovery_content_proof_does_not_bypass_configured_guard(service, monkeypatch):
+    calls = []
+
+    def overlap(_transcript, _ebook, diagnostics=None):
+        calls.append(None)
+        if len(calls) == 1:
+            diagnostics.update(sampled=20)
+            return 0.30  # clears the mandatory recovery proof
+        diagnostics.update(sampled=20, ebook_tokens=100, transcript_tokens=100,
+                           quartiles=[0.0, 0.0, 0.0, 0.0])
+        return 0.10  # fails the configured normal guard
+
+    monkeypatch.setattr(map_quality, "transcript_text_overlap", overlap)
+    with pytest.MonkeyPatch.context() as mp:
+        _guard_env(mp, min_overlap="0.20")
+        with pytest.raises(ContentMatchRejected, match="need 20.0%"):
+            service._verify_content_match(
+                [{"text": "matching enough"}], "matching enough", abs_id="book",
+                raise_on_mismatch=True, require_lexical_overlap=True,
+            )
+
+    assert len(calls) == 2
+
+
 def test_align_and_store_stores_matching_content_without_ollama(service):
     """False-positive guard: a genuine, well-matched pairing must not be
     blocked. The transcript narrates the ebook text verbatim -- the real

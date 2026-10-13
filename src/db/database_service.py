@@ -5,6 +5,7 @@ Direct model-based interface without dictionary conversions.
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -1590,6 +1591,316 @@ class DatabaseService:
             for book in books:
                 session.expunge(book)
             return books
+
+    def get_ebook_input_recovery_candidates(self) -> list[dict]:
+        """Return only CWA audiobook mappings with cheap evidence of bad EPUB input."""
+        from sqlalchemy import func, or_, select
+        from sqlalchemy.orm import aliased
+
+        candidates = []
+        with self.get_session() as session:
+            latest_job = aliased(Job)
+            staged_job = aliased(Job)
+            latest_job_id = select(latest_job.id).where(
+                latest_job.abs_id == Book.abs_id,
+                latest_job.kind == "alignment",
+            ).order_by(latest_job.last_attempt.desc()).limit(1).correlate(Book).scalar_subquery()
+            recovery_stage = session.query(staged_job.id).filter(
+                staged_job.id == latest_job_id,
+                staged_job.stage.in_(("ebook_input_recovery", "ebook_input_recovery_manual")),
+            ).exists()
+            rows = (
+                session.query(
+                    Book, BookAlignment.last_updated, BookAlignment.total_chars
+                )
+                .outerjoin(BookAlignment, BookAlignment.abs_id == Book.abs_id)
+                .filter(
+                    func.lower(Book.ebook_source) == "cwa",
+                    Book.sync_mode == "audiobook",
+                    Book.status.in_(("active", "failed_retry_later", "failed_permanent")),
+                    or_(
+                        Book.ebook_filename.ilike("%.pdf"),
+                        Book.status.in_(("failed_retry_later", "failed_permanent")),
+                        BookAlignment.total_chars == 0,
+                        recovery_stage,
+                    ),
+                )
+                .all()
+            )
+            for book, alignment_last_updated, alignment_total_chars in rows:
+                job = (
+                    session.query(Job)
+                    .filter(Job.abs_id == book.abs_id, Job.kind == "alignment")
+                    .order_by(Job.last_attempt.desc())
+                    .first()
+                )
+                session.expunge(book)
+                if job:
+                    session.expunge(job)
+                candidates.append({
+                    "book": book,
+                    "job": job,
+                    "alignment_last_updated": alignment_last_updated,
+                    "alignment_total_chars": alignment_total_chars,
+                })
+        return candidates
+
+    def get_ebook_input_recovery_alignment(
+        self, abs_id: str
+    ) -> tuple[Optional[list], Optional[datetime], Optional[int]]:
+        """Read one fresh recovery map version and its metadata from the database."""
+        with self.get_session() as session:
+            row = session.query(
+                BookAlignment.alignment_map_json,
+                BookAlignment.last_updated,
+                BookAlignment.total_chars,
+            ).filter(BookAlignment.abs_id == abs_id).first()
+            if not row:
+                return None, None, None
+            try:
+                alignment = json.loads(row.alignment_map_json or "[]")
+            except (TypeError, ValueError):
+                alignment = None
+            return alignment, row.last_updated, row.total_chars
+
+    def repair_ebook_input_recovery(
+        self,
+        abs_id: str,
+        expected_book: Book,
+        expected_job: Optional[Job],
+        expected_alignment_last_updated: Optional[datetime],
+        new_ebook_filename: str,
+        new_kosync_doc_id: str,
+        bad_kosync_doc_id: Optional[str] = None,
+    ) -> bool:
+        """Atomically queue recovery if its inspected book, job, map and links still match."""
+        if not abs_id or not new_ebook_filename or not new_kosync_doc_id:
+            return False
+
+        with self.get_session() as session:
+            changed = self._commit_ebook_input_recovery_state(
+                session, abs_id, expected_book, expected_job,
+                expected_alignment_last_updated,
+                {"ebook_filename": new_ebook_filename,
+                 "kosync_doc_id": new_kosync_doc_id, "status": "pending"},
+                stage="ebook_input_recovery", last_error=None,
+                new_kosync_doc_id=new_kosync_doc_id,
+                bad_kosync_doc_id=bad_kosync_doc_id,
+            )
+        if changed:
+            self._notify_catalog_change()
+        return changed
+
+    def flag_ebook_input_recovery_manual(
+        self,
+        abs_id: str,
+        expected_book: Book,
+        expected_job: Optional[Job],
+        expected_alignment_last_updated: Optional[datetime],
+        reason: str,
+    ) -> bool:
+        """Flag an unproven damaged input for manual review and block active sync."""
+        if not abs_id:
+            return False
+        with self.get_session() as session:
+            changed = self._commit_ebook_input_recovery_state(
+                session, abs_id, expected_book, expected_job,
+                expected_alignment_last_updated, {"status": "failed_permanent"},
+                stage="ebook_input_recovery_manual", last_error=str(reason)[:1000],
+            )
+        if changed:
+            self._notify_catalog_change()
+        return changed
+
+    def complete_ebook_input_recovery(
+        self,
+        abs_id: str,
+        expected_book: Book,
+        expected_alignment_last_updated: datetime,
+    ) -> bool:
+        """Activate recovery only if its repaired identity and queued stage still match."""
+        if (
+            not abs_id or getattr(expected_book, "abs_id", None) != abs_id
+            or expected_alignment_last_updated is None
+        ):
+            return False
+        with self.get_session() as session:
+            latest_job_id = (
+                session.query(Job.id)
+                .filter(Job.abs_id == abs_id, Job.kind == "alignment")
+                .order_by(Job.last_attempt.desc())
+                .limit(1)
+                .scalar_subquery()
+            )
+            recovery_job = session.query(Job.id).filter(
+                Job.id == latest_job_id,
+                Job.stage == "ebook_input_recovery",
+            ).exists()
+            alignment_row = session.query(BookAlignment).filter_by(abs_id=abs_id).first()
+            if (
+                not alignment_row or not alignment_row.last_updated
+                or alignment_row.last_updated != expected_alignment_last_updated
+                or alignment_row.total_chars is None or alignment_row.total_chars <= 0
+            ):
+                return False
+            try:
+                alignment_map = json.loads(alignment_row.alignment_map_json or "[]")
+                if not isinstance(alignment_map, list) or any(
+                    not isinstance(point, dict) for point in alignment_map
+                ):
+                    return False
+                anchors = [
+                    point.get("global_char", point.get("char"))
+                    for point in alignment_map
+                ]
+                if (
+                    len(anchors) < 2
+                    or any(
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        or value < 0
+                        for value in anchors
+                    )
+                    or max(anchors) <= min(anchors)
+                ):
+                    return False
+            except (TypeError, ValueError):
+                return False
+            usable_alignment = session.query(BookAlignment.abs_id).filter(
+                BookAlignment.abs_id == abs_id,
+                BookAlignment.last_updated == alignment_row.last_updated,
+                BookAlignment.last_updated == expected_alignment_last_updated,
+                BookAlignment.total_chars > 0,
+            ).exists()
+            filters = [Book.abs_id == abs_id, recovery_job, usable_alignment]
+            for field in (
+                "status", "audio_source", "audio_source_id", "audio_duration",
+                "duration", "ebook_source", "ebook_source_id", "ebook_filename",
+                "original_ebook_filename", "kosync_doc_id", "sync_mode",
+            ):
+                value = getattr(expected_book, field, None)
+                column = getattr(Book, field)
+                filters.append(column.is_(None) if value is None else column == value)
+
+            updated = session.query(Book).filter(*filters).update(
+                {Book.status: "active", Book.transcript_file: "DB_MANAGED"},
+                synchronize_session=False,
+            )
+            if updated != 1:
+                return False
+            session.query(Job).filter(
+                Job.id == latest_job_id,
+                Job.stage == "ebook_input_recovery",
+            ).update(
+                {Job.retry_count: 0, Job.last_error: None, Job.progress: 1.0, Job.stage: None},
+                synchronize_session=False,
+            )
+        self._notify_catalog_change()
+        return True
+
+    def _commit_ebook_input_recovery_state(
+        self,
+        session,
+        abs_id: str,
+        expected_book: Book,
+        expected_job: Optional[Job],
+        expected_alignment_last_updated: Optional[datetime],
+        book_updates: dict,
+        stage: str,
+        last_error: Optional[str],
+        new_kosync_doc_id: Optional[str] = None,
+        bad_kosync_doc_id: Optional[str] = None,
+    ) -> bool:
+        """Commit a recovery state only while every inspected row still matches."""
+        from sqlalchemy import not_
+
+        latest_job_id = (
+            session.query(Job.id)
+            .filter(Job.abs_id == abs_id, Job.kind == "alignment")
+            .order_by(Job.last_attempt.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        if expected_job is None:
+            job_unchanged = not_(
+                session.query(Job.id)
+                .filter(Job.abs_id == abs_id, Job.kind == "alignment")
+                .exists()
+            )
+        else:
+            job_unchanged = session.query(Job.id).filter(
+                Job.id == latest_job_id,
+                Job.id == expected_job.id,
+                Job.last_attempt == expected_job.last_attempt,
+                Job.retry_count == expected_job.retry_count,
+                Job.progress == expected_job.progress,
+                Job.last_error == expected_job.last_error,
+                Job.stage == expected_job.stage,
+            ).exists()
+        if expected_alignment_last_updated is None:
+            alignment_unchanged = not_(
+                session.query(BookAlignment.abs_id)
+                .filter(BookAlignment.abs_id == abs_id)
+                .exists()
+            )
+        else:
+            alignment_unchanged = session.query(BookAlignment.abs_id).filter(
+                BookAlignment.abs_id == abs_id,
+                BookAlignment.last_updated == expected_alignment_last_updated,
+            ).exists()
+
+        filters = [Book.abs_id == abs_id, job_unchanged, alignment_unchanged]
+        for field in (
+            "status", "audio_source", "audio_source_id", "audio_duration",
+            "duration", "ebook_source", "ebook_source_id", "ebook_filename",
+            "original_ebook_filename", "kosync_doc_id", "sync_mode",
+        ):
+            value = getattr(expected_book, field)
+            column = getattr(Book, field)
+            filters.append(column.is_(None) if value is None else column == value)
+        if new_kosync_doc_id:
+            filters.append(not_(session.query(KosyncDocument.document_hash).filter(
+                KosyncDocument.document_hash == new_kosync_doc_id,
+                KosyncDocument.linked_abs_id.isnot(None),
+                KosyncDocument.linked_abs_id != abs_id,
+            ).exists()))
+
+        values = dict(book_updates)
+        if not values:
+            values["status"] = expected_book.status
+        updated = session.query(Book).filter(*filters).update(values, synchronize_session=False)
+        if updated != 1:
+            return False
+
+        if new_kosync_doc_id:
+            session.query(KosyncDocument).filter(
+                KosyncDocument.document_hash == new_kosync_doc_id,
+                KosyncDocument.linked_abs_id.is_(None),
+            ).update({KosyncDocument.linked_abs_id: abs_id}, synchronize_session=False)
+        if bad_kosync_doc_id and bad_kosync_doc_id != new_kosync_doc_id:
+            session.query(KosyncDocument).filter(
+                KosyncDocument.document_hash == bad_kosync_doc_id,
+                KosyncDocument.linked_abs_id == abs_id,
+            ).update({KosyncDocument.linked_abs_id: None}, synchronize_session=False)
+
+        if expected_job:
+            job_values = {
+                Job.last_attempt: time.time(), Job.last_error: last_error,
+                Job.progress: 0.0 if new_kosync_doc_id else expected_job.progress,
+                Job.stage: stage,
+            }
+            if new_kosync_doc_id:
+                job_values[Job.retry_count] = 0
+            session.query(Job).filter(Job.id == expected_job.id).update(
+                job_values, synchronize_session=False,
+            )
+        else:
+            session.add(Job(
+                abs_id=abs_id, last_attempt=time.time(), retry_count=0,
+                last_error=last_error, progress=0.0, kind="alignment", stage=stage,
+            ))
+        return True
 
     # ---- per-user book membership (shared catalog, per-user visibility) ----
     def link_user_book(self, user_id: int, abs_id: str) -> None:

@@ -107,6 +107,7 @@ class TestJobKindIsolation(unittest.TestCase):
             self.db.save_book(Book(abs_id=abs_id, status="processing"))
             with self.db.get_session() as session:
                 session.add(BookAlignment(abs_id=abs_id, alignment_map_json=raw))
+        self.db.save_job(Job(abs_id="broken-map", retry_count=4, kind=JOB_KIND_ALIGNMENT))
 
         self.manager.cleanup_stale_jobs()
 
@@ -114,6 +115,7 @@ class TestJobKindIsolation(unittest.TestCase):
         self.assertEqual(broken.status, "failed_retry_later")
         self.assertIsNone(broken.transcript_file)
         self.assertEqual(self.db.get_latest_job("broken-map").last_error, "Interrupted by restart")
+        self.assertEqual(self.db.get_latest_job("broken-map").retry_count, 0)
         self.assertEqual(self.db.get_book("valid-map").status, "active")
         self.assertEqual(self.db.get_book("valid-map").transcript_file, "DB_MANAGED")
 

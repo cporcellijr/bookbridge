@@ -225,6 +225,9 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             def save_job(self, job):
                 self.job = job
 
+            def get_latest_job(self, abs_id, kind=None):
+                return None
+
         user_library_service = object()
         global_library_service = object()
         registry = _FakeRegistry({2: _FakeBundle({"ABS": _FakeClient()}, library_service=user_library_service)})
@@ -309,6 +312,9 @@ class TestSyncCycleUserScoping(unittest.TestCase):
 
             def save_job(self, job):
                 self.job = job
+
+            def get_latest_job(self, abs_id, kind=None):
+                return None
 
         user_library_service = object()
         global_library_service = object()

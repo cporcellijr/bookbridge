@@ -114,6 +114,34 @@ class TestCoverageCheck(TranscriptCoverageTestCase):
         self.assertEqual(self.transcriber._transcript_extent([]), 0.0)
         self.assertEqual(self.transcriber._transcript_extent(None), 0.0)
 
+    def test_cached_word_transcript_uses_configured_coverage_and_validates_snapshot(self):
+        cache_dir = self.transcriber.cache_root / "cached-book"
+        cache_dir.mkdir(parents=True)
+        segments = [{
+            "start": 0.0,
+            "end": 90.0,
+            "text": "ready",
+            "words": [{"word": "ready", "start": 89.0, "end": 90.0}],
+        }]
+        progress = {"done": True, "chunks_completed": 1, "transcript": segments}
+        (cache_dir / "_progress.json").write_text(json.dumps(progress), encoding="utf-8")
+
+        assert self.transcriber.get_cached_word_timed_transcript("cached-book", 100) == segments
+        self.assertIsNone(
+            self.transcriber.get_cached_word_timed_transcript("cached-book", 110)
+        )
+
+        progress.update(vad_filter=True, cumulative_duration=95.0)
+        progress["transcript"][0]["words"][0].update(start=69.0, end=70.0)
+        (cache_dir / "_progress.json").write_text(json.dumps(progress), encoding="utf-8")
+        assert self.transcriber.get_cached_word_timed_transcript("cached-book", 100) == segments
+
+        progress["transcript"][0]["words"][0]["end"] = float("nan")
+        (cache_dir / "_progress.json").write_text(json.dumps(progress), encoding="utf-8")
+        self.assertIsNone(
+            self.transcriber.get_cached_word_timed_transcript("cached-book", 100)
+        )
+
 
 class TestDownloadIntegrity(TranscriptCoverageTestCase):
     def _response(self, content_length):

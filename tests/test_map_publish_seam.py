@@ -116,6 +116,31 @@ def test_veto_takes_no_backup(service):
     assert service._get_alignment("book") == original
 
 
+def test_recovery_preserves_existing_good_backup(service):
+    original = _dense_map(1000, 10)
+    current = _dense_map(1000, 20)
+    repaired = _dense_map(1000, 5)
+    service._save_alignment("book", original, "lexical", total_chars=1000)
+    assert service._publish_map("book", current, "lexical", total_chars=1000,
+                                force_replace=True)
+    assert service._publish_map("book", repaired, "lexical", total_chars=1000,
+                                force_replace=True, preserve_backup=True)
+
+    assert service.restore_previous_alignment("book") is True
+    assert service._get_alignment("book") == original
+
+
+def test_recovery_creates_backup_when_none_exists(service):
+    current = _dense_map(1000, 20)
+    repaired = _dense_map(1000, 5)
+    service._save_alignment("book", current, "lexical", total_chars=1000)
+
+    assert service._publish_map("book", repaired, "lexical", total_chars=1000,
+                                force_replace=True, preserve_backup=True)
+    assert service.restore_previous_alignment("book") is True
+    assert service._get_alignment("book") == current
+
+
 # --------------------------------------------------------------------------- #
 # Unconditional-replace cases
 # --------------------------------------------------------------------------- #

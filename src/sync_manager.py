@@ -1,5 +1,6 @@
 import glob
 import logging
+import math
 import os
 import threading
 import time
@@ -1783,15 +1784,41 @@ class SyncManager:
                 elif book.status == 'processing':
                      # Only mark processing checks as failed (failed are already failed)
                     logger.info(f"⚡ Recovering interrupted job: {sanitize_log_data(book.abs_title)}")
-                    book.status = 'failed_retry_later'
+                    interrupted_job = self.database_service.get_latest_job(
+                        book.abs_id, kind=JOB_KIND_ALIGNMENT
+                    )
+                    stage = getattr(interrupted_job, "stage", None)
+                    existing_retries = (getattr(interrupted_job, "retry_count", 0) or 0)
+                    recovery_marker = stage in {
+                        "ebook_input_recovery", "ebook_input_recovery_manual",
+                    }
+                    retries = existing_retries if recovery_marker else 0
+                    max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
+                    recovery_interrupted = stage == "ebook_input_recovery"
+                    if recovery_interrupted:
+                        retries += 1
+                    manual_recovery = (
+                        stage == "ebook_input_recovery_manual"
+                        or (recovery_interrupted and retries >= max_retries)
+                    )
+                    book.status = 'failed_permanent' if manual_recovery else 'failed_retry_later'
                     self.database_service.save_book(book)
 
                     # Also update the job record with error info
                     job = Job(
                         abs_id=book.abs_id,
                         last_attempt=time.time(),
-                        retry_count=0,
-                        last_error=restart_error
+                        retry_count=retries,
+                        last_error=(
+                            f"{restart_error}; recovery needs manual review"
+                            if manual_recovery else restart_error
+                        ),
+                        progress=getattr(interrupted_job, "progress", 0.0) or 0.0,
+                        kind=JOB_KIND_ALIGNMENT,
+                        stage=(
+                            "ebook_input_recovery_manual" if manual_recovery
+                            else stage
+                        ),
                     )
                     self.database_service.save_job(job)
 
@@ -2366,6 +2393,13 @@ class SyncManager:
                 return False
             latest_job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
 
+        # Recovery replaces a verified-bad source input while keeping the old
+        # alignment until the new timed transcript has produced a usable map.
+        if getattr(latest_job, "stage", None) in {
+            "ebook_input_recovery", "ebook_input_recovery_manual",
+        }:
+            return False
+
         repair_job = latest_job and (
             (latest_job.progress or 0.0) < 1.0
             or latest_job.retry_count
@@ -2892,6 +2926,166 @@ class SyncManager:
             logger.error(f"❌ Failed to create suggestion for '{abs_id}': {e}", exc_info=True)
             logger.debug(traceback.format_exc())
 
+    def _ebook_input_recovery_candidates(self) -> list[dict]:
+        """Load the narrow, cheap DB candidate set used by recovery and sync gating."""
+        getter = getattr(self.database_service, "get_ebook_input_recovery_candidates", None)
+        if not callable(getter):
+            return []
+        candidates = getter()
+        return candidates if isinstance(candidates, list) else []
+
+    def _is_ebook_input_recovery_stage(self, abs_id: str) -> bool:
+        getter = getattr(self.database_service, "get_latest_job", None)
+        if not callable(getter):
+            return False
+        job = getter(abs_id, kind=JOB_KIND_ALIGNMENT)
+        return getattr(job, "stage", None) in {
+            "ebook_input_recovery", "ebook_input_recovery_manual",
+        }
+
+    def _cached_recovery_evidence(self, candidate: dict) -> tuple[Path, str, str | None] | None:
+        """Return the retained EPUB, its hash, and a proven bad PDF hash."""
+        book = candidate.get("book") if isinstance(candidate, dict) else None
+        if not book or not self.ebook_parser or not self.alignment_service:
+            return None
+        if (
+            str(getattr(book, "ebook_source", "") or "").lower() != "cwa"
+            or not str(getattr(book, "ebook_source_id", "") or "").strip().isdigit()
+            or getattr(book, "sync_mode", "audiobook") != "audiobook"
+        ):
+            return None
+
+        current_name = str(getattr(book, "ebook_filename", "") or "")
+        total_chars = candidate.get("alignment_total_chars")
+        pdf_candidate = current_name.lower().endswith(".pdf")
+        zero_map_candidate = total_chars == 0
+        if not pdf_candidate and not zero_map_candidate:
+            return None
+
+        original_name = str(getattr(book, "original_ebook_filename", "") or "").strip()
+        if not original_name or Path(original_name).name != original_name:
+            return None
+        original_path = safe_cache_path(self.epub_cache_dir, original_name)
+        if (
+            not original_path or not original_path.is_file()
+            or original_path.suffix.lower() != ".epub"
+            or not LibraryService._is_epub_file(str(original_path))
+        ):
+            return None
+        try:
+            ebook_text, _chapters = self.ebook_parser.extract_text_and_map(original_path)
+        except Exception:
+            return None
+        if not ebook_text or not ebook_text.strip():
+            return None
+
+        duration = getattr(book, "audio_duration", None) or getattr(book, "duration", None)
+        cached_transcript = getattr(self.transcriber, "get_cached_word_timed_transcript", None)
+        if not callable(cached_transcript):
+            return None
+        transcript = cached_transcript(book.abs_id, duration)
+        if not transcript:
+            return None
+        transcript_text = " ".join(
+            str(segment.get("text") or " ".join(
+                str(word.get("word") or "") for word in segment.get("words", [])
+            ))
+            for segment in transcript if isinstance(segment, dict)
+        )
+        from src.services import map_quality
+        diagnostics = {}
+        overlap = map_quality.transcript_text_overlap(
+            transcript_text, ebook_text, diagnostics=diagnostics,
+        )
+        if diagnostics.get("sampled", 0) <= 0 or overlap < 0.25:
+            return None
+
+        try:
+            original_hash = self.ebook_parser.get_kosync_id(original_path)
+        except Exception:
+            return None
+        if not original_hash:
+            return None
+
+        bad_hash = None
+        if pdf_candidate:
+            pdf_path = safe_cache_path(self.epub_cache_dir, f"{book.abs_id}_direct.pdf")
+            if not pdf_path or not pdf_path.is_file():
+                return None
+            try:
+                with pdf_path.open("rb") as source:
+                    if source.read(5) != b"%PDF-":
+                        return None
+                pdf_hash = self.ebook_parser.get_kosync_id(pdf_path)
+            except Exception:
+                return None
+            if not pdf_hash or getattr(book, "kosync_doc_id", None) != pdf_hash:
+                return None
+            bad_hash = pdf_hash
+
+        if zero_map_candidate and not pdf_candidate:
+            current_hash = getattr(book, "kosync_doc_id", None)
+            if current_hash not in (None, "", original_hash):
+                return None
+            try:
+                alignment, map_updated, _current_total_chars = (
+                    self.database_service.get_ebook_input_recovery_alignment(book.abs_id)
+                )
+                if map_updated != candidate.get("alignment_last_updated"):
+                    return None
+                if not isinstance(alignment, list) or not alignment:
+                    return None
+                anchors = []
+                for point in alignment:
+                    if not isinstance(point, dict):
+                        return None
+                    value = point.get("global_char", point.get("char"))
+                    if (
+                        isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value) or value < 0
+                    ):
+                        return None
+                    anchors.append(value)
+                if not anchors or any(value != 0 for value in anchors):
+                    return None
+            except (ValueError, TypeError, KeyError):
+                return None
+
+        return original_path, original_hash, bad_hash
+
+    def _recover_ebook_input_candidates(self) -> None:
+        """Queue only proof-backed CWA EPUB input repairs; ambiguous rows stay flagged."""
+        flag_manual = getattr(self.database_service, "flag_ebook_input_recovery_manual", None)
+        repair = getattr(self.database_service, "repair_ebook_input_recovery", None)
+        if not callable(flag_manual) or not callable(repair):
+            return
+        for candidate in self._ebook_input_recovery_candidates():
+            if not isinstance(candidate, dict):
+                continue
+            book = candidate.get("book")
+            if not book or self._is_ebook_input_recovery_stage(book.abs_id):
+                continue
+            proof = self._cached_recovery_evidence(candidate)
+            if proof is None:
+                explicit_pdf = str(getattr(book, "ebook_filename", "") or "").lower().endswith(".pdf")
+                zero_map = candidate.get("alignment_total_chars") == 0
+                if explicit_pdf or zero_map:
+                    flag_manual(
+                        book.abs_id, book, candidate.get("job"),
+                        candidate.get("alignment_last_updated"),
+                        "Recovery proof incomplete: retained EPUB, timed transcript, content match, and bad-input identity must all be verified.",
+                    )
+                continue
+            original_path, original_hash, bad_hash = proof
+            try:
+                repair(
+                    book.abs_id, book, candidate.get("job"),
+                    candidate.get("alignment_last_updated"),
+                    original_path.name, original_hash, bad_kosync_doc_id=bad_hash,
+                )
+            except Exception:
+                logger.warning("Could not queue ebook input recovery for %s", book.abs_id, exc_info=True)
+
     def check_pending_jobs(self):
         """
         Check for pending jobs and run them in a BACKGROUND thread
@@ -2900,6 +3094,8 @@ class SyncManager:
         # 1. If a job is already running, let it finish.
         if self._job_thread and self._job_thread.is_alive():
             return
+
+        self._recover_ebook_input_candidates()
 
         max_retries = int(os.getenv("JOB_MAX_RETRIES", 5))
         retry_delay_mins = int(os.getenv("JOB_RETRY_DELAY_MINS", 15))
@@ -2971,6 +3167,8 @@ class SyncManager:
                 # This loop drives alignment-worker retry eligibility.
                 job = self.database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
                 if job:
+                    if getattr(job, "stage", None) == "ebook_input_recovery_manual":
+                        continue
                     retry_count = job.retry_count or 0
                     last_attempt = job.last_attempt or 0
 
@@ -3021,12 +3219,36 @@ class SyncManager:
         self.database_service.save_book(target_book)
 
         # Create or update job record
+        prior_job = retry_job
+        if not prior_job:
+            get_latest_job = getattr(self.database_service, "get_latest_job", None)
+            if callable(get_latest_job):
+                try:
+                    candidate_job = get_latest_job(
+                        target_book.abs_id, kind=JOB_KIND_ALIGNMENT
+                    )
+                except TypeError:
+                    candidate_job = None
+                if getattr(candidate_job, "stage", None) in {
+                    "ebook_input_recovery", "ebook_input_recovery_manual",
+                }:
+                    prior_job = candidate_job
+        prior_stage = getattr(prior_job, "stage", None)
+        prior_retry_count = (prior_job.retry_count or 0) if retry_job else 0
+        if prior_stage == "ebook_input_recovery_manual":
+            # Reaching pending is the explicit Remap/retry path. Let the user's
+            # selected source run through the ordinary pipeline again.
+            prior_stage = None
+            prior_retry_count = 0
+        elif prior_stage != "ebook_input_recovery":
+            prior_stage = None
         job = Job(
             abs_id=target_book.abs_id,
             last_attempt=time.time(),
-            retry_count=(retry_job.retry_count or 0) if retry_job else 0,
+            retry_count=prior_retry_count,
             last_error=None,
-            progress=0.0
+            progress=0.0,
+            stage=prior_stage,
         )
         self.database_service.save_job(job)
 
@@ -3058,6 +3280,99 @@ class SyncManager:
     def cancel_background_job(self, abs_id: str) -> bool:
         """Request cancellation only when this manager has an active worker."""
         return request_cancel(abs_id)
+
+    def _run_cached_ebook_input_recovery(
+        self, book: Book, ensure_active, update_progress,
+    ) -> None:
+        """Rebuild a proven bad input mapping from retained EPUB and timed transcript caches."""
+        original_name = str(getattr(book, "original_ebook_filename", "") or "").strip()
+        if not original_name or book.ebook_filename != original_name:
+            raise EbookInputError("Recovery input identity changed; choose the retained EPUB and retry.")
+        epub_path = safe_cache_path(self.epub_cache_dir, original_name)
+        if (
+            not epub_path or not epub_path.is_file()
+            or epub_path.suffix.lower() != ".epub"
+            or not LibraryService._is_epub_file(str(epub_path))
+        ):
+            raise EbookInputError("Recovery EPUB cache is missing or invalid; restore the retained EPUB and retry.")
+
+        ensure_active()
+        try:
+            ebook_text, spine_chapters = self.ebook_parser.extract_text_and_map(epub_path)
+        except Exception as exc:
+            raise EbookInputError("Recovery EPUB is no longer readable; restore a valid cached EPUB and retry.") from exc
+        if not ebook_text or not ebook_text.strip():
+            raise EbookInputError("Recovery EPUB has no readable text; restore a valid cached EPUB and retry.")
+        try:
+            retained_hash = self.ebook_parser.get_kosync_id(epub_path)
+        except Exception as exc:
+            raise EbookInputError("Recovery EPUB identity could not be verified; recovery needs manual review.") from exc
+        if not retained_hash or retained_hash != getattr(book, "kosync_doc_id", None):
+            raise EbookInputError("Recovery EPUB hash no longer matches the repaired mapping; recovery needs manual review.")
+        current_book = self.database_service.get_book(book.abs_id)
+        if not self._ebook_recovery_book_matches(book, current_book):
+            raise TranscriptionCancelled(book.abs_id)
+
+        duration = getattr(book, "audio_duration", None) or getattr(book, "duration", None)
+        transcript_getter = getattr(self.transcriber, "get_cached_word_timed_transcript", None)
+        transcript = transcript_getter(book.abs_id, duration) if callable(transcript_getter) else None
+        if not transcript:
+            raise EbookInputError("Completed word-timed transcript cache is missing or incomplete; recovery needs manual review.")
+
+        update_progress(0.5, 3)
+        ensure_active()
+        # The final Book/alignment CAS prevents a remap during alignment from
+        # activating this result. A raced map can remain stored, but the remap
+        # leaves the Book pending so the next explicit recovery rebuilds it.
+        # shortcut: make map publication atomic with remap if concurrent remaps become common.
+        if not self.alignment_service.align_and_store(
+            book.abs_id, transcript, ebook_text, spine_chapters,
+            preserve_backup=True, require_recovery_content_match=True,
+        ):
+            raise EbookInputError("Cached transcript did not produce a usable recovery alignment; recovery needs manual review.")
+
+        alignment, alignment_updated, total_chars = (
+            self.database_service.get_ebook_input_recovery_alignment(book.abs_id)
+        )
+        if not isinstance(alignment, list) or len(alignment) < 2:
+            raise EbookInputError("Recovery alignment is incomplete; recovery needs manual review.")
+        anchors = []
+        for point in alignment:
+            if not isinstance(point, dict):
+                raise EbookInputError("Recovery alignment is malformed; recovery needs manual review.")
+            value = point.get("global_char", point.get("char"))
+            if (
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 0
+            ):
+                raise EbookInputError("Recovery alignment is malformed; recovery needs manual review.")
+            anchors.append(value)
+        if total_chars is None or total_chars <= 0 or max(anchors) <= min(anchors):
+            raise EbookInputError("Recovery alignment has no character extent; recovery needs manual review.")
+
+        ensure_active()
+        current_book = self.database_service.get_book(book.abs_id)
+        if not self._ebook_recovery_book_matches(book, current_book):
+            raise TranscriptionCancelled(book.abs_id)
+        complete_recovery = getattr(self.database_service, "complete_ebook_input_recovery", None)
+        if (
+            not callable(complete_recovery)
+            or not complete_recovery(book.abs_id, current_book, alignment_updated)
+        ):
+            raise TranscriptionCancelled(book.abs_id)
+        self._dispatch_readalong_intent(book)
+
+    @staticmethod
+    def _ebook_recovery_book_matches(expected: Book, current: Book | None) -> bool:
+        """Whether the shared catalog still has the proof-backed recovery identity."""
+        return bool(current) and all(
+            getattr(current, field, None) == getattr(expected, field, None)
+            for field in (
+                "status", "audio_source", "audio_source_id", "audio_duration",
+                "duration", "ebook_source", "ebook_source_id", "ebook_filename",
+                "original_ebook_filename", "kosync_doc_id", "sync_mode",
+            )
+        )
 
     def _run_ebook_only_batch(self, abs_ids: list[str]) -> None:
         """
@@ -3192,6 +3507,14 @@ class SyncManager:
 
                 # Save to DB every time for now (or throttle if too frequent).
                 self.database_service.update_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT, progress=global_pct)
+
+            current_alignment_job = self.database_service.get_latest_job(
+                abs_id, kind=JOB_KIND_ALIGNMENT
+            )
+            if getattr(current_alignment_job, "stage", None) == "ebook_input_recovery":
+                self._run_cached_ebook_input_recovery(book, ensure_active, update_progress)
+                logger.info("✅ Completed cached ebook input recovery: %s", sanitize_log_data(abs_title))
+                return
 
             # --- Heavy Lifting (Blocks this thread, but not the Main thread) ---
             # Step 1: Get EPUB file
@@ -3547,6 +3870,19 @@ class SyncManager:
             job = self.database_service.get_latest_job(abs_id, kind=JOB_KIND_ALIGNMENT)
             current_retry_count = job.retry_count if job else 0
             new_retry_count = current_retry_count + 1
+            recovery_mode = getattr(job, "stage", None) == "ebook_input_recovery"
+            if recovery_mode and not self._ebook_recovery_book_matches(
+                book, self.database_service.get_book(abs_id)
+            ):
+                logger.info(
+                    "🛑 Skipping recovery failure save for %s: mapping identity changed",
+                    abs_id,
+                )
+                return
+            recovery_manual = recovery_mode and (
+                isinstance(e, (ContentMatchRejected, EbookInputError))
+                or new_retry_count >= max_retries
+            )
 
             # Update job record
             from src.db.models import Job
@@ -3555,7 +3891,12 @@ class SyncManager:
                 last_attempt=time.time(),
                 retry_count=new_retry_count,
                 last_error=str(e),
-                progress=job.progress if job else 0.0
+                progress=job.progress if job else 0.0,
+                stage=(
+                    "ebook_input_recovery_manual" if recovery_manual
+                    else "ebook_input_recovery" if recovery_mode
+                    else getattr(job, "stage", None)
+                ),
             )
             self.database_service.save_job(updated_job)
 
@@ -3570,7 +3911,7 @@ class SyncManager:
                     logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Max retries exceeded", exc_info=True)
                 
                 # Keep the completed transcript so correcting the pairing does not repeat Whisper.
-                if self.data_dir:
+                if self.data_dir and not recovery_mode:
                     audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
                     if audio_cache_dir.exists():
                         try:
@@ -5028,6 +5369,25 @@ class SyncManager:
             active_books = self.database_service.get_books_by_status('active')
 
         active_books = self._filter_books_for_current_user(active_books, bulk_states_per_client)
+
+        blocked_recovery_ids = set()
+        for candidate in self._ebook_input_recovery_candidates():
+            if not isinstance(candidate, dict):
+                continue
+            candidate_book = candidate.get("book")
+            if not candidate_book:
+                continue
+            stage = getattr(candidate.get("job"), "stage", None)
+            if (
+                str(getattr(candidate_book, "ebook_filename", "") or "").lower().endswith(".pdf")
+                or candidate.get("alignment_total_chars") == 0
+                or stage in {"ebook_input_recovery", "ebook_input_recovery_manual"}
+            ):
+                blocked_recovery_ids.add(candidate_book.abs_id)
+        if blocked_recovery_ids:
+            active_books = [book for book in active_books if book.abs_id not in blocked_recovery_ids]
+            if target_abs_id in blocked_recovery_ids:
+                logger.info("⏸️ Skipping sync for '%s' until ebook input recovery is resolved", target_abs_id)
 
         if not active_books:
             return
