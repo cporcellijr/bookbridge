@@ -3,8 +3,12 @@ CWA Sync API client — reads and writes reading progress via
 Calibre-Web Automated's Kobo sync endpoints.
 """
 
+import hashlib
 import os
 import logging
+import threading
+import time
+from email.utils import parsedate_to_datetime
 from typing import Sequence
 from urllib.parse import urlparse
 
@@ -20,6 +24,11 @@ STATUS_READING = "Reading"
 STATUS_FINISHED = "Finished"
 STATUS_READY = "ReadyToRead"
 
+# Host-level failure backoff: every Kobo-protocol request makes CWA create a
+# user_session row (#496), so a struggling CWA must not be hammered book by book.
+COOLDOWN_BASE_SECONDS = 60
+COOLDOWN_MAX_SECONDS = 900
+
 
 class CWASyncApi:
     def __init__(self, cwa_client=None, credentials: dict = None):
@@ -28,6 +37,9 @@ class CWASyncApi:
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
         self._timeout = 15
+        self._cooldown_lock = threading.Lock()
+        self._cooldown_until = 0.0
+        self._cooldown_failures = 0
 
         # Snapshot config at init. Server and token are snapshotted; the enable
         # flag is deliberately read per call because this class is a DI Singleton
@@ -39,6 +51,74 @@ class CWASyncApi:
     @property
     def _base_url(self) -> str:
         return f"{self._server}/kobo/{self._token}/v1"
+
+    @property
+    def _cooldown_key(self) -> str:
+        # Per server + token, without carrying the sync token itself.
+        token_tag = hashlib.sha256(self._token.encode("utf-8")).hexdigest()[:12]
+        return f"cwa_sync_cooldown:{self._server}:{token_tag}"
+
+    def _start_cooldown(self, retry_after: float | None = None) -> None:
+        """Back off after a host-level failure: 60s, doubling, capped at 15 min."""
+        with self._cooldown_lock:
+            self._cooldown_failures += 1
+            seconds = retry_after if retry_after is not None else min(
+                COOLDOWN_BASE_SECONDS * 2 ** (self._cooldown_failures - 1), COOLDOWN_MAX_SECONDS)
+            seconds = max(1.0, min(seconds, COOLDOWN_MAX_SECONDS))
+            self._cooldown_until = time.monotonic() + seconds
+        get_persistent_condition_logger().warn(
+            logger,
+            self._cooldown_key,
+            f"⚠️ CWA Sync: server unreachable or failing; pausing requests to {self._server} for {seconds:.0f}s",
+        )
+
+    def _end_cooldown(self) -> None:
+        """Any answer from the host clears the backoff."""
+        with self._cooldown_lock:
+            had_failures = self._cooldown_failures > 0
+            self._cooldown_failures = 0
+            self._cooldown_until = 0.0
+        if had_failures:
+            get_persistent_condition_logger().resolve(
+                logger, self._cooldown_key, f"✅ CWA Sync: server responding again at {self._server}",
+            )
+
+    def _send(self, method: str, url: str, **kwargs) -> requests.Response | None:
+        """Single choke point for CWA HTTP (``method`` is a requests.Session verb, lowercase). Returns None (no request sent) while cooling down.
+
+        Timeouts, connection errors, 5xx and 429 start the cooldown (exceptions are
+        re-raised for the caller's existing handling); any other status, including a
+        per-book 404, proves the host is up and resets it.
+        """
+        with self._cooldown_lock:
+            if time.monotonic() < self._cooldown_until:
+                return None
+        try:
+            r = getattr(self._session, method)(url, **kwargs)
+        except requests.RequestException:
+            self._start_cooldown()
+            raise
+        if r.status_code == 429:
+            self._start_cooldown(self._parse_retry_after(r.headers.get("Retry-After")))
+        elif r.status_code >= 500:
+            self._start_cooldown()
+        else:
+            self._end_cooldown()
+        return r
+
+    @staticmethod
+    def _parse_retry_after(value: str | None) -> float | None:
+        """Retry-After as seconds, from delta-seconds or an HTTP-date; None if absent/invalid."""
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            pass
+        try:
+            return parsedate_to_datetime(value).timestamp() - time.time()
+        except (TypeError, ValueError):
+            return None
 
     def is_configured(self) -> bool:
         enabled = str(resolve_setting(self._creds, "CWA_SYNC_ENABLED", "")).lower() == "true"
@@ -86,7 +166,9 @@ class CWASyncApi:
 
         try:
             url = f"{self._base_url}/library/{book_uuid}/state"
-            r = self._session.get(url, timeout=self._timeout)
+            r = self._send("get", url, timeout=self._timeout)
+            if r is None:
+                return None
 
             if r.status_code != 200:
                 logger.debug(f"📖 CWA Sync: GET state for {book_uuid} returned {r.status_code}")
@@ -157,7 +239,9 @@ class CWASyncApi:
                 }]
             }
 
-            r = self._session.put(url, json=payload, timeout=self._timeout)
+            r = self._send("put", url, json=payload, timeout=self._timeout)
+            if r is None:
+                return False
 
             if r.status_code == 200:
                 resp = r.json()
@@ -185,9 +269,11 @@ class CWASyncApi:
         if not self.is_configured() or not book_uuid:
             return None
         try:
-            r = self._session.get(
-                f"{self._base_url}/library/{book_uuid}/metadata", timeout=self._timeout
+            r = self._send(
+                "get", f"{self._base_url}/library/{book_uuid}/metadata", timeout=self._timeout
             )
+            if r is None:
+                return None
             if r.status_code != 200:
                 logger.debug(
                     f"📖 CWA Sync: metadata for {book_uuid} returned {r.status_code}"
@@ -217,7 +303,9 @@ class CWASyncApi:
         if not path:
             return None
         try:
-            r = self._session.get(f"{self._server}{path}", timeout=180)
+            r = self._send("get", f"{self._server}{path}", timeout=180)
+            if r is None:
+                return None
             if r.status_code != 200:
                 logger.debug(
                     f"📖 CWA Sync: kepub download for {book_uuid} returned {r.status_code}"

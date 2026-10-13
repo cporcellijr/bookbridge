@@ -6,6 +6,7 @@ Covers the shared helpers, each client's capture of its service's own
 the State persistence round-trip.
 """
 
+import threading
 import json
 import os
 import sys
@@ -134,6 +135,9 @@ class TestCwaCapture(unittest.TestCase):
         api._token = "tok"
         api._creds = {"CWA_SYNC_ENABLED": "true"}
         api._timeout = 5
+        api._cooldown_lock = threading.Lock()
+        api._cooldown_until = 0.0
+        api._cooldown_failures = 0
         api._session = MagicMock()
         response = MagicMock()
         response.status_code = 200
