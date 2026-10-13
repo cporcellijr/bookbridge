@@ -4479,6 +4479,7 @@ def settings():
             'OLLAMA_EBOOK_TEXT_FALLBACK',
             'DIAGNOSTICS_OPT_IN',
             'WHISPER_CPP_SEND_ORIGINAL',
+            'WHISPER_VAD_FILTER',
             'CTC_ENABLED',
             'ALIGNMENT_SEGMENTED_MAPS',
             'CONTENT_MATCH_GUARD',
@@ -5687,7 +5688,7 @@ def _build_dashboard_mapping(
         "states": {},
     }
 
-    if book.status in ("processing", "forging"):
+    if book.status in ("processing", "forging", "failed_retry_later", "failed_permanent", "error"):
         job = database_service.get_latest_job(book.abs_id, kind=JOB_KIND_ALIGNMENT)
         if job:
             mapping["job_progress"] = round((job.progress or 0.0) * 100, 1)
@@ -10095,7 +10096,8 @@ def remap_alignment(abs_id):
         transcriber = getattr(manager, "transcriber", None) if manager else None
         if transcriber is not None:
             try:
-                transcriber.invalidate_transcript_cache(abs_id)
+                if not transcriber.has_word_timed_transcript(abs_id):
+                    transcriber.invalidate_transcript_cache(abs_id)
             except Exception as e:
                 logger.warning(
                     f"⚠️ Remap: could not invalidate transcript for '{abs_id}': {e}",

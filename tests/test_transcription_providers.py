@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
@@ -15,6 +16,45 @@ from utils.transcription_providers import (
 )
 
 class TestLocalWhisperProvider(unittest.TestCase):
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_vad_and_language_apply_per_call_without_changing_timestamps(self):
+        provider = LocalWhisperProvider()
+        provider._model = MagicMock()
+        word = SimpleNamespace(word='привет', start=12, end=13)
+        segment = SimpleNamespace(start=12, end=13, text='привет', words=[word])
+        info = SimpleNamespace(language='ru', language_probability=0.98)
+        provider._model.transcribe.return_value = ([segment], info)
+        provider.transcribe(Path('chunk.wav'))
+        options = provider._model.transcribe.call_args.kwargs
+        self.assertIsNone(options['language'])
+        self.assertFalse(options['vad_filter'])
+        self.assertEqual(options['task'], 'transcribe')
+        for spelling in ('true', 'on'):
+            with self.subTest(spelling=spelling):
+                os.environ['WHISPER_LANGUAGE'] = ' RU '
+                os.environ['WHISPER_VAD_FILTER'] = spelling
+                result = provider.transcribe(Path('chunk.wav'))
+                options = provider._model.transcribe.call_args.kwargs
+                self.assertEqual(options['language'], 'ru')
+                self.assertTrue(options['vad_filter'])
+                self.assertEqual(result[0]['words'][0]['start'], 12)
+                self.assertEqual(result[0]['end'], 13)
+
+    @patch('utils.transcription_providers.logger')
+    @patch.dict(os.environ, {'WHISPER_LANGUAGE': 'ru'}, clear=True)
+    def test_english_over_russian_audio_warns_without_discarding_segments(self, logger):
+        provider = LocalWhisperProvider()
+        provider._model = MagicMock()
+        segments = [SimpleNamespace(start=0, end=2, text='Привет мир', words=None),
+                    SimpleNamespace(start=3, end=5, text='Before they hang', words=None)]
+        provider._model.transcribe.return_value = (segments, SimpleNamespace(language='ru', language_probability=0.99))
+        result = provider.transcribe(Path('music-span.wav'))
+        self.assertEqual(len(result), 2)
+        args = logger.warning.call_args.args
+        self.assertIn('Whisper script mismatch', args[0])
+        self.assertEqual(args[1:4], (1, 2, 50.0))
+        self.assertIn('Whisper language', logger.info.call_args_list[1].args[0])
     
     @patch.dict(os.environ, {}, clear=True)
     def test_default_init(self):

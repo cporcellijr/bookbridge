@@ -10,6 +10,9 @@ from src.services.audio_source_adapters import ABSAudioSourceAdapter
 from src.sync_manager import SyncManager
 from src.utils.transcription_cancel import register_worker
 from src.utils.transcriber import TranscriptionCancelled
+from src.utils.transcriber import AudioTranscriber
+from src.services.alignment_service import AlignmentService
+from src.utils.polisher import Polisher
 
 
 def _write_storyteller_manifest(base_dir: Path, abs_id: str) -> Path:
@@ -99,6 +102,50 @@ def _build_manager(tmp_path):
     epub_path.write_text("dummy", encoding="utf-8")
     manager._get_local_epub = MagicMock(return_value=epub_path)
     return manager, db, abs_client, transcriber, alignment_service
+
+
+@pytest.mark.parametrize('retry_count', [0, 4])
+def test_partial_omnibus_keeps_completed_transcript_and_records_refusal(tmp_path, monkeypatch, caplog,
+                                                                      retry_count):
+    monkeypatch.setenv('CTC_ENABLED', 'false')
+    monkeypatch.setenv('OLLAMA_ALIGN_CONTENT_GUARD', 'true')
+    monkeypatch.setenv('CONTENT_MATCH_GUARD', 'true')
+    monkeypatch.setenv('CONTENT_MATCH_MIN_OVERLAP', '0.15')
+    manager, db, *_ = _build_manager(tmp_path)
+    book = Book(abs_id='partial-omnibus', abs_title='Partial Omnibus', ebook_filename='book.epub',
+                status='processing', duration=100, sync_mode='audiobook')
+    db.get_book.return_value = book
+    db.get_latest_job.return_value = MagicMock(retry_count=retry_count, progress=0.9)
+    manager.ebook_parser.extract_text_and_map.return_value = (' '.join(f'word{i}' for i in range(1000)), [])
+    manager.alignment_service = AlignmentService(db, Polisher())
+    manager.transcriber = AudioTranscriber(tmp_path, MagicMock(), Polisher())
+    manager.transcriber.transcribe_from_smil = MagicMock(return_value=None)
+    adapter = MagicMock()
+    adapter.get_chapters.return_value = []
+    adapter.get_audio_files.return_value = [{'local_path': 'unused.m4b'}]
+    manager._get_audio_source_adapter = MagicMock(return_value=adapter)
+    words = [{'word': f'word{i}', 'start': i, 'end': i + 1} for i in range(100)]
+    transcript = [{'start': 0, 'end': 100, 'text': ' '.join(w['word'] for w in words), 'words': words}]
+    cache = manager.transcriber.cache_root / book.abs_id
+    cache.mkdir(parents=True)
+    progress = cache / '_progress.json'
+    progress.write_text(json.dumps({'done': True, 'chunks_completed': 1, 'transcript': transcript}))
+    saved = progress.read_bytes()
+    (cache / 'part.wav').write_bytes(b'audio')
+    tracks = cache / 'source_tracks'
+    tracks.mkdir()
+    (tracks / 'track.m4b').write_bytes(b'audio')
+    with caplog.at_level(logging.INFO):
+        manager._run_background_job(book)
+    assert book.status == 'failed_permanent'
+    error = db.save_job.call_args.args[0].last_error
+    assert 'ebook 1,000 / transcript 100 tokens = 10.00x' in error
+    assert 'Lexical content-match guard' in error
+    assert 'Resuming from completed local cache' in caplog.text
+    assert progress.read_bytes() == saved
+    assert not (cache / 'part.wav').exists()
+    assert not tracks.exists()
+    assert manager.transcriber.has_word_timed_transcript(book.abs_id)
 
 
 def test_storyteller_branch_skips_smil_and_whisper(tmp_path):

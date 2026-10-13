@@ -116,6 +116,13 @@
             <div class="sync-warning">Out of sync by {{ '%.1f' | format(sync_warning_pct) }}%</div>
             {% endif %}
 
+            {% if mapping.status in ['failed_retry_later', 'failed_permanent', 'error'] and mapping.job_last_error %}
+            <details class="sync-warning">
+                <summary>Alignment needs attention</summary>
+                <p style="white-space: normal; overflow-wrap: anywhere;">{{ mapping.job_last_error }}</p>
+            </details>
+            {% endif %}
+
             {% if mapping.reading_stats is defined and mapping.reading_stats %}
             <div class="reading-stats">
                 {% if mapping.reading_stats.listen_seconds > 0 %}

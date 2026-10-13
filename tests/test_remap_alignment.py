@@ -96,6 +96,19 @@ def test_invalidate_transcript_cache_removes_progress_json(tmp_path):
     assert transcriber.invalidate_transcript_cache("bookX") is False
 
 
+@pytest.mark.parametrize('bad_words', [None, [], [{'word': 'hello'}],
+                                      [{'word': 'hello', 'start': 2, 'end': 1}],
+                                      [{'word': 'hello', 'start': 0, 'end': float('nan')}]])
+def test_remap_does_not_reuse_incomplete_word_timings(tmp_path, bad_words):
+    transcriber = AudioTranscriber(tmp_path, MagicMock(), Polisher())
+    book_dir = transcriber.cache_root / 'book'
+    book_dir.mkdir()
+    progress = {'done': True, 'chunks_completed': 1,
+                'transcript': [{'text': 'hello', 'start': 0, 'end': 1, 'words': bad_words}]}
+    (book_dir / '_progress.json').write_text(json.dumps(progress))
+    assert not transcriber.has_word_timed_transcript('book')
+
+
 # --------------------------------------------------------------------------- #
 # Remap route
 # --------------------------------------------------------------------------- #
@@ -228,6 +241,7 @@ class RemapRouteTest(unittest.TestCase):
         self._container = container
         self._db = container.mock_database_service
         self._transcriber = container.mock_sync_manager.transcriber
+        self._transcriber.has_word_timed_transcript.return_value = False
         return app.test_client()
 
     def _post(self, client):
@@ -253,6 +267,15 @@ class RemapRouteTest(unittest.TestCase):
         self.assertEqual(data["status"], "up_to_date")
         self._db.set_book_status.assert_not_called()
         self._transcriber.invalidate_transcript_cache.assert_not_called()
+
+    def test_refused_map_remap_reuses_completed_word_timed_transcript(self):
+        client = self._build(align_method=None)
+        self._transcriber.has_word_timed_transcript.return_value = True
+        resp = self._post(client)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.get_json()['success'])
+        self._transcriber.invalidate_transcript_cache.assert_not_called()
+        self._db.set_book_status.assert_called_once_with('test-book', 'pending')
 
     def test_ctc_configured_queues_ctc_without_invalidating_transcript(self):
         os.environ["CTC_ENABLED"] = "true"

@@ -8,6 +8,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Local Whisper language override and opt-in non-speech filtering (VAD), with
+  per-chunk language and script-mismatch diagnostics (#504). VAD is off by default.
 - Bulk-delete dashboard books with one confirmation and existing per-user
   shared-book protection.
 - Token-authenticated admin API to create reader accounts and set their integrations
@@ -35,6 +37,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Keep completed transcripts after alignment failure and reuse valid word timings
+  on Remap. Content-match refusals show token counts, regional overlap and a
+  neutral explanation on the dashboard, without weakening the guard (#503).
+- Restore the settings unsaved-change count and leave-page warning when edits are
+  undone, including changes made through shelf pickers (#506).
 - BridgeSync initializes and repairs each closed book's saved checksum when syncing
   reading status, preventing KOReader from sending a new book's progress under the
   previous book's ID. Positions and highlights are retained. Managed-book rename,

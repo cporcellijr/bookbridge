@@ -3009,8 +3009,27 @@
                         </div>
                     </div>
 
-                    <!-- Wrapper: Local Whisper (device + compute only) -->
+                    <!-- Wrapper: Local Whisper -->
                     <div id="group_local" class="dynamic-group full-width" style="display:contents;">
+                        <div class="form-group">
+                            <label for="whisper_language">Whisper Language</label>
+                            <input type="text" id="whisper_language" name="WHISPER_LANGUAGE"
+                                value="{{ get_val('WHISPER_LANGUAGE', '') }}" placeholder="Auto-detect (e.g. ru, en)">
+                            <div class="help-text">Leave blank to detect each chunk's language, or enter a language
+                                code such as <code>ru</code> for Russian. Applies to new local transcriptions;
+                                saved transcripts are reused.</div>
+                        </div>
+                        <div class="form-group" style="align-items: center;">
+                            <label for="whisper_vad_filter">Filter Non-Speech Audio</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="whisper_vad_filter" name="WHISPER_VAD_FILTER"
+                                    {% if get_bool('WHISPER_VAD_FILTER') %}checked{% endif %}>
+                                <span class="slider"></span>
+                            </label>
+                            <div class="help-text">Use voice activity detection (VAD) to reduce transcription over
+                                music and silence. Off by default; check quiet narration before using it broadly.
+                                Audio timestamps are preserved. Applies to new local transcriptions.</div>
+                        </div>
                         <div class="form-group">
                             <label>Whisper Device</label>
                             <select name="WHISPER_DEVICE">
@@ -3380,7 +3399,7 @@
             if (singleSelect) {
                 // Watch shelf: a single shelf name, not a comma-separated list.
                 input.value = select.value;
-                if (typeof markDirty === 'function') markDirty();
+                if (typeof markDirty === 'function') markDirty(input);
                 select.value = "";
                 return;
             }
@@ -3390,7 +3409,7 @@
             if (!current.includes(select.value)) {
                 current.push(select.value);
                 input.value = current.join(', ');
-                if (typeof markDirty === 'function') markDirty();
+                if (typeof markDirty === 'function') markDirty(input);
             }
             select.value = ""; // Reset select
         }
@@ -4260,14 +4279,21 @@
         // --- Unsaved Changes Guard ---
         let isFormDirty = false;
         const dirtyFields = new Set();
+        const initialFieldValues = new Map();
+
+        function settingFieldValue(field) {
+            return field.type === 'checkbox' || field.type === 'radio' ? field.checked : field.value;
+        }
 
         function markDirty(field) {
-            isFormDirty = true;
-            dirtyFields.add(field && (field.name || field.id) ? (field.name || field.id) : '__misc__');
+            if (!initialFieldValues.has(field)) return;
+            if (settingFieldValue(field) === initialFieldValues.get(field)) dirtyFields.delete(field);
+            else dirtyFields.add(field);
+            isFormDirty = dirtyFields.size > 0;
             const note = document.getElementById('dirty_note');
             if (note) {
                 const n = dirtyFields.size;
-                note.style.display = '';
+                note.style.display = n ? '' : 'none';
                 note.textContent = n === 1 ? '1 unsaved change' : n + ' unsaved changes';
             }
         }
@@ -4284,7 +4310,8 @@
             // has its own forms that navigate immediately on submit.
             const inputs = document.querySelectorAll('#settingsForm input, #settingsForm select, #settingsForm textarea');
             inputs.forEach(input => {
-                if (input.id === 'settings_search') return;
+                if (!input.name || input.type === 'hidden' || input.type === 'submit' || input.type === 'button') return;
+                initialFieldValues.set(input, settingFieldValue(input));
                 input.addEventListener('change', function () { markDirty(input); });
                 input.addEventListener('input', function () { markDirty(input); });
             });

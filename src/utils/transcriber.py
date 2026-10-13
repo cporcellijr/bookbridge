@@ -81,6 +81,30 @@ class AudioTranscriber:
             )
             return False
 
+    def has_word_timed_transcript(self, abs_id: str) -> bool:
+        """Whether a completed cache contains usable word timings for re-alignment."""
+        try:
+            progress = json.loads((self.cache_root / str(abs_id) / '_progress.json').read_text())
+            segments = progress.get('transcript')
+            return bool(
+                progress.get('done') and progress.get('chunks_completed', 0) > 0
+                and isinstance(segments, list) and segments
+                and all(
+                    isinstance(segment, dict) and isinstance(segment.get('words'), list)
+                    and segment['words'] and all(
+                        isinstance(word, dict) and isinstance(word.get('word'), str)
+                        and word['word'].strip()
+                        and isinstance(word.get('start'), (int, float))
+                        and isinstance(word.get('end'), (int, float))
+                        and math.isfinite(word['start']) and math.isfinite(word['end'])
+                        and 0 <= word['start'] <= word['end']
+                        for word in segment['words']
+                    ) for segment in segments
+                )
+            )
+        except (OSError, ValueError, TypeError, AttributeError):
+            return False
+
     @property
     def split_duration(self) -> int:
         """Local audio chunk length in seconds (lower for smaller GPUs).
@@ -511,17 +535,22 @@ class AudioTranscriber:
         return new_files if new_files else [file_path]
 
     @staticmethod
-    def _prune_audio_cache(book_cache_dir: Path) -> None:
-        """Remove heavy audio artifacts after a successful run but keep `_progress.json`
-        (the finished transcript) so a later re-align can reuse it instead of
-        re-downloading audio and re-running Whisper."""
+    def _prune_audio_cache(book_cache_dir: Path, remove_directories: bool = False) -> None:
+        """Remove heavy audio but retain `_progress.json` for later re-alignment.
+
+        Source-track directories remain reusable after success; permanent failure
+        can remove them too without discarding the transcript.
+        """
         if not book_cache_dir.exists():
             return
         for artifact in book_cache_dir.iterdir():
-            if artifact.name == "_progress.json" or artifact.is_dir():
+            if artifact.name == "_progress.json" or (artifact.is_dir() and not remove_directories):
                 continue
             try:
-                artifact.unlink()
+                if artifact.is_dir():
+                    shutil.rmtree(artifact)
+                else:
+                    artifact.unlink()
             except OSError as cleanup_err:
                 logger.debug(f"Transcript cache cleanup skipped {artifact.name}: {cleanup_err}")
 
@@ -569,7 +598,8 @@ class AudioTranscriber:
                         # this file forever. Re-check it here or the book never heals.
                         try:
                             self._check_audio_coverage(
-                                self._transcript_extent(cached_transcript), expected_duration
+                                (progress.get('cumulative_duration') if progress.get('vad_filter') is True
+                                 else self._transcript_extent(cached_transcript)), expected_duration
                             )
                         except ValueError as coverage_err:
                             progress_file.unlink(missing_ok=True)
@@ -597,6 +627,7 @@ class AudioTranscriber:
         chunks_completed = 0
         cumulative_duration = 0.0
         resuming = False
+        vad_used = False
 
         try:
             # Check for partial resumption
@@ -607,6 +638,7 @@ class AudioTranscriber:
                     chunks_completed = progress.get('chunks_completed', 0)
                     cumulative_duration = progress.get('cumulative_duration', 0.0)
                     full_transcript = progress.get('transcript', [])
+                    vad_used = progress.get('vad_filter') is True
 
                     # Find existing split files
                     cached_files = sorted(book_cache_dir.glob("part_*_split_*.wav"))
@@ -808,6 +840,7 @@ class AudioTranscriber:
                 try:
                     # Use the transcription provider
                     segments = provider.transcribe(local_path)
+                    vad_used = vad_used or getattr(provider, 'last_vad_filter', False) is True
                     raise_if_cancelled()
                     
                     for segment in segments:
@@ -847,6 +880,7 @@ class AudioTranscriber:
                             'chunks_completed': chunks_completed,
                             'cumulative_duration': cumulative_duration,
                             'transcript': full_transcript,
+                            'vad_filter': vad_used,
                             'done': (chunks_completed == total_chunks)
                         }, f)
                 except (FileNotFoundError, NotADirectoryError):
@@ -866,7 +900,10 @@ class AudioTranscriber:
             # Belt-and-braces: chunks can individually fail to decode, so the
             # transcript can still fall short of audio that measured fine above.
             try:
-                self._check_audio_coverage(self._transcript_extent(full_transcript), expected_duration)
+                # VAD can omit trailing music; decoded/processed duration still proves audio coverage.
+                self._check_audio_coverage(
+                    cumulative_duration if vad_used else self._transcript_extent(full_transcript), expected_duration
+                )
             except ValueError as coverage_err:
                 progress_file.unlink(missing_ok=True)
                 logger.error(f"❌ '{abs_id}' {coverage_err}", exc_info=True)

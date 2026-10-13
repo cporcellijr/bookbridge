@@ -66,7 +66,7 @@ from src.utils.ebook_sources import (
 )
 
 # Service imports
-from src.services.alignment_service import AlignmentService, ingest_storyteller_transcripts
+from src.services.alignment_service import AlignmentService, ContentMatchRejected, ingest_storyteller_transcripts
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import LibraryService
 from src.services.readalong_delivery import is_generated_readalong_epub
@@ -3558,17 +3558,20 @@ class SyncManager:
             self.database_service.save_job(updated_job)
 
             # Update book status based on retry count
-            if new_retry_count >= max_retries:
+            if isinstance(e, ContentMatchRejected) or new_retry_count >= max_retries:
                 book.status = 'failed_permanent'
-                logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Max retries exceeded", exc_info=True)
+                if isinstance(e, ContentMatchRejected):
+                    logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Alignment refused; awaiting corrected pairing")
+                else:
+                    logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Max retries exceeded", exc_info=True)
                 
-                # Clean up audio cache on permanent failure to free disk space
+                # Keep the completed transcript so correcting the pairing does not repeat Whisper.
                 if self.data_dir:
-                    import shutil
                     audio_cache_dir = Path(self.data_dir) / "audio_cache" / abs_id
                     if audio_cache_dir.exists():
                         try:
-                            shutil.rmtree(audio_cache_dir)
+                            from src.utils.transcriber import AudioTranscriber
+                            AudioTranscriber._prune_audio_cache(audio_cache_dir, remove_directories=True)
                             logger.info(f"✅ Cleaned up audio cache for {sanitize_log_data(abs_title)}")
                         except Exception as cleanup_err:
                             logger.warning(f"⚠️ Failed to clean audio cache: {cleanup_err}", exc_info=True)

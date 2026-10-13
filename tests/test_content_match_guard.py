@@ -15,7 +15,7 @@ import pytest
 
 from src.db.database_service import DatabaseService
 from src.services import map_quality
-from src.services.alignment_service import AlignmentService
+from src.services.alignment_service import AlignmentService, ContentMatchRejected
 from src.services.map_quality import transcript_text_overlap
 from src.utils.polisher import Polisher
 
@@ -75,6 +75,33 @@ def test_overlap_identical_text_scores_near_one():
     assert transcript_text_overlap(text, text) == pytest.approx(1.0)
 
 
+def test_partial_omnibus_refusal_logs_counts_and_regional_evidence(service, caplog, monkeypatch):
+    _guard_env(monkeypatch)
+    ebook = _sequential_words(1000)
+    segments = [{'start': 0, 'end': 100, 'text': _sequential_words(100)}]
+    with pytest.raises(ContentMatchRejected) as refusal:
+        service.align_and_store('partial-omnibus', segments, ebook)
+    reason = str(refusal.value)
+    assert 'ebook 1,000 / transcript 100 tokens = 10.00x' in reason
+    assert 'ebook quartile overlap:' in reason
+    assert ' / 0.0% / 0.0% / 0.0%' in reason
+    assert 'no exact match' in reason
+    assert 'Completed transcript retained' in reason
+    assert 'do not appear to be the same work' not in reason
+    assert reason in caplog.text
+    assert service._get_alignment('partial-omnibus') is None
+
+
+def test_overlap_diagnostics_use_the_same_samples_as_the_verdict():
+    diagnostics = {}
+    overlap = transcript_text_overlap(_sequential_words(100), _sequential_words(1000),
+                                      diagnostics=diagnostics)
+    assert diagnostics['sampled'] == 200
+    assert diagnostics['matched'] / diagnostics['sampled'] == overlap
+    assert diagnostics['quartiles'][0] > 0
+    assert diagnostics['quartiles'][1:] == [0, 0, 0]
+
+
 def test_overlap_survives_an_inline_word_join_in_the_ebook_text():
     """``_WORD_TOKEN_RE`` does not include
     ``INLINE_TEXT_JOINER``, so left in place it would split a bionic-reading
@@ -125,9 +152,8 @@ def test_align_and_store_refuses_mismatched_content_without_ollama(service):
 
     with pytest.MonkeyPatch.context() as mp:
         _guard_env(mp)
-        result = service.align_and_store("mismatched_book", segments, ebook_text)
-
-    assert result is False
+        with pytest.raises(ContentMatchRejected):
+            service.align_and_store("mismatched_book", segments, ebook_text)
     assert service._get_alignment("mismatched_book") is None
     assert service.database_service.get_alignment_method("mismatched_book") is None
 
@@ -161,9 +187,8 @@ def test_content_match_guard_blocks_on_true_and_on_spellings(service, spelling):
 
     with pytest.MonkeyPatch.context() as mp:
         _guard_env(mp, lexical_guard=spelling)
-        result = service.align_and_store(abs_id, segments, ebook_text)
-
-    assert result is False
+        with pytest.raises(ContentMatchRejected):
+            service.align_and_store(abs_id, segments, ebook_text)
     assert service._get_alignment(abs_id) is None
 
 
@@ -257,9 +282,8 @@ def test_embed_failure_falls_through_to_lexical_guard(tmp_path, bad_result, labe
 
         with pytest.MonkeyPatch.context() as mp:
             _guard_env(mp)
-            result = service.align_and_store("embed_fail_book", segments, ebook_text)
-
-        assert result is False, f"guard must still refuse when {label}"
+            with pytest.raises(ContentMatchRejected):
+                service.align_and_store("embed_fail_book", segments, ebook_text)
         assert service._get_alignment("embed_fail_book") is None
     finally:
         db.db_manager.close()
@@ -305,10 +329,10 @@ def test_working_embedding_path_never_consults_the_lexical_guard(tmp_path):
         with pytest.MonkeyPatch.context() as mp:
             _guard_env(mp)
             mp.setattr(map_quality, "transcript_text_overlap", _spy)
-            result = service.align_and_store("embed_ok_book", segments, ebook_text)
+            with pytest.raises(ContentMatchRejected):
+                service.align_and_store("embed_ok_book", segments, ebook_text)
 
         # The embedding verdict (ocean vs mountain => cosine 0.0 < 0.45) refuses.
-        assert result is False
         assert calls == [], "lexical guard must not run when embeddings decided"
     finally:
         db.db_manager.close()

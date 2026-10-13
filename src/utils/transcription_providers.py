@@ -12,6 +12,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
+from src.utils.config_loader import env_truthy
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,7 +123,20 @@ class LocalWhisperProvider(TranscriptionProvider):
         segments_out = []
         
         logger.info(f"🧠 Transcribing with {self.get_name()}: {audio_path.name}")
-        segments, info = model.transcribe(str(audio_path), beam_size=1, best_of=1, word_timestamps=True)
+        language = os.environ.get('WHISPER_LANGUAGE', '').strip().lower() or None
+        vad_filter = env_truthy('WHISPER_VAD_FILTER', 'false')
+        self.last_vad_filter = vad_filter
+        segments, info = model.transcribe(
+            str(audio_path), beam_size=1, best_of=1, word_timestamps=True,
+            task='transcribe', language=language, vad_filter=vad_filter,
+        )
+        detected_language = info.language if isinstance(info.language, str) else 'unknown'
+        logger.info(
+            'Whisper language: requested=%s, detected=%s, confidence=%s, VAD=%s',
+            language or 'auto', detected_language, info.language_probability, vad_filter,
+        )
+        check_cyrillic = (language or detected_language) in ('ru', 'uk', 'be', 'bg', 'mk')
+        mismatches = []
         
         for segment in segments:
             seg_dict = {
@@ -135,6 +150,18 @@ class LocalWhisperProvider(TranscriptionProvider):
                     for w in segment.words
                 ]
             segments_out.append(seg_dict)
+            if check_cyrillic:
+                letters = [ch for ch in seg_dict['text'] if ch.isalpha()]
+                if letters and sum('A' <= ch <= 'Z' or 'a' <= ch <= 'z' for ch in letters) > len(letters) / 2:
+                    mismatches.append((segment.start, segment.end))
+
+        if mismatches:
+            logger.warning(
+                'Whisper script mismatch: %s/%s segments (%.1f%%) are mostly Latin for language=%s; '
+                'first %.1fs, last %.1fs in %s. Check for transcription errors around music/non-speech.',
+                len(mismatches), len(segments_out), 100 * len(mismatches) / len(segments_out),
+                language or detected_language, mismatches[0][0], mismatches[-1][1], audio_path.name,
+            )
         
         logger.info(f"✅ Transcription complete: {len(segments_out)} segments")
         return segments_out

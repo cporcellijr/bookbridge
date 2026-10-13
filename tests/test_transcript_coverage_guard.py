@@ -182,6 +182,26 @@ class TestProcessAudioGuards(TranscriptCoverageTestCase):
         )
         self.assertEqual(len(result), 1)
 
+    def test_vad_cache_uses_processed_audio_duration_when_music_follows_speech(self):
+        abs_id = 'vad-trailing-music'
+        progress_file = self._write_completed_cache(abs_id, 60)
+        progress = json.loads(progress_file.read_text())
+        progress.update(vad_filter=True, cumulative_duration=100)
+        progress_file.write_text(json.dumps(progress))
+        result = self.transcriber.process_audio(abs_id, [], expected_duration=100)
+        self.assertEqual(result[0]['end'], 60)
+        self.assertTrue(progress_file.exists())
+
+    def test_vad_does_not_accept_audio_shorter_than_expected_runtime(self):
+        abs_id = 'vad-short-audio'
+        progress_file = self._write_completed_cache(abs_id, 60)
+        progress = json.loads(progress_file.read_text())
+        progress.update(vad_filter=True, cumulative_duration=60)
+        progress_file.write_text(json.dumps(progress))
+        with self.assertRaises(Exception):
+            self.transcriber.process_audio(abs_id, [], expected_duration=100)
+        self.assertFalse(progress_file.exists())
+
     def test_cached_transcript_reused_when_no_expected_duration(self):
         """Unchanged behaviour for callers that cannot supply a runtime."""
         abs_id = "legacy-book"

@@ -27,6 +27,10 @@ from src.utils.logging_utils import time_execution
 
 logger = logging.getLogger(__name__)
 
+
+class ContentMatchRejected(ValueError):
+    """An alignment was refused; its completed transcript can be reused."""
+
 _CTC_UNNARRATED_DENSITY_MULTIPLIER = 4.0
 _CTC_UNNARRATED_MIN_SPAN_CHARS = 1500
 _CTC_UNNARRATED_MIN_TIMING_RATIO = 0.25
@@ -237,6 +241,8 @@ class AlignmentService:
         3. Anchor: Run N-Gram alignment to map characters to timestamps.
         4. Rebuild: Fix fragmented sentences in transcript using ebook text as a guide.
         5. Store: Save ONLY the mapping and essential metadata to DB.
+
+        Raises ContentMatchRejected when the content guard refuses the pairing.
         """
         logger.info(f"AlignmentService: Processing {abs_id} (Text: {len(ebook_text)} chars, Segments: {len(raw_segments)})")
 
@@ -261,7 +267,8 @@ class AlignmentService:
 
         # 2b. Content-match guard — refuse to persist a map when the audio and ebook are
         # clearly different content (wrong edition / abridged / translation / mis-match).
-        if not self._verify_content_match(rebuilt_segments, ebook_text, abs_id=abs_id):
+        if not self._verify_content_match(rebuilt_segments, ebook_text, abs_id=abs_id,
+                                          raise_on_mismatch=True):
             return False
 
         # 3. Anchored Alignment
@@ -1608,7 +1615,8 @@ class AlignmentService:
                 samples.append(chunk)
         return samples
 
-    def _verify_content_match(self, segments: List[Dict], full_text: str, abs_id: str = None) -> bool:
+    def _verify_content_match(self, segments: List[Dict], full_text: str, abs_id: str = None,
+                              raise_on_mismatch: bool = False) -> bool:
         """Content-match guard: refuse to store a map when audio and ebook are clearly
         different content. Returns True (proceed) unless the evidence shows strong
         divergence. No-op (True) when the master switch (OLLAMA_ALIGN_CONTENT_GUARD)
@@ -1662,14 +1670,16 @@ class AlignmentService:
                             best_overall = cos
 
                 if best_overall < min_sim:
-                    logger.warning(
-                        "🚫 Content-match guard: audio/ebook content diverges for %s "
-                        "(best passage similarity %.2f < %.2f) — likely wrong edition / abridged / "
-                        "translation / mis-match. Refusing to store a misleading alignment.",
-                        abs_id or "?",
-                        best_overall,
-                        min_sim,
+                    reason = (
+                        f"🚫 Content-match guard: audio/ebook content diverges for {abs_id or '?'} "
+                        f"(best passage similarity {best_overall:.2f} < {min_sim:.2f}) — "
+                        "possible edition, partial narration, language or transcription mismatch. "
+                        "Refusing to store a misleading alignment. Completed transcript retained; "
+                        "check the ebook/audio pairing and use Remap to re-align."
                     )
+                    logger.warning(reason)
+                    if raise_on_mismatch:
+                        raise ContentMatchRejected(reason)
                     return False
                 return True
 
@@ -1683,17 +1693,28 @@ class AlignmentService:
             return True
 
         min_overlap = self._env_float("CONTENT_MATCH_MIN_OVERLAP", 0.15)
-        overlap = map_quality.transcript_text_overlap(transcript_text, content_text)
+        diagnostics = {}
+        overlap = map_quality.transcript_text_overlap(transcript_text, content_text,
+                                                      diagnostics=diagnostics)
         if overlap < min_overlap:
-            logger.warning(
-                "🚫 Lexical content-match guard: audio/ebook n-gram overlap too low for %s "
-                "(%.1f%% of sampled ebook n-grams found in the transcript, need %.1f%%) — "
-                "the audio and ebook do not appear to be the same work. Refusing to store "
-                "a misleading alignment.",
-                abs_id or "?",
-                overlap * 100.0,
-                min_overlap * 100.0,
+            ratio = diagnostics['ebook_tokens'] / max(1, diagnostics['transcript_tokens'])
+            quartiles = ' / '.join(
+                f'{score:.1%}' if score is not None else 'n/a'
+                for score in diagnostics['quartiles']
             )
+            reason = (
+                f"🚫 Lexical content-match guard: audio/ebook n-gram overlap too low for {abs_id or '?'} "
+                f"({overlap:.1%} of sampled ebook n-grams found in the transcript, need {min_overlap:.1%}) — "
+                f"ebook {diagnostics['ebook_tokens']:,} / transcript {diagnostics['transcript_tokens']:,} "
+                f"tokens = {ratio:.2f}x; ebook quartile overlap: {quartiles}; "
+                f"{1 - overlap:.1%} of sampled n-grams have no exact match. "
+                "This does not establish which text is unnarrated: partial editions, language and "
+                "transcription errors can all lower overlap. Refusing to store a misleading alignment. "
+                "Completed transcript retained; check the ebook/audio pairing and use Remap to re-align."
+            )
+            logger.warning(reason)
+            if raise_on_mismatch:
+                raise ContentMatchRejected(reason)
             return False
         return True
 

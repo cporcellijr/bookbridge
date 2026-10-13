@@ -664,7 +664,8 @@ def _mostly_unspaced_script(tokens: List[str]) -> bool:
 
 
 def transcript_text_overlap(transcript_text: str, ebook_text: str,
-                            samples: int = 200, ngram: int = 6) -> float:
+                            samples: int = 200, ngram: int = 6,
+                            diagnostics: Optional[Dict] = None) -> float:
     """Fraction of sampled ebook n-grams that also occur in the transcript.
 
     Builds a set of every `ngram`-token window in the transcript once, then
@@ -679,6 +680,8 @@ def transcript_text_overlap(transcript_text: str, ebook_text: str,
     """
     transcript_tokens = _word_tokens(transcript_text)
     ebook_tokens = _word_tokens(ebook_text)
+    if diagnostics is not None:
+        diagnostics.update(transcript_tokens=len(transcript_tokens), ebook_tokens=len(ebook_tokens))
     if (_letter_token_count(transcript_tokens) < _MIN_TOKENS_FOR_OVERLAP
             or _letter_token_count(ebook_tokens) < _MIN_TOKENS_FOR_OVERLAP
             or len(transcript_tokens) < ngram or len(ebook_tokens) < ngram):
@@ -698,8 +701,14 @@ def transcript_text_overlap(transcript_text: str, ebook_text: str,
     else:
         offsets = [max_offset * i // (sample_count - 1) for i in range(sample_count)]
 
-    matched = sum(
-        1 for offset in offsets
-        if tuple(ebook_tokens[offset:offset + ngram]) in transcript_ngrams
-    )
+    matches = [tuple(ebook_tokens[offset:offset + ngram]) in transcript_ngrams for offset in offsets]
+    matched = sum(matches)
+    if diagnostics is not None:
+        regions = [[] for _ in range(4)]
+        for offset, match in zip(offsets, matches):
+            regions[min(3, offset * 4 // (max_offset + 1))].append(match)
+        diagnostics.update(
+            sampled=len(offsets), matched=matched,
+            quartiles=[sum(region) / len(region) if region else None for region in regions],
+        )
     return matched / len(offsets)

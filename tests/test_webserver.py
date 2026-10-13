@@ -312,6 +312,26 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertEqual(mapping['job_progress'], 35.0)
         self.assertEqual(mapping['job_last_error'], 'Waiting for Storyteller alignment')
 
+    def test_failed_alignment_exposes_refusal_on_dashboard(self):
+        from src.db.models import Book, Job
+
+        book = Book(abs_id='partial-omnibus', abs_title='Partial Omnibus',
+                    ebook_filename='omnibus.epub', status='failed_permanent', duration=100)
+        reason = 'Overlap below threshold. Completed transcript retained; use Remap to re-align.'
+        self.mock_database_service.get_all_books.return_value = [book]
+        self.mock_database_service.get_latest_job.return_value = Job(
+            abs_id=book.abs_id, progress=0.95, last_error=reason,
+        )
+        self._set_dashboard_integrations(storyteller=False)
+        for status in ('failed_permanent', 'error'):
+            with self.subTest(status=status):
+                book.status = status
+                mapping = self._capture_index_mapping()
+                self.assertEqual(mapping['job_last_error'], reason)
+                response = self.client.get('/')
+                self.assertIn('Alignment needs attention', response.get_data(as_text=True))
+                self.assertIn(reason, response.get_data(as_text=True))
+
     def test_forge_active_tasks_includes_persisted_forging_books(self):
         from src.db.models import Book
 
