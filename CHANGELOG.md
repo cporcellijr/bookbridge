@@ -37,6 +37,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Honor explicitly mapped CWA ebooks from cache or by exact Calibre ID, and
+  retry normalized CWA searches without selecting unrelated or ambiguous books
+  (#509, #511).
+- Skip companion PDFs and other non-EPUB ABS attachments during ebook acquisition.
+  Reject unreadable ebook input before locking a KoSync hash or starting audio
+  transcription, with a persistent error that preserves completed transcripts
+  (#510).
 - Compare KoSync text positions across hashes identified as the same cached EPUB,
   avoiding repeated percentage-scale rollback loops. Unknown copies and different
   original/forged files keep percentage fallback to protect reading progress (#502).

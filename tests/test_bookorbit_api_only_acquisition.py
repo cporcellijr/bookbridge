@@ -18,6 +18,7 @@ import tempfile
 import shutil
 import unittest
 import os
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -437,6 +438,14 @@ class TestLibraryServicePriority0(unittest.TestCase):
             }
         }
 
+    @staticmethod
+    def _write_epub(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            archive.writestr("META-INF/container.xml", '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+            archive.writestr("OEBPS/content.opf", "<package/>")
+
     def test_explicit_bookorbit_mapping_short_circuits_chain(self):
         """
         Explicit BookOrbit mapping short-circuits the chain.
@@ -553,7 +562,7 @@ class TestLibraryServicePriority0(unittest.TestCase):
         abs_item = self._make_abs_item(item_id="item1")
 
         self.mock_abs.get_ebook_files.return_value = [{"stream_url": "url", "ext": "epub"}]
-        self.mock_abs.download_file.return_value = True
+        self.mock_abs.download_file.side_effect = lambda _url, path: (self._write_epub(path) or True)
 
         self.mock_bookorbit.is_configured.return_value = True
         self.mock_bookorbit.download_book = MagicMock()

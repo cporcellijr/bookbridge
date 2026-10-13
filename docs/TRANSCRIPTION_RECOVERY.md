@@ -32,6 +32,27 @@ and use Remap to re-align without repeating Whisper when valid word timings are
 available. Old untimed or invalid caches are re-transcribed. Keep the mapping:
 deleting a book still intentionally removes its cached data.
 
+## When ebook input is refused
+
+Companion PDFs, MOBI and AZW3 files are skipped when acquiring an EPUB from ABS.
+An explicitly mapped CWA ebook wins over an ABS attachment, including when its
+cached copy must be downloaded again. Automatic CWA discovery retries simpler
+title queries and requires a unique matching title and author; choose the book
+manually when multiple records match.
+
+A non-EPUB file or EPUB with no readable text stops processing before hashing or
+transcription. The failed book's error names the file. Correct the selected ebook
+or replace its unusable cache copy, then retry/Remap. Preserve any existing timed
+transcript before replacing files; deleting the mapping also deletes cached data.
+
+Previously processed wrong files need explicit recovery: verify the chosen CWA ID,
+the current and original ebook filenames, and the cached EPUB. Correct those
+before rebuilding alignment. If the primary KoSync hash came from the wrong file,
+update it to the verified ebook/device hash using the existing hash-update action;
+Remap does not reset an existing hash. Hash updates retain the old hash as a linked
+document, so review an erroneous old document link separately in KoSync Documents.
+Keep reader progress and history; clearing them does not repair the input file.
+
 ## Deliberately retrying transcription
 
 For a failed alignment whose transcript itself is wrong, configure the new

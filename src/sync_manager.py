@@ -68,7 +68,7 @@ from src.utils.ebook_sources import (
 # Service imports
 from src.services.alignment_service import AlignmentService, ContentMatchRejected, ingest_storyteller_transcripts
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
-from src.services.library_service import LibraryService
+from src.services.library_service import EbookInputError, LibraryService
 from src.services.readalong_delivery import is_generated_readalong_epub
 from src.services.migration_service import MigrationService
 from src.services.reading_session_aggregator import (
@@ -3242,6 +3242,14 @@ class SyncManager:
             update_progress(1.0, 1) # Done with step 1
             if not epub_path:
                 raise FileNotFoundError(f"Could not locate or download: {ebook_filename}")
+
+            book_text, spine_chapters = '', []
+            if not (ebook_only_mode and is_cbz_filename(epub_path.name)):
+                if epub_path.suffix.lower() != '.epub':
+                    raise EbookInputError(f"Ebook input refused: {epub_path.name} is not an EPUB. Choose the correct ebook and retry.")
+                book_text, spine_chapters = self.ebook_parser.extract_text_and_map(epub_path)
+                if not book_text.strip():
+                    raise EbookInputError(f"Ebook input refused: {epub_path.name} has no readable EPUB text. Replace the file and retry.")
             
             # acquire_ebook returns a string, so normalize epub_path to Path.
             if epub_path:
@@ -3276,8 +3284,6 @@ class SyncManager:
                     logger.info(
                         f"Ebook-only background prep: skipping EPUB parser warmup for CBZ '{sanitize_log_data(epub_path.name)}'"
                     )
-                else:
-                    self.ebook_parser.extract_text_and_map(epub_path)
                 update_progress(1.0, 3)
                 book.status = 'active'
                 persist_book()
@@ -3308,10 +3314,6 @@ class SyncManager:
             else:
                 chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
             
-            # Pre-fetch book text for validation and alignment.
-            # We need this for Validating SMIL OR for Aligning Whisper
-            book_text, spine_chapters = self.ebook_parser.extract_text_and_map(epub_path)
-
             if (
                 self.alignment_service
                 and (
@@ -3558,10 +3560,12 @@ class SyncManager:
             self.database_service.save_job(updated_job)
 
             # Update book status based on retry count
-            if isinstance(e, ContentMatchRejected) or new_retry_count >= max_retries:
+            if isinstance(e, (ContentMatchRejected, EbookInputError)) or new_retry_count >= max_retries:
                 book.status = 'failed_permanent'
                 if isinstance(e, ContentMatchRejected):
                     logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Alignment refused; awaiting corrected pairing")
+                elif isinstance(e, EbookInputError):
+                    logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Ebook input refused; awaiting corrected file")
                 else:
                     logger.warning(f"⚠️ {sanitize_log_data(abs_title)}: Max retries exceeded", exc_info=True)
                 
