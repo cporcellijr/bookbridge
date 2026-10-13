@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CWA Kobo-protocol cooldown after host-level failures (#496)."""
 
+import logging
 import sys
 import unittest
 from email.utils import format_datetime
@@ -48,6 +49,18 @@ class TestCwaCooldown(unittest.TestCase):
         self.api._session.get.side_effect = requests.Timeout()
         self.assertEqual(self._poll(), [None, None, None])
         self.assertEqual(self.api._session.get.call_count, 1)
+
+    def test_failed_request_never_logs_the_sync_token(self):
+        self.api._token = "s3cret-sync-token"
+        self.api._session.get.side_effect = requests.ConnectionError(
+            "HTTPConnectionPool(host='cwa.local', port=8083): Max retries exceeded with url: "
+            "/kobo/s3cret-sync-token/v1/library/u0/state")
+        with self.assertLogs("src.api.cwa_sync_api", level="DEBUG") as logs:
+            self.assertIsNone(self.api.get_reading_state("u0"))
+        rendered = "\n".join(logs.output) + "".join(
+            logging.Formatter().formatException(r.exc_info) for r in logs.records if r.exc_info)
+        self.assertIn("<token>", rendered)
+        self.assertNotIn("s3cret-sync-token", rendered)
 
     def test_sync_cycle_calls_send_nothing_during_cooldown(self):
         self.api._session.get.side_effect = requests.Timeout()

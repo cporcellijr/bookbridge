@@ -95,8 +95,11 @@ class CWASyncApi:
                 return None
         try:
             r = getattr(self._session, method)(url, **kwargs)
-        except requests.RequestException:
+        except requests.RequestException as e:
             self._start_cooldown()
+            # Kobo URLs carry the sync token in the path; keep it out of logs and tracebacks.
+            if self._token and self._token in str(e):
+                raise type(e)(str(e).replace(self._token, "<token>")) from None
             raise
         if r.status_code == 429:
             self._start_cooldown(self._parse_retry_after(r.headers.get("Retry-After")))
