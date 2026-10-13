@@ -269,7 +269,10 @@ All notable changes to BookBridge will be documented in this file.
   left as it is, and a failed rebuild keeps the previous read-along. A blue headphones
   pill marks books with a finished read-along, beside the CTC pill, which moved under
   the ratings. Needs BookOrbit as the audiobook source; **Read-Along Audio Bitrate**
-  (default 32k) sets the size of the embedded audio.
+  (default 32k) sets the size of the embedded audio. When BookBridge cannot write to
+  BookOrbit's folder itself (different mount paths, or the ebook and audiobook kept in
+  one library folder), it uploads the read-along through BookOrbit instead, within
+  BookOrbit's maximum upload size.
 
 - **Forced alignment is now a regular, recommended option, and runs on any CPU.**
   Settings now offers a plain choice: **Use forced alignment (recommended)**, which

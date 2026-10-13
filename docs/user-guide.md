@@ -472,6 +472,17 @@ rather than shipping a book with missing chapters. A failed regeneration leaves 
 EPUB in place and does not trigger a library scan. EPUB 2 source books are converted to EPUB 3
 automatically as part of generation.
 
+### How it reaches BookOrbit
+
+When BookBridge sees the audiobook's folder at the same path BookOrbit does (and the folder
+is not shared with the ebook library), it writes the EPUB there directly and triggers a scan;
+there is no size limit. Otherwise — different mount paths, or the ebook and audiobook sitting
+in one combined library folder — it uploads the EPUB through BookOrbit into the audiobook's
+entry, so it is subject to BookOrbit's maximum upload size (BookOrbit Settings) and to any
+reverse proxy or tunnel in front of it. A refused oversized upload names the file size in the
+log; a shared local mount lets BookBridge deliver directly instead. Audio loose in a library's
+root folder is refused either way: move it into its own book folder first.
+
 ### Coexistence with BookOrbit's own read-along sync
 
 BookOrbit 3.0 and later can keep a read-along book's audio and text positions in step by

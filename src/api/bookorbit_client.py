@@ -64,6 +64,65 @@ _SESSION_DEDUPE_WINDOW_SECONDS = 7200
 _SESSION_OVERLAP_EPSILON_PCT = 0.05
 
 
+class BookOrbitUploadError(Exception):
+    """An upload into a BookOrbit book entry was refused or failed.
+
+    ``kind`` is one of: 'name_conflict' (a file with that name is already in the
+    entry's folder), 'duplicate' (identical bytes already attached), 'conflict'
+    (another 409), 'too_large' (413 from BookOrbit or a proxy in front of it),
+    'auth' (no token), 'failed' (anything else).
+    """
+
+    def __init__(self, kind: str, status_code: Optional[int], message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.status_code = status_code
+        self.message = message
+
+
+class _MultipartFileBody:
+    """A one-file multipart/form-data body read from disk in chunks.
+
+    ``requests`` builds ``files=`` bodies in memory; read-along EPUBs run to
+    hundreds of MB. ``__len__`` gives requests an exact Content-Length.
+    """
+
+    def __init__(self, field: str, filename: str, content_type: str, fh) -> None:
+        self.boundary = uuid.uuid4().hex
+        quoted = filename.replace("\\", "\\\\").replace('"', '\\"')
+        crlf = "\r\n"
+        self._head = (
+            f"--{self.boundary}{crlf}"
+            f"Content-Disposition: form-data; name=\"{field}\"; filename=\"{quoted}\"{crlf}"
+            f"Content-Type: {content_type}{crlf}{crlf}"
+        ).encode("utf-8")
+        self._tail = f"{crlf}--{self.boundary}--{crlf}".encode("utf-8")
+        self._fh = fh
+        self._size = os.fstat(fh.fileno()).st_size
+        self._parts = [self._head, None, self._tail]
+
+    def __len__(self) -> int:
+        return len(self._head) + self._size + len(self._tail)
+
+    def read(self, size: int = -1) -> bytes:
+        while self._parts:
+            part = self._parts[0]
+            if part is None:
+                chunk = self._fh.read(size if size and size > 0 else 1 << 20)
+                if chunk:
+                    return chunk
+                self._parts.pop(0)
+                continue
+            if size is None or size < 0 or size >= len(part):
+                self._parts.pop(0)
+            else:
+                self._parts[0] = part[size:]
+                part = part[:size]
+            if part:
+                return part
+        return b""
+
+
 class BookOrbitClient:
     def __init__(self, ollama_client=None, credentials: dict = None):
         self.ollama_client = ollama_client
@@ -738,6 +797,65 @@ class BookOrbitClient:
             return False
         return True
 
+    def upload_book_file(self, book_id: int, file_path: Path, filename: str) -> dict:
+        """Upload a file into a BookOrbit book entry (``POST /api/v1/books/{id}/files``).
+
+        BookOrbit writes it into the entry's own folder and indexes it at once.
+        Streams from disk. Returns the 201 body (with the new file ``id``);
+        raises :class:`BookOrbitUploadError` otherwise.
+        """
+        file_path = Path(file_path)
+        endpoint = f"/api/v1/books/{book_id}/files"
+        resp = None
+        for attempt in range(2):
+            token = self._get_fresh_token()
+            if not token:
+                raise BookOrbitUploadError("auth", None, "BookOrbit login unavailable")
+            try:
+                with open(file_path, "rb") as fh:
+                    body = _MultipartFileBody("file", filename, "application/epub+zip", fh)
+                    resp = self.session.post(
+                        f"{self._get_base_url()}{endpoint}",
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": f"multipart/form-data; boundary={body.boundary}",
+                        },
+                        data=body,
+                        timeout=(15, 1800),
+                    )
+            except Exception as exc:
+                logger.warning("BookOrbit: upload of '%s' into book %s failed: %s",
+                               sanitize_log_data(filename), book_id, exc, exc_info=True)
+                raise BookOrbitUploadError("failed", None, str(exc)) from exc
+            if resp.status_code != 401 or attempt:
+                break
+            with self._token_lock:
+                self._token = None
+                self._token_timestamp = 0
+
+        if resp.status_code == 201:
+            size_mb = file_path.stat().st_size / (1024 * 1024)
+            logger.info("📤 BookOrbit: uploaded '%s' (%.1f MB) into book %s",
+                        sanitize_log_data(filename), size_mb, book_id)
+            return self._parse_json(resp) or {}
+
+        body = self._parse_json(resp)
+        message = str(body.get("message") or "") if isinstance(body, dict) else ""
+        if resp.status_code == 409:
+            if "already exists in this book" in message:
+                kind = "name_conflict"
+            elif "already attached" in message:
+                kind = "duplicate"
+            else:
+                kind = "conflict"
+        elif resp.status_code == 413:
+            kind = "too_large"
+        else:
+            kind = "failed"
+        logger.warning("BookOrbit: upload of '%s' into book %s refused: status=%s kind=%s",
+                       sanitize_log_data(filename), book_id, resp.status_code, kind)
+        raise BookOrbitUploadError(kind, resp.status_code, message or f"HTTP {resp.status_code}")
+
     # ------------------------------------------------------------------
     # Resolution
     # ------------------------------------------------------------------
@@ -1116,8 +1234,9 @@ class BookOrbitClient:
                 "format": (f.get("format") or "").lower(),
                 "duration_seconds": track_duration,
                 "size_bytes": f.get("sizeBytes"),
-                # BookOrbit and the bridge share the /books mount, so this
-                # container path often resolves locally (staging fast path).
+                # absolutePath is in BookOrbit's container namespace; it
+                # resolves here only when the bridge mounts the library at the
+                # same path (staging fast path), never assumed.
                 "absolute_path": f.get("absolutePath"),
             })
 

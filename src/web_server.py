@@ -72,6 +72,7 @@ from src.services.readalong_delivery import (
     resolve_audiobook_folder,
     remove_readalong_epub as _remove_readalong_epub_file,
     _readalong_filename,
+    is_generated_readalong_epub,
 )
 from src.utils.kosync_headers import kosync_request_kwargs
 from src.utils.series_metadata import (
@@ -3459,6 +3460,8 @@ def _build_local_ebook_title_index():
             for eb in EBOOK_DIR.rglob('*'):
                 if eb.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
                     continue
+                if is_generated_readalong_epub(eb.name):
+                    continue
                 stem = eb.stem
                 title_part = stem.split(" - ", 1)[0]
                 for key in (_ebook_title_key(title_part), _ebook_title_key(stem)):
@@ -3673,6 +3676,7 @@ def get_searchable_ebooks(search_term):
             all_ebooks = [
                 eb for eb in EBOOK_DIR.rglob('*')
                 if eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS and eb.is_file()
+                and not is_generated_readalong_epub(eb.name)
             ]
             for eb in all_ebooks:
                 fname_lower = eb.name.lower()
@@ -6536,7 +6540,7 @@ def forge_search_text():
         local_books_dir = Path(os.environ.get("BOOKS_DIR", "/books"))
         if local_books_dir.exists():
             for epub in local_books_dir.rglob("*.epub"):
-                if "(readaloud)" in epub.name.lower():
+                if "(readaloud)" in epub.name.lower() or is_generated_readalong_epub(epub.name):
                     continue
                 if query_lower in epub.name.lower():
                     key = f"local_{epub.name}"
@@ -10413,10 +10417,6 @@ def remove_readalong_epub_route(abs_id: str):
     if audio_book_id is None:
         return jsonify({"success": True, "removed": False, "message": "No resolvable BookOrbit audio entry for this book."})
 
-    resolved = resolve_audiobook_folder(clients.bookorbit_client, audio_book_id)
-    if resolved is None:
-        return jsonify({"success": True, "removed": False, "message": "Could not resolve the BookOrbit audio folder."})
-
     epub_filename = getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
     if not epub_filename:
         return jsonify({"success": True, "removed": False, "message": "No source EPUB on file."})
@@ -10425,7 +10425,9 @@ def remove_readalong_epub_route(abs_id: str):
     except FileNotFoundError:
         return jsonify({"success": True, "removed": False, "message": "Source EPUB not found on disk."})
 
-    output_path = resolved.folder / _readalong_filename(Path(epub_path))
+    resolved = resolve_audiobook_folder(clients.bookorbit_client, audio_book_id)
+    output_name = _readalong_filename(Path(epub_path))
+    output_path = resolved.folder / output_name if resolved else Path(output_name)
     ok = _remove_readalong_epub_file(clients.bookorbit_client, audio_book_id, output_path)
     if ok:
         logger.info("🗑️ Removed read-along EPUB for %s", sanitize_log_data(book.abs_title or abs_id))

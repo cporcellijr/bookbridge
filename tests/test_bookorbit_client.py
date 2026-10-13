@@ -686,3 +686,80 @@ def test_get_read_aloud_sync_default_does_not_force(client):
     with patch.object(client, 'get_book_detail', return_value={"readAloudSync": {"state": "disabled"}}) as mock_detail:
         client.get_read_aloud_sync(5204)
     mock_detail.assert_called_once_with(5204, force=False)
+
+
+def _upload(client, tmp_path, *responses):
+    path = tmp_path / "Book.readalong.epub"
+    path.write_bytes(b"PK\x03\x04epub-bytes")
+    client._token = "tok"
+    client._token_timestamp = 10**12
+    with patch.object(client.session, "post", side_effect=list(responses)) as post:
+        try:
+            return client.upload_book_file(7, path, "Book.readalong.epub"), post
+        except Exception as exc:  # noqa: BLE001 - returned for assertions
+            return exc, post
+
+
+def test_upload_streams_the_file_as_multipart_and_returns_the_new_row(client, tmp_path):
+    result, post = _upload(client, tmp_path, _Resp({"id": 99, "format": "epub"}, status_code=201))
+    assert result == {"id": 99, "format": "epub"}
+    args, kwargs = post.call_args
+    assert args[0] == "http://mock/api/v1/books/7/files"
+    body = kwargs["data"]
+    assert kwargs["headers"]["Content-Type"] == f"multipart/form-data; boundary={body.boundary}"
+
+
+def test_multipart_body_streams_in_chunks_with_an_exact_length(tmp_path):
+    from email.parser import BytesParser
+    from email.policy import HTTP
+    from src.api.bookorbit_client import _MultipartFileBody
+
+    payload = bytes(range(256)) * 5000
+    path = tmp_path / "book.bin"
+    path.write_bytes(payload)
+    filename = 'Odd "name".readalong.epub'
+    with open(path, "rb") as fh:
+        body = _MultipartFileBody("file", filename, "application/epub+zip", fh)
+        chunks = iter(lambda: body.read(8192), b"")
+        raw = b"".join(chunks)
+    assert len(raw) == len(body)
+    message = BytesParser(policy=HTTP).parsebytes(
+        f"Content-Type: multipart/form-data; boundary={body.boundary}\r\n\r\n".encode() + raw
+    )
+    (part,) = message.iter_parts()
+    assert part.get_param("name", header="content-disposition") == "file"
+    assert part.get_filename() == filename
+    assert part.get_payload(decode=True) == payload
+
+
+def test_upload_retries_once_after_a_401_with_a_fresh_token(client, tmp_path):
+    with patch.object(client, "_get_fresh_token", side_effect=["old", "new"]):
+        result, post = _upload(client, tmp_path, _Resp(status_code=401), _Resp({"id": 5}, status_code=201))
+    assert result == {"id": 5}
+    assert post.call_count == 2
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer new"
+
+
+@pytest.mark.parametrize("status,message,kind", [
+    (409, "A file named \"Book.readalong.epub\" already exists in this book's folder", "name_conflict"),
+    (409, "This file is already attached to this book", "duplicate"),
+    (409, "something else", "conflict"),
+    (413, "", "too_large"),
+    (500, "", "failed"),
+])
+def test_upload_refusals_are_classified(client, tmp_path, status, message, kind):
+    from src.api.bookorbit_client import BookOrbitUploadError
+    error, _ = _upload(client, tmp_path, _Resp({"message": message} if message else None, status_code=status))
+    assert isinstance(error, BookOrbitUploadError)
+    assert (error.kind, error.status_code) == (kind, status)
+
+
+def test_upload_transport_error_and_missing_token(client, tmp_path):
+    from src.api.bookorbit_client import BookOrbitUploadError
+    import requests as _requests
+    error, _ = _upload(client, tmp_path, _requests.ConnectionError("down"))
+    assert isinstance(error, BookOrbitUploadError) and error.kind == "failed"
+    with patch.object(client, "_get_fresh_token", return_value=None):
+        error, post = _upload(client, tmp_path)
+    assert isinstance(error, BookOrbitUploadError) and error.kind == "auth"
+    post.assert_not_called()

@@ -569,16 +569,21 @@ class ReadalongEpubActionTestCase(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertFalse(data["removed"])
 
-    def test_remove_reports_nothing_when_folder_unresolvable(self):
+    def test_remove_deletes_via_api_when_folder_unresolvable(self):
         import src.web_server as ws
         clients = self._worker_clients()
         clients.sync_clients["BookOrbitAudio"].resolve_bookorbit_book_id.return_value = "bo-audio-1"
-        with patch.object(ws, "uc", return_value=clients), \
-             patch.object(ws, "resolve_audiobook_folder", return_value=None):
+        self.mock_container.mock_ebook_parser.resolve_book_path.return_value = str(
+            Path(self.temp_dir) / "rl.epub"
+        )
+        with patch.object(ws, "uc", return_value=clients),              patch.object(ws, "resolve_audiobook_folder", return_value=None),              patch.object(ws, "_remove_readalong_epub_file", return_value=True) as mock_remove:
             resp = self.client.post('/api/readalong-epub/rl-book-1/remove')
         data = resp.get_json()
         self.assertTrue(data["success"])
-        self.assertFalse(data["removed"])
+        self.assertTrue(data["removed"])
+        called_output_path = Path(mock_remove.call_args[0][2])
+        self.assertFalse(called_output_path.is_absolute())
+        self.assertEqual(called_output_path.name, "rl.readalong.epub")
 
     def test_remove_deletes_when_resolvable(self):
         import src.web_server as ws
