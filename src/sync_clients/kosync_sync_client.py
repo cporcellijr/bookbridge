@@ -20,8 +20,6 @@ from src.utils.fixed_page_progress import (
 )
 from src.utils.config_loader import env_truthy
 from src.utils.kosync_url import is_builtin_kosync_url
-from src.utils.logging_utils import get_persistent_condition_logger
-from src.utils.user_context import get_current_user_id
 from src.utils.kosync_canonical import (
     prewarm_xpath_order_cache,
     resolve_canonical_position,
@@ -160,17 +158,13 @@ class KoSyncSyncClient(SyncClient):
                     )
                 ko_pct = canonical_pct
         book_label = f"'{title_snip}' " if title_snip else ""
-        no_record_key = f"kosync-no-record:{get_current_user_id()}:{getattr(book, 'abs_id', None)}"
         if ko_pct is None and prev_state is None and self._server_has_no_record(ko_xpath, ko_metadata):
             # Only a definite "no record" (never a 5xx or an outage) and only without a
             # saved state: a missing position later is not evidence of a rewind. The
             # placeholder never reaches change detection; it just lets the cycle write
-            # the other clients' agreed position here.
-            get_persistent_condition_logger().warn(
-                logger, no_record_key,
-                "%sKoSync has no stored position yet; it will be filled from the other clients",
-                book_label, level=logging.INFO,
-            )
+            # the other clients' agreed position here. Whether and when it is filled is
+            # decided (and logged at INFO) by the sync cycle.
+            logger.debug(f"{book_label}KoSync has no stored position yet; joining as a follower")
             return ServiceState(
                 current={"pct": 0.0, "xpath": None},
                 previous_pct=0,
@@ -180,10 +174,6 @@ class KoSyncSyncClient(SyncClient):
                 display=("KoSync", "{prev:.4%} -> {curr:.4%}"),
                 value_formatter=lambda v: f"{v*100:.4f}%",
                 follower_only=True,
-            )
-        if ko_pct is not None:
-            get_persistent_condition_logger().resolve(
-                logger, no_record_key, f"{book_label}KoSync now has a stored position"
             )
         if ko_pct is None:
             if ko_xpath is None:

@@ -101,11 +101,6 @@ class TestKoSyncServiceStateForMissingPosition(unittest.TestCase):
     def test_original_server_empty_200_is_a_follower_only(self):
         self.assertTrue(self._state(200).follower_only)
 
-    def test_decision_is_logged_at_info(self):
-        with self.assertLogs("src.sync_clients.kosync_sync_client", level="INFO") as logs:
-            self._state(404)
-        self.assertTrue(any("no stored position" in line for line in logs.output))
-
     def test_not_found_with_a_saved_state_is_not_read_as_a_rewind_to_zero(self):
         saved = State(abs_id="book", client_name="kosync", percentage=0.4, xpath="/body/DocFragment[1]/body/p[1].0")
         self.assertIsNone(self._state(404, prev_state=saved))
@@ -262,8 +257,10 @@ class TestSyncCycleFillsKoSyncWithoutAPosition(unittest.TestCase):
     def test_agreeing_clients_are_left_alone_and_only_kosync_is_written(self):
         self.peer = PeerClient(0.11)
         self.states.append(State(abs_id="night", client_name="peer", percentage=0.11, last_updated=1791757881.5))
-        self._build().sync_cycle()
+        with self.assertLogs("src.sync_manager", level="INFO") as logs:
+            self._build().sync_cycle()
 
+        self.assertTrue(any("filling follower(s) with no position: ['KoSync']" in line for line in logs.output))
         self.kosync_api.update_progress.assert_called_once()
         self.assertEqual(self.peer.writes, [])
         self.abs_client.update_progress.assert_not_called()
