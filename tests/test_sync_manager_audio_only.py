@@ -62,11 +62,12 @@ def test_audio_only_cycle_uses_percentage_without_locating_epub(tmp_path):
     assert saved_state.percentage == 0.5
 
 
-def test_cycle_keeps_empty_abs_bulk_state(tmp_path):
-    """An empty ABS map from a successful read means "no progress"; other empty results are dropped."""
-    clients = {"ABS": MagicMock(), "Storyteller": MagicMock()}
-    for client in clients.values():
-        client.fetch_bulk_state.return_value = {}
+def test_cycle_keeps_every_successful_bulk_read_and_drops_failures(tmp_path):
+    """fetch_bulk_state: a dict (even empty) is a successful read for any client; None is a failed one."""
+    clients = {"ABS": MagicMock(), "Storyteller": MagicMock(), "BookFusion": MagicMock()}
+    clients["ABS"].fetch_bulk_state.return_value = {}
+    clients["Storyteller"].fetch_bulk_state.return_value = {}
+    clients["BookFusion"].fetch_bulk_state.return_value = None
     manager = SyncManager(
         abs_client=MagicMock(),
         booklore_client=MagicMock(),
@@ -81,4 +82,4 @@ def test_cycle_keeps_empty_abs_bulk_state(tmp_path):
 
     manager._sync_cycle_internal()
 
-    assert manager._filter_books_for_current_user.call_args[0][1] == {"ABS": {}}
+    assert manager._filter_books_for_current_user.call_args[0][1] == {"ABS": {}, "Storyteller": {}}

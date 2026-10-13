@@ -1,10 +1,12 @@
 import json
+import logging
 import threading
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from src.api.api_clients import ABSBulkProgress
 from src.sync_manager import SyncManager
 from src.utils.user_context import get_current_user_id, set_current_user_id, reset_current_user_id
 
@@ -698,10 +700,12 @@ class TestSyncCycleUserScoping(unittest.TestCase):
         mgr = SyncManager.__new__(SyncManager)
         mgr.sync_clients = {"ABS": _FakeABSSyncClient(accessible={"book-1"})}
         abs_api = mgr.sync_clients["ABS"].abs_client
-        abs_api.can_access_all_items = True
         abs_api.listed = {"book-1"}
         mgr.database_service = _FakeStateDB(linked={2: {"book-1", "deleted"}})
         books = [_FakeBook("book-1"), _FakeBook("deleted")]
+
+        sees_all = ABSBulkProgress()
+        sees_all.can_access_all_items = True
 
         def run(bulk_states_per_client):
             abs_api.calls = []
@@ -712,12 +716,52 @@ class TestSyncCycleUserScoping(unittest.TestCase):
                 reset_current_user_id(token)
             return [b.abs_id for b in visible], abs_api.calls
 
-        self.assertEqual(run({"ABS": {}}), (["book-1"], ["<listing>"]))
+        # A listed item needs no request; a miss gets its own authoritative check
+        self.assertEqual(run({"ABS": sees_all}), (["book-1"], ["<listing>", "deleted"]))
+        # Permission comes from the bulk result itself, not from shared client state
+        self.assertEqual(run({"ABS": {}}), (["book-1"], ["book-1", "deleted"]))
         # Without this cycle's bulk read (Instant Sync) each item is checked
         self.assertEqual(run({}), (["book-1"], ["book-1", "deleted"]))
         # A failed listing falls back to checking each item
         abs_api.listed = None
-        self.assertEqual(run({"ABS": {}}), (["book-1"], ["<listing>", "book-1", "deleted"]))
+        self.assertEqual(run({"ABS": sees_all}), (["book-1"], ["<listing>", "book-1", "deleted"]))
+
+    def test_listed_miss_that_exists_is_kept_and_deleted_item_warns_once(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr.sync_clients = {"ABS": _FakeABSSyncClient(accessible={"new-item"})}
+        abs_api = mgr.sync_clients["ABS"].abs_client
+        abs_api.listed = set()  # stale listing: the new item is not in it yet
+        mgr.database_service = _FakeStateDB(linked={2: {"new-item", "gone-xyz"}})
+        sees_all = ABSBulkProgress()
+        sees_all.can_access_all_items = True
+        books = [_FakeBook("new-item"), _FakeBook("gone-xyz")]
+
+        def run():
+            token = set_current_user_id(2)
+            try:
+                return [b.abs_id for b in mgr._filter_books_for_current_user(books, {"ABS": sees_all})]
+            finally:
+                reset_current_user_id(token)
+
+        with self.assertLogs("src.sync_manager", level="DEBUG") as logs:
+            self.assertEqual(run(), ["new-item"])
+            self.assertEqual(run(), ["new-item"])
+        loud = [r for r in logs.records if r.levelno == logging.WARNING and "not in the library listing" in r.getMessage()]
+        self.assertEqual(len(loud), 1)
+        self.assertEqual(loud[0].getMessage(), "\u26a0\ufe0f ABS: Skipping item 'gone-xyz' for user_id=2: not in the library listing")
+
+    def test_ownership_failure_logs_each_skipped_book(self):
+        mgr = SyncManager.__new__(SyncManager)
+        mgr.sync_clients = {"ABS": _FakeABSSyncClient(accessible={"book-1"})}
+        mgr.database_service = _FailingLinkDB(linked={1: {"book-1"}})
+        token = set_current_user_id(1)
+        try:
+            with self.assertLogs("src.sync_manager", level="WARNING") as logs:
+                mgr._filter_books_for_current_user([_FakeBook("book-1")], bulk_states_per_client={})
+        finally:
+            reset_current_user_id(token)
+        messages = [r.getMessage() for r in logs.records]
+        self.assertIn("Skipping 'book-1' for user_id=1: ownership check failed: db unavailable", messages)
 
 
 class _FakeUser:

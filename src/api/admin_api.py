@@ -6,12 +6,21 @@
 # ADMIN_API_TOKEN instead of a browser session. With the variable unset the API
 # does not exist (every route answers 404). It is served on the main port only,
 # never on the split-port sync server.
+#
+# The token manages READER accounts only: it can create role='user' accounts and
+# change existing ones, but never creates or promotes an admin and never touches
+# an existing admin (password, active, role or integrations).
 import hmac
 import logging
 import os
+import re
+import threading
+import time
+from typing import Callable, Optional
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
+from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.user_config import PER_USER_FIELD_GROUPS
 
 logger = logging.getLogger(__name__)
@@ -23,24 +32,40 @@ _database_service = None
 _on_user_created = None
 _on_integrations_saved = None
 _on_user_updated = None
+_on_user_enabled = None
 
 MIN_TOKEN_LENGTH = 32
 _short_token_warned = False
 
+# Per-remote-address failure limiter (same shape as the web login / KoSync ones).
+_AUTH_FAILURES: dict[str, list[float]] = {}
+_AUTH_FAILURES_LOCK = threading.Lock()
+_AUTH_FAILURE_LIMIT = 5
+_AUTH_FAILURE_WINDOW = 60
+_ADMIN_REFUSAL = "the admin API manages reader accounts only; admin accounts are changed in the dashboard"
 
-def init_admin_api(database_service, on_user_created=None, on_integrations_saved=None, on_user_updated=None):
+
+def init_admin_api(
+    database_service,
+    on_user_created: Optional[Callable] = None,
+    on_integrations_saved: Optional[Callable[[int], None]] = None,
+    on_user_updated: Optional[Callable[[int], None]] = None,
+    on_user_enabled: Optional[Callable] = None,
+) -> None:
     """Initialize the admin API with its dependencies.
 
-    on_user_created(user) runs after a user is created or re-enabled (to share the
-    existing library). on_integrations_saved(user_id) runs after integrations
-    change (cache invalidation, primary-admin mirroring). on_user_updated(user_id)
-    refreshes cached clients after account role or active changes.
+    on_user_created(user) runs after a user is created (to share the existing
+    library); on_user_enabled(user) does the same when a disabled user is
+    re-enabled. on_integrations_saved(user_id) runs after integrations change
+    (cache invalidation, primary-admin mirroring). on_user_updated(user_id)
+    refreshes cached clients and listeners after account role or active changes.
     """
-    global _database_service, _on_user_created, _on_integrations_saved, _on_user_updated
+    global _database_service, _on_user_created, _on_integrations_saved, _on_user_updated, _on_user_enabled
     _database_service = database_service
     _on_user_created = on_user_created
     _on_integrations_saved = on_integrations_saved
     _on_user_updated = on_user_updated
+    _on_user_enabled = on_user_enabled
 
 
 def _configured_token():
@@ -58,31 +83,59 @@ def _configured_token():
     return token
 
 
+def _auth_failures_recent(addr: str, failed: bool = False) -> int:
+    """Count (and optionally record) recent unauthenticated attempts from one address."""
+    now = time.time()
+    with _AUTH_FAILURES_LOCK:
+        recent = [t for t in _AUTH_FAILURES.get(addr, []) if now - t < _AUTH_FAILURE_WINDOW]
+        if failed:
+            recent.append(now)
+        if recent:
+            _AUTH_FAILURES[addr] = recent
+        else:
+            _AUTH_FAILURES.pop(addr, None)
+        return len(recent)
+
+
+def _printable(value: str, limit: int) -> str:
+    """Bound a client-controlled string and drop control characters before logging it."""
+    return re.sub(r"[^\x20-\x7e]", "?", value or "")[:limit]
+
+
 @admin_api_bp.before_request
-def _require_token():
+def _require_token() -> Optional[tuple[Response, int]]:
     token = _configured_token()
     if token is None or _database_service is None:
         return jsonify({"error": "not found"}), 404
+    addr = request.remote_addr or ""
+    if _auth_failures_recent(addr) >= _AUTH_FAILURE_LIMIT:
+        return jsonify({"error": "too many failed attempts"}), 429
     header = request.headers.get("Authorization", "")
     presented = header[7:] if header.startswith("Bearer ") else ""
-    if not presented or not hmac.compare_digest(presented, token):
-        logger.warning(f"⚠️ Admin API: rejected request from '{request.remote_addr}' ({request.path})")
+    if not presented or not hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
+        _auth_failures_recent(addr, failed=True)
+        get_persistent_condition_logger().warn(
+            logger,
+            f"admin_api_rejected:{_printable(addr, 64)}",
+            "⚠️ Admin API: rejected request from '%s' (%s)",
+            _printable(addr, 64), _printable(request.path, 120),
+        )
         return jsonify({"error": "unauthorized"}), 401
     return None
 
 
-def _user_json(user, created=None):
+def _user_json(user, created: Optional[bool] = None) -> dict:
     data = {"id": user.id, "username": user.username, "role": user.role, "active": bool(user.active)}
     if created is not None:
         data["created"] = created
     return data
 
 
-def _field_types():
+def _field_types() -> dict[str, str]:
     return {key: ftype for _group, fields in PER_USER_FIELD_GROUPS for key, _label, ftype in fields}
 
 
-def _as_bool(value):
+def _as_bool(value) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str) and value.strip().lower() in ("true", "false"):
@@ -91,12 +144,14 @@ def _as_bool(value):
 
 
 @admin_api_bp.route("/users", methods=["GET"])
-def list_users():
+def list_users() -> tuple[Response, int]:
+    """List every account (id, username, role, active)."""
     return jsonify({"users": [_user_json(u) for u in _database_service.list_users()]}), 200
 
 
 @admin_api_bp.route("/users/<username>", methods=["GET"])
-def get_user(username):
+def get_user(username: str) -> tuple[Response, int]:
+    """Return one account by username, or 404."""
     user = _database_service.get_user_by_username(username)
     if not user:
         return jsonify({"error": "user not found"}), 404
@@ -104,11 +159,12 @@ def get_user(username):
 
 
 @admin_api_bp.route("/users/<username>", methods=["PUT"])
-def put_user(username):
-    """Create the user if missing, otherwise update it. Idempotent.
+def put_user(username: str) -> tuple[Response, int]:
+    """Create the reader if missing, otherwise update it. Idempotent.
 
     Body (all optional except password when creating):
-      {"password": str, "role": "user" | "admin", "active": bool}
+      {"password": str, "role": "user", "active": bool}
+    Admin accounts can be neither created, promoted to, nor modified (403).
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -123,6 +179,8 @@ def put_user(username):
     role = data.get("role")
     if role is not None and role not in ("user", "admin"):
         return jsonify({"error": "role must be 'user' or 'admin'"}), 400
+    if role == "admin":
+        return jsonify({"error": _ADMIN_REFUSAL}), 403
     active = data.get("active")
     if active is not None:
         try:
@@ -134,15 +192,24 @@ def put_user(username):
     if user is None:
         if not password:
             return jsonify({"error": "password is required to create a user"}), 400
-        user = _database_service.create_user(username, password, role=role or "user", active=0 if active is False else 1)
-        logger.info(f"👤 Admin API: created user '{username}'")
-        if _on_user_created is not None:
-            try:
-                _on_user_created(user)
-            except Exception as e:
-                logger.warning(f"Admin API: post-create hook failed for '{username}': {e}", exc_info=True)
-        return jsonify(_user_json(_database_service.get_user(user.id), created=True)), 201
+        try:
+            user = _database_service.create_user(username, password, role="user", active=0 if active is False else 1)
+        except ValueError:
+            # Lost a create race: the account exists now, so this is an update.
+            user = _database_service.get_user_by_username(username)
+            if user is None:
+                return jsonify({"error": "could not create user"}), 409
+        else:
+            logger.info(f"👤 Admin API: created user '{username}'")
+            if _on_user_created is not None:
+                try:
+                    _on_user_created(user)
+                except Exception as e:
+                    logger.warning(f"Admin API: post-create hook failed for '{username}': {e}", exc_info=True)
+            return jsonify(_user_json(_database_service.get_user(user.id), created=True)), 201
 
+    if user.role == "admin":
+        return jsonify({"error": _ADMIN_REFUSAL}), 403
     was_active = bool(user.active)
     try:
         user = _database_service.update_user_account(user.id, password=password, role=role, active=active)
@@ -155,27 +222,48 @@ def put_user(username):
             _on_user_updated(user.id)
         except Exception as e:
             logger.warning(f"Admin API: post-update hook failed for '{username}': {e}", exc_info=True)
-    if not was_active and user.active and _on_user_created is not None:
+    if not was_active and user.active and _on_user_enabled is not None:
         try:
-            _on_user_created(user)
+            _on_user_enabled(user)
         except Exception as e:
             logger.warning(f"Admin API: post-enable hook failed for '{username}': {e}", exc_info=True)
     logger.info(f"👤 Admin API: updated user '{username}'")
     return jsonify(_user_json(user, created=False)), 200
 
 
+def _validate_field(key: str, ftype: str, value) -> str:
+    """Check ``value`` against the declared field type; return the string to store.
+
+    Raises ValueError (message names the field) when it does not fit.
+    """
+    if ftype == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} must be true or false")
+        return "true" if value else "false"
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    if ftype.startswith("select:"):
+        options = [opt.split("=", 1)[0] for opt in ftype[len("select:"):].split("|")]
+        if value not in options:
+            raise ValueError(f"{key} must be one of: {', '.join(options)}")
+    return value
+
+
 @admin_api_bp.route("/users/<username>/integrations", methods=["PATCH"])
-def patch_integrations(username):
+def patch_integrations(username: str) -> tuple[Response, int]:
     """Set some of a user's per-user integration fields. Only the keys given change.
 
     Body: {"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", "KOSYNC_KEY": "...", ...}
-    Keys are the per-user fields from Account -> My Integrations. Booleans accept
-    true/false; an empty string clears a text or secret field. Secret values are
-    never returned.
+    Keys are the per-user fields from Account -> My Integrations. Each value must
+    fit the field's type: a JSON boolean, a string, or (for selects) one of the
+    declared options. An empty string clears a text or secret field. Secret values
+    are never returned. Admin accounts are refused (403).
     """
     user = _database_service.get_user_by_username(username)
     if not user:
         return jsonify({"error": "user not found"}), 404
+    if user.role == "admin":
+        return jsonify({"error": _ADMIN_REFUSAL}), 403
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not data:
         return jsonify({"error": "body must be a non-empty JSON object"}), 400
@@ -187,17 +275,13 @@ def patch_integrations(username):
 
     values = {}
     for key, value in data.items():
-        if types[key] == "bool":
-            try:
-                values[key] = "true" if _as_bool(value) else "false"
-            except ValueError as e:
-                return jsonify({"error": f"{key} {e}"}), 400
-        elif value is None or isinstance(value, (str, int, float)):
-            values[key] = "" if value is None else str(value)
-        else:
-            return jsonify({"error": f"{key} must be a string"}), 400
+        try:
+            values[key] = _validate_field(key, types[key], value)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
 
-    _database_service.set_user_credentials(user.id, values)
+    if not _database_service.set_user_credentials(user.id, values):
+        return jsonify({"error": "user not found"}), 404
     if _on_integrations_saved is not None:
         try:
             _on_integrations_saved(user.id)

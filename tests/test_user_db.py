@@ -191,9 +191,9 @@ class TestUserDb(unittest.TestCase):
 
     def test_disabled_user_cannot_authenticate(self):
         u = self.svc.create_user("bob", "pw")
-        self.svc.set_user_active(u.id, False)
+        self.svc.update_user_account(u.id, active=False)
         self.assertIsNone(self.svc.verify_user_credentials("bob", "pw"))
-        self.svc.set_user_active(u.id, True)
+        self.svc.update_user_account(u.id, active=True)
         self.assertIsNotNone(self.svc.verify_user_credentials("bob", "pw"))
 
     def test_password_is_hashed_not_plaintext(self):

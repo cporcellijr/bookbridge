@@ -12,7 +12,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-_MOJIBAKE_MARKERS = (
+MOJIBAKE_MARKERS = (
     "\u00f0\u0178",  # Common emoji mojibake prefix, e.g. ðŸ
     "\u00e2",        # Common punctuation/symbol mojibake prefix, e.g. âš, âœ, â
     "\u00c3",        # Common accented-text mojibake prefix, e.g. Ã
@@ -22,12 +22,12 @@ _MOJIBAKE_MARKERS = (
 
 def repair_mojibake(text):
     """Repair UTF-8 text that was accidentally decoded as a single-byte encoding."""
-    if not isinstance(text, str) or not any(marker in text for marker in _MOJIBAKE_MARKERS):
+    if not isinstance(text, str) or not any(marker in text for marker in MOJIBAKE_MARKERS):
         return text
 
     repaired = text
     for _ in range(3):
-        if not any(marker in repaired for marker in _MOJIBAKE_MARKERS):
+        if not any(marker in repaired for marker in MOJIBAKE_MARKERS):
             break
 
         raw_bytes = bytearray()

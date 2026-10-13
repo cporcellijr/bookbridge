@@ -27,9 +27,11 @@ class TestFilenameVariantResolution(unittest.TestCase):
         self.db.get_books_by_status.side_effect = lambda status, user_id=None: list(self.books.values())
         self.db.get_book.side_effect = lambda abs_id: self.books.get(abs_id)
         kosync_server._database_service = self.db
+        kosync_server._invalidate_filename_variant_index()
 
     def _restore(self):
         kosync_server._database_service = self._saved_db
+        kosync_server._invalidate_filename_variant_index()
 
     def _book(self, abs_id, original=None, ebook=None):
         book = MagicMock()
@@ -43,6 +45,7 @@ class TestFilenameVariantResolution(unittest.TestCase):
     def _resolve(self, doc_id, **kwargs):
         kwargs.setdefault("filename_variants", True)
         kwargs.setdefault("user_id", 7)
+        kosync_server._invalidate_filename_variant_index()
         return kosync_server._resolve_book_by_sibling_hash(doc_id, **kwargs)
 
     # ---- the reported case ----
@@ -173,6 +176,19 @@ class TestFilenameVariantResolution(unittest.TestCase):
         with patch.object(kosync_server, "get_persistent_condition_logger", return_value=condition_logger):
             self.assertIsNone(self._resolve(_md5("Frank Herbert - Dune.epub")))
         condition_logger.warn.assert_called_once()
+
+    def test_conflict_warning_is_resolved_once_the_hash_matches_a_single_book(self):
+        self._book("one", original="Dune - Frank Herbert.epub")
+        self._book("two", original="Dune - Frank Herbert.kepub.epub", ebook="Dune - Frank Herbert.epub")
+        device_hash = _md5("Frank Herbert - Dune.epub")
+        condition_logger = MagicMock()
+        with patch.object(kosync_server, "get_persistent_condition_logger", return_value=condition_logger):
+            self.assertIsNone(self._resolve(device_hash))
+            condition_logger.resolve.assert_not_called()
+            del self.books["two"]
+            self.assertIsNotNone(self._resolve(device_hash))
+        key = f"kosync_filename_variant_conflict:{device_hash}"
+        self.assertEqual(condition_logger.resolve.call_args.args[1], key)
 
 
 if __name__ == "__main__":

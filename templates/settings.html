@@ -1136,7 +1136,7 @@
                             {% if get_bool('BOOKLORE_SHELF_WATCH_ENABLED') %}checked{% endif %}>
                         <label for="booklore_shelf_watch">Watch a Grimmory shelf for auto-matching</label>
                     </div>
-                    <div id="shelf_watch_body" class="full-width" {% if not get_bool('BOOKLORE_SHELF_WATCH_ENABLED') %}style="display:none;"{% endif %}>
+                    <div id="shelf_watch_body" class="full-width section-body{% if not get_bool('BOOKLORE_SHELF_WATCH_ENABLED') %} collapsed{% endif %}" style="padding: 0;">
                         <div class="form-group full-width">
                             <label>Watch Shelf Name</label>
                             <div style="display: flex; gap: 10px;">
@@ -1303,7 +1303,7 @@
                             {% if get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %}checked{% endif %}>
                         <label for="bookorbit_shelf_watch">Watch a BookOrbit collection for auto-matching</label>
                     </div>
-                    <div id="bookorbit_shelf_watch_body" class="full-width" {% if not get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %}style="display:none;"{% endif %}>
+                    <div id="bookorbit_shelf_watch_body" class="full-width section-body{% if not get_bool('BOOKORBIT_SHELF_WATCH_ENABLED') %} collapsed{% endif %}" style="padding: 0;">
                         <div class="form-group full-width">
                             <label>Watch Collection Name</label>
                             <input type="text" name="BOOKORBIT_SHELF_WATCH_NAME"
@@ -1390,7 +1390,7 @@
                 {% set kavita_enabled = get_bool('KAVITA_ENABLED') %}
                 <div class="section-header">
                     <div class="svc-left">
-                        <span class="svc-chev">â–¶</span>
+                        <span class="svc-chev">▶</span>
                         <div class="svc-chip">KV</div>
                         <div class="svc-title">
                             <h3>Kavita</h3>
@@ -1424,8 +1424,8 @@
                         <div class="help-text" style="background:rgba(102,126,234,.08);border:1px solid rgba(102,126,234,.25);border-radius:8px;padding:10px 12px;">
                             <strong>Per-user account.</strong> Set each user's Kavita authentication key, optional Library ID,
                             and destination Collection under
-                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings â†’ Users â†’ (user) â†’ Integrations</a>.
-                            Generate the authentication key in Kavita's user settings. The server URL and poll settings here stay global.
+                            <a href="{{ url_for('settings') }}#users" style="color:#aab4f5;">Settings → Users → (user) → Integrations</a>.
+                            Generate the authentication key in Kavita's user settings. The server URL here stays global; poll settings are under Polling.
                         </div>
                     </div>
 
@@ -1437,7 +1437,7 @@
                             {% if get_bool('KAVITA_SHELF_WATCH_ENABLED') %}checked{% endif %}>
                         <label for="kavita_shelf_watch">Watch a Kavita collection for auto-matching</label>
                     </div>
-                    <div id="kavita_shelf_watch_body" class="full-width" {% if not get_bool('KAVITA_SHELF_WATCH_ENABLED') %}style="display:none;"{% endif %}>
+                    <div id="kavita_shelf_watch_body" class="full-width section-body{% if not get_bool('KAVITA_SHELF_WATCH_ENABLED') %} collapsed{% endif %}" style="padding: 0;">
                         <div class="form-group full-width">
                             <label>Watch Collection Name</label>
                             <input type="text" name="KAVITA_SHELF_WATCH_NAME"

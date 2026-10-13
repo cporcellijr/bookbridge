@@ -38,6 +38,7 @@ from src.utils.user_context import (
 from src.utils.user_config import resolve_setting, user_setting
 from src.utils.user_config import global_fallback_allowed as _global_fallback_allowed
 from src.utils.user_config import SERVICE_ENABLE_KEYS
+from src.utils.kosync_url import is_builtin_kosync_url
 
 from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
 from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename
@@ -445,7 +446,10 @@ def setup_dependencies(app, test_container=None):
     app.register_blueprint(goodreads_bp)
 
     # Token-authenticated admin API (disabled unless ADMIN_API_TOKEN is set)
-    init_admin_api(database_service, _share_library_with_new_user, _after_user_integrations_saved, _invalidate_user_clients)
+    init_admin_api(
+        database_service, _share_library_with_new_user, _after_user_integrations_saved,
+        _after_user_account_changed, on_user_enabled=_share_library_with_returning_user,
+    )
     app.register_blueprint(admin_api_bp)
 
     logger.info(f"🚀 Web server dependencies initialized (DATA_DIR={DATA_DIR})")
@@ -1561,24 +1565,42 @@ def _invalidate_user_clients(user_id: int) -> None:
         logger.debug("Could not invalidate client bundle for user %s: %s", user_id, e)
 
 
-def _share_library_with_new_user(new_user) -> int:
-    """With share-all-books on, a new account starts with the whole library rather
-    than only books matched from now on. Returns the number of books shared."""
+def _after_user_account_changed(user_id: int) -> None:
+    """Apply an enable/disable/role change: refresh cached clients and the user's ABS listener."""
+    _invalidate_user_clients(user_id)
+    if abs_socket_manager is not None:
+        try:
+            abs_socket_manager.refresh_user(user_id)
+        except Exception as e:
+            logger.warning("Could not refresh the ABS listener for user %s: %s", user_id, e, exc_info=True)
+
+
+def _share_library_with_new_user(new_user, returning: bool = False) -> int:
+    """With share-all-books on, a new or re-enabled account starts with the whole
+    library rather than only books matched from now on. Returns the number of
+    books shared."""
     if not env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
         return 0
+    kind = "re-enabled" if returning else "new"
     try:
         linked = database_service.backfill_user_books_for_user(new_user.id)
         logger.info(
-            "🔗 Shared %d existing book(s) with new user '%s' (share-all-books enabled)",
-            linked, sanitize_log_data(new_user.username),
+            "🔗 Shared %d existing book(s) with %s user '%s' (share-all-books enabled)",
+            linked, kind, sanitize_log_data(new_user.username),
         )
         return linked
     except Exception as share_err:
         logger.warning(
-            "Could not backfill shared books for new user '%s': %s",
-            sanitize_log_data(new_user.username), share_err, exc_info=True,
+            "Could not backfill shared books for %s user '%s': %s",
+            kind, sanitize_log_data(new_user.username), share_err, exc_info=True,
         )
         return 0
+
+
+def _share_library_with_returning_user(user) -> int:
+    """Share-on-enable for an account that already existed."""
+    return _share_library_with_new_user(user, returning=True)
+
 
 def _apply_user_admin_action(form):
     """Handle a single user-management action (create/reset/toggle/delete).
@@ -1587,9 +1609,6 @@ def _apply_user_admin_action(form):
     Returns (message, error)."""
     message = None
     error = None
-
-    def _active_admin_count():
-        return sum(1 for u in database_service.list_users() if u.role == 'admin' and u.active)
 
     action = form.get('action')
     try:
@@ -1620,26 +1639,17 @@ def _apply_user_admin_action(form):
             target = database_service.get_user(uid)
             if target:
                 disabling = bool(target.active)
-                if disabling and target.role == 'admin' and _active_admin_count() <= 1:
-                    error = "Can't disable the last active admin"
+                try:
+                    database_service.update_user_account(uid, active=not disabling)
+                except ValueError as policy_error:
+                    error = str(policy_error)
                 else:
-                    database_service.update_user_account(uid, active=not target.active)
-                    _invalidate_user_clients(uid)
+                    _after_user_account_changed(uid)
                     message = f"{'Disabled' if disabling else 'Enabled'} '{target.username}'"
-                    if not disabling and env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
-                        try:
-                            linked = database_service.backfill_user_books_for_user(uid)
-                            logger.info(
-                                "🔗 Shared %d existing book(s) with re-enabled user '%s' (share-all-books enabled)",
-                                linked, sanitize_log_data(target.username),
-                            )
-                            if linked:
-                                message = f"Enabled '{target.username}' and shared {linked} book(s)"
-                        except Exception as share_err:
-                            logger.warning(
-                                "Could not backfill shared books for re-enabled user '%s': %s",
-                                sanitize_log_data(target.username), share_err, exc_info=True,
-                            )
+                    if not disabling:
+                        linked = _share_library_with_returning_user(target)
+                        if linked:
+                            message = f"Enabled '{target.username}' and shared {linked} book(s)"
         elif action == 'set_role':
             uid = int(form.get('user_id'))
             new_role = (form.get('role') or '').strip().lower()
@@ -1651,29 +1661,26 @@ def _apply_user_admin_action(form):
                 error = "Invalid role"
             elif target.role == new_role:
                 error = f"'{target.username}' is already {new_role}"
-            elif demoting and database_service.is_primary_admin(uid):
-                # The global service settings are this account mirrored outward
-                # (ENGINE_MIRROR_KEYS) and it owns un-scoped rows, so demoting it
-                # would leave the engine authenticating as a regular user.
-                error = "Can't demote the primary admin — the global service settings belong to that account"
-            elif demoting and _active_admin_count() <= 1:
-                error = "Can't demote the last active admin"
             else:
-                database_service.update_user_account(uid, role=new_role)
-                # The cached client bundle carries the global-fallback flag, which
-                # this change flips.
-                _invalidate_user_clients(uid)
-                logger.info(
-                    "👤 Role change: '%s' is now '%s'",
-                    sanitize_log_data(target.username), new_role,
-                )
-                if demoting:
-                    message = f"'{target.username}' is now a regular user"
+                try:
+                    database_service.update_user_account(uid, role=new_role)
+                except ValueError as policy_error:
+                    error = str(policy_error)
                 else:
-                    message = (
-                        f"'{target.username}' is now an admin. They still use their own "
-                        f"service logins — set them under Integrations."
+                    # The cached client bundle carries the global-fallback flag, which
+                    # this change flips.
+                    _after_user_account_changed(uid)
+                    logger.info(
+                        "👤 Role change: '%s' is now '%s'",
+                        sanitize_log_data(target.username), new_role,
                     )
+                    if demoting:
+                        message = f"'{target.username}' is now a regular user"
+                    else:
+                        message = (
+                            f"'{target.username}' is now an admin. They still use their own "
+                            f"service logins — set them under Integrations."
+                        )
         elif action == 'delete':
             uid = int(form.get('user_id'))
             target = database_service.get_user(uid)
@@ -1681,17 +1688,20 @@ def _apply_user_admin_action(form):
                 error = "User not found"
             elif uid == current_user().id:
                 error = "You can't delete your own account"
-            elif target.role == 'admin' and _active_admin_count() <= 1:
-                error = "Can't delete the last active admin"
             else:
-                if database_service.delete_user(uid):
-                    _clear_match_queue_for_user_id(uid)
-                    _invalidate_user_clients(uid)
-                    if abs_socket_manager is not None:
-                        abs_socket_manager.stop_user(uid)
-                    message = f"Deleted '{target.username}'"
+                try:
+                    deleted = database_service.delete_user(uid)
+                except ValueError as policy_error:
+                    error = str(policy_error)
                 else:
-                    error = "User not found"
+                    if deleted:
+                        _clear_match_queue_for_user_id(uid)
+                        _invalidate_user_clients(uid)
+                        if abs_socket_manager is not None:
+                            abs_socket_manager.stop_user(uid)
+                        message = f"Deleted '{target.username}'"
+                    else:
+                        error = "User not found"
         elif action == 'share_library':
             if not env_truthy('SHARE_ALL_BOOKS_WITH_ALL_USERS'):
                 error = "Enable Features → Shared Library first, then share the existing catalog."
@@ -12544,34 +12554,6 @@ def _build_test_url(base_url: str, path: str) -> str:
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _is_builtin_kosync_test_url(url: str) -> bool:
-    if not url:
-        return False
-
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-
-    host = (parsed.hostname or "").strip().lower()
-    if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
-        return False
-
-    valid_ports = {5757}
-    configured_port = (os.environ.get("KOSYNC_PORT") or "").strip()
-    if configured_port:
-        try:
-            valid_ports.add(int(configured_port))
-        except ValueError:
-            logger.warning(f"Invalid KOSYNC_PORT '{configured_port}' while testing KOSync settings", exc_info=True)
-
-    port = parsed.port
-    if port is None:
-        port = 443 if parsed.scheme == "https" else 80
-
-    return port in valid_ports
-
-
 def _run_test_connection(service: str, payload: dict):
     testers = {
         'abs': lambda data: _test_abs(
@@ -13343,7 +13325,7 @@ def _test_kosync(
     except Exception as e:
         healthcheck_error = str(e)
 
-    if _is_builtin_kosync_test_url(url):
+    if is_builtin_kosync_url(url):
         if healthcheck_status == 200:
             return {
                 "ok": True,

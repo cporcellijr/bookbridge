@@ -24,6 +24,10 @@ class ServiceState:
     # Deliberately NOT inside `current`: that dict is persisted and fingerprinted,
     # and an extra key there would perturb change detection.
     locator_shape: Optional[str] = None
+    # The service has no record of this book yet. The state exists only so the
+    # cycle can write the leader's position there; its `current` values are a
+    # placeholder and must never feed change detection or leader selection.
+    follower_only: bool = False
 
 @dataclass
 class LocatorResult:
@@ -68,6 +72,10 @@ class UpdateProgressRequest:
     # selection and is then silently dropped at the write, leaving the ebook side moved
     # and the audio side ahead. Set only on the corroborated paths, never on a guess.
     allow_rewind: bool = False
+    # The target has no position yet and this write may only fill that gap. A
+    # client that can tell (the built-in KoSync server) must not replace a
+    # position it already holds.
+    fill_if_absent: bool = False
 
 @dataclass
 class SyncResult:
@@ -117,6 +125,13 @@ class SyncClient:
         Returns a dict keyed by book identifier for quick lookup.
         Only implemented by clients that support bulk fetching (ABS, Storyteller).
         Default returns None (no bulk support).
+
+        Contract: None means the read failed, is unknown or unsupported; any dict,
+        even an empty one, means the read succeeded and is handed to every
+        get_service_state call as ``bulk_context``. A client whose per-book read
+        would find more than the map must fall back to it for a missing key; a
+        client for which a missing key after a successful read means "no progress"
+        (ABS) must say so.
         """
         return None
 

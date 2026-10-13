@@ -34,6 +34,7 @@ class ABSSocketManager:
         self._sync_manager = sync_manager
         self._registry = user_client_registry
         self._threads: list[threading.Thread] = []
+        self._supervisors: dict[str, threading.Thread] = {}
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         # scope label -> the listener currently running for it (for clean stop()).
@@ -70,6 +71,19 @@ class ABSSocketManager:
         for everyone else. We are skipping one listener — we are not disabling any
         client, singleton, or another user's listener.
         """
+        if user_id is not None:
+            # A disabled or deleted account is definitively off. Only a failed
+            # lookup falls through to the fail-open path below.
+            try:
+                account = self._db.get_user(user_id)
+                if account is None or not getattr(account, "active", 1):
+                    return False
+            except Exception as e:
+                logger.debug(
+                    "ABS Socket.IO: account lookup failed for user %s, failing open: %s",
+                    user_id, e, exc_info=True,
+                )
+
         # Fail open: if we can't determine, assume enabled
         if self._registry is None:
             return env_truthy("ABS_ENABLED", "true")
@@ -218,21 +232,55 @@ class ABSSocketManager:
             return
 
         for user_id, server, token in targets:
-            scope = "global" if user_id is None else f"user {user_id}"
-            thread = threading.Thread(
-                target=self._supervise,
-                args=(user_id, server, token, scope),
-                daemon=True,
-                name=f"abs-socket-{scope.replace(' ', '-')}",
-            )
-            thread.start()
-            self._threads.append(thread)
+            self._spawn_supervisor(user_id, server, token)
 
         logger.info(
             "🔌 ABS Socket.IO: started %d supervised listener(s) — %s",
             len(targets),
             ", ".join("global" if uid is None else f"user {uid}" for uid, _, _ in targets),
         )
+
+    def _spawn_supervisor(self, user_id, server, token) -> None:
+        """Start the supervised listener thread for one scope."""
+        scope = "global" if user_id is None else f"user {user_id}"
+        thread = threading.Thread(
+            target=self._supervise,
+            args=(user_id, server, token, scope),
+            daemon=True,
+            name=f"abs-socket-{scope.replace(' ', '-')}",
+        )
+        with self._lock:
+            self._supervisors[scope] = thread
+        thread.start()
+        self._threads.append(thread)
+
+    def refresh_user(self, user_id: int) -> None:
+        """Re-evaluate a user's listener after the account was enabled or disabled.
+
+        Drops the current connection without retiring the scope: the supervisor
+        then re-checks the scope and exits if the account is now disabled. When no
+        supervisor is running and the scope is enabled (re-enable), starts one.
+        """
+        scope = f"user {user_id}"
+        with self._lock:
+            if self._stop_event.is_set() or scope in self._retired_scopes:
+                return
+            listener = self._current_listeners.pop(scope, None)
+            running = self._supervisors.get(scope)
+            running = running is not None and running.is_alive()
+        if listener is not None:
+            logger.info("🔌 ABS Socket.IO: %s listener reconnecting — account enabled or disabled", scope)
+            try:
+                listener.stop()
+            except Exception as e:
+                logger.debug("ABS Socket.IO: error stopping listener: %s", e)
+        if running or not self._is_scope_enabled(user_id):
+            return
+        for target_id, server, token in self._listener_targets():
+            if target_id == user_id:
+                logger.info("🔌 ABS Socket.IO: %s listener starting — account enabled", scope)
+                self._spawn_supervisor(target_id, server, token)
+                return
 
     def _supervise(self, user_id, server, token, scope: str) -> None:
         """Run one listener and restart it (with backoff) whenever it exits.

@@ -367,8 +367,10 @@ class TestSharedCatalogDatabaseHelpers(unittest.TestCase):
 
     def test_share_all_books_with_active_users_with_no_active_users(self):
         """Disable alice and bob; result should be 0 users, 0 links."""
-        self.db.set_user_active(self.alice.id, False)
-        self.db.set_user_active(self.bob.id, False)
+        from src.db.models import User
+        with self.db.get_session() as session:
+            # Account policy forbids disabling the last active admin; force the state.
+            session.query(User).update({User.active: 0})
 
         result = self.db.share_all_books_with_active_users()
 

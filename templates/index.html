@@ -261,7 +261,7 @@
                 {% if integrations.kavita and (mapping.states.kavita is defined or mapping.ebook_source == 'Kavita') %}
                 <a href="{{ mapping.kavita_url|default(get_val('KAVITA_WEB_URL') or get_val('KAVITA_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
                     class="service-item" title="Open in Kavita">
-                    <span class="service-icon-emoji" aria-hidden="true">📚</span>
+                    <img src="/static/kavita.svg" alt="" class="service-icon">
                     <span class="service-name">Kavita</span>
                     {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'kavita' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
                     <span class="service-value">
@@ -378,7 +378,7 @@
 
                 {% if integrations.cwa and (mapping.states.cwa is defined or mapping.ebook_source == 'CWA') %}
                 <div class="service-item" title="CWA Kobo Sync">
-                    <span class="service-icon-emoji">📖</span>
+                    <img src="/static/calibre-web.png" alt="" class="service-icon">
                     <span class="service-name">CWA</span>
                     {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'cwa' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
                     <span class="service-value">

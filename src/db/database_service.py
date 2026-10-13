@@ -9,6 +9,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,6 +94,11 @@ _PENDING_SHELF_ADDS_KEY = "BOOKLORE_SHELF_PENDING_ADDS"
 _SHELF_ASSIGNMENTS_KEY = "BOOKLORE_SHELF_ASSIGNMENTS"
 
 
+def _username_key(name: str) -> str:
+    """Unicode-correct comparison key for usernames (SQLite lower() folds ASCII only)."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", (name or "").strip()).casefold())
+
+
 class DatabaseService:
     """
     Unified SQLAlchemy-based database service providing direct model operations.
@@ -100,6 +106,12 @@ class DatabaseService:
     This service works exclusively with SQLAlchemy models, avoiding dictionary
     conversions for better type safety and cleaner code.
     """
+
+    # Process-local log of which books had sync-relevant progress written, so a
+    # sync cycle can tell its start-of-cycle snapshot went stale for a book.
+    _progress_lock = threading.Lock()
+    _progress_seq = 0
+    _progress_written_at: dict = {}
 
     def __init__(self, db_path: str):
         import os
@@ -219,12 +231,40 @@ class DatabaseService:
         try:
             yield session
             session.commit()
+            written = session.info.pop("progress_written", None)
+            if written:
+                self._note_progress_written(written)
         except Exception as e:
             session.rollback()
             logger.error(f"❌ Database error: {e}", exc_info=True)
             raise
         finally:
             session.close()
+
+    @classmethod
+    def _note_progress_written(cls, abs_ids) -> None:
+        """Record that these books' sync-relevant progress was just committed."""
+        with DatabaseService._progress_lock:
+            DatabaseService._progress_seq += 1
+            for abs_id in abs_ids:
+                DatabaseService._progress_written_at[abs_id] = DatabaseService._progress_seq
+
+    @classmethod
+    def progress_write_seq(cls) -> int:
+        """Current value of the process-wide progress-write counter."""
+        with DatabaseService._progress_lock:
+            return DatabaseService._progress_seq
+
+    @classmethod
+    def progress_written_since(cls, abs_id: str, seq: int) -> bool:
+        """True when a book's progress (State or linked KoSync device progress) was written after ``seq``."""
+        with DatabaseService._progress_lock:
+            return DatabaseService._progress_written_at.get(abs_id, 0) > seq
+
+    @staticmethod
+    def _mark_progress_written(session, *abs_ids) -> None:
+        """Queue books for the progress-write log; it is bumped once the session commits."""
+        session.info.setdefault("progress_written", set()).update(a for a in abs_ids if a)
 
     # Setting operations
     @staticmethod
@@ -379,14 +419,22 @@ class DatabaseService:
                 session.expunge(user)
             return user
 
+    @staticmethod
+    def _find_user_by_name(session, username: str, exclude_id: Optional[int] = None) -> Optional[User]:
+        """Match a username by NFC + casefold; the users table is tiny so this runs in Python."""
+        key = _username_key(username)
+        if not key:
+            return None
+        for user in session.query(User).order_by(User.id):
+            if user.id != exclude_id and _username_key(user.username) == key:
+                return user
+        return None
+
     def get_user_by_username(self, username: str) -> Optional[User]:
         if not username:
             return None
-        from sqlalchemy import func
         with self.get_session() as session:
-            user = session.query(User).filter(
-                func.lower(User.username) == username.strip().lower()
-            ).first()
+            user = self._find_user_by_name(session, username)
             if user:
                 session.expunge(user)
             return user
@@ -406,28 +454,30 @@ class DatabaseService:
                     active: int = 1) -> User:
         """Create a user with an optional plaintext password (hashed here).
 
-        Enforces case-insensitive username uniqueness. Every lookup (login,
-        KoSync auth, rename) compares via ``func.lower()``, but the DB unique
-        index is case-sensitive, so 'Admin' and 'admin' could otherwise coexist
-        and make those lookups resolve ambiguously. Raises ValueError on a clash.
+        Enforces Unicode case-insensitive username uniqueness (the DB unique
+        index is case-sensitive). The duplicate check and insert share one
+        BEGIN IMMEDIATE transaction so concurrent creators cannot both win.
+        Raises ValueError on a clash.
         """
+        from sqlalchemy import text
         from werkzeug.security import generate_password_hash
-        from sqlalchemy import func
         username = (username or "").strip()
         password_hash = generate_password_hash(password) if password else None
+        clash = False
         with self.get_session() as session:
-            existing = session.query(User).filter(
-                func.lower(User.username) == username.lower()
-            ).first()
-            if existing is not None:
-                raise ValueError(f"Username '{username}' already exists")
-            user = User(username=username, password_hash=password_hash,
-                        role=role, active=active)
-            session.add(user)
-            session.flush()
-            session.refresh(user)
-            session.expunge(user)
-            return user
+            session.execute(text("BEGIN IMMEDIATE"))
+            if self._find_user_by_name(session, username) is not None:
+                clash = True
+            else:
+                user = User(username=username, password_hash=password_hash,
+                            role=role, active=active)
+                session.add(user)
+                session.flush()
+                session.refresh(user)
+                session.expunge(user)
+        if clash:
+            raise ValueError(f"Username '{username}' already exists")
+        return user
 
     def set_user_password(self, user_id: int, password: str) -> bool:
         from werkzeug.security import generate_password_hash
@@ -436,30 +486,6 @@ class DatabaseService:
             if not user:
                 return False
             user.password_hash = generate_password_hash(password) if password else None
-            return True
-
-    def set_user_active(self, user_id: int, active: bool) -> bool:
-        with self.get_session() as session:
-            user = session.query(User).filter(User.id == user_id).first()
-            if not user:
-                return False
-            user.active = 1 if active else 0
-            return True
-
-    def set_user_role(self, user_id: int, role: str) -> bool:
-        """Set a user's role to 'admin' or 'user'. Returns False if not found."""
-        normalized = (role or "").strip().lower()
-        if normalized not in ('admin', 'user'):
-            raise ValueError(f"Invalid role: {role}")
-        with self.get_session() as session:
-            user = session.query(User).filter(User.id == user_id).first()
-            if not user:
-                return False
-            user.role = normalized
-            # A role change can move which account is the primary admin, and the
-            # default-user id is cached for the process lifetime, so recompute it
-            # on next access — same reason delete_user clears it.
-            self._default_uid = None
             return True
 
     def update_user_account(self, user_id: int, *, password: Optional[str] = None,
@@ -484,6 +510,10 @@ class DatabaseService:
                 primary = session.query(User).filter(User.role == 'admin').order_by(User.id).first()
                 if primary and primary.id == user_id:
                     policy_error = "Can't demote the primary admin — the global service settings belong to that account"
+            if role_changed and role == 'admin':
+                primary = session.query(User).filter(User.role == 'admin').order_by(User.id).first()
+                if primary and user_id < primary.id:
+                    policy_error = "Can't promote this account to admin — it would become the primary admin and take over the global service settings"
             if not policy_error and user.role == 'admin' and user.active and (role == 'user' or active is False):
                 if session.query(User).filter(User.role == 'admin', User.active == 1).count() <= 1:
                     policy_error = "Can't demote the last active admin" if role == 'user' else "Can't disable the last active admin"
@@ -504,17 +534,14 @@ class DatabaseService:
 
     def set_username(self, user_id: int, new_username: str) -> tuple:
         """Rename a user. Returns (ok, error_message). Enforces uniqueness
-        (case-insensitive) and a non-empty name."""
-        from sqlalchemy import func
+        (Unicode case-insensitive) and a non-empty name."""
+        from sqlalchemy import text
         new_username = (new_username or "").strip()
         if not new_username:
             return False, "Username cannot be empty"
         with self.get_session() as session:
-            clash = session.query(User).filter(
-                func.lower(User.username) == new_username.lower(),
-                User.id != user_id,
-            ).first()
-            if clash:
+            session.execute(text("BEGIN IMMEDIATE"))
+            if self._find_user_by_name(session, new_username, exclude_id=user_id) is not None:
                 return False, "That username is already taken"
             user = session.query(User).filter(User.id == user_id).first()
             if not user:
@@ -595,62 +622,91 @@ class DatabaseService:
             ).all()
             return {c.key: self._read_value(c.key, c.value) for c in creds}
 
+    _READEST_IDENTITY_KEYS = ('READEST_EMAIL', 'READEST_PASSWORD')
+    _READEST_TOKEN_KEYS = ('READEST_ACCESS_TOKEN', 'READEST_REFRESH_TOKEN', 'READEST_TOKEN_EXPIRES_AT')
+
+    def _write_user_credentials(self, user_id: int, values: dict,
+                                expected: Optional[dict] = None) -> bool:
+        """The one credential writer: atomic, and a no-op once the account is gone.
+
+        ``expected`` makes the write a compare-and-set: it is dropped unless every
+        listed key currently holds the given value (missing counts as ''). A change
+        of Readest identity clears that account's cached tokens in the same
+        transaction. Returns False when nothing was written.
+        """
+        from sqlalchemy import exists, literal, select, text
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        updates = dict(values)
+        written = 0
+        with self.get_session() as session:
+            if expected is not None or any(key in updates for key in self._READEST_IDENTITY_KEYS):
+                # Reads that decide the write: hold the writer lock from read to write.
+                session.execute(text("BEGIN IMMEDIATE"))
+                watched = set(self._READEST_IDENTITY_KEYS) | set(expected or {})
+                current = {
+                    row.key: self._read_value(row.key, row.value)
+                    for row in session.query(UserCredential).filter(
+                        UserCredential.user_id == user_id, UserCredential.key.in_(watched)
+                    )
+                }
+                if expected is not None and any(
+                    (current.get(key) or '').strip() != (want or '').strip() for key, want in expected.items()
+                ):
+                    logger.info("🔐 Dropped credential write for user %s: identity changed meanwhile", user_id)
+                    return False
+                if any(updates[key] != current.get(key) for key in self._READEST_IDENTITY_KEYS if key in updates):
+                    updates.update({key: '' for key in self._READEST_TOKEN_KEYS})
+            for key, value in updates.items():
+                stored = self._store_value(key, value)
+                # One statement that writes only while the account exists: atomic against a
+                # concurrent delete_user without serializing every credential writer.
+                row = select(literal(user_id), literal(key), literal(stored)).where(
+                    exists().where(User.id == user_id)
+                )
+                written += session.execute(
+                    sqlite_insert(UserCredential).from_select(['user_id', 'key', 'value'], row)
+                    .on_conflict_do_update(
+                        index_elements=[UserCredential.user_id, UserCredential.key],
+                        set_={"value": stored},
+                    )
+                ).rowcount
+        if updates and not written:
+            # An in-flight token refresh must not outlive its deleted account.
+            logger.info("🔐 Ignored credential write for missing user %s", user_id)
+            return False
+        return True
+
     def set_user_credential(self, user_id: int, key: str, value: str) -> Optional[UserCredential]:
         """Store a per-user credential. Secret keys are encrypted at rest; the
         returned (detached) row carries the plaintext the caller passed in.
         Returns None when the account no longer exists."""
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
         plain = str(value) if value is not None else None
-        value_str = self._store_value(key, value)
+        if not self._write_user_credentials(user_id, {key: value}):
+            return None
         with self.get_session() as session:
-            if session.query(User.id).filter(User.id == user_id).first() is None:
-                # An in-flight token refresh must not outlive its deleted account.
-                logger.info("🔐 Ignored credential write for missing user %s", user_id)
-                return None
-            statement = sqlite_insert(UserCredential).values(
-                user_id=user_id, key=key, value=value_str
-            ).on_conflict_do_update(
-                index_elements=[UserCredential.user_id, UserCredential.key],
-                set_={"value": value_str},
-            )
-            session.execute(statement)
             cred = session.query(UserCredential).filter(
                 UserCredential.user_id == user_id, UserCredential.key == key
-            ).one()
+            ).first()
+            if cred is None:
+                return None
             session.expunge(cred)
             cred.value = plain
             return cred
 
-    def set_user_credentials(self, user_id: int, values: dict[str, str]) -> None:
-        """Save related credentials atomically, encrypting secret values at rest."""
-        from sqlalchemy import text
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    def set_user_credentials(self, user_id: int, values: dict[str, str]) -> bool:
+        """Save related credentials atomically, encrypting secret values at rest.
 
-        updates = dict(values)
-        with self.get_session() as session:
-            identity_keys = ('READEST_EMAIL', 'READEST_PASSWORD')
-            if any(key in updates for key in identity_keys):
-                # Serialize the identity read/reset with other credential writers.
-                session.execute(text("BEGIN IMMEDIATE"))
-                current = {
-                    row.key: self._read_value(row.key, row.value)
-                    for row in session.query(UserCredential).filter(
-                        UserCredential.user_id == user_id, UserCredential.key.in_(identity_keys)
-                    )
-                }
-                if any(updates[key] != current.get(key) for key in identity_keys if key in updates):
-                    updates.update({key: '' for key in (
-                        'READEST_ACCESS_TOKEN', 'READEST_REFRESH_TOKEN', 'READEST_TOKEN_EXPIRES_AT'
-                    )})
-            for key, value in updates.items():
-                stored = self._store_value(key, value)
-                session.execute(sqlite_insert(UserCredential).values(
-                    user_id=user_id, key=key, value=stored,
-                ).on_conflict_do_update(
-                    index_elements=[UserCredential.user_id, UserCredential.key],
-                    set_={"value": stored},
-                ))
+        Returns False (writing nothing) when the account no longer exists."""
+        return self._write_user_credentials(user_id, values)
+
+    def persist_readest_tokens(self, user_id: int, tokens: dict[str, str],
+                               email: str, password: str) -> bool:
+        """Store refreshed Readest tokens only if the account's Readest identity is
+        still the one that obtained them; otherwise drop them."""
+        return self._write_user_credentials(
+            user_id, tokens, expected={'READEST_EMAIL': email, 'READEST_PASSWORD': password}
+        )
 
     def encrypt_plaintext_secrets(self) -> int:
         """Wrap any secret still sitting in plaintext, in both credential stores.
@@ -1364,6 +1420,7 @@ class DatabaseService:
             try:
                 # Migrate Foreign Keys
                 # synchronize_session=False is required for updates on collections
+                self._mark_progress_written(session, old_abs_id, new_abs_id)
                 session.query(State).filter(State.abs_id == old_abs_id).update({State.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(Job).filter(Job.abs_id == old_abs_id).update({Job.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(KosyncDocument).filter(KosyncDocument.linked_abs_id == old_abs_id).update({KosyncDocument.linked_abs_id: new_abs_id}, synchronize_session=False)
@@ -1545,6 +1602,8 @@ class DatabaseService:
             ).first()
             if not exists:
                 session.add(UserBook(user_id=user_id, abs_id=abs_id))
+        if not exists:
+            self._notify_catalog_change()
 
     def link_book_to_all_active_users(self, abs_id: str) -> int:
         """Claim one book for every active user. Returns links created.
@@ -1566,7 +1625,9 @@ class DatabaseService:
             missing = user_ids - claimed
             for user_id in missing:
                 session.add(UserBook(user_id=user_id, abs_id=abs_id))
-            return len(missing)
+        if missing:
+            self._notify_catalog_change()
+        return len(missing)
 
     def backfill_user_books_for_user(self, user_id: int) -> int:
         """Claim every catalog book for one user. Returns links created.
@@ -1585,7 +1646,9 @@ class DatabaseService:
             missing = all_ids - claimed
             for abs_id in missing:
                 session.add(UserBook(user_id=user_id, abs_id=abs_id))
-            return len(missing)
+        if missing:
+            self._notify_catalog_change()
+        return len(missing)
 
     def share_all_books_with_active_users(self) -> dict:
         """Claim every catalog book for every active user. Returns {"users": <count>, "links": <count>}.
@@ -1620,16 +1683,21 @@ class DatabaseService:
                     session.add(UserBook(user_id=user_id, abs_id=abs_id))
                     links_created += 1
 
-            return {"users": len(active_user_ids), "links": links_created}
+        if links_created:
+            self._notify_catalog_change()
+        return {"users": len(active_user_ids), "links": links_created}
 
     def unlink_user_book(self, user_id: int, abs_id: str) -> int:
         """Remove a user's claim on a book. Returns rows deleted."""
         if user_id is None or not abs_id:
             return 0
         with self.get_session() as session:
-            return session.query(UserBook).filter(
+            deleted = session.query(UserBook).filter(
                 UserBook.user_id == user_id, UserBook.abs_id == abs_id
             ).delete(synchronize_session=False)
+        if deleted:
+            self._notify_catalog_change()
+        return deleted
 
     def is_user_linked(self, user_id: int, abs_id: str) -> bool:
         """True if the user has claimed this book."""
@@ -2068,19 +2136,26 @@ class DatabaseService:
                 session.expunge(state)
             return states
 
-    def get_all_states(self, user_id: int = None) -> List[State]:
+    def get_all_states(self, user_id: int = None, abs_ids=None) -> List[State]:
         """Get all states. When user_id is given, scope to that user; otherwise
-        return every row (dashboard, until per-user scoping in the UI)."""
+        return every row (dashboard, until per-user scoping in the UI).
+        ``abs_ids`` restricts the read to those books."""
         if user_id is None:
             logger.debug(
                 "get_all_states called with user_id=None — returning unfiltered "
                 "bulk data. Future callers should pass an explicit user_id."
             )
+        wanted = None if abs_ids is None else list(abs_ids)
         with self.get_session() as session:
             query = session.query(State)
             if user_id is not None:
                 query = query.filter(State.user_id == user_id)
-            states = query.all()
+            if wanted is None:
+                states = query.all()
+            else:
+                states = []
+                for i in range(0, len(wanted), 500):  # stay under SQLite's variable limit
+                    states.extend(query.filter(State.abs_id.in_(wanted[i:i + 500])).all())
             for state in states:
                 session.expunge(state)
             return states
@@ -2095,6 +2170,7 @@ class DatabaseService:
                 State.client_name == state.client_name,
                 State.user_id == state.user_id,
             ).first()
+            self._mark_progress_written(session, state.abs_id)
 
             if existing:
                 # Update existing state
@@ -2117,6 +2193,7 @@ class DatabaseService:
     def delete_states_for_book(self, abs_id: str, user_id: int = None) -> int:
         """Delete states for a book. Scoped to a user when user_id is given."""
         with self.get_session() as session:
+            self._mark_progress_written(session, abs_id)
             query = session.query(State).filter(State.abs_id == abs_id)
             if user_id is not None:
                 query = query.filter(State.user_id == user_id)
@@ -2158,12 +2235,19 @@ class DatabaseService:
 
     def get_latest_jobs(self, kind: Optional[str] = None) -> dict:
         """``get_latest_job`` for all books in one query: abs_id -> latest job."""
+        from sqlalchemy import func
         with self.get_session() as session:
-            query = session.query(Job)
+            newest = session.query(Job.abs_id, func.max(Job.last_attempt).label("newest"))
+            if kind is not None:
+                newest = newest.filter(Job.kind == kind)
+            newest = newest.group_by(Job.abs_id).subquery()
+            query = session.query(Job).join(
+                newest, (Job.abs_id == newest.c.abs_id) & Job.last_attempt.is_(newest.c.newest)
+            )
             if kind is not None:
                 query = query.filter(Job.kind == kind)
             latest = {}
-            for job in query.order_by(Job.last_attempt.desc()).all():
+            for job in query.all():
                 if job.abs_id not in latest:
                     session.expunge(job)
                     latest[job.abs_id] = job
@@ -2481,6 +2565,7 @@ class DatabaseService:
         now = utcnow()
         doc.last_updated = now
         with self.get_session() as session:
+            self._mark_progress_written(session, doc.linked_abs_id)
             stmt = sqlite_insert(KosyncDocument).values(
                 document_hash=doc.document_hash,
                 progress=doc.progress,
@@ -2496,6 +2581,7 @@ class DatabaseService:
                 source=doc.source,
                 booklore_id=doc.booklore_id,
                 mtime=doc.mtime,
+                hash_method=doc.hash_method,
             )
             excluded = stmt.excluded
             session.execute(stmt.on_conflict_do_update(
@@ -2513,6 +2599,7 @@ class DatabaseService:
                     "source": excluded.source,
                     "booklore_id": excluded.booklore_id,
                     "mtime": excluded.mtime,
+                    "hash_method": excluded.hash_method,
                 },
             ))
             saved = session.get(KosyncDocument, doc.document_hash)
@@ -2616,31 +2703,75 @@ class DatabaseService:
             return False
 
     def get_linked_kosync_documents_without_progress(self, user_id: Optional[int] = None) -> dict[str, str]:
-        """Map accessible linked hashes to books with no state or device progress."""
-        from sqlalchemy.orm import aliased
+        """Map accessible linked hashes to books whose built-in GET would answer 404.
 
-        # With no authenticated user, all users' rows conservatively exclude progress.
-        other = aliased(KosyncDocument)
+        Mirrors ``_respond_from_book_states``. A book answers 200 when the user has
+        a State whose served position is not a locator-less non-zero one (the GET
+        suppresses that as a page-0 reset), or when a usable device row (percentage
+        > 0 with a locator) is at least as far as that State. Per-user rows are the
+        device rows; the legacy shared document rows count only when the user has no
+        per-user rows at all, and only when unowned or owned by this user. With no
+        authenticated user every user's rows conservatively count.
+        """
+        from sqlalchemy import func, or_
+
+        def usable(model):
+            return (model.percentage > 0, func.trim(func.coalesce(model.progress, "")) != "")
+
         with self.get_session() as session:
-            states = session.query(State.abs_id)
-            user_progress = session.query(other.linked_abs_id).join(
-                KosyncUserProgress, KosyncUserProgress.document_hash == other.document_hash
-            ).filter(other.linked_abs_id.isnot(None))
-            doc_progress = session.query(other.linked_abs_id).filter(
-                other.linked_abs_id.isnot(None), other.percentage > 0
+            states = session.query(
+                State.abs_id, State.client_name, State.percentage, State.xpath, State.cfi, State.last_updated
+            )
+            user_rows = session.query(KosyncDocument.linked_abs_id, KosyncUserProgress.percentage).join(
+                KosyncUserProgress, KosyncUserProgress.document_hash == KosyncDocument.document_hash
+            ).filter(KosyncDocument.linked_abs_id.isnot(None))
+            legacy = session.query(KosyncDocument.linked_abs_id, KosyncDocument.percentage).filter(
+                KosyncDocument.linked_abs_id.isnot(None), *usable(KosyncDocument)
             )
             docs = session.query(KosyncDocument.document_hash, KosyncDocument.linked_abs_id).filter(
                 KosyncDocument.linked_abs_id.isnot(None)
             )
             if user_id is not None:
                 states = states.filter(State.user_id == user_id)
-                user_progress = user_progress.filter(KosyncUserProgress.user_id == user_id)
+                user_rows = user_rows.filter(KosyncUserProgress.user_id == user_id)
+                legacy = legacy.filter(or_(KosyncDocument.user_id.is_(None), KosyncDocument.user_id == user_id))
                 docs = docs.filter(KosyncDocument.linked_abs_id.in_(
                     session.query(UserBook.abs_id).filter(UserBook.user_id == user_id)
                 ))
-            for with_progress in (states, user_progress, doc_progress):
-                docs = docs.filter(KosyncDocument.linked_abs_id.notin_(with_progress))
-            return dict(docs.all())
+            has_rows = {abs_id for abs_id, _ in user_rows.all()}
+            good_rows = user_rows.filter(*usable(KosyncUserProgress)).all()
+            best_row: dict[str, float] = {}
+            for abs_id, pct in good_rows + [r for r in legacy.all() if r[0] not in has_rows]:
+                best_row[abs_id] = max(best_row.get(abs_id, 0.0), float(pct))
+
+            chosen: dict = {}
+            for row in states.all():
+                current = chosen.get(row.abs_id)
+                is_kosync = str(row.client_name).lower() == "kosync"
+                if current is None or (is_kosync and not current[0]) or (
+                    is_kosync == current[0] and (row.last_updated or 0) > (current[1].last_updated or 0)
+                ):
+                    chosen[row.abs_id] = (is_kosync, row)
+
+            def answers_200(abs_id: str) -> bool:
+                row_pct = best_row.get(abs_id)
+                if abs_id not in chosen:
+                    return row_pct is not None
+                state = chosen[abs_id][1]
+                state_pct = float(state.percentage or 0)
+                if state_pct > 0 and not str(state.xpath or state.cfi or "").strip():
+                    return row_pct is not None and row_pct >= state_pct - 0.0001
+                return True
+
+            return {h: a for h, a in docs.all() if not answers_200(a)}
+
+    def kosync_document_has_other_user_progress(self, document_hash: str, user_id: int) -> bool:
+        """True when a user other than ``user_id`` has per-user progress on this hash."""
+        with self.get_session() as session:
+            return session.query(KosyncUserProgress.document_hash).filter(
+                KosyncUserProgress.document_hash == document_hash,
+                KosyncUserProgress.user_id != user_id,
+            ).first() is not None
 
     def get_kosync_document_by_linked_book(self, abs_id: str) -> Optional[KosyncDocument]:
         """Get a KOSync document linked to a specific ABS book."""
@@ -2691,15 +2822,82 @@ class DatabaseService:
                 session.expunge(book)
             return book
 
-    def get_kosync_doc_by_filename(self, filename: str) -> Optional[KosyncDocument]:
-        """Find a KOSync document by its associated filename."""
+    def get_kosync_doc_by_filename(self, filename: str, hash_method: Optional[str] = None) -> Optional[KosyncDocument]:
+        """Find a KOSync document by its associated filename.
+
+        ``hash_method`` restricts the lookup to rows cached with that
+        KOSYNC_HASH_METHOD; rows of the other method are invisible to it.
+        """
+        with self.get_session() as session:
+            query = session.query(KosyncDocument).filter(KosyncDocument.filename == filename)
+            if hash_method is not None:
+                query = query.filter(KosyncDocument.hash_method == hash_method)
+            doc = query.first()
+            if doc:
+                session.expunge(doc)
+            return doc
+
+    def get_linked_kosync_sibling_by_filename(self, filename: str, exclude_hash: str) -> Optional[KosyncDocument]:
+        """Find a book-linked KOSync document with this filename other than ``exclude_hash``."""
         with self.get_session() as session:
             doc = session.query(KosyncDocument).filter(
-                KosyncDocument.filename == filename
+                KosyncDocument.filename == filename,
+                KosyncDocument.linked_abs_id.isnot(None),
+                KosyncDocument.document_hash != exclude_hash,
             ).first()
             if doc:
                 session.expunge(doc)
             return doc
+
+    def upsert_kosync_hash_metadata(self, document_hash: str, filename: str, source: str,
+                                    mtime: Optional[float] = None, booklore_id: Optional[str] = None,
+                                    hash_method: Optional[str] = None) -> Optional[KosyncDocument]:
+        """Insert or update ONLY the hash-cache columns of a KOSync document.
+
+        Progress, device, link and owner columns are never touched, so a cache
+        write cannot overwrite them with a stale snapshot or stamp an owner.
+        """
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        if not document_hash:
+            return None
+        now = utcnow()
+        values = {"filename": filename, "source": source}
+        for column, value in (("mtime", mtime), ("hash_method", hash_method),
+                              ("booklore_id", None if booklore_id is None else str(booklore_id))):
+            if value is not None:
+                values[column] = value
+        with self.get_session() as session:
+            stmt = sqlite_insert(KosyncDocument).values(
+                document_hash=document_hash, percentage=0, first_seen=now, last_updated=now, **values,
+            )
+            session.execute(stmt.on_conflict_do_update(index_elements=["document_hash"], set_=values))
+            saved = session.get(KosyncDocument, document_hash)
+            session.expunge(saved)
+            return saved
+
+    def clear_kosync_hash_metadata(self, document_hash: str, filename: Optional[str] = None,
+                                   booklore_id: Optional[str] = None,
+                                   hash_method: Optional[str] = None) -> bool:
+        """Drop cached lookup metadata from a row, keeping progress and link data.
+
+        Only a row cached with ``hash_method`` is touched, so a row belonging to
+        the other hash method (devices may still use it) keeps its metadata.
+        """
+        with self.get_session() as session:
+            doc = session.query(KosyncDocument).filter(
+                KosyncDocument.document_hash == document_hash
+            ).first()
+            if not doc or (hash_method is not None and doc.hash_method != hash_method):
+                return False
+            changed = False
+            if filename is not None and doc.filename == filename:
+                doc.filename = doc.mtime = doc.source = doc.hash_method = None
+                changed = True
+            if booklore_id is not None and str(doc.booklore_id) == str(booklore_id):
+                doc.booklore_id = doc.source = None
+                changed = True
+            return changed
 
     def get_kosync_doc_by_booklore_id(self, booklore_id: str) -> Optional[KosyncDocument]:
         """Find a KOSync document by its Grimmory ID."""
@@ -2744,6 +2942,7 @@ class DatabaseService:
         if uid is None or not document_hash:
             return None
         with self.get_session() as session:
+            self._mark_hash_progress_written(session, document_hash)
             row = session.query(KosyncUserProgress).filter(
                 KosyncUserProgress.document_hash == document_hash,
                 KosyncUserProgress.user_id == uid,
@@ -2770,6 +2969,13 @@ class DatabaseService:
             session.refresh(row)
             session.expunge(row)
             return row
+
+    def _mark_hash_progress_written(self, session, document_hash: str) -> None:
+        """Mark every book a KoSync document hash is linked to (or is the doc id of) as written."""
+        linked = [r[0] for r in session.query(KosyncDocument.linked_abs_id).filter(
+            KosyncDocument.document_hash == document_hash).all()]
+        owners = [r[0] for r in session.query(Book.abs_id).filter(Book.kosync_doc_id == document_hash).all()]
+        self._mark_progress_written(session, *linked, *owners)
 
     def get_user_kosync_progress_for_book(self, abs_id: str, user_id: int = None) -> List[KosyncUserProgress]:
         """Return this user's progress rows across every hash linked to ``abs_id``.
@@ -2905,6 +3111,7 @@ class DatabaseService:
             return 0, 0
 
         with self.get_session() as session:
+            self._mark_progress_written(session, abs_id)
             hashes = {
                 row[0]
                 for row in session.query(KosyncDocument.document_hash)
@@ -2944,6 +3151,7 @@ class DatabaseService:
 
         now = utcnow()
         with self.get_session() as session:
+            self._mark_progress_written(session, abs_id)
             hashes = {
                 row[0]
                 for row in session.query(KosyncDocument.document_hash)

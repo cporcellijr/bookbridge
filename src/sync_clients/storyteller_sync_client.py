@@ -26,9 +26,9 @@ class StorytellerSyncClient(SyncClient):
     def check_connection(self):
         return self.storyteller_client.check_connection()
 
-    def fetch_bulk_state(self):
-        """Pre-fetch all Storyteller progress data at once."""
-        return self.storyteller_client.get_all_positions_bulk()
+    def fetch_bulk_state(self) -> Optional[dict]:
+        """Pre-fetch all Storyteller progress data at once (None when nothing could be read)."""
+        return self.storyteller_client.get_all_positions_bulk() or None
 
     def get_supported_sync_types(self) -> set:
         """Storyteller participates in both audiobook and ebook sync modes."""

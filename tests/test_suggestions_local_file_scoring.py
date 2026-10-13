@@ -5,13 +5,17 @@ metadata.opf, then the EPUB's own OPF, then the filename.
 """
 import os
 import sys
+import unicodedata
 import zipfile
 from unittest.mock import MagicMock
+
+import pytest
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import src.web_server as web_server
 from src.services.suggestions_service import SuggestionsService
+from src.utils import local_ebook_metadata
 
 EbookResult = web_server.EbookResult
 
@@ -29,8 +33,22 @@ def _service() -> SuggestionsService:
     )
 
 
+_ROOT = None
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_library(tmp_path, monkeypatch):
+    """Point filename-only candidates at an empty temp library and start with a cold cache."""
+    global _ROOT
+    _ROOT = tmp_path / "lib"
+    _ROOT.mkdir()
+    local_ebook_metadata.clear_metadata_cache()
+    yield
+    local_ebook_metadata.clear_metadata_cache()
+
+
 def _local(filename, folder="Author/Title (1)"):
-    return EbookResult(name=filename, path=f"/books/{folder}/{filename}", source="Local File")
+    return EbookResult(name=filename, path=_ROOT / folder / filename, source="Local File")
 
 
 def _abs_item(title, author):
@@ -211,7 +229,6 @@ def test_sort_form_authors_do_not_match_on_a_shared_surname():
 def test_translator_does_not_match_as_the_writer():
     assert _top('Collected Poems', 'Jorge Luis Borges, Jane Doe - translator',
                 _local('Collected Poems - Jane Doe.epub'))['score'] < 100.0
-    assert SuggestionsService._author_score('Jane Doe - narrator', 'Jane Doe') == 0.0
 
 
 def test_sort_form_author_keeps_both_name_parts_beside_role_credits():
@@ -231,3 +248,134 @@ def test_epub3_role_refinements_filter_non_authors(tmp_path):
       </metadata></package>'''
     book = _calibre_book(tmp_path, 'Collected Poems.epub', embedded_opf=opf)
     assert _pool_entry(book)['author'] == 'Jorge Luis Borges'
+
+
+# ---- review fixes ----
+
+def _book_in(root, folder, filename, opf=None, metadata_opf=None):
+    path = root / folder
+    path.mkdir(parents=True, exist_ok=True)
+    epub = path / filename
+    _write_epub(epub, opf or _opf("Embedded Title", ("Embedded Author", "aut")))
+    if metadata_opf is not None:
+        (path / "metadata.opf").write_text(metadata_opf, encoding="utf-8")
+    return EbookResult(name=filename, path=epub, source="Local File")
+
+
+@pytest.mark.parametrize("encoding", ["gbk", "shift_jis", "big5", "euc-jp", "bogus-codec"])
+def test_unsupported_opf_encoding_falls_back_to_the_filename(tmp_path, encoding):
+    opf = f'<?xml version="1.0" encoding="{encoding}"?><package><metadata><title>x</title></metadata></package>'
+    book = _book_in(tmp_path, "a", "Dune - Frank Herbert.epub", opf=opf)
+    (tmp_path / "a" / "metadata.opf").write_text(opf, encoding="utf-8")
+    entry = _pool_entry(book)
+    assert (entry["title"], entry["author"]) == ("Dune", "Frank Herbert")
+
+
+def test_reader_never_raises_on_unexpected_errors(tmp_path, monkeypatch):
+    book = _book_in(tmp_path, "a", "Dune - Frank Herbert.epub")
+    monkeypatch.setattr(local_ebook_metadata, "opf_title_authors", MagicMock(side_effect=NotImplementedError))
+    assert local_ebook_metadata.read_local_ebook_metadata(book.path) == ("", "")
+
+
+def test_metadata_opf_is_ignored_when_the_folder_holds_other_books(tmp_path):
+    shared = _opf("Leftover Title", ("Leftover Author", "aut"))
+    first = _book_in(tmp_path, "flat", "Dune - Frank Herbert.epub", opf=_opf("", ), metadata_opf=shared)
+    second = _book_in(tmp_path, "flat", "Emma - Jane Austen.epub", opf=_opf("", ))
+    assert _pool_entry(first)["title"] == "Dune"
+    assert _pool_entry(second)["title"] == "Emma"
+
+
+def test_metadata_opf_is_used_when_formats_share_a_stem(tmp_path):
+    book = _book_in(tmp_path, "one", "Dune - Frank Herbert.epub", opf=_opf(""),
+                    metadata_opf=_opf("Dune", ("Frank Herbert", "aut")))
+    (tmp_path / "one" / "Dune - Frank Herbert.mobi").write_bytes(b"x")
+    assert _pool_entry(book)["author"] == "Frank Herbert"
+
+
+def test_placeholder_embedded_title_does_not_replace_the_filename(tmp_path):
+    book = _book_in(tmp_path, "a", "Dune - Frank Herbert.epub", opf=_opf("Untitled", ("Unknown", None)))
+    assert _top("Dune", "Frank Herbert", book)["score"] == 100.0
+
+
+def test_author_first_stem_scores_with_its_author():
+    assert _top("Dune", "Frank Herbert", _local("Frank Herbert - Dune.epub"))["score"] == 100.0
+
+
+def test_series_prefixed_stem_keeps_the_title():
+    top = _top("Dune", "Frank Herbert", _local("Dune Chronicles 01 - Dune.epub"))
+    assert top["score"] >= 70
+
+
+def test_whole_stem_hypothesis_matches_old_behaviour():
+    assert _top("Mr. Bunny - Revenge", "", _local("Mr. Bunny - Revenge.epub"))["score"] == 100.0
+
+
+@pytest.mark.parametrize("credit,expected", [
+    ("Terry Pratchett, Neil Gaiman", ["Terry Pratchett", "Neil Gaiman"]),
+    ("King, Stephen", ["Stephen King"]),
+    ("Gardner Dozois (Editor)", ["Gardner Dozois"]),
+    ("Haruki Murakami, Rubin, Jay - translator", ["Haruki Murakami"]),
+    ("Roberto Bolaño, Natasha Wimmer - translator", ["Roberto Bolaño"]),
+    ("A One & B Two; C Three and D Four", ["A One", "B Two", "C Three", "D Four"]),
+])
+def test_author_credit_parsing(credit, expected):
+    assert SuggestionsService._author_names(credit) == expected
+
+
+def test_comma_joined_coauthors_match_either_author():
+    assert SuggestionsService._author_score("Terry Pratchett, Neil Gaiman", "Neil Gaiman") == 100.0
+
+
+def test_an_editor_stands_in_only_when_no_author_is_credited():
+    assert SuggestionsService._author_score("Gardner Dozois (Editor)", "Gardner Dozois") == 100.0
+    assert SuggestionsService._author_names("Jane Roe, Gardner Dozois (Editor)") == ["Jane Roe"]
+
+
+def test_a_narrator_alone_is_never_the_author():
+    assert SuggestionsService._author_score('Jane Doe - narrator', 'Jane Doe') == 0.0
+
+
+def test_translator_only_sort_form_is_not_the_writer():
+    assert SuggestionsService._author_names("Smith, Jane - translator") == []
+    assert SuggestionsService._author_score("Haruki Murakami, Rubin, Jay - translator", "Jay Rubin") < 100.0
+
+
+def test_author_names_are_parsed_once_per_candidate_and_audiobook():
+    svc = _service()
+    pool = svc._prepare_candidate_pool([_local(f"Book {i} - Author {i}.epub") for i in range(5)])
+    calls = []
+    original = SuggestionsService._author_names
+    SuggestionsService._author_names = classmethod(lambda cls, text: calls.append(text) or original.__func__(cls, text))
+    try:
+        svc._scan_single_audiobook(_abs_item("Book 1", "Author 1"), pool)
+    finally:
+        SuggestionsService._author_names = original
+    assert len(calls) == 1
+
+
+def test_non_epub_files_are_not_opened_as_zips(tmp_path, monkeypatch):
+    cbz = tmp_path / "Comic - Writer.cbz"
+    with zipfile.ZipFile(cbz, "w") as zf:
+        zf.writestr("page.jpg", b"x")
+    opener = MagicMock(wraps=zipfile.ZipFile)
+    monkeypatch.setattr(local_ebook_metadata.zipfile, "ZipFile", opener)
+    assert local_ebook_metadata.read_local_ebook_metadata(cbz) == ("", "")
+    opener.assert_not_called()
+
+
+def test_metadata_is_cached_until_the_file_changes(tmp_path, monkeypatch):
+    book = _book_in(tmp_path, "a", "Dune - Frank Herbert.epub", opf=_opf("Dune", ("Frank Herbert", "aut")))
+    spy = MagicMock(wraps=local_ebook_metadata._read_uncached)
+    monkeypatch.setattr(local_ebook_metadata, "_read_uncached", spy)
+    local_ebook_metadata.read_local_ebook_metadata(book.path)
+    local_ebook_metadata.read_local_ebook_metadata(book.path)
+    assert spy.call_count == 1
+    _write_epub(book.path, _opf("Dune Messiah", ("Frank Herbert", "aut")) + " ")
+    assert local_ebook_metadata.read_local_ebook_metadata(book.path)[0] == "Dune Messiah"
+    assert spy.call_count == 2
+
+
+def test_nfd_filename_scores_like_nfc_metadata():
+    stem = unicodedata.normalize("NFD", "Les Misérables - Victor Hugo")
+    assert _top("Les Misérables", "Victor Hugo", _local(f"{stem}.epub"))["score"] == 100.0
+    assert SuggestionsService._author_score(unicodedata.normalize("NFD", "Roberto Bolaño"), "Roberto Bolaño") == 100.0

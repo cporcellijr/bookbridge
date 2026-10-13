@@ -137,6 +137,7 @@ class TestFailedKosyncHashScan(unittest.TestCase):
             scan_dir.rglob.return_value = [failed_epub, matched_epub]
             container = MagicMock()
             parser = container.ebook_parser.return_value
+            parser.hash_method = "content"
             parser.get_kosync_id.side_effect = (
                 lambda path: None if path.name == "Unreadable.epub" else "b" * 32
             )

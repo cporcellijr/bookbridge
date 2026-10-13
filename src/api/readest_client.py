@@ -135,7 +135,7 @@ class ReadestClient:
 
         data = resp.json()
         if persist:
-            self._persist_tokens(data)
+            self._persist_tokens(data, identity=(email, password))
         return True
 
     def _token_is_fresh(self) -> bool:
@@ -204,26 +204,35 @@ class ReadestClient:
         self._persist_tokens(resp.json())
         return True
 
-    def _persist_tokens(self, data: dict) -> None:
+    def _persist_tokens(self, data: dict, identity: Optional[tuple] = None) -> None:
+        """Cache rotated tokens; ``identity`` is the (email, password) they were obtained with."""
         access = str(data.get("access_token") or "").strip()
         refresh = str(data.get("refresh_token") or "").strip()
         expires_in = int(data.get("expires_in") or 3600)
         expires_at = str(time.time() + expires_in)
 
-        for key, val in (
-            ("READEST_ACCESS_TOKEN", access),
-            ("READEST_REFRESH_TOKEN", refresh),
-            ("READEST_TOKEN_EXPIRES_AT", expires_at),
-        ):
-            if self._user_id is not None:
-                # Per-user: cache the rotating tokens in this user's credential
-                # store only — never os.environ, which is the admin/global config.
-                if self._db is not None:
-                    try:
-                        self._db.set_user_credential(self._user_id, key, val)
-                    except Exception as e:
-                        logger.warning("Readest: could not persist per-user setting %s: %s", key, e, exc_info=True)
-            else:
+        tokens = {
+            "READEST_ACCESS_TOKEN": access,
+            "READEST_REFRESH_TOKEN": refresh,
+            "READEST_TOKEN_EXPIRES_AT": expires_at,
+        }
+        if self._user_id is not None:
+            # Per-user: cache the rotating tokens in this user's credential store
+            # only, never os.environ (the admin/global config). Written as one
+            # compare-and-set so tokens from a replaced Readest identity are dropped.
+            if self._db is not None:
+                email = identity[0] if identity else self._email()
+                password = identity[1] if identity else self._password()
+                try:
+                    stored = self._db.persist_readest_tokens(self._user_id, tokens, email, password)
+                except Exception as e:
+                    logger.warning("Readest: could not persist per-user tokens: %s", e, exc_info=True)
+                    stored = False
+                if not stored:
+                    logger.info("Readest: discarded refreshed tokens for user %s (account or Readest login changed)", self._user_id)
+                    return
+        else:
+            for key, val in tokens.items():
                 os.environ[key] = val
                 if self._db is not None:
                     try:

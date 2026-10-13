@@ -65,7 +65,7 @@ class TestKosyncUserAuth(unittest.TestCase):
         u = self.svc.create_user("dan", "pw")
         self.svc.set_user_credential(u.id, "KOSYNC_USER", "dan_ko")
         self.svc.set_user_credential(u.id, "KOSYNC_KEY", "dk")
-        self.svc.set_user_active(u.id, False)
+        self.svc.update_user_account(u.id, active=False)
         self.assertEqual(ks.authenticate_kosync("dan_ko", "dk"), (False, None))
 
     def test_global_fallback_authenticates_default_user(self):

@@ -94,14 +94,21 @@ only, never on the split-port sync server, so keep it on your LAN.
 | --- | --- | --- |
 | `GET /api/v1/admin/users` | | List users (id, username, role, active) |
 | `GET /api/v1/admin/users/<username>` | | One user |
-| `PUT /api/v1/admin/users/<username>` | `{"password", "role", "active"}`, all optional except `password` when creating | Create the user if missing, otherwise update it. Safe to repeat. A new user gets the shared library when Shared Library is on. `active` is set, not toggled. The last active admin can't be disabled or demoted (409) |
-| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account -> My Integrations**. Booleans take `true`/`false`; an empty string clears a field. Secret values are never returned |
+| `PUT /api/v1/admin/users/<username>` | `{"password", "role", "active"}`, all optional except `password` when creating | Create the reader if missing, otherwise update it. Safe to repeat, including concurrent calls. A new reader gets the shared library when Shared Library is on. `active` is set, not toggled. `role` may only be `"user"` |
+| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account -> My Integrations**. Each value must match its field: booleans must be JSON `true`/`false`, text and secrets must be strings (an empty string clears a field), and select fields must be one of their declared options. Anything else is rejected with 400 naming the field. Secret values are never returned |
+
+The token manages **readers only**. It can create `user` accounts and change existing
+`user` accounts, but any attempt to create or promote an admin, or to change an
+existing admin's password, active state, role or integrations, is refused with 403.
+Admin accounts are managed in the dashboard. After five failed authentications from
+one address within a minute, further requests from it get 429 until the window passes.
 
 Disabling a user also stops their KOSync login, since KOSync authentication
 skips inactive users.
 
-Account updates protect the primary admin from demotion and retain at least one
-active admin, including concurrent requests. Re-enabling a reader restores shared
+Disabling a reader also stops their Audiobookshelf real-time listener and skips their
+syncs. Usernames are matched case-insensitively across Unicode (for example `Émile` and
+`émile` are the same account). Re-enabling a reader restores shared
 books when Shared Library is enabled. Integration PATCH requests save all submitted
 fields together; changing a Readest email or password discards its previous session
 so the next sync authenticates with the updated credentials.

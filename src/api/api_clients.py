@@ -13,7 +13,7 @@ from src.utils.kosync_headers import (
     hash_kosync_key,
     kosync_request_kwargs,
 )
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,15 @@ def is_abs_disabled_value(value) -> bool:
 # access every library item: all libraries, all tags, and explicit content.
 _ABS_ALL_ITEMS_PERMISSIONS = ("accessAllLibraries", "accessAllTags", "accessExplicitContent")
 
+_ABS_ITEM_LISTING_TTL_SECONDS = 1800
+
+
+class ABSBulkProgress(dict):
+    """`mediaProgress` by library item id, plus whether this login can access every library item."""
+
+    can_access_all_items: bool = False
+
+
 class ABSClient:
     def __init__(self, credentials: dict = None):
         # Configuration is dynamic via properties (no caching). `credentials`
@@ -36,6 +45,7 @@ class ABSClient:
         self._creds = credentials
         self.session = requests.Session()
         self.timeout = 30
+        self._item_ids_cache: Optional[tuple] = None  # (server+token key, expires_at, item ids)
 
     def _cfg(self, key, default=None):
         return resolve_setting(self._creds, key, default)
@@ -766,12 +776,11 @@ class ABSClient:
             logger.error(f"❌ Failed to sync ABS session progress: {e}", exc_info=True)
             return {"success": False, "code": None, "reason": str(e)}
 
-    def get_all_progress_raw(self):
+    def get_all_progress_raw(self) -> Optional[ABSBulkProgress]:
         """Fetch all user progress in one API call (`mediaProgress` from GET /api/me).
 
         Returns None when the read failed, so callers can tell it from "no progress".
         """
-        self.can_access_all_items = False
         self._update_session_headers()
         url = f"{self.base_url}/api/me"
         try:
@@ -781,10 +790,12 @@ class ABSClient:
                 return None
             # The User object includes the user's token: keep only what is used here
             user = r.json()
-            progress = {item.get('libraryItemId'): item for item in user['mediaProgress'] if item.get('libraryItemId')}
+            progress = ABSBulkProgress(
+                (item.get('libraryItemId'), item) for item in user['mediaProgress'] if item.get('libraryItemId')
+            )
             # librariesAccessible must also be empty: GET /api/libraries lists only those when set
             permissions = user.get('permissions') or {}
-            self.can_access_all_items = not user.get('librariesAccessible') and all(
+            progress.can_access_all_items = not user.get('librariesAccessible') and all(
                 permissions.get(key) is True
                 for key in _ABS_ALL_ITEMS_PERMISSIONS
             )
@@ -793,9 +804,18 @@ class ABSClient:
             logger.error(f"❌ Error fetching all ABS progress: {e}", exc_info=True)
             return None
 
-    def get_all_item_ids(self):
-        """Ids of every item in the user's libraries, or None when a listing failed."""
+    def get_all_item_ids(self) -> Optional[set[str]]:
+        """Ids of every item in the user's libraries, or None when a listing failed.
+
+        The listing is cached per server+token for 30 minutes: callers treat an
+        id in it as present and must verify a miss themselves (it may be new).
+        """
+        cache_key = (self.base_url, self.token)
+        cached = self._item_ids_cache
+        if cached and cached[0] == cache_key and cached[1] > time.monotonic():
+            return cached[2]
         self._update_session_headers()
+        condition_key = f"abs-item-listing:{self.base_url}:{hash(self.token) & 0xffff}"
         try:
             r = self.session.get(f"{self.base_url}/api/libraries", timeout=self.timeout)
             r.raise_for_status()
@@ -812,10 +832,14 @@ class ABSClient:
                 if len(data['results']) != data['total']:
                     raise ValueError(f"listed {len(data['results'])} of {data['total']} items")
                 item_ids.update(item['id'] for item in data['results'])
-            return item_ids
         except Exception as e:
-            logger.warning(f"⚠️ ABS: Failed to list library items: {e}")
+            get_persistent_condition_logger().warn(
+                logger, condition_key, "⚠️ ABS: Failed to list library items: %s", e, exc_info=True
+            )
             return None
+        get_persistent_condition_logger().resolve(logger, condition_key, "✅ ABS: Library item listing recovered")
+        self._item_ids_cache = (cache_key, time.monotonic() + _ABS_ITEM_LISTING_TTL_SECONDS, item_ids)
+        return item_ids
 
     def get_in_progress(self, min_progress=0.01):
         """Fetch in-progress items, optimized to avoid redundant detail fetches if possible."""
@@ -1201,7 +1225,8 @@ class KoSyncClient:
                 data = r.json()
                 raw_pct = data.get('percentage')
                 if raw_pct is None:
-                    return None, None, data
+                    # The original sync server answers 200 + {} for an unknown document.
+                    return None, None, {**data, "_http_status": 200}
                 pct = float(raw_pct)
                 # Grab the raw progress string (XPath)
                 xpath = data.get('progress')
@@ -1220,7 +1245,7 @@ class KoSyncClient:
             logger.error(f"❌ Error fetching KoSync progress for doc '{doc_id}': {e}", exc_info=True)
         return None, None, {}
 
-    def update_progress(self, doc_id, percentage, xpath=None):
+    def update_progress(self, doc_id, percentage, xpath=None, fill_if_absent=False):
         if not self.is_configured(): return False
 
         request_kwargs = self._request_kwargs()
@@ -1243,11 +1268,16 @@ class KoSyncClient:
         if self._is_local_server():
             payload["timestamp"] = int(time.time())
             payload["force"] = True
+            if fill_if_absent:
+                payload["fill_if_absent"] = True
         try:
             r = self.session.put(url, json=payload, timeout=10, **request_kwargs)
             if r.status_code in (200, 202, 201, 204):
                 logger.debug(f"   📡 KoSync Updated: {percentage:.1%} with progress '{progress_val}' for doc {doc_id}")
                 return True
+            elif fill_if_absent and r.status_code == 409:
+                logger.info(f"KoSync already holds a position for doc {doc_id}; starting-position fill not applied")
+                return False
             else:
                 logger.error(f"❌ Failed to update KoSync: {r.status_code} - {r.text}")
                 return False

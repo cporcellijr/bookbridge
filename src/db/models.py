@@ -46,6 +46,9 @@ class KosyncDocument(Base):
     source = Column(String(50), nullable=True)
     booklore_id = Column(String(255), nullable=True, index=True)
     mtime = Column(Float, nullable=True)
+    # Which KOSYNC_HASH_METHOD ('content' | 'filename') produced document_hash when
+    # this row was cached; NULL for rows that carry no cached filename.
+    hash_method = Column(String(16), nullable=True)
 
     # Relationship to Book (optional)
     linked_book = relationship("Book", backref="kosync_documents")
@@ -53,7 +56,8 @@ class KosyncDocument(Base):
     def __init__(self, document_hash: str, progress: str = None, percentage: float = 0,
                  device: str = None, device_id: str = None, timestamp: datetime = None,
                  linked_abs_id: str = None, filename: str = None, source: str = None,
-                 booklore_id: str = None, mtime: float = None, user_id: int = None):
+                 booklore_id: str = None, mtime: float = None, user_id: int = None,
+                 hash_method: str = None):
         self.document_hash = document_hash
         self.progress = progress
         self.percentage = percentage
@@ -65,6 +69,7 @@ class KosyncDocument(Base):
         self.source = source
         self.booklore_id = booklore_id
         self.mtime = mtime
+        self.hash_method = hash_method
         self.user_id = user_id
         self.first_seen = utcnow()
         self.last_updated = utcnow()

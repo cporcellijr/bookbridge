@@ -51,7 +51,7 @@ class Shelving:
 
     def user(self, username, shelf_name=None, active=True):
         user = self.db.create_user(username)
-        self.db.set_user_active(user.id, active)
+        self.db.update_user_account(user.id, active=active)
         credentials = {"__allow_global_fallback__": False}
         if shelf_name:
             credentials["BOOKLORE_SHELF_NAME"] = shelf_name
@@ -422,7 +422,7 @@ class TestReconcile:
         with caplog.at_level(logging.DEBUG, logger=web_server.logger.name):
             web_server._reconcile_aligned_shelf()
             web_server._reconcile_aligned_shelf()
-            required.db.set_user_active(owner, True)
+            required.db.update_user_account(owner, active=True)
             web_server._reconcile_aligned_shelf()
 
         warnings = [r for r in caplog.records if "is not an active BookBridge user" in r.getMessage()]

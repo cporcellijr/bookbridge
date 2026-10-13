@@ -135,6 +135,9 @@ _HIGH_CONFIDENCE_NORMALIZATION_SOURCES: frozenset[str] = frozenset({
     "href_progression",
 })
 
+# How long a follower fill that did not complete waits before it is attempted again.
+_FOLLOWER_INIT_COOLDOWN_SECONDS = 6 * 3600
+
 # Clients that navigate by locator rather than by percentage. ABSEbook rejects a
 # locator whose cfi is None outright; BookOrbit, Grimmory and CWA all back a Kobo
 # reading state, and a Kobo moves only when it is handed a KoboSpan — which those
@@ -270,6 +273,10 @@ class SyncManager:
         self._hardcover_cooldown_lock = threading.Lock()
         self._goodreads_cooldown: dict[tuple[int | None, str], dict] = {}
         self._goodreads_cooldown_lock = threading.Lock()
+        # (user_id, abs_id) -> monotonic time of the last attempt to fill a KoSync
+        # follower; an attempt that never completes is not retried for the cooldown.
+        self._follower_init_attempts: dict[tuple[int | None, str], float] = {}
+        self._follower_init_lock = threading.Lock()
         # One follow-up timer per user/book; both trackers are evaluated by the
         # targeted cycle, so matching deadlines must not launch duplicate cycles.
         self._tracker_cooldown_timers: dict[tuple[int | None, str], dict] = {}
@@ -536,6 +543,61 @@ class SyncManager:
                         logger.warning(f"⚠️ Completion propagation failed for '{client_name}': client reported unsuccessful write")
             except Exception as e:
                 logger.warning(f"⚠️ Completion propagation failed for '{client_name}': {e}", exc_info=True)
+
+    def _should_initialize_followers(self, config: dict, abs_id: str, title_snip: str) -> bool:
+        """True when a follower_only client should be filled now.
+
+        Each attempt is recorded up front and cleared only by a completed write, so
+        a failure or an attempt that cannot produce a position (no locator, no
+        text, an unresolvable XPath) waits out the cooldown instead of repeating
+        every cycle.
+        """
+        if not any(state.follower_only for state in config.values()):
+            return False
+        key = (get_current_user_id(), abs_id)
+        now = time.monotonic()
+        with self._follower_init_lock:
+            last = self._follower_init_attempts.get(key)
+            if last is not None and now - last < _FOLLOWER_INIT_COOLDOWN_SECONDS:
+                get_persistent_condition_logger().warn(
+                    logger, f"follower-init:{key[0]}:{abs_id}",
+                    "'%s' '%s' A previous attempt to fill a client with no position did not complete; "
+                    "not retrying for %d hours unless a client moves",
+                    abs_id, title_snip, _FOLLOWER_INIT_COOLDOWN_SECONDS // 3600,
+                )
+                return False
+            self._follower_init_attempts[key] = now
+        return True
+
+    def _finish_follower_init(self, book: Book, results: dict, abs_id: str, title_snip: str) -> None:
+        """Persist follower writes that landed and clear their attempt record."""
+        key = (get_current_user_id(), abs_id)
+        current_time = time.time()
+        written = False
+        for client_name, result in results.items():
+            if not result.success or result.skipped:
+                logger.info(f"'{abs_id}' '{title_snip}' Could not fill '{client_name}' with a starting position")
+                continue
+            state_data = result.updated_state or {'pct': result.location}
+            self.database_service.save_state(State(
+                abs_id=book.abs_id,
+                client_name=client_name.lower(),
+                last_updated=current_time,
+                percentage=state_data.get('pct'),
+                timestamp=state_data.get('ts'),
+                xpath=state_data.get('xpath'),
+                cfi=state_data.get('cfi'),
+                **state_metadata_kwargs(state_data),
+            ))
+            written = True
+            logger.info(f"💾 '{abs_id}' '{title_snip}' Filled '{client_name}' with the synced position")
+        if written:
+            with self._follower_init_lock:
+                self._follower_init_attempts.pop(key, None)
+            get_persistent_condition_logger().resolve(
+                logger, f"follower-init:{key[0]}:{abs_id}",
+                f"'{abs_id}' '{title_snip}' Client with no position filled",
+            )
 
     def _iter_update_targets(self, active_clients: dict, leader_name: str | None):
         """Yield non-leader clients with KoSync updated last."""
@@ -3877,6 +3939,9 @@ class SyncManager:
             # _mark_bookorbit_readalong_mirror). Shrinks the candidate set only.
             if v.current.get('_readalong_mirror'):
                 continue
+            # No record on that service: its position is a placeholder.
+            if v.follower_only:
+                continue
             if client.can_be_leader():
                 pct = v.current.get('pct')
                 if pct is not None:
@@ -4557,6 +4622,18 @@ class SyncManager:
         except Exception as e:
             logger.debug(f"Could not persist state snapshot for '{client_name}': {e}")
 
+    def _user_may_sync(self, user_id: int) -> bool:
+        """False for a disabled or deleted account; a failed lookup lets the cycle run."""
+        try:
+            user = self.database_service.get_user(user_id)
+        except Exception as e:
+            logger.debug("Could not check account %s before syncing: %s", user_id, e, exc_info=True)
+            return True
+        if user is not None and getattr(user, "active", 1):
+            return True
+        logger.info("⏸️ Skipping sync for user %s: account is disabled or deleted", user_id)
+        return False
+
     def sync_cycle(self, target_abs_id=None, user_id=None, sessions_only: bool = False):
         """
         Run a sync cycle.
@@ -4569,6 +4646,9 @@ class SyncManager:
                      runs as the default (single-user/admin) exactly as before.
             sessions_only: Deliver buffered sessions using the same user context and lock.
         """
+        if user_id is not None and not self._user_may_sync(user_id):
+            return
+
         # Per-user context: only when an explicit user + a registry are present,
         # so the default cycle is byte-for-byte unchanged.
         clients_token = None
@@ -4729,11 +4809,10 @@ class SyncManager:
             abs_client and getattr(abs_client, "is_configured", lambda: False)()
         )
         # This cycle's GET /api/me showed the user can access every library item
-        abs_sees_all = "ABS" in (bulk_states_per_client or {}) and (
-            getattr(abs_client, "can_access_all_items", False) is True
-        )
+        abs_bulk = (bulk_states_per_client or {}).get("ABS")
+        abs_sees_all = abs_bulk is not None and getattr(abs_bulk, "can_access_all_items", False) is True
+        abs_bulk = abs_bulk or {}
         abs_item_ids = None
-        abs_bulk = (bulk_states_per_client or {}).get("ABS") or {}
         abs_bulk_ids = set(abs_bulk.keys()) if isinstance(abs_bulk, dict) else set()
 
         # Primary ownership gate: only the books this user claimed (linked).
@@ -4746,6 +4825,14 @@ class SyncManager:
                 exc,
                 exc_info=True,
             )
+            for book in books or []:
+                logger.warning(
+                    "Skipping '%s' for user_id=%s: ownership check failed: %s",
+                    getattr(book, "abs_id", None),
+                    user_id,
+                    exc,
+                    exc_info=True,
+                )
             linked_abs_ids = set()
 
         visible = []
@@ -4774,22 +4861,30 @@ class SyncManager:
                 visible.append(book)
                 continue
 
-            # With access to every item, an item is accessible iff it is listed (one listing, not a request per book)
+            # With access to every item, a listed item is accessible (one cached listing, not a request per
+            # book); a miss may be a new item, so it is checked on its own below.
+            missing_key = f"abs-item-not-listed:{user_id}:{abs_id}"
             if abs_sees_all and abs_item_ids is None:
                 abs_item_ids = abs_client.get_all_item_ids()
                 abs_sees_all = abs_item_ids is not None  # listing failed: check each book
-            if abs_sees_all:
-                if abs_id in abs_item_ids:
-                    visible.append(book)
-                else:
-                    logger.warning(
-                        "⚠️ ABS: Skipping item '%s' for user_id=%s: not in the library listing", abs_id, user_id
-                    )
+            if abs_sees_all and abs_id in abs_item_ids:
+                get_persistent_condition_logger().resolve(
+                    logger, missing_key, "✅ ABS: Item '%s' is back in the library listing", abs_id
+                )
+                visible.append(book)
                 continue
 
             try:
                 if abs_client.get_item_details(abs_id):
+                    get_persistent_condition_logger().resolve(
+                        logger, missing_key, "✅ ABS: Item '%s' is back in the library listing", abs_id
+                    )
                     visible.append(book)
+                elif abs_sees_all:
+                    get_persistent_condition_logger().warn(
+                        logger, missing_key,
+                        "⚠️ ABS: Skipping item '%s' for user_id=%s: not in the library listing", abs_id, user_id,
+                    )
                 else:
                     logger.debug(
                         "Skipping ABS item '%s' for user_id=%s: item is not accessible to this ABS token",
@@ -4812,6 +4907,14 @@ class SyncManager:
         return visible
 
     def _sync_cycle_internal(self, target_abs_id=None):
+        # One state-fetch pool per cycle, sized so each book still fetches all its clients at once.
+        state_fetch_pool = ThreadPoolExecutor(max_workers=max(1, len(self.sync_clients)))
+        try:
+            self._run_sync_cycle(target_abs_id, state_fetch_pool)
+        finally:
+            state_fetch_pool.shutdown()
+
+    def _run_sync_cycle(self, target_abs_id, state_fetch_pool: ThreadPoolExecutor) -> None:
         self._flush_reading_sessions()
         # Clear caches at start of cycle
         self._sync_cycle_ebook_cache.clear()
@@ -4887,12 +4990,15 @@ class SyncManager:
         # Optimization: Pre-fetch bulk data from all clients that support it
         # Only do this if we are in a full cycle (target_abs_id is None)
         bulk_states_per_client = {}
+        # Taken before the bulk reads: a book written after this point is re-read
+        # individually, since every cycle-start read is minutes old by its turn.
+        snapshot_seq = None if target_abs_id else self.database_service.progress_write_seq()
 
         if not target_abs_id:
             for client_name, client in self.sync_clients.items():
                 bulk_data = client.fetch_bulk_state()
-                # An empty ABS map from a successful read still means "no progress"
-                if bulk_data or (client_name == "ABS" and bulk_data is not None):
+                # None = the read failed; any dict, even an empty one, is a successful read
+                if bulk_data is not None:
                     bulk_states_per_client[client_name] = bulk_data
                     logger.debug(f"📊 Pre-fetched bulk state for {client_name}")
 
@@ -4927,16 +5033,21 @@ class SyncManager:
         # here; Instant Sync (one book) keeps the per-book reads.
         states_by_book = alignment_snapshot = None
         if not target_abs_id:
-            states_by_book = {}
-            for state in self.database_service.get_all_states(user_id=self.database_service._resolve_uid(None)):
-                states_by_book.setdefault(state.abs_id, []).append(state)
-            if self.alignment_service:
-                alignment_snapshot = (
-                    self.database_service.get_aligned_book_ids(),
-                    self.database_service.get_latest_jobs(kind=JOB_KIND_ALIGNMENT),
-                )
-        # One state-fetch pool per cycle, sized so each book still fetches all its clients at once.
-        state_fetch_pool = ThreadPoolExecutor(max_workers=max(1, len(self.sync_clients)))
+            try:
+                states_by_book = {}
+                for state in self.database_service.get_all_states(
+                    user_id=self.database_service._resolve_uid(None),
+                    abs_ids=[b.abs_id for b in active_books],
+                ):
+                    states_by_book.setdefault(state.abs_id, []).append(state)
+                if self.alignment_service:
+                    alignment_snapshot = (
+                        self.database_service.get_aligned_book_ids(),
+                        self.database_service.get_latest_jobs(kind=JOB_KIND_ALIGNMENT),
+                    )
+            except Exception as e:
+                logger.warning("Cycle snapshot read failed, reading per book instead: %s", e, exc_info=True)
+                states_by_book = alignment_snapshot = None
 
         for book in active_books:
             book_t0 = time.monotonic()
@@ -4953,8 +5064,18 @@ class SyncManager:
                     if not had_db_managed_alignment and getattr(book, 'transcript_file', None) == 'DB_MANAGED':
                         logger.info(f"   🔄 Upgrading '{title_snip}' to DB_MANAGED unified architecture")
 
+                # A write since the snapshot (web route, KoSync PUT) makes both the saved states
+                # and the cycle-start "KoSync would 404" map stale for this book.
+                written_since_snapshot = (
+                    states_by_book is not None
+                    and self.database_service.progress_written_since(abs_id, snapshot_seq) is True
+                )
+                book_bulk_states = bulk_states_per_client
+                if written_since_snapshot:
+                    book_bulk_states = {k: v for k, v in bulk_states_per_client.items() if k != "KoSync"}
+
                 # Get previous state for this book from database
-                if states_by_book is not None:
+                if states_by_book is not None and not written_since_snapshot:
                     previous_states = states_by_book.get(abs_id, [])
                 else:
                     previous_states = self.database_service.get_states_for_book(abs_id)
@@ -4978,7 +5099,7 @@ class SyncManager:
 
                 # Build config using active_clients - parallel fetch
                 config = self._fetch_states_parallel(
-                    book, prev_states_by_client, title_snip, bulk_states_per_client, active_clients, executor=state_fetch_pool
+                    book, prev_states_by_client, title_snip, book_bulk_states, active_clients, executor=state_fetch_pool
                 )
 
                 # Filtered config now only contains non-None states
@@ -4996,32 +5117,40 @@ class SyncManager:
                         exc_info=True,
                     )
 
+                # A follower_only state (a service with no record of this book) carries a
+                # placeholder position: it receives writes but takes no part in change
+                # detection, trackers or leader selection.
+                decision_config = {k: v for k, v in config.items() if not v.follower_only}
+                if not decision_config:
+                    continue
+                init_followers_only = False
+
                 # Write-only trackers are driven by an idle cooldown rather than the
                 # per-cycle dispatch. Evaluate them for every active book each cycle
                 # (including idle books that early-skip below) so the trailing-edge post
                 # can fire.
                 tracker_followup = bool(target_abs_id) or any(
                     self._state_percentage_delta(state) > 0
-                    for state in config.values()
+                    for state in decision_config.values()
                 )
                 self._handle_storygraph_cooldown(
-                    book, config, time.time(), schedule_followup=tracker_followup
+                    book, decision_config, time.time(), schedule_followup=tracker_followup
                 )
                 self._handle_hardcover_cooldown(
-                    book, config, time.time(), schedule_followup=tracker_followup
+                    book, decision_config, time.time(), schedule_followup=tracker_followup
                 )
                 self._handle_goodreads_cooldown(
-                    book, config, time.time(), schedule_followup=tracker_followup
+                    book, decision_config, time.time(), schedule_followup=tracker_followup
                 )
 
                 # Check for ABS offline condition (only for audiobook mode)
                 # Check for ABS offline condition (only for audiobook mode)
                 if not (hasattr(book, 'sync_mode') and book.sync_mode == 'ebook_only'):
                     primary_audio_client = self._get_primary_audio_client_name(book)
-                    audio_state = config.get(primary_audio_client) if primary_audio_client else None
+                    audio_state = decision_config.get(primary_audio_client) if primary_audio_client else None
                     if audio_state is None:
                         # Fallback logic: If ABS is missing but we have ebook clients, try to sync them as ebook-only
-                        ebook_clients_active = [k for k in config.keys() if k != primary_audio_client]
+                        ebook_clients_active = [k for k in decision_config.keys() if k != primary_audio_client]
                         if ebook_clients_active:
                              logger.info(f"'{abs_id}' '{title_snip}' Primary audio source not found/offline, falling back to ebook-only sync between {ebook_clients_active}")
                         else:
@@ -5031,7 +5160,7 @@ class SyncManager:
 
 
                 # Check for sync delta threshold between clients
-                progress_values = [cfg.current.get('pct', 0) for cfg in config.values() if cfg.current.get('pct') is not None]
+                progress_values = [cfg.current.get('pct', 0) for cfg in decision_config.values() if cfg.current.get('pct') is not None]
                 significant_diff = False
 
                 if len(progress_values) >= 2:
@@ -5057,7 +5186,7 @@ class SyncManager:
                 char_delta_triggered = False  # Track if character delta triggered significance
                 page_delta_triggered = any(
                     self._has_fixed_page_delta(name, state, book)
-                    for name, state in config.items()
+                    for name, state in decision_config.items()
                 )
                 if page_delta_triggered:
                     significant_diff = True
@@ -5067,7 +5196,7 @@ class SyncManager:
                 fixed_page_book = is_cbz_book(book)
                 if (not significant_diff and hasattr(book, 'ebook_filename') and book.ebook_filename
                         and not fixed_page_book):
-                    for client_name_key, client_state in config.items():
+                    for client_name_key, client_state in decision_config.items():
                          percentage_delta = self._state_percentage_delta(client_state)
                          if percentage_delta > 0:
                              try:
@@ -5094,12 +5223,12 @@ class SyncManager:
                 # Check if all 'delta' fields in config are zero
                 # We typically skip if nothing changed, BUT if there is a significant discrepancy
                 # between clients (e.g. from a fresh push to DB), we must proceed to sync them.
-                deltas_zero = all(round(cfg.delta, 4) == 0 for cfg in config.values())
+                deltas_zero = all(round(cfg.delta, 4) == 0 for cfg in decision_config.values())
                 
                 # Check if any client has a significant delta (using time-based threshold)
                 any_significant_delta = any(
-                    self._has_significant_delta(k, config, book) 
-                    for k in config.keys()
+                    self._has_significant_delta(k, decision_config, book) 
+                    for k in decision_config.keys()
                 )
 
                 # If nothing changed AND clients are effectively in sync, skip
@@ -5110,9 +5239,12 @@ class SyncManager:
                     # delta, so gating this on movement would mean it only ever
                     # got a status the next time you happened to open it.
                     # only_if_absent makes this a one-time fill, not per-cycle work.
-                    self._maybe_mark_koreader_reading_from_config(book, config, abs_id, title_snip)
-                    logger.debug(f"'{abs_id}' '{title_snip}' No changes and clients in sync, skipping")
-                    continue
+                    self._maybe_mark_koreader_reading_from_config(book, decision_config, abs_id, title_snip)
+                    if not self._should_initialize_followers(config, abs_id, title_snip):
+                        logger.debug(f"'{abs_id}' '{title_snip}' No changes and clients in sync, skipping")
+                        continue
+                    init_followers_only = True
+                    logger.info(f"🔄 '{abs_id}' '{title_snip}' Clients in sync; filling follower(s) with no position: {[k for k in config if k not in decision_config]}")
                 
                 # If there's a discrepancy but no client actually changed, skip
                 # (discrepancy will resolve next time someone reads)
@@ -5128,7 +5260,7 @@ class SyncManager:
                 #   for a "new" read that will never look new.
                 new_client_in_config = any(
                     client_name.lower() not in prev_states_by_client
-                    for client_name in config.keys()
+                    for client_name in decision_config.keys()
                 )
                 is_instant_target = bool(target_abs_id)
                 if (significant_diff and not any_significant_delta and not char_delta_triggered and not page_delta_triggered
@@ -5144,7 +5276,7 @@ class SyncManager:
 
                 # Small changes (below thresholds) should be noisy-reduced
                 small_changes = []
-                for key, cfg in config.items():
+                for key, cfg in decision_config.items():
                     delta = cfg.delta
                     threshold = cfg.threshold
 
@@ -5157,7 +5289,7 @@ class SyncManager:
                         delta_str = cfg.value_seconds_formatter(delta) if cfg.value_seconds_formatter else cfg.value_formatter(delta)
                         small_changes.append(f"✋ [{abs_id}] [{title_snip}] {label} delta {delta_str} (Below threshold)")
 
-                if small_changes and not any(cfg.delta >= cfg.threshold for cfg in config.values()):
+                if small_changes and not any(cfg.delta >= cfg.threshold for cfg in decision_config.values()):
                     # If we have significant discrepancies between clients, we MUST NOT skip,
                     # even if individual deltas are small (e.g. from DB pre-update).
                     if significant_diff:
@@ -5174,7 +5306,7 @@ class SyncManager:
 
                 # Status block - show only changed lines
                 status_lines = []
-                for key, cfg in config.items():
+                for key, cfg in decision_config.items():
                     if cfg.delta > 0:
                         prev = cfg.previous_pct
                         curr = cfg.current.get('pct')
@@ -5185,7 +5317,7 @@ class SyncManager:
                     logger.info(line)
 
                 # Determine leader
-                leader, leader_pct = self._determine_leader(config, book, abs_id, title_snip)
+                leader, leader_pct = self._determine_leader(decision_config, book, abs_id, title_snip)
                 if not leader:
                     continue
 
@@ -5374,6 +5506,12 @@ class SyncManager:
                             # Driven by the idle-cooldown handlers, not the dispatch loop.
                             continue
                         client_state = config.get(client_name)
+                        is_follower = bool(client_state and client_state.follower_only)
+                        if init_followers_only and not is_follower:
+                            continue
+                        if is_follower:
+                            # Its state is a placeholder, not a prior read to reuse.
+                            client_state = None
                         if client_state and client_state.current.get('_readalong_mirror'):
                             # BookOrbit mirrors this format from the one we do write;
                             # writing it too would race its own derived position.
@@ -5425,6 +5563,7 @@ class SyncManager:
                             # audio still ahead, and the next cycle drags them
                             # forward again (issue #215 / #391).
                             allow_rewind=bool(leader_state.current.get("_approved_rewind")),
+                            fill_if_absent=is_follower,
                         )
                         result = client.update_progress(book, request)
                         results[client_name] = result
@@ -5432,6 +5571,10 @@ class SyncManager:
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to update '{client_name}': {e}", exc_info=True)
                         results[client_name] = SyncResult(None, False)
+
+                if init_followers_only:
+                    self._finish_follower_init(book, results, abs_id, title_snip)
+                    continue
 
                 # A write that failed because the Audiobookshelf library item no
                 # longer exists means the mapping itself is stale (ABS re-ingested a
@@ -5572,7 +5715,6 @@ class SyncManager:
                 logger.error(f"❌ Sync error: {e}", exc_info=True)
             finally:
                 book_durations.append((time.monotonic() - book_t0, title_snip))
-        state_fetch_pool.shutdown()
 
         cycle_elapsed = time.monotonic() - cycle_t0
         n_books = len(book_durations)

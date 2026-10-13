@@ -130,7 +130,7 @@ class KoSyncSyncClientCanonicalTests(unittest.TestCase):
 
     def _request(self, pct):
         return SimpleNamespace(locator_result=SimpleNamespace(percentage=pct),
-                               allow_rewind=False, current_state=None)
+                               allow_rewind=False, current_state=None, fill_if_absent=False)
 
     def _book(self):
         return SimpleNamespace(

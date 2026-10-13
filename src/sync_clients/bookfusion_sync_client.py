@@ -87,7 +87,7 @@ class BookFusionSyncClient(SyncClient):
         while page <= 10000:
             books = self.client.search_books(page=page, per_page=per_page)
             if books is None:
-                return results or None
+                return None
             for item in books:
                 book_id = item.get("id")
                 pos = item.get("reading_position")

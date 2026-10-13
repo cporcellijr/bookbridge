@@ -154,6 +154,50 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
         self.assertAlmostEqual(float(data['percentage']), 0.42)
         self.assertEqual(data['progress'], "/body/DocFragment[7]/body/p[12]")
 
+    def _internal_put(self, doc_hash, pct, **extra):
+        return self.client.put(
+            '/syncs/progress',
+            headers=self.auth_headers,
+            json={"document": doc_hash, "percentage": pct, "progress": "",
+                  "device": "abs-sync-bot", "device_id": "abs-sync-bot", "force": True, **extra},
+        )
+
+    def test_fill_if_absent_never_replaces_a_stored_device_percentage(self):
+        """A device PUT a percentage with no locator: the GET hides it (404), so the
+        bridge sees 'no record'. The follower fill must not overwrite it."""
+        from src import web_server
+
+        doc_hash = _hex_hash("fill-if-absent-held")
+        device_put = self.client.put(
+            '/syncs/progress', headers=self.auth_headers,
+            json={"document": doc_hash, "percentage": 0.45, "progress": "",
+                  "device": "Kobo", "device_id": "kobo-1"},
+        )
+        self.assertEqual(device_put.status_code, 200)
+        self.assertEqual(self.client.get(f'/syncs/progress/{doc_hash}', headers=self.auth_headers).status_code, 404)
+
+        self.assertEqual(self._internal_put(doc_hash, 0.11, fill_if_absent=True).status_code, 409)
+        self.assertAlmostEqual(float(web_server.database_service.get_kosync_document(doc_hash).percentage), 0.45)
+
+    def test_fill_if_absent_writes_when_no_position_is_stored(self):
+        from src import web_server
+
+        doc_hash = _hex_hash("fill-if-absent-empty")
+        self.assertEqual(self._internal_put(doc_hash, 0.11, fill_if_absent=True).status_code, 200)
+        self.assertAlmostEqual(float(web_server.database_service.get_kosync_document(doc_hash).percentage), 0.11)
+
+    def test_internal_put_without_the_marker_still_replaces(self):
+        from src import web_server
+
+        doc_hash = _hex_hash("fill-if-absent-plain")
+        self.client.put(
+            '/syncs/progress', headers=self.auth_headers,
+            json={"document": doc_hash, "percentage": 0.45, "progress": "",
+                  "device": "Kobo", "device_id": "kobo-1"},
+        )
+        self._internal_put(doc_hash, 0.11)
+        self.assertAlmostEqual(float(web_server.database_service.get_kosync_document(doc_hash).percentage), 0.11)
+
     def test_sync_cycle_skips_only_builtin_reads_that_would_404(self):
         """With the built-in server, the cycle's KoSync bulk lists exactly the
         linked documents whose GET 404s, and their HTTP read is skipped."""
@@ -180,7 +224,7 @@ class TestKosyncNotFoundStatus(unittest.TestCase):
         kosync = KoSyncClient({**creds, "KOSYNC_SERVER": "http://127.0.0.1:5757"})
         sync_client = KoSyncSyncClient(kosync, MagicMock())
         bulk = sync_client.fetch_bulk_state()
-        self.assertEqual(bulk, {hashes["empty"]: "empty"})
+        self.assertEqual(bulk, {"documents_without_progress": {hashes["empty"]: "empty"}})
         for name, doc_hash in hashes.items():
             status = self.client.get(f'/syncs/progress/{doc_hash}', headers=self.auth_headers).status_code
             self.assertEqual(status, 404 if name == "empty" else 200, name)

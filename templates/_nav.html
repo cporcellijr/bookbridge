@@ -35,14 +35,7 @@
 
     {% macro library_link(url, icon, title) -%}
     <a href="{{ url }}" class="nav-icon-link" target="_blank" rel="noopener noreferrer" title="{{ title }}">
-        {% if icon %}
         <img src="{{ icon }}" alt="{{ title }}">
-        {% else %}
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-label="{{ title }}">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-        </svg>
-        {% endif %}
     </a>
     {%- endmacro %}
 
@@ -81,13 +74,13 @@
         {% endif %}
         {% if ebook_source and ebook_source != audio_source %}
             {% if ebook_source == 'cwa' %}
-                {{ library_link(cwa_url, '', 'Calibre-Web ebook library') }}
+                {{ library_link(cwa_url, '/static/calibre-web.png', 'Calibre-Web ebook library') }}
             {% elif ebook_source == 'grimmory' %}
                 {{ library_link(grimmory_url, '/static/grimmory.webp', 'Grimmory ebook library') }}
             {% elif ebook_source == 'bookorbit' %}
                 {{ library_link(bookorbit_url, '/static/bookorbit.svg', 'BookOrbit ebook library') }}
             {% elif ebook_source == 'kavita' %}
-                {{ library_link(kavita_url, '', 'Kavita ebook library') }}
+                {{ library_link(kavita_url, '/static/kavita.svg', 'Kavita ebook library') }}
             {% endif %}
         {% endif %}
 

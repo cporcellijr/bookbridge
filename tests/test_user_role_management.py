@@ -32,7 +32,7 @@ import src.web_server as web_server
 
 
 class RoleStorageTestCase(unittest.TestCase):
-    """DatabaseService.set_user_role / is_primary_admin."""
+    """DatabaseService.update_user_account role handling / is_primary_admin."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -45,11 +45,11 @@ class RoleStorageTestCase(unittest.TestCase):
         admin = self.svc.create_user("owner", "pw", role="admin")
         bob = self.svc.create_user("bob", "pw")
 
-        self.assertTrue(self.svc.set_user_role(bob.id, "admin"))
+        self.assertTrue(self.svc.update_user_account(bob.id, role="admin"))
         self.assertEqual(self.svc.get_user(bob.id).role, "admin")
         self.assertTrue(self.svc.get_user(bob.id).is_admin)
 
-        self.assertTrue(self.svc.set_user_role(bob.id, "user"))
+        self.assertTrue(self.svc.update_user_account(bob.id, role="user"))
         self.assertEqual(self.svc.get_user(bob.id).role, "user")
         self.assertFalse(self.svc.get_user(bob.id).is_admin)
         # the original admin is untouched
@@ -57,23 +57,23 @@ class RoleStorageTestCase(unittest.TestCase):
 
     def test_role_is_normalized(self):
         bob = self.svc.create_user("bob", "pw")
-        self.svc.set_user_role(bob.id, "  ADMIN  ")
+        self.svc.update_user_account(bob.id, role="  ADMIN  ")
         self.assertEqual(self.svc.get_user(bob.id).role, "admin")
 
     def test_unknown_role_is_rejected(self):
         bob = self.svc.create_user("bob", "pw")
-        for bad in ("superuser", "", None, "administrator"):
+        for bad in ("superuser", "", "administrator"):
             with self.assertRaises(ValueError):
-                self.svc.set_user_role(bob.id, bad)
+                self.svc.update_user_account(bob.id, role=bad)
         self.assertEqual(self.svc.get_user(bob.id).role, "user")
 
     def test_missing_user_returns_false(self):
-        self.assertFalse(self.svc.set_user_role(99999, "admin"))
+        self.assertFalse(self.svc.update_user_account(99999, role="admin"))
 
     def test_primary_admin_is_the_first_admin(self):
         admin = self.svc.create_user("owner", "pw", role="admin")
         bob = self.svc.create_user("bob", "pw")
-        self.svc.set_user_role(bob.id, "admin")
+        self.svc.update_user_account(bob.id, role="admin")
 
         self.assertTrue(self.svc.is_primary_admin(admin.id))
         self.assertFalse(self.svc.is_primary_admin(bob.id))
@@ -85,7 +85,7 @@ class RoleStorageTestCase(unittest.TestCase):
         self.assertEqual(self.svc._default_user_id(), first.id)
 
         second = self.svc.create_user("second", "pw")
-        self.svc.set_user_role(second.id, "admin")
+        self.svc.update_user_account(second.id, role="admin")
         # 'second' is now the only admin, so it becomes the default owner.
         self.assertEqual(self.svc._default_user_id(), second.id)
 
@@ -111,7 +111,7 @@ class GlobalFallbackPolicyTestCase(unittest.TestCase):
         self.assertFalse(global_fallback_allowed(self.svc, user))
 
     def test_second_admin_may_not(self):
-        self.svc.set_user_role(self.regular.id, "admin")
+        self.svc.update_user_account(self.regular.id, role="admin")
         user = self.svc.get_user(self.regular.id)
         self.assertTrue(user.is_admin)
         self.assertFalse(
@@ -158,7 +158,7 @@ class PromotedAdminCredentialIsolationTestCase(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_promoted_user_does_not_sync_with_the_primary_admins_token(self):
-        self.svc.set_user_role(self.caitlin.id, "admin")
+        self.svc.update_user_account(self.caitlin.id, role="admin")
         self.registry.invalidate(self.caitlin.id)
 
         bundle = self.registry.get_clients(self.caitlin.id)
@@ -169,7 +169,7 @@ class PromotedAdminCredentialIsolationTestCase(unittest.TestCase):
 
     def test_promoted_user_keeps_their_own_token(self):
         self.svc.set_user_credential(self.caitlin.id, "ABS_KEY", "caitlin-token")
-        self.svc.set_user_role(self.caitlin.id, "admin")
+        self.svc.update_user_account(self.caitlin.id, role="admin")
         self.registry.invalidate(self.caitlin.id)
 
         bundle = self.registry.get_clients(self.caitlin.id)
@@ -248,34 +248,27 @@ class SetRoleAdminActionTestCase(unittest.TestCase):
         self.assertIn("regular user", message)
         self.db.update_user_account.assert_called_once_with(2, role='user')
 
-    def test_primary_admin_cannot_be_demoted(self):
+    def test_database_policy_refusal_is_shown_verbatim(self):
         target = self._user(1, "owner", "admin")
         self.db.get_user.return_value = target
-        self.db.is_primary_admin.return_value = True
-        self._users(target, self._user(2, "caitlin", "admin"))
+        self.db.update_user_account.side_effect = ValueError("Can't demote the primary admin — policy text")
 
         message, error = web_server._apply_user_admin_action(
             {'action': 'set_role', 'user_id': '1', 'role': 'user'}
         )
 
         self.assertIsNone(message)
-        self.assertIn("primary admin", error)
-        self.db.update_user_account.assert_not_called()
+        self.assertEqual(error, "Can't demote the primary admin — policy text")
+        self.registry.invalidate.assert_not_called()
 
-    def test_last_active_admin_cannot_be_demoted(self):
-        target = self._user(2, "caitlin", "admin")
-        self.db.get_user.return_value = target
-        self.db.is_primary_admin.return_value = False
-        # only one ACTIVE admin: the disabled original does not count
-        self._users(self._user(1, "owner", "admin", active=0), target)
+    def test_toggle_active_refusal_is_shown_verbatim(self):
+        self.db.get_user.return_value = self._user(2, "caitlin", "admin")
+        self.db.update_user_account.side_effect = ValueError("Can't disable the last active admin")
 
-        message, error = web_server._apply_user_admin_action(
-            {'action': 'set_role', 'user_id': '2', 'role': 'user'}
-        )
+        message, error = web_server._apply_user_admin_action({'action': 'toggle_active', 'user_id': '2'})
 
         self.assertIsNone(message)
-        self.assertIn("last active admin", error)
-        self.db.update_user_account.assert_not_called()
+        self.assertEqual(error, "Can't disable the last active admin")
 
     def test_promotion_is_never_blocked_by_the_admin_count_guard(self):
         """The guards are about losing admins, so they must not block gaining one."""

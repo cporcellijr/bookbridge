@@ -285,7 +285,8 @@ class TestReadestClientEmailPassword(unittest.TestCase):
         creds = {"READEST_EMAIL": "a@b.com", "READEST_PASSWORD": "pw"}
         c = ReadestClient(credentials=creds, database_service=db, user_id=7)
         c._persist_tokens({"access_token": "atk", "refresh_token": "rtk", "expires_in": 3600})
-        db.set_user_credential.assert_any_call(7, "READEST_ACCESS_TOKEN", "atk")
+        (user_id, tokens, email, password), _ = db.persist_readest_tokens.call_args
+        self.assertEqual((user_id, tokens["READEST_ACCESS_TOKEN"], email, password), (7, "atk", "a@b.com", "pw"))
         db.set_setting.assert_not_called()
         self.assertNotIn("READEST_ACCESS_TOKEN", os.environ)
         # in-memory creds updated so later calls in the same cycle see the token

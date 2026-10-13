@@ -171,6 +171,7 @@ class TestKosyncDocument(unittest.TestCase):
                 source='filesystem',
                 mtime=0.0,
                 percentage=0.12,
+                hash_method='content',
             )
         )
         self.db_service.save_kosync_document(
@@ -182,6 +183,7 @@ class TestKosyncDocument(unittest.TestCase):
         )
 
         ebook_parser = MagicMock()
+        ebook_parser.hash_method = 'content'
         ebook_parser.get_kosync_id.return_value = target_hash
         container = MagicMock()
         container.ebook_parser.return_value = ebook_parser
@@ -2241,6 +2243,7 @@ class TestKosyncEndpoints(unittest.TestCase):
         booklore_client.download_book.return_value = b'epub-bytes'
 
         ebook_parser = MagicMock()
+        ebook_parser.hash_method = 'content'
         ebook_parser.get_kosync_id_from_bytes.return_value = target_hash
 
         container = MagicMock()
@@ -2257,10 +2260,10 @@ class TestKosyncEndpoints(unittest.TestCase):
         booklore_client.get_all_books.assert_called()
         booklore_client._fetch_and_cache_detail.assert_called_with('bl-1')
         booklore_client.download_book.assert_called_once_with('bl-1')
-        db.save_kosync_document.assert_called_once()
-        saved_doc = db.save_kosync_document.call_args[0][0]
-        self.assertEqual(saved_doc.filename, 'target-book.epub')
-        self.assertEqual(saved_doc.booklore_id, 'bl-1')
+        db.upsert_kosync_hash_metadata.assert_called_once_with(
+            target_hash, 'target-book.epub', 'booklore',
+            mtime=None, booklore_id='bl-1', hash_method='content',
+        )
 
     def test_plugin_session_upload_auto_classifies_device_and_replaces_estimated_overlap(self):
         from src import web_server

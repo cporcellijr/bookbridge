@@ -10,8 +10,10 @@ All notable changes to BookBridge will be documented in this file.
 
 - Bulk-delete dashboard books with one confirmation and existing per-user
   shared-book protection.
-- Token-authenticated admin API to create readers and set their integrations from a
-  script, off unless `ADMIN_API_TOKEN` is set. Contributed by
+- Token-authenticated admin API to create reader accounts and set their integrations
+  from a script, off unless `ADMIN_API_TOKEN` is set. It manages reader accounts only:
+  it cannot create, promote or change an admin, rejects values a setting doesn't
+  accept, and slows down repeated bad tokens. Contributed by
   [@splitsec2](https://github.com/splitsec2) in #494.
 - Link CBZ comics as ebooks without allowing them to become audiobook matches (#459).
 - Optionally filter KOReader device manifests to selected Grimmory shelves (#464).
@@ -33,24 +35,34 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Show the real Calibre-Web and Kavita logos in the Library header and on the dashboard,
+  and fix the Kavita settings section's expand arrow. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #501.
 - Apply account changes atomically in the admin API and dashboard, protecting the
   primary admin and retaining an active admin during concurrent updates or deletion.
   Deleting an account removes its scoped data while retaining the shared catalog,
   never reissues its account number to a later account, and disconnects its
   Audiobookshelf listener; the primary admin can no longer be deleted.
-  Re-enabled readers regain shared books and cached access policies refresh. Integration
-  updates save together and changing Readest credentials clears the old session (#494).
+  Re-enabled readers regain shared books and cached access policies refresh; disabling
+  an account stops its syncs and its Audiobookshelf listener. Usernames with accented
+  capitals are matched regardless of case. Integration updates save together and
+  changing Readest credentials clears the old session for good (#494).
 - Resolve KOReader filename hashes when Calibre reorders title and author, with
   per-user matching and ambiguity guards; refresh filesystem hashes after changing
-  the hash method. Contributed by [@chemicalsno](https://github.com/chemicalsno)
-  in #497 and #500.
-- Initialize a missing KoSync follower from the current sync leader, including the
-  built-in server's skipped-read optimization. Contributed by
+  the hash method, keeping both methods' hashes so devices on either setting still
+  match. A newly matched copy can't drag your saved position back. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #497 and #500.
+- A mapped book that KoSync has no position for gets one: once your other services
+  agree, or the next time one of them moves, their position is written to KoSync. It
+  never replaces a position a device already stored and never picks the leader, and
+  the original KoSync server's empty reply counts as "no position" too. Contributed by
   [@chemicalsno](https://github.com/chemicalsno) in #498.
-- Read Local File suggestion titles and authors from Calibre or EPUB metadata, then
-  filenames. Match complete authors while excluding translator/narrator credits and
-  EPUB 3 non-author roles. Ambiguous comma-separated names remain intact to avoid
-  perfect matches based on a shared surname. Contributed by
+- Read Local File suggestion titles and authors from Calibre or EPUB metadata and the
+  filename, scoring whichever reading fits best, so an "Author - Title" filename or a
+  placeholder title no longer misses. Co-authors listed with commas each match,
+  "Surname, Given" credits read correctly, translator, narrator and illustrator
+  credits are ignored, and an editor counts when no author is credited. One unreadable
+  EPUB no longer stops the whole scan. Contributed by
   [@chemicalsno](https://github.com/chemicalsno) in #499.
 
 - Full sync cycles fetch Audiobookshelf progress and unrestricted item access in
