@@ -35,6 +35,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- BridgeSync initializes and repairs each closed book's saved checksum when syncing
+  reading status, preventing KOReader from sending a new book's progress under the
+  previous book's ID. Positions and highlights are retained. Managed-book rename,
+  deletion, and replacement use KOReader's metadata APIs, including centralized
+  storage, instead of an incorrect `.epub.sdr` path. Re-download plugin **0.9.7**
+  and sync reading stats with affected books closed to repair their identities.
 - Show the real Calibre-Web and Kavita logos in the Library header and on the dashboard,
   and fix the Kavita settings section's expand arrow. Contributed by
   [@chemicalsno](https://github.com/chemicalsno) in #501.

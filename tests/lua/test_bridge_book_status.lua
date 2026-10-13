@@ -9,6 +9,11 @@ package.path = plugin_dir .. "/?.lua;" .. package.path
 -- no sidecar on disk, which is the "delivered but never opened" case.
 local sidecars = {}
 local flushed = {}
+local checksum = "506e3e2bc7cd723fcb14afef476585de"
+local hash_failure = false
+package.preload["util"] = function()
+    return { partialMD5 = function() return not hash_failure and checksum or nil end }
+end
 
 local function resetStore()
     sidecars = {}
@@ -86,6 +91,42 @@ do
     assert(written, "write must succeed for a book with no sidecar")
     local summary = sidecars["/books/fresh.epub"].summary
     assert(summary.status == "reading" and summary.modified == "2026-09-18")
+    -- KOReader 2026.07 can inherit the preceding book's cached checksum when
+    -- a plugin-created sidecar makes this book look previously opened.
+    local reader = setmetatable({ doc_settings = sidecars["/books/fresh.epub"] }, {
+        __index = { md5_checksum = "776802041599e3d31d5eaf580ff3ca30" },
+    })
+    local used_checksum = reader.doc_settings.partial_md5_checksum or reader.md5_checksum
+    assert(used_checksum == checksum, "Goddess inherited Merfolk's checksum on first open")
+end
+
+-- Repair an already-crossed identity even when status agrees, retaining reading data.
+do
+    resetStore()
+    sidecars["/books/goddess.epub"] = {
+        partial_md5_checksum = "776802041599e3d31d5eaf580ff3ca30",
+        summary = { status = "reading", modified = "2026-10-05", rating = 5 },
+        annotations = { "highlight" }, last_xpointer = "/body/DocFragment[46]/body/div/p[66]",
+        percent_finished = 0.7939,
+    }
+    assert(BookStatus.write("/books/goddess.epub", "reading", "2026-10-13"))
+    local store = sidecars["/books/goddess.epub"]
+    assert(store.partial_md5_checksum == checksum)
+    assert(store.percent_finished == 0.7939 and store.annotations[1] == "highlight")
+    assert(store.last_xpointer == "/body/DocFragment[46]/body/div/p[66]")
+    assert(store.summary.modified == "2026-10-05" and store.summary.rating == 5)
+    local written, reason = BookStatus.write("/books/goddess.epub", "reading")
+    assert(not written and reason == "unchanged" and flushed["/books/goddess.epub"] == 1)
+end
+
+-- Failure to hash must not publish a status-only metadata file.
+do
+    resetStore()
+    hash_failure = true
+    local written, reason = BookStatus.write("/books/unreadable.epub", "reading")
+    hash_failure = false
+    assert(not written and reason ~= "unchanged")
+    assert(sidecars["/books/unreadable.epub"] == nil)
 end
 
 -- Writing preserves the rest of an existing sidecar.
@@ -107,7 +148,8 @@ end
 -- status cache on sidecar mtime, so a pointless rewrite invalidates it for free.
 do
     resetStore()
-    sidecars["/books/same.epub"] = { summary = { status = "reading", modified = "2026-01-01" } }
+    sidecars["/books/same.epub"] = { partial_md5_checksum = checksum,
+        summary = { status = "reading", modified = "2026-01-01" } }
     local written, reason = BookStatus.write("/books/same.epub", "reading")
     assert(not written and reason == "unchanged")
     assert((flushed["/books/same.epub"] or 0) == 0, "unchanged status must not flush")
@@ -279,7 +321,8 @@ end
 do
     resetStore()
     sidecars["/books/open.epub"] = { summary = { status = "reading", modified = "2026-01-01" } }
-    sidecars["/books/agree.epub"] = { summary = { status = "complete", modified = "2026-01-01" } }
+    sidecars["/books/agree.epub"] = { partial_md5_checksum = checksum,
+        summary = { status = "complete", modified = "2026-01-01" } }
     local index = {
         aaa = "/books/fresh.epub",     -- no sidecar yet: gets one
         bbb = "/books/open.epub",      -- currently open: deferred
@@ -350,7 +393,7 @@ end
 -- Clearing a sidecar that has no status is a no-op, not a rewrite.
 do
     resetStore()
-    sidecars["/books/nostatus.epub"] = { percent_finished = 0.3 }
+    sidecars["/books/nostatus.epub"] = { percent_finished = 0.3, partial_md5_checksum = checksum }
     local written, reason = BookStatus.write("/books/nostatus.epub", "unread")
     assert(not written and reason == "unchanged")
     assert((flushed["/books/nostatus.epub"] or 0) == 0)

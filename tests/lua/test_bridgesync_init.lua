@@ -258,6 +258,23 @@ preload("bridge_stats_batches", empty_module)
 preload("bridge_version", empty_module)
 preload("bridge_sessions", empty_module)
 
+local metadata_events = {}
+local metadata_purge_hook
+preload("docsettings", function()
+    return {
+        open = function(_, path)
+            metadata_events[#metadata_events + 1] = { "open", path }
+            return { purge = function()
+                metadata_events[#metadata_events + 1] = { "purge", path }
+                if metadata_purge_hook then metadata_purge_hook(path) end
+            end }
+        end,
+        updateLocation = function(source, target)
+            metadata_events[#metadata_events + 1] = { "move", source, target }
+        end,
+    }
+end)
+
 local BridgeSync = require("main")
 local extracted_paths = {}
 local fake_archiver = {
@@ -680,7 +697,7 @@ for _, failure in ipairs({ "missing", "empty", "size", "hash", "rename", "rename
         _fileExists = function(_, path) return file_bytes(path) ~= nil end,
         _calculateBookHash = function(_, path) return file_bytes(path) end,
         _safeRemove = function(_, path) os.remove(path) end,
-        _removeTree = function() sidecar_removed = true end,
+        _removeTree = function() error("must use KOReader metadata API, not .epub.sdr") end,
         _updateCollections = function() end,
         _saveState = function(_, saved, revision) items = saved; saved_revision = revision end,
         logInfo = function() end,
@@ -700,6 +717,11 @@ for _, failure in ipairs({ "missing", "empty", "size", "hash", "rename", "rename
         },
     }
     local real_rename = os.rename
+    metadata_purge_hook = function(path)
+        assert(path == target and file_bytes(target) == "new-book",
+            "old metadata must only be purged after successful publication")
+        sidecar_removed = true
+    end
     -- The retry after a Windows EEXIST fallback moves the destination aside
     -- and republishes it, so the "previous good file" guarantee only holds
     -- for the FIRST publication attempt on a given book, not every rename
@@ -736,6 +758,7 @@ for _, failure in ipairs({ "missing", "empty", "size", "hash", "rename", "rename
     end
     local ok, result = pcall(function() return sync:_runSync() end)
     os.rename = real_rename
+    metadata_purge_hook = nil
     assert(ok, result)
     if failure == "success" or failure == "rename_eexist" then
         assert(result.downloaded == 1 and result.errors == 0)
@@ -750,6 +773,32 @@ for _, failure in ipairs({ "missing", "empty", "size", "hash", "rename", "rename
     assert(file_bytes(target .. ".part") == nil, "partial file leaked")
     assert(file_bytes(backup_path) == nil, "backup file leaked")
     os.remove(target)
+end
+
+-- Resolve source metadata before removing its bytes (including hash storage),
+-- and let KOReader handle real .sdr and centralized metadata locations.
+do
+    metadata_events = {}
+    local original = settings_dir .. "/goddess.epub"
+    local renamed = settings_dir .. "/renamed.epub"
+    write_bytes(original, "goddess")
+    local sync = BridgeSync:new{
+        _safeRemove = function(_, path) os.remove(path); return true end,
+        _removeTree = function() error("wrong .epub.sdr path") end,
+    }
+    assert(sync:_moveFile(original, renamed))
+    assert(metadata_events[1] and metadata_events[1][1] == "open"
+        and metadata_events[1][2] == original, "rename must resolve original metadata")
+    assert(metadata_events[2] and metadata_events[2][1] == "move"
+        and metadata_events[2][2] == original and metadata_events[2][3] == renamed)
+    metadata_events = {}
+    assert(sync:_deleteManagedFile(renamed))
+    assert(metadata_events[1][1] == "open" and metadata_events[2][1] == "purge")
+    assert(file_bytes(renamed) == nil)
+    metadata_events = {}
+    sync._safeRemove = function() return false, "permission denied" end
+    local ok = sync:_deleteManagedFile(original)
+    assert(not ok and #metadata_events == 1, "failed deletion must retain metadata")
 end
 
 -- The Kindle downloaded Household Inheritance then deleted it through its old

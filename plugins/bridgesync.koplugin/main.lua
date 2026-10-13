@@ -1,5 +1,6 @@
 local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
+local DocSettings = require("docsettings")
 local Dispatcher = require("dispatcher")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
@@ -1617,12 +1618,10 @@ function BridgeSync:_deleteManagedFile(path)
     if not path or path == "" then
         return true
     end
+    local doc_settings = DocSettings:open(path)
     local file_ok, file_err = self:_safeRemove(path)
-    local sidecar_ok, sidecar_err = self:_removeTree(path .. ".sdr")
-    if not file_ok or not sidecar_ok then
-        return false, file_err or sidecar_err or "managed file deletion failed"
-    end
-    return true
+    if not file_ok then return false, file_err end
+    return pcall(doc_settings.purge, doc_settings)
 end
 
 function BridgeSync:_moveFile(source_path, target_path)
@@ -1630,19 +1629,15 @@ function BridgeSync:_moveFile(source_path, target_path)
         return true
     end
 
+    -- Resolve hash-based metadata while the source bytes still exist.
+    DocSettings:open(source_path)
     self:_safeRemove(target_path)
     local ok, err = os.rename(source_path, target_path)
     if not ok then
         return false, err or "rename failed"
     end
 
-    local old_sidecar = source_path .. ".sdr"
-    local new_sidecar = target_path .. ".sdr"
-    if lfs.attributes(old_sidecar, "mode") == "directory" then
-        self:_removeTree(new_sidecar)
-        os.rename(old_sidecar, new_sidecar)
-    end
-    return true
+    return pcall(DocSettings.updateLocation, source_path, target_path)
 end
 
 function BridgeSync:_currentDocumentPath()
@@ -1711,12 +1706,6 @@ function BridgeSync:_runSync()
         local target_path = self.download_dir .. "/" .. book.filename
         remote_paths[self:_normalizeManagedPath(target_path)] = true
         local entry = items[book.abs_id]
-        local previous_entry = entry and {
-            local_path = entry.local_path,
-            filename = entry.filename,
-            content_hash = entry.content_hash,
-            pending_delete = entry.pending_delete,
-        } or nil
         local reused_path = nil
 
         if entry and entry.local_path and self:_fileExists(entry.local_path) and entry.content_hash == book.content_hash then
@@ -1782,6 +1771,7 @@ function BridgeSync:_runSync()
                         errors = errors + 1
                         self:_safeRemove(temp_path)
                     else
+                        local old_settings = self:_fileExists(target_path) and DocSettings:open(target_path) or nil
                         local move_ok, move_err = os.rename(temp_path, target_path)
                         if not move_ok and self:_fileExists(target_path) then
                             -- Same atomic-install idiom as _installPluginZip, sized down
@@ -1812,13 +1802,7 @@ function BridgeSync:_runSync()
                             self:_safeRemove(temp_path)
                         else
                             downloaded = downloaded + 1
-                            if previous_entry
-                                and self:_managedPathsEqual(previous_entry.local_path, target_path)
-                                and previous_entry.content_hash
-                                and previous_entry.content_hash ~= book.content_hash
-                            then
-                                self:_removeTree(target_path .. ".sdr")
-                            end
+                            if old_settings then old_settings:purge() end
                             items[book.abs_id] = {
                                 local_path = target_path,
                                 filename = book.filename,

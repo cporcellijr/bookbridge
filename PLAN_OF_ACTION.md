@@ -1,3 +1,22 @@
+# BridgeSync book identity and metadata fixes
+
+1. Reproduce the reported previous-book checksum carryover and the incorrect
+   `.epub.sdr` path with regression tests before changing production code.
+2. Ensure status-created metadata includes the current file's partial checksum;
+   repair missing or incorrect checksums even when reading status is unchanged,
+   preserving positions, bookmarks, highlights, and other metadata.
+3. Use KOReader's DocSettings APIs for managed-book rename/delete/replacement,
+   resolving metadata before replacing bytes and preserving it on failed transfers.
+4. Bump the plugin version and document recovery/deployment. Run focused Lua
+   checks, syntax checks, and the full project suite; review the final diff.
+5. Restart the bridge, verify the downloadable plugin and healthy startup, and
+   validate on the attached Kindle using its installed KOReader modules. Back up
+   targeted metadata before correcting the two confirmed checksum mismatches.
+6. Update branch status with evidence and limitations, then commit locally.
+   Do not push. The Kobo must receive the updated plugin and checksum recovery.
+
+---
+
 # PRs 435–437: local integration and review fixes
 
 ## Scope

@@ -13,6 +13,7 @@
 -- every shared book, so it is never read and never written.
 
 local DocSettings = require("docsettings")
+local util = require("util")
 
 local BookStatus = {}
 
@@ -95,26 +96,29 @@ function BookStatus.write(file, status, modified)
         if type(summary) ~= "table" then
             summary = {}
         end
-        -- Skip a no-op write: it would bump the sidecar mtime for nothing, and
-        -- at least one third-party shelf plugin keys its status cache on that.
-        if clearing then
-            if summary.status == nil then
-                return false
-            end
-        elseif summary.status == status then
+        local checksum = util.partialMD5(file)
+        if not checksum then error("Could not calculate book checksum", 0) end
+        local checksum_changed = doc_settings:readSetting("partial_md5_checksum") ~= checksum
+        local status_changed = (clearing and summary.status ~= nil)
+            or (not clearing and summary.status ~= status)
+        if not status_changed and not checksum_changed then
             return false
         end
         -- Only the status goes; a rating or note the reader wrote in the same
         -- summary block is theirs and survives the clear.
         -- Written long-hand on purpose: `clearing and nil or status` always
         -- yields `status`, because nil is falsy and the `or` branch takes over.
-        if clearing then
-            summary.status = nil
-        else
-            summary.status = status
+        if status_changed then
+            if clearing then
+                summary.status = nil
+            else
+                summary.status = status
+            end
+            summary.modified = modified or BookStatus.today()
+            doc_settings:saveSetting("summary", summary)
         end
-        summary.modified = modified or BookStatus.today()
-        doc_settings:saveSetting("summary", summary)
+        -- A status-only sidecar can make KOReader inherit the previous book's checksum.
+        doc_settings:saveSetting("partial_md5_checksum", checksum)
         doc_settings:flush()
         return true
     end)
