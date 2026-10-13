@@ -137,6 +137,9 @@ _HIGH_CONFIDENCE_NORMALIZATION_SOURCES: frozenset[str] = frozenset({
 
 # How long a follower fill that did not complete waits before it is attempted again.
 _FOLLOWER_INIT_COOLDOWN_SECONDS = 6 * 3600
+# Below this the book is unstarted: a reader opening it starts there anyway, so a
+# fill would only cost a parse and a write per newly matched book.
+_FOLLOWER_FILL_MIN_PCT = 0.001
 
 # Clients that navigate by locator rather than by percentage. ABSEbook rejects a
 # locator whose cfi is None outright; BookOrbit, Grimmory and CWA all back a Kobo
@@ -553,6 +556,9 @@ class SyncManager:
         every cycle.
         """
         if not any(state.follower_only for state in config.values()):
+            return False
+        if max((state.current.get('pct') or 0 for state in config.values() if not state.follower_only),
+               default=0) < _FOLLOWER_FILL_MIN_PCT:
             return False
         key = (get_current_user_id(), abs_id)
         now = time.monotonic()

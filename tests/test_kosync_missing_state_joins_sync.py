@@ -269,6 +269,17 @@ class TestSyncCycleFillsKoSyncWithoutAPosition(unittest.TestCase):
         self.abs_client.update_progress.assert_not_called()
         self.assertEqual([s.percentage for s in self._saved_kosync_states()], [0.11])
 
+    def test_unstarted_book_is_not_filled(self):
+        """Nothing to fill while every other client is at the start."""
+        self.states[0] = State(abs_id="night", client_name="abs", percentage=0.0, timestamp=0.0,
+                               last_updated=1791757881.5)
+        manager = self._build()
+        self.abs_client.get_progress.return_value = {"currentTime": 0.0, "duration": 1000.0}
+        manager.sync_cycle()
+
+        self.kosync_api.update_progress.assert_not_called()
+        self.assertEqual(self._saved_kosync_states(), [])
+
     def test_failed_write_is_not_retried_within_the_cooldown(self):
         self.kosync_update = False
         manager = self._build()
