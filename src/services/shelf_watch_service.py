@@ -378,6 +378,7 @@ class ShelfWatchService:
         now = utcnow()
 
         candidate_pool = None  # Lazy-built on first non-skipped book
+        pool_empty = False
 
         for book in books:
             stats['scanned'] += 1
@@ -411,20 +412,21 @@ class ShelfWatchService:
                         shelf_name, len(books) - (stats['scanned'] - 1),
                     )
                     stats['errors'] += 1
-                    return stats
+                    pool_empty = True
 
             try:
                 outcome = self._process_one_book(
                     book, filename, grimmory_id, candidate_pool, threshold,
                     shelf_name, kobo_shelf, user_id=user_id,
-                    active_client=active_client,
+                    active_client=active_client, same_entry_only=bool(pool_empty),
                 )
             except Exception as e:
                 logger.exception(f"Shelf-watch: unexpected error processing '{filename}': {e}")
                 stats['errors'] += 1
                 continue
 
-            stats[outcome] = stats.get(outcome, 0) + 1
+            if outcome:
+                stats[outcome] = stats.get(outcome, 0) + 1
 
         if stats['scanned']:
             logger.info(
@@ -441,7 +443,10 @@ class ShelfWatchService:
     def _process_one_book(self, grimmory_book: dict, filename: str, grimmory_id: str,
                          candidate_pool: list, threshold: float,
                          watch_shelf: str, kobo_shelf: str,
-                         user_id: int = None, active_client=None) -> str:
+                         user_id: int = None, active_client=None,
+                         same_entry_only: bool = False) -> Optional[str]:
+        """Return the outcome key, or None when deferred (same_entry_only and no
+        same-entry audio match)."""
         ebook_anchor = {
             'filename': filename,
             'title': (grimmory_book.get('title') or '').strip(),
@@ -460,6 +465,9 @@ class ShelfWatchService:
                 self._scan_key(grimmory_id), filename, top_score=100.0, status='auto_matched',
             )
             return 'auto_matched'
+
+        if same_entry_only:
+            return None
 
         scan_result = self._get_suggestions_service()._scan_single_ebook(ebook_anchor, candidate_pool)
         matches = (scan_result or {}).get('matches') or []

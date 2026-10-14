@@ -158,3 +158,37 @@ def test_same_entry_not_attempted_for_grimmory():
         source_name='BookLore', env_prefix='BOOKLORE', info={"tracks": [{"id": 1}]})
     assert _run_one(svc, client) == 'ebook_only'
     client.get_audiobook_info.assert_not_called()
+
+
+# ---- empty candidate pool still allows the same-entry shortcut ----------
+
+def _run_shelf_empty_pool(info):
+    svc, client, bms, sugg = _same_entry_svc(info=info)
+    sugg._build_audiobook_candidate_pool.return_value = []
+    client.is_configured.return_value = True
+    client.list_books_on_shelf.return_value = [
+        {"id": "77", "title": "Some Book", "fileName": "some-book.epub"}]
+    svc._is_enabled = MagicMock(return_value=True)
+    svc._watch_shelf_name = MagicMock(return_value="Up Next")
+    svc._kobo_shelf_name = MagicMock(return_value="Kobo")
+    svc._is_already_mapped = MagicMock(return_value=False)
+    svc._is_throttled = MagicMock(return_value=False)
+    stats = svc._process_watch_shelf(active_client=client)
+    return svc, bms, sugg, stats
+
+
+def test_empty_pool_same_entry_audio_still_auto_matches():
+    svc, bms, sugg, stats = _run_shelf_empty_pool({"tracks": [{"id": 1}], "duration_seconds": 3600.0})
+    assert stats['auto_matched'] == 1
+    bms.create_audio_mapping_from_match.assert_called_once()
+    bms.create_ebook_only_mapping.assert_not_called()
+    sugg._scan_single_ebook.assert_not_called()
+
+
+def test_empty_pool_without_same_entry_audio_stays_deferred():
+    svc, bms, sugg, stats = _run_shelf_empty_pool({"tracks": []})
+    assert stats['auto_matched'] == 0 and stats['ebook_only'] == 0
+    bms.create_audio_mapping_from_match.assert_not_called()
+    bms.create_ebook_only_mapping.assert_not_called()
+    sugg._scan_single_ebook.assert_not_called()
+    svc.database_service.upsert_shelf_watch_scan.assert_not_called()
