@@ -469,6 +469,10 @@ function APIClient:ackAnnotations(payload)
 end
 
 function APIClient:uploadBookStatus(payload)
+    local books = payload and payload.books
+    if type(books) == "table" and next(books) == nil then
+        setmetatable(books, { __jsontype = "array" })
+    end
     local body = json.encode(payload)
     local ok, code, resp_body = self:_requestJSON("POST", "/koreader/device-sync/status", body, {
         block_timeout = 20,

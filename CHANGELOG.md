@@ -37,6 +37,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Keep the KOReader reading-status upload's empty `books` field encoded as a JSON
+  array so the server accepts it and the device still pulls merged statuses.
 - Bind cached input recovery to its approved audiobook and ebook pairing across
   retries and restarts. Commit its alignment, backup, activation and job completion
   together; a changed pairing, job, map or document owner leaves the newer state

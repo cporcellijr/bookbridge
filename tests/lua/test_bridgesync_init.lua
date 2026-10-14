@@ -276,6 +276,43 @@ preload("docsettings", function()
 end)
 
 local BridgeSync = require("main")
+do
+    local BookStatus = require("bridge_book_status")
+    local original_collect = BookStatus.collect
+    local original_apply = BookStatus.apply
+    local collected = {}
+    local uploads, pulls = 0, 0
+    BookStatus.collect = function() return collected end
+    BookStatus.apply = function() return { applied = 0, unchanged = 0, deferred = 0, errors = 0 } end
+    local sync = BridgeSync:new{
+        api = {
+            uploadBookStatus = function(_, payload)
+                uploads = uploads + 1
+                assert(payload.books == collected,
+                    "status sync must upload the collected statuses")
+                return true, { accepted = #payload.books }
+            end,
+            getMergedBookStatus = function()
+                pulls = pulls + 1
+                return true, { books = {} }
+            end,
+        },
+        _currentDeviceIdentity = function() return "reader", "device-1" end,
+        _buildHashIndex = function() return {} end,
+        _currentDocumentPath = function() return nil end,
+    }
+    local result = sync:_runBookStatusSync()
+    assert(not result.err and uploads == 1 and pulls == 1,
+        "an empty local status upload must still pull merged statuses: "
+            .. tostring(result.err) .. " (uploads=" .. uploads .. ", pulls=" .. pulls .. ")")
+
+    collected = { { md5 = "abc", status = "reading", modified = "2026-10-14" } }
+    result = sync:_runBookStatusSync()
+    assert(not result.err and result.uploaded == 1 and uploads == 2 and pulls == 2,
+        "a populated local status upload must still complete the merged pull")
+    BookStatus.collect = original_collect
+    BookStatus.apply = original_apply
+end
 local extracted_paths = {}
 local fake_archiver = {
     Reader = {
