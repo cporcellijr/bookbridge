@@ -1490,6 +1490,23 @@ class DatabaseService:
             ).first()
             return row[0] if row else None
 
+    def find_duplicate_mapping(self, keep_book) -> Optional[str]:
+        """The abs_id that absorb_duplicate_mapping would fold into ``keep_book``, or None.
+
+        Read-only, so a caller can check it may touch that mapping before saving
+        anything.
+        """
+        keep_abs_id = getattr(keep_book, "abs_id", None)
+        if not keep_abs_id:
+            return None
+        doc_id = str(getattr(keep_book, "kosync_doc_id", None) or "").strip()
+        if doc_id:
+            candidate = self.get_book_by_kosync_id(doc_id)
+            candidate_id = getattr(candidate, "abs_id", None)
+            if candidate_id and candidate_id != keep_abs_id:
+                return candidate_id
+        return self._find_ebook_only_duplicate(keep_book)
+
     def absorb_duplicate_mapping(self, keep_book) -> Optional[str]:
         """Fold a stale mapping for the same ebook into ``keep_book``.
 
@@ -1508,16 +1525,7 @@ class DatabaseService:
         if not keep_abs_id:
             return None
 
-        stale_abs_id = None
-        doc_id = str(getattr(keep_book, "kosync_doc_id", None) or "").strip()
-        if doc_id:
-            candidate = self.get_book_by_kosync_id(doc_id)
-            candidate_id = getattr(candidate, "abs_id", None)
-            if candidate_id and candidate_id != keep_abs_id:
-                stale_abs_id = candidate_id
-
-        if stale_abs_id is None:
-            stale_abs_id = self._find_ebook_only_duplicate(keep_book)
+        stale_abs_id = self.find_duplicate_mapping(keep_book)
 
         if not stale_abs_id:
             # Logged so that "ran and found nothing" is distinguishable from

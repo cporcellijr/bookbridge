@@ -42,6 +42,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Stop readers from changing or removing each other's books when matching. On a
+  multi-user install, matching could fold another reader's book into yours, taking
+  their progress with it, or point their book at a different ebook. A reader can now
+  only change books in their own library; matching a book someone else already set up
+  with the same ebook just adds it to your library, and anything that would change it
+  is refused with a message to ask an admin. Admins work as before.
 - Harden KoSync sign-in for servers reachable from the internet. KOReader's login and
   register buttons now share the limit on wrong passwords that already protected
   syncing, so they can no longer be used to guess a reader's password without limit.

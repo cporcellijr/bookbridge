@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 import requests
 import schedule
 from dependency_injector import providers
-from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash
+from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context
 from functools import wraps
 from src.utils.user_context import (
     set_current_user_id, reset_current_user_id,
@@ -2688,7 +2688,7 @@ def _resolve_abs_chapters_for_storyteller_ingest(book):
     return item_details.get("media", {}).get("chapters", []) or []
 
 
-def _preserve_or_reset_mapping_status(
+def _mapping_identity_changes(
     target_book,
     *,
     kosync_doc_id=None,
@@ -2697,31 +2697,12 @@ def _preserve_or_reset_mapping_status(
     storyteller_uuid=None,
     ebook_source=None,
     ebook_source_id=None,
-) -> None:
-    """Queue a mapping for processing, unless its existing alignment still applies.
+) -> tuple[list, bool]:
+    """Which pairing fields a re-match would change on ``target_book``.
 
-    Re-matching used to reset every mapping to 'pending' unconditionally, which sent
-    an already-aligned book back through transcription and alignment. That is what a
-    second user hit when adopting a book someone else had already matched: the
-    catalog row and its alignment are shared, so the only thing they actually needed
-    was the per-user claim.
-
-    An alignment is only reusable when the pairing it was built from is unchanged, so
-    every identity value the caller is about to overwrite is compared first — a
-    genuine re-map (different ebook or different audio) still re-runs the pipeline.
-    Mirrors the same decision in SyncManager's clear-progress path.
-
-    MUST be called before the caller overwrites those attributes.
+    Returns ``(changed, same_stable_ebook)``. A field going from empty to populated
+    is not a change. Shared by the status guard below and the cross-user guard.
     """
-    if target_book is None:
-        return
-
-    abs_id = getattr(target_book, "abs_id", None)
-    # Every identity value a caller may overwrite has to be listed here: a field
-    # that is set later but never compared silently keeps a stale alignment. The
-    # readalong uuid and the ebook source id are as much a part of the pairing as
-    # the filename — swapping a book to a different Storyteller readalong changes
-    # the audio the map was built against.
     existing_source = _normalize_text_source_type(getattr(target_book, "ebook_source", None))
     next_source = _normalize_text_source_type(ebook_source) if ebook_source is not None else existing_source
     existing_source_id = str(getattr(target_book, "ebook_source_id", None) or "").strip()
@@ -2757,6 +2738,52 @@ def _preserve_or_reset_mapping_status(
 
     if ebook_source is not None and existing_source and existing_source.lower() != next_source.lower():
         changed.append("ebook_source")
+    return changed, same_stable_ebook
+
+
+def _preserve_or_reset_mapping_status(
+    target_book,
+    *,
+    kosync_doc_id=None,
+    ebook_filename=None,
+    audio_source_id=None,
+    storyteller_uuid=None,
+    ebook_source=None,
+    ebook_source_id=None,
+) -> None:
+    """Queue a mapping for processing, unless its existing alignment still applies.
+
+    Re-matching used to reset every mapping to 'pending' unconditionally, which sent
+    an already-aligned book back through transcription and alignment. That is what a
+    second user hit when adopting a book someone else had already matched: the
+    catalog row and its alignment are shared, so the only thing they actually needed
+    was the per-user claim.
+
+    An alignment is only reusable when the pairing it was built from is unchanged, so
+    every identity value the caller is about to overwrite is compared first — a
+    genuine re-map (different ebook or different audio) still re-runs the pipeline.
+    Mirrors the same decision in SyncManager's clear-progress path.
+
+    MUST be called before the caller overwrites those attributes.
+    """
+    if target_book is None:
+        return
+
+    abs_id = getattr(target_book, "abs_id", None)
+    # Every identity value a caller may overwrite has to be listed here: a field
+    # that is set later but never compared silently keeps a stale alignment. The
+    # readalong uuid and the ebook source id are as much a part of the pairing as
+    # the filename — swapping a book to a different Storyteller readalong changes
+    # the audio the map was built against.
+    changed, same_stable_ebook = _mapping_identity_changes(
+        target_book,
+        kosync_doc_id=kosync_doc_id,
+        ebook_filename=ebook_filename,
+        audio_source_id=audio_source_id,
+        storyteller_uuid=storyteller_uuid,
+        ebook_source=ebook_source,
+        ebook_source_id=ebook_source_id,
+    )
 
     if same_stable_ebook and not changed:
         logger.info(
@@ -3018,6 +3045,21 @@ def _upsert_storyteller_mapping(
 
     if not target_book:
         return None, "Book not found", 404
+
+    if not _may_absorb_mapping(migration_source_id):
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
+    access = _existing_mapping_access(
+        None if created_ebook_only else target_book,
+        kosync_doc_id=kosync_doc_id,
+        ebook_filename=resolved_ebook_filename,
+        storyteller_uuid=selected_storyteller_uuid,
+        ebook_source=selected_ebook_source,
+        ebook_source_id=selected_ebook_source_id,
+    )
+    if access == "join":
+        return target_book, None, None
+    if access == "deny":
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
 
     _preserve_or_reset_mapping_status(
         target_book,
@@ -3950,6 +3992,19 @@ def _create_or_update_library_audio_mapping(
     # can return a row whose abs_id is not the bridge key, and re-keying it here would
     # strand the states, annotations and per-user claims filed against the old id.
     # Consolidating a genuine duplicate is `absorb_duplicate_mapping`'s job, below.
+    access = _existing_mapping_access(
+        existing_book,
+        kosync_doc_id=kosync_doc_id,
+        ebook_filename=resolved_ebook_filename,
+        audio_source_id=str(audio_source_id),
+        storyteller_uuid=storyteller_uuid,
+        ebook_source=ebook_source,
+        ebook_source_id=ebook_source_id,
+    )
+    if access == "join":
+        return existing_book, None, None
+    if access == "deny":
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
     target_book = existing_book or Book(abs_id=bridge_key, sync_mode="audiobook")
     target_book.abs_title = audio_title or target_book.abs_title or bridge_key
     _preserve_or_reset_mapping_status(
@@ -4014,6 +4069,9 @@ def _create_or_update_library_audio_mapping(
                 "Series resolve on match failed for '%s': %s",
                 sanitize_log_data(target_book.abs_title), series_err, exc_info=True,
             )
+
+    if not _may_absorb_mapping(database_service.find_duplicate_mapping(target_book)):
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
 
     saved_book = database_service.save_book(target_book)
 
@@ -4099,6 +4157,21 @@ def _create_or_update_audio_only_mapping(
         database_service.get_book(bridge_key)
         or database_service.get_book_by_audio_source(audio_source, audio_source_id)
     )
+
+    if existing_book is not None and not _acting_user_may_modify_book(existing_book.abs_id):
+        # An audio-only re-match strips the text side, so it only leaves another
+        # reader's mapping untouched when that mapping is audio-only already.
+        if getattr(existing_book, "sync_mode", None) == "audiobook_only":
+            logger.info(
+                "🔗 '%s' is already mapped by another reader with the same text — adding it to this reader's library unchanged",
+                sanitize_log_data(existing_book.abs_id),
+            )
+            return existing_book, None, None
+        logger.info(
+            "🔒 Refused to change mapping '%s': it belongs to another reader (%s would change)",
+            sanitize_log_data(existing_book.abs_id), "text source",
+        )
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
 
     clients = uc()
     default_cover = None
@@ -4285,6 +4358,17 @@ def _create_or_update_bookfusion_progress_mapping(
         default_cover = audio_cover_url
         resolved_title = audio_title or bookfusion_title or abs_id
 
+    access = _existing_mapping_access(
+        existing_book,
+        audio_source_id=str(audio_source_id),
+        storyteller_uuid=storyteller_uuid,
+        ebook_source="BookFusion",
+        ebook_source_id=str(bookfusion_id),
+    )
+    if access == "join":
+        return existing_book, None, None
+    if access == "deny":
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
     target_book = existing_book or Book(abs_id=abs_id, sync_mode="audiobook")
     _preserve_or_reset_mapping_status(
         target_book,
@@ -4337,6 +4421,11 @@ def _create_or_update_bookfusion_progress_mapping(
                 "⚠️ BookFusion tri-link: could not obtain Storyteller artifact '%s' for '%s'",
                 storyteller_uuid, target_book.abs_title,
             )
+
+    if getattr(target_book, "kosync_doc_id", None) and not _may_absorb_mapping(
+        database_service.find_duplicate_mapping(target_book)
+    ):
+        return None, _FOREIGN_MAPPING_MESSAGE, 403
 
     saved_book = database_service.save_book(target_book)
     if not isinstance(getattr(saved_book, "abs_id", None), str):
@@ -6965,6 +7054,13 @@ def match():
 
             from src.db.models import Book
 
+            forge_target_id = (
+                _build_bridge_key(audio_source, audio_source_id)
+                if audio_source in _LIBRARY_AUDIO_SOURCES else abs_id
+            )
+            if not _may_replace_mapping(forge_target_id):
+                return _FOREIGN_MAPPING_MESSAGE, 403
+
             if audio_source in _LIBRARY_AUDIO_SOURCES:
                 forge_title = audio_title or Path(selected_filename or f"{audio_source.lower()}_{audio_source_id}").stem
                 forge_id = _build_bridge_key(audio_source, audio_source_id)
@@ -7103,6 +7199,21 @@ def match():
 
         # [DUPLICATE MERGE] Check if this ebook is already linked to another ABS ID (e.g. ebook-only entry)
         existing_book = database_service.get_book_by_kosync_id(kosync_doc_id)
+        if existing_book and existing_book.abs_id != abs_id and not _may_absorb_mapping(existing_book.abs_id):
+            return _FOREIGN_MAPPING_MESSAGE, 403
+        access = _existing_mapping_access(
+            current_book_entry,
+            ebook_filename=ebook_filename,
+            audio_source_id=abs_id,
+            storyteller_uuid=storyteller_uuid,
+            ebook_source=ebook_source,
+            ebook_source_id=ebook_source_id,
+        )
+        if access == "deny":
+            return _FOREIGN_MAPPING_MESSAGE, 403
+        if access == "join":
+            _claim_book_for_current_user(abs_id)
+            return redirect(url_for('index'))
         migration_source_id = None
         abs_ebook_item_id = None
         preserved_storyteller_uuid = current_book_entry.storyteller_uuid if current_book_entry else None
@@ -7601,6 +7712,19 @@ def _process_batch_queue(queue_items):
         if current_book_entry and current_book_entry.kosync_doc_id:
             logger.info(f"🔄 Preserving existing hash '{current_book_entry.kosync_doc_id}' for '{item['abs_id']}' instead of new hash '{kosync_doc_id}'")
             kosync_doc_id = current_book_entry.kosync_doc_id
+        access = _existing_mapping_access(
+            current_book_entry,
+            ebook_filename=ebook_filename,
+            audio_source_id=item['abs_id'],
+            storyteller_uuid=storyteller_uuid or None,
+            ebook_source=item.get('ebook_source'),
+            ebook_source_id=item.get('ebook_source_id'),
+        )
+        if access == "deny":
+            continue
+        if access == "join":
+            _claim_book_for_user_id(get_current_user_id(), item['abs_id'])
+            continue
 
         item_details = clients.abs_client.get_item_details(item['abs_id'])
         chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
@@ -7788,6 +7912,19 @@ def _process_forge_match_queue(queue_items):
             current_book_entry = database_service.get_book(item['abs_id'])
             if current_book_entry and current_book_entry.kosync_doc_id:
                 kosync_doc_id = current_book_entry.kosync_doc_id
+            access = _existing_mapping_access(
+                current_book_entry,
+                ebook_filename=ebook_filename,
+                audio_source_id=item['abs_id'],
+                storyteller_uuid=storyteller_uuid or None,
+                ebook_source=item.get('ebook_source'),
+                ebook_source_id=item.get('ebook_source_id'),
+            )
+            if access == "deny":
+                continue
+            if access == "join":
+                _claim_book_for_user_id(get_current_user_id(), item['abs_id'])
+                continue
 
             item_details = clients.abs_client.get_item_details(item['abs_id'])
             chapters = item_details.get('media', {}).get('chapters', []) if item_details else []
@@ -7910,6 +8047,8 @@ def _process_forge_match_queue(queue_items):
                 )
                 continue
 
+            if not _may_replace_mapping(forge_id):
+                continue
             forge_title = item.get('audio_title') or item.get('abs_title') or Path(original_filename).stem
             book = Book(
                 abs_id=forge_id,
@@ -7961,6 +8100,8 @@ def _process_forge_match_queue(queue_items):
                 )
                 continue
 
+            if not _may_replace_mapping(forge_id):
+                continue
             forge_title = item.get('abs_title') or item.get('audio_title') or forge_id
             book = Book(
                 abs_id=forge_id,
@@ -9779,6 +9920,79 @@ def _user_may_modify_book(user, abs_id) -> bool:
         return database_service.is_user_linked(user.id, abs_id)
     except Exception:
         return False
+
+
+_FOREIGN_MAPPING_MESSAGE = (
+    "Forbidden: another reader's mapping already uses this book. Ask an admin to change it."
+)
+
+
+def _acting_user_may_modify_book(abs_id) -> bool:
+    """_user_may_modify_book for whoever is acting right now.
+
+    In a request that is the signed-in user; in a user-scoped background job
+    (the Add Book queue) it is the user the job runs for. Work with no user at
+    all is system work and may.
+    """
+    if has_request_context():
+        return _user_may_modify_book(current_user(), abs_id)
+    user_id = get_current_user_id()
+    if user_id is None:
+        return True
+    try:
+        user = database_service.get_user(user_id)
+        if user is None:
+            return False
+        return bool(getattr(user, "is_admin", False)) or database_service.is_user_linked(user_id, abs_id)
+    except Exception:
+        return False
+
+
+def _existing_mapping_access(existing_book, **identity) -> str:
+    """Whether a match may rewrite ``existing_book`` for the acting user.
+
+    'modify' when there is no such mapping or the user may change it. Otherwise
+    the mapping is another reader's: 'join' when the request names the pairing it
+    already has, so the caller only adds it to this reader's library, and 'deny'
+    when the match would change it. ``identity`` takes the keyword arguments of
+    _mapping_identity_changes.
+    """
+    if existing_book is None or _acting_user_may_modify_book(existing_book.abs_id):
+        return "modify"
+    changed, _ = _mapping_identity_changes(existing_book, **identity)
+    if changed:
+        logger.info(
+            "🔒 Refused to change mapping '%s': it belongs to another reader (%s would change)",
+            sanitize_log_data(existing_book.abs_id), ", ".join(changed),
+        )
+        return "deny"
+    logger.info(
+        "🔗 '%s' is already mapped by another reader with the same text — adding it to this reader's library unchanged",
+        sanitize_log_data(existing_book.abs_id),
+    )
+    return "join"
+
+
+def _may_absorb_mapping(abs_id) -> bool:
+    """Whether a match may fold the mapping ``abs_id`` into another one."""
+    if not abs_id or _acting_user_may_modify_book(abs_id):
+        return True
+    logger.info(
+        "🔒 Refused to absorb mapping '%s': it belongs to another reader",
+        sanitize_log_data(abs_id),
+    )
+    return False
+
+
+def _may_replace_mapping(abs_id) -> bool:
+    """Whether a match may overwrite the stored mapping ``abs_id`` wholesale (Forge)."""
+    if not abs_id or database_service.get_book(abs_id) is None or _acting_user_may_modify_book(abs_id):
+        return True
+    logger.info(
+        "🔒 Refused to change mapping '%s': it belongs to another reader (%s would change)",
+        sanitize_log_data(abs_id), "the whole mapping",
+    )
+    return False
 
 
 def _forbidden_book_response(json_response: bool = False):
