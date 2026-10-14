@@ -74,6 +74,14 @@ ports:
   - "5758:5758"
 ```
 
+Every KoSync sign-in, including KOReader's login and register buttons, is refused for
+a minute after five wrong passwords for the same username from the same address. If
+the KoSync port sits behind a reverse proxy or tunnel (nginx, Caddy, cloudflared), set
+**Trusted proxy addresses** (`KOSYNC_TRUSTED_PROXIES`) to the proxy's address so the
+count follows each reader's real address. Otherwise everyone shares the proxy's
+address, and someone guessing a reader's password would lock that reader's own devices
+out too.
+
 ### Admin API (Optional)
 
 A small JSON API lets a script create readers and set their integrations, for
@@ -174,6 +182,7 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 | Share Recently-Read Books Between Devices | `KOREADER_SYNC_READ_HISTORY` | `false` | Adds a book you read on one device into KOReader's History on your others, so views built from History (like a "Recent" shelf) look the same everywhere. Bounded per sync: only books whose file is already on the device, nothing read more than 30 days ago, and at most 25 books. Requires the **BridgeSync 0.9.6** plugin (or newer) on each device. |
 | Target KOSync URL | `KOSYNC_SERVER` | empty | Under **Advanced** on the card. An empty value uses the built-in server at `http://127.0.0.1:<KOSYNC_PORT or 5757>`, including installs configured only through environment variables. Set another URL only to relay through a separate external KoSync instance. |
 | Split-Port Listener | `KOSYNC_PORT` | empty | Optional dedicated KOSync port for internet-safe exposure. |
+| Trusted Proxy Addresses | `KOSYNC_TRUSTED_PROXIES` | empty | Under **Advanced — behind a reverse proxy**. Comma-separated IPs or CIDR ranges of the proxy or tunnel in front of the KoSync port. Requests from them are rate-limited under the client address in `X-Forwarded-For`. Empty trusts only localhost. List only your proxy: any address covered here can claim to be any client. |
 | When Two KOReader Devices Disagree | `KOSYNC_ACTIVE_DEVICE_WINS` | `shadow` | Under **Advanced — cross-device progress**. `shadow` (**Watch and log only**) records the choice the arbiter would make without changing anything readers receive; `on` (**Let the device you are reading on win**) lets the device you are actively reading — proven by several forward page turns in a row — outrank a stale device sitting at the furthest position; `off` (**Always use the furthest position**) keeps the original behavior. |
 
 KOSync notes:

@@ -13856,6 +13856,11 @@ def api_diagnostics_submissions():
 
 
 # --- Application Factory ---
+# Largest request body either server reads. The split-port sync server serves the
+# same KoSync blueprint, so the same cap fits every device upload it accepts.
+_MAX_REQUEST_BYTES = 8 * 1024 * 1024
+
+
 def create_app(test_container=None):
     # Under a test container, run deferred work inline so integration tests are
     # deterministic (no background thread races).
@@ -13877,7 +13882,7 @@ def create_app(test_container=None):
     if str(os.environ.get("SESSION_COOKIE_SECURE", "")).strip().lower() in ("true", "1", "yes", "on"):
         app.config["SESSION_COOKIE_SECURE"] = True
 
-    app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+    app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
 
     # Tests inject a test_container and exercise routes without a session; honor
     # Flask's conventional LOGIN_DISABLED so the auth guard is a no-op there.
@@ -14075,6 +14080,23 @@ def create_app(test_container=None):
     # Return both app and container for external reference
     return app, container
 
+
+def create_sync_only_app() -> Flask:
+    """The split-port KoSync server: the sync blueprint alone, with the body cap.
+
+    Two KoSync routes read a JSON body before any credential check, so without
+    the cap an unauthenticated request of any size is read and parsed in full.
+    """
+    sync_app = Flask(__name__)
+    sync_app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
+    sync_app.register_blueprint(kosync_sync_bp)
+
+    @sync_app.route('/')
+    def sync_health():
+        return "Sync Server OK", 200
+
+    return sync_app
+
 # ---------------- MAIN ----------------
 if __name__ == '__main__':
 
@@ -14257,12 +14279,7 @@ if __name__ == '__main__':
     sync_port = os.environ.get('KOSYNC_PORT')
     if sync_port and int(sync_port) != 5757:
         def run_sync_only_server(port):
-            sync_app = Flask(__name__)
-            sync_app.register_blueprint(kosync_sync_bp)
-            @sync_app.route('/')
-            def sync_health():
-                return "Sync Server OK", 200
-            sync_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+            create_sync_only_app().run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
         threading.Thread(target=run_sync_only_server, args=(int(sync_port),), daemon=True).start()
         logger.info(f"🚀 Split-Port Mode Active: Sync-only server on port {sync_port}")

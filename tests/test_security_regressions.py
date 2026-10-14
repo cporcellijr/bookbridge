@@ -14,4 +14,5 @@ def test_storyteller_results_do_not_interpolate_remote_fields_into_html():
 def test_request_body_limit_is_configured():
     source = Path("src/web_server.py").read_text(encoding="utf-8")
 
-    assert 'app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024' in source
+    assert "_MAX_REQUEST_BYTES = 8 * 1024 * 1024" in source
+    assert '\n    app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES' in source

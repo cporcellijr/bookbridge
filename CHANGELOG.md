@@ -42,6 +42,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Harden KoSync sign-in for servers reachable from the internet. KOReader's login and
+  register buttons now share the limit on wrong passwords that already protected
+  syncing, so they can no longer be used to guess a reader's password without limit.
+  Behind a reverse proxy or tunnel, the limit can follow each reader's real address
+  (set **Trusted proxy addresses** under KOSync → Advanced), so a stranger's wrong
+  guesses no longer lock a reader's own devices out. The split-port KoSync server
+  now refuses request bodies over 8 MB, and keys are compared in constant time.
 - Map a book added to the BookOrbit watch shelf to its own audiobook when the same
   BookOrbit entry has audio files, instead of creating an ebook-only entry when
   the book was added recently (#515).

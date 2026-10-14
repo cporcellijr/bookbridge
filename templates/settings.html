@@ -912,6 +912,17 @@
                             from Add / Update Book -> Reader Documents before any sync — percentage or text — can happen.</div>
                     </div>
 
+                    <details class="advanced-sub full-width">
+                        <summary>Advanced — behind a reverse proxy</summary>
+                        <div class="section-body" style="padding: 12px 0 0;">
+                            <div class="form-group full-width">
+                                <label>Trusted proxy addresses</label>
+                                <input type="text" name="KOSYNC_TRUSTED_PROXIES" value="{{ get_val('KOSYNC_TRUSTED_PROXIES') }}" placeholder="172.18.0.5, 10.0.0.0/24">
+                                <div class="help-text">Comma-separated IP addresses or CIDR ranges of the reverse proxy or tunnel (nginx, Caddy, cloudflared) in front of the KoSync port. Requests from these addresses are counted under the reader's real address from <code>X-Forwarded-For</code>, so repeated wrong passwords lock out only the sender, not every reader behind the proxy. <strong>Leave blank to trust only localhost.</strong> On Docker, this is the proxy container's address on the shared network (find it with <code>docker inspect</code>). List only your proxy: any address covered here can claim to be any client.</div>
+                            </div>
+                        </div>
+                    </details>
+
                     <details class="advanced-sub full-width" {% if kosync_external %}open{% endif %}>
                         <summary>Advanced — external KoSync server</summary>
                         <div class="section-body" style="padding: 12px 0 0;">

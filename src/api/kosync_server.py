@@ -1,7 +1,9 @@
 # KoSync Server - Extracted from web_server.py for clean code separation
 # Implements KOSync protocol compatible with kosync-dotnet
 import hashlib
+import hmac
 import io
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -75,6 +77,7 @@ _AUTH_FAILURES: dict[tuple[str, str], list[float]] = {}
 _AUTH_FAILURES_LOCK = threading.Lock()
 _AUTH_FAILURE_LIMIT = 5
 _AUTH_FAILURE_WINDOW = 60
+_LOOPBACK_PROXY_NETWORKS = ('127.0.0.0/8', '::1/128')
 
 # Plugin self-update: resolved from src/api/ -> project root -> plugins/
 _PLUGIN_DIR = Path(__file__).parent.parent.parent / "plugins" / "bridgesync.koplugin"
@@ -1205,14 +1208,67 @@ def _kosync_debounce_loop() -> None:
 
 
 def _kosync_creds_match(presented_key: str, stored_secret: str) -> bool:
-    """KOReader sends either the raw key or its md5 hash."""
-    if not presented_key or not stored_secret:
+    """KOReader sends either the raw key or its md5 hash. Compared in constant time."""
+    if not isinstance(presented_key, str) or not presented_key or not stored_secret:
         return False
-    return presented_key == stored_secret or presented_key == hash_kosync_key(stored_secret)
+    presented = presented_key.encode("utf-8")
+    return (
+        hmac.compare_digest(presented, stored_secret.encode("utf-8"))
+        or hmac.compare_digest(presented, hash_kosync_key(stored_secret).encode("utf-8"))
+    )
 
 
-def _auth_failure_key(username: str) -> tuple[str, str]:
-    return ((username or "").strip().lower(), request.remote_addr or "")
+def _kosync_trusted_proxies() -> list:
+    """Reverse proxies whose X-Forwarded-For names the KoSync client, read per call.
+
+    KOSYNC_TRUSTED_PROXIES is a comma-separated list of IPs/CIDRs; blank means
+    localhost only. Malformed entries are skipped, never widening the list.
+    """
+    raw = os.environ.get('KOSYNC_TRUSTED_PROXIES', '') or ''
+    entries = [part.strip() for part in raw.replace('\n', ',').split(',') if part.strip()]
+    networks = []
+    for entry in entries or _LOOPBACK_PROXY_NETWORKS:
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            get_persistent_condition_logger().warn(
+                logger,
+                f"kosync_bad_proxy_entry:{entry}",
+                "⚠️ KOSYNC_TRUSTED_PROXIES entry %s is not a valid IP or CIDR — ignoring it",
+                entry,
+            )
+    return networks
+
+
+def _kosync_client_address() -> str:
+    """The KoSync client's address for rate limiting.
+
+    The TCP peer, unless the peer is a trusted proxy: then the right-most
+    X-Forwarded-For hop that is not itself a trusted proxy. Behind a proxy every
+    request otherwise shares the proxy's address, and five bad keys from anyone
+    would lock the real reader out.
+    """
+    networks = _kosync_trusted_proxies()
+
+    def trusted(address: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(ip in network for network in networks)
+
+    peer = (request.remote_addr or "").strip()
+    if not trusted(peer):
+        return peer
+    hops = [hop.strip() for hop in request.headers.get("X-Forwarded-For", "").split(",") if hop.strip()]
+    for hop in reversed(hops):
+        if not trusted(hop):
+            return hop
+    return peer
+
+
+def _auth_failure_key(username) -> tuple[str, str]:
+    return (str(username or "").strip().lower(), _kosync_client_address())
 
 
 def _auth_is_limited(key: tuple[str, str], failed: bool = False) -> bool:
@@ -1226,6 +1282,24 @@ def _auth_is_limited(key: tuple[str, str], failed: bool = False) -> bool:
         else:
             _AUTH_FAILURES.pop(key, None)
         return len(recent) >= _AUTH_FAILURE_LIMIT
+
+
+def _authenticate_kosync_limited(username, key) -> tuple[bool, Optional[int], bool]:
+    """authenticate_kosync behind the per-(username, client) failure limiter.
+
+    Returns (authenticated, user_id, limited). A limited request is refused before
+    the credentials are checked; a failure is counted, a success clears the count.
+    """
+    failure_key = _auth_failure_key(username)
+    if _auth_is_limited(failure_key):
+        return False, None, True
+    authenticated, user_id = authenticate_kosync(username, key)
+    if authenticated:
+        with _AUTH_FAILURES_LOCK:
+            _AUTH_FAILURES.pop(failure_key, None)
+    else:
+        _auth_is_limited(failure_key, failed=True)
+    return authenticated, user_id, False
 
 
 def _kosync_user_may_access_book(book) -> bool:
@@ -1261,7 +1335,7 @@ def authenticate_kosync(username: str, key: str):
     which case user_id is the default/admin user (or None if no users exist —
     still authenticated, scoping then falls back to the default).
     """
-    if not username or not key:
+    if not isinstance(username, str) or not isinstance(key, str) or not username or not key:
         return False, None
 
     # 1. Per-user credentials
@@ -1297,18 +1371,13 @@ def kosync_auth_required(f):
     def decorated_function(*args, **kwargs):
         user = request.headers.get('x-auth-user')
         key = request.headers.get('x-auth-key')
-        failure_key = _auth_failure_key(user)
-        if _auth_is_limited(failure_key):
+        authenticated, user_id, limited = _authenticate_kosync_limited(user, key)
+        if limited:
             return jsonify({"error": "Too many authentication attempts"}), 429
-
-        authenticated, user_id = authenticate_kosync(user, key)
         if not authenticated:
-            _auth_is_limited(failure_key, failed=True)
             logger.warning(f"⚠️ KOSync Integrated Server: Unauthorized access attempt from '{request.remote_addr}' (user: '{user}')")
             return jsonify({"error": "Unauthorized"}), 401
 
-        with _AUTH_FAILURES_LOCK:
-            _AUTH_FAILURES.pop(failure_key, None)
         g.kosync_user_id = user_id
         token = set_current_user_id(user_id)
         try:
@@ -1338,7 +1407,9 @@ def kosync_users_auth():
         logger.warning(f"⚠️ KOSync Auth: Missing credentials from '{request.remote_addr}'")
         return jsonify({"message": "Invalid credentials"}), 401
 
-    authenticated, _ = authenticate_kosync(user, key)
+    authenticated, _, limited = _authenticate_kosync_limited(user, key)
+    if limited:
+        return jsonify({"message": "Too many authentication attempts"}), 429
     if authenticated:
         logger.debug(f"KOSync Auth: User '{user}' authenticated successfully")
         return jsonify({"username": user}), 200
@@ -1364,7 +1435,9 @@ def kosync_users_create():
     requested = data.get("username") or request.form.get("username") or ""
     password = data.get("password") or request.form.get("password") or ""
 
-    authenticated, _ = authenticate_kosync(requested, password)
+    authenticated, _, limited = _authenticate_kosync_limited(requested, password)
+    if limited:
+        return jsonify({"message": "Too many authentication attempts"}), 429
     if not authenticated:
         logger.warning(
             f"⚠️ KOSync Create: Registration refused for unconfigured user '{requested}' from "
@@ -1394,7 +1467,9 @@ def kosync_users_login():
         user = user or data.get("username")
         key = key or data.get("password")
 
-    authenticated, _ = authenticate_kosync(user, key)
+    authenticated, _, limited = _authenticate_kosync_limited(user, key)
+    if limited:
+        return jsonify({"message": "Too many authentication attempts"}), 429
     if not authenticated:
         logger.warning(f"⚠️ KOSync Login: Failed attempt for user '{user}' from '{request.remote_addr}'")
         return jsonify({"message": "Unauthorized"}), 401
