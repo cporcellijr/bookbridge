@@ -137,6 +137,51 @@ class TestGoodreadsClient(unittest.TestCase):
 
     @patch("src.api.goodreads_client.requests.post")
     @patch("src.api.goodreads_client.requests.get")
+    def test_browser_transport_handles_webdriver_error_for_current_url(self, get, post):
+        get.side_effect = [
+            Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}}),
+            Mock(json=lambda: {"value": {"error": "invalid session id", "message": "gone"}}),
+        ]
+        client = GoodreadsClient({
+            "GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium:4444",
+        }, user_id=7, enforce_global_gate=False)
+
+        with patch("src.api.goodreads_client.logger") as logger:
+            self.assertIsNone(client._request("/"))
+
+        logger.warning.assert_called_once_with("Goodreads browser request failed")
+        post.assert_not_called()
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
+    def test_browser_navigation_handles_webdriver_error_url_and_source(self, get, post):
+        session_status = Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}})
+        start_url = Mock(json=lambda: {"value": "https://www.goodreads.com/"})
+        bad_url = Mock(json=lambda: {"value": {"error": "invalid session id", "message": "gone"}})
+        good_url = Mock(json=lambda: {"value": "https://www.goodreads.com/book/show/123"})
+        bad_source = Mock(json=lambda: {"value": {"error": "invalid session id", "message": "gone"}})
+        challenge = {"value": {
+            "status": 202, "url": "https://www.goodreads.com/book/show/123",
+            "body": "challenge", "waf": "challenge",
+        }}
+        client = GoodreadsClient({
+            "GOODREADS_ENABLED": "true", "GOODREADS_BROWSER_URL": "http://selenium:4444",
+        }, user_id=7, enforce_global_gate=False)
+
+        for label, navigation_response, later_gets, final_endpoint in (
+            ("navigation URL error", bad_url, [], "/url"),
+            ("navigation source error", good_url, [bad_source], "/source"),
+        ):
+            with self.subTest(path=label):
+                get.reset_mock()
+                post.reset_mock()
+                get.side_effect = [session_status, start_url, navigation_response, *later_gets]
+                post.side_effect = [Mock(json=lambda: challenge), Mock(status_code=200)]
+                self.assertIsNone(client._request("/book/show/123"))
+                self.assertTrue(get.call_args_list[-1].args[0].endswith(final_endpoint))
+
+    @patch("src.api.goodreads_client.requests.post")
+    @patch("src.api.goodreads_client.requests.get")
     def test_browser_transport_passes_progress_form_and_csrf(self, get, post):
         get.side_effect = [
             Mock(json=lambda: {"value": {"nodes": [{"slots": [{"session": {"sessionId": "live"}}]}]}}),

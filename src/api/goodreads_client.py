@@ -213,6 +213,9 @@ class GoodreadsClient:
                 return None
             endpoint = f"{base}/session/{sessions[0]}"
             current_url = requests.get(endpoint + "/url", timeout=self.timeout).json()["value"]
+            if not isinstance(current_url, str):
+                logger.warning("Goodreads browser request failed")
+                return None
             if urlparse(current_url).netloc != urlparse(self.base_url).netloc:
                 logger.warning("Goodreads browser is not on the Goodreads site")
                 return None
@@ -246,9 +249,15 @@ class GoodreadsClient:
                 target = urljoin(self.base_url + "/", path)
                 requests.post(endpoint + "/url", json={"url": target}, timeout=60).raise_for_status()
                 current = requests.get(endpoint + "/url", timeout=self.timeout).json()["value"]
+                if not isinstance(current, str):
+                    logger.warning("Goodreads browser request failed")
+                    return None
                 if urlparse(current).netloc != urlparse(self.base_url).netloc:
                     return None
                 source = requests.get(endpoint + "/source", timeout=30).json()["value"]
+                if not isinstance(source, str):
+                    logger.warning("Goodreads browser request failed")
+                    return None
                 logger.info("Goodreads browser retried GET as navigation after WAF")
                 result = {"status": 200, "url": current, "body": source}
             resp = requests.Response()
