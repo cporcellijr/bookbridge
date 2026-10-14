@@ -77,8 +77,9 @@ _UUID_RE = re.compile(
 # Hex-looking runs of >= 6 chars that contain at least one digit -- the
 # digit requirement lets English words spelled entirely with a-f letters
 # (e.g. "decade", "efface") survive untouched.
-# A 0x-prefixed run (an object address like "at 0x7f4cf94090") counts too.
-_HEX_RUN_RE = re.compile(r'\b(?:0x[0-9a-fA-F]+|(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{6,})\b')
+# Only repr object addresses ("at 0x7f4cf94090") collapse as 0x runs; other 0x
+# values such as HRESULT codes stay distinct.
+_HEX_RUN_RE = re.compile(r'(?<=\bat )0x[0-9a-fA-F]+\b|\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{6,}\b')
 # Long alnum/underscore ids (>= 14 chars, >= 2 digits), e.g. database
 # primary keys or slugs like "li_4nrp2qhewiqe3xdi2q".
 _LONG_ID_RE = re.compile(

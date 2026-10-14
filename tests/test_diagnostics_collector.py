@@ -573,6 +573,11 @@ class TestMakeTemplate(unittest.TestCase):
         self.assertEqual(first, _make_template(message.format("0x7f842cee10")))
         self.assertIn("at #>", first)
 
+    def test_distinct_hresult_codes_do_not_collapse(self):
+        first = _make_template("Operation failed with error 0x80070005")
+        second = _make_template("Operation failed with error 0x8007000e")
+        self.assertNotEqual(first, second)
+
     def test_long_alnum_ids_collapse_to_same_template(self):
         first = _make_template("Fetching li_4nrp2qhewiqe3xdi2q from library")
         second = _make_template("Fetching li_9xz8qhewiqe3aa1b from library")
