@@ -439,6 +439,43 @@ class TestMatchPathsRegression(unittest.TestCase):
         saved_book = db.save_book.call_args[0][0]
         self.assertEqual(saved_book.abs_id, "uuid-legacy-1")
 
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-bo-2")
+    def test_library_audio_rematch_writes_the_bookorbit_ebook_id_into_the_user_link(self, _mock_kosync):
+        """Re-matching must repair an audio-only per-user BookOrbit link.
+
+        The link outranks Book.ebook_source_id in resolve_bookorbit_ebook_id, so a
+        link stuck at ebook_id=NULL kept the ebook out of sync however often the
+        book was re-matched.
+        """
+        from src.db.models import Book
+
+        existing = Book(
+            abs_id="bookorbit:6277",
+            abs_title="Rematched Book",
+            audio_source="BookOrbit",
+            audio_source_id="6277",
+            audio_provider_book_id="6277",
+            ebook_filename="rematched.epub",
+            kosync_doc_id="hash-bo-2",
+            status="active",
+        )
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = existing
+        db.save_book.side_effect = lambda book: book
+
+        response = self._post_as_user(1, "/match", {
+            "audio_source": "BookOrbit",
+            "audio_source_id": "6277",
+            "ebook_filename": "rematched.epub",
+            "ebook_source": "BookOrbit",
+            "ebook_source_id": "6264",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        db.set_user_bookorbit_link.assert_called_once_with(
+            1, "bookorbit:6277", ebook_id="6264", audio_id="6277", title="rematched",
+        )
+
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="1234567890abcdef1234567890abcdef")
     def test_library_audio_match_resolves_series_on_match(self, _mock_kosync):
         """A BookOrbit/Grimmory audio match resolves series at match time, so the book

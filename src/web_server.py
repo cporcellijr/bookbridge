@@ -4023,6 +4023,24 @@ def _create_or_update_library_audio_mapping(
     # loser is served to devices but can never receive progress.
     database_service.absorb_duplicate_mapping(saved_book)
 
+    # The per-user link outranks the book row in the BookOrbit resolvers, so a link
+    # created audio-only (e.g. by shelf-watch) hides the ebook until it is refreshed here.
+    user_id = get_current_user_id()
+    if user_id is not None and "BookOrbit" in (audio_source, saved_book.ebook_source):
+        try:
+            database_service.set_user_bookorbit_link(
+                user_id,
+                saved_book.abs_id,
+                ebook_id=saved_book.ebook_source_id if saved_book.ebook_source == "BookOrbit" else None,
+                audio_id=saved_book.audio_provider_book_id if audio_source == "BookOrbit" else None,
+                title=saved_book.abs_title,
+            )
+        except Exception as link_err:
+            logger.warning(
+                "Failed to set BookOrbit link for user %s on '%s': %s",
+                user_id, sanitize_log_data(saved_book.abs_id), link_err, exc_info=True,
+            )
+
     if uc().storyteller_client.is_configured() and saved_book.storyteller_uuid:
         try:
             uc().storyteller_client.add_to_collection_by_uuid(saved_book.storyteller_uuid)
