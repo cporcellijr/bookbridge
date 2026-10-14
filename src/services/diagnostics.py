@@ -20,7 +20,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 
@@ -755,6 +755,163 @@ def _shed_to_budget(
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Known-title scrubbing (one pass per report, at send time)
+# ---------------------------------------------------------------------------
+
+# scrub_diagnostic_text hashes a title only when the emitting site quoted it
+# (rule 5).  A title logged bare -- f"❌ {abs_title}: {e}" and friends -- passes
+# through verbatim, and the opt-in modal promises that it does not.  The
+# library's own titles are known, so each report is swept for them once, just
+# before it is posted.
+#
+# Titles shorter than this are left alone.  One- to three-character titles
+# ("It", "Us", "Pi", "Her") are ordinary words, and a case-insensitive sweep for
+# them would shred the surrounding log text (and the templates built from it)
+# far more often than it would hide a title.  At four characters most titles
+# stop being everyday vocabulary, and the residual false positives ("Dune",
+# "Emma") cost a mangled word rather than a leak.
+_MIN_TITLE_SCRUB_LEN = 4
+
+
+def _render_title_trie(node: Dict[str, Any]) -> str:
+    """Render a character trie of titles as nested non-capturing alternations.
+
+    At each node the children come first and the end-of-title marker (the
+    ``''`` key) makes them optional, so the regex engine tries the longest
+    continuation before settling for the shorter title it extends.  Runs of
+    single-child nodes are rendered iteratively so a long title does not cost
+    one stack frame per character.
+    """
+    branches: List[str] = []
+    optional = False
+    for ch, child in sorted(node.items()):
+        if ch == '':
+            optional = True
+            continue
+        run = [r'\s+' if ch == ' ' else re.escape(ch)]
+        while len(child) == 1 and '' not in child:
+            (ch, child), = child.items()
+            run.append(r'\s+' if ch == ' ' else re.escape(ch))
+        branches.append(''.join(run) + _render_title_trie(child))
+    if not branches:
+        return ''
+    if len(branches) == 1 and not optional:
+        return branches[0]
+    joined = '|'.join(branches)
+    return f'(?:{joined})?' if optional else f'(?:{joined})'
+
+
+def build_title_pattern(titles: Iterable[Any]) -> Optional[re.Pattern]:
+    """Compile one case-insensitive pattern that matches any known title.
+
+    The titles are folded into a character trie and rendered as nested
+    alternations, so matching cost grows with the text and not with the
+    library: a flat ``a|b|c`` alternation makes ``re`` try every branch at
+    every word start (tens of seconds for a full report against a few
+    thousand titles), while the trie form takes a fraction of a second to
+    build and run.  Within the trie a longer title is always tried before
+    the shorter one it extends, so "Dune Messiah" is replaced whole rather
+    than as "Dune" plus " Messiah".  Matches are bounded by ``(?<!\\w)`` and
+    ``(?!\\w)`` rather than ``\\b`` so a title that starts or ends with
+    punctuation still anchors correctly.  Whitespace inside a title matches
+    any whitespace run, which also covers the whitespace-collapsed template
+    form, and a digit-collapsed variant of each title is added so the
+    template form of "Catch-22" ("Catch-#") is caught as well.  Titles
+    shorter than :data:`_MIN_TITLE_SCRUB_LEN`, and titles with no letter in
+    them (a bare number such as "1984" cannot be told apart from the numbers
+    a log line carries anyway), are skipped.  Returns None when nothing is
+    left to match.
+    """
+    trie: Dict[str, Any] = {}
+    for raw in titles:
+        if not isinstance(raw, str):
+            continue
+        title = ' '.join(raw.split()).lower()
+        for variant in (title, re.sub(r'\d+', '#', title)):
+            if len(variant) < _MIN_TITLE_SCRUB_LEN:
+                continue
+            if not any(ch.isalpha() for ch in variant):
+                continue
+            node = trie
+            for ch in variant:
+                node = node.setdefault(ch, {})
+            node[''] = {}
+    if not trie:
+        return None
+    return re.compile(
+        r'(?<!\w)' + _render_title_trie(trie) + r'(?!\w)', re.IGNORECASE
+    )
+
+
+def scrub_known_titles(text: str, pattern: Optional[re.Pattern]) -> str:
+    """Replace each known-title occurrence in *text* with ``t:<sha1(match)[:8]>``.
+
+    Same placeholder family as rule 5 of :func:`scrub_diagnostic_text`, and
+    the hash is taken over the text as logged, so a title that reaches one
+    line bare and another line quoted carries the same token in both.
+    """
+    if pattern is None or not text:
+        return text
+    return pattern.sub(lambda m: f"t:{_sha1_prefix(m.group(0))}", text)
+
+
+def _load_title_pattern(database_service: Any) -> Optional[re.Pattern]:
+    """Build this report's known-title pattern from the books table.
+
+    Best-effort: when the titles cannot be loaded (no database, a stand-in
+    without ``get_all_books``, an unexpected row shape) the report still goes
+    out with everything :func:`scrub_diagnostic_text` already removed, and
+    the failure is logged at DEBUG only.
+    """
+    try:
+        titles: List[str] = []
+        for book in database_service.get_all_books():
+            for attr in ('abs_title', 'audio_title'):
+                value = getattr(book, attr, None)
+                if isinstance(value, str):
+                    titles.append(value)
+        return build_title_pattern(titles)
+    except Exception:
+        logger.debug("Diagnostics title scrub skipped: titles unavailable", exc_info=True)
+        return None
+
+
+def _scrub_titles_in_text_fields(payload: Dict[str, Any], pattern: re.Pattern) -> None:
+    """Sweep known titles out of message, context, traceback and recent_logs, in place."""
+    for entry in payload.get('warnings', []):
+        if entry.get('message'):
+            entry['message'] = scrub_known_titles(entry['message'], pattern)
+        if entry.get('context'):
+            entry['context'] = [scrub_known_titles(c, pattern) for c in entry['context']]
+        if entry.get('traceback'):
+            entry['traceback'] = scrub_known_titles(entry['traceback'], pattern)
+    if payload.get('recent_logs'):
+        payload['recent_logs'] = [
+            scrub_known_titles(line, pattern) for line in payload['recent_logs']
+        ]
+
+
+def _scrub_titles_in_templates(payload: Dict[str, Any], pattern: re.Pattern) -> None:
+    """Sweep known titles out of each warning's template, in place.
+
+    The template is the dedupe key, so a title that reached it is collapsed
+    to the canonical ``t:#`` the same way _make_template collapses every
+    other placeholder; the per-title hash would otherwise mint one template
+    per book.  Kept separate from the text-field pass because
+    _shed_to_budget matches payload entries back to the snapshot by their
+    template; see the call site in _maybe_send_diagnostics_locked.
+    """
+    for entry in payload.get('warnings', []):
+        template = entry.get('template')
+        if template:
+            swept = scrub_known_titles(template, pattern)
+            if swept != template:
+                entry['template'] = _SCRUB_TOKEN_RE.sub(
+                    lambda m: f"{m.group(1)}:#", swept
+                )
+
+
 def maybe_send_diagnostics(
     database_service: Any,
     service_flags: Optional[Dict[str, bool]] = None,
@@ -829,8 +986,19 @@ def _maybe_send_diagnostics_locked(
         manual=manual,
         user_message=user_message,
     )
+    # Known titles are swept in two steps around the byte budget.  Free text
+    # first, so _shed_to_budget measures what is actually posted; templates
+    # last, because shedding matches payload entries back to the snapshot by
+    # (logger, level, template) and that key has to stay the live handler's
+    # until it is done.  A template only shrinks in that second step (t:# is
+    # shorter than any title the pattern matches), so the budget still holds.
+    title_pattern = _load_title_pattern(database_service)
+    if title_pattern is not None:
+        _scrub_titles_in_text_fields(payload, title_pattern)
     max_payload_bytes = _resolve_max_payload_bytes()
     payload = _shed_to_budget(payload, snapshot, max_payload_bytes)
+    if title_pattern is not None:
+        _scrub_titles_in_templates(payload, title_pattern)
     warning_count = len(payload.get('warnings', []))
 
     try:

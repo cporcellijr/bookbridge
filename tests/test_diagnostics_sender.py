@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -12,9 +13,14 @@ from src.services.diagnostics import (
     DiagnosticsLogHandler,
     ensure_instance_id,
     build_diagnostics_payload,
+    build_title_pattern,
     collect_env_facts,
     maybe_send_diagnostics,
+    scrub_diagnostic_text,
+    scrub_known_titles,
+    _make_template,
     _resolve_max_payload_bytes,
+    _sha1_prefix,
     _shed_to_budget,
     _utc_iso,
 )
@@ -37,12 +43,21 @@ def _make_record(
     )
 
 
+class _FakeBook:
+    """Just the title columns the known-title sweep reads from a Book row."""
+
+    def __init__(self, abs_title=None, audio_title=None):
+        self.abs_title = abs_title
+        self.audio_title = audio_title
+
+
 class FakeDatabaseService:
     """Records set_setting calls without touching a real database."""
 
     def __init__(self):
         self.settings: dict = {}
         self.set_setting_calls: list = []
+        self.books: list = []
 
     def set_setting(self, key: str, value: str) -> None:
         self.settings[key] = value
@@ -50,6 +65,9 @@ class FakeDatabaseService:
 
     def get_books_by_status(self, status: str):
         return []
+
+    def get_all_books(self, user_id=None):
+        return list(self.books)
 
 
 # ---------------------------------------------------------------------------
@@ -840,6 +858,244 @@ class TestMaybeSendPaths(unittest.TestCase):
                 os.environ.pop('DIAGNOSTICS_MAX_PAYLOAD_BYTES', None)
             else:
                 os.environ['DIAGNOSTICS_MAX_PAYLOAD_BYTES'] = orig_budget
+
+
+# ---------------------------------------------------------------------------
+# Known-title scrubbing: build_title_pattern / scrub_known_titles
+# ---------------------------------------------------------------------------
+
+class TestKnownTitleScrub(unittest.TestCase):
+
+    def test_bare_title_gets_the_quoted_span_token(self):
+        pattern = build_title_pattern(['The Great Gatsby'])
+        token = f"t:{_sha1_prefix('The Great Gatsby')}"
+        self.assertEqual(
+            scrub_known_titles('❌ The Great Gatsby: ConnectionError', pattern),
+            f'❌ {token}: ConnectionError',
+        )
+        # Same token the quoted-span rule mints for the same text.
+        self.assertIn(
+            token,
+            scrub_diagnostic_text("Hardcover: No match found for 'The Great Gatsby'"),
+        )
+
+    def test_match_is_case_insensitive_and_whitespace_tolerant(self):
+        pattern = build_title_pattern(['  The   Great Gatsby '])
+        out = scrub_known_titles('read THE GREAT GATSBY and the great  gatsby', pattern)
+        self.assertNotIn('gatsby', out.lower())
+        self.assertEqual(out.count('t:'), 2)
+
+    def test_longer_title_replaced_whole_over_the_shorter_it_contains(self):
+        pattern = build_title_pattern(['Dune', 'Dune Messiah'])
+        self.assertEqual(
+            scrub_known_titles('failed on Dune Messiah, then on Dune', pattern),
+            f"failed on t:{_sha1_prefix('Dune Messiah')}, then on t:{_sha1_prefix('Dune')}",
+        )
+
+    def test_short_titles_left_alone(self):
+        self.assertIsNone(build_title_pattern(['It', 'Us', 'Her']))
+        pattern = build_title_pattern(['It', 'Us', 'Her', 'Dune'])
+        self.assertEqual(
+            scrub_known_titles('It is us and her, not Dune', pattern),
+            f"It is us and her, not t:{_sha1_prefix('Dune')}",
+        )
+
+    def test_bare_number_titles_and_non_strings_are_skipped(self):
+        self.assertIsNone(build_title_pattern(['1984', '4 3 2 1', '', None, 7]))
+
+    def test_regex_metacharacters_in_titles_are_literal(self):
+        pattern = build_title_pattern(['C++ for Kids (2nd ed.)', 'What If?', '[REC]'])
+        out = scrub_known_titles(
+            'C++ for Kids (2nd ed.) broke; C++ for Kids (2nd edX) did not; '
+            'What If? vs What Ifx; [REC] rec',
+            pattern,
+        )
+        self.assertEqual(
+            out,
+            f"t:{_sha1_prefix('C++ for Kids (2nd ed.)')} broke; C++ for Kids (2nd edX) did not; "
+            f"t:{_sha1_prefix('What If?')} vs What Ifx; t:{_sha1_prefix('[REC]')} rec",
+        )
+
+    def test_word_boundaries_hold_around_punctuation(self):
+        pattern = build_title_pattern(['Dune', "'Salem's Lot"])
+        dune = _sha1_prefix('Dune')
+        salems = _sha1_prefix("'Salem's Lot")
+        self.assertEqual(
+            scrub_known_titles("Dunes, redune, (Dune) and 'Salem's Lot.", pattern),
+            f"Dunes, redune, (t:{dune}) and t:{salems}.",
+        )
+
+    def test_digit_collapsed_variant_covers_the_template_form(self):
+        pattern = build_title_pattern(['Catch-22'])
+        template = _make_template('Sync failed for Catch-22 now')
+        self.assertEqual(template, 'Sync failed for Catch-# now')
+        self.assertEqual(
+            scrub_known_titles(template, pattern),
+            f"Sync failed for t:{_sha1_prefix('Catch-#')} now",
+        )
+
+    def test_none_pattern_and_empty_text_pass_through(self):
+        self.assertEqual(scrub_known_titles('as is', None), 'as is')
+        self.assertEqual(scrub_known_titles('', build_title_pattern(['Dune'])), '')
+
+    def test_library_of_thousands_builds_one_pattern(self):
+        titles = [
+            f'Shadow of the {word} {i}'
+            for i, word in enumerate(['Tower', 'River', 'Crown'] * 1700)
+        ]
+        titles.append('Word ' * 100)  # as long as a Book title column allows
+        pattern = build_title_pattern(titles)
+        self.assertEqual(
+            scrub_known_titles('x Shadow of the River 4999 y', pattern),
+            f"x t:{_sha1_prefix('Shadow of the River 4999')} y",
+        )
+        self.assertEqual(
+            scrub_known_titles('a ' + 'Word ' * 100 + 'b', pattern),
+            f"a t:{_sha1_prefix(('Word ' * 100).strip())} b",
+        )
+
+
+# ---------------------------------------------------------------------------
+# maybe_send_diagnostics: known-title sweep over the posted report
+# ---------------------------------------------------------------------------
+
+class TestMaybeSendScrubsKnownTitles(unittest.TestCase):
+
+    TITLE = 'The Great Gatsby'
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        import src.services.diagnostics as _mod
+        self._saved_handler = _mod._diagnostics_handler
+        self.handler = DiagnosticsLogHandler(data_dir=self._tmp.name)
+        _mod._diagnostics_handler = self.handler
+        self.db = FakeDatabaseService()
+        self.db.books = [
+            _FakeBook(abs_title=self.TITLE),
+            _FakeBook(audio_title='Dune Messiah'),
+        ]
+
+        self._saved_env = {
+            key: os.environ.pop(key, None)
+            for key in (
+                'DIAGNOSTICS_OPT_IN', 'DIAGNOSTICS_ENDPOINT_URL',
+                'DIAGNOSTICS_LAST_SENT', 'DIAGNOSTICS_INSTANCE_ID',
+                'DIAGNOSTICS_INGEST_TOKEN', 'DIAGNOSTICS_MAX_PAYLOAD_BYTES',
+            )
+        }
+        os.environ['DIAGNOSTICS_OPT_IN'] = 'true'
+        os.environ['DIAGNOSTICS_ENDPOINT_URL'] = 'http://collector.example.com'
+        os.environ['DIAGNOSTICS_INSTANCE_ID'] = 'test-inst-id'
+
+    def tearDown(self):
+        import src.services.diagnostics as _mod
+        _mod._diagnostics_handler = self._saved_handler
+        for key, val in self._saved_env.items():
+            if val is not None:
+                os.environ[key] = val
+            else:
+                os.environ.pop(key, None)
+        self._tmp.cleanup()
+
+    def _post(self, mock_post, **kwargs):
+        mock_resp = Mock(status_code=200)
+        mock_resp.json.return_value = {'ok': True}
+        mock_post.return_value = mock_resp
+        result = maybe_send_diagnostics(self.db, force=True, **kwargs)
+        self.assertTrue(result['sent'])
+        return mock_post.call_args.kwargs['json']
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_bare_title_swept_from_message_context_template_and_recent_logs(self, mock_post):
+        self.handler.emit(_make_record(
+            'src.sync_manager', logging.INFO,
+            f'Preparing {self.TITLE} for transcription',
+        ))
+        self.handler.emit(_make_record(
+            'src.sync_manager', logging.ERROR,
+            f'❌ {self.TITLE}: ConnectionError',
+        ))
+
+        payload = self._post(mock_post, manual=True, user_message='it broke')
+
+        token = f"t:{_sha1_prefix(self.TITLE)}"
+        (warning,) = payload['warnings']
+        self.assertEqual(warning['message'], f'❌ {token}: ConnectionError')
+        self.assertEqual(warning['template'], '❌ t:#: ConnectionError')
+        self.assertTrue(any(token in line for line in warning['context']))
+        self.assertTrue(any(token in line for line in payload['recent_logs']))
+        self.assertNotIn(self.TITLE, json.dumps(payload, ensure_ascii=False))
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_traceback_tail_is_swept(self, mock_post):
+        record = _make_record('src.sync_manager', logging.ERROR, 'alignment failed')
+        try:
+            raise RuntimeError(f'no audio for {self.TITLE}')
+        except RuntimeError:
+            record.exc_info = sys.exc_info()
+        self.handler.emit(record)
+
+        payload = self._post(mock_post)
+
+        (warning,) = payload['warnings']
+        self.assertIn('RuntimeError', warning['traceback'])
+        self.assertIn(f"t:{_sha1_prefix(self.TITLE)}", warning['traceback'])
+        self.assertNotIn(self.TITLE, warning['traceback'])
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_title_loading_failure_still_posts_the_otherwise_scrubbed_report(self, mock_post):
+        def _boom(user_id=None):
+            raise RuntimeError('database is locked')
+        self.db.get_all_books = _boom
+        self.handler.emit(_make_record(
+            'src.sync_manager', logging.WARNING,
+            f'Could not notify reader@example.com about {self.TITLE}',
+        ))
+
+        payload = self._post(mock_post)
+
+        (warning,) = payload['warnings']
+        self.assertIn('email:', warning['message'])
+        self.assertNotIn('reader@example.com', warning['message'])
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_database_stand_in_without_get_all_books_is_tolerated(self, mock_post):
+        class _SettingsOnly:
+            def set_setting(self, key, value):
+                pass
+
+        self.db = _SettingsOnly()
+        self.handler.emit(_make_record('test', logging.WARNING, 'boom'))
+
+        payload = self._post(mock_post)
+
+        self.assertEqual(len(payload['warnings']), 1)
+
+    @patch('src.services.diagnostics.requests.post')
+    def test_shedding_still_defers_by_live_key_when_titles_are_swept(self, mock_post):
+        """The template is the key _shed_to_budget hands back to clear_snapshot.
+
+        If titles were swept out of templates before shedding, deferred
+        entries would no longer match their live keys and clear_snapshot
+        would drop them unsent.
+        """
+        for i in range(30):
+            self.handler.emit(_make_record(
+                f'test.shed.{i}', logging.WARNING,
+                f'Oversized shape {i} for {self.TITLE} ' + ('z' * 200),
+            ))
+        os.environ['DIAGNOSTICS_MAX_PAYLOAD_BYTES'] = '9000'
+
+        payload = self._post(mock_post)
+
+        self.assertIn('shed', payload)
+        self.assertLessEqual(len(json.dumps(payload)), 9000)
+        self.assertNotIn(self.TITLE, json.dumps(payload, ensure_ascii=False))
+        sent = len(payload['warnings'])
+        self.assertTrue(0 < sent < 30, sent)
+        with self.handler._lock:
+            remaining = len(self.handler._entries)
+        self.assertEqual(remaining, 30 - sent)
 
 
 # ---------------------------------------------------------------------------
