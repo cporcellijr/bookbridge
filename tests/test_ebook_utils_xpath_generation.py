@@ -202,6 +202,17 @@ class TestFragileWrapperKeptAboveAnchor(unittest.TestCase):
         rel = xpath.split("/body/DocFragment[17]/")[1].rsplit("/text()", 1)[0]
         self.assertTrue(html.fromstring(content).xpath(f"./{rel}"))
 
+    def test_bs4_fallback_loop_keeps_span_wrapper(self):
+        content = self._chapter("<span><p>first line</p><p><![CDATA[second line]]></p></span>")
+        full_text = BeautifulSoup(content, "html.parser").body.get_text(strip=True)
+        item = {"start": 0, "end": len(full_text), "char_len": len(full_text),
+                "spine_index": 3, "href": "c.xhtml", "content": content}
+        offset = len("first line") + 2
+        with patch.object(EbookParser, "resolve_book_path", return_value="b.epub"),                 patch.object(EbookParser, "extract_text_and_map", return_value=(full_text, [item])),                 self.assertLogs("src.utils.ebook_utils", level="WARNING") as logs:
+            xpath = self._parser()._compute_xpath_at_position("b.epub", offset)
+        self.assertTrue(any("Falling back to BS4 structural path" in m for m in logs.output))
+        self.assertIn("/body/span[1]/p[2]", xpath)
+
     def test_inline_span_inside_p_still_anchors_to_p(self):
         content = self._chapter("<p>Plain.</p><p>Some <span>inline words</span> here.</p>")
         tree = html.fromstring(content)
