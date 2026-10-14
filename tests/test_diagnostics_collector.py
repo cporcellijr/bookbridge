@@ -577,6 +577,10 @@ class TestMakeTemplate(unittest.TestCase):
         first = _make_template("Operation failed with error 0x80070005")
         second = _make_template("Operation failed with error 0x8007000e")
         self.assertNotEqual(first, second)
+        # All-digit codes too: the digit collapse used to turn both into "#x#".
+        third = _make_template("Operation failed with error 0x80070057")
+        self.assertNotEqual(first, third)
+        self.assertEqual(first, "Operation failed with error 0x80070005")
 
     def test_long_alnum_ids_collapse_to_same_template(self):
         first = _make_template("Fetching li_4nrp2qhewiqe3xdi2q from library")

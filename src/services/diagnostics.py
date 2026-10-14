@@ -80,6 +80,10 @@ _UUID_RE = re.compile(
 # Only repr object addresses ("at 0x7f4cf94090") collapse as 0x runs; other 0x
 # values such as HRESULT codes stay distinct.
 _HEX_RUN_RE = re.compile(r'(?<=\bat )0x[0-9a-fA-F]+\b|\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{6,}\b')
+# 0x codes that survive _HEX_RUN_RE (which already collapsed repr addresses) are
+# error codes such as HRESULTs; the digit collapse must keep them whole, or
+# 0x80070005 and 0x80070057 both become "#x#".
+_HEX_CODE_OR_DIGITS_RE = re.compile(r'\b0[xX][0-9a-fA-F]+\b|\d+')
 # Long alnum/underscore ids (>= 14 chars, >= 2 digits), e.g. database
 # primary keys or slugs like "li_4nrp2qhewiqe3xdi2q".
 _LONG_ID_RE = re.compile(
@@ -184,6 +188,11 @@ def scrub_diagnostic_text(text: str) -> str:
     return result
 
 
+def _collapse_digits(text: str) -> str:
+    """Replace digit runs with '#', leaving 0x error codes intact."""
+    return _HEX_CODE_OR_DIGITS_RE.sub(lambda m: m.group(0) if m.group(0)[:2].lower() == '0x' else '#', text)
+
+
 def _make_template(message: str) -> str:
     """Create a stable warning template without erasing semantic HTTP codes."""
     normalized = re.sub(r'\s+', ' ', message).strip()
@@ -224,10 +233,10 @@ def _make_template(message: str) -> str:
     last_end = 0
     for match in _HTTP_STATUS_RE.finditer(normalized):
         status_start, status_end = match.span(1)
-        parts.append(re.sub(r'\d+', '#', normalized[last_end:status_start]))
+        parts.append(_collapse_digits(normalized[last_end:status_start]))
         parts.append(match.group(1))
         last_end = status_end
-    parts.append(re.sub(r'\d+', '#', normalized[last_end:]))
+    parts.append(_collapse_digits(normalized[last_end:]))
     return ''.join(parts)
 
 
