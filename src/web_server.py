@@ -11070,13 +11070,37 @@ def _build_listening_book_list():
     return result
 
 
-def _build_listening_stats_payload(tz):
+def _local_listening_stats(tz):
+    """ABS-shaped listening stats from the bridge's own AUDIOBOOK sessions, or None if empty."""
+    days = database_service.get_listening_days(getattr(tz, "key", str(tz)))
+    if not days:
+        return None
+    return {
+        "days": days,
+        "totalTime": sum(days.values()),
+        "items": {
+            abs_id: stats for abs_id, stats in database_service.get_all_reading_stats().items()
+            if int(stats.get("listen_seconds") or 0) > 0
+        },
+    }
+
+
+def _abs_listening_configured():
+    """True when the request user's own ABS client is configured."""
     try:
         abs_client = uc().abs_client
+        return bool(abs_client) and bool(abs_client.is_configured())
     except Exception:
-        return None
+        return False
 
-    raw_stats = abs_client.get_listening_stats()
+
+def _build_listening_stats_payload(tz):
+    use_abs = _abs_listening_configured()
+    if use_abs:
+        abs_client = uc().abs_client
+        raw_stats = abs_client.get_listening_stats()
+    else:
+        raw_stats = _local_listening_stats(tz)
     if not raw_stats:
         return None
 
@@ -11088,14 +11112,17 @@ def _build_listening_stats_payload(tz):
         for key, value in all_days.items()
     ])
 
-    recent_sessions = raw_stats.get("recentSessions")
-    if not isinstance(recent_sessions, list) or not recent_sessions:
-        recent_sessions = abs_client.get_listening_sessions(limit=10)
-    normalized_sessions = [
-        _normalize_listening_session(session_data)
-        for session_data in (recent_sessions or [])[:10]
-        if isinstance(session_data, dict)
-    ]
+    if use_abs:
+        recent_sessions = raw_stats.get("recentSessions")
+        if not isinstance(recent_sessions, list) or not recent_sessions:
+            recent_sessions = abs_client.get_listening_sessions(limit=10)
+        normalized_sessions = [
+            _normalize_listening_session(session_data)
+            for session_data in (recent_sessions or [])[:10]
+            if isinstance(session_data, dict)
+        ]
+    else:
+        normalized_sessions = database_service.get_recent_listening_sessions(10)
 
     summary = _summarize_activity(
         daily=daily,
@@ -11533,8 +11560,10 @@ def api_stats_yearly_recap():
 
         listening_recap = None
         try:
-            abs_client = uc().abs_client
-            raw_stats = abs_client.get_listening_stats() if abs_client else None
+            if _abs_listening_configured():
+                raw_stats = uc().abs_client.get_listening_stats()
+            else:
+                raw_stats = _local_listening_stats(tz)
         except Exception:
             raw_stats = None
         if raw_stats:

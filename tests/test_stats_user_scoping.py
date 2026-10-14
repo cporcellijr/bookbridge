@@ -82,6 +82,48 @@ class TestStatsUserScoping(unittest.TestCase):
         self.user_abs.get_listening_stats.assert_called()
         self.mock_abs_client.get_listening_stats.assert_not_called()
 
+    def _local_listening_setup(self):
+        db = self.mock_database_service
+        db.get_listening_days.return_value = {"2026-04-07": 900}
+        db.get_all_reading_stats.return_value = {"a": {"listen_seconds": 900, "session_count": 1}}
+        db.get_recent_listening_sessions.return_value = [{
+            "id": "local-1", "activityType": "listening", "absId": "a", "title": "T",
+            "durationSeconds": 900, "startedAt": 1, "endedAt": 2,
+        }]
+        self.user_abs.is_configured.return_value = False
+
+    def test_listening_stats_without_abs_use_local_sessions(self):
+        self._local_listening_setup()
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle):
+            payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
+        self.assertTrue(payload['available'])
+        self.assertEqual(payload['stats']['totalSeconds'], 900)
+        self.assertEqual(payload['stats']['itemsFinished'], 1)
+        self.assertEqual(payload['recentSessions'][0]['title'], "T")
+        self.user_abs.get_listening_stats.assert_not_called()
+
+    def test_listening_stats_without_abs_or_local_rows_unavailable(self):
+        self._local_listening_setup()
+        self.mock_database_service.get_listening_days.return_value = {}
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle):
+            self.assertIsNone(self.ws._build_listening_stats_payload(self.ws._get_stats_timezone()))
+
+    def test_listening_stats_with_abs_skip_local_sessions(self):
+        self.user_abs.is_configured.return_value = True
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle):
+            self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
+        self.user_abs.get_listening_stats.assert_called()
+        self.mock_database_service.get_listening_days.assert_not_called()
+        self.mock_database_service.get_recent_listening_sessions.assert_not_called()
+
+    def test_yearly_recap_without_abs_uses_local_sessions(self):
+        self._local_listening_setup()
+        self.mock_database_service.get_koreader_yearly_recap.return_value = {}
+        with patch.object(self.ws, 'uc', return_value=self.bundle):
+            response = self.client.get('/api/stats/yearly-recap?scope=listening&year=2026')
+        self.assertEqual(response.get_json()['totalSeconds'], 900)
+        self.user_abs.get_listening_stats.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -6250,6 +6250,40 @@ class DatabaseService:
                 }
             return result
 
+    def get_listening_days(self, tz_name: str) -> dict[str, int]:
+        """Seconds of the ambient user's AUDIOBOOK sessions per local date (YYYY-MM-DD)."""
+        uid = self._resolve_uid(None)
+        with self.get_session() as session:
+            rows = session.query(ReadingSession.start_time, ReadingSession.duration_seconds).filter(
+                ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.user_id == uid,
+            ).all()
+        days: dict[str, int] = defaultdict(int)
+        for start_time, duration in rows:
+            days[self._local_date_from_epoch(start_time, tz_name)] += int(max(duration or 0, 0))
+        return dict(days)
+
+    def get_recent_listening_sessions(self, limit: int = 10) -> list[dict]:
+        """Newest-first AUDIOBOOK sessions of the ambient user, in the stats-page session shape."""
+        uid = self._resolve_uid(None)
+        with self.get_session() as session:
+            rows = session.query(ReadingSession, Book.abs_title, Book.audio_title).outerjoin(
+                Book, Book.abs_id == ReadingSession.abs_id,
+            ).filter(
+                ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.user_id == uid,
+            ).order_by(ReadingSession.end_time.desc()).limit(limit).all()
+            return [{
+                "id": f"local-{rs.id}",
+                "activityType": "listening",
+                "absId": rs.abs_id,
+                "title": abs_title or audio_title or "Unknown title",
+                "subtitle": None,
+                "author": None,
+                "durationSeconds": int(rs.duration_seconds or 0),
+                "startedAt": int(rs.start_time),
+                "endedAt": int(rs.end_time),
+                "coverPath": None,
+            } for rs, abs_title, audio_title in rows]
+
     def delete_recent_estimated_kosync_session(
         self,
         abs_id: str,
