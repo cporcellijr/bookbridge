@@ -1,6 +1,7 @@
 """Tests for ABSSocketManager — per-user ABS Socket.IO listener orchestration."""
 
 import os
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -501,6 +502,9 @@ class TestABSSocketManagerCredentialRefresh(unittest.TestCase):
 
             def start(self_inner):
                 on_session_end(len(built))
+                if len(built) >= 10:
+                    # A regression that never ends the loop fails the test instead of hanging the run.
+                    mgr._stop_event.set()
 
             def stop(self_inner):
                 pass
@@ -539,6 +543,17 @@ class TestABSSocketManagerCredentialRefresh(unittest.TestCase):
 
         self.assertEqual(len(built), 1)
         self.assertFalse(self.mgr._stop_event.is_set())
+
+    def test_spawn_is_a_no_op_while_the_scopes_supervisor_is_alive(self):
+        release = threading.Event()
+        with patch.object(self.mgr, "_supervise", side_effect=lambda *args: release.wait(5)):
+            self.mgr._spawn_supervisor(7, "http://abs.local", "old-token")
+            first = self.mgr._supervisors["user 7"]
+            self.mgr._spawn_supervisor(7, "http://abs.local", "old-token")
+            self.assertIs(self.mgr._supervisors["user 7"], first)
+            self.assertEqual(sum(t.is_alive() for t in self.mgr._threads), 1)
+            release.set()
+            first.join(5)
 
     def test_lookup_failure_keeps_the_last_known_credentials(self):
         def on_session_end(n):

@@ -291,9 +291,15 @@ class ABSSocketManager:
             daemon=True,
             name=f"abs-socket-{scope.replace(' ', '-')}",
         )
+        # Checked and started under the lock: refresh_user decides "not running"
+        # before calling here, so two concurrent refreshes (two quick saves) could
+        # otherwise each start a supervisor and the user would get two listeners.
         with self._lock:
+            existing = self._supervisors.get(scope)
+            if existing is not None and existing.is_alive():
+                return
             self._supervisors[scope] = thread
-        thread.start()
+            thread.start()
         self._threads.append(thread)
 
     def refresh_user(self, user_id: int) -> None:
