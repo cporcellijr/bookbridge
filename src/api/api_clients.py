@@ -950,8 +950,10 @@ class ABSClient:
 
     def add_to_collection(self, item_id, collection_name=None):
         """Add an audiobook to a collection, creating the collection if it doesn't exist."""
-        if not collection_name:
-             collection_name = os.environ.get("ABS_COLLECTION_NAME", "abs-kosync")
+        if collection_name is None:
+            collection_name = os.environ.get("ABS_COLLECTION_NAME", "abs-kosync")
+        if not isinstance(collection_name, str) or not collection_name.strip():
+            return False
 
         self._update_session_headers()
         try:
@@ -1028,6 +1030,8 @@ class ABSClient:
         stops answering, so nothing is added blind and a stalled server costs a
         single timeout.
         """
+        if not isinstance(collection_name, str) or not collection_name.strip():
+            return 0, []
         if not self.is_configured():
             return 0, []
         self._update_session_headers()

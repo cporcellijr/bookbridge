@@ -104,6 +104,37 @@ class TestABSCollectionCreation(unittest.TestCase):
         self.assertIn("Internal Server Error", message)
         self.assertNotIn("collection id unavailable", message)
 
+    def test_blank_explicit_collection_name_skips_requests_instead_of_using_global(self):
+        with patch.dict(os.environ, {"ABS_COLLECTION_NAME": "Global Shelf"}):
+            for name in ("", " \t "):
+                with self.subTest(name=repr(name)):
+                    self.client.session.get.reset_mock()
+                    self.client.session.post.reset_mock()
+
+                    self.assertFalse(self.client.add_to_collection("item-1", name))
+
+                    self.client.session.get.assert_not_called()
+                    self.client.session.post.assert_not_called()
+
+    def test_blank_configured_collection_name_skips_requests(self):
+        with patch.dict(os.environ, {"ABS_COLLECTION_NAME": "  \t "}):
+            self.assertFalse(self.client.add_to_collection("item-1"))
+
+        self.client.session.get.assert_not_called()
+        self.client.session.post.assert_not_called()
+
+    def test_unset_collection_name_uses_configured_default(self):
+        with patch.dict(os.environ, {"ABS_COLLECTION_NAME": "Configured Shelf"}):
+            self.assertTrue(self.client.add_to_collection("item-1"))
+
+        self.assertEqual(self._created_payload()["name"], "Configured Shelf")
+
+    def test_blank_missing_collection_name_skips_all_requests(self):
+        self.assertEqual(self.client.add_missing_to_collection(["item-1"], " \t "), (0, []))
+
+        self.client.session.get.assert_not_called()
+        self.client.session.post.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
