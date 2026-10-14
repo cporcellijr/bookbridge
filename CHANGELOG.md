@@ -56,8 +56,9 @@ All notable changes to BookBridge will be documented in this file.
   memory address as one finding instead of one per occurrence.
 - Treat Goodreads WebDriver error values as failed browser requests before URL
   parsing or WAF navigation body handling, avoiding uncaught error dictionaries.
-- Keep the KOReader reading-status upload's empty `books` field encoded as a JSON
-  array so the server accepts it and the device still pulls merged statuses.
+- Keep empty lists in KOReader plugin uploads (reading statuses, device logs,
+  reading statistics) encoded as JSON arrays, so the server accepts them and the
+  device still pulls merged statuses.
 - Bind cached input recovery to its approved audiobook and ebook pairing across
   retries and restarts. Commit its alignment, backup, activation and job completion
   together; a changed pairing, job, map or document owner leaves the newer state

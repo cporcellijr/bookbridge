@@ -10,6 +10,15 @@ local KOSYNC_ACCEPT = "application/vnd.koreader.v1+json"
 local MAX_JSON_BODY_BYTES = 900 * 1024
 local MAX_PLUGIN_ZIP_BYTES = 16 * 1024 * 1024
 
+-- KOReader's json (LuaJSON) and RapidJSON encode an empty table as {} unless it
+-- carries their array marker; the bridge rejects {} where it expects a list.
+local JSON_ARRAY_MT = { __jsontype = "array", __is_luajson_array = true }
+local function markEmptyArray(t)
+    if type(t) == "table" and next(t) == nil and getmetatable(t) == nil then
+        setmetatable(t, JSON_ARRAY_MT)
+    end
+end
+
 -- A JSON null decodes to a non-nil sentinel (a function/userdata in KOReader's
 -- json lib), which is truthy and, if it reaches a KOReader annotation field,
 -- crashes rendering ("attempt to concatenate a function value"). Recursively
@@ -420,6 +429,7 @@ function APIClient:uploadSessions(sessions)
 end
 
 function APIClient:uploadClientLogs(payload)
+    markEmptyArray(payload and payload.lines)
     local body = json.encode(payload)
     return self:_requestJSON("POST", "/koreader/device-sync/logs", body, {
         block_timeout = 5,
@@ -429,6 +439,8 @@ function APIClient:uploadClientLogs(payload)
 end
 
 function APIClient:uploadStatistics(payload)
+    markEmptyArray(payload and payload.books)
+    markEmptyArray(payload and payload.page_stats)
     local body = json.encode(payload)
     return self:_requestJSON("POST", "/koreader/device-sync/statistics", body, {
         block_timeout = 30,
@@ -469,10 +481,7 @@ function APIClient:ackAnnotations(payload)
 end
 
 function APIClient:uploadBookStatus(payload)
-    local books = payload and payload.books
-    if type(books) == "table" and next(books) == nil then
-        setmetatable(books, { __jsontype = "array" })
-    end
+    markEmptyArray(payload and payload.books)
     local body = json.encode(payload)
     local ok, code, resp_body = self:_requestJSON("POST", "/koreader/device-sync/status", body, {
         block_timeout = 20,

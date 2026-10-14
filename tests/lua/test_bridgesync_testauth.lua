@@ -62,14 +62,15 @@ package.preload["socket.http"] = function()
     }
 end
 
--- This small RapidJSON-compatible stub covers the array marker used by the
+-- This small LuaJSON-compatible stub (array iff __is_luajson_array, as in json.util.IsArray) covers the array marker used by the
 -- status-upload regression without pulling in a second JSON implementation.
 package.preload["json"] = function()
     return {
         encode = function(payload)
+            if payload.books == nil then return "{}" end
             local books = payload.books
             local mt = getmetatable(books)
-            if #books == 0 and not (mt and mt.__jsontype == "array") then
+            if #books == 0 and not (mt and mt.__is_luajson_array) then
                 if books.unexpected then
                     return '{"books":{"unexpected":true}}'
                 end
@@ -175,3 +176,17 @@ assert(last_http_request.source == '{"books":{"unexpected":true}}',
     "nonempty malformed tables must not be rewritten as valid empty arrays")
 
 print("BridgeSync Lua testAuth regression tests passed")
+
+-- Device-log and statistics uploads mark their empty lists the same way, so
+-- LuaJSON sends [] instead of the {} the bridge rejects ("lines must be an array").
+http_routes = {
+    ["/device-sync/logs"] = { status = 200, body = '{}' },
+    ["/device-sync/statistics"] = { status = 200, body = '{}' },
+}
+local log_payload = { operation = "probe", lines = {} }
+client():uploadClientLogs(log_payload)
+assert((getmetatable(log_payload.lines) or {}).__is_luajson_array, "empty log lines must encode as a JSON array")
+local stats_payload = { books = {}, page_stats = {} }
+client():uploadStatistics(stats_payload)
+assert((getmetatable(stats_payload.books) or {}).__is_luajson_array, "empty statistics books must encode as a JSON array")
+assert((getmetatable(stats_payload.page_stats) or {}).__is_luajson_array, "empty page_stats must encode as a JSON array")
