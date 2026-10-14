@@ -2653,6 +2653,13 @@ def _download_storyteller_artifact(storyteller_uuid, abs_title=None, *, original
     if downloaded:
         return artifact_filename, target_path
 
+    if target_path.exists():
+        # This uuid's own earlier artifact (downloads are staged and swapped in, so
+        # a failed one never leaves a partial file). The title-matched local copy
+        # below must never replace it: the title comes from the caller.
+        logger.warning(f"Storyteller local fallback used: '{target_path}'")
+        return artifact_filename, target_path
+
     st_lib = Path(os.environ.get("STORYTELLER_LIBRARY_DIR", "/storyteller_library"))
     if abs_title and st_lib.exists():
         for child in st_lib.iterdir():
@@ -3908,6 +3915,30 @@ def _parse_audio_duration(raw_value):
         return None
 
 
+def _set_bookorbit_link_for_current_user(book, audio_source) -> None:
+    """Point the acting user's BookOrbit link at ``book``.
+
+    The per-user link outranks the book row in the BookOrbit resolvers, so a link
+    created audio-only (e.g. by shelf-watch) hides the ebook until it is refreshed
+    here, and a reader joining a shared book has no usable BookOrbit id without one.
+    """
+    user_id = get_current_user_id()
+    if user_id is not None and "BookOrbit" in (audio_source, book.ebook_source):
+        try:
+            database_service.set_user_bookorbit_link(
+                user_id,
+                book.abs_id,
+                ebook_id=book.ebook_source_id if book.ebook_source == "BookOrbit" else None,
+                audio_id=book.audio_provider_book_id if audio_source == "BookOrbit" else None,
+                title=book.abs_title,
+            )
+        except Exception as link_err:
+            logger.warning(
+                "Failed to set BookOrbit link for user %s on '%s': %s",
+                user_id, sanitize_log_data(book.abs_id), link_err, exc_info=True,
+            )
+
+
 def _create_or_update_library_audio_mapping(
     *,
     audio_source="BookLore",
@@ -4002,6 +4033,7 @@ def _create_or_update_library_audio_mapping(
         ebook_source_id=ebook_source_id,
     )
     if access == "join":
+        _set_bookorbit_link_for_current_user(existing_book, audio_source)
         return existing_book, None, None
     if access == "deny":
         return None, _FOREIGN_MAPPING_MESSAGE, 403
@@ -4081,23 +4113,7 @@ def _create_or_update_library_audio_mapping(
     # loser is served to devices but can never receive progress.
     database_service.absorb_duplicate_mapping(saved_book)
 
-    # The per-user link outranks the book row in the BookOrbit resolvers, so a link
-    # created audio-only (e.g. by shelf-watch) hides the ebook until it is refreshed here.
-    user_id = get_current_user_id()
-    if user_id is not None and "BookOrbit" in (audio_source, saved_book.ebook_source):
-        try:
-            database_service.set_user_bookorbit_link(
-                user_id,
-                saved_book.abs_id,
-                ebook_id=saved_book.ebook_source_id if saved_book.ebook_source == "BookOrbit" else None,
-                audio_id=saved_book.audio_provider_book_id if audio_source == "BookOrbit" else None,
-                title=saved_book.abs_title,
-            )
-        except Exception as link_err:
-            logger.warning(
-                "Failed to set BookOrbit link for user %s on '%s': %s",
-                user_id, sanitize_log_data(saved_book.abs_id), link_err, exc_info=True,
-            )
+    _set_bookorbit_link_for_current_user(saved_book, audio_source)
 
     if uc().storyteller_client.is_configured() and saved_book.storyteller_uuid:
         try:
@@ -4366,6 +4382,13 @@ def _create_or_update_bookfusion_progress_mapping(
         ebook_source_id=str(bookfusion_id),
     )
     if access == "join":
+        _persist_bookfusion_link_for_current_user(
+            existing_book.abs_id,
+            "BookFusion",
+            str(bookfusion_id),
+            title=bookfusion_title or existing_book.abs_title,
+            author=bookfusion_author,
+        )
         return existing_book, None, None
     if access == "deny":
         return None, _FOREIGN_MAPPING_MESSAGE, 403
@@ -9995,6 +10018,21 @@ def _may_replace_mapping(abs_id) -> bool:
     return False
 
 
+def _hash_owned_by_foreign_mapping(doc_hash, abs_id) -> bool:
+    """Whether ``doc_hash`` belongs to another mapping the acting user may not modify."""
+    doc = database_service.get_kosync_document(doc_hash)
+    owner = getattr(doc, "linked_abs_id", None) if doc else None
+    if not owner:
+        owner = getattr(database_service.get_book_by_kosync_id(doc_hash), "abs_id", None)
+    if not owner or owner == abs_id or _acting_user_may_modify_book(owner):
+        return False
+    logger.info(
+        "ðŸ”’ Refused to move KoSync document '%s' from mapping '%s': it belongs to another reader",
+        sanitize_log_data(doc_hash), sanitize_log_data(owner),
+    )
+    return True
+
+
 def _forbidden_book_response(json_response: bool = False):
     message = "Forbidden: you have not claimed this book"
     if json_response or _request_wants_json():
@@ -10821,6 +10859,8 @@ def update_hash(abs_id):
     old_hash = book.kosync_doc_id
 
     if new_hash:
+        if _hash_owned_by_foreign_mapping(new_hash, abs_id):
+            return _FOREIGN_MAPPING_MESSAGE, 403
         book.kosync_doc_id = new_hash
         database_service.save_book(book)
         logger.info(f"✅ Updated KoSync hash for '{sanitize_log_data(book.abs_title)}' to manual input: '{new_hash}'")
@@ -10843,6 +10883,8 @@ def update_hash(abs_id):
         if recalc_hash:
             # [CHANGED] Manual update (via UI) should always succeed, even if it changes a linked hash.
             # The protection logic remains in match() and batch_match() to prevent automated overwrites.
+            if _hash_owned_by_foreign_mapping(recalc_hash, abs_id):
+                return _FOREIGN_MAPPING_MESSAGE, 403
             book.kosync_doc_id = recalc_hash
             database_service.save_book(book)
             logger.info(f"✅ Auto-regenerated KoSync hash for '{sanitize_log_data(book.abs_title)}': '{recalc_hash}'")

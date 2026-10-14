@@ -4,7 +4,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from src.db.database_service import DatabaseService
 from src.db.models import Book, KosyncDocument, State
@@ -157,6 +157,79 @@ class TestCrossUserMappingGuard(unittest.TestCase):
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.svc.get_book("ab-alice").ebook_filename, "book.epub")
         self.assertFalse(self.svc.is_user_linked(self.bob.id, "ab-alice"))
+
+    def _give_bob_a_book(self):
+        self.svc.save_book(Book(
+            abs_id="ab-bob", abs_title="Bob's Book", ebook_filename="bob.epub",
+            kosync_doc_id="b" * 32, sync_mode="audiobook", status="active",
+        ))
+        self.svc.link_user_book(self.bob.id, "ab-bob")
+        # Saving outside a request claims the book for the default admin too, which
+        # would make it "shared" and trip the admin-only shared-hash rule instead.
+        self.svc.unlink_user_book(self.admin.id, "ab-bob")
+
+    def test_non_admin_cannot_take_another_mappings_hash_through_update_hash(self):
+        self._give_bob_a_book()
+        self._login("bob")
+
+        r = self.client.post("/update-hash/ab-bob", data={"new_hash": HASH})
+
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("another reader's mapping", r.get_data(as_text=True))
+        self.assertEqual(self.svc.get_kosync_document(HASH).linked_abs_id, "ab-alice")
+        self.assertEqual(self.svc.get_book("ab-bob").kosync_doc_id, "b" * 32)
+
+    def test_update_hash_still_sets_an_unowned_hash(self):
+        self._give_bob_a_book()
+        self._login("bob")
+
+        r = self.client.post("/update-hash/ab-bob", data={"new_hash": "e" * 32})
+
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(self.svc.get_book("ab-bob").kosync_doc_id, "e" * 32)
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="c" * 32)
+    def test_joining_a_bookorbit_mapping_gives_the_joiner_a_link(self, _hash):
+        self.svc.save_book(Book(
+            abs_id="bookorbit:bo-1", abs_title="Orbit Book", ebook_filename="orbit.epub",
+            kosync_doc_id="c" * 32, sync_mode="audiobook", status="active",
+            audio_source="BookOrbit", audio_source_id="bo-1", audio_provider_book_id="bo-1",
+        ))
+        self.svc.link_user_book(self.alice.id, "bookorbit:bo-1")
+        self._login("bob")
+
+        r = self.client.post("/match", data={
+            "audio_source": "BookOrbit", "audio_source_id": "bo-1",
+            "audio_title": "Orbit Book", "ebook_filename": "orbit.epub",
+        })
+
+        self.assertEqual(r.status_code, 302)
+        self.assertTrue(self.svc.is_user_linked(self.bob.id, "bookorbit:bo-1"))
+        link = self.svc.get_user_bookorbit_link(self.bob.id, "bookorbit:bo-1")
+        self.assertEqual((link or {}).get("audio_id"), "bo-1")
+
+    def test_storyteller_fallback_never_overwrites_a_cached_artifact(self):
+        import src.web_server as ws
+
+        cache = Path(self.tmp) / "epub_cache"
+        cache.mkdir()
+        cached = cache / "storyteller_victim-uuid.epub"
+        cached.write_bytes(b"victim's readalong")
+        library = Path(self.tmp) / "storyteller_library" / "Other Book"
+        library.mkdir(parents=True)
+        (library / "other readaloud.epub").write_bytes(b"someone else's book")
+
+        clients = Mock()
+        clients.storyteller_client.download_slim_book.return_value = False
+        container = Mock()
+        container.epub_cache_dir.return_value = cache
+        with patch.object(ws, "uc", return_value=clients), patch.object(ws, "container", container), \
+                patch.dict(os.environ, {"STORYTELLER_LIBRARY_DIR": str(library.parent)}):
+            filename, path = ws._download_storyteller_artifact("victim-uuid", "Other Book")
+
+        self.assertEqual(filename, "storyteller_victim-uuid.epub")
+        self.assertEqual(cached.read_bytes(), b"victim's readalong")
+        clients.storyteller_client._strip_audio_from_epub.assert_not_called()
 
     def test_background_job_uses_the_user_it_runs_for(self):
         import src.web_server as ws

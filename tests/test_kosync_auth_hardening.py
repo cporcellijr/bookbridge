@@ -152,6 +152,28 @@ class TestKosyncAuthHardening(unittest.TestCase):
             401,
         )
 
+    def test_failure_table_drops_expired_keys_and_stays_bounded(self):
+        now = [1_000_000.0]
+        with patch.object(ks.time, "time", side_effect=lambda: now[0]):
+            for i in range(30):
+                ks._auth_is_limited((f"rotating-{i}", "192.0.2.1"), failed=True)
+            self.assertEqual(len(ks._AUTH_FAILURES), 30)
+
+            now[0] += ks._AUTH_FAILURE_WINDOW + 1
+            ks._auth_is_limited(("fresh", "192.0.2.1"), failed=True)
+            self.assertEqual(list(ks._AUTH_FAILURES), [("fresh", "192.0.2.1")])
+
+            with patch.object(ks, "_AUTH_FAILURE_MAX_KEYS", 10):
+                for i in range(25):
+                    ks._auth_is_limited((f"flood-{i}", "192.0.2.1"), failed=True)
+                self.assertEqual(len(ks._AUTH_FAILURES), 10)
+                self.assertIn(("flood-24", "192.0.2.1"), ks._AUTH_FAILURES)
+
+    def test_failure_key_caps_the_username(self):
+        with Flask(__name__).test_request_context("/"):
+            username, _address = ks._auth_failure_key("a" * 100_000)
+        self.assertEqual(len(username), ks._AUTH_USERNAME_KEY_CHARS)
+
     def test_key_comparison_is_constant_time(self):
         with patch.object(ks.hmac, "compare_digest", wraps=hmac.compare_digest) as cd:
             self.assertEqual(ks.authenticate_kosync("reader", "right-key")[0], True)

@@ -79,6 +79,11 @@ _AUTH_FAILURE_LIMIT = 5
 _AUTH_FAILURE_WINDOW = 60
 _LOOPBACK_PROXY_NETWORKS = ('127.0.0.0/8', '::1/128')
 
+# Caps on the auth-failure table: an unauthenticated client controls the username,
+# so neither the key count nor a key's size may grow with what it sends.
+_AUTH_FAILURE_MAX_KEYS = 10_000
+_AUTH_USERNAME_KEY_CHARS = 256
+
 # Plugin self-update: resolved from src/api/ -> project root -> plugins/
 _PLUGIN_DIR = Path(__file__).parent.parent.parent / "plugins" / "bridgesync.koplugin"
 _plugin_zip_cache: Optional[tuple] = None  # (zip_bytes: bytes, max_mtime: float)
@@ -1268,19 +1273,27 @@ def _kosync_client_address() -> str:
 
 
 def _auth_failure_key(username) -> tuple[str, str]:
-    return (str(username or "").strip().lower(), _kosync_client_address())
+    return (str(username or "").strip().lower()[:_AUTH_USERNAME_KEY_CHARS], _kosync_client_address())
 
 
 def _auth_is_limited(key: tuple[str, str], failed: bool = False) -> bool:
     now = time.time()
     with _AUTH_FAILURES_LOCK:
-        recent = [t for t in _AUTH_FAILURES.get(key, []) if now - t < _AUTH_FAILURE_WINDOW]
+        recent = [t for t in _AUTH_FAILURES.pop(key, []) if now - t < _AUTH_FAILURE_WINDOW]
         if failed:
             recent.append(now)
         if recent:
             _AUTH_FAILURES[key] = recent
-        else:
-            _AUTH_FAILURES.pop(key, None)
+        # Re-inserting keeps dict order = last-touched order, so expired keys and,
+        # past the cap, the least recently touched ones are dropped from the front.
+        while _AUTH_FAILURES:
+            oldest = next(iter(_AUTH_FAILURES))
+            if (
+                len(_AUTH_FAILURES) <= _AUTH_FAILURE_MAX_KEYS
+                and now - _AUTH_FAILURES[oldest][-1] < _AUTH_FAILURE_WINDOW
+            ):
+                break
+            del _AUTH_FAILURES[oldest]
         return len(recent) >= _AUTH_FAILURE_LIMIT
 
 
