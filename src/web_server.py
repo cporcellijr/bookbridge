@@ -11059,7 +11059,7 @@ def _build_listening_book_list():
             "bookKey": f"abs:{abs_id}",
             "absId": abs_id,
             "isLinked": True,
-            "title": getattr(book, "abs_title", None) or "Unknown book",
+            "title": getattr(book, "abs_title", None) or stats.get("book_title") or "Unknown book",
             "author": None,
             "totalSeconds": listen_seconds,
             "sessionCount": int(stats.get("session_count") or 0),
@@ -11524,7 +11524,7 @@ def api_stats_book_detail():
                 book = database_service.get_book(abs_id)
                 listening = {
                     "absId": abs_id,
-                    "title": getattr(book, "abs_title", None),
+                    "title": getattr(book, "abs_title", None) or row.get("book_title"),
                     "totalSeconds": int(row.get("listen_seconds") or 0),
                     "sessionCount": int(row.get("session_count") or 0),
                     "avgSessionSeconds": int(row.get("avg_session_seconds") or 0),

@@ -226,7 +226,7 @@ class Book(Base):
     storygraph_details = relationship("StorygraphDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     goodreads_details = relationship("GoodreadsDetails", back_populates="book", cascade="all, delete-orphan", uselist=False)
     alignment = relationship("BookAlignment", back_populates="book", uselist=False, cascade="all, delete-orphan")
-    reading_sessions = relationship("ReadingSession", back_populates="book", cascade="all, delete-orphan")
+    reading_sessions = relationship("ReadingSession", back_populates="book", passive_deletes="all")
 
     def __init__(self, abs_id: str, abs_title: str = None, ebook_filename: str = None,
                  audio_source: str = None, audio_source_id: str = None,
@@ -731,12 +731,14 @@ class ReadingSession(Base):
     leader_client = Column(String(50), nullable=True)    # e.g. 'ABS', 'BookLoreAudio', 'KoSync', 'BookLore'
     # Multi-user: stats are per-user. Nullable during rollout; backfilled in Phase 3.
     user_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    # Title snapshot so history stays nameable after the book mapping is deleted.
+    book_title = Column(String(500), nullable=True)
 
     book = relationship("Book", back_populates="reading_sessions")
 
     def __init__(self, abs_id: str, session_type: str, start_time: float, end_time: float,
                  duration_seconds: int, start_progress: float = None, end_progress: float = None,
-                 leader_client: str = None, user_id: int = None):
+                 leader_client: str = None, user_id: int = None, book_title: str = None):
         self.abs_id = abs_id
         self.session_type = session_type
         self.start_time = start_time
@@ -746,6 +748,7 @@ class ReadingSession(Base):
         self.end_progress = end_progress
         self.leader_client = leader_client
         self.user_id = user_id
+        self.book_title = book_title
 
 
 class KOReaderBookStat(Base):

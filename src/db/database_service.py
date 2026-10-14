@@ -1432,6 +1432,7 @@ class DatabaseService:
                 self._mark_progress_written(session, old_abs_id, new_abs_id)
                 session.query(State).filter(State.abs_id == old_abs_id).update({State.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(Job).filter(Job.abs_id == old_abs_id).update({Job.abs_id: new_abs_id}, synchronize_session=False)
+                session.query(ReadingSession).filter(ReadingSession.abs_id == old_abs_id).update({ReadingSession.abs_id: new_abs_id}, synchronize_session=False)
                 session.query(KosyncDocument).filter(KosyncDocument.linked_abs_id == old_abs_id).update({KosyncDocument.linked_abs_id: new_abs_id}, synchronize_session=False)
                 # Carry per-user claims across, deduping against any link the user
                 # already has on the new id (the (user_id, abs_id) pair is unique).
@@ -1555,7 +1556,7 @@ class DatabaseService:
             
             book = session.query(Book).filter(Book.abs_id == abs_id).first()
             if book:
-                session.delete(book)  # Cascade will handle states and jobs
+                session.delete(book)  # Cascade handles states and jobs; reading sessions are kept as history
                 deleted = True
             else:
                 deleted = False
@@ -5936,6 +5937,7 @@ class DatabaseService:
     @staticmethod
     def _close_reading_session(session, row: ReadingSessionBuffer, now: float) -> None:
         """Close the buffer and insert local history in the same transaction."""
+        from sqlalchemy import func
         from src.services.reading_session_aggregator import MAX_SESSION_SECONDS
 
         duration = int(min(row.accumulated_seconds,
@@ -5945,12 +5947,15 @@ class DatabaseService:
             row.grimmory_status = "disabled"
             row.bookorbit_status = "disabled"
             return
+        book_title = session.query(
+            func.coalesce(Book.abs_title, Book.audio_title)
+        ).filter(Book.abs_id == row.abs_id).scalar()
         session.add(ReadingSession(
             abs_id=row.abs_id, session_type=row.session_type,
             start_time=row.last_event_at - duration, end_time=row.last_event_at,
             duration_seconds=duration, start_progress=row.start_progress,
             end_progress=row.end_progress, leader_client=row.leader_client,
-            user_id=row.user_id or None,
+            user_id=row.user_id or None, book_title=book_title,
         ))
         logger.info("Reading session closed: user=%s book='%s' type=%s estimated_seconds=%s",
                     row.user_id, row.abs_id, row.session_type, duration)
@@ -6148,6 +6153,8 @@ class DatabaseService:
         Callers must pre-compute duration_seconds (exact telemetry or heuristic).
         This method only persists and applies a safety cap.
         """
+        from sqlalchemy import func
+
         try:
             if duration_seconds <= 0:
                 return
@@ -6155,6 +6162,10 @@ class DatabaseService:
             duration_seconds = min(duration_seconds, 14400)
             uid = self._resolve_uid(user_id)
 
+            with self.get_session() as db_session:
+                book_title = db_session.query(
+                    func.coalesce(Book.abs_title, Book.audio_title)
+                ).filter(Book.abs_id == abs_id).scalar()
             session = ReadingSession(
                 abs_id=abs_id,
                 session_type=session_type,
@@ -6165,6 +6176,7 @@ class DatabaseService:
                 end_progress=end_progress,
                 leader_client=leader_client,
                 user_id=uid,
+                book_title=book_title,
             )
             with self.get_session() as db_session:
                 db_session.add(session)
@@ -6188,6 +6200,7 @@ class DatabaseService:
                 func.count(ReadingSession.id).label('session_count'),
                 func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
                 func.max(ReadingSession.end_time).label('last_session_time'),
+                ReadingSession.book_title.label('book_title'),
             ).filter(ReadingSession.abs_id == abs_id)
             uid = self._resolve_uid(user_id)
             if uid is not None:
@@ -6203,6 +6216,7 @@ class DatabaseService:
                 'session_count': int(row.session_count),
                 'avg_session_seconds': int(row.total_duration) // int(row.session_count),
                 'last_session_time': row.last_session_time,
+                'book_title': row.book_title,
             }
 
     def get_all_reading_stats(self, user_id: int = None) -> dict:
@@ -6230,6 +6244,7 @@ class DatabaseService:
                 # This gives us the latest leader per book with no extra query. Do not
                 # "clean this up" into a plain column; it is load-bearing.
                 ReadingSession.leader_client.label('last_leader'),
+                ReadingSession.book_title.label('book_title'),
             )
             uid = self._resolve_uid(user_id)
             if uid is not None:
@@ -6247,6 +6262,7 @@ class DatabaseService:
                     'avg_session_seconds': int(row.total_duration) // int(row.session_count),
                     'last_session_time': row.last_session_time,
                     'last_leader': row.last_leader,
+                    'book_title': row.book_title,
                 }
             return result
 
@@ -6275,7 +6291,7 @@ class DatabaseService:
                 "id": f"local-{rs.id}",
                 "activityType": "listening",
                 "absId": rs.abs_id,
-                "title": abs_title or audio_title or "Unknown title",
+                "title": abs_title or audio_title or rs.book_title or "Unknown title",
                 "subtitle": None,
                 "author": None,
                 "durationSeconds": int(rs.duration_seconds or 0),

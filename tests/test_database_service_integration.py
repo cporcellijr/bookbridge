@@ -557,8 +557,8 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         deleted_job = self.db_service.get_latest_job(test_abs_id)
         self.assertIsNone(deleted_job)
 
-    def test_delete_book_cascades_reading_sessions(self):
-        """Deleting a book should also delete reading_sessions rows."""
+    def test_delete_book_keeps_reading_sessions(self):
+        """Deleting a book keeps its reading_sessions rows so listening history survives."""
         test_abs_id = 'test-book-delete-reading-sessions'
 
         book = self.Book(
@@ -595,7 +595,7 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         with self.db_service.get_session() as session:
             self.assertEqual(
                 session.query(self.ReadingSession).filter(self.ReadingSession.abs_id == test_abs_id).count(),
-                0,
+                1,
             )
 
     def test_delete_book_removes_membership_links_without_foreign_key_cascades(self):

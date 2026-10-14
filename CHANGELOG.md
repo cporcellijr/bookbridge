@@ -11,6 +11,8 @@ All notable changes to BookBridge will be documented in this file.
 - Fill the Stats page's Listening section from BookBridge's own listening sessions
   (BookOrbit, Grimmory) when you don't use Audiobookshelf: daily totals, heatmap,
   recent sessions and the yearly recap. Audiobookshelf users keep its numbers.
+  Deleting a book mapping now keeps its reading and listening history, so finished
+  books you remove still count in Stats.
 - Local Whisper language override and opt-in non-speech filtering (VAD), with
   per-chunk language and script-mismatch diagnostics (#504). VAD is off by default.
 - Bulk-delete dashboard books with one confirmation and existing per-user
