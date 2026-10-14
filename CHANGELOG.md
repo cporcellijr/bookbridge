@@ -37,6 +37,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Keep syncing audiobook progress to KOReader in books whose chapters wrap
+  paragraphs in a `<span>`; the generated position no longer points at a
+  paragraph that doesn't exist, which made the update get skipped (#514).
 - Show Audiobookshelf listening stats from the signed-in user's own Audiobookshelf
   account, and keep each admin's cached stats separate (#508).
 - Skip adding books to an Audiobookshelf collection when the collection name is

@@ -372,7 +372,6 @@ class KoSyncSyncClient(SyncClient):
             path_segments = []
             current = anchor
             found_body = False
-            fragile_tags = self.ebook_parser.CRENGINE_FRAGILE_INLINE_TAGS
             while current is not None and getattr(current, "name", None) != "[document]":
                 name = getattr(current, "name", None)
                 if name == "body":
@@ -381,9 +380,6 @@ class KoSyncSyncClient(SyncClient):
                     break
                 if not name:
                     return None
-                if name in fragile_tags:
-                    current = getattr(current, "parent", None)
-                    continue
 
                 parent = getattr(current, "parent", None)
                 siblings = []

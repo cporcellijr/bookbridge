@@ -231,6 +231,30 @@ class TestKoSyncXPathSafety(unittest.TestCase):
         self.assertTrue(result.updated_state["skipped"])
         self.kosync_api.update_progress.assert_not_called()
 
+    def test_update_progress_keeps_span_wrapper_around_blocks_and_does_not_skip(self):
+        self._configure_epub_dom(
+            b"<html><body><span>"
+            b"<p>Alpha</p><p>Bravo Charlie</p>"
+            b"</span></body></html>",
+            "Alpha Bravo Charlie",
+            clamped_pos=8,
+        )
+        self.ebook_parser.get_sentence_level_ko_xpath.return_value = (
+            "/body/DocFragment[4]/body/p[2]/text().0"
+        )
+        self.kosync_api.update_progress.return_value = True
+        book = SimpleNamespace(kosync_doc_id="doc-span", ebook_filename="book.epub", abs_title="Book")
+        request = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5, xpath="ignored"))
+
+        with self.assertLogs("src.sync_clients.kosync_sync_client", level="INFO") as logs:
+            result = self.client.update_progress(book, request)
+
+        self.assertTrue(result.success)
+        self.kosync_api.update_progress.assert_called_once_with(
+            "doc-span", 0.5, "/body/DocFragment[4]/body/span/p[2].0"
+        )
+        self.assertFalse(any("Skipping KoSync update due to unresolvable XPath" in m for m in logs.output))
+
     def test_update_progress_keeps_valid_generated_parent_chain(self):
         self._configure_epub_dom(
             b"<html><body><div><p>Readable text</p></div></body></html>",

@@ -1,5 +1,6 @@
 import logging
 import unittest
+from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 from lxml import html
@@ -168,6 +169,45 @@ class TestSplitXpathCharOffset(unittest.TestCase):
             records = self._resolve_unresolvable()
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].levelno, logging.DEBUG)
+
+
+class TestFragileWrapperKeptAboveAnchor(unittest.TestCase):
+    """#514: a fragile tag that WRAPS blocks is a real step; only tags below the anchor are skipped."""
+
+    PARAS = "".join(f"<p>Paragraph number {i} with readable text.</p>" for i in range(1, 51))
+
+    def _parser(self) -> EbookParser:
+        return EbookParser.__new__(EbookParser)
+
+    def _chapter(self, inner: str) -> str:
+        return f"<html><body>{inner}</body></html>"
+
+    def test_build_xpath_keeps_span_wrapping_blocks(self):
+        content = self._chapter(f"<span>{self.PARAS}</span>")
+        tree = html.fromstring(content)
+        target = tree.xpath("./body/span/p[43]")[0]
+        xpath = self._parser()._build_xpath(target)
+        self.assertEqual(xpath, "body/span/p[43]")
+        self.assertTrue(tree.xpath(f"./{xpath}"))
+
+    def test_bs4_position_xpath_keeps_span_wrapper_and_resolves(self):
+        content = self._chapter(f"<span>{self.PARAS}</span>")
+        full_text = BeautifulSoup(content, "html.parser").body.get_text(strip=True)
+        item = {"start": 0, "end": len(full_text), "char_len": len(full_text),
+                "spine_index": 17, "href": "c.xhtml", "content": content}
+        offset = sum(len(f"Paragraph number {i} with readable text.") + 1 for i in range(1, 43)) + 3
+        with patch.object(EbookParser, "resolve_book_path", return_value="b.epub"),                 patch.object(EbookParser, "extract_text_and_map", return_value=(full_text, [item])):
+            xpath = self._parser()._compute_xpath_at_position("b.epub", offset)
+        self.assertIn("/body/span/p[43]", xpath)
+        rel = xpath.split("/body/DocFragment[17]/")[1].rsplit("/text()", 1)[0]
+        self.assertTrue(html.fromstring(content).xpath(f"./{rel}"))
+
+    def test_inline_span_inside_p_still_anchors_to_p(self):
+        content = self._chapter("<p>Plain.</p><p>Some <span>inline words</span> here.</p>")
+        tree = html.fromstring(content)
+        span = tree.xpath("./body/p[2]/span")[0]
+        self.assertEqual(self._parser()._build_xpath(span.getparent()), "body/p[2]")
+        self.assertEqual(self._parser()._build_xpath(span), "body/p[2]")
 
 
 if __name__ == "__main__":

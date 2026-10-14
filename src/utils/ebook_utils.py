@@ -1839,15 +1839,18 @@ class EbookParser:
             # Build KOReader-compatible strictly positional XPath using BS4 (Fallback)
             path_segments = []
             curr = target_tag
+            anchored = False
 
             while curr and curr.name != '[document]':
                 if curr.name == 'body':
                     path_segments.append("body")
                     break
                 
-                if curr.name in self.CRENGINE_FRAGILE_INLINE_TAGS:
+                # Fragile tags are skipped only below the anchor; above it they wrap blocks and CREngine keeps them.
+                if curr.name in self.CRENGINE_FRAGILE_INLINE_TAGS and not anchored:
                     curr = curr.parent
                     continue
+                anchored = True
                 
                 index = 1
                 sibling = curr.previous_sibling
@@ -1883,14 +1886,17 @@ class EbookParser:
         """Build XPath for an element, ensuring proper KOReader format."""
         parts = []
         current = element
+        anchored = False
 
         while current is not None and current.tag not in ['html', 'document']:
             tag_name = self._local_tag_name(current)
 
-            if tag_name in self.CRENGINE_FRAGILE_INLINE_TAGS:
+            # Fragile tags are skipped only below the anchor; above it they wrap blocks and CREngine keeps them.
+            if tag_name in self.CRENGINE_FRAGILE_INLINE_TAGS and not anchored:
                 current = current.getparent()
                 continue
-            
+            anchored = True
+
             # Get siblings of same tag to determine index
             parent = current.getparent()
             if parent is not None:
