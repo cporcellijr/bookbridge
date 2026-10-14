@@ -99,3 +99,62 @@ def test_pending_suggestion_carries_source_name():
     meta = json.loads(captured["s"].origin_metadata_json)
     assert meta["source_name"] == "BookOrbit"
     assert meta["grimmory_id"] == "5"
+
+
+# ---- #515 same-entry audio shortcut -------------------------------------
+
+def _same_entry_svc(source_name='BookOrbit', env_prefix='BOOKORBIT', info=None, info_exc=None):
+    suggestions = MagicMock()
+    suggestions._scan_single_ebook.return_value = None
+    bms = MagicMock()
+    bms.create_audio_mapping_from_match.return_value = MagicMock(
+        audio_source='BookOrbit', audio_source_id='77')
+    svc = ShelfWatchService(
+        booklore_client=MagicMock(), database_service=MagicMock(),
+        book_mapping_service=bms, source_name=source_name, env_prefix=env_prefix,
+        suggestions_service_factory=MagicMock(return_value=suggestions),
+    )
+    client = MagicMock()
+    if info_exc:
+        client.get_audiobook_info.side_effect = info_exc
+    else:
+        client.get_audiobook_info.return_value = info
+    return svc, client, bms, suggestions
+
+
+def _run_one(svc, client):
+    book = {"id": "77", "title": "Some Book", "fileName": "some-book.epub"}
+    return svc._process_one_book(book, "some-book.epub", "77", [], 95.0, "Up Next", "Kobo",
+                                 active_client=client)
+
+
+def test_same_entry_audio_auto_matches_when_pool_misses():
+    svc, client, bms, sugg = _same_entry_svc(info={"tracks": [{"id": 1}], "duration_seconds": 3600.0})
+    assert _run_one(svc, client) == 'auto_matched'
+    kw = bms.create_audio_mapping_from_match.call_args.kwargs
+    assert kw['audio_source'] == 'BookOrbit' and kw['audio_source_id'] == '77'
+    assert kw['audio_provider_book_id'] == '77' and kw['audio_duration'] == 3600.0
+    bms.create_ebook_only_mapping.assert_not_called()
+    sugg._scan_single_ebook.assert_not_called()
+    assert svc.database_service.upsert_shelf_watch_scan.call_args.kwargs['status'] == 'auto_matched'
+
+
+def test_same_entry_without_audio_stays_ebook_only():
+    for info in (None, {"tracks": []}):
+        svc, client, bms, _ = _same_entry_svc(info=info)
+        assert _run_one(svc, client) == 'ebook_only'
+        bms.create_audio_mapping_from_match.assert_not_called()
+
+
+def test_same_entry_check_error_falls_back_to_scan():
+    svc, client, bms, sugg = _same_entry_svc(info_exc=RuntimeError("boom"))
+    assert _run_one(svc, client) == 'ebook_only'
+    sugg._scan_single_ebook.assert_called_once()
+    bms.create_audio_mapping_from_match.assert_not_called()
+
+
+def test_same_entry_not_attempted_for_grimmory():
+    svc, client, bms, _ = _same_entry_svc(
+        source_name='BookLore', env_prefix='BOOKLORE', info={"tracks": [{"id": 1}]})
+    assert _run_one(svc, client) == 'ebook_only'
+    client.get_audiobook_info.assert_not_called()

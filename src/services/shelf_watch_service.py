@@ -450,6 +450,17 @@ class ShelfWatchService:
             'path': grimmory_book.get('filePath') or grimmory_book.get('filepath') or grimmory_book.get('path') or '',
         }
 
+        same_entry = self._same_entry_audio_match(grimmory_book, grimmory_id, active_client)
+        if same_entry:
+            self._create_audio_mapping_and_move(
+                grimmory_book, filename, grimmory_id, same_entry, watch_shelf, kobo_shelf,
+                user_id=user_id, active_client=active_client,
+            )
+            self.database_service.upsert_shelf_watch_scan(
+                self._scan_key(grimmory_id), filename, top_score=100.0, status='auto_matched',
+            )
+            return 'auto_matched'
+
         scan_result = self._get_suggestions_service()._scan_single_ebook(ebook_anchor, candidate_pool)
         matches = (scan_result or {}).get('matches') or []
         if matches:
@@ -492,6 +503,41 @@ class ShelfWatchService:
             self._scan_key(grimmory_id), filename, top_score=top_score, status=outcome_status,
         )
         return outcome_status
+
+    def _same_entry_audio_match(self, grimmory_book: dict, grimmory_id: str,
+                                active_client) -> Optional[dict]:
+        """Live-check whether a BookOrbit shelf book's own entry also carries audio.
+
+        The fuzzy candidate pool comes from a TTL-cached listing, so a book added
+        and shelved within the TTL is missing from it; the entry itself is the
+        authoritative match. Returns a match dict, or None to fall back to the scan.
+        """
+        if self._source_name != 'BookOrbit' or active_client is None:
+            return None
+        try:
+            info = active_client.get_audiobook_info(grimmory_id)
+        except Exception as e:
+            logger.warning(
+                "Shelf-watch: same-entry audio check failed for %s:%s: %s",
+                self._source_name, grimmory_id, e, exc_info=True,
+            )
+            return None
+        if not isinstance(info, dict) or not info.get('tracks'):
+            return None
+        logger.info(
+            "Shelf-watch: %s:%s has audio on its own entry; auto-matching same entry "
+            "(candidate pool not consulted)", self._source_name, grimmory_id,
+        )
+        return {
+            'audio_source': 'BookOrbit',
+            'audio_source_id': grimmory_id,
+            'audio_provider_book_id': grimmory_id,
+            'audio_title': grimmory_book.get('title') or '',
+            'audio_duration': info.get('duration_seconds'),
+            'audio_cover_url': f"/api/bookorbit/audiobook-cover/{grimmory_id}",
+            'score': 100.0,
+            'match_reason': 'same_entry',
+        }
 
     def _create_audio_mapping_and_move(self, grimmory_book: dict, filename: str,
                                        grimmory_id: str, top_match: dict,

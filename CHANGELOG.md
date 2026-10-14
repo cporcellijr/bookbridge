@@ -37,6 +37,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Map a book added to the BookOrbit watch shelf to its own audiobook when the same
+  BookOrbit entry has audio files, instead of creating an ebook-only entry when
+  the book was added recently (#515).
 - Keep syncing audiobook progress to KOReader in books whose chapters wrap
   paragraphs in a `<span>`; the generated position no longer points at a
   paragraph that doesn't exist, which made the update get skipped (#514).
