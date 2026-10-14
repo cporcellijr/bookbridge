@@ -11085,19 +11085,21 @@ def _local_listening_stats(tz):
     }
 
 
-def _abs_listening_configured():
-    """True when the request user's own ABS client is configured."""
+def _stats_abs_client():
+    """The request user's own configured ABS client, or None. Never falls back to
+    the global (primary admin) client when the user's bundle cannot be built."""
     try:
-        abs_client = uc().abs_client
-        return bool(abs_client) and bool(abs_client.is_configured())
-    except Exception:
-        return False
+        abs_client = container.user_client_registry().get_clients(current_user().id).abs_client
+        return abs_client if abs_client and abs_client.is_configured() else None
+    except Exception as e:
+        logger.warning("Stats: user ABS client unavailable, using local sessions: %s", e, exc_info=True)
+        return None
 
 
 def _build_listening_stats_payload(tz):
-    use_abs = _abs_listening_configured()
+    abs_client = _stats_abs_client()
+    use_abs = abs_client is not None
     if use_abs:
-        abs_client = uc().abs_client
         raw_stats = abs_client.get_listening_stats()
     else:
         raw_stats = _local_listening_stats(tz)
@@ -11560,8 +11562,9 @@ def api_stats_yearly_recap():
 
         listening_recap = None
         try:
-            if _abs_listening_configured():
-                raw_stats = uc().abs_client.get_listening_stats()
+            abs_client = _stats_abs_client()
+            if abs_client:
+                raw_stats = abs_client.get_listening_stats()
             else:
                 raw_stats = _local_listening_stats(tz)
         except Exception:

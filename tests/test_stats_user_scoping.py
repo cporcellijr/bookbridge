@@ -45,6 +45,7 @@ class TestStatsUserScoping(unittest.TestCase):
             "days": {"2026-04-07": 900}, "items": {"a": {}}, "recentSessions": [],
         }
         self.bundle = MagicMock(abs_client=self.user_abs)
+        self.mock_container.mock_user_client_registry.get_clients.return_value = self.bundle
 
     def tearDown(self):
         import src.db.migration_utils
@@ -53,7 +54,7 @@ class TestStatsUserScoping(unittest.TestCase):
 
     def test_listening_stats_use_request_user_bundle(self):
         with self.app.test_request_context('/api/stats'), \
-                patch.object(self.ws, 'uc', return_value=self.bundle):
+                patch.object(self.ws, 'current_user', return_value=_user(1)):
             payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
         self.assertIsNotNone(payload)
         self.assertTrue(payload['available'])
@@ -76,7 +77,7 @@ class TestStatsUserScoping(unittest.TestCase):
             'year': 2026, 'months': [{'month': m, 'seconds': 0, 'pages': 0, 'finished': 0} for m in range(1, 13)],
             'totalSeconds': 0, 'totalPages': 0, 'booksFinished': 0, 'finishedBooks': [], 'availableYears': [],
         }
-        with patch.object(self.ws, 'uc', return_value=self.bundle):
+        with patch.object(self.ws, 'current_user', return_value=_user(1)):
             response = self.client.get('/api/stats/yearly-recap?scope=listening&year=2026')
         self.assertEqual(response.status_code, 200)
         self.user_abs.get_listening_stats.assert_called()
@@ -94,7 +95,7 @@ class TestStatsUserScoping(unittest.TestCase):
 
     def test_listening_stats_without_abs_use_local_sessions(self):
         self._local_listening_setup()
-        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle):
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'current_user', return_value=_user(1)):
             payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
         self.assertTrue(payload['available'])
         self.assertEqual(payload['stats']['totalSeconds'], 900)
@@ -105,12 +106,12 @@ class TestStatsUserScoping(unittest.TestCase):
     def test_listening_stats_without_abs_or_local_rows_unavailable(self):
         self._local_listening_setup()
         self.mock_database_service.get_listening_days.return_value = {}
-        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle):
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'current_user', return_value=_user(1)):
             self.assertIsNone(self.ws._build_listening_stats_payload(self.ws._get_stats_timezone()))
 
     def test_listening_stats_with_abs_skip_local_sessions(self):
         self.user_abs.is_configured.return_value = True
-        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle):
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'current_user', return_value=_user(1)):
             self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
         self.user_abs.get_listening_stats.assert_called()
         self.mock_database_service.get_listening_days.assert_not_called()
@@ -119,10 +120,19 @@ class TestStatsUserScoping(unittest.TestCase):
     def test_yearly_recap_without_abs_uses_local_sessions(self):
         self._local_listening_setup()
         self.mock_database_service.get_koreader_yearly_recap.return_value = {}
-        with patch.object(self.ws, 'uc', return_value=self.bundle):
+        with patch.object(self.ws, 'current_user', return_value=_user(1)):
             response = self.client.get('/api/stats/yearly-recap?scope=listening&year=2026')
         self.assertEqual(response.get_json()['totalSeconds'], 900)
         self.user_abs.get_listening_stats.assert_not_called()
+
+    def test_stats_never_fall_back_to_global_abs_when_bundle_fails(self):
+        self.mock_container.mock_user_client_registry.get_clients.side_effect = RuntimeError("boom")
+        self.mock_abs_client.is_configured.return_value = True
+        self._local_listening_setup()
+        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'current_user', return_value=_user(2)):
+            payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
+        self.assertEqual(payload['stats']['totalSeconds'], 900)
+        self.mock_abs_client.get_listening_stats.assert_not_called()
 
 
 if __name__ == '__main__':
