@@ -39,6 +39,8 @@ All notable changes to BookBridge will be documented in this file.
 
 - Skip adding books to an Audiobookshelf collection when the collection name is
   blank, instead of asking Audiobookshelf to create a collection with no name.
+- Report repeated diagnostics warnings that differ only by a JSON request ID or a
+  memory address as one finding instead of one per occurrence.
 - Treat Goodreads WebDriver error values as failed browser requests before URL
   parsing or WAF navigation body handling, avoiding uncaught error dictionaries.
 - Keep the KOReader reading-status upload's empty `books` field encoded as a JSON

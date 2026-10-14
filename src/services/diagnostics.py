@@ -60,9 +60,12 @@ _SCRUB_TOKEN_RE = re.compile(r'\b(t|path|url|ip|email):[0-9a-f]{8}')
 _XPATH_TOKEN_RE = re.compile(
     r'^\.{0,1}/{1,2}(?=.*(?:text\(\)|DocFragment|@id=))'
 )
+# A quoted scrub token is consumed whole (and kept) so its closing quote can't
+# pair with the next opening quote and shift every later span out of phase.
 _SHORT_QUOTED_RE = re.compile(
-    r'''(?:"(?!\b(?:t|path|url|ip|email):#)[^"]{0,11}"|'''
-    r'''(?<!\w)'(?!\b(?:t|path|url|ip|email):#)[^']{0,11}'(?!\w))'''
+    r'''(?P<token>"(?:t|path|url|ip|email):#[^"]*"|'''
+    r'''(?<!\w)'(?:t|path|url|ip|email):#[^']*'(?!\w))|'''
+    r'''"[^"]{0,11}"|(?<!\w)'[^']{0,11}'(?!\w)'''
 )
 # Per-value id collapses used by _make_template (template only -- never
 # applied to the persisted message/context text).  UUIDs first so a
@@ -74,7 +77,8 @@ _UUID_RE = re.compile(
 # Hex-looking runs of >= 6 chars that contain at least one digit -- the
 # digit requirement lets English words spelled entirely with a-f letters
 # (e.g. "decade", "efface") survive untouched.
-_HEX_RUN_RE = re.compile(r'\b(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{6,}\b')
+# A 0x-prefixed run (an object address like "at 0x7f4cf94090") counts too.
+_HEX_RUN_RE = re.compile(r'\b(?:0x[0-9a-fA-F]+|(?=[0-9a-fA-F]*\d)[0-9a-fA-F]{6,})\b')
 # Long alnum/underscore ids (>= 14 chars, >= 2 digits), e.g. database
 # primary keys or slugs like "li_4nrp2qhewiqe3xdi2q".
 _LONG_ID_RE = re.compile(
@@ -211,7 +215,7 @@ def _make_template(message: str) -> str:
     normalized = _LONG_ID_RE.sub('#', normalized)
 
     normalized = _SHORT_QUOTED_RE.sub(
-        lambda m: f"{m.group(0)[0]}<value>{m.group(0)[-1]}",
+        lambda m: m.group(0) if m.group('token') else f"{m.group(0)[0]}<value>{m.group(0)[-1]}",
         normalized,
     )
 

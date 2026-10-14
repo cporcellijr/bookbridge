@@ -544,6 +544,35 @@ class TestMakeTemplate(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertIn('#', first)
 
+    def test_json_request_ids_collapse_after_quoted_scrub_tokens(self):
+        """Fleet finding 7289: a quoted t:# token must not shift quote pairing."""
+        first = _make_template(
+            'BookOrbit koreader request path:3e75edb9 returned 401: {"statusCode":401,'
+            '"message":"t:e417846e","path":"t:1b04e7ce","timestamp":"t:d34b6533","requestId":"req-93t"}'
+        )
+        second = _make_template(
+            'BookOrbit koreader request path:3e75edb9 returned 401: {"statusCode":401,'
+            '"message":"t:e417846e","path":"t:1b04e7ce","timestamp":"t:59583a44","requestId":"req-95i"}'
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(
+            first,
+            'BookOrbit koreader request path:# returned 401: {"<value>":#,"<value>":"t:#",'
+            '"<value>":"t:#","<value>":"t:#","<value>":"<value>"}',
+        )
+
+    def test_object_addresses_collapse_to_same_template(self):
+        """Fleet finding 7289: repr addresses like 'at 0x7f4cf94090' are per-process."""
+        message = (
+            "❌ Storyteller API request failed ('GET' 't:12e4a39a'): HTTPConnectionPool("
+            "host='ip:e595c452', port=8001): Max retries exceeded with url: path:5f44182b "
+            "(Caused by ConnectTimeoutError(<HTTPConnection(host='ip:e595c452', port=8001) "
+            "at {}>, 't:0fa3be7a'))"
+        )
+        first = _make_template(message.format("0x7f4cf94090"))
+        self.assertEqual(first, _make_template(message.format("0x7f842cee10")))
+        self.assertIn("at #>", first)
+
     def test_long_alnum_ids_collapse_to_same_template(self):
         first = _make_template("Fetching li_4nrp2qhewiqe3xdi2q from library")
         second = _make_template("Fetching li_9xz8qhewiqe3aa1b from library")
