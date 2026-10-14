@@ -93,9 +93,9 @@ only, never on the split-port sync server, so keep it on your LAN.
 | Method and path | Body | Does |
 | --- | --- | --- |
 | `GET /api/v1/admin/users` | | List users (id, username, role, active) |
-| `GET /api/v1/admin/users/<username>` | | One user |
+| `GET /api/v1/admin/users/<username>` | | One user, plus `off_server_wide`: the services this reader has switched on under **My Integrations** that are switched off in **Settings**, so are not running for them (an empty list when none) |
 | `PUT /api/v1/admin/users/<username>` | `{"password", "role", "active"}`, all optional except `password` when creating | Create the reader if missing, otherwise update it. Safe to repeat, including concurrent calls. A new reader gets the shared library when Shared Library is on. `active` is set, not toggled. `role` may only be `"user"` |
-| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account -> My Integrations**. Each value must match its field: booleans must be JSON `true`/`false`, text and secrets must be strings (an empty string clears a field), and select fields must be one of their declared options. Anything else is rejected with 400 naming the field. Secret values are never returned |
+| `PATCH /api/v1/admin/users/<username>/integrations` | `{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}` | Set only the given per-user fields from **Account -> My Integrations**. Each value must match its field: booleans must be JSON `true`/`false`, text and secrets must be strings (an empty string clears a field), and select fields must be one of their declared options. Anything else is rejected with 400 naming the field. Secret values are never returned. The response lists the keys saved (`updated`) and, in `off_server_wide`, any service switched on in this call that is switched off in **Settings**: the value is saved, but the service will not run for this reader until it is switched back on server-wide |
 
 The token manages **readers only**. It can create `user` accounts and change existing
 `user` accounts, but any attempt to create or promote an admin, or to change an
@@ -121,7 +121,10 @@ have their own switch for the services they hold a login for, under **Account ->
 Integrations**, but it applies only while the service is switched on server-wide. When
 it is off, their switch is shown greyed out with the reason instead of letting them
 turn on something that will not work. Nobody's personal choice is lost — switching the
-service back on restores everyone's settings exactly as they were.
+service back on restores everyone's settings exactly as they were. A script using the
+[admin API](#admin-api-optional) gets the same answer in `off_server_wide`, and a
+KOReader device that keeps syncing to BookBridge while KoSync is off is noted once per
+reader in the log, since the device itself cannot tell that its progress stops there.
 
 #### Audiobookshelf
 

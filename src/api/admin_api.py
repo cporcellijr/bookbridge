@@ -10,6 +10,13 @@
 # The token manages READER accounts only: it can create role='user' accounts and
 # change existing ones, but never creates or promotes an admin and never touches
 # an existing admin (password, active, role or integrations).
+#
+# A service switched off in Settings is off for every reader whatever their own
+# switch says (SERVICE_ENABLE_KEYS in user_config). Writing such a switch still
+# succeeds, because the value is kept for when the service comes back, so the
+# responses that describe a reader's integrations carry "off_server_wide": the
+# service keys the reader has on that do nothing right now. It is always present
+# (an empty list when nothing is off) so a script can check one fixed shape.
 import hmac
 import logging
 import os
@@ -21,7 +28,7 @@ from typing import Callable, Optional
 from flask import Blueprint, Response, jsonify, request
 
 from src.utils.logging_utils import get_persistent_condition_logger
-from src.utils.user_config import PER_USER_FIELD_GROUPS
+from src.utils.user_config import PER_USER_FIELD_GROUPS, services_off_server_wide
 
 logger = logging.getLogger(__name__)
 
@@ -151,11 +158,18 @@ def list_users() -> tuple[Response, int]:
 
 @admin_api_bp.route("/users/<username>", methods=["GET"])
 def get_user(username: str) -> tuple[Response, int]:
-    """Return one account by username, or 404."""
+    """Return one account by username, or 404.
+
+    Adds "off_server_wide": the services this user has switched on in their own
+    integrations that are switched off in Settings, so are not running for them.
+    Nothing else of the user's integrations is returned, secrets least of all.
+    """
     user = _database_service.get_user_by_username(username)
     if not user:
         return jsonify({"error": "user not found"}), 404
-    return jsonify(_user_json(user)), 200
+    data = _user_json(user)
+    data["off_server_wide"] = services_off_server_wide(_database_service.get_user_credentials(user.id))
+    return jsonify(data), 200
 
 
 @admin_api_bp.route("/users/<username>", methods=["PUT"])
@@ -258,6 +272,11 @@ def patch_integrations(username: str) -> tuple[Response, int]:
     fit the field's type: a JSON boolean, a string, or (for selects) one of the
     declared options. An empty string clears a text or secret field. Secret values
     are never returned. Admin accounts are refused (403).
+
+    The response names the keys saved ("updated") and, in "off_server_wide", any
+    service switched on in this call that is switched off in Settings: the value
+    is saved, but the service will not run for this user until an admin turns it
+    back on server-wide. Only the keys in this call are considered.
     """
     user = _database_service.get_user_by_username(username)
     if not user:
@@ -287,5 +306,12 @@ def patch_integrations(username: str) -> tuple[Response, int]:
             _on_integrations_saved(user.id)
         except Exception as e:
             logger.warning(f"Admin API: post-save hook failed for '{username}': {e}", exc_info=True)
+    off_server_wide = services_off_server_wide(values)
     logger.info(f"🔧 Admin API: updated {len(values)} integration field(s) for '{username}'")
-    return jsonify({"username": user.username, "updated": sorted(values)}), 200
+    if off_server_wide:
+        logger.warning(
+            f"⚠️ Admin API: '{username}' now has {', '.join(off_server_wide)} switched on, but "
+            f"{'that service is' if len(off_server_wide) == 1 else 'those services are'} switched off "
+            f"server-wide in Settings, so nothing will run for them until it is switched back on"
+        )
+    return jsonify({"username": user.username, "updated": sorted(values), "off_server_wide": off_server_wide}), 200

@@ -112,6 +112,12 @@ All notable changes to BookBridge will be documented in this file.
   an account stops its syncs and its Audiobookshelf listener. Usernames with accented
   capitals are matched regardless of case. Integration updates save together and
   changing Readest credentials clears the old session for good (#494).
+- Say when a reader's integration is switched off server-wide. The admin API's user
+  and integrations responses now carry `off_server_wide`, the services a reader has
+  switched on that are off in Settings, where before a saved switch that did nothing
+  looked the same as a working one. The KOSync server logs once per reader when a
+  device's progress arrives while KoSync is off server-wide, since the device keeps
+  syncing normally and nothing said that its progress stopped at BookBridge.
 - Resolve KOReader filename hashes when Calibre reorders title and author, with
   per-user matching and ambiguity guards; refresh filesystem hashes after changing
   the hash method, keeping both methods' hashes so devices on either setting still

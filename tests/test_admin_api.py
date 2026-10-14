@@ -207,6 +207,71 @@ class TestAdminApi(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.db.get_user_credential(uid, select_key), option)
 
+    def test_patch_integrations_reports_services_switched_off_server_wide(self):
+        """A switch the global gate makes inert is saved, and the response says it is inert."""
+        self.client.put('/api/v1/admin/users/r@example.com', headers=self._h(), json={"password": "pw pw pw"})
+        uid = self.db.get_user_by_username("r@example.com").id
+        url = '/api/v1/admin/users/r@example.com/integrations'
+        body = {
+            "KOSYNC_ENABLED": True, "KOSYNC_USER": "r@example.com",  # on, gate off: reported
+            "ABS_ENABLED": True,                                     # on, gate on: not reported
+            "READEST_ENABLED": False,                                # off in this call: not reported
+            "READEST_ANNOTATION_SYNC": True,                         # not a service gate: never reported
+        }
+        globals_off = {"KOSYNC_ENABLED": "false", "ABS_ENABLED": "true", "READEST_ENABLED": "false",
+                       "READEST_ANNOTATION_SYNC": "false"}
+        with patch.dict(os.environ, globals_off), self.assertLogs(admin_api.logger, level="WARNING") as logs:
+            r = self.client.patch(url, headers=self._h(), json=body)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["off_server_wide"], ["KOSYNC_ENABLED"])
+        self.assertEqual(r.get_json()["updated"], sorted(body))
+        self.assertEqual(self.db.get_user_credential(uid, "KOSYNC_ENABLED"), "true")  # still saved
+        self.assertTrue(any("KOSYNC_ENABLED" in rec.getMessage() and "server-wide" in rec.getMessage()
+                            for rec in logs.records))
+
+        # A key the call does not touch is not reported, even though it is gated.
+        with patch.dict(os.environ, globals_off):
+            r = self.client.patch(url, headers=self._h(), json={"KOSYNC_USER": "other"})
+        self.assertEqual(r.get_json()["off_server_wide"], [])
+
+        # With the gate open, or no global decision at all, nothing is reported.
+        with patch.dict(os.environ, {"KOSYNC_ENABLED": "true"}):
+            r = self.client.patch(url, headers=self._h(), json={"KOSYNC_ENABLED": True})
+        self.assertEqual(r.get_json()["off_server_wide"], [])
+        with patch.dict(os.environ, {"KOSYNC_ENABLED": "x"}):
+            del os.environ["KOSYNC_ENABLED"]
+            r = self.client.patch(url, headers=self._h(), json={"KOSYNC_ENABLED": True})
+        self.assertEqual(r.get_json()["off_server_wide"], [])
+
+    def test_get_user_reports_services_switched_off_server_wide(self):
+        self.client.put('/api/v1/admin/users/r@example.com', headers=self._h(), json={"password": "pw pw pw"})
+        uid = self.db.get_user_by_username("r@example.com").id
+        self.db.set_user_credentials(uid, {
+            "KOSYNC_ENABLED": "true", "KOSYNC_KEY": "sync secret",  # on, gate off: reported
+            "CWA_SYNC_ENABLED": "true",                             # on, gate off: reported
+            "ABS_ENABLED": "true",                                  # on, gate on: not reported
+            "READEST_ENABLED": "false",                             # off for this user: not reported
+            "READEST_ANNOTATION_SYNC": "true",                      # not a service gate: never reported
+        })
+        globals_off = {"KOSYNC_ENABLED": "false", "CWA_SYNC_ENABLED": "off", "ABS_ENABLED": "true",
+                       "READEST_ENABLED": "false", "READEST_ANNOTATION_SYNC": "false"}
+        with patch.dict(os.environ, globals_off):
+            r = self.client.get('/api/v1/admin/users/r@example.com', headers=self._h())
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(set(body), {"id", "username", "role", "active", "off_server_wide"})
+        self.assertEqual(body["off_server_wide"], ["CWA_SYNC_ENABLED", "KOSYNC_ENABLED"])
+        self.assertNotIn("sync secret", r.get_data(as_text=True))
+
+        with patch.dict(os.environ, {"KOSYNC_ENABLED": "true", "CWA_SYNC_ENABLED": "true"}):
+            r = self.client.get('/api/v1/admin/users/r@example.com', headers=self._h())
+        self.assertEqual(r.get_json()["off_server_wide"], [])
+        # A reader with no integrations of their own has nothing switched off.
+        self.client.put('/api/v1/admin/users/blank@example.com', headers=self._h(), json={"password": "pw pw pw"})
+        with patch.dict(os.environ, globals_off):
+            r = self.client.get('/api/v1/admin/users/blank@example.com', headers=self._h())
+        self.assertEqual(r.get_json()["off_server_wide"], [])
+
     # --- end to end: provision, sync, revoke ----------------------------------
 
     def test_provisioned_reader_can_sync_until_disabled(self):

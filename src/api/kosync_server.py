@@ -35,6 +35,7 @@ from src.utils.user_context import get_current_user_id, set_current_user_id, res
 from src.utils.user_config import (
     _ALLOW_GLOBAL_FALLBACK_KEY,
     global_fallback_allowed,
+    global_service_disabled,
     resolve_setting,
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
@@ -1841,6 +1842,29 @@ def _book_for_put_baseline(doc_hash: str, kosync_doc, user_id):
     )
 
 
+def _note_kosync_off_server_wide(user_id, device) -> None:
+    """Warn once per user (per process) that progress arriving from their device
+    stops here while KoSync is switched off server-wide, and say once when it is
+    switched back on. Goes through the persistent-condition logger, so the first
+    PUT logs at WARNING and later ones at DEBUG, with its usual periodic reminder
+    while the condition lasts."""
+    condition_logger = get_persistent_condition_logger()
+    key = f"kosync-off-server-wide:{user_id}"
+    if global_service_disabled("KOSYNC_ENABLED"):
+        condition_logger.warn(
+            logger, key,
+            "KOSync: received progress from device '%s' for user_id=%s, but KoSync is switched "
+            "off server-wide in Settings, so it is kept here and will not reach the other services",
+            device or "unknown", user_id,
+        )
+    else:
+        condition_logger.resolve(
+            logger, key,
+            "KOSync: KoSync is switched on server-wide again, so progress from user_id=%s "
+            "reaches the other services", user_id,
+        )
+
+
 @kosync_sync_bp.route('/syncs/progress', methods=['PUT'])
 @kosync_sync_bp.route('/koreader/syncs/progress', methods=['PUT'])
 @kosync_auth_required
@@ -1883,6 +1907,14 @@ def kosync_put_progress():
     force_update = data.get('force', False)
     is_internal = _is_internal_kosync_device(device, device_id)
     request_user_id = getattr(g, 'kosync_user_id', None)
+
+    # This server does not read the service gate: devices keep authenticating and
+    # their positions are kept, by design, so nothing is lost while KoSync is off
+    # in Settings. But the KoSync sync client sits out every cycle for as long as
+    # it is, so what arrives here goes no further. Say so once per reader rather
+    # than letting a working-looking device hide a stopped sync.
+    if not is_internal:
+        _note_kosync_off_server_wide(request_user_id, device)
 
     # Allow rewinds if:
     # 1. Force flag is set (e.g. from SyncManager)

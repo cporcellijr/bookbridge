@@ -394,6 +394,40 @@ class TestKosyncEndpoints(unittest.TestCase):
         data_bn = response_bn.get_json()
         self.assertIsInstance(data_bn['timestamp'], int)
 
+    def test_put_warns_once_per_user_while_kosync_is_off_server_wide(self):
+        """The device's progress is still accepted and kept; the log says, once, that it stops here."""
+        import logging
+        from src import web_server
+        from src.api import kosync_server
+        from src.utils.logging_utils import get_persistent_condition_logger
+
+        get_persistent_condition_logger().reset()
+        self.addCleanup(get_persistent_condition_logger().reset)
+        doc = 'k' * 32
+        payload = {'document': doc, 'progress': '/body/test', 'device': 'TestKobo', 'device_id': 'KOBO123'}
+
+        def put(pct):
+            return self.client.put('/syncs/progress', headers=self.auth_headers, json={**payload, 'percentage': pct})
+
+        with patch.dict(os.environ, {'KOSYNC_ENABLED': 'false'}), \
+             self.assertLogs(kosync_server.logger, level='DEBUG') as logs:
+            responses = [put(pct) for pct in (0.2, 0.3, 0.4)]
+        self.assertEqual([r.status_code for r in responses], [200] * 3)
+        self.assertEqual(set(responses[-1].get_json()), {'document', 'timestamp'})
+        self.assertAlmostEqual(float(web_server.database_service.get_kosync_document(doc).percentage), 0.4)
+        gate_lines = [r for r in logs.records if 'switched off server-wide' in r.getMessage()]
+        self.assertEqual([r.levelno for r in gate_lines], [logging.WARNING, logging.DEBUG, logging.DEBUG])
+        self.assertIn("device 'TestKobo'", gate_lines[0].getMessage())
+
+        # Switched back on: one recovery line, then nothing more about the gate.
+        with patch.dict(os.environ, {'KOSYNC_ENABLED': 'true'}), \
+             self.assertLogs(kosync_server.logger, level='DEBUG') as logs:
+            self.assertEqual(put(0.5).status_code, 200)
+            self.assertEqual(put(0.6).status_code, 200)
+        self.assertFalse(any('switched off server-wide' in r.getMessage() for r in logs.records))
+        recovered = [r for r in logs.records if 'switched on server-wide again' in r.getMessage()]
+        self.assertEqual([r.levelno for r in recovered], [logging.INFO])
+
     def test_put_links_unmapped_hash_to_book_via_filename_sibling(self):
         """A device hash unknown to the book but sharing the ebook filename should
         link to the existing book on PUT instead of falling to auto-discovery."""
