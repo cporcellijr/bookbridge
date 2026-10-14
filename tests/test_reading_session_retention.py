@@ -62,6 +62,18 @@ def test_history_stays_named_and_counted_after_book_delete(database):
     assert [(b["absId"], b["title"]) for b in books] == [("gone", "Finished Book")]
 
 
+def test_blank_primary_title_falls_through_to_audio_title_and_survives_delete(database):
+    database.save_book(Book(abs_id="blank", abs_title="", audio_title="Valid Audio Title", status="active"))
+    database.record_reading_session("blank", "AUDIOBOOK", 1000.0, 1600.0, 600)
+    with database.get_session() as session:
+        session.add(_buffer("blank"))
+    database.close_reading_sessions(5000.0, 60, user_id=0)
+    database.delete_book("blank")
+    with database.get_session() as session:
+        titles = [r.book_title for r in session.query(ReadingSession).filter_by(abs_id="blank")]
+    assert titles == ["Valid Audio Title", "Valid Audio Title"]
+
+
 def test_migrate_book_data_moves_sessions(database):
     database.save_book(Book(abs_id="new", abs_title="New", status="active"))
     database.record_reading_session("gone", "AUDIOBOOK", 1000.0, 1600.0, 600)
@@ -83,13 +95,13 @@ def test_migration_backfills_book_title_from_books():
     with engine.begin() as conn:
         conn.execute(sa.text("CREATE TABLE books (abs_id VARCHAR(255), abs_title VARCHAR(500), audio_title VARCHAR(500))"))
         conn.execute(sa.text("CREATE TABLE reading_sessions (id INTEGER PRIMARY KEY, abs_id VARCHAR(255))"))
-        conn.execute(sa.text("INSERT INTO books VALUES ('a', 'Title A', 'Audio A'), ('b', NULL, 'Audio B')"))
-        conn.execute(sa.text("INSERT INTO reading_sessions (abs_id) VALUES ('a'), ('b'), ('missing')"))
+        conn.execute(sa.text("INSERT INTO books VALUES ('a', 'Title A', 'Audio A'), ('b', NULL, 'Audio B'), ('c', '', 'Audio C'), ('d', '', '')"))
+        conn.execute(sa.text("INSERT INTO reading_sessions (abs_id) VALUES ('a'), ('b'), ('c'), ('d'), ('missing')"))
         mod.op = Operations(MigrationContext.configure(conn))
         mod.upgrade()
         rows = dict(conn.execute(sa.text("SELECT abs_id, book_title FROM reading_sessions")).all())
     engine.dispose()
-    assert rows == {"a": "Title A", "b": "Audio B", "missing": None}
+    assert rows == {"a": "Title A", "b": "Audio B", "c": "Audio C", "d": None, "missing": None}
 
 
 def test_migration_applies_base_to_head(database):

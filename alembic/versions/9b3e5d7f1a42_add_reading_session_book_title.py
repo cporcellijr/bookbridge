@@ -19,7 +19,7 @@ def upgrade() -> None:
     op.add_column("reading_sessions", sa.Column("book_title", sa.String(length=500), nullable=True))
     op.execute(
         "UPDATE reading_sessions SET book_title = ("
-        "SELECT COALESCE(books.abs_title, books.audio_title) FROM books "
+        "SELECT COALESCE(NULLIF(books.abs_title, ''), NULLIF(books.audio_title, '')) FROM books "
         "WHERE books.abs_id = reading_sessions.abs_id)"
     )
 
