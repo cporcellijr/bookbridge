@@ -39,6 +39,9 @@ class ABSSocketManager:
         self._lock = threading.Lock()
         # scope label -> the listener currently running for it (for clean stop()).
         self._current_listeners: dict = {}
+        # scope label -> the (server, token) that listener was built with, so
+        # refresh_user() can tell a rotated key from an unrelated save.
+        self._listener_credentials: dict[str, tuple] = {}
         # Scopes of deleted accounts: their listeners must never reconnect.
         self._retired_scopes: set[str] = set()
         # Restart/backoff tuning (instance attrs so tests can zero them out).
@@ -189,27 +192,66 @@ class ABSSocketManager:
 
         for user in users:
             try:
-                bundle = registry.get_clients(user.id)
+                target = self._user_target(user.id)
             except Exception as e:
                 logger.warning(
                     "ABS Socket.IO: skipping user %s (client build failed): %s",
                     getattr(user, "id", None), e, exc_info=True,
                 )
                 continue
-
-            abs_sync = (getattr(bundle, "sync_clients", None) or {}).get("ABS")
-            abs_client = getattr(abs_sync, "abs_client", None)
-            if not abs_client or not abs_client.is_configured():
+            if target is None:
                 continue
-
-            token = resolve_setting(bundle.credentials, "ABS_KEY")
-            if not token or token in seen_tokens:
+            server, token = target
+            if token in seen_tokens:
                 continue
             seen_tokens.add(token)
-            server = resolve_setting(bundle.credentials, "ABS_SERVER", global_server)
             targets.append((user.id, server, token))
 
         return targets
+
+    def _user_target(self, user_id):
+        """Resolve one user's listener credentials from their current client bundle.
+
+        Returns ``(server_url, token)``, or ``None`` when the user's ABS client is
+        not configured or they have no token of their own. Raises when the bundle
+        cannot be built, so callers can tell a failed lookup from a definite
+        "no listener". Shared by ``_listener_targets()`` (which also de-duplicates
+        tokens across scopes), ``refresh_user()`` and the supervisor, so every
+        path reads the same credentials.
+        """
+        bundle = self._registry.get_clients(user_id)
+        abs_sync = (getattr(bundle, "sync_clients", None) or {}).get("ABS")
+        abs_client = getattr(abs_sync, "abs_client", None)
+        if not abs_client or not abs_client.is_configured():
+            return None
+        token = resolve_setting(bundle.credentials, "ABS_KEY")
+        if not token:
+            return None
+        server = resolve_setting(bundle.credentials, "ABS_SERVER", os.environ.get("ABS_SERVER", ""))
+        return server, token
+
+    def _refreshed_credentials(self, user_id, server, token):
+        """Return the ``(server, token)`` a (re)starting listener should use now.
+
+        A per-user listener re-reads its account's credentials so a rotated or
+        replaced ABS key is used on the next connection instead of after a
+        process restart. Returns ``None`` when the account no longer has a token
+        of its own. Fails open: a manager without a registry and a lookup that
+        raises both keep the last known pair, so a transient error never ends a
+        healthy supervision loop. The global scope always keeps the pair it was
+        started with (unchanged: the primary admin's key is mirrored to the
+        global settings and picked up on the next restart).
+        """
+        if user_id is None or self._registry is None:
+            return server, token
+        try:
+            return self._user_target(user_id)
+        except Exception as e:
+            logger.debug(
+                "ABS Socket.IO: credential refresh failed for user %s, keeping the last known credentials: %s",
+                user_id, e, exc_info=True,
+            )
+            return server, token
 
     def start(self) -> None:
         """Start a supervised listener thread for every target."""
@@ -255,30 +297,47 @@ class ABSSocketManager:
         self._threads.append(thread)
 
     def refresh_user(self, user_id: int) -> None:
-        """Re-evaluate a user's listener after the account was enabled or disabled.
+        """Re-evaluate a user's listener after their account or integrations changed.
 
         Drops the current connection without retiring the scope: the supervisor
-        then re-checks the scope and exits if the account is now disabled. When no
-        supervisor is running and the scope is enabled (re-enable), starts one.
+        then re-checks the scope, exits if the account is now disabled, and
+        otherwise reconnects with the account's current credentials (see
+        ``_supervise``). A connected listener that already uses the current
+        credentials is left alone, so saving an unrelated integration does not
+        drop the socket. When no supervisor is running and the scope is enabled
+        (re-enabled account, or a key added after startup), starts one.
         """
         scope = f"user {user_id}"
         with self._lock:
             if self._stop_event.is_set() or scope in self._retired_scopes:
                 return
-            listener = self._current_listeners.pop(scope, None)
+            listener = self._current_listeners.get(scope)
+            in_use = self._listener_credentials.get(scope)
             running = self._supervisors.get(scope)
             running = running is not None and running.is_alive()
+        enabled = self._is_scope_enabled(user_id)
+        if listener is not None and running and enabled and in_use is not None:
+            try:
+                unchanged = self._user_target(user_id) == in_use
+            except Exception:
+                unchanged = False  # cannot tell, so reconnect as before
+            if unchanged:
+                logger.debug("ABS Socket.IO: %s listener already uses the current credentials", scope)
+                return
         if listener is not None:
-            logger.info("🔌 ABS Socket.IO: %s listener reconnecting — account enabled or disabled", scope)
+            with self._lock:
+                if self._current_listeners.get(scope) is listener:
+                    del self._current_listeners[scope]
+            logger.info("🔌 ABS Socket.IO: %s listener reconnecting: account or integrations changed", scope)
             try:
                 listener.stop()
             except Exception as e:
                 logger.debug("ABS Socket.IO: error stopping listener: %s", e)
-        if running or not self._is_scope_enabled(user_id):
+        if running or not enabled:
             return
         for target_id, server, token in self._listener_targets():
             if target_id == user_id:
-                logger.info("🔌 ABS Socket.IO: %s listener starting — account enabled", scope)
+                logger.info("🔌 ABS Socket.IO: %s listener starting: account enabled or ABS configured", scope)
                 self._spawn_supervisor(target_id, server, token)
                 return
 
@@ -300,6 +359,14 @@ class ABSSocketManager:
         runtime, without adding a reconcile thread. Because the helper fails open,
         a transient database or registry error can never terminate a healthy
         supervision loop — only a definite "disabled" answer does.
+
+        A per-user scope then re-reads the account's current credentials before
+        each connection. The supervisor used to connect with the token it was
+        spawned with, so once a user's ABS key was rotated (a new key pasted in,
+        or a provisioning tool replacing it through the admin API) the listener
+        retried the deleted key with 401s until the process restarted. The
+        refresh fails open the same way the enable check does; an account that
+        no longer has a token of its own ends the loop like a disabled scope.
         """
         backoff = self._restart_base_secs
         while not self._stop_event.is_set():
@@ -321,6 +388,17 @@ class ABSSocketManager:
                 )
                 return
 
+            credentials = self._refreshed_credentials(user_id, server, token)
+            if credentials is None:
+                logger.info(
+                    "🔌 ABS Socket.IO: %s listener stopping: the account no longer has an ABS token of its own",
+                    scope,
+                )
+                return
+            if credentials != (server, token):
+                logger.info("🔌 ABS Socket.IO: %s listener reconnecting with updated credentials", scope)
+                server, token = credentials
+
             listener = ABSSocketListener(
                 abs_server_url=server,
                 abs_api_token=token,
@@ -332,6 +410,7 @@ class ABSSocketManager:
                 if self._stop_event.is_set() or scope in self._retired_scopes:
                     break
                 self._current_listeners[scope] = listener
+                self._listener_credentials[scope] = (server, token)
 
             t0 = time.monotonic()
             try:

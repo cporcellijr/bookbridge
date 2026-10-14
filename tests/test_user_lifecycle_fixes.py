@@ -270,6 +270,20 @@ class DashboardToggleTests(DbTestCase):
         self.assertEqual(error, "Can't disable the last active admin")
         self.socket_manager.refresh_user.assert_not_called()
 
+    def test_saving_integrations_refreshes_the_users_abs_listener(self):
+        self.web_server._after_user_integrations_saved(self.reader.id)
+        self.socket_manager.refresh_user.assert_called_once_with(self.reader.id)
+
+    def test_primary_admin_key_is_mirrored_before_the_listener_refresh(self):
+        """Refreshing first would see the admin's new token differ from the global
+        key and give the primary admin a second, per-user listener."""
+        self.db.set_user_credential(self.admin.id, "ABS_KEY", "rotated-token")
+        seen = []
+        self.socket_manager.refresh_user.side_effect = lambda uid: seen.append(os.environ.get("ABS_KEY"))
+        with patch.dict(os.environ, {"ABS_KEY": "old-token"}):
+            self.web_server._after_user_integrations_saved(self.admin.id)
+        self.assertEqual(seen, ["rotated-token"])
+
 
 if __name__ == "__main__":
     unittest.main()

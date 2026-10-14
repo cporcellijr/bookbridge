@@ -1346,6 +1346,13 @@ def _after_user_integrations_saved(user_id):
                 database_service.set_setting(key, val)
                 os.environ[key] = val
 
+    # The user's ABS Socket.IO listener authenticates with their own key, so a
+    # new or rotated key has to reach it: reconnect a running listener, or start
+    # one for an account that only now has a key. This runs after the mirror
+    # above so the primary admin's token still matches the global key and is
+    # not given a second, per-user listener.
+    _refresh_user_abs_listener(user_id)
+
 
 @admin_required
 def admin_user_integrations(user_id):
@@ -1566,14 +1573,20 @@ def _invalidate_user_clients(user_id: int) -> None:
         logger.debug("Could not invalidate client bundle for user %s: %s", user_id, e)
 
 
+def _refresh_user_abs_listener(user_id: int) -> None:
+    """Re-evaluate the user's ABS Socket.IO listener after their account or credentials changed."""
+    if abs_socket_manager is None:
+        return
+    try:
+        abs_socket_manager.refresh_user(user_id)
+    except Exception as e:
+        logger.warning("Could not refresh the ABS listener for user %s: %s", user_id, e, exc_info=True)
+
+
 def _after_user_account_changed(user_id: int) -> None:
     """Apply an enable/disable/role change: refresh cached clients and the user's ABS listener."""
     _invalidate_user_clients(user_id)
-    if abs_socket_manager is not None:
-        try:
-            abs_socket_manager.refresh_user(user_id)
-        except Exception as e:
-            logger.warning("Could not refresh the ABS listener for user %s: %s", user_id, e, exc_info=True)
+    _refresh_user_abs_listener(user_id)
 
 
 def _share_library_with_new_user(new_user, returning: bool = False) -> int:

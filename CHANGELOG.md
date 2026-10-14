@@ -72,6 +72,15 @@ All notable changes to BookBridge will be documented in this file.
 - Keep empty lists in KOReader plugin uploads (reading statuses, device logs,
   reading statistics) encoded as JSON arrays, so the server accepts them and the
   device still pulls merged statuses.
+- Follow a user's current Audiobookshelf key in their instant-sync listener. A key
+  saved on the integrations page or through the admin API now reconnects a running
+  listener or starts one for an account that had none, instead of retrying the old
+  key until the next restart. Saving an unrelated integration leaves the socket
+  connected.
+  Contributed by [@splitsec2](https://github.com/splitsec2) in #518.
+- Replace your library's book titles in diagnostics reports even where a log line
+  names a book without quoting it, as the opt-in screen promises.
+  Contributed by [@splitsec2](https://github.com/splitsec2) in #513.
 - Bind cached input recovery to its approved audiobook and ebook pairing across
   retries and restarts. Commit its alignment, backup, activation and job completion
   together; a changed pairing, job, map or document owner leaves the newer state
@@ -131,6 +140,7 @@ All notable changes to BookBridge will be documented in this file.
   looked the same as a working one. The KOSync server logs once per reader when a
   device's progress arrives while KoSync is off server-wide, since the device keeps
   syncing normally and nothing said that its progress stopped at BookBridge.
+  Contributed by [@splitsec2](https://github.com/splitsec2) in #517.
 - Resolve KOReader filename hashes when Calibre reorders title and author, with
   per-user matching and ambiguity guards; refresh filesystem hashes after changing
   the hash method, keeping both methods' hashes so devices on either setting still

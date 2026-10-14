@@ -459,3 +459,145 @@ class TestABSSocketManagerStartDiagnostics(unittest.TestCase):
             "ABS Socket.IO: no configured ABS token found — no listeners started",
             "\n".join(logs.output),
         )
+
+
+class TestABSSocketManagerCredentialRefresh(unittest.TestCase):
+    """A per-user listener follows its account's current ABS credentials.
+
+    The supervisor used to reconnect with the token it was spawned with, so a
+    rotated key kept the deleted one in a 401 loop until the process restarted,
+    and refresh_user() only ran after an enable/disable, never after a save.
+    """
+
+    def setUp(self):
+        self.env = patch.dict(os.environ, {
+            "ABS_SERVER": "http://abs.local", "ABS_KEY": "admin-token", "ABS_ENABLED": "true",
+        })
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.db = MagicMock()
+        self.db.is_primary_admin.return_value = False
+        self.db.get_user.return_value = _user(7)
+        self.bundle = _bundle("old-token")
+        self.registry = MagicMock()
+        self.registry.get_clients.return_value = self.bundle
+        self.mgr = ABSSocketManager(self.db, MagicMock(), user_client_registry=self.registry)
+        self.mgr._restart_base_secs = 0
+        self.mgr._restart_max_secs = 0
+        self.mgr._healthy_session_secs = 0
+
+    def _supervise(self, on_session_end):
+        """Run _supervise for user 7 with a listener whose sessions end at once.
+
+        ``on_session_end(n)`` runs as the n-th session ends. Returns the
+        constructor kwargs of every listener that was built.
+        """
+        built = []
+        mgr = self.mgr
+
+        class _FakeListener:
+            def __init__(self_inner, **kwargs):
+                built.append(kwargs)
+
+            def start(self_inner):
+                on_session_end(len(built))
+
+            def stop(self_inner):
+                pass
+
+        with patch("src.services.abs_socket_manager.ABSSocketListener", _FakeListener):
+            mgr._supervise(7, "http://abs.local", "old-token", "user 7")
+        return built
+
+    def test_restart_connects_with_the_users_current_key(self):
+        def on_session_end(n):
+            if n == 1:
+                self.bundle.credentials["ABS_KEY"] = "new-token"  # rotated while connected
+            else:
+                self.mgr._stop_event.set()
+
+        built = self._supervise(on_session_end)
+
+        self.assertEqual([b["abs_api_token"] for b in built], ["old-token", "new-token"])
+        self.assertEqual(self.mgr._listener_credentials["user 7"], ("http://abs.local", "new-token"))
+
+    def test_supervisor_exits_when_abs_is_switched_off_for_the_account(self):
+        def on_session_end(n):
+            self.bundle.credentials["ABS_KEY"] = ""
+            self.bundle.sync_clients["ABS"].abs_client.is_configured.return_value = False
+
+        built = self._supervise(on_session_end)
+
+        self.assertEqual(len(built), 1)
+        self.assertFalse(self.mgr._stop_event.is_set())  # the loop ended on its own
+
+    def test_supervisor_exits_when_the_account_has_no_token_of_its_own(self):
+        def on_session_end(n):
+            self.bundle.credentials["ABS_KEY"] = ""
+
+        built = self._supervise(on_session_end)
+
+        self.assertEqual(len(built), 1)
+        self.assertFalse(self.mgr._stop_event.is_set())
+
+    def test_lookup_failure_keeps_the_last_known_credentials(self):
+        def on_session_end(n):
+            if n == 1:
+                self.registry.get_clients.side_effect = Exception("db down")
+            else:
+                self.mgr._stop_event.set()
+
+        built = self._supervise(on_session_end)
+
+        self.assertEqual([b["abs_api_token"] for b in built], ["old-token", "old-token"])
+
+    def test_global_listener_keeps_the_credentials_it_was_started_with(self):
+        with patch.dict(os.environ, {"ABS_KEY": "rotated-global"}):
+            refreshed = self.mgr._refreshed_credentials(None, "http://abs.local", "admin-token")
+        self.assertEqual(refreshed, ("http://abs.local", "admin-token"))
+
+    # --- refresh_user() after an integrations save ---
+
+    def _connected_listener(self):
+        listener = MagicMock()
+        self.mgr._current_listeners["user 7"] = listener
+        self.mgr._listener_credentials["user 7"] = ("http://abs.local", "old-token")
+        self.mgr._supervisors["user 7"] = MagicMock(is_alive=MagicMock(return_value=True))
+        self.mgr._spawn_supervisor = MagicMock()
+        return listener
+
+    def test_refresh_leaves_a_listener_with_current_credentials_connected(self):
+        listener = self._connected_listener()
+
+        self.mgr.refresh_user(7)  # e.g. a KoSync field was saved, ABS untouched
+
+        listener.stop.assert_not_called()
+        self.assertIs(self.mgr._current_listeners["user 7"], listener)
+        self.mgr._spawn_supervisor.assert_not_called()
+
+    def test_refresh_reconnects_a_listener_after_the_key_changed(self):
+        listener = self._connected_listener()
+        self.bundle.credentials["ABS_KEY"] = "new-token"
+
+        self.mgr.refresh_user(7)
+
+        listener.stop.assert_called_once()
+        self.assertNotIn("user 7", self.mgr._current_listeners)
+        self.mgr._spawn_supervisor.assert_not_called()  # the live supervisor reconnects
+
+    def test_refresh_still_disconnects_a_disabled_account(self):
+        listener = self._connected_listener()
+        self.db.get_user.return_value = _user(7, active=0)
+
+        self.mgr.refresh_user(7)
+
+        listener.stop.assert_called_once()
+
+    def test_refresh_starts_a_supervisor_when_a_key_is_added_after_startup(self):
+        self.db.list_users.return_value = [_user(7)]
+        started = []
+        self.mgr._spawn_supervisor = lambda uid, server, token: started.append((uid, server, token))
+
+        self.mgr.refresh_user(7)
+
+        self.assertEqual(started, [(7, "http://abs.local", "old-token")])
