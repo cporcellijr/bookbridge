@@ -37,6 +37,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Show Audiobookshelf listening stats from the signed-in user's own Audiobookshelf
+  account, and keep each admin's cached stats separate (#508).
 - Skip adding books to an Audiobookshelf collection when the collection name is
   blank, instead of asking Audiobookshelf to create a collection with no name.
 - Report repeated diagnostics warnings that differ only by a JSON request ID or a
