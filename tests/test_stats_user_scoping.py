@@ -60,21 +60,6 @@ class TestStatsUserScoping(unittest.TestCase):
         self.user_abs.get_listening_stats.assert_called()
         self.mock_abs_client.get_listening_stats.assert_not_called()
 
-    def _unconfigured_bundle_payload(self, fallback_allowed):
-        self.user_abs.is_configured.return_value = False
-        self.mock_abs_client.is_configured.return_value = True
-        self.mock_abs_client.get_listening_stats.return_value = {
-            "days": {"2026-04-07": 600}, "items": {}, "recentSessions": [],
-        }
-        with self.app.test_request_context('/api/stats'),                 patch.object(self.ws, 'uc', return_value=self.bundle),                 patch.object(self.ws, 'current_user', return_value=_user(1)),                 patch.object(self.ws, '_global_fallback_allowed', return_value=fallback_allowed):
-            return self.ws._stats_abs_client()
-
-    def test_primary_admin_with_own_abs_off_falls_back_to_global_client(self):
-        self.assertIs(self._unconfigured_bundle_payload(True), self.mock_abs_client)
-
-    def test_other_admin_with_own_abs_off_never_gets_global_client(self):
-        self.assertIs(self._unconfigured_bundle_payload(False), self.user_abs)
-
     def test_stats_cache_not_shared_between_users(self):
         with self.app.test_request_context('/api/stats'):
             with patch.object(self.ws, 'current_user', return_value=_user(1)):

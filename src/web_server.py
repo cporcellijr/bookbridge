@@ -11070,18 +11070,9 @@ def _build_listening_book_list():
     return result
 
 
-def _stats_abs_client():
-    """The request user's ABS client for stats. Only the primary admin, whose own
-    account the global client mirrors, falls back to it when theirs is off."""
-    abs_client = uc().abs_client
-    if abs_client.is_configured() or not _global_fallback_allowed(database_service, current_user()):
-        return abs_client
-    return container.abs_client()
-
-
 def _build_listening_stats_payload(tz):
     try:
-        abs_client = _stats_abs_client()
+        abs_client = uc().abs_client
     except Exception:
         return None
 
@@ -11542,7 +11533,7 @@ def api_stats_yearly_recap():
 
         listening_recap = None
         try:
-            abs_client = _stats_abs_client()
+            abs_client = uc().abs_client
             raw_stats = abs_client.get_listening_stats() if abs_client else None
         except Exception:
             raw_stats = None
