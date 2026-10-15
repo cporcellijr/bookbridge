@@ -5,6 +5,7 @@ import html
 import logging
 import json
 import contextvars
+import functools
 import os
 import posixpath
 import queue
@@ -578,6 +579,95 @@ def current_user():
             user = None
     g.current_user = user
     return user
+
+
+# ---------------- i18n / UI LANGUAGE ----------------
+# The interface language. Resolution order: the user's saved `users.language`
+# (when it names a language we actually have a catalog for), then the request's
+# Accept-Language, then English. Wrapped strings and the catalogs are gettext
+# (Flask-Babel); only user-facing display text is translated — log messages,
+# setting keys and API/JSON field names stay English by design.
+
+# Babel wants `_`-style codes ("ru_RU"); browsers send tags ("ru-RU"). Everything
+# is reduced to the primary subtag, which is all we key catalogs and the column on.
+_BASE_LOCALE = "en"
+
+
+def _normalize_locale(value: Optional[str]) -> Optional[str]:
+    """'ru-RU' / 'ru_RU' / 'ru' -> 'ru'; junk -> None."""
+    if not value:
+        return None
+    primary = str(value).strip().replace("_", "-").split("-")[0].lower()
+    return primary or None
+
+
+def translations_dir() -> str:
+    """Directory holding the per-language catalogs (translations/<lang>/...).
+
+    Resolved from the app root the same way STATIC_DIR/TEMPLATE_DIR are, with an
+    env override so a deployment can point elsewhere. This module runs as
+    /app/src/web_server.py in the image, so the root is /app.
+    """
+    override = os.environ.get("TRANSLATIONS_DIR")
+    if override:
+        return override
+    app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    return os.path.join(app_root, "translations")
+
+
+def available_locales() -> tuple:
+    """UI languages that actually have a catalog, plus the English base.
+
+    Derived from the catalogs on disk, not a hardcoded list: a language the user
+    can pick must be a language we can render. Until a `ru` catalog ships, `ru`
+    is simply not offered — the picker never shows a choice that does nothing.
+
+    Cached: the catalogs only change on deploy, and this is called several times
+    per request. Call available_locales.cache_clear() after adding one.
+    """
+    locales = [_BASE_LOCALE]
+    try:
+        from babel import Locale
+
+        directory = translations_dir()
+        if os.path.isdir(directory):
+            for name in sorted(os.listdir(directory)):
+                candidate = _normalize_locale(name)
+                if not candidate or candidate in locales:
+                    continue
+                if os.path.isfile(os.path.join(directory, name, "LC_MESSAGES", "messages.mo")):
+                    try:
+                        Locale.parse(candidate)
+                    except Exception:
+                        continue
+                    locales.append(candidate)
+    except Exception:
+        # Never let catalog discovery break a page render.
+        return (_BASE_LOCALE,)
+    return tuple(locales)
+
+
+available_locales = functools.lru_cache(maxsize=1)(available_locales)
+
+
+def get_locale():
+    """Flask-Babel locale selector (passed to Babel(locale_selector=...))."""
+    try:
+        user = current_user()
+        if user is not None:
+            wanted = _normalize_locale(getattr(user, "language", None))
+            if wanted and wanted in available_locales():
+                return wanted
+    except Exception:
+        pass
+    try:
+        if has_request_context():
+            best = request.accept_languages.best_match(available_locales())
+            if best:
+                return best
+    except Exception:
+        pass
+    return _BASE_LOCALE
 
 
 class _UnavailableClient:
@@ -14095,6 +14185,22 @@ def create_app(test_container=None):
     app.context_processor(inject_global_vars)
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
     app.jinja_env.globals['suggestion_source_badge'] = suggestion_source_badge
+
+    # i18n: gettext for the Jinja layer. The selector is passed as an argument
+    # (Flask-Babel >= 3.0 dropped the @babel.localeselector decorator); it is
+    # called lazily on the first get_locale()/render, so no before_request hook
+    # is needed. Flask-Babel is a hard dependency — a missing install must fail
+    # loudly here, not leave templates rendering with an undefined `_`.
+    import flask_babel
+
+    # Flask-Babel resolves catalogs relative to app.root_path unless told
+    # otherwise; point it at our translations dir (missing dir is fine — every
+    # string then falls back to English).
+    app.config.setdefault('BABEL_TRANSLATION_DIRECTORIES', translations_dir())
+    flask_babel.Babel(app, locale_selector=get_locale, default_locale=_BASE_LOCALE)
+    # Flask-Babel wires `_`/`gettext`/`ngettext` into Jinja but not
+    # `get_locale`, which base.html uses for the <html lang> attribute.
+    app.jinja_env.globals['get_locale'] = flask_babel.get_locale
 
     def format_duration(seconds: int) -> str:
         """Convert seconds to human-readable duration."""
