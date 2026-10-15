@@ -650,6 +650,16 @@ def available_locales() -> tuple:
 available_locales = functools.lru_cache(maxsize=1)(available_locales)
 
 
+def locale_display_name(code: str) -> str:
+    """'ru' -> 'Русский' (the language's name in itself); falls back to the code."""
+    try:
+        from babel import Locale
+
+        return Locale.parse(code).get_display_name(code).capitalize()
+    except Exception:
+        return code
+
+
 def get_locale():
     """Flask-Babel locale selector (passed to Babel(locale_selector=...))."""
     try:
@@ -1336,7 +1346,27 @@ def account():
         error=error,
         message=message,
         account_user=user,
+        available_languages=[(code, locale_display_name(code)) for code in available_locales()],
+        current_language=_normalize_locale(user.language),
     )
+
+
+def account_language():
+    """Set the signed-in user's UI language, then reload the account page.
+
+    A redirect (rather than re-rendering in place) guarantees the whole page
+    comes back in the new locale on the next request.
+    """
+    user = current_user()
+    if user is None:
+        return redirect(url_for('login'))
+
+    language = _normalize_locale(request.form.get('language'))
+    allowed = available_locales()
+    if language is not None and language not in allowed:
+        language = None
+    database_service.set_user_language(user.id, language)
+    return redirect(url_for('account'))
 
 
 def account_integrations():
@@ -14236,6 +14266,7 @@ def create_app(test_container=None):
     app.add_url_rule('/login', 'login', login, methods=['GET', 'POST'])
     app.add_url_rule('/logout', 'logout', logout, methods=['GET', 'POST'])
     app.add_url_rule('/account', 'account', account, methods=['GET', 'POST'])
+    app.add_url_rule('/account/language', 'account_language', account_language, methods=['POST'])
     app.add_url_rule('/account/integrations', 'account_integrations', account_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
