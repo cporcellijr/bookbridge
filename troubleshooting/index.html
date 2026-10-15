@@ -635,6 +635,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#read-along-highlights-run-ahead-or-stop-partway-through-a-sentence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-along highlights run ahead or stop partway through a sentence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#koreader-sends-progress-under-the-wrong-book" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KOReader sends progress under the wrong book
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#a-deliberate-rewind-does-not-stick" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -977,6 +999,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#read-along-highlights-run-ahead-or-stop-partway-through-a-sentence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-along highlights run ahead or stop partway through a sentence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#koreader-sends-progress-under-the-wrong-book" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KOReader sends progress under the wrong book
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#a-deliberate-rewind-does-not-stick" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1262,14 +1306,39 @@ as a bonus alignment source.</p>
 <li>If a collection's audiobook narrates chapters in a different order from the EPUB,
   enable experimental <strong>Segmented Alignment Maps</strong> in Settings, then remap that book.
   It is off by default and is not needed for normally ordered books.</li>
-<li><strong>Forced alignment</strong> (on by default) matches each audiobook directly against its ebook
+<li>
+<p><strong>Forced alignment</strong> (on by default) matches each audiobook directly against its ebook
   and locates every chapter in the audio itself, so most books never touch Whisper. It
   falls back to transcription automatically for a book that is not in English, whose
   audio does not follow the text closely enough, whose chapters are narrated out of
   order, or that appears to be a different book — that fallback is expected, not a
   failure. To force-align a non-English book instead, choose the <code>mms_fa</code> model, which
-  requires a self-built image (<code>INSTALL_CTC=true</code>) and effectively an NVIDIA GPU.</li>
+  requires a self-built image (<code>INSTALL_CTC=true</code>) and effectively an NVIDIA GPU.</p>
+</li>
+<li>
+<p>Completed transcripts are kept after alignment failure. <strong>Remap alignment</strong>
+  reuses valid word timings instead of transcribing again. Certain older CWA
+  input failures recover automatically only when the retained ebook and complete
+  transcript prove the original pairing; otherwise manual review is required.
+  See <a href="../TRANSCRIPTION_RECOVERY/">transcription recovery</a>.</p>
+</li>
+<li>If local Whisper detects the wrong language, set <strong>Whisper Language</strong> under
+  Transcription to a code such as <code>ru</code> or <code>en</code>. <strong>Filter Non-Speech Audio</strong> can
+  reduce transcription over music and silence; test quiet narration first.
+  Both affect new local transcriptions, not saved transcripts. Keep the
+  Content-Match Guard enabled while checking the ebook and audio pairing.</li>
 </ul>
+<h3 id="read-along-highlights-run-ahead-or-stop-partway-through-a-sentence">Read-along highlights run ahead or stop partway through a sentence</h3>
+<p>Regenerate the read-along after upgrading to get complete sentence highlights
+and skip pages the narrator does not read. If the highlight gets increasingly
+ahead through the book, re-align the book first, then regenerate its read-along;
+the corrected alignment accounts for timestamp gaps between audio chapters.</p>
+<h3 id="koreader-sends-progress-under-the-wrong-book">KOReader sends progress under the wrong book</h3>
+<p>Install <strong>BridgeSync 0.9.9</strong> on each device. Close affected managed books, then run
+<strong>Bridge Sync → Sync Reading Stats</strong> to repair their saved book identities.
+Positions and highlights are retained; do not delete the books' metadata to repair
+the checksum. The plugin also uses KOReader's metadata handling when managed books
+are renamed, replaced or removed.</p>
 <h3 id="a-deliberate-rewind-does-not-stick">A deliberate rewind does not stick</h3>
 <ul>
 <li>Confirm <strong>Honor a Deliberate Rewind</strong> is enabled under <strong>Settings -&gt; Sync</strong>.</li>

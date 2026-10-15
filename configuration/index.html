@@ -598,6 +598,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#admin-api-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin API (Optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1100,6 +1111,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#admin-api-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admin API (Optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1516,6 +1538,68 @@ the same effect as losing <code>secret.key</code>.</p>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"8080:5757"</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"5758:5758"</span>
 </code></pre></div>
+<p>Every KoSync sign-in, including KOReader's login and register buttons, is refused for
+a minute after five wrong passwords for the same username from the same address. If
+the KoSync port sits behind a reverse proxy or tunnel (nginx, Caddy, cloudflared), set
+<strong>Trusted proxy addresses</strong> (<code>KOSYNC_TRUSTED_PROXIES</code>) to the proxy's address so the
+count follows each reader's real address. Otherwise everyone shares the proxy's
+address, and someone guessing a reader's password would lock that reader's own devices
+out too.</p>
+<h3 id="admin-api-optional">Admin API (Optional)</h3>
+<p>A small JSON API lets a script create readers and set their integrations, for
+example an invite system that onboards people. It is off unless you set
+<code>ADMIN_API_TOKEN</code> to a random string of at least 32 characters. Like
+<code>BOOKBRIDGE_SECRET_KEY</code>, it is read from the environment only and is not a
+Settings-page option.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">environment</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ADMIN_API_TOKEN=a-long-random-string-only-your-script-knows</span>
+</code></pre></div>
+<p>Send it as <code>Authorization: Bearer &lt;token&gt;</code>. The API is on the primary port
+only, never on the split-port sync server, so keep it on your LAN.</p>
+<table>
+<thead>
+<tr>
+<th>Method and path</th>
+<th>Body</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/v1/admin/users</code></td>
+<td></td>
+<td>List users (id, username, role, active)</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/admin/users/&lt;username&gt;</code></td>
+<td></td>
+<td>One user, plus <code>off_server_wide</code>: the services this reader has switched on under <strong>My Integrations</strong> that are switched off in <strong>Settings</strong>, so are not running for them (an empty list when none)</td>
+</tr>
+<tr>
+<td><code>PUT /api/v1/admin/users/&lt;username&gt;</code></td>
+<td><code>{"password", "role", "active"}</code>, all optional except <code>password</code> when creating</td>
+<td>Create the reader if missing, otherwise update it. Safe to repeat, including concurrent calls. A new reader gets the shared library when Shared Library is on. <code>active</code> is set, not toggled. <code>role</code> may only be <code>"user"</code></td>
+</tr>
+<tr>
+<td><code>PATCH /api/v1/admin/users/&lt;username&gt;/integrations</code></td>
+<td><code>{"KOSYNC_ENABLED": true, "KOSYNC_USER": "...", ...}</code></td>
+<td>Set only the given per-user fields from <strong>Account -&gt; My Integrations</strong>. Each value must match its field: booleans must be JSON <code>true</code>/<code>false</code>, text and secrets must be strings (an empty string clears a field), and select fields must be one of their declared options. Anything else is rejected with 400 naming the field. Secret values are never returned. The response lists the keys saved (<code>updated</code>) and, in <code>off_server_wide</code>, any service switched on in this call that is switched off in <strong>Settings</strong>: the value is saved, but the service will not run for this reader until it is switched back on server-wide</td>
+</tr>
+</tbody>
+</table>
+<p>The token manages <strong>readers only</strong>. It can create <code>user</code> accounts and change existing
+<code>user</code> accounts, but any attempt to create or promote an admin, or to change an
+existing admin's password, active state, role or integrations, is refused with 403.
+Admin accounts are managed in the dashboard. After five failed authentications from
+one address within a minute, further requests from it get 429 until the window passes.</p>
+<p>Disabling a user also stops their KOSync login, since KOSync authentication
+skips inactive users.</p>
+<p>Disabling a reader also stops their Audiobookshelf real-time listener and skips their
+syncs. Usernames are matched case-insensitively across Unicode (for example <code>Émile</code> and
+<code>émile</code> are the same account). Re-enabling a reader restores shared
+books when Shared Library is enabled. Integration PATCH requests save all submitted
+fields together; changing a Readest email or password discards its previous session
+so the next sync authenticates with the updated credentials.</p>
 <h3 id="integrations">Integrations</h3>
 <p>Every integration card has an <strong>Enable</strong> switch, and that switch is server-wide: a
 service switched off in Settings is off for everyone on the install. Readers still
@@ -1523,7 +1607,10 @@ have their own switch for the services they hold a login for, under <strong>Acco
 Integrations</strong>, but it applies only while the service is switched on server-wide. When
 it is off, their switch is shown greyed out with the reason instead of letting them
 turn on something that will not work. Nobody's personal choice is lost — switching the
-service back on restores everyone's settings exactly as they were.</p>
+service back on restores everyone's settings exactly as they were. A script using the
+<a href="#admin-api-optional">admin API</a> gets the same answer in <code>off_server_wide</code>, and a
+KOReader device that keeps syncing to BookBridge while KoSync is off is noted once per
+reader in the log, since the device itself cannot tell that its progress stops there.</p>
 <h4 id="audiobookshelf">Audiobookshelf</h4>
 <p>Audiobookshelf remains the default audiobook source when a mapping is not explicitly using Grimmory or BookOrbit audio.</p>
 <table>
@@ -1565,6 +1652,12 @@ service back on restores everyone's settings exactly as they were.</p>
 <td><code>ABS_COLLECTION_NAME</code></td>
 <td><code>Synced with KOReader</code></td>
 <td>Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup.</td>
+</tr>
+<tr>
+<td>Keep every match in its auto-add collection</td>
+<td><code>ABS_COLLECTION_RECONCILE</code></td>
+<td><code>false</code></td>
+<td>Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. An Audiobookshelf collection only holds books from one library, so with several audiobook libraries a collection of that name is kept in each. Add-only: while on, a book removed from the collection by hand is added back.</td>
 </tr>
 <tr>
 <td>Progress Offset</td>
@@ -1632,6 +1725,12 @@ service back on restores everyone's settings exactly as they were.</p>
 <td><code>content</code> is safest. <code>filename</code> is faster but less reliable.</td>
 </tr>
 <tr>
+<td>Take each reader's sync login from Grimmory</td>
+<td><code>KOSYNC_CREDENTIALS_FROM_GRIMMORY</code></td>
+<td><code>false</code></td>
+<td>Global. At startup and each sync cycle, an active reader's KoSync username and password are taken from the KOReader login of their Grimmory account, and keep following it when it changes there. A reader who already has a different KoSync login set in BookBridge keeps it — clear their KoSync username to switch to the Grimmory one. A Grimmory username that another BookBridge user already has is skipped. Both cases are logged as warnings; readers without a Grimmory KOReader login are left alone.</td>
+</tr>
+<tr>
 <td>PUT Debounce</td>
 <td><code>KOSYNC_PUT_DEBOUNCE_SECONDS</code></td>
 <td><code>300</code></td>
@@ -1672,6 +1771,12 @@ service back on restores everyone's settings exactly as they were.</p>
 <td><code>KOSYNC_PORT</code></td>
 <td>empty</td>
 <td>Optional dedicated KOSync port for internet-safe exposure.</td>
+</tr>
+<tr>
+<td>Trusted Proxy Addresses</td>
+<td><code>KOSYNC_TRUSTED_PROXIES</code></td>
+<td>empty</td>
+<td>Under <strong>Advanced — behind a reverse proxy</strong>. Comma-separated IPs or CIDR ranges of the proxy or tunnel in front of the KoSync port. Requests from them are rate-limited under the client address in <code>X-Forwarded-For</code>. Empty trusts only localhost. List only your proxy: any address covered here can claim to be any client.</td>
 </tr>
 <tr>
 <td>When Two KOReader Devices Disagree</td>
@@ -1919,6 +2024,12 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td>Root path that contains <code>/assets/{title}/transcriptions</code>.</td>
 </tr>
 <tr>
+<td>Library Timeout</td>
+<td><code>STORYTELLER_LIBRARY_TIMEOUT</code></td>
+<td><code>10</code></td>
+<td>Seconds to wait for a whole-library response (5–300). Increase for large libraries or slow servers; connection timeout stays 10 seconds. Failed searches report the error instead of appearing empty.</td>
+</tr>
+<tr>
 <td>Upload Chunk Size</td>
 <td><code>STORYTELLER_UPLOAD_CHUNK_SIZE</code></td>
 <td><code>5242880</code></td>
@@ -1986,6 +2097,18 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td><code>BOOKLORE_SHELF_NAME</code></td>
 <td><code>Kobo</code></td>
 <td>Shelf used for matched ebooks.</td>
+</tr>
+<tr>
+<td>Add matched books to the shelf only once they are aligned</td>
+<td><code>BOOKLORE_SHELF_REQUIRE_ALIGNMENT</code></td>
+<td><code>false</code></td>
+<td>Global. A newly matched audiobook-and-ebook pair joins the shelf only once it has a fine-grained alignment map (forced alignment or the standard Whisper/lexical one, the same bar as read-along generation; a coarse fallback map does not count), checked every sync cycle. Covers manual matches, approved and auto-matched suggestions, "Up Next" auto-matches and Forge &amp; Match. Each book is added once, with the matching reader's own Grimmory login and Shelf Name, so taking it off the shelf later sticks. Ebook-only matches and ebooks without a recorded Grimmory id are shelved at match time as before. Turning the option off shelves every book still waiting.</td>
+</tr>
+<tr>
+<td>Shelf Owner</td>
+<td><code>BOOKLORE_SHELF_OWNER</code></td>
+<td>empty</td>
+<td>Global, used with the aligned-only shelving option above, for a shelf that one Grimmory account owns and other readers only see. The BookBridge user whose own Grimmory login adds the waiting books, to the global Shelf Name, and removes such a book when its match is deleted. While the name is not an active BookBridge user the shelf is left alone and the books keep waiting. Empty uses each reader's own login and shelf.</td>
 </tr>
 <tr>
 <td>Library ID</td>
@@ -2063,6 +2186,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <li>When the source is Grimmory, <strong>Collection Syncing</strong> controls which Grimmory shelves become KOReader collections. <strong>Magic Shelves Only</strong> means Bridge Sync uses shelves in Grimmory that fill themselves based on rules.</li>
 <li><strong>Excluded Shelves</strong> lets you list Grimmory shelf names you do not want turned into KOReader collections.</li>
 <li><strong>Find Shelves</strong> helps you pick shelf names from Grimmory instead of typing them by hand.</li>
+<li><strong>Only download books on these Grimmory shelves</strong> (under <strong>KOReader / KoSync</strong>) limits what Bridge Sync puts on the device, independently of collections. It can name your sync shelf (for example <code>Kobo</code>), which collections always skip. Books whose ebook doesn't come from Grimmory are left out while a filter is set, and shelf changes reach the device within a couple of minutes. If none of the named shelves exist, or a shelf can't be read and BookBridge has no earlier answer to reuse, the manifest request fails instead of returning an empty list, so the device never deletes its books because of a typo or an outage.</li>
 </ul>
 <p>KOReader Collections per-reader settings:</p>
 <table>
@@ -2092,6 +2216,12 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td><code>DEVICE_SYNC_EXCLUDED_SHELVES</code></td>
 <td>empty</td>
 <td>Comma-separated shelf names to skip.</td>
+</tr>
+<tr>
+<td>Only download books on these Grimmory shelves</td>
+<td><code>DEVICE_SYNC_SHELF_FILTER</code></td>
+<td>empty</td>
+<td>Under <strong>KOReader / KoSync</strong>. Comma-separated Grimmory shelf names, case-insensitive. Blank downloads every matched book.</td>
 </tr>
 <tr>
 <td>Hardcover List Mode</td>
@@ -2548,7 +2678,7 @@ bridge auto-matches it on the next poll:</p>
 <td>Calibre Library Path</td>
 <td><code>CALIBRE_LIBRARY_PATH</code></td>
 <td>empty</td>
-<td>Optional path to the Calibre library containing <code>metadata.db</code> for identifier lookup.</td>
+<td>Optional path to the Calibre library containing <code>metadata.db</code>, mounted read-only. Used for identifier lookup, and to recognise KOReader copies downloaded from CWA (see below).</td>
 </tr>
 </tbody>
 </table>
@@ -2557,6 +2687,7 @@ bridge auto-matches it on the next poll:</p>
 <li>CWA appears as a standard ebook source in Add / Update Book, the match queue, and Suggestions.</li>
 <li>Kobo sync lets CWA-sourced ebook progress participate alongside KOReader, Grimmory, BookOrbit, Storyteller, and ABS ebook progress.</li>
 <li>The CWA username/password and Kobo sync token are per-reader integration credentials.</li>
+<li>With <strong>Embed Metadata</strong> on, CWA rewrites an EPUB's metadata on every download, so a copy a reader downloads from CWA does not hash the same as the file BookBridge matched. When <code>CALIBRE_LIBRARY_PATH</code> points at the library, BookBridge looks an unknown KOReader hash up in CWA's checksum history (<code>book_format_checksums</code>, which CWA creates and writes only while its KOReader sync is enabled) and links it to the matching book on the reader's first sync.</li>
 <li>If you use the Audiobookshelf Calibre plugin, the bridge can read the <code>audiobookshelf_id</code> identifier from Calibre metadata or CWA as a fallback to avoid fuzzy matching already-linked books.</li>
 </ul>
 <h4 id="hardcover">Hardcover</h4>
@@ -2941,12 +3072,38 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <td><code>false</code></td>
 <td>Enables the Suggestions page and background suggestion discovery.</td>
 </tr>
+<tr>
+<td>Scheduled Scan Interval</td>
+<td><code>SUGGESTIONS_AUTO_SCAN_MINUTES</code></td>
+<td><code>0</code></td>
+<td>Minutes between scheduled library scans, counted from the end of the previous one (0 = off, minimum 5). Runs as the primary admin, reusing cached results like a normal scan.</td>
+</tr>
+<tr>
+<td>Scheduled Full Refresh</td>
+<td><code>SUGGESTIONS_FULL_REFRESH_ENABLED</code></td>
+<td><code>false</code></td>
+<td>Turns the scheduled full refresh on; the schedule field appears once it is ticked.</td>
+</tr>
+<tr>
+<td>Full Refresh Schedule</td>
+<td><code>SUGGESTIONS_FULL_REFRESH_CRON</code></td>
+<td><em>(empty)</em></td>
+<td>Five-field cron expression (minute hour day-of-month month day-of-week, in the <code>TZ</code> timezone; <code>*</code>, ranges, steps, lists and <code>jan</code>/<code>sun</code>-style names). Each time it fires the scan cache is cleared and the whole unmatched library is rescanned. A fire missed while BookBridge was down runs when it comes back, up to a day late. Used only while the full refresh is enabled; empty = off; an invalid expression turns it off and logs a warning.</td>
+</tr>
+<tr>
+<td>Weekly Full Refresh Day / Time</td>
+<td><code>SUGGESTIONS_FULL_REFRESH_DAY</code> / <code>SUGGESTIONS_FULL_REFRESH_TIME</code></td>
+<td><code>off</code> / <code>04:00</code></td>
+<td>Legacy weekly schedule, used only while <code>SUGGESTIONS_FULL_REFRESH_ENABLED</code> is off (<code>sunday</code> + <code>04:20</code> behaves like <code>20 4 * * sun</code>). Saving the Features page converts it to the cron setting.</td>
+</tr>
 </tbody>
 </table>
 <p>Suggestions notes:</p>
 <ul>
 <li>A normal scan reuses cached results so repeat scans are faster.</li>
 <li><strong>Full Refresh</strong> rescans the whole unmatched library from scratch.</li>
+<li>Scheduled scans never overlap a running scan, and a slow scan pushes the next one back instead of queueing it. The time of the last scheduled scan and the day of the last weekly refresh are stored, so a restart neither scans straight away nor repeats a refresh already done that day.</li>
+<li>A scheduled scan uses the primary admin's own credentials, the same as that account pressing the buttons on the Suggestions page. An open Suggestions page shows the scheduled results the next time it loads.</li>
 <li>Suggestions can queue audiobook-backed links from Audiobookshelf, Grimmory, or BookOrbit, and can use CWA as the ebook side for audiobook-backed, ebook-only, and Storyteller-assisted links.</li>
 <li>If your audio and ebook providers expose the same mounted <code>/books</code> tree,
   sibling files in the same title folder are treated as same-folder matches
@@ -2980,6 +3137,18 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td><code>WHISPER_MODEL</code></td>
 <td><code>tiny</code></td>
 <td>Local Whisper model size or a custom Whisper.cpp model name.</td>
+</tr>
+<tr>
+<td>Whisper Language</td>
+<td><code>WHISPER_LANGUAGE</code></td>
+<td>empty</td>
+<td>Local Whisper only. Blank detects each chunk's language; a code such as <code>ru</code> or <code>en</code> fixes it. Applies to new transcriptions; saved transcripts are reused.</td>
+</tr>
+<tr>
+<td>Filter Non-Speech Audio</td>
+<td><code>WHISPER_VAD_FILTER</code></td>
+<td><code>false</code></td>
+<td>Local Whisper only. Uses voice activity detection to reduce transcription over music and silence while preserving audio timestamps. Check quiet narration before enabling broadly. Applies to new transcriptions.</td>
 </tr>
 <tr>
 <td>Whisper Device</td>

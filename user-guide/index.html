@@ -581,6 +581,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stats
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#account-and-my-integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -991,6 +1002,17 @@
     <span class="md-ellipsis">
       
         Generating one
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#how-it-reaches-bookorbit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it reaches BookOrbit
       
     </span>
   </a>
@@ -1428,6 +1450,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stats
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#account-and-my-integrations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1845,6 +1878,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#how-it-reaches-bookorbit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How it reaches BookOrbit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#coexistence-with-bookorbits-own-read-along-sync" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2158,6 +2202,17 @@ one app, keep reading or listening from the new position so the bridge can disti
 your rewind from a stale report. The setting is independent of the normal protection
 against a different device pulling you backward.</p>
 <hr />
+<h2 id="stats">Stats</h2>
+<p>The <strong>Listening</strong> section shows daily totals, a heatmap, recent sessions and the
+yearly recap. If your own Audiobookshelf account is configured, its listening
+stats are used. Otherwise, BookBridge uses its retained audiobook sessions,
+including listening through BookOrbit and Grimmory.</p>
+<p>Local listening times are estimates from changes in audio position. They cover
+only sessions BookBridge recorded and retained, rather than a service's complete
+past history. Deleting a book mapping keeps its reading and listening sessions,
+so removing a finished book no longer removes those totals. Previously deleted
+history is not reconstructed.</p>
+<hr />
 <h2 id="account-and-my-integrations">Account and My Integrations</h2>
 <p>The <strong>Account</strong> page is where you manage your own login and reader-specific setup.</p>
 <ul>
@@ -2170,6 +2225,11 @@ against a different device pulling you backward.</p>
 </ul>
 <p>Readers do not inherit anyone else's account credentials when their own fields are blank. This keeps one reader's BookFusion, Grimmory, BookOrbit, tracker, or KOSync account from being used for another reader by accident. Only the <strong>primary admin</strong> — the first admin account, whose logins the engine's shared settings are copied from — falls back to the server-wide values; a second admin account needs its own logins like anyone else.</p>
 <p>Admins can change an existing account between <strong>user</strong> and <strong>admin</strong> from <strong>Settings -&gt; Users</strong> with the <em>Make admin</em> / <em>Make user</em> button. Promoting someone does not hand over your service logins, and it leaves their books, progress and saved credentials untouched. The primary admin and the last remaining active admin cannot be demoted.</p>
+<p>Scripts can create readers and save their integrations through the optional
+<a href="../configuration/#admin-api-optional">admin API</a>. It is off until its environment
+token is set and cannot manage admins. Disabling a reader stops their syncs and
+Audiobookshelf listener; re-enabling restores the shared catalog when Shared Library
+is on, including books that reader previously removed.</p>
 <hr />
 <h2 id="sync-modes">Sync Modes</h2>
 <p>Each mapping runs in one of three modes.</p>
@@ -2196,6 +2256,9 @@ against a different device pulling you backward.</p>
 <li>You can still link a standard ebook, a Storyteller title, or both.</li>
 <li>Ebook-only links skip audiobook preparation work, so they activate faster.</li>
 </ul>
+<p>CBZ comics can also be linked as ebook-only books. Leave audio on <strong>None / Skip</strong>;
+comic archives cannot be paired with audiobooks or used for audio alignment or
+read-along generation.</p>
 <p>Use this when you only want reading sync between KOReader, BookFusion, Grimmory, BookOrbit, Storyteller, optional ABS ebook progress, and CWA-sourced ebooks when Kobo sync is enabled.</p>
 <hr />
 <h2 id="real-time-sync">Real-Time Sync</h2>
@@ -2223,6 +2286,17 @@ against a different device pulling you backward.</p>
 <li>When the restart finishes, you are sent back to the dashboard.</li>
 </ul>
 <p>If you use Whisper.cpp with a custom model name, you can type that model directly into the <strong>Whisper Model</strong> field.</p>
+<p>Under the Grimmory integration, <strong>Add matched books to the shelf only once they
+are aligned</strong> holds an audiobook paired with an ebook off its shelf until a fine-grained alignment is ready;
+ebook-only books are shelved immediately. <strong>Shelf Owner</strong> can name the BookBridge
+account whose Grimmory login owns a shared shelf. Leaving it blank uses each
+reader's own login and shelf.</p>
+<p>Under KOReader / KoSync, optional <strong>Take each reader's sync login from Grimmory</strong>
+follows each reader's Grimmory KOReader login. A different manual KoSync login is kept; clear that reader's
+KoSync username to use the Grimmory one instead.</p>
+<p>Audiobookshelf's optional <strong>Keep every match in its auto-add collection</strong> puts
+mapped audiobooks back into their configured auto-add collection if they are missing. It only adds
+books: a manual removal is undone on the next cycle while the option is on.</p>
 <hr />
 <h2 id="highlights-and-notes">Highlights and Notes</h2>
 <p>BookBridge can sync KOReader highlights and notes between KOReader devices and supported web readers, but this is a Bridge Sync plugin feature.</p>
@@ -2246,6 +2320,10 @@ against a different device pulling you backward.</p>
 <p>Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing reading position, but they do not exchange highlights or notes.</p>
 <hr />
 <h2 id="keeping-multiple-koreader-devices-in-step">Keeping Multiple KOReader Devices in Step</h2>
+<p>Use <strong>BridgeSync 0.9.9</strong> on every device. When upgrading from an older plugin,
+close affected managed books and run <strong>Bridge Sync → Sync Reading Stats</strong> to repair
+their saved book identities. Positions and highlights are retained. This also
+updates reading status when there are no local status changes to upload.</p>
 <p>Two independent features, both needing the <strong>BridgeSync 0.9.6</strong> plugin (or newer) on every
 device involved, keep more than a book's reading <em>position</em> in sync across your devices.</p>
 <h3 id="reading-status">Reading status</h3>
@@ -2349,6 +2427,9 @@ and a language badge appears beside it when the provider supplies one.</p>
 <li>BookFusion</li>
 <li>Local files from <code>BOOKS_DIR</code> and any folder listed in <code>EXTRA_EBOOK_DIRS</code></li>
 </ol>
+<p>When a provider's ebook is safely available in a configured mounted library,
+BookBridge uses that copy instead of downloading another. Missing or unreadable
+mounted files fall back to the cache or provider.</p>
 <h3 id="final-actions">Final actions</h3>
 <ul>
 <li><strong>Create Mapping</strong> creates the link immediately.</li>
@@ -2383,6 +2464,12 @@ count whenever books are waiting in it.</p>
 <li><strong>Scan Library</strong> reuses cached results so repeat scans are faster.</li>
 <li><strong>Full Refresh</strong> ignores the previous cache and rescans the whole unmatched library.</li>
 </ul>
+<p>Under <strong>Settings → Features</strong>, <strong>Scheduled Scan Interval</strong> runs normal scans in
+the background (<code>0</code> is off; enabled intervals are at least five minutes). Enable
+<strong>Scheduled Full Refresh</strong> to rescan on a five-field cron schedule in your <code>TZ</code>
+timezone, for example <code>20 4 * * sun</code> for Sunday at 04:20. An existing weekly
+schedule carries over. Scheduled scans use the primary admin's own libraries and
+credentials, never overlap another scan, and appear when Suggestions next loads.</p>
 <h3 id="actions">Actions</h3>
 <ul>
 <li><strong>Add to Queue</strong> sends the current pick to the batch queue.</li>
@@ -2476,6 +2563,15 @@ each audio clip within its narrated segment, and refuses to publish an incomplet
 rather than shipping a book with missing chapters. A failed regeneration leaves the previous
 EPUB in place and does not trigger a library scan. EPUB 2 source books are converted to EPUB 3
 automatically as part of generation.</p>
+<h3 id="how-it-reaches-bookorbit">How it reaches BookOrbit</h3>
+<p>When BookBridge sees the audiobook's folder at the same path BookOrbit does (and the folder
+is not shared with the ebook library), it writes the EPUB there directly and triggers a scan;
+there is no size limit. Otherwise — different mount paths, or the ebook and audiobook sitting
+in one combined library folder — it uploads the EPUB through BookOrbit into the audiobook's
+entry, so it is subject to BookOrbit's maximum upload size (BookOrbit Settings) and to any
+reverse proxy or tunnel in front of it. A refused oversized upload names the file size in the
+log; a shared local mount lets BookBridge deliver directly instead. Audio loose in a library's
+root folder is refused either way: move it into its own book folder first.</p>
 <h3 id="coexistence-with-bookorbits-own-read-along-sync">Coexistence with BookOrbit's own read-along sync</h3>
 <p>BookOrbit 3.0 and later can keep a read-along book's audio and text positions in step by
 itself. If BookBridge maps both formats onto the <em>same</em> BookOrbit entry, both would be
@@ -2575,6 +2671,11 @@ normal sync or matching flow again.</p>
 <li><strong>Excluded Shelves</strong> lets you skip shelf names you do not want turned into KOReader collections.</li>
 <li><strong>Find Shelves</strong> helps you pick shelf names from Grimmory instead of typing them by hand.</li>
 </ul>
+<p><strong>Only download books on these Grimmory shelves</strong> (under <strong>KOReader / KoSync</strong> in
+My Integrations) is separate from collection shaping: the comma-separated shelves
+you list limit which matched books the device can download. Blank keeps all
+matched books available. Invalid shelf data withholds an update rather than treating your
+library as empty.</p>
 <p>In simple terms, a <strong>magic shelf</strong> is a shelf in Grimmory that fills itself based on rules instead of you adding books one by one.</p>
 <p>If you do not use the Bridge Sync plugin, you can ignore these settings.</p>
 <hr />
