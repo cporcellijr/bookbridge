@@ -7,6 +7,7 @@ epubcfi>=0.0.6,<0.1
 beautifulsoup4>=4.12,<5
 rapidfuzz>=3.0,<4
 flask>=3.0,<4
+flask-babel>=4.0,<5
 lxml>=5.0,<6
 defusedxml>=0.7,<1
 dependency-injector>=4.41,<5

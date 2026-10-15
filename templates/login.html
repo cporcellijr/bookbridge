@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set hide_chrome = true %}
 
-{% block title %}Sign in · BookBridge{% endblock %}
+{% block title %}{{ _('Sign in') }} · BookBridge{% endblock %}
 
 {% block content %}
 <div class="auth-shell">
@@ -9,19 +9,19 @@
         <div class="auth-brand">
             <img src="/static/icon.png" alt="BookBridge" class="app-icon">
             <h1 class="brand-wordmark">BookBridge</h1>
-            <p>Sign in to continue</p>
+            <p>{{ _('Sign in to continue') }}</p>
         </div>
         {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
         <form method="POST" action="{{ url_for('login') }}{% if request.args.get('next') %}?next={{ request.args.get('next')|urlencode }}{% endif %}">
             <div class="form-group">
-                <label for="username" class="form-label">Username</label>
+                <label for="username" class="form-label">{{ _('Username') }}</label>
                 <input type="text" id="username" name="username" class="form-input" autocomplete="username" autofocus required>
             </div>
             <div class="form-group">
-                <label for="password" class="form-label">Password</label>
+                <label for="password" class="form-label">{{ _('Password') }}</label>
                 <input type="password" id="password" name="password" class="form-input" autocomplete="current-password" required>
             </div>
-            <button type="submit" class="btn btn-primary" style="width: 100%;">Sign in</button>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">{{ _('Sign in') }}</button>
         </form>
     </div>
 </div>
