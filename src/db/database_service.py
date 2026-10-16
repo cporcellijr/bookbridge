@@ -6208,6 +6208,8 @@ class DatabaseService:
                 func.count(ReadingSession.id).label('session_count'),
                 func.coalesce(func.sum(ReadingSession.duration_seconds), 0).label('total_duration'),
                 func.max(ReadingSession.end_time).label('last_session_time'),
+                # See get_all_reading_stats for why bare leader column matches max(end_time) row
+                ReadingSession.leader_client.label('last_leader'),
                 ReadingSession.book_title.label('book_title'),
             ).filter(ReadingSession.abs_id == abs_id)
             uid = self._resolve_uid(user_id)
@@ -6224,6 +6226,7 @@ class DatabaseService:
                 'session_count': int(row.session_count),
                 'avg_session_seconds': int(row.total_duration) // int(row.session_count),
                 'last_session_time': row.last_session_time,
+                'last_leader': row.last_leader,
                 'book_title': row.book_title,
             }
 

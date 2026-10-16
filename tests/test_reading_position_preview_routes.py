@@ -26,6 +26,7 @@ class FakeDatabase:
         return [SimpleNamespace(client_name="kosync")]
 
     def get_reading_stats(self, abs_id, user_id=None):
+        # The real DatabaseService.get_reading_stats must return 'last_leader' as well (see tests/test_reading_position_preview_last_leader.py)
         self.stats_calls.append((abs_id, user_id))
         return {"last_leader": "KoSync:reader"}
 

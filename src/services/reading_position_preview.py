@@ -96,9 +96,14 @@ def _select_state(states: Iterable, last_leader: str | None):
 
     # ReadingSession data can be absent for old/imported rows.  In that case the
     # newest observed state is the least surprising display-only fallback.
+    # One sync cycle writes several clients with the same last_updated (#523); the
+    # client key breaks that tie so the choice never depends on input order.
     return max(
         states,
-        key=lambda state: _as_float(getattr(state, "last_updated", None)) or 0,
+        key=lambda state: (
+            _as_float(getattr(state, "last_updated", None)) or 0,
+            _client_key(getattr(state, "client_name", None)),
+        ),
     )
 
 
