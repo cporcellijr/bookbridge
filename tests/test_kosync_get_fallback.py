@@ -601,6 +601,36 @@ class TestKosyncGetEqualPercentageFallback(unittest.TestCase):
         self.assertAlmostEqual(float(data["percentage"]), 0.24)
         parser.resolve_xpath_to_index.assert_not_called()
 
+    def test_sibling_position_names_the_document_it_came_from(self):
+        """An ahead sibling from another EPUB build is served under the requested id;
+        the response must name the hash whose XPath it is (#523 review)."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(
+            synced_xpath, device_xpath, 0.23, 0.24, device_filename="other-build.epub",
+        )
+
+        data, _ = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["document"], "a" * 32)
+        self.assertEqual(data["progress"], device_xpath)
+        self.assertEqual(data["_bridge_position_document"], "b" * 32)
+
+    def test_synced_position_names_no_other_document(self):
+        """The requested document's own synced position carries no provenance marker."""
+        synced_xpath = "/body/DocFragment[20]/body/p[20]/text().0"
+        device_xpath = "/body/DocFragment[20]/body/p[15]/text().0"
+        self._setup_cross_hash_device(synced_xpath, device_xpath, 0.23, 0.24)
+
+        data, _ = self._get_with_resolved_indexes(
+            "a" * 32, {device_xpath: 100, synced_xpath: 200},
+        )
+
+        self.assertEqual(data["progress"], synced_xpath)
+        self.assertNotIn("_bridge_position_document", data)
+
     def test_cross_hash_primary_file_not_the_books_keeps_percentage_fallback(self):
         """Without the book's own file cached on its primary hash there is no file to
         resolve both XPaths in."""

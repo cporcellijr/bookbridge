@@ -208,6 +208,8 @@ class KoSyncSyncClient(SyncClient):
             current["_kosync_last_put_device"] = ko_metadata.get("_bridge_recent_external_put_device") or ""
             current["_kosync_last_put_device_id"] = ko_metadata.get("_bridge_recent_external_put_device_id") or ""
             current["_kosync_last_put_age_seconds"] = ko_metadata.get("_bridge_recent_external_put_age_seconds")
+        if ko_metadata.get("_bridge_position_document"):
+            current["_kosync_position_document"] = ko_metadata["_bridge_position_document"]
 
         return ServiceState(
             current=current,
@@ -245,6 +247,10 @@ class KoSyncSyncClient(SyncClient):
         xpath = state.current.get('xpath')
         epub = self._state_epub(book)
         if not xpath or not epub or epub != epub_file_name:
+            return None
+        position_document = state.current.get('_kosync_position_document')
+        if position_document and position_document != book.kosync_doc_id:
+            # The server answered with another hash's XPath, which may be another EPUB build.
             return None
         index = self.ebook_parser.resolve_xpath_to_index(epub, xpath)
         if index is None:

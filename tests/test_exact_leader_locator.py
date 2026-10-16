@@ -224,6 +224,35 @@ class TestKoSyncLeaderExactLocator(_ExactLocatorTestCase):
         locator = client.get_exact_locator(book, state, self.filename)
         self.assertIsNone(locator)
 
+    def test_kosync_exact_locator_declines_another_documents_xpath(self) -> None:
+        """A GET answered from another hash (possibly another EPUB build) is not an
+        exact position in this book's file, even when the XPath resolves (#523 review)."""
+        from src.sync_clients.kosync_sync_client import KoSyncSyncClient
+        from unittest.mock import Mock
+
+        book = Mock()
+        book.kosync_doc_id = "a" * 32
+        book.original_ebook_filename = self.filename
+        book.ebook_filename = None
+
+        def state_for(metadata: dict):
+            kosync_client = Mock()
+            kosync_client.get_progress_with_metadata.return_value = (0.3, XPATH_TO_LEADER, metadata)
+            client = KoSyncSyncClient(kosync_client, self.parser)
+            return client, client.get_service_state(book, None)
+
+        client, foreign = state_for({"_bridge_position_document": "b" * 32})
+        self.assertEqual(foreign.current["_kosync_position_document"], "b" * 32)
+        self.assertIsNone(client.get_exact_locator(book, foreign, self.filename))
+
+        client, own = state_for({})
+        locator = client.get_exact_locator(book, own, self.filename)
+        self.assertIsNotNone(locator)
+        self.assertEqual(
+            locator.match_index,
+            self.parser.resolve_xpath_to_index(self.filename, XPATH_TO_LEADER),
+        )
+
 
 class TestGrimmoryLeaderExactLocator(_ExactLocatorTestCase):
     """Grimmory leads with cfi; exact locator prevents drift to later duplicate."""

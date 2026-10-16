@@ -3576,6 +3576,9 @@ def _respond_from_book_states(doc_id, book):
                         user_id,
                     )
                 )
+                if arbiter_doc.document_hash != doc_id:
+                    # Another hash's XPath may be from a different EPUB build; say whose it is.
+                    response_data["_bridge_position_document"] = arbiter_doc.document_hash
                 return jsonify(response_data), 200
         # Furthest-wins: only hand back the device's own position when it is genuinely
         # ahead of the bridge-synced position. The bridge's internal sync-push advances
@@ -3728,6 +3731,9 @@ def _respond_from_book_states(doc_id, book):
                     user_id,
                 )
             )
+            if best_doc.document_hash != doc_id:
+                # Another hash's XPath may be from a different EPUB build; say whose it is.
+                response_data["_bridge_position_document"] = best_doc.document_hash
             return jsonify(response_data), 200
 
     if not states:
