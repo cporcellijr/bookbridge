@@ -52,6 +52,19 @@
         {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
         {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
 
+        {% if available_languages and available_languages|length > 1 %}
+        <form method="POST" action="{{ url_for('account_language') }}">
+            <div class="section-title">{{ _('Language') }}</div>
+            <label for="language">{{ _('Interface language') }}</label>
+            <select id="language" name="language" class="form-input" onchange="this.form.submit()">
+                <option value="" {% if not current_language %}selected{% endif %}>{{ _('Automatic (browser)') }}</option>
+                {% for code, name in available_languages %}
+                <option value="{{ code }}" {% if code == current_language %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        {% endif %}
+
         <form method="POST" action="{{ url_for('account') }}">
             <div class="section-title">Username</div>
             <label for="username">Username</label>

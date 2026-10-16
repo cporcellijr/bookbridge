@@ -496,6 +496,17 @@ class DatabaseService:
             user.password_hash = generate_password_hash(password) if password else None
             return True
 
+    def set_user_language(self, user_id: int, language: Optional[str]) -> bool:
+        """Set the account's UI language. Pass None/'' to clear the choice (the
+        locale selector then falls back to Accept-Language, then English).
+        Returns False when the account no longer exists."""
+        with self.get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            if not user:
+                return False
+            user.language = (language or "").strip() or None
+            return True
+
     def update_user_account(self, user_id: int, *, password: Optional[str] = None,
                             role: Optional[str] = None, active: Optional[bool] = None) -> Optional[User]:
         """Update account fields atomically while retaining the primary and last admin."""

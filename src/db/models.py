@@ -1060,6 +1060,10 @@ class User(Base):
     active = Column(Integer, nullable=False, default=1)  # 1=active, 0=disabled
     created_at = Column(DateTime, default=utcnow)
     last_login = Column(DateTime, nullable=True)
+    # UI language (i18n). NULL = never chosen; resolve from Accept-Language, then
+    # English. Deliberately not set in __init__ so existing create_user call sites
+    # are untouched.
+    language = Column(String(10), nullable=True)
 
     credentials = relationship("UserCredential", back_populates="user", cascade="all, delete-orphan")
 
