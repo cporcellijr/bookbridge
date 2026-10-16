@@ -580,3 +580,61 @@ def test_closing_curly_quote_stays_a_separator():
     assert map_quality._word_tokens("‘Hello,’ she said. ‘Don’t.’") == [
         "hello", "she", "said", "don't",
     ]
+
+
+def test_word_tokens_keeps_words_whole_across_format_chars():
+    """Format characters (soft hyphen, word joiner, zero-width space) must not split words.
+    The aligner's Polisher already deletes them, so the guard must do the same."""
+    soft_hyphen = "\u00ad"
+    word_joiner = "\u2060"
+    zero_width_space = "\u200b"
+    text_with_format = f"кро{soft_hyphen}вь гул{soft_hyphen}ко сло{word_joiner}во про{zero_width_space}бирался"
+    text_plain = "кровь гулко слово пробирался"
+    tokens_fmt = map_quality._word_tokens(text_with_format)
+    tokens_plain = map_quality._word_tokens(text_plain)
+    assert tokens_fmt == ["кровь", "гулко", "слово", "пробирался"]
+    assert tokens_fmt == tokens_plain
+
+
+def test_transcript_text_overlap_soft_hyphen_ebook():
+    """A soft-hyphenated ebook must still match its plain transcript at 1.0 overlap."""
+    diagnostics = {}
+    words = _russian_words(600)
+    transcript = " ".join(words)
+    soft_hyphen = "\u00ad"
+    ebook_words = []
+    for w in words:
+        if len(w) >= 4:
+            mid = len(w) // 2
+            ebook_words.append(w[:mid] + soft_hyphen + w[mid:])
+        else:
+            ebook_words.append(w)
+    ebook_text = " ".join(ebook_words)
+    overlap = transcript_text_overlap(transcript, ebook_text, diagnostics=diagnostics)
+    assert overlap == 1.0
+    assert diagnostics["ebook_tokens"] == diagnostics["transcript_tokens"]
+
+
+def test_soft_hyphen_ebook_is_accepted_by_guard(service, caplog):
+    """The lexical guard must accept a soft-hyphenated ebook; it should not log a warning."""
+    from src.utils.config_loader import DEFAULT_CONFIG
+
+    words = _russian_words(600)
+    transcript = " ".join(words)
+    soft_hyphen = "\u00ad"
+    ebook_words = []
+    for w in words:
+        if len(w) >= 4:
+            mid = len(w) // 2
+            ebook_words.append(w[:mid] + soft_hyphen + w[mid:])
+        else:
+            ebook_words.append(w)
+    ebook_text = " ".join(ebook_words)
+    segments = [{"start": 0.0, "end": 1.0, "text": transcript}]
+
+    with pytest.MonkeyPatch.context() as mp:
+        _guard_env(mp, min_overlap=DEFAULT_CONFIG["CONTENT_MATCH_MIN_OVERLAP"])
+        with caplog.at_level("WARNING"):
+            ok = service._verify_content_match(segments, ebook_text, abs_id="soft-hyphen")
+    assert ok is True
+    assert "Lexical content-match guard: audio/ebook n-gram overlap too low" not in caplog.text

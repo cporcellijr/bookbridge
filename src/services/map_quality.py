@@ -645,7 +645,9 @@ def _word_tokens(text: str) -> List[str]:
     folded = strip_inline_joiner(text or "").casefold()
     if not folded.isascii():
         folded = unicodedata.normalize("NFD", _INNER_CURLY_APOSTROPHE_RE.sub("'", folded))
-        folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Mn")
+        # Format characters (EPUB soft hyphens, joiners) sit inside words; the aligner's
+        # Polisher deletes them, so they must not split a word here either (#526).
+        folded = "".join(ch for ch in folded if unicodedata.category(ch) not in ("Mn", "Cf"))
     return _WORD_TOKEN_RE.findall(folded)
 
 
