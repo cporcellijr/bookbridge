@@ -25,7 +25,7 @@ from src.utils.kosync_canonical import (
     resolve_canonical_position,
 )
 from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp
-from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState
+from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState, LocatorResult
 
 logger = logging.getLogger(__name__)
 
@@ -219,10 +219,15 @@ class KoSyncSyncClient(SyncClient):
             value_formatter=lambda v: f"{v*100:.4f}%"
         )
 
+    @staticmethod
+    def _state_epub(book: Book) -> Optional[str]:
+        """The EPUB that a KoSync XPath is resolved against."""
+        return getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
+
     def get_text_from_current_state(self, book: Book, state: ServiceState) -> Optional[str]:
         ko_xpath = state.current.get('xpath')
         ko_pct = state.current.get('pct')
-        epub = getattr(book, "original_ebook_filename", None) or getattr(book, "ebook_filename", None)
+        epub = self._state_epub(book)
         if self.supports_fixed_page_progress() and is_cbz_book(book):
             return None
         if ko_xpath and epub:
@@ -232,6 +237,19 @@ class KoSyncSyncClient(SyncClient):
         if ko_pct is not None and epub:
             return self.ebook_parser.get_text_at_percentage(epub, ko_pct)
         return None
+
+    def get_exact_locator(self, book: Book, state: ServiceState, epub_file_name: str) -> Optional[LocatorResult]:
+        """Keep the XPath's own position when it refers to epub_file_name itself (#523)."""
+        if self.supports_fixed_page_progress() and is_cbz_book(book):
+            return None
+        xpath = state.current.get('xpath')
+        epub = self._state_epub(book)
+        if not xpath or not epub or epub != epub_file_name:
+            return None
+        index = self.ebook_parser.resolve_xpath_to_index(epub, xpath)
+        if index is None:
+            return None
+        return self._locator_from_index(epub, index)
 
     def _sanitize_kosync_xpath(self, xpath: Optional[str], pct: float) -> Optional[str]:
         # Clear-progress flows intentionally send no XPath.

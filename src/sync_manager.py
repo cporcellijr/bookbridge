@@ -5742,23 +5742,36 @@ class SyncManager:
                                 f"⚠️ '{abs_id}' '{title_snip}' Could not locate or download locator target EPUB '{sanitize_log_data(epub)}'"
                             )
                             continue
+                        # Followers on other files (e.g. Storyteller) still need the text.
                         txt = leader_client.get_text_from_current_state(book, leader_state)
-                        if not txt:
-                            logger.warning(f"⚠️ '{abs_id}' '{title_snip}' Could not get text from leader '{leader}'")
-                            continue
+                        # Re-finding the text can land on a later anchor (#523), so when the
+                        # leader's own XPath/CFI refers to this very EPUB, keep its position.
+                        exact_locator = leader_client.get_exact_locator(book, leader_state, epub)
+                        if exact_locator is not None:
+                            locator = exact_locator
+                            locator_source = "exact_locator"
+                            logger.debug(
+                                f"'{abs_id}' '{title_snip}' Keeping leader '{leader}' exact position "
+                                f"(index={exact_locator.match_index})"
+                            )
+                        else:
+                            if not txt:
+                                logger.warning(f"⚠️ '{abs_id}' '{title_snip}' Could not get text from leader '{leader}'")
+                                continue
 
-                        locator = leader_client.get_locator_from_text(txt, epub, leader_pct)
-                        if locator:
-                            locator_source = "fuzzy_text"
-                        if not locator:
-                            if getattr(self.ebook_parser, 'useXpathSegmentFallback', False):
-                                fallback_txt = leader_client.get_fallback_text(book, leader_state)
-                                if fallback_txt and fallback_txt != txt:
-                                    logger.info(f"🔄 '{abs_id}' '{title_snip}' Primary text match failed. Trying previous segment fallback...")
-                                    locator = leader_client.get_locator_from_text(fallback_txt, epub, leader_pct)
-                                    if locator:
-                                        logger.info(f"✅ '{abs_id}' '{title_snip}' Fallback successful!")
-                                        locator_source = "fuzzy_text_previous_segment"
+                            locator = leader_client.get_locator_from_text(txt, epub, leader_pct)
+                            if locator:
+                                locator_source = "fuzzy_text"
+                            if not locator:
+                                if getattr(self.ebook_parser, 'useXpathSegmentFallback', False):
+                                    fallback_txt = leader_client.get_fallback_text(book, leader_state)
+                                    if fallback_txt and fallback_txt != txt:
+                                        logger.info(f"🔄 '{abs_id}' '{title_snip}' Primary text match failed. Trying previous segment fallback...")
+                                        locator = leader_client.get_locator_from_text(fallback_txt, epub, leader_pct)
+                                        if locator:
+                                            logger.info(f"✅ '{abs_id}' '{title_snip}' Fallback successful!")
+                                            locator_source = "fuzzy_text_previous_segment"
+
 
                 if not locator:
                     logger.warning(f"⚠️ '{abs_id}' '{title_snip}' Could not resolve locator from text for leader '{leader}', falling back to percentage of leader")

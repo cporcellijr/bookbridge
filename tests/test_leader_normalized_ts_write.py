@@ -264,6 +264,8 @@ class _StubClient:
         # mocks `_resolve_alignment_locator_from_abs_timestamp` to a real locator
         # and never reaches these.
         self.get_text_from_current_state = MagicMock(return_value="leader anchor text")
+        # No exact leader position (#523), so the fuzzy-text fallthrough stays reachable.
+        self.get_exact_locator = MagicMock(return_value=None)
         self.get_locator_from_text = MagicMock(
             return_value=LocatorResult(percentage=0.71, match_index=480, cfi="epubcfi(/6/4!/4/2:0)")
         )

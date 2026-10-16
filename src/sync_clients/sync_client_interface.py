@@ -190,3 +190,30 @@ class SyncClient:
             fragments=locator_result.fragments,
             page=locator_result.page,
         )
+
+    def get_exact_locator(self, book: Book, state: ServiceState, epub_file_name: str) -> Optional[LocatorResult]:
+        """Return a locator built from the state's own exact position when that position refers to epub_file_name itself, else None."""
+        return None
+
+    def _locator_from_index(self, epub_file_name: str, index: int) -> Optional[LocatorResult]:
+        # Only a concrete character index is an exact position; anything else
+        # (None, or a non-int from a stand-in parser) leaves the text-match path in charge.
+        if not epub_file_name or not isinstance(index, int) or isinstance(index, bool):
+            return None
+        locator_result = self.ebook_parser.get_locator_from_char_offset(epub_file_name, index)
+        if not locator_result:
+            return None
+        perfect_xpath = self.ebook_parser.get_perfect_ko_xpath(epub_file_name, index)
+        return LocatorResult(
+            percentage=locator_result.percentage,
+            xpath=locator_result.xpath,
+            match_index=index,
+            cfi=locator_result.cfi,
+            href=locator_result.href,
+            fragment=locator_result.fragment,
+            perfect_ko_xpath=perfect_xpath,
+            css_selector=locator_result.css_selector,
+            chapter_progress=locator_result.chapter_progress,
+            fragments=locator_result.fragments,
+            page=locator_result.page,
+        )

@@ -440,6 +440,8 @@ def cycle_client(*, fixed_pages=False, update_result=None):
     client.can_be_leader.return_value = True
     client.supports_fixed_page_progress.return_value = fixed_pages
     client.get_text_from_current_state.return_value = "anchor text"
+    # No exact leader position (#523): these tests exercise the text-match path.
+    client.get_exact_locator.return_value = None
     client.get_locator_from_text.side_effect = lambda _txt, _epub, pct: LocatorResult(
         percentage=pct, cfi="epubcfi(/6/2)", match_index=40
     )
