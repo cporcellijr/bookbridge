@@ -122,9 +122,12 @@ class TestPositionPreviewRouteLastLeader(unittest.TestCase):
     def test_route_picks_latest_session_leader_on_tie(self):
         """Two states with equal last_updated: route picks state of latest session's leader."""
         from flask import Flask
-        from src.api import kosync_server
         from src.api import reading_position_preview_routes as routes
         from src.utils.user_context import reset_current_user_id, set_current_user_id
+
+        # Patch the kosync_server module the route itself holds: other suites reload it,
+        # so `from src.api import kosync_server` can name a different module object.
+        kosync_server = routes.kosync_server
 
         user = self.db_service.create_user('rl-user', 'pw', role='admin')
         abs_id = 'rl-book'
