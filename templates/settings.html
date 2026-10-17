@@ -797,7 +797,14 @@
                             value="{{ get_val('ABS_PROGRESS_OFFSET_SECONDS') }}">
                         <div class="help-text">Rewind progress sent to ABS (e.g. -60)</div>
                     </div>
-                    <!-- Old Checkbox location removed -->
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="abs_reading_checkpoints" name="ABS_READING_CHECKPOINTS"
+                            {% if get_bool('ABS_READING_CHECKPOINTS') %}checked{% endif %}>
+                        <label for="abs_reading_checkpoints">Save reading checkpoints in ABS listening history</label>
+                        <small>When ebook reading advances the ABS position, save a recoverable listening-history
+                            entry by adding one second of artificial listening time. This labels reading as listening
+                            and slightly increases ABS listening statistics. Disabled by default.</small>
+                    </div>
                 </div>
             </div>
 

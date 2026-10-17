@@ -7,6 +7,7 @@ from typing import Optional
 from src.api.api_clients import ABSClient
 from src.db.models import Book, State
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState, ABS_ITEM_NOT_FOUND
+from src.utils.config_loader import env_truthy
 from src.utils.ebook_utils import EbookParser
 from src.utils.progress_metadata import parse_service_timestamp
 from src.utils.transcriber import AudioTranscriber
@@ -329,21 +330,24 @@ class ABSSyncClient(SyncClient):
         Args:
             abs_id: ABS library item ID
             ts: New timestamp to set (seconds)
-            prev_abs_ts: Previous ABS timestamp (kept for logging context)
-            time_listened: Listening seconds to credit. Normally 0 (a bridge push
-                from reading progress is not playback); a non-zero value is passed
-                only when an audiobook-companion leader advanced the position and the
-                forward audio delta should count as listening time.
+            prev_abs_ts: Previous ABS timestamp used to detect forward writes
+            time_listened: Listening seconds to credit. Normally 0 for reading;
+                audiobook-companion leaders credit the forward audio delta.
+                Opt-in reading checkpoints add one second on forward writes.
         """
         adjusted_ts = max(round(ts + self.abs_progress_offset, 2), 0)
         if self.abs_progress_offset != 0:
             logger.debug(f"   📐 Adjusted timestamp: {ts}s → {adjusted_ts}s (offset: {self.abs_progress_offset:+.1f}s)")
 
-        # Bridge pushes originate from reading progress (KoSync/Storyteller/Grimmory
-        # leader), never from actual playback — send zero timeListened so reading
-        # does not accrue listening time in ABS stats. Exception: an audiobook
-        # companion (Storyteller) advancing the position is treated as listening, so
-        # the caller credits the forward audio delta as time_listened.
+        # ABS only retains listening history for nonzero timeListened. Keep the
+        # artificial credit opt-in and exclude resets, rewinds and unchanged writes.
+        if (
+            time_listened == 0
+            and ts > prev_abs_ts
+            and adjusted_ts > prev_abs_ts
+            and env_truthy("ABS_READING_CHECKPOINTS")
+        ):
+            time_listened = 1.0
         time_listened = max(0.0, round(float(time_listened or 0.0), 2))
         if time_listened > 0:
             logger.debug(f"   ⏱️ time_listened: {time_listened:.1f}s (listening push; prev: {prev_abs_ts:.1f}s → new: {adjusted_ts:.1f}s)")

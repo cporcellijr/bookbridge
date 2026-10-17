@@ -68,6 +68,7 @@ class TestSettingsComprehensive(unittest.TestCase):
         # List of all boolean keys from web_server.py
         self.bool_keys = [
             'ABS_ENABLED',
+            'ABS_READING_CHECKPOINTS',
             'READEST_ENABLED',
             'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
             'SYNC_ABS_EBOOK',

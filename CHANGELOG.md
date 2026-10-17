@@ -8,6 +8,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Optional Audiobookshelf reading checkpoints (`ABS_READING_CHECKPOINTS`, off by default):
+  forward ebook-to-audiobook progress writes can create a recoverable ABS listening-history
+  entry by crediting one artificial second. Rewinds, resets, unchanged positions and
+  audiobook listening credit retain their existing behavior (#530, #495).
 - Optionally generate a read-along EPUB for books the BookOrbit shelf watch auto-matches to a
   BookOrbit audiobook (Settings → BookOrbit, off by default) (#524).
 - Job Queue page (#529) in the top navigation: see which books are waiting,
