@@ -196,6 +196,8 @@ class Book(Base):
     kosync_doc_id = Column(String(255), index=True)
     transcript_file = Column(String(500))
     status = Column(String(50), default='active')
+    # Pending alignment order; NULL books follow positioned books in existing order.
+    alignment_queue_position = Column(Float, nullable=True)
     duration = Column(Float)  # Duration in seconds from AudioBookShelf
     sync_mode = Column(String(20), default='audiobook')  # 'audiobook', 'audiobook_only', or 'ebook_only'
     transcript_source = Column(String(32), nullable=True)  # 'storyteller', 'smil', 'whisper'
@@ -240,7 +242,7 @@ class Book(Base):
                  transcript_source: str = None,
                  storyteller_uuid: str = None, bookfusion_id: str = None, abs_ebook_item_id: str = None,
                  series_name: str = None, series_sequence: float = None,
-                 user_id: int = None):
+                 user_id: int = None, alignment_queue_position: float = None):
         self.abs_id = abs_id
         self.abs_title = abs_title
         self.audio_source = audio_source
@@ -266,6 +268,7 @@ class Book(Base):
         self.series_name = series_name
         self.series_sequence = series_sequence
         self.user_id = user_id
+        self.alignment_queue_position = alignment_queue_position
 
     def __repr__(self):
         return f"<Book(abs_id='{self.abs_id}', title='{self.abs_title}')>"

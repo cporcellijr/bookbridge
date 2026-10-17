@@ -219,6 +219,12 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             def get_books_by_status(self, status):
                 return [self.book] if status == "pending" else []
 
+            def get_pending_alignment_queue(self):
+                return self.get_books_by_status('pending')
+
+            def clear_alignment_queue_position(self, abs_id):
+                pass
+
             def save_book(self, book):
                 self.book = book
 
@@ -269,6 +275,12 @@ class TestSyncCycleUserScoping(unittest.TestCase):
                     return [self.book]
                 return []
 
+            def get_pending_alignment_queue(self):
+                return []
+
+            def clear_alignment_queue_position(self, abs_id):
+                pass
+
             def get_latest_job(self, abs_id, kind=None):
                 return self.previous_job
 
@@ -303,6 +315,12 @@ class TestSyncCycleUserScoping(unittest.TestCase):
 
             def get_books_by_status(self, status):
                 return [self.book] if status == "pending" else []
+
+            def get_pending_alignment_queue(self):
+                return self.get_books_by_status('pending')
+
+            def clear_alignment_queue_position(self, abs_id):
+                pass
 
             def get_book_user_ids(self, abs_id):
                 return [2] if abs_id == "book-claim" else []

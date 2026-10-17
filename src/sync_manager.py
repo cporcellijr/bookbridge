@@ -3105,7 +3105,7 @@ class SyncManager:
         retry_delay_mins = int(os.getenv("JOB_RETRY_DELAY_MINS", 15))
 
         # Get books with pending status
-        pending_books = self.database_service.get_books_by_status('pending')
+        pending_books = self.database_service.get_pending_alignment_queue()
         had_pending = bool(pending_books)
 
         # Audio-only mappings have no EPUB/transcript work to prepare. They are
@@ -3216,11 +3216,17 @@ class SyncManager:
         job_idx = (eligible_books.index(target_book) + 1) if total_jobs else 1
 
         # 3. Mark book as 'processing' and create/update job record
+        if not retry_job:
+            logger.info(
+                "📋 Alignment queue: starting '%s' (1 of %s waiting)",
+                sanitize_log_data(target_book.abs_title), len(full_pipeline_books),
+            )
         logger.info(f"⚡ [{job_idx}/{total_jobs}] Starting background transcription: {sanitize_log_data(target_book.abs_title)}")
 
         # Update book status to processing
         target_book.status = 'processing'
         self.database_service.save_book(target_book)
+        self.database_service.clear_alignment_queue_position(target_book.abs_id)
 
         # Create or update job record
         prior_job = retry_job

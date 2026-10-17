@@ -1613,6 +1613,84 @@ class DatabaseService:
             return books
 
     @staticmethod
+    def _pending_alignment_order(books: list[Book]) -> list[Book]:
+        """Sort positioned books first, preserving original DB order for ties/NULLs."""
+        return sorted(books, key=lambda book: (
+            book.alignment_queue_position is None,
+            book.alignment_queue_position if book.alignment_queue_position is not None else 0.0,
+        ))
+
+    def get_pending_alignment_queue(self) -> list[Book]:
+        """Return all pending books in the order considered by the alignment worker.
+
+        Books without a position follow positioned rows in the same order as
+        the previous pending-book query. Reading does not assign positions.
+        """
+        with self.get_session() as session:
+            books = self._pending_alignment_order(
+                session.query(Book).filter(Book.status == 'pending').all()
+            )
+            for book in books:
+                session.expunge(book)
+            return books
+
+    def move_pending_alignment_book(self, user_id: int, abs_id: str,
+                                    direction: str) -> str:
+        """Move a claimed, user-owned pending book within that user's slots.
+
+        Initialize positions for every pending book in effective order before
+        moving, in one transaction. Foreign books retain their exact slots.
+        Return 'missing' for unclaimed/non-owned/nonpending/invalid requests.
+        """
+        if direction not in {'up', 'down', 'top'} or not abs_id or user_id is None:
+            return 'missing'
+        with self.get_session() as session:
+            pending = self._pending_alignment_order(
+                session.query(Book).filter(Book.status == 'pending').all()
+            )
+            if not any(book.abs_id == abs_id for book in pending):
+                return 'missing'
+            owned_ids = {
+                row[0] for row in session.query(UserBook.abs_id).filter(
+                    UserBook.user_id == user_id
+                ).all()
+            }
+            owned_slots = [
+                index for index, book in enumerate(pending)
+                if book.user_id == user_id and book.abs_id in owned_ids
+            ]
+            owned_positions = [
+                index for index in owned_slots if pending[index].abs_id == abs_id
+            ]
+            if not owned_positions:
+                return 'missing'
+            # Canonicalize the entire pending queue; subsequent moves preserve
+            # other users' positions, and new NULL entries always join the back.
+            for index, book in enumerate(pending):
+                book.alignment_queue_position = float(index + 1)
+            owner_index = owned_slots.index(owned_positions[0])
+            destination = {
+                'up': max(0, owner_index - 1),
+                'down': min(len(owned_slots) - 1, owner_index + 1),
+                'top': 0,
+            }[direction]
+            if owner_index == destination:
+                return 'unchanged'
+            owner_books = [pending[index] for index in owned_slots]
+            owner_books.insert(destination, owner_books.pop(owner_index))
+            for index, book in zip(owned_slots, owner_books):
+                book.alignment_queue_position = float(index + 1)
+            return 'moved'
+
+    def clear_alignment_queue_position(self, abs_id: str) -> None:
+        """Discard a selected book's queue position so requeueing joins the back."""
+        with self.get_session() as session:
+            session.query(Book).filter(Book.abs_id == abs_id).update(
+                {Book.alignment_queue_position: None},
+                synchronize_session=False,
+            )
+
+    @staticmethod
     def ebook_input_recovery_identity(book: Book | dict) -> str:
         """Hash the stable audio/ebook pairing fields for recovery CAS checks."""
         values = {

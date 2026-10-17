@@ -10,8 +10,9 @@ All notable changes to BookBridge will be documented in this file.
 
 - Job Queue page (#529) in the top navigation: see which books are waiting,
   processing or recently finished, including requested EPUB3 read-alongs.
-  Move staged Add Book items up, down or to the top before processing them;
-  reordering jobs that have already started is not yet supported.
+  Move staged Add Book items and books waiting for alignment up, down or to
+  the top before processing starts. Alignment order is saved across restarts;
+  books already processing cannot be reordered.
 - Fill the Stats page's Listening section from BookBridge's own listening sessions
   (BookOrbit, Grimmory) when you don't use Audiobookshelf: daily totals, heatmap,
   recent sessions and the yearly recap. Audiobookshelf users keep its numbers.

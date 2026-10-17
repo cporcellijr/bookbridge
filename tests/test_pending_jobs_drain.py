@@ -39,6 +39,17 @@ class _FakeDatabaseService:
             return list(self.failed_retry_later)
         return []
 
+    def get_pending_alignment_queue(self):
+        return sorted(self.pending, key=lambda book: (
+            getattr(book, 'alignment_queue_position', None) is None,
+            getattr(book, 'alignment_queue_position', None) or 0,
+        ))
+
+    def clear_alignment_queue_position(self, abs_id):
+        for book in self.pending:
+            if book.abs_id == abs_id:
+                book.alignment_queue_position = None
+
     def get_book(self, abs_id):
         return self.books_by_id.get(abs_id)
 
@@ -158,6 +169,60 @@ class TestFullPipelineSingleBookUnchanged(unittest.TestCase):
 
         self.assertEqual(book.status, "processing")
         self.assertEqual(len(db.saved_jobs), 1)
+
+
+class TestAlignmentQueueOrdering(unittest.TestCase):
+    """The existing single-job worker honors persisted positions and drain gates."""
+
+    def test_top_positioned_book_is_selected_and_position_cleared(self):
+        first = _FakeBook("aaa")
+        first.alignment_queue_position = None
+        preferred = _FakeBook("zzz")
+        preferred.alignment_queue_position = 1.0
+        other = _FakeBook("bbb")
+        other.alignment_queue_position = 2.0
+        db = _FakeDatabaseService(pending=[first, other, preferred])
+        mgr = _make_manager(db)
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr.check_pending_jobs()
+        self.assertEqual(thread_cls.call_args.kwargs["target"], mgr._run_background_job)
+        self.assertIs(thread_cls.call_args.kwargs["args"][0], preferred)
+        self.assertEqual(preferred.status, "processing")
+        self.assertIsNone(preferred.alignment_queue_position)
+        self.assertIsNone(first.alignment_queue_position)
+        self.assertEqual(other.alignment_queue_position, 2.0)
+        # If the selected book is put back into pending, its now-NULL position
+        # puts it after the remaining positioned entry.
+        preferred.status = "pending"
+        self.assertEqual([b.abs_id for b in db.get_pending_alignment_queue()],
+                         ["bbb", "aaa", "zzz"])
+
+    def test_audio_only_drain_and_ebook_only_batch_still_precede_alignment(self):
+        audio = _FakeBook("audio", sync_mode="audiobook_only")
+        audio.alignment_queue_position = 1.0
+        ebook = _FakeBook("ebook", sync_mode="ebook_only")
+        ebook.alignment_queue_position = 2.0
+        normal = _FakeBook("normal")
+        normal.alignment_queue_position = 3.0
+        db = _FakeDatabaseService(
+            pending=[normal, ebook, audio],
+            books_by_id={"ebook": ebook},
+        )
+        mgr = _make_manager(db)
+        with patch("src.sync_manager.threading.Thread") as thread_cls:
+            mgr.check_pending_jobs()
+        self.assertEqual(audio.status, "active")
+        self.assertEqual(normal.status, "pending")
+        self.assertEqual(thread_cls.call_args.kwargs["target"], mgr._run_ebook_only_batch)
+        self.assertEqual(thread_cls.call_args.kwargs["args"], (["ebook"],))
+
+    def test_unpositioned_books_follow_positioned_in_previous_query_order(self):
+        a = _FakeBook("a")
+        b = _FakeBook("b")
+        c = _FakeBook("c")
+        c.alignment_queue_position = 3.0
+        queue = _FakeDatabaseService(pending=[b, c, a]).get_pending_alignment_queue()
+        self.assertEqual([book.abs_id for book in queue], ["c", "b", "a"])
 
 
 class TestEbookOnlyBatchMidSkip(unittest.TestCase):

@@ -24,7 +24,8 @@ def _entry(title: str, operation: str, status: str, *, detail: str = "",
            epub3: bool = False, percent: float | None = None,
            timestamp: float | None = None, order: int | None = None,
            queue_key: str | None = None, can_move_up: bool = False,
-           can_move_down: bool = False) -> dict:
+           can_move_down: bool = False, queue: str = 'staged',
+           alignment_rank: int | None = None) -> dict:
     return {
         "title": str(title),
         "operation": operation,
@@ -35,6 +36,8 @@ def _entry(title: str, operation: str, status: str, *, detail: str = "",
         "timestamp": timestamp,
         "order": order,
         "queue_key": queue_key,
+        "queue": queue,
+        "alignment_rank": alignment_rank,
         "can_move_up": can_move_up,
         "can_move_down": can_move_down,
     }
@@ -42,7 +45,9 @@ def _entry(title: str, operation: str, status: str, *, detail: str = "",
 
 def build_job_queue_view(staged_items: list[dict], batches: list[dict],
                          books: list, jobs: list, active_readalong_ids: set[str],
-                         now: float | None = None) -> dict[str, list[dict]]:
+                         now: float | None = None,
+                         alignment_queue: list | None = None,
+                         alignment_movable_ids: set[str] | None = None) -> dict[str, list[dict]]:
     """Combine visible work sources without pretending they share a scheduler.
 
     `batches` contains in-process handoffs only. A restart loses those entries,
@@ -52,6 +57,11 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
     if now is None:
         now = datetime.now(timezone.utc).timestamp()
     pending, running, recent = [], [], []
+    alignment_queue = alignment_queue or []
+    alignment_movable_ids = alignment_movable_ids or set()
+    alignment_positions = {book.abs_id: i for i, book in enumerate(alignment_queue, 1)}
+    movable_order = [book.abs_id for book in alignment_queue
+                     if book.abs_id in alignment_movable_ids]
 
     staged_keys = [item.get('bridge_key') or item.get('abs_id') for item in staged_items]
     for idx, item in enumerate(staged_items, 1):
@@ -100,12 +110,21 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
         epub_intent = bool(getattr(book, "readalong_epub_requested", False))
         alignment_pct = _percent(alignment.progress) if alignment else None
         if status in {"pending", "processing", "forging"}:
+            position = alignment_positions.get(abs_id) if status == 'pending' else None
+            own_position = (movable_order.index(abs_id)
+                            if abs_id in movable_order else None)
             (pending if status == "pending" else running).append(_entry(
                 title, "Forge / Alignment", "queued" if status == "pending" else "running",
-                detail={"pending": "Awaiting background processing",
-                        "processing": "Aligning", "forging": "Forging"}.get(status),
+                detail=(f"#{position} of {len(alignment_queue)} waiting for alignment"
+                        if position is not None else
+                        {"pending": "Awaiting background processing",
+                         "processing": "Aligning", "forging": "Forging"}.get(status)),
                 epub3=epub_intent, percent=alignment_pct,
                 timestamp=getattr(alignment, "last_attempt", None),
+                queue_key=abs_id if own_position is not None else None,
+                can_move_up=own_position is not None and own_position > 0,
+                can_move_down=own_position is not None and own_position < len(movable_order) - 1,
+                queue='alignment', alignment_rank=position,
             ))
         elif status in {"error", "failed_retry_later", "failed_permanent"}:
             recent.append(_entry(
@@ -146,6 +165,15 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
                     title, "EPUB3 Read-along", state, detail=detail, epub3=True,
                     percent=progress, timestamp=stamp,
                 ))
+
+    # Keep the other waiting groups in place, but display pending alignments
+    # in precisely the same global order that the sync worker uses.
+    alignment_slots = [i for i, entry in enumerate(pending)
+                       if entry['queue'] == 'alignment' and entry['alignment_rank'] is not None]
+    aligned_entries = sorted((pending[i] for i in alignment_slots),
+                             key=lambda entry: entry['alignment_rank'])
+    for index, entry in zip(alignment_slots, aligned_entries):
+        pending[index] = entry
 
     recent.sort(key=lambda row: row["timestamp"] or 0, reverse=True)
     return {"pending": pending, "running": running, "recent": recent[:25]}

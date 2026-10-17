@@ -6455,18 +6455,33 @@ def job_queue_page():
         *database_service.get_latest_jobs(kind=JOB_KIND_ALIGNMENT).values(),
         *database_service.get_latest_jobs(kind=JOB_KIND_READALONG).values(),
     ]
+    alignment_queue = database_service.get_pending_alignment_queue()
+    alignment_movable_ids = {
+        book.abs_id for book in books
+        if book.status == 'pending' and user_id is not None and book.user_id == user_id
+    }
     snapshot = build_job_queue_view(
         _load_match_queue(), batches, books, jobs, active_readalong,
+        alignment_queue=alignment_queue,
+        alignment_movable_ids=alignment_movable_ids,
     )
     return render_template('job_queue.html', queue_view=snapshot)
 
 
 def job_queue_reorder():
-    """Move one staged Add Book entry without touching submitted/running work."""
+    """Move only an owned, still-pending entry in the chosen queue."""
     key = request.form.get('queue_key', '')
     direction = request.form.get('direction', '')
-    if not key or direction not in {'up', 'down', 'top'}:
+    queue_kind = request.form.get('queue', 'staged')
+    if not key or direction not in {'up', 'down', 'top'} or queue_kind not in {'staged', 'alignment'}:
         flash("That move isn't valid.", "warning")
+    elif queue_kind == 'alignment':
+        user = current_user()
+        result = database_service.move_pending_alignment_book(
+            user.id if user is not None else None, key, direction,
+        )
+        if result == 'missing':
+            flash("That book is no longer waiting for alignment.", "warning")
     else:
         result = _match_queue_move(key, direction)
         if result == 'missing':

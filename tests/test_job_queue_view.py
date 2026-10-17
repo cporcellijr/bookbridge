@@ -281,6 +281,116 @@ class JobQueueRouteTests(unittest.TestCase):
             self.assertNotIn('name="queue_key"', page)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["items"], items)
 
+    def test_alignment_order_and_owner_slot_moves_persist(self):
+        books = [
+            ("a", self.alice.id), ("b", self.bob.id),
+            ("c", self.alice.id), ("d", self.bob.id),
+            ("e", self.alice.id),
+        ]
+        for abs_id, owner in books:
+            self.db.save_book(Book(abs_id=abs_id, abs_title=abs_id,
+                                   status="pending", user_id=owner))
+        self.assertEqual([book.abs_id for book in self.db.get_pending_alignment_queue()],
+                         ["a", "b", "c", "d", "e"])
+        self.assertEqual(
+            self.db.move_pending_alignment_book(self.alice.id, "e", "top"), "moved")
+        ordered = self.db.get_pending_alignment_queue()
+        self.assertEqual([book.abs_id for book in ordered],
+                         ["e", "b", "a", "d", "c"])
+        self.assertEqual([book.alignment_queue_position for book in ordered],
+                         [1., 2., 3., 4., 5.])
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.alice.id, "e", "up"), "unchanged")
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.alice.id, "a", "down"), "moved")
+        self.assertEqual([book.abs_id for book in self.db.get_pending_alignment_queue()],
+                         ["e", "b", "c", "d", "a"])
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.alice.id, "b", "top"), "missing")
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.bob.id, "a", "top"), "missing")
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.alice.id, "missing", "up"), "missing")
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.alice.id, "c", "invalid"), "missing")
+        self.assertEqual([book.abs_id for book in self.db.get_pending_alignment_queue()],
+                         ["e", "b", "c", "d", "a"])
+
+    def test_alignment_nulls_follow_positioned_and_selected_cleared(self):
+        self.db.save_book(Book(abs_id="a", abs_title="A", status="pending",
+                               user_id=self.alice.id))
+        self.db.save_book(Book(abs_id="b", abs_title="B", status="pending",
+                               user_id=self.alice.id, alignment_queue_position=0.5))
+        self.db.save_book(Book(abs_id="c", abs_title="C", status="pending",
+                               user_id=self.alice.id))
+        self.assertEqual([b.abs_id for b in self.db.get_pending_alignment_queue()],
+                         ["b", "a", "c"])
+        self.db.clear_alignment_queue_position("b")
+        self.assertIsNone(self.db.get_book("b").alignment_queue_position)
+        self.assertEqual([b.abs_id for b in self.db.get_pending_alignment_queue()],
+                         ["a", "b", "c"])
+        self.assertEqual(self.db.move_pending_alignment_book(
+            self.alice.id, "c", "top"), "moved")
+        # A newly pending legacy book joins the end, without any move request.
+        self.db.save_book(Book(abs_id="new", abs_title="New", status="pending",
+                               user_id=self.alice.id))
+        self.assertEqual([b.abs_id for b in self.db.get_pending_alignment_queue()],
+                         ["c", "a", "b", "new"])
+
+    def test_alignment_route_visibility_reorder_and_stale_warnings(self):
+        self.db.save_book(Book(abs_id="a", abs_title="Alice First", status="pending",
+                               user_id=self.alice.id))
+        self.db.save_book(Book(abs_id="b", abs_title="Bob Private", status="pending",
+                               user_id=self.bob.id))
+        self.db.save_book(Book(abs_id="c", abs_title="Alice Second", status="pending",
+                               user_id=self.alice.id))
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        page = self.client.get("/job-queue").get_data(as_text=True)
+        self.assertIn("#3 of 3 waiting for alignment", page)
+        self.assertIn('name="queue" value="alignment"', page)
+        self.assertNotIn("Bob Private", page)
+        response = self.client.post(
+            "/job-queue/reorder", data={
+                "queue": "alignment", "queue_key": "c", "direction": "top",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/job-queue")
+        self.assertEqual([b.abs_id for b in self.db.get_pending_alignment_queue()],
+                         ["c", "b", "a"])
+        self._assert_reorder_warning(
+            {"queue": "alignment", "queue_key": "b", "direction": "up"},
+            "That book is no longer waiting for alignment.",
+        )
+        self._assert_reorder_warning(
+            {"queue": "alignment", "queue_key": "c", "direction": "sideways"},
+            "That move isn't valid.",
+        )
+        self.db.save_book(Book(abs_id="c", abs_title="Alice Second", status="processing",
+                               user_id=self.alice.id))
+        self._assert_reorder_warning(
+            {"queue": "alignment", "queue_key": "c", "direction": "down"},
+            "That book is no longer waiting for alignment.",
+        )
+        self.assertEqual([b.abs_id for b in self.db.get_pending_alignment_queue()],
+                         ["b", "a"])
+
+    def test_alignment_reorder_requires_owner_even_if_other_user_claimed_book(self):
+        self.db.save_book(Book(abs_id="owned", abs_title="Owned by Alice",
+                               status="pending", user_id=self.alice.id))
+        self.db.save_book(Book(abs_id="bob", abs_title="Owned by Bob",
+                               status="pending", user_id=self.bob.id))
+        self.db.link_user_book(self.bob.id, "owned")
+        self.assertEqual(
+            self.db.move_pending_alignment_book(self.bob.id, "owned", "top"),
+            "missing",
+        )
+        self.client.post("/login", data={"username": "bob", "password": "pw-bob"})
+        page = self.client.get("/job-queue").get_data(as_text=True)
+        self.assertIn("Owned by Alice", page)
+        # Only Bob's own pending book has reorder controls.
+        self.assertNotIn('value="owned"', page)
+        self.assertIn('value="bob"', page)
+
     def test_failed_batch_does_not_leave_a_phantom_queue(self):
         import src.web_server as ws
         with self.app.test_request_context("/job-queue"):

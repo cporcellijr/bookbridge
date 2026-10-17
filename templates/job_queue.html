@@ -9,7 +9,7 @@
     <header class="job-queue-header">
         <div>
             <h1>Job Queue</h1>
-            <p>See books waiting, processing, or recently finished. Move books up or down before starting an Add Book batch.</p>
+            <p>See books waiting, processing, or recently finished. Move staged books or pending alignments before they start.</p>
         </div>
         <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">Refresh status</a>
     </header>
@@ -82,6 +82,7 @@
                             {% for direction, text, available in [('up', '↑', job.can_move_up), ('down', '↓', job.can_move_down), ('top', '⇈', job.can_move_up)] %}
                                 <form method="POST" action="{{ url_for('job_queue_reorder') }}">
                                     <input type="hidden" name="queue_key" value="{{ job.queue_key }}">
+                                    <input type="hidden" name="queue" value="{{ job.queue }}">
                                     <input type="hidden" name="direction" value="{{ direction }}">
                                     <button type="submit" aria-label="Move {{ job.title }} {{ 'to top' if direction == 'top' else direction }}" title="Move {{ 'to top' if direction == 'top' else direction }}" {% if not available %}disabled{% endif %}>{{ text }}</button>
                                 </form>
