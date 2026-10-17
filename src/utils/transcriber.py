@@ -38,6 +38,9 @@ from src.utils.transcription_cancel import CancellationToken, is_cancelled
 
 logger = logging.getLogger(__name__)
 
+# faster-whisper word times overhang their segment by up to ~0.1 s (measured live, #527).
+WORD_SEGMENT_TOLERANCE_S = 0.5
+
 
 class TranscriptionCancelled(Exception):
     """Raised inside a transcription worker when its mapping has been deleted."""
@@ -111,7 +114,7 @@ class AudioTranscriber:
                     or not isinstance(words, list) or not words):
                 return False
 
-            expected = self.polisher.normalize(text)
+            expected = self.polisher.normalize(text).replace(' ', '')
             actual = []
             for word in words:
                 if not isinstance(word, dict) or not isinstance(word.get('word'), str):
@@ -121,13 +124,16 @@ class AudioTranscriber:
                         or not isinstance(word_start, (int, float)) or isinstance(word_start, bool)
                         or not isinstance(word_end, (int, float)) or isinstance(word_end, bool)
                         or not math.isfinite(word_start) or not math.isfinite(word_end)
+                        or word_start < 0
                         or word_start < previous_word_start or word_end < word_start
-                        or word_start < start or word_end > end):
+                        or word_start < start - WORD_SEGMENT_TOLERANCE_S
+                        or word_end > end + WORD_SEGMENT_TOLERANCE_S):
                     return False
                 previous_word_start = word_start
                 actual.append(word['word'])
-            # Normalize after joining because providers split hyphenated words differently.
-            if self.polisher.normalize(' '.join(actual)) != expected:
+            # Providers split words at hyphens and number punctuation ("$1" ",700."), so
+            # compare the words' characters, not where the word boundaries fall.
+            if self.polisher.normalize(' '.join(actual)).replace(' ', '') != expected:
                 return False
         return True
 
