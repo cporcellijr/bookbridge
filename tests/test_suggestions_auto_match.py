@@ -418,6 +418,81 @@ class TestAutoMatchSuggestions(unittest.TestCase):
         finally:
             self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
 
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="local-hash")
+    @patch("src.web_server.container")
+    def test_local_file_match_is_linked_by_its_file_hash(self, mock_container, mock_hash):
+        """A Local File has no library id to download by, so its hash comes from the file."""
+        old = os.environ.get("SUGGESTIONS_AUTO_MATCH_ENABLED")
+        try:
+            self._set_env("SUGGESTIONS_AUTO_MATCH_ENABLED", "true")
+
+            mock_mapping = MagicMock()
+            mock_mapping.create_audio_mapping_from_match.return_value = True
+            mock_container.book_mapping_service.return_value = mock_mapping
+
+            match = _make_match(100.0, ebook_filename="Dark Matter - Blake Crouch.epub",
+                                source="Local File", source_id=None)
+            match["source_path"] = "/books/Blake Crouch/Dark Matter (1)/Dark Matter - Blake Crouch.epub"
+            results = {"suggestions": [_make_suggestion(matches=[match])], "stats": {}}
+
+            out = _auto_match_suggestions(results, user_id=1)
+
+            mock_hash.assert_called_once_with(
+                "Dark Matter - Blake Crouch.epub", source_path=match["source_path"],
+            )
+            kwargs = mock_mapping.create_audio_mapping_from_match.call_args.kwargs
+            self.assertEqual(kwargs["kosync_doc_id"], "local-hash")
+            self.assertEqual(out["stats"].get("auto_matched"), 1)
+        finally:
+            self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
+
+    @patch("src.web_server.get_kosync_id_for_ebook")
+    @patch("src.web_server.container")
+    def test_library_match_still_hashes_through_the_library(self, mock_container, mock_hash):
+        """A library match keeps the mapping service's download-based hash."""
+        old = os.environ.get("SUGGESTIONS_AUTO_MATCH_ENABLED")
+        try:
+            self._set_env("SUGGESTIONS_AUTO_MATCH_ENABLED", "true")
+
+            mock_mapping = MagicMock()
+            mock_mapping.create_audio_mapping_from_match.return_value = True
+            mock_container.book_mapping_service.return_value = mock_mapping
+
+            results = {"suggestions": [_make_suggestion(matches=[_make_match(100.0)])], "stats": {}}
+
+            _auto_match_suggestions(results, user_id=1)
+
+            mock_hash.assert_not_called()
+            kwargs = mock_mapping.create_audio_mapping_from_match.call_args.kwargs
+            self.assertIsNone(kwargs.get("kosync_doc_id"))
+        finally:
+            self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
+
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value=None)
+    @patch("src.web_server.container")
+    def test_unhashable_local_file_stays_in_review(self, mock_container, mock_hash):
+        """A Local File that can't be hashed skips the mapping service, which can only download."""
+        old = os.environ.get("SUGGESTIONS_AUTO_MATCH_ENABLED")
+        try:
+            self._set_env("SUGGESTIONS_AUTO_MATCH_ENABLED", "true")
+
+            mock_mapping = MagicMock()
+            mock_container.book_mapping_service.return_value = mock_mapping
+
+            match = _make_match(100.0, ebook_filename="Dark Matter - Blake Crouch.epub",
+                                source="Local File", source_id=None)
+            suggestion = _make_suggestion(matches=[match])
+            results = {"suggestions": [suggestion], "stats": {}}
+
+            with self.assertLogs("src.web_server", level="WARNING") as cm:
+                out = _auto_match_suggestions(results, user_id=1)
+
+            mock_mapping.create_audio_mapping_from_match.assert_not_called()
+            self.assertEqual(out["suggestions"], [suggestion])
+            self.assertTrue(any("could not hash Local File" in line for line in cm.output))
+        finally:
+            self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
+
 
 if __name__ == "__main__":
     unittest.main()

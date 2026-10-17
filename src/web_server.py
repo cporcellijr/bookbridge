@@ -8872,6 +8872,21 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
             remaining.append(suggestion)
             continue
         try:
+            # The mapping service hashes by downloading from a library; a Local File
+            # has no library id, so hash the file itself as manual matching does.
+            # Without a hash the service can't link it either.
+            kosync_doc_id = None
+            if top.get('source') == 'Local File':
+                kosync_doc_id = get_kosync_id_for_ebook(
+                    top.get('ebook_filename') or '', source_path=top.get('source_path'),
+                )
+                if not kosync_doc_id:
+                    logger.warning(
+                        f"⚠️ Auto-match could not hash Local File '{top.get('ebook_filename')}' "
+                        f"for '{suggestion.get('abs_title')}'; left for review"
+                    )
+                    remaining.append(suggestion)
+                    continue
             saved = mapping_service.create_audio_mapping_from_match(
                 audio_source=suggestion.get('audio_source') or 'ABS',
                 audio_source_id=suggestion.get('audio_source_id') or suggestion.get('abs_id') or '',
@@ -8883,6 +8898,7 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
                 audio_provider_file_id=suggestion.get('audio_provider_file_id'),
                 ebook_source=top.get('source'),
                 ebook_source_id=str(top.get('source_id')) if top.get('source_id') is not None else None,
+                kosync_doc_id=kosync_doc_id,
                 user_id=user_id,
             )
         except Exception as e:
