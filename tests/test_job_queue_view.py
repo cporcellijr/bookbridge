@@ -1,4 +1,5 @@
 """Phase 1 Job Queue: visibility, worker handoff, auth and EPUB3 intent."""
+import html
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from src.db.database_service import DatabaseService
 from src.db.models import Book, Job, JOB_KIND_READALONG
 from src.services.job_queue_view import build_job_queue_view
+from src.utils.user_context import set_current_user_id, reset_current_user_id
 from tests.test_webserver import MockContainer
 
 
@@ -117,6 +119,16 @@ class JobQueueRouteTests(unittest.TestCase):
                 os.environ[key] = value
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def _assert_reorder_warning(self, data, message):
+        response = self.client.post('/job-queue/reorder', data=data)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers['Location'], '/job-queue')
+        page = self.client.get(response.headers['Location'])
+        self.assertEqual(page.status_code, 200)
+        content = html.unescape(page.get_data(as_text=True))
+        self.assertIn('flash-warning', content)
+        self.assertIn(message, content)
+
     def test_login_required_and_user_scoped_for_jobs_and_staged_work(self):
         self.assertEqual(self.client.get("/job-queue").status_code, 302)
         self.db.save_book(Book(abs_id="alice-id", abs_title="Visible Alice",
@@ -175,6 +187,99 @@ class JobQueueRouteTests(unittest.TestCase):
         page = self.client.get("/job-queue").get_data(as_text=True)
         self.assertIn("Alice batch", page)
         self.assertNotIn("Private batch", page)
+
+    def test_reorder_persists_and_is_used_when_submitting_add_book_queue(self):
+        import src.web_server as ws
+        path = Path(self.tmp) / "match_queue.json"
+        items = [
+            {"bridge_key": "a", "abs_id": "a", "abs_title": "Alice First",
+             "user_id": self.alice.id},
+            {"bridge_key": "b", "abs_id": "b", "abs_title": "Bob Item",
+             "user_id": self.bob.id},
+            {"bridge_key": "c", "abs_id": "c", "abs_title": "Alice Second",
+             "user_id": self.alice.id},
+            {"bridge_key": "d", "abs_id": "d", "abs_title": "Alice Third",
+             "user_id": self.alice.id},
+        ]
+        path.write_text(json.dumps({"items": items}), encoding="utf-8")
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        with patch.object(ws, "_match_queue_file_path", return_value=path):
+            response = self.client.post("/job-queue/reorder",
+                                        data={"queue_key": "d", "direction": "top"})
+            self.assertEqual(response.status_code, 302)
+            page = self.client.get("/job-queue").get_data(as_text=True)
+            self.assertIn("Move Alice Third down", page)
+            self.assertNotIn("Move Bob Item up", page)
+            token = set_current_user_id(self.alice.id)
+            try:
+                queued = ws._load_match_queue()
+            finally:
+                reset_current_user_id(token)
+            self.assertEqual([x["bridge_key"] for x in queued], ["d", "a", "c"])
+            raw = json.loads(path.read_text(encoding="utf-8"))["items"]
+            self.assertEqual([x["bridge_key"] for x in raw], ["d", "b", "a", "c"])
+            token = set_current_user_id(self.alice.id)
+            try:
+                self.assertEqual([x["bridge_key"] for x in ws._match_queue_drain()],
+                                 ["d", "a", "c"])
+                self.assertEqual([x["bridge_key"] for x in ws._load_match_queue()], [])
+            finally:
+                reset_current_user_id(token)
+            self.assertEqual([x["bridge_key"] for x in
+                             json.loads(path.read_text(encoding="utf-8"))["items"]],
+                             ["b"])
+
+    def test_reorder_only_applies_to_owned_staged_items(self):
+        import src.web_server as ws
+        path = Path(self.tmp) / "match_queue.json"
+        items = [
+            {"bridge_key": "alice", "abs_id": "alice", "user_id": self.alice.id},
+            {"bridge_key": "bob", "abs_id": "bob", "user_id": self.bob.id},
+        ]
+        path.write_text(json.dumps({"items": items}), encoding="utf-8")
+        self.assertEqual(self.client.post("/job-queue/reorder",
+                          data={"queue_key": "alice", "direction": "top"}).status_code, 302)
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        with patch.object(ws, "_match_queue_file_path", return_value=path):
+            self.assertEqual(self.client.get("/job-queue/reorder").status_code, 405)
+            self._assert_reorder_warning(
+                {"queue_key": "bob", "direction": "top"},
+                "That book is no longer waiting in Add Book.",
+            )
+            self._assert_reorder_warning(
+                {"queue_key": "alice", "direction": "diagonal"},
+                "That move isn't valid.",
+            )
+            self.assertEqual(self.client.post("/job-queue/reorder",
+                             data={"queue_key": "alice", "direction": "top"}).status_code, 302)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["items"], items)
+            token = set_current_user_id(self.alice.id)
+            try:
+                ws._match_queue_drain()
+            finally:
+                reset_current_user_id(token)
+            self._assert_reorder_warning(
+                {"queue_key": "alice", "direction": "up"},
+                "That book is no longer waiting in Add Book.",
+            )
+
+    def test_reorder_rejects_ambiguous_staged_keys(self):
+        import src.web_server as ws
+        path = Path(self.tmp) / "match_queue.json"
+        items = [
+            {"bridge_key": "same", "user_id": self.alice.id},
+            {"bridge_key": "same", "user_id": self.alice.id},
+        ]
+        path.write_text(json.dumps({"items": items}), encoding="utf-8")
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        with patch.object(ws, "_match_queue_file_path", return_value=path):
+            self._assert_reorder_warning(
+                {"queue_key": "same", "direction": "up"},
+                "That book couldn't be identified; refresh and try again.",
+            )
+            page = self.client.get("/job-queue").get_data(as_text=True)
+            self.assertNotIn('name="queue_key"', page)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["items"], items)
 
     def test_failed_batch_does_not_leave_a_phantom_queue(self):
         import src.web_server as ws

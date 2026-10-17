@@ -21,5 +21,10 @@
 .job-queue-progress{width:110px;max-width:100%;height:7px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.22);margin-bottom:5px}
 .job-queue-progress span{display:block;height:100%;background:var(--accent)}
 .job-queue-epub{font-size:.74rem;font-weight:700;border-radius:5px;padding:4px 7px;background:rgba(102,126,234,.2)}
+.job-queue-move-actions{display:flex;gap:4px;align-items:center}
+.job-queue-move-actions form{display:inline}
+.job-queue-move-actions button{border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);padding:4px 9px;cursor:pointer}
+.job-queue-move-actions button:not(:disabled):hover{background:rgba(102,126,234,.3)}
+.job-queue-move-actions button:disabled{opacity:.3;cursor:default}
 .job-queue-empty{padding:15px 20px 23px;color:var(--muted);margin:0}
 @media(max-width:680px){.job-queue-page{padding:18px 12px 45px}.job-queue-header h1{font-size:1.5rem}}

@@ -9,10 +9,22 @@
     <header class="job-queue-header">
         <div>
             <h1>Job Queue</h1>
-            <p>Books that are waiting, processing or recently finished. Numbers show order within one batch; reordering isn't available yet.</p>
+            <p>See books waiting, processing, or recently finished. Move books up or down before starting an Add Book batch.</p>
         </div>
         <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">Refresh status</a>
     </header>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages mb-16">
+        {% for category, msg in messages %}
+        <div class="flash flash-{{ category }} flash-msg-container">
+            {{ msg }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
 
     {% set sections = [
         ('running', 'Processing'),
@@ -37,6 +49,7 @@
                         <th scope="col">Status / stage</th>
                         <th scope="col">Progress</th>
                         <th scope="col">Requested</th>
+                        <th scope="col">Order</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -63,6 +76,19 @@
                             {% else %}&mdash;{% endif %}
                         </td>
                         <td>{% if job.epub3 %}<span class="job-queue-epub">EPUB3</span>{% else %}&mdash;{% endif %}</td>
+                        <td>
+                        {% if job.queue_key %}
+                            <div class="job-queue-move-actions">
+                            {% for direction, text, available in [('up', '↑', job.can_move_up), ('down', '↓', job.can_move_down), ('top', '⇈', job.can_move_up)] %}
+                                <form method="POST" action="{{ url_for('job_queue_reorder') }}">
+                                    <input type="hidden" name="queue_key" value="{{ job.queue_key }}">
+                                    <input type="hidden" name="direction" value="{{ direction }}">
+                                    <button type="submit" aria-label="Move {{ job.title }} {{ 'to top' if direction == 'top' else direction }}" title="Move {{ 'to top' if direction == 'top' else direction }}" {% if not available %}disabled{% endif %}>{{ text }}</button>
+                                </form>
+                            {% endfor %}
+                            </div>
+                        {% else %}&mdash;{% endif %}
+                        </td>
                     </tr>
                 {% endfor %}
                 </tbody>

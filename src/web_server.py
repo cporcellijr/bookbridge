@@ -6461,6 +6461,21 @@ def job_queue_page():
     return render_template('job_queue.html', queue_view=snapshot)
 
 
+def job_queue_reorder():
+    """Move one staged Add Book entry without touching submitted/running work."""
+    key = request.form.get('queue_key', '')
+    direction = request.form.get('direction', '')
+    if not key or direction not in {'up', 'down', 'top'}:
+        flash("That move isn't valid.", "warning")
+    else:
+        result = _match_queue_move(key, direction)
+        if result == 'missing':
+            flash("That book is no longer waiting in Add Book.", "warning")
+        elif result == 'ambiguous':
+            flash("That book couldn't be identified; refresh and try again.", "warning")
+    return redirect(url_for('job_queue_page'))
+
+
 def shelfmark():
     """Shelfmark handoff - redirects to the configured SHELFMARK_URL."""
     url = os.environ.get("SHELFMARK_URL")
@@ -9330,6 +9345,44 @@ def _match_queue_add(item: dict) -> bool:
         items.append(scoped_item)
         _write_match_queue_unlocked(items)
         return True
+
+
+def _match_queue_move(queue_key: str, direction: str) -> str:
+    """Reorder an actor-owned, still-staged item, preserving every other user's order.
+
+    Moving a staged entry changes the durable Add Book queue. It therefore also
+    changes the execution order *if* those items are submitted together later.
+    Nothing already drained into a running batch can be moved here.
+    """
+    user_id, include_legacy = _match_queue_scope()
+    if direction not in {'up', 'down', 'top'}:
+        return 'missing'
+    with MATCH_QUEUE_LOCK:
+        items = _read_match_queue_unlocked()
+        visible_positions = [
+            idx for idx, item in enumerate(items)
+            if _match_queue_item_visible(item, user_id, include_legacy)
+        ]
+        positions = [
+            idx for idx in visible_positions
+            if (items[idx].get('bridge_key') or items[idx].get('abs_id')) == queue_key
+        ]
+        if len(positions) > 1:
+            return 'ambiguous'
+        if not positions:
+            return 'missing'
+        start = visible_positions.index(positions[0])
+        destination = {'up': max(0, start - 1),
+                       'down': min(len(visible_positions) - 1, start + 1),
+                       'top': 0}[direction]
+        if destination == start:
+            return 'unchanged'
+        staged = [items[idx] for idx in visible_positions]
+        staged.insert(destination, staged.pop(start))
+        for idx, item in zip(visible_positions, staged):
+            items[idx] = item
+        _write_match_queue_unlocked(items)
+    return 'moved'
 
 
 def _match_queue_remove(abs_id) -> None:
@@ -14302,6 +14355,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
     app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
+    app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
     app.add_url_rule('/whats-new', 'whats_new_page', whats_new_page, methods=['GET'])
     app.add_url_rule('/whats-new/dismiss', 'whats_new_dismiss', whats_new_dismiss, methods=['POST'])
     app.add_url_rule('/shelfmark', 'shelfmark', shelfmark)

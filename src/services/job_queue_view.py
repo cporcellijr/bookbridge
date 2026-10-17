@@ -22,7 +22,9 @@ def _percent(value: object) -> float:
 
 def _entry(title: str, operation: str, status: str, *, detail: str = "",
            epub3: bool = False, percent: float | None = None,
-           timestamp: float | None = None, order: int | None = None) -> dict:
+           timestamp: float | None = None, order: int | None = None,
+           queue_key: str | None = None, can_move_up: bool = False,
+           can_move_down: bool = False) -> dict:
     return {
         "title": str(title),
         "operation": operation,
@@ -32,6 +34,9 @@ def _entry(title: str, operation: str, status: str, *, detail: str = "",
         "percent": percent,
         "timestamp": timestamp,
         "order": order,
+        "queue_key": queue_key,
+        "can_move_up": can_move_up,
+        "can_move_down": can_move_down,
     }
 
 
@@ -48,11 +53,18 @@ def build_job_queue_view(staged_items: list[dict], batches: list[dict],
         now = datetime.now(timezone.utc).timestamp()
     pending, running, recent = [], [], []
 
+    staged_keys = [item.get('bridge_key') or item.get('abs_id') for item in staged_items]
     for idx, item in enumerate(staged_items, 1):
+        key = staged_keys[idx - 1]
+        # A missing or duplicate identifier cannot be safely moved by a request.
+        can_reorder = bool(isinstance(key, str) and key and staged_keys.count(key) == 1)
         pending.append(_entry(
             _title(item), "Add Book", "staged",
             detail="In Add Book; not yet submitted for processing",
             epub3=item.get("readalong_epub_requested"), order=idx,
+            queue_key=key if can_reorder else None,
+            can_move_up=can_reorder and idx > 1,
+            can_move_down=can_reorder and idx < len(staged_items),
         ))
 
     for batch in batches:
