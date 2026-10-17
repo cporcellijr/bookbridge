@@ -2,6 +2,7 @@
 
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -192,3 +193,138 @@ def test_empty_pool_without_same_entry_audio_stays_deferred():
     bms.create_ebook_only_mapping.assert_not_called()
     sugg._scan_single_ebook.assert_not_called()
     svc.database_service.upsert_shelf_watch_scan.assert_not_called()
+
+
+# ---- #524 optional read-along for BookOrbit-audio auto-matches -----------
+
+
+def _readalong_svc(*, source_name='BookOrbit', env_prefix='BOOKORBIT',
+                   audio_source='BookOrbit', status='pending'):
+    db = MagicMock()
+    forge = MagicMock()
+    mapping = MagicMock()
+    saved = SimpleNamespace(abs_id='bookorbit:77', audio_source=audio_source,
+                            audio_source_id='77', abs_title='Some Book', status=status)
+    db.get_book.return_value = saved
+    db.set_readalong_epub_requested.return_value = True
+    mapping.create_audio_mapping_from_match.return_value = saved
+    svc = ShelfWatchService(
+        booklore_client=MagicMock(), database_service=db,
+        book_mapping_service=mapping, source_name=source_name,
+        env_prefix=env_prefix, forge_service=forge,
+    )
+    return svc, db, forge, mapping, saved
+
+
+def _save_audio_match(svc, audio_source='BookOrbit'):
+    svc._create_audio_mapping_and_move(
+        {'title': 'Some Book'}, 'some-book.epub', '77',
+        {'audio_source': audio_source, 'audio_source_id': '77',
+         'audio_title': 'Some Book', 'score': 100},
+        'Up Next', 'Kobo', active_client=MagicMock(),
+    )
+
+
+def test_readalong_enabled_bookorbit_audio_match_records_intent(caplog):
+    svc, db, forge, _, _ = _readalong_svc()
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'on'}):
+        with caplog.at_level('INFO'):
+            _save_audio_match(svc)
+    db.set_readalong_epub_requested.assert_called_once_with('bookorbit:77', True)
+    forge.generate_readalong_if_requested.assert_not_called()
+    assert any("read-along requested for 'Some Book'" in rec.message for rec in caplog.records)
+
+
+def test_readalong_disabled_does_not_record_intent():
+    svc, db, forge, _, _ = _readalong_svc()
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'false'}):
+        _save_audio_match(svc)
+    db.set_readalong_epub_requested.assert_not_called()
+    forge.generate_readalong_if_requested.assert_not_called()
+
+
+def test_readalong_reads_setting_again_for_every_match():
+    svc, db, _, _, _ = _readalong_svc()
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'false'}):
+        _save_audio_match(svc)
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        _save_audio_match(svc)
+    db.set_readalong_epub_requested.assert_called_once_with('bookorbit:77', True)
+
+
+def test_readalong_ignores_abs_audio_even_on_bookorbit_shelf():
+    svc, db, forge, _, _ = _readalong_svc(audio_source='ABS')
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        _save_audio_match(svc, 'ABS')
+    db.set_readalong_epub_requested.assert_not_called()
+    forge.generate_readalong_if_requested.assert_not_called()
+
+
+def test_readalong_ebook_only_does_not_record_intent():
+    svc, db, forge, mapping, _ = _readalong_svc()
+    mapping.create_ebook_only_mapping.return_value = SimpleNamespace(abs_id='ebook-only')
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        svc._create_ebook_only_and_move(
+            {'title': 'Some Book'}, 'some-book.epub', '77',
+            'Up Next', 'Kobo', active_client=MagicMock())
+    db.set_readalong_epub_requested.assert_not_called()
+    forge.generate_readalong_if_requested.assert_not_called()
+
+
+def test_readalong_active_book_dispatches_immediately():
+    svc, db, forge, _, saved = _readalong_svc(status='active')
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        _save_audio_match(svc)
+    db.set_readalong_epub_requested.assert_called_once_with('bookorbit:77', True)
+    forge.generate_readalong_if_requested.assert_called_once_with(saved)
+
+
+def test_readalong_grimmory_watcher_ignores_bookorbit_toggle():
+    svc, db, forge, _, _ = _readalong_svc(
+        source_name='BookLore', env_prefix='BOOKLORE')
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        _save_audio_match(svc)
+    db.set_readalong_epub_requested.assert_not_called()
+    forge.generate_readalong_if_requested.assert_not_called()
+
+
+def test_readalong_failed_mapping_save_does_not_record_intent():
+    svc, db, forge, mapping, _ = _readalong_svc()
+    mapping.create_audio_mapping_from_match.return_value = None
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        _save_audio_match(svc)
+    db.set_readalong_epub_requested.assert_not_called()
+    forge.generate_readalong_if_requested.assert_not_called()
+
+
+def test_readalong_intent_record_failure_does_not_block_shelf_move():
+    svc, db, _, _, _ = _readalong_svc()
+    db.set_readalong_epub_requested.side_effect = RuntimeError('DB unavailable')
+    svc._move_shelf = MagicMock()
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        _save_audio_match(svc)
+    svc._move_shelf.assert_called_once()
+
+
+def test_readalong_same_entry_auto_match_records_intent():
+    svc, db, _, _, _ = _readalong_svc()
+    client = MagicMock()
+    client.get_audiobook_info.return_value = {'tracks': [{'id': 1}], 'duration_seconds': 3600}
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        assert _run_one(svc, client) == 'auto_matched'
+    db.set_readalong_epub_requested.assert_called_once_with('bookorbit:77', True)
+
+
+def test_readalong_scored_audio_match_records_intent():
+    svc, db, _, _, _ = _readalong_svc()
+    client = MagicMock()
+    client.get_audiobook_info.return_value = None
+    suggestions = MagicMock()
+    suggestions._scan_single_ebook.return_value = {'matches': [
+        {'audio_source': 'BookOrbit', 'audio_source_id': '77',
+         'audio_title': 'Some Book', 'score': 100},
+    ]}
+    svc.set_suggestions_service_factory(lambda: suggestions)
+    with patch.dict(os.environ, {'BOOKORBIT_SHELF_WATCH_READALONG': 'true'}):
+        assert _run_one(svc, client) == 'auto_matched'
+    db.set_readalong_epub_requested.assert_called_once_with('bookorbit:77', True)

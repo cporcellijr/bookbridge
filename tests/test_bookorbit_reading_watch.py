@@ -369,5 +369,24 @@ class TestReadingWatchDismissedGuard(unittest.TestCase):
         self.assertTrue(any('Shelf-watch:' in line and 'dismissed earlier' in line for line in cm.output))
 
 
+def test_readalong_toggle_does_not_request_for_continue_reading_ebook_only():
+    svc, _client, db, bms, _ss = _build_service(suggestions_result=None)
+    with patch.dict(os.environ, dict(READING_WATCH_ON, BOOKORBIT_SHELF_WATCH_READALONG='true')):
+        stats = svc._process_reading_watch()
+    assert stats['ebook_only'] == 1
+    bms.create_ebook_only_mapping.assert_called_once()
+    db.set_readalong_epub_requested.assert_not_called()
+
+
+def test_readalong_toggle_does_not_turn_continue_reading_suggestion_into_audio_match():
+    svc, _client, db, bms, _ss = _build_service(
+        suggestions_result={'matches': [_make_audio_match(score=100.0, audio_source='BookOrbit')]})
+    with patch.dict(os.environ, dict(READING_WATCH_ON, BOOKORBIT_SHELF_WATCH_READALONG='true')):
+        stats = svc._process_reading_watch()
+    assert stats['suggested'] == 1
+    bms.create_audio_mapping_from_match.assert_not_called()
+    db.set_readalong_epub_requested.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

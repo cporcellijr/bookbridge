@@ -8,6 +8,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Optionally generate a read-along EPUB for books the BookOrbit shelf watch auto-matches to a
+  BookOrbit audiobook (Settings → BookOrbit, off by default) (#524).
 - Job Queue page (#529) in the top navigation: see which books are waiting,
   processing or recently finished, including requested EPUB3 read-alongs.
   Move staged Add Book items and books waiting for alignment up, down or to

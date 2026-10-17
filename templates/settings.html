@@ -1334,6 +1334,11 @@
                                 value="{{ get_val('BOOKORBIT_SHELF_WATCH_RESCAN_HOURS', '24') }}">
                             <div class="help-text">Books on the watch collection with no audio candidate are re-scanned no more often than this.</div>
                         </div>
+                        <div class="checkbox-wrapper full-width">
+                            <input type="checkbox" id="bookorbit_shelf_watch_readalong" name="BOOKORBIT_SHELF_WATCH_READALONG"
+                                {% if get_bool('BOOKORBIT_SHELF_WATCH_READALONG') %}checked{% endif %}>
+                            <label for="bookorbit_shelf_watch_readalong">Also generate a read-along EPUB for auto-matched books</label>
+                        </div>
                     </div>
 
                     <!-- Separator -->

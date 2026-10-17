@@ -434,6 +434,7 @@ class Container(containers.DeclarativeContainer):
         booklore_client=bookorbit_client,
         database_service=database_service,
         book_mapping_service=book_mapping_service,
+        forge_service=forge_service,
         source_name='BookOrbit',
         env_prefix='BOOKORBIT',
         user_client_registry=user_client_registry,

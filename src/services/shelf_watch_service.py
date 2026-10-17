@@ -24,6 +24,7 @@ from typing import Optional
 
 from src.db.models import PendingSuggestion
 from src.services.aligned_shelf import defer_shelf_add
+from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.time_utils import utcnow
 
@@ -87,7 +88,8 @@ class ShelfWatchService:
 
     def __init__(self, booklore_client, database_service, book_mapping_service,
                  suggestions_service_factory=None, source_name='BookLore',
-                 env_prefix='BOOKLORE', user_client_registry=None):
+                 env_prefix='BOOKLORE', user_client_registry=None,
+                 forge_service=None):
         """Args:
             booklore_client: the library client (BookloreClient or BookOrbitClient).
                 Both expose the same shelf surface (is_configured, get_all_shelves,
@@ -102,6 +104,8 @@ class ShelfWatchService:
             user_client_registry: optional UserClientRegistry for per-user client
                 resolution. When provided and user_id is supplied, the watcher
                 resolves the user's own library client instead of the singleton.
+            forge_service: optional ForgeService, used by the BookOrbit watcher
+                for immediate read-along generation on already-active matches.
         """
         self.booklore_client = booklore_client
         self.database_service = database_service
@@ -110,6 +114,7 @@ class ShelfWatchService:
         self._source_name = source_name
         self._env_prefix = env_prefix
         self._user_client_registry = user_client_registry
+        self._forge_service = forge_service
 
     def set_suggestions_service_factory(self, factory):
         """Inject the SuggestionsService factory at runtime.
@@ -576,8 +581,45 @@ class ShelfWatchService:
             f"Shelf-watch: auto-matched '{filename}' -> {saved.audio_source}:{saved.audio_source_id} "
             f"(score={top_match.get('score')})"
         )
+        self._request_readalong_for_audio_match(saved)
         self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client,
                          book=saved, user_id=user_id)
+
+    def _request_readalong_for_audio_match(self, saved) -> None:
+        """Record intent only for BookOrbit-audio auto-matches when opted in.
+
+        A pending mapping is handled after alignment by SyncManager. An active
+        mapping will not pass through that job, so dispatch its intent now.
+        Read the global toggle on every match, not at service construction.
+        """
+        if (self._source_name != 'BookOrbit' or self._env_prefix != 'BOOKORBIT'
+                or getattr(saved, 'audio_source', None) != 'BookOrbit'
+                or not env_truthy('BOOKORBIT_SHELF_WATCH_READALONG')):
+            return
+        abs_id = getattr(saved, 'abs_id', None)
+        if not abs_id:
+            return
+        try:
+            if not self.database_service.set_readalong_epub_requested(abs_id, True):
+                logger.warning("Shelf-watch: could not request read-along for '%s'", abs_id)
+                return
+            logger.info("📖 Shelf-watch: read-along requested for '%s'",
+                        getattr(saved, 'abs_title', None) or abs_id)
+            book = self.database_service.get_book(abs_id)
+        except Exception as exc:
+            # An optional read-along failure must not interrupt the shelf move.
+            logger.warning("Shelf-watch: could not record/inspect read-along for '%s': %s",
+                           abs_id, exc, exc_info=True)
+            return
+        if book is None or getattr(book, 'status', None) != 'active':
+            return
+        try:
+            if self._forge_service is None:
+                raise RuntimeError('ForgeService is not configured')
+            self._forge_service.generate_readalong_if_requested(book)
+        except Exception as exc:
+            logger.warning("Shelf-watch: read-along dispatch failed for '%s': %s",
+                           abs_id, exc, exc_info=True)
 
     def _create_ebook_only_and_move(self, grimmory_book: dict, filename: str,
                                     grimmory_id: str,
