@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r'https?://[^\s"\'<>]+')
 _EMAIL_RE = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
 _IPV4_RE = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b')
-_QUOTED_SINGLE = re.compile(r"(?<!\w)'([^']{12,})'(?!\w)")
+_QUOTED_SINGLE = re.compile(r"(?<!\w)'((?:[^']|(?<=\w)'(?=\w)){12,})'(?!\w)")
 _QUOTED_DOUBLE = re.compile(r'(?<!\w)"([^"]{12,})"(?!\w)')
 _TRANSCRIPT_FAILURE_SUFFIX = \
     ": Failed to generate transcript from both SMIL and Whisper."
@@ -65,7 +65,7 @@ _XPATH_TOKEN_RE = re.compile(
 _SHORT_QUOTED_RE = re.compile(
     r'''(?P<token>"(?:t|path|url|ip|email):#[^"]*"|'''
     r'''(?<!\w)'(?:t|path|url|ip|email):#[^']*'(?!\w))|'''
-    r'''"[^"]{0,11}"|(?<!\w)'[^']{0,11}'(?!\w)'''
+    r'''"[^"]{0,11}"|(?<!\w)'(?:[^']|(?<=\w)'(?=\w)){0,11}'(?!\w)'''
 )
 # Per-value id collapses used by _make_template (template only -- never
 # applied to the persisted message/context text).  UUIDs first so a
@@ -872,11 +872,14 @@ def _load_title_pattern(database_service: Any) -> Optional[re.Pattern]:
     without ``get_all_books``, an unexpected row shape) the report still goes
     out with everything :func:`scrub_diagnostic_text` already removed, and
     the failure is logged at DEBUG only.
+
+    Stored filenames can contain private title fragments absent from the catalog
+    title, so they must participate in the same sweep.
     """
     try:
         titles: List[str] = []
         for book in database_service.get_all_books():
-            for attr in ('abs_title', 'audio_title'):
+            for attr in ('abs_title', 'audio_title', 'ebook_filename', 'original_ebook_filename'):
                 value = getattr(book, attr, None)
                 if isinstance(value, str):
                     titles.append(value)

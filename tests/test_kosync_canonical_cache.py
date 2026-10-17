@@ -63,6 +63,8 @@ class CanonicalCacheTests(unittest.TestCase):
         self._old_api_pkg = sys.modules.get("src.api")
         api_pkg = self._old_api_pkg or types.ModuleType("src.api")
         sys.modules["src.api"] = api_pkg
+        self._old_server_module = sys.modules.get("src.api.kosync_server")
+        self._had_server_module = "src.api.kosync_server" in sys.modules
         server = types.ModuleType("src.api.kosync_server")
         server._database_service = self.db
         self.memory = {}
@@ -73,7 +75,10 @@ class CanonicalCacheTests(unittest.TestCase):
         api_pkg.kosync_server = server
 
     def tearDown(self):
-        sys.modules.pop("src.api.kosync_server", None)
+        if self._had_server_module:
+            sys.modules["src.api.kosync_server"] = self._old_server_module
+        else:
+            sys.modules.pop("src.api.kosync_server", None)
         api_pkg = sys.modules.get("src.api")
         if api_pkg is not None:
             if self._old_server_attr is None:
@@ -263,6 +268,22 @@ class GetPathWiringTests(unittest.TestCase):
         key = ("a" * 32, "book.epub", "/device", "/never-seen")
 
         self.assertIsNone(self.server._xpath_index_cache_get(key))
+
+    def test_stubbed_server_preserves_import_identity(self) -> None:
+        """Running a stubbed CanonicalCacheTests case must not leak the stub module."""
+        import importlib
+
+        original = importlib.import_module("src.api.kosync_server")
+        case = CanonicalCacheTests("test_persisted_pair_round_trips")
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertTrue(
+            result.wasSuccessful(),
+            f"inner test failed: {result.failures + result.errors}"
+        )
+        fresh = importlib.import_module("src.api.kosync_server")
+        self.assertIs(fresh, original)
+        self.assertIs(sys.modules["src.api"].kosync_server, original)
 
     def test_unexpected_key_shape_is_a_miss(self):
         self.assertIsNone(self.server._xpath_index_cache_get(("too", "short")))

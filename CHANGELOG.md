@@ -42,6 +42,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Scrub stored ebook filenames and quoted paths containing apostrophes from
+  outgoing diagnostics, including context, tracebacks and recent logs.
+- Tolerate a background job being deleted during a progress update without
+  recreating it or updating a different job.
+- Treat Audiobookshelf's explicit "Book already in collection" response as a
+  successful collection add, avoiding a false failure on repeated requests.
 - Stop readers from changing or removing each other's books when matching. On a
   multi-user install, matching could fold another reader's book into yours, taking
   their progress with it, or point their book at a different ebook. A reader can now

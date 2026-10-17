@@ -279,6 +279,9 @@ class TestKosyncEndpoints(unittest.TestCase):
         # Clear specific tables
         from src import web_server
         from src.api import kosync_server
+        database_binding = patch.object(kosync_server, '_database_service', web_server.database_service)
+        database_binding.start()
+        self.addCleanup(database_binding.stop)
         with web_server.database_service.get_session() as session:
              session.query(ReadingSession).delete()
              session.query(KosyncDocument).delete()
@@ -288,8 +291,9 @@ class TestKosyncEndpoints(unittest.TestCase):
              session.query(HardcoverDetails).delete()
              session.query(UserCredential).delete()
              session.query(Book).delete()
-        if web_server.database_service.count_users() == 0:
+        if not any(user.is_admin for user in web_server.database_service.list_users()):
             web_server.database_service.create_user("admin", "secret", role="admin")
+        web_server.database_service._default_uid = None
         kosync_server._kosync_device_session_registry = None
         with kosync_server._booklore_shelf_mapping_cache_lock:
             kosync_server._booklore_shelf_mapping_cache.clear()
