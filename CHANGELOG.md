@@ -8,6 +8,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- Job Queue page (#529) in the top navigation: see which books are waiting,
+  processing or recently finished, including requested EPUB3 read-alongs.
+  Reordering isn't available yet.
 - Fill the Stats page's Listening section from BookBridge's own listening sessions
   (BookOrbit, Grimmory) when you don't use Audiobookshelf: daily totals, heatmap,
   recent sessions and the yearly recap. Audiobookshelf users keep its numbers.

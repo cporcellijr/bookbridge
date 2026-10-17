@@ -1,0 +1,25 @@
+.job-queue-page{max-width:1220px;margin:0 auto;padding:28px 22px 65px;color:var(--text)}
+.job-queue-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.job-queue-header h1{margin:0 0 6px;font-size:1.8rem}
+.job-queue-header p{margin:0;color:var(--muted);line-height:1.5}
+.job-queue-refresh{background:var(--gradient);color:white;text-decoration:none;padding:10px 16px;border-radius:var(--radius-sm)}
+.job-queue-refresh:hover{filter:brightness(1.1)}
+.job-queue-section{border:1px solid var(--border);border-radius:var(--radius);margin-bottom:22px;overflow:hidden;background:var(--panel-soft)}
+.job-queue-section-title{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px}
+.job-queue-section-title h2{font-size:1.2rem;margin:0 0 5px}
+.job-queue-count{background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:6px 12px;font-variant-numeric:tabular-nums}
+.job-queue-table-scroll{overflow-x:auto}
+.job-queue-table{width:100%;border-collapse:collapse;text-align:left;min-width:620px}
+.job-queue-table th,.job-queue-table td{padding:13px 16px;vertical-align:top;border-top:1px solid var(--border)}
+.job-queue-table th{font-size:.82rem;font-weight:600;color:var(--muted)}
+.job-queue-table td{font-size:.93rem}
+.job-queue-sequence,.job-queue-detail{display:block;margin-top:5px;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere}
+.job-queue-status{display:inline-block;border-radius:7px;padding:3px 9px;font-size:.78rem;font-weight:600;background:rgba(100,116,139,.2)}
+.job-queue-status-running{background:rgba(102,126,234,.25)}
+.job-queue-status-failed,.job-queue-status-interrupted{background:rgba(220,38,38,.23)}
+.job-queue-status-completed{background:rgba(22,163,74,.23)}
+.job-queue-progress{width:110px;max-width:100%;height:7px;border-radius:999px;overflow:hidden;background:rgba(148,163,184,.22);margin-bottom:5px}
+.job-queue-progress span{display:block;height:100%;background:var(--accent)}
+.job-queue-epub{font-size:.74rem;font-weight:700;border-radius:5px;padding:4px 7px;background:rgba(102,126,234,.2)}
+.job-queue-empty{padding:15px 20px 23px;color:var(--muted);margin:0}
+@media(max-width:680px){.job-queue-page{padding:18px 12px 45px}.job-queue-header h1{font-size:1.5rem}}

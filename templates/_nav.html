@@ -19,6 +19,7 @@
     <div class="nav-tabs">
         <a href="/" class="nav-tab {% if active_page == 'library' %}active{% endif %}">Library</a>
         <a href="{{ url_for('add_book') }}" class="nav-tab {% if active_page == 'add_book' %}active{% endif %}">Add Book{% if queued_count > 0 %} <span class="nav-tab-badge">{{ queued_count }}</span>{% endif %}</a>
+        <a href="{{ url_for('job_queue_page') }}" class="nav-tab {% if active_page == 'job_queue' %}active{% endif %}">Job Queue</a>
         {% if is_admin %}
         <a href="/stats" class="nav-tab {% if active_page == 'stats' %}active{% endif %}">Stats</a>
         {% endif %}

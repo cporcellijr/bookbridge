@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% set active_page = 'job_queue' %}
+{% block title %}Job Queue — BookBridge{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/css/job-queue.css">
+{% endblock %}
+{% block content %}
+<main class="job-queue-page">
+    <header class="job-queue-header">
+        <div>
+            <h1>Job Queue</h1>
+            <p>Books that are waiting, processing or recently finished. Numbers show order within one batch; reordering isn't available yet.</p>
+        </div>
+        <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">Refresh status</a>
+    </header>
+
+    {% set sections = [
+        ('running', 'Processing'),
+        ('pending', 'Waiting'),
+        ('recent', 'Recently finished (7 days)')
+    ] %}
+    {% for key, heading in sections %}
+    <section class="job-queue-section" aria-labelledby="job-queue-{{ key }}">
+        <div class="job-queue-section-title">
+            <div>
+                <h2 id="job-queue-{{ key }}">{{ heading }}</h2>
+            </div>
+            <span class="job-queue-count">{{ queue_view[key]|length }}</span>
+        </div>
+        {% if queue_view[key] %}
+        <div class="job-queue-table-scroll">
+            <table class="job-queue-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Book</th>
+                        <th scope="col">Operation</th>
+                        <th scope="col">Status / stage</th>
+                        <th scope="col">Progress</th>
+                        <th scope="col">Requested</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for job in queue_view[key] %}
+                    <tr>
+                        <td>
+                            <strong>{{ job.title }}</strong>
+                            {% if job.order is not none %}
+                            <span class="job-queue-sequence">#{{ job.order }} in its list</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ job.operation }}</td>
+                        <td>
+                            <span class="job-queue-status job-queue-status-{{ job.status|replace(' ', '-') }}">{{ job.status|replace('_', ' ')|title }}</span>
+                            {% if job.detail %}<small class="job-queue-detail">{{ job.detail }}</small>{% endif %}
+                            {% if job.timestamp %}<small class="job-queue-detail">Last attempt {{ job.timestamp|format_time_ago }} ago</small>{% endif %}
+                        </td>
+                        <td>
+                            {% if job.percent is not none %}
+                            <div class="job-queue-progress" role="progressbar" aria-valuenow="{{ job.percent }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ job.title }} progress">
+                                <span style="width: {{ job.percent }}%"></span>
+                            </div>
+                            <small>{{ job.percent }}%</small>
+                            {% else %}&mdash;{% endif %}
+                        </td>
+                        <td>{% if job.epub3 %}<span class="job-queue-epub">EPUB3</span>{% else %}&mdash;{% endif %}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="job-queue-empty">Nothing to show here.</p>
+        {% endif %}
+    </section>
+    {% endfor %}
+</main>
+{% endblock %}

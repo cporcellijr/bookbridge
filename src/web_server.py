@@ -54,6 +54,7 @@ from src.utils.logging_utils import sanitize_log_data
 from src.utils.logging_utils import get_persistent_condition_logger
 from src.services.diagnostics import setup_diagnostics_logging
 from src.services.aligned_shelf import defer_shelf_add, shelf_add_waits_for_alignment
+from src.services.job_queue_view import build_job_queue_view
 from src.services import whats_new
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
@@ -119,6 +120,15 @@ SUGGESTIONS_CACHE_LOCK = threading.RLock()
 # unbounded, survives container rebuilds, and is shared across the admin's tabs.
 MATCH_QUEUE_FILE_NAME = "match_queue.json"
 MATCH_QUEUE_LOCK = threading.RLock()
+# Read-only visibility of Add Book batches already handed to background threads.
+# This does not control, persist, or reorder the workers.
+_VISIBLE_BATCH_LOCK = threading.Lock()
+_VISIBLE_BATCHES = {}
+_VISIBLE_BATCH_LABELS = {
+    'batch-forge-match': 'Forge & Match batch',
+    'batch-match-process': 'Match batch',
+    'add-book-forge-only': 'Forge Only batch',
+}
 _READALONG_GENERATION_LOCK = threading.Lock()
 _ACTIVE_READALONG_GENERATIONS = set()
 
@@ -748,6 +758,15 @@ def _enqueue_tracker_automatch(sync_clients, book):
     _TRACKER_AUTOMATCH_QUEUE.put((snapshot, book))
 
 
+def _visible_batch_items(items, token):
+    """Expose which submitted batch item is being handed off to a worker."""
+    for idx, item in enumerate(items):
+        with _VISIBLE_BATCH_LOCK:
+            if token in _VISIBLE_BATCHES:
+                _VISIBLE_BATCHES[token]['current'] = idx
+        yield item
+
+
 def _spawn_user_background(fn, *args, label="background"):
     """Run `fn(*args)` on a daemon thread with the request's user context re-bound.
 
@@ -761,11 +780,37 @@ def _spawn_user_background(fn, *args, label="background"):
     tests observe the side effects right after the request — the request context is
     still active there, so `uc()` resolves normally without the re-bind.
     """
+    batch_token = None
+    if label in _VISIBLE_BATCH_LABELS and args and isinstance(args[0], list) and args[0]:
+        owner = current_user()
+        batch_token = uuid.uuid4().hex
+        # Only retain display metadata, never file paths or service credentials.
+        safe_items = [
+            {key: item.get(key) for key in (
+                'abs_id', 'abs_title', 'audio_title', 'title', 'readalong_epub_requested'
+            )} for item in args[0]
+        ]
+        with _VISIBLE_BATCH_LOCK:
+            _VISIBLE_BATCHES[batch_token] = {
+                'user_id': owner.id if owner else None,
+                'label': _VISIBLE_BATCH_LABELS[label],
+                'items': safe_items,
+                'current': -1,
+            }
+        args = (_visible_batch_items(args[0], batch_token), *args[1:])
+
+    def finish_visible_batch():
+        if batch_token is not None:
+            with _VISIBLE_BATCH_LOCK:
+                _VISIBLE_BATCHES.pop(batch_token, None)
+
     if _BACKGROUND_TASKS_SYNCHRONOUS:
         try:
             fn(*args)
         except Exception as e:
             logger.error("%s failed: %s", label, e, exc_info=True)
+        finally:
+            finish_visible_batch()
         return
 
     bundle = uc()
@@ -788,8 +833,13 @@ def _spawn_user_background(fn, *args, label="background"):
             reset_current_user_credentials(tok_creds)
             reset_current_user_id(tok_uid)
             _active_bundle.reset(tok_bundle)
+            finish_visible_batch()
 
-    threading.Thread(target=runner, daemon=True, name=label).start()
+    try:
+        threading.Thread(target=runner, daemon=True, name=label).start()
+    except Exception:
+        finish_visible_batch()
+        raise
 
 
 def _request_wants_json() -> bool:
@@ -6385,6 +6435,30 @@ def index():
         show_diagnostics_modal=show_diagnostics_modal,
         whats_new=whats_new_ctx
     )
+
+
+def job_queue_page():
+    """Read-only overview of staged work, in-flight batches and recent jobs."""
+    user = current_user()
+    user_id = user.id if user else None
+    books = database_service.get_all_books(user_id=user_id)
+    books = _dashboard_visible_books_for_user(books, user)
+    with _VISIBLE_BATCH_LOCK:
+        batches = [
+            {**batch, 'items': list(batch['items'])}
+            for batch in _VISIBLE_BATCHES.values()
+            if batch['user_id'] == user_id
+        ]
+    with _READALONG_GENERATION_LOCK:
+        active_readalong = set(_ACTIVE_READALONG_GENERATIONS)
+    jobs = [
+        *database_service.get_latest_jobs(kind=JOB_KIND_ALIGNMENT).values(),
+        *database_service.get_latest_jobs(kind=JOB_KIND_READALONG).values(),
+    ]
+    snapshot = build_job_queue_view(
+        _load_match_queue(), batches, books, jobs, active_readalong,
+    )
+    return render_template('job_queue.html', queue_view=snapshot)
 
 
 def shelfmark():
@@ -14227,6 +14301,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
+    app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
     app.add_url_rule('/whats-new', 'whats_new_page', whats_new_page, methods=['GET'])
     app.add_url_rule('/whats-new/dismiss', 'whats_new_dismiss', whats_new_dismiss, methods=['POST'])
     app.add_url_rule('/shelfmark', 'shelfmark', shelfmark)
