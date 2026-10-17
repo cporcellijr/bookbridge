@@ -43,6 +43,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Adding a book to an Audiobookshelf collection it is already in no longer reports a failure.**
+  Audiobookshelf answers a repeated add with "Book already in collection", and BookBridge now treats
+  that as done.
+- **Diagnostics reports no longer include your ebook file names.** Stored ebook file names, and file
+  paths containing apostrophes, are now scrubbed from diagnostics, including tracebacks and recent
+  log lines.
+- **Removing a background job while it runs no longer brings it back.** A progress update for a job
+  that was just deleted is dropped instead of recreating it or updating a different job.
 - **One reader's automatic matching no longer changes another reader's book.** A shelf watch or a
   KoSync device opening a new ebook could re-point an audiobook someone else had already matched, and
   reset it for re-alignment. Now a different pairing is left alone, and the same pairing just adds the

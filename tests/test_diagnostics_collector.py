@@ -1,4 +1,5 @@
 """Tests for the diagnostics warning collector (Phase 1 core)."""
+import atexit
 import json
 import logging
 import os
@@ -221,6 +222,22 @@ class TestScrubDiagnosticText(unittest.TestCase):
         self.assertIn("url:", result)
         self.assertNotIn("192.168.1.50", result)
         self.assertNotIn("ip:", result)
+
+    def test_quoted_path_with_apostrophe_is_scrubbed(self):
+        text = "Failed to open '/books/John Scalzi/Old Man's War (2498)/Old Man's War - John Scalzi.epub'"
+        result = scrub_diagnostic_text(text)
+        self.assertNotIn("Scalzi", result)
+        self.assertNotIn("Old Man's War", result)
+        self.assertIn("t:", result)
+        self.assertTrue(result.startswith("Failed to open '"))
+        self.assertTrue(result.endswith("'"))
+
+    def test_single_quoted_title_with_apostrophe_is_scrubbed(self):
+        text = "Could not resolve 'The Assassin's Blade'"
+        result = scrub_diagnostic_text(text)
+        self.assertNotIn("The Assassin", result)
+        self.assertNotIn("Blade", result)
+        self.assertIn("t:", result)
 
 
 class TestMakeTemplate(unittest.TestCase):
@@ -1053,19 +1070,38 @@ class TestSetupAndGetters(unittest.TestCase):
     """Tests for the module-level singleton functions."""
 
     def setUp(self):
-        # Start from no singleton so a handler another test left attached can't skew the counts.
         import src.services.diagnostics as _mod
+        self._mod = _mod
         self._saved_handler = _mod._diagnostics_handler
+        self._saved_root_handlers = [h for h in logging.getLogger().handlers if isinstance(h, DiagnosticsLogHandler)]
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            if isinstance(h, DiagnosticsLogHandler):
+                root.removeHandler(h)
         _mod._diagnostics_handler = None
-        atexit_patch = patch('src.services.diagnostics.atexit.register')
-        atexit_patch.start()
-        self.addCleanup(atexit_patch.stop)
+        self._orig_data_dir = os.environ.get('DATA_DIR')
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ['DATA_DIR'] = self._tmp.name
 
     def tearDown(self):
-        import src.services.diagnostics as _mod
-        if _mod._diagnostics_handler is not None and _mod._diagnostics_handler is not self._saved_handler:
-            logging.getLogger().removeHandler(_mod._diagnostics_handler)
-        _mod._diagnostics_handler = self._saved_handler
+        root = logging.getLogger()
+        current_handlers = {h for h in root.handlers if isinstance(h, DiagnosticsLogHandler)}
+        if self._mod._diagnostics_handler is not None:
+            current_handlers.add(self._mod._diagnostics_handler)
+        for h in current_handlers:
+            if h not in self._saved_root_handlers and h is not self._saved_handler:
+                root.removeHandler(h)
+                atexit.unregister(h.flush_now)
+                h.close()
+        for h in self._saved_root_handlers:
+            if h not in root.handlers:
+                root.addHandler(h)
+        self._mod._diagnostics_handler = self._saved_handler
+        if self._orig_data_dir is not None:
+            os.environ['DATA_DIR'] = self._orig_data_dir
+        else:
+            os.environ.pop('DATA_DIR', None)
+        self._tmp.cleanup()
 
     def test_setup_and_get(self):
         handler = setup_diagnostics_logging()

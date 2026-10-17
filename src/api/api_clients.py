@@ -1228,6 +1228,8 @@ class ABSClient:
                     title = None
                 logger.info(f"🏷️ Added '{sanitize_log_data(title or str(item_id))}' to ABS Collection: {collection_name}")
                 return True
+            if r_add.status_code == 400 and (r_add.text or "").strip() == "Book already in collection":
+                return True
             logger.warning(
                 "Failed to add item to ABS collection '%s': add returned %s - %s",
                 collection_name, r_add.status_code, sanitize_log_data(r_add.text)

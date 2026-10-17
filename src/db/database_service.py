@@ -19,6 +19,9 @@ from typing import Callable, List, Optional, Tuple
 from contextlib import contextmanager
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import InvalidRequestError
+from sqlalchemy.orm.exc import StaleDataError
+
 from .models import (
     DatabaseManager,
     Book,
@@ -2837,29 +2840,45 @@ class DatabaseService:
             if kind is not None:
                 query = query.filter(Job.kind == kind)
             job = query.order_by(Job.last_attempt.desc()).first()
-            if job:
-                for key, value in kwargs.items():
-                    if hasattr(job, key):
-                        setattr(job, key, value)
+            if not job:
+                return None
+            job_id = job.id
+            for key, value in kwargs.items():
+                if hasattr(job, key):
+                    setattr(job, key, value)
+            try:
                 session.flush()
                 session.refresh(job)
-                session.expunge(job)
-                return job
-            return None
+            except (StaleDataError, InvalidRequestError):
+                session.rollback()
+                exists = session.query(Job.id).filter(Job.id == job_id).first()
+                if exists:
+                    raise
+                return None
+            session.expunge(job)
+            return job
 
     def update_job_by_id(self, job_id: int, **kwargs) -> Optional[Job]:
         """Update exactly one job row by primary key."""
         with self.get_session() as session:
             job = session.query(Job).filter(Job.id == job_id).first()
-            if job:
-                for key, value in kwargs.items():
-                    if hasattr(job, key):
-                        setattr(job, key, value)
+            if not job:
+                return None
+            original_id = job.id
+            for key, value in kwargs.items():
+                if hasattr(job, key):
+                    setattr(job, key, value)
+            try:
                 session.flush()
                 session.refresh(job)
-                session.expunge(job)
-                return job
-            return None
+            except (StaleDataError, InvalidRequestError):
+                session.rollback()
+                exists = session.query(Job.id).filter(Job.id == original_id).first()
+                if exists:
+                    raise
+                return None
+            session.expunge(job)
+            return job
 
     def delete_jobs_for_book(self, abs_id: str, kind: Optional[str] = None) -> int:
         """Delete a book's jobs; all of them, or only those of ``kind``."""
