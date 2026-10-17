@@ -155,6 +155,42 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertNotIn("Private Bob", html)
         self.assertNotIn("Bob Staged", html)
 
+    def test_running_job_queue_page_enables_auto_refresh(self):
+        import src.web_server as ws
+        with ws._VISIBLE_BATCH_LOCK:
+            ws._VISIBLE_BATCHES["auto-refresh"] = {
+                "user_id": self.alice.id,
+                "label": "Match batch",
+                "items": [{"abs_title": "Processing book"}],
+                "current": 0,
+            }
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        response = self.client.get("/job-queue")
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn('data-auto-refresh="20"', page)
+        self.assertIn("Updates every 20 seconds while books are processing.", page)
+        self.assertIn("window.setInterval", page)
+        self.assertIn("20000", page)
+        self.assertIn("document.hidden", page)
+        self.assertIn("reorderSubmitting", page)
+        self.assertIn("window.location.reload()", page)
+
+    def test_waiting_only_job_queue_page_has_no_auto_refresh(self):
+        self.db.save_book(Book(
+            abs_id="pending-only", abs_title="Waiting book",
+            status="pending", user_id=self.alice.id,
+        ))
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        response = self.client.get("/job-queue")
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn("Waiting book", page)
+        self.assertNotIn('data-auto-refresh="20"', page)
+        self.assertNotIn("Updates every 20 seconds while books are processing.", page)
+        self.assertNotIn("window.setInterval", page)
+        self.assertNotIn("window.location.reload()", page)
+
     def test_in_process_batch_is_visible_and_cleaned_up(self):
         import src.web_server as ws
         seen = []

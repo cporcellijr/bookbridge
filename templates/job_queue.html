@@ -5,7 +5,7 @@
 <link rel="stylesheet" href="/static/css/job-queue.css">
 {% endblock %}
 {% block content %}
-<main class="job-queue-page">
+<main class="job-queue-page"{% if queue_view['running'] %} data-auto-refresh="20"{% endif %}>
     <header class="job-queue-header">
         <div>
             <h1>Job Queue</h1>
@@ -13,6 +13,9 @@
         </div>
         <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">Refresh status</a>
     </header>
+    {% if queue_view['running'] %}
+    <p class="job-queue-auto-refresh-note">Updates every 20 seconds while books are processing.</p>
+    {% endif %}
 
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
@@ -101,4 +104,20 @@
     </section>
     {% endfor %}
 </main>
+{% if queue_view['running'] %}
+<script>
+(function () {
+    let reorderSubmitting = false;
+    document.querySelectorAll('.job-queue-move-actions form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            reorderSubmitting = true;
+        });
+    });
+    window.setInterval(function () {
+        if (document.hidden || reorderSubmitting) return;
+        window.location.reload();
+    }, 20000);
+})();
+</script>
+{% endif %}
 {% endblock %}

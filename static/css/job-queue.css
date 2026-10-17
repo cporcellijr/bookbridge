@@ -2,6 +2,7 @@
 .job-queue-header{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
 .job-queue-header h1{margin:0 0 6px;font-size:1.8rem}
 .job-queue-header p{margin:0;color:var(--muted);line-height:1.5}
+.job-queue-auto-refresh-note{margin:-8px 0 20px;color:var(--muted);font-size:.85rem}
 .job-queue-refresh{background:var(--gradient);color:white;text-decoration:none;padding:10px 16px;border-radius:var(--radius-sm)}
 .job-queue-refresh:hover{filter:brightness(1.1)}
 .job-queue-section{border:1px solid var(--border);border-radius:var(--radius);margin-bottom:22px;overflow:hidden;background:var(--panel-soft)}
