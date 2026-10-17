@@ -118,8 +118,9 @@ All notable changes to BookBridge will be documented in this file.
   avoiding repeated percentage-scale rollback loops. Unknown copies and different
   original/forged files keep percentage fallback to protect reading progress (#502).
 - Keep completed transcripts after alignment failure and reuse valid word timings
-  on Remap. Content-match refusals show token counts, regional overlap and a
-  neutral explanation on the dashboard, without weakening the guard (#503).
+  on Remap, including transcripts where Whisper splits hyphenated words across
+  timed entries. Content-match refusals show token counts, regional overlap and a
+  neutral explanation on the dashboard, without weakening the guard (#503, #527).
 - Restore the settings unsaved-change count and leave-page warning when edits are
   undone, including changes made through shelf pickers (#506).
 - BridgeSync initializes and repairs each closed book's saved checksum when syncing

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from src.utils.polisher import Polisher
 from src.utils.transcriber import AudioTranscriber
 
@@ -19,6 +21,55 @@ def _cache(transcriber, tmp_path, segments, **extra):
     }
     (cache_dir / "_progress.json").write_text(json.dumps(progress), encoding="utf-8")
     return progress
+
+
+@pytest.mark.parametrize(("text", "tokens"), [
+    ("мастер-распорядитель", [" мастер", "-распорядитель"]),
+    ("мастер-распорядитель", [" мастер", "-", "распорядитель"]),
+    ("мастер-распорядитель", [" мастер-распорядитель"]),
+    ("well-known author", [" well-known", " author"]),
+    ("well known author", [" well-known author"]),
+    ("twenty-one books", [" twenty", "-one", " books"]),
+    ("twenty one books", [" twenty one", " books"]),
+])
+def test_completed_cache_accepts_provider_word_boundaries(tmp_path, text, tokens):
+    transcriber = _transcriber(tmp_path)
+    segments = [{
+        "start": 0.0, "end": float(len(tokens)), "text": text,
+        "words": [
+            {"word": token, "start": float(index), "end": float(index + 1)}
+            for index, token in enumerate(tokens)
+        ],
+    }]
+    _cache(transcriber, tmp_path, segments)
+    cache_file = transcriber.cache_root / "book" / "_progress.json"
+    original = cache_file.read_bytes()
+
+    assert transcriber.has_word_timed_transcript("book")
+    assert transcriber.get_cached_word_timed_transcript("book", len(tokens)) == segments
+    assert cache_file.read_bytes() == original
+
+
+@pytest.mark.parametrize(("text", "tokens"), [
+    ("мастер-распорядитель", [" мастер"]),
+    ("мастер-распорядитель", [" мастер", "-писатель"]),
+    ("мастер-распорядитель", [" распорядитель", "-мастер"]),
+    ("notebook", [" note", " book"]),
+    ("note book", [" notebook"]),
+])
+def test_completed_cache_still_requires_complete_ordered_text(tmp_path, text, tokens):
+    transcriber = _transcriber(tmp_path)
+    segments = [{
+        "start": 0.0, "end": float(len(tokens)), "text": text,
+        "words": [
+            {"word": token, "start": float(index), "end": float(index + 1)}
+            for index, token in enumerate(tokens)
+        ],
+    }]
+    _cache(transcriber, tmp_path, segments)
+
+    assert not transcriber.has_word_timed_transcript("book")
+    assert transcriber.get_cached_word_timed_transcript("book", len(tokens)) is None
 
 
 def test_completed_partial_provider_words_do_not_prove_cached_transcript(tmp_path):

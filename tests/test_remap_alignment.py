@@ -277,6 +277,38 @@ class RemapRouteTest(unittest.TestCase):
         self._transcriber.invalidate_transcript_cache.assert_not_called()
         self._db.set_book_status.assert_called_once_with('test-book', 'pending')
 
+    def test_remap_preserves_hyphenated_word_timed_cache(self):
+        client = self._build(align_method=None)
+        transcriber = AudioTranscriber(Path(self.temp_dir), MagicMock(), Polisher())
+        self._container.mock_sync_manager.transcriber = transcriber
+        cache_dir = transcriber.cache_root / "test-book"
+        cache_dir.mkdir()
+        progress_file = cache_dir / "_progress.json"
+        progress_file.write_text(json.dumps({
+            "done": True, "chunks_completed": 1,
+            "transcript": [{
+                "start": 0.0, "end": 2.0, "text": "мастер-распорядитель",
+                "words": [
+                    {"word": " мастер", "start": 0.0, "end": 1.0},
+                    {"word": "-распорядитель", "start": 1.0, "end": 2.0},
+                ],
+            }],
+        }), encoding="utf-8")
+        original = progress_file.read_bytes()
+
+        with self.assertLogs("src.web_server", level="INFO") as logs:
+            resp = self._post(client)
+
+        self.assertEqual(resp.status_code, 200, resp.get_data(as_text=True))
+        self.assertEqual(resp.get_json(), {"success": True, "backend": "word_level"})
+        self.assertTrue(progress_file.exists(), "Remap deleted a valid hyphenated transcript")
+        self.assertEqual(progress_file.read_bytes(), original)
+        self._db.set_book_status.assert_called_once_with("test-book", "pending")
+        self.assertIn(
+            "🔁 Remap queued for Test Book (backend='word_level', from='none')",
+            [record.getMessage() for record in logs.records],
+        )
+
     def test_ctc_configured_queues_ctc_without_invalidating_transcript(self):
         os.environ["CTC_ENABLED"] = "true"
         client = self._build(align_method="lexical_timed")

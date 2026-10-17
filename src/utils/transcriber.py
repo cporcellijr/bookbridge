@@ -111,8 +111,7 @@ class AudioTranscriber:
                     or not isinstance(words, list) or not words):
                 return False
 
-            expected = [self.polisher.normalize(token) for token in text.split()]
-            expected = [token for token in expected if token]
+            expected = self.polisher.normalize(text)
             actual = []
             for word in words:
                 if not isinstance(word, dict) or not isinstance(word.get('word'), str):
@@ -126,12 +125,9 @@ class AudioTranscriber:
                         or word_start < start or word_end > end):
                     return False
                 previous_word_start = word_start
-                actual.extend(
-                    token for token in (
-                        self.polisher.normalize(raw) for raw in word['word'].split()
-                    ) if token
-                )
-            if actual != expected:
+                actual.append(word['word'])
+            # Normalize after joining because providers split hyphenated words differently.
+            if self.polisher.normalize(' '.join(actual)) != expected:
                 return False
         return True
 
