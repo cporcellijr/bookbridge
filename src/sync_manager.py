@@ -5547,6 +5547,21 @@ class SyncManager:
                     else:
                         logger.debug(f"'{abs_id}' '{title_snip}' Progress difference {progress_diff:.2%} below threshold {self.sync_delta_between_clients:.2%} - skipping sync")
                         # Do not continue here, let the consolidated check handle it
+                        # An EPUB's and its audiobook's percentages are different scales (front and
+                        # back matter), so equal numbers can be different places. For the book a read
+                        # event just triggered, compare the positions on the audio timeline as well, but
+                        # only while no client moved by its own measure (a mover is handled as before).
+                        duration = getattr(book, 'duration', None)
+                        quiet = not any(self._has_significant_delta(k, decision_config, book) for k in decision_config)
+                        normalized = (self._normalize_for_cross_format_comparison(book, decision_config)
+                                      if target_abs_id and duration and quiet else None)
+                        positions = [ts for k, ts in (normalized or {}).items()
+                                     if not decision_config[k].current.get('_readalong_mirror')]
+                        if len(positions) >= 2:
+                            gap = max(positions) - min(positions)
+                            if gap / duration >= self.sync_delta_between_clients:
+                                significant_diff = True
+                                logger.info(f"'{abs_id}' '{title_snip}' Positions differ by {gap:.1f}s on the audio timeline although the percentages agree ({progress_diff:.2%})")
 
                 # Check for Character Delta Threshold (Fix 2B)
                 # Loop through ebook clients (KoSync, Storyteller, Grimmory, ABS_Ebook)

@@ -183,7 +183,7 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
             'database_service': database_service
         }
 
-    def run_sync_test_with_leader_verification(self):
+    def run_sync_test_with_leader_verification(self, target_abs_id=None):
         """Run the sync test and verify the expected leader behavior."""
 
         # Set up all mocks
@@ -262,7 +262,7 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
         manager._sync_to_hardcover = Mock()
 
         # Run the sync cycle
-        manager.sync_cycle()
+        manager.sync_cycle(target_abs_id=target_abs_id)
 
         # Perform all verifications within the same context
         self.verify_common_assertions(mocks, manager)
@@ -402,7 +402,7 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
 
         return final_states
 
-    def run_test(self, from_percentage: float|None, target_percentage: float|None):
+    def run_test(self, from_percentage: float|None, target_percentage: float|None, target_abs_id=None):
         """Test that the logs show the expected service correctly leading the sync."""
         import logging
         from io import StringIO
@@ -417,7 +417,7 @@ class BaseSyncCycleTestCase(unittest.TestCase, ABC):
 
         try:
             # Run the sync test
-            mocks, manager, final_state = self.run_sync_test_with_leader_verification()
+            mocks, manager, final_state = self.run_sync_test_with_leader_verification(target_abs_id)
 
             log_output = log_stream.getvalue()
 
