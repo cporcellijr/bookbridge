@@ -66,11 +66,13 @@ BookBridge does its own audio ↔ text alignment, using built-in Whisper transcr
 ### Management Web UI
 
 - **Multiple readers** with their own sign-in, their own service logins, and their own progress — each person sees only the books they are reading.
+- **Scripted reader setup** through an optional [admin API](configuration.md#admin-api-optional) for accounts and integrations.
+- **Listening stats without Audiobookshelf**, using retained BookBridge sessions for daily totals, the heatmap, recent sessions and yearly recap when your own ABS account is not configured.
 - **Self-service integrations** so each reader can manage their own usernames, passwords, tokens, API keys, and sync toggles from Account -> My Integrations, while admins can still manage them centrally.
 - **Dashboard** for live sync status, reading session details, direct service links, source badges, author/series/format filters, richer sorting, optional one-card-per-series display, and a **Show position** excerpt of the text where you are currently synced.
 - **Add / Update Book** for ABS, Grimmory, or BookOrbit audio; ABS, Grimmory, BookOrbit, Kavita, CWA, BookFusion, or local ebook sources; Storyteller links; ebook-only flows; and reader document fixes.
 - **A match queue** inside Add / Update Book for reviewing and linking books in bulk.
-- **Library Suggestions** for background scanning, review, and queue building.
+- **Library Suggestions** for scanning, review, and queue building, with optional scheduled scans and cron full refreshes.
 - **Storyteller Editions** for building and uploading read-along books.
 - **Read-along EPUBs for BookOrbit**, built from BookBridge's own alignment with no
   Storyteller server required, with dashboard pills showing CTC and read-along status.

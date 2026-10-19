@@ -84,6 +84,21 @@ against a different device pulling you backward.
 
 ---
 
+## Stats
+
+The **Listening** section shows daily totals, a heatmap, recent sessions and the
+yearly recap. If your own Audiobookshelf account is configured, its listening
+stats are used. Otherwise, BookBridge uses its retained audiobook sessions,
+including listening through BookOrbit and Grimmory.
+
+Local listening times are estimates from changes in audio position. They cover
+only sessions BookBridge recorded and retained, rather than a service's complete
+past history. Deleting a book mapping keeps its reading and listening sessions,
+so removing a finished book no longer removes those totals. Previously deleted
+history is not reconstructed.
+
+---
+
 ## Account and My Integrations
 
 The **Account** page is where you manage your own login and reader-specific setup.
@@ -98,6 +113,12 @@ The **Account** page is where you manage your own login and reader-specific setu
 Readers do not inherit anyone else's account credentials when their own fields are blank. This keeps one reader's BookFusion, Grimmory, BookOrbit, tracker, or KOSync account from being used for another reader by accident. Only the **primary admin** — the first admin account, whose logins the engine's shared settings are copied from — falls back to the server-wide values; a second admin account needs its own logins like anyone else.
 
 Admins can change an existing account between **user** and **admin** from **Settings -> Users** with the *Make admin* / *Make user* button. Promoting someone does not hand over your service logins, and it leaves their books, progress and saved credentials untouched. The primary admin and the last remaining active admin cannot be demoted.
+
+Scripts can create readers and save their integrations through the optional
+[admin API](configuration.md#admin-api-optional). It is off until its environment
+token is set and cannot manage admins. Disabling a reader stops their syncs and
+Audiobookshelf listener; re-enabling restores the shared catalog when Shared Library
+is on, including books that reader previously removed.
 
 ---
 
@@ -132,6 +153,10 @@ This mode tracks reading progress without attaching an audiobook source.
 - Create it by leaving audio on **None / Skip** in **Add / Update Book**.
 - You can still link a standard ebook, a Storyteller title, or both.
 - Ebook-only links skip audiobook preparation work, so they activate faster.
+
+CBZ comics can also be linked as ebook-only books. Leave audio on **None / Skip**;
+comic archives cannot be paired with audiobooks or used for audio alignment or
+read-along generation.
 
 Use this when you only want reading sync between KOReader, BookFusion, Grimmory, BookOrbit, Storyteller, optional ABS ebook progress, and CWA-sourced ebooks when Kobo sync is enabled.
 
@@ -169,6 +194,20 @@ The **Settings** page is where you connect your services and adjust how the brid
 
 If you use Whisper.cpp with a custom model name, you can type that model directly into the **Whisper Model** field.
 
+Under the Grimmory integration, **Add matched books to the shelf only once they
+are aligned** holds an audiobook paired with an ebook off its shelf until a fine-grained alignment is ready;
+ebook-only books are shelved immediately. **Shelf Owner** can name the BookBridge
+account whose Grimmory login owns a shared shelf. Leaving it blank uses each
+reader's own login and shelf.
+
+Under KOReader / KoSync, optional **Take each reader's sync login from Grimmory**
+follows each reader's Grimmory KOReader login. A different manual KoSync login is kept; clear that reader's
+KoSync username to use the Grimmory one instead.
+
+Audiobookshelf's optional **Keep every match in its auto-add collection** puts
+mapped audiobooks back into their configured auto-add collection if they are missing. It only adds
+books: a manual removal is undone on the next cycle while the option is on.
+
 ---
 
 ## Highlights and Notes
@@ -197,6 +236,11 @@ Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing re
 ---
 
 ## Keeping Multiple KOReader Devices in Step
+
+Use **BridgeSync 0.9.9** on every device. When upgrading from an older plugin,
+close affected managed books and run **Bridge Sync → Sync Reading Stats** to repair
+their saved book identities. Positions and highlights are retained. This also
+updates reading status when there are no local status changes to upload.
 
 Two independent features, both needing the **BridgeSync 0.9.6** plugin (or newer) on every
 device involved, keep more than a book's reading *position* in sync across your devices.
@@ -321,6 +365,10 @@ The bridge can pull ebook choices from:
 6. BookFusion
 7. Local files from `BOOKS_DIR` and any folder listed in `EXTRA_EBOOK_DIRS`
 
+When a provider's ebook is safely available in a configured mounted library,
+BookBridge uses that copy instead of downloading another. Missing or unreadable
+mounted files fall back to the cache or provider.
+
 ### Final actions
 
 - **Create Mapping** creates the link immediately.
@@ -360,6 +408,13 @@ The **Suggestions** page is a review workspace for likely matches that are not l
 
 - **Scan Library** reuses cached results so repeat scans are faster.
 - **Full Refresh** ignores the previous cache and rescans the whole unmatched library.
+
+Under **Settings → Features**, **Scheduled Scan Interval** runs normal scans in
+the background (`0` is off; enabled intervals are at least five minutes). Enable
+**Scheduled Full Refresh** to rescan on a five-field cron schedule in your `TZ`
+timezone, for example `20 4 * * sun` for Sunday at 04:20. An existing weekly
+schedule carries over. Scheduled scans use the primary admin's own libraries and
+credentials, never overlap another scan, and appear when Suggestions next loads.
 
 ### Actions
 
@@ -553,6 +608,12 @@ The same plugin is also where highlight and note sync lives. Use **Sync Highligh
 - **Hardcover Lists** can use all lists or selected list names when Hardcover is the collection source.
 - **Excluded Shelves** lets you skip shelf names you do not want turned into KOReader collections.
 - **Find Shelves** helps you pick shelf names from Grimmory instead of typing them by hand.
+
+**Only download books on these Grimmory shelves** (under **KOReader / KoSync** in
+My Integrations) is separate from collection shaping: the comma-separated shelves
+you list limit which matched books the device can download. Blank keeps all
+matched books available. Invalid shelf data withholds an update rather than treating your
+library as empty.
 
 In simple terms, a **magic shelf** is a shelf in Grimmory that fills itself based on rules instead of you adding books one by one.
 

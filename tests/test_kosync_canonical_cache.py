@@ -295,6 +295,22 @@ class GetPathWiringTests(unittest.TestCase):
 
         self.assertIsNone(self.server._xpath_index_cache_get(key))
 
+    def test_stubbed_server_preserves_import_identity(self) -> None:
+        """Running a stubbed CanonicalCacheTests case must not leak the stub module."""
+        import importlib
+
+        original = importlib.import_module("src.api.kosync_server")
+        case = CanonicalCacheTests("test_persisted_pair_round_trips")
+        result = unittest.TestResult()
+        case.run(result)
+        self.assertTrue(
+            result.wasSuccessful(),
+            f"inner test failed: {result.failures + result.errors}"
+        )
+        fresh = importlib.import_module("src.api.kosync_server")
+        self.assertIs(fresh, original)
+        self.assertIs(sys.modules["src.api"].kosync_server, original)
+
 
 if __name__ == "__main__":
     unittest.main()

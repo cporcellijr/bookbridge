@@ -27,12 +27,14 @@
 - **Flexible Match Flows**: Link ABS, Grimmory, or BookOrbit audiobooks; use Kavita or CWA as an ebook source; or create ebook-only links when you only want text sync.
 - **Flexible Setup**: You can intentionally turn Audiobookshelf off for ebook-only or maintenance-focused setups.
 - **Dashboard Session Details**: See recent reading or listening session summaries right on the dashboard cards.
+- **Listening Stats Without Audiobookshelf**: See daily totals, a heatmap and recent listening from BookBridge's retained sessions when your own ABS account is not configured.
 - **Deliberate Rewinds That Stick**: Go back in one app and continue from there without the furthest-ahead app immediately pulling you forward again.
 - **Safer, More Visible Alignment**: Uses Storyteller transcripts when available; otherwise forced alignment (on by default, CPU-only) matches each audiobook directly against its ebook, word by word, and finds every chapter in the audio itself, so most books never need a Whisper transcript. Books forced alignment can't follow (non-English, out-of-order narration, a different edition) fall back to SMIL or Whisper automatically. Content-match protection catches wrong pairings, and alignment scoring lets you remap or restore maps.
 - **Read-Along EPUBs for BookOrbit**: Generate a read-along EPUB directly from a book's own audiobook, ebook, and alignment — no Storyteller server required.
 - **Richer Dashboard Controls**: Filter by author, series, or format; sort by author, series, progress, status, last sync, date added, or rating; optionally show each series as the book you're reading.
 - **Web UI**: Management dashboard for tracking syncs and matching books.
-- **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk.
+- **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk. Optional scheduled scans and cron full refreshes keep suggestions current.
+- **Scripted Reader Setup**: Provision readers and their integrations through an optional [admin API](docs/configuration.md#admin-api-optional).
 - **Same-Folder Matching**: Treat sibling audiobook and ebook files in the same
   title folder as high-confidence matches.
 - **Guided Settings Workflow**: Check your service settings from the UI and save everything in one place.

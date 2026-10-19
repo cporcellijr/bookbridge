@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.api.bookorbit_client import BookOrbitClient
 from src.sync_clients.sync_client_interface import ServiceState
 from src.sync_manager import SyncManager
+from src.utils.logging_utils import get_persistent_condition_logger
 
 ABS_ID = "bookorbit:5180"
 TITLE = "A Haunting on the Hill"
@@ -122,6 +123,9 @@ class ReadAlongBase(unittest.TestCase):
     def setUp(self):
         os.environ.pop("BOOKORBIT_READALONG_POLICY", None)
         self.addCleanup(lambda: os.environ.pop("BOOKORBIT_READALONG_POLICY", None))
+        # Reused book IDs require isolated process-wide log counters; reset per test.
+        get_persistent_condition_logger().reset()
+        self.addCleanup(get_persistent_condition_logger().reset)
 
     def _mark(self, manager, config):
         with self.assertLogs("src.sync_manager", level="INFO") as captured:

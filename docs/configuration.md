@@ -145,7 +145,7 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | API Token | `ABS_KEY` | empty | Per-user (set in **Account -> My Integrations**). The admin's token also powers global library scans. |
 | Library ID | `ABS_LIBRARY_ID` | empty | Per-user (set in user Integrations). Used by the matcher and search scoping. |
 | Auto-add Collection | `ABS_COLLECTION_NAME` | `Synced with KOReader` | Per-user (set in user Integrations). Collection matched audiobooks are added to. The value here is the global default; the admin's value seeds from it on first startup. |
-| Keep Collection Complete | `ABS_COLLECTION_RECONCILE` | `false` | Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. An Audiobookshelf collection only holds books from one library, so with several audiobook libraries a collection of that name is kept in each. Add-only: while on, a book removed from the collection by hand is added back. |
+| Keep every match in its auto-add collection | `ABS_COLLECTION_RECONCILE` | `false` | Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. An Audiobookshelf collection only holds books from one library, so with several audiobook libraries a collection of that name is kept in each. Add-only: while on, a book removed from the collection by hand is added back. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Save reading checkpoints in ABS listening history | `ABS_READING_CHECKPOINTS` | `false` | Adds one second of artificial listening time when ebook reading advances the ABS audiobook position, preserving a recoverable entry in ABS listening history. Labels reading as listening and slightly increases ABS listening statistics. Resets, rewinds, unchanged positions, and existing audiobook listening credit are unaffected. |
 | Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
@@ -175,7 +175,7 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 | --- | --- | --- | --- |
 | Enable | `KOSYNC_ENABLED` | `false` | Turns on KOSync support. |
 | Hash Method | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
-| Sync Login From Grimmory | `KOSYNC_CREDENTIALS_FROM_GRIMMORY` | `false` | Global. At startup and each sync cycle, an active reader's KoSync username and password are taken from the KOReader login of their Grimmory account, and keep following it when it changes there. A reader who already has a different KoSync login set in BookBridge keeps it — clear their KoSync username to switch to the Grimmory one. A Grimmory username that another BookBridge user already has is skipped. Both cases are logged as warnings; readers without a Grimmory KOReader login are left alone. |
+| Take each reader's sync login from Grimmory | `KOSYNC_CREDENTIALS_FROM_GRIMMORY` | `false` | Global. At startup and each sync cycle, an active reader's KoSync username and password are taken from the KOReader login of their Grimmory account, and keep following it when it changes there. A reader who already has a different KoSync login set in BookBridge keeps it — clear their KoSync username to switch to the Grimmory one. A Grimmory username that another BookBridge user already has is skipped. Both cases are logged as warnings; readers without a Grimmory KOReader login are left alone. |
 | PUT Debounce | `KOSYNC_PUT_DEBOUNCE_SECONDS` | `300` | Wait this long after KOReader stops pushing before running the sync cycle. |
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Highlight Sync | `KOREADER_ANNOTATION_SYNC` | `true` | Enables bridge-side annotation exchange for the Bridge Sync KOReader plugin. Requires the current Bridge Sync plugin on each device. |
@@ -273,6 +273,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 | Collection Name | `STORYTELLER_COLLECTION_NAME` | `Synced with KOReader` | Collection used when linked books are added to Storyteller. |
 | Library Path | `STORYTELLER_LIBRARY_DIR` | `/storyteller_library` | Optional local Storyteller library path used for fallback/download helpers. Storyteller edition uploads go through the API. |
 | Assets Path | `STORYTELLER_ASSETS_DIR` | empty | Root path that contains `/assets/{title}/transcriptions`. |
+| Library Timeout | `STORYTELLER_LIBRARY_TIMEOUT` | `10` | Seconds to wait for a whole-library response (5–300). Increase for large libraries or slow servers; connection timeout stays 10 seconds. Failed searches report the error instead of appearing empty. |
 | Upload Chunk Size | `STORYTELLER_UPLOAD_CHUNK_SIZE` | `5242880` | TUS PATCH chunk size in bytes for direct Storyteller uploads. |
 | Poll Mode | `STORYTELLER_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Storyteller separately. |
 | Poll Interval | `STORYTELLER_POLL_SECONDS` | `45` | Used when Poll Mode is `custom`. |
@@ -295,8 +296,8 @@ Grimmory is a supported ebook and audiobook source. You can use it for ebook syn
 | Username | `BOOKLORE_USER` | empty | Grimmory username. |
 | Password | `BOOKLORE_PASSWORD` | empty | Grimmory password. |
 | Shelf Name | `BOOKLORE_SHELF_NAME` | `Kobo` | Shelf used for matched ebooks. |
-| Shelve Only When Aligned | `BOOKLORE_SHELF_REQUIRE_ALIGNMENT` | `false` | Global. A newly matched audiobook-and-ebook pair joins the shelf only once it has a fine-grained alignment map (forced alignment or the standard Whisper/lexical one, the same bar as read-along generation; a coarse fallback map does not count), checked every sync cycle. Covers manual matches, approved and auto-matched suggestions, "Up Next" auto-matches and Forge & Match. Each book is added once, with the matching reader's own Grimmory login and Shelf Name, so taking it off the shelf later sticks. Ebook-only matches and ebooks without a recorded Grimmory id are shelved at match time as before. Turning the option off shelves every book still waiting. |
-| Shelf Owner | `BOOKLORE_SHELF_OWNER` | empty | Global, used with Shelve Only When Aligned, for a shelf that one Grimmory account owns and other readers only see. The BookBridge user whose own Grimmory login adds the waiting books, to the global Shelf Name, and removes such a book when its match is deleted. While the name is not an active BookBridge user the shelf is left alone and the books keep waiting. Empty uses each reader's own login and shelf. |
+| Add matched books to the shelf only once they are aligned | `BOOKLORE_SHELF_REQUIRE_ALIGNMENT` | `false` | Global. A newly matched audiobook-and-ebook pair joins the shelf only once it has a fine-grained alignment map (forced alignment or the standard Whisper/lexical one, the same bar as read-along generation; a coarse fallback map does not count), checked every sync cycle. Covers manual matches, approved and auto-matched suggestions, "Up Next" auto-matches and Forge & Match. Each book is added once, with the matching reader's own Grimmory login and Shelf Name, so taking it off the shelf later sticks. Ebook-only matches and ebooks without a recorded Grimmory id are shelved at match time as before. Turning the option off shelves every book still waiting. |
+| Shelf Owner | `BOOKLORE_SHELF_OWNER` | empty | Global, used with the aligned-only shelving option above, for a shelf that one Grimmory account owns and other readers only see. The BookBridge user whose own Grimmory login adds the waiting books, to the global Shelf Name, and removes such a book when its match is deleted. While the name is not an active BookBridge user the shelf is left alone and the books keep waiting. Empty uses each reader's own login and shelf. |
 | Library ID | `BOOKLORE_LIBRARY_ID` | empty | Optional library restriction. |
 | Record Reading Sessions | `GRIMMORY_READING_SESSIONS` | `true` | Sends reading or listening session updates back to Grimmory. |
 | Highlight Sync | `BOOKLORE_ANNOTATION_SYNC` | `false` | Enables Grimmory web-reader highlight/note relay for this reader. Requires the current Bridge Sync plugin for KOReader device annotations. |
@@ -331,7 +332,7 @@ KOReader Collections per-reader settings:
 | Collection Source | `DEVICE_SYNC_COLLECTION_SOURCE` | `grimmory` | `off`, `grimmory`, or `hardcover`. Choose one source to avoid collection-name collisions. |
 | Grimmory Shelf Mode | `DEVICE_SYNC_COLLECTIONS` | `off` | `off`, `all`, `magic`, or `shelf`. Used when Collection Source is `grimmory`. |
 | Excluded Grimmory Shelves | `DEVICE_SYNC_EXCLUDED_SHELVES` | empty | Comma-separated shelf names to skip. |
-| Download Shelf Filter | `DEVICE_SYNC_SHELF_FILTER` | empty | Comma-separated Grimmory shelf names, case-insensitive. Blank downloads every matched book. |
+| Only download books on these Grimmory shelves | `DEVICE_SYNC_SHELF_FILTER` | empty | Under **KOReader / KoSync**. Comma-separated Grimmory shelf names, case-insensitive. Blank downloads every matched book. |
 | Hardcover List Mode | `DEVICE_SYNC_HARDCOVER_LISTS` | `all` | `all` or `selected`. Used when Collection Source is `hardcover`. |
 | Hardcover List Names | `DEVICE_SYNC_HARDCOVER_LIST_NAMES` | empty | Comma-separated list names when Hardcover List Mode is `selected`. |
 
@@ -633,6 +634,8 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | --- | --- | --- | --- |
 | Provider | `TRANSCRIPTION_PROVIDER` | `local` | `local`, `deepgram`, or `whispercpp`. |
 | Whisper Model | `WHISPER_MODEL` | `tiny` | Local Whisper model size or a custom Whisper.cpp model name. |
+| Whisper Language | `WHISPER_LANGUAGE` | empty | Local Whisper only. Blank detects each chunk's language; a code such as `ru` or `en` fixes it. Applies to new transcriptions; saved transcripts are reused. |
+| Filter Non-Speech Audio | `WHISPER_VAD_FILTER` | `false` | Local Whisper only. Uses voice activity detection to reduce transcription over music and silence while preserving audio timestamps. Check quiet narration before enabling broadly. Applies to new transcriptions. |
 | Whisper Device | `WHISPER_DEVICE` | `auto` | `auto`, `cpu`, or `cuda`. |
 | Whisper Compute Type | `WHISPER_COMPUTE_TYPE` | `auto` | Precision mode for local Whisper. |
 | Whisper.cpp URL | `WHISPER_CPP_URL` | empty | Full endpoint URL, including the path — e.g. `http://HOST:8080/v1/audio/transcriptions`. |

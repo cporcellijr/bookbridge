@@ -29,6 +29,32 @@ as a bonus alignment source.
   failure. To force-align a non-English book instead, choose the `mms_fa` model, which
   requires a self-built image (`INSTALL_CTC=true`) and effectively an NVIDIA GPU.
 
+- Completed transcripts are kept after alignment failure. **Remap alignment**
+  reuses valid word timings instead of transcribing again. Certain older CWA
+  input failures recover automatically only when the retained ebook and complete
+  transcript prove the original pairing; otherwise manual review is required.
+  See [transcription recovery](TRANSCRIPTION_RECOVERY.md).
+- If local Whisper detects the wrong language, set **Whisper Language** under
+  Transcription to a code such as `ru` or `en`. **Filter Non-Speech Audio** can
+  reduce transcription over music and silence; test quiet narration first.
+  Both affect new local transcriptions, not saved transcripts. Keep the
+  Content-Match Guard enabled while checking the ebook and audio pairing.
+
+### Read-along highlights run ahead or stop partway through a sentence
+
+Regenerate the read-along after upgrading to get complete sentence highlights
+and skip pages the narrator does not read. If the highlight gets increasingly
+ahead through the book, re-align the book first, then regenerate its read-along;
+the corrected alignment accounts for timestamp gaps between audio chapters.
+
+### KOReader sends progress under the wrong book
+
+Install **BridgeSync 0.9.9** on each device. Close affected managed books, then run
+**Bridge Sync → Sync Reading Stats** to repair their saved book identities.
+Positions and highlights are retained; do not delete the books' metadata to repair
+the checksum. The plugin also uses KOReader's metadata handling when managed books
+are renamed, replaced or removed.
+
 ### A deliberate rewind does not stick
 
 - Confirm **Honor a Deliberate Rewind** is enabled under **Settings -> Sync**.

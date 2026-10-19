@@ -12,44 +12,8 @@ All notable changes to BookBridge will be documented in this file.
   forward ebook-to-audiobook progress writes can create a recoverable ABS listening-history
   entry by crediting one artificial second. Rewinds, resets, unchanged positions and
   audiobook listening credit retain their existing behavior (#530, #495).
-- Optionally generate a read-along EPUB for books the BookOrbit shelf watch auto-matches to a
-  BookOrbit audiobook (Settings → BookOrbit, off by default) (#524).
-- Job Queue page (#529) in the top navigation: see which books are waiting,
-  processing or recently finished, including requested EPUB3 read-alongs.
-  Move staged Add Book items and books waiting for alignment up, down or to
-  the top before processing starts. Alignment order is saved across restarts;
-  books already processing cannot be reordered.
-- Fill the Stats page's Listening section from BookBridge's own listening sessions
-  (BookOrbit, Grimmory) when you don't use Audiobookshelf: daily totals, heatmap,
-  recent sessions and the yearly recap. Audiobookshelf users keep its numbers.
-  Deleting a book mapping now keeps its reading and listening history, so finished
-  books you remove still count in Stats.
-- Local Whisper language override and opt-in non-speech filtering (VAD), with
-  per-chunk language and script-mismatch diagnostics (#504). VAD is off by default.
 - Bulk-delete dashboard books with one confirmation and existing per-user
   shared-book protection.
-- Token-authenticated admin API to create reader accounts and set their integrations
-  from a script, off unless `ADMIN_API_TOKEN` is set. It manages reader accounts only:
-  it cannot create, promote or change an admin, rejects values a setting doesn't
-  accept, and slows down repeated bad tokens. Contributed by
-  [@splitsec2](https://github.com/splitsec2) in #494.
-- Link CBZ comics as ebooks without allowing them to become audiobook matches (#459).
-- Optionally filter KOReader device manifests to selected Grimmory shelves (#464).
-- Prefer ebooks already mounted in the configured library, with provider fallback
-  when no safe mounted file is available (#470).
-- Defer optional Grimmory shelf additions until alignment is ready, using the
-  configured shelf owner's account when enabled (#471).
-- Scan for suggestions on a schedule as the default user. Full rescans can follow a
-  cron schedule (Settings → Features → Scheduled full refresh); an existing weekly
-  day and time carries over. Contributed by [@benjitobz](https://github.com/benjitobz)
-  in #472 and #488.
-- Share automatic ebook matches across users. Re-enabling an account restores its
-  catalog, including books that account previously removed (#473).
-- Reconcile Audiobookshelf collections with the configured mappings (#474).
-- Optionally mirror Grimmory KoSync logins while preserving manually managed
-  credentials (#475).
-- Set how long BookBridge waits for Storyteller's book list in Settings →
-  Storyteller → Library Timeout, for large libraries or slow servers (#483).
 
 ### Fixed
 
@@ -65,6 +29,93 @@ All notable changes to BookBridge will be documented in this file.
   recreating it or updating a different job.
 - Treat Audiobookshelf's explicit "Book already in collection" response as a
   successful collection add, avoiding a false failure on repeated requests.
+- Treat Goodreads WebDriver error values as failed browser requests before URL
+  parsing or WAF navigation body handling, avoiding uncaught error dictionaries.
+- Opening an unmatched KOReader book now runs audiobook matching, searches
+  BookOrbit beyond already-linked books within the existing discovery budget,
+  and retains its BookOrbit identity for ebook-only sync. Discovery uses the
+  requesting reader's clients, including when an unlinked document already has
+  stored progress.
+- Goodreads tracker failures use the same retry backoff as Hardcover and StoryGraph.
+- Hash reconciliation cannot recreate links to mappings deleted during a pass.
+
+## [7.10.0] - 2026-10-15
+
+### Added
+
+- Optionally generate a read-along EPUB for books the BookOrbit shelf watch auto-matches to a
+  BookOrbit audiobook (Settings → BookOrbit, off by default) (#524).
+- Job Queue page (#529) in the top navigation: see which books are waiting,
+  processing or recently finished, including requested EPUB3 read-alongs.
+  Move staged Add Book items and books waiting for alignment up, down or to
+  the top before processing starts. Alignment order is saved across restarts;
+  books already processing cannot be reordered.
+- Fill the Stats page's Listening section from BookBridge's own listening sessions
+  (BookOrbit, Grimmory) when you don't use Audiobookshelf: daily totals, heatmap,
+  recent sessions and the yearly recap. Audiobookshelf users keep its numbers.
+  Deleting a book mapping now keeps its reading and listening history, so finished
+  books you remove still count in Stats.
+- Local Whisper language override and opt-in non-speech filtering (VAD), with
+  per-chunk language and script-mismatch diagnostics (#504). VAD is off by default.
+- Token-authenticated admin API to create readers and save their integrations
+  from a script, off unless the environment-only `ADMIN_API_TOKEN` is set to a
+  random string of at least 32 characters. It manages readers only, protects admin
+  accounts, validates settings, saves account and integration changes atomically,
+  and limits bad tokens. Responses identify integrations switched off server-wide.
+  Deleting a reader removes scoped data, retains the shared catalog, and never
+  reuses their account number. Disabling a reader stops sync and their ABS listener;
+  re-enabling restores shared books. Unicode usernames match regardless of case,
+  and changing Readest credentials clears the old session. Contributed by
+  [@splitsec2](https://github.com/splitsec2) in #494 and #517.
+- Link CBZ comics as ebook-only books, keeping them out of manual, bulk and
+  automatic audiobook matching and alignment (#459).
+- Optionally filter KOReader downloads to matched books on selected Grimmory
+  shelves. Unverifiable ownership or malformed membership data withholds the
+  manifest instead of presenting an empty library (#464).
+- Defer optional Grimmory shelf additions until a fine-grained alignment is
+  ready, with an optional Shelf Owner for shared shelves. Ebook-only books are
+  shelved immediately; removal keeps using the account that added the book even
+  if alignment waiting is later switched off (#471).
+- Scan for suggestions on a schedule as the primary admin. Full rescans can follow a
+  cron schedule (Settings → Features → Scheduled full refresh); an existing weekly
+  day and time carries over. Contributed by [@benjitobz](https://github.com/benjitobz)
+  in #472 and #488.
+- Share automatic ebook matches across users. Re-enabling an account restores its
+  catalog, including books that account previously removed (#473).
+- Reconcile Audiobookshelf collections with the configured mappings (#474).
+- Optionally mirror Grimmory KoSync logins while preserving manually managed
+  credentials; credential rotation saves together so a failure can be retried
+  without leaving a partial login (#475).
+- Set how long BookBridge waits for Storyteller's book list in Settings →
+  Storyteller → Library Timeout, for large libraries or slow servers. Failed
+  searches report the error, and searches reuse the downloaded library (#483).
+
+### Changed
+
+- Prefer ebooks already mounted in the configured library, with cache and provider fallback
+  when no safe mounted file is available. Directory links cannot escape configured
+  roots, and lookup continues past missing directories or stale handles (#470).
+- Full sync cycles fetch Audiobookshelf progress and unrestricted item access in
+  bulk, skip built-in KoSync reads for linked books without progress, and reuse
+  database snapshots and one client-fetch worker pool. This reduces idle-cycle
+  work while preserving per-user access checks and individual-read fallbacks.
+  Contributed by [@nmackler](https://github.com/nmackler) in #491, #492, and #493
+  for #490.
+- Read Local File suggestion titles and authors from Calibre or EPUB metadata and the
+  filename, scoring whichever reading fits best, so an "Author - Title" filename or a
+  placeholder title no longer misses. Co-authors listed with commas each match,
+  "Surname, Given" credits read correctly, translator, narrator and illustrator
+  credits are ignored, and an editor counts when no author is credited. One unreadable
+  EPUB no longer stops the whole scan. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #499.
+- Suggestions match an audiobook to an ebook whose title differs only by a subtitle,
+  using the Audiobookshelf subtitle when there is one. A match found only by dropping
+  the subtitle scores below the default auto-keep and auto-match cutoffs, so a bare
+  series title can't link the wrong volume unverified. Contributed by
+  [@benjitobz](https://github.com/benjitobz) in #487.
+
+### Fixed
+
 - Stop readers from changing or removing each other's books when matching. On a
   multi-user install, matching could fold another reader's book into yours, taking
   their progress with it, or point their book at a different ebook. A reader can now
@@ -90,8 +141,6 @@ All notable changes to BookBridge will be documented in this file.
   blank, instead of asking Audiobookshelf to create a collection with no name.
 - Report repeated diagnostics warnings that differ only by a JSON request ID or a
   memory address as one finding instead of one per occurrence.
-- Treat Goodreads WebDriver error values as failed browser requests before URL
-  parsing or WAF navigation body handling, avoiding uncaught error dictionaries.
 - Keep empty lists in KOReader plugin uploads (reading statuses, device logs,
   reading statistics) encoded as JSON arrays, so the server accepts them and the
   device still pulls merged statuses.
@@ -104,10 +153,13 @@ All notable changes to BookBridge will be documented in this file.
 - Replace your library's book titles in diagnostics reports even where a log line
   names a book without quoting it, as the opt-in screen promises.
   Contributed by [@splitsec2](https://github.com/splitsec2) in #513.
-- Bind cached input recovery to its approved audiobook and ebook pairing across
-  retries and restarts. Commit its alignment, backup, activation and job completion
-  together; a changed pairing, job, map or document owner leaves the newer state
-  untouched. Incomplete or contradictory word timings require manual review.
+- Recover provable legacy CWA input failures from the retained EPUB and a matching,
+  complete word-timed transcript, without downloading audio or transcribing again.
+  Recovery stays bound to the approved pairing across retries and restarts and
+  commits alignment, backup, activation and completion together. A changed pairing,
+  map, job or document owner leaves newer state untouched; incomplete or
+  contradictory timings require manual review. Reader progress and history remain
+  intact (#509, #510).
 - Preserve the existing BookOrbit read-along when a replacement upload encounters
   a filename conflict. Identical-content uploads still count as delivered.
 - Avoid matching a bare CWA title to a subtitle-qualified volume, and apply token
@@ -115,11 +167,6 @@ All notable changes to BookBridge will be documented in this file.
 - Withhold device manifests when reader ownership cannot be verified. Resolve
   KOReader's unindexed `DocFragment` locators for single-spine EPUBs while retaining
   the same-file cross-hash comparison guards.
-- Recover provable legacy CWA input failures automatically from the retained EPUB
-  and a matching, complete word-timed transcript. Rebuild alignment without
-  downloading audio or repeating transcription; preserve reader progress, history,
-  and existing alignment backups. Incomplete proof leaves a manual-review error
-  and blocks unsafe sync (#509, #510).
 - Record internal KoSync pushes for the authenticated reader so another reader's
   device update cannot erase their position. Contributed by
   [@benjitobz](https://github.com/benjitobz) in #512; retain the guarded comparison
@@ -145,27 +192,11 @@ All notable changes to BookBridge will be documented in this file.
   reading status, preventing KOReader from sending a new book's progress under the
   previous book's ID. Positions and highlights are retained. Managed-book rename,
   deletion, and replacement use KOReader's metadata APIs, including centralized
-  storage, instead of an incorrect `.epub.sdr` path. Re-download plugin **0.9.7**
+  storage, instead of an incorrect `.epub.sdr` path. Re-download plugin **0.9.9**
   and sync reading stats with affected books closed to repair their identities.
 - Show the real Calibre-Web and Kavita logos in the Library header and on the dashboard,
   and fix the Kavita settings section's expand arrow. Contributed by
   [@chemicalsno](https://github.com/chemicalsno) in #501.
-- Apply account changes atomically in the admin API and dashboard, protecting the
-  primary admin and retaining an active admin during concurrent updates or deletion.
-  Deleting an account removes its scoped data while retaining the shared catalog,
-  never reissues its account number to a later account, and disconnects its
-  Audiobookshelf listener; the primary admin can no longer be deleted.
-  Re-enabled readers regain shared books and cached access policies refresh; disabling
-  an account stops its syncs and its Audiobookshelf listener. Usernames with accented
-  capitals are matched regardless of case. Integration updates save together and
-  changing Readest credentials clears the old session for good (#494).
-- Say when a reader's integration is switched off server-wide. The admin API's user
-  and integrations responses now carry `off_server_wide`, the services a reader has
-  switched on that are off in Settings, where before a saved switch that did nothing
-  looked the same as a working one. The KOSync server logs once per reader when a
-  device's progress arrives while KoSync is off server-wide, since the device keeps
-  syncing normally and nothing said that its progress stopped at BookBridge.
-  Contributed by [@splitsec2](https://github.com/splitsec2) in #517.
 - Resolve KOReader filename hashes when Calibre reorders title and author, with
   per-user matching and ambiguity guards; refresh filesystem hashes after changing
   the hash method, keeping both methods' hashes so devices on either setting still
@@ -176,30 +207,6 @@ All notable changes to BookBridge will be documented in this file.
   never replaces a position a device already stored and never picks the leader, and
   the original KoSync server's empty reply counts as "no position" too. Contributed by
   [@chemicalsno](https://github.com/chemicalsno) in #498.
-- Read Local File suggestion titles and authors from Calibre or EPUB metadata and the
-  filename, scoring whichever reading fits best, so an "Author - Title" filename or a
-  placeholder title no longer misses. Co-authors listed with commas each match,
-  "Surname, Given" credits read correctly, translator, narrator and illustrator
-  credits are ignored, and an editor counts when no author is credited. One unreadable
-  EPUB no longer stops the whole scan. Contributed by
-  [@chemicalsno](https://github.com/chemicalsno) in #499.
-
-- Full sync cycles fetch Audiobookshelf progress and unrestricted item access in
-  bulk, skip built-in KoSync reads for linked books without progress, and reuse
-  database snapshots and one client-fetch worker pool. This reduces idle-cycle
-  work while preserving per-user access checks and individual-read fallbacks.
-  Contributed by [@nmackler](https://github.com/nmackler) in #491, #492, and #493
-  for #490.
-- Opening an unmatched KOReader book now runs audiobook matching, searches
-  BookOrbit beyond already-linked books within the existing discovery budget,
-  and retains its BookOrbit identity for ebook-only sync. Discovery uses the
-  requesting reader's clients, including when an unlinked document already has
-  stored progress.
-- Suggestions match an audiobook to an ebook whose title differs only by a subtitle,
-  using the Audiobookshelf subtitle when there is one. A match found only by dropping
-  the subtitle scores below the default auto-keep and auto-match cutoffs, so a bare
-  series title can't link the wrong volume unverified. Contributed by
-  [@benjitobz](https://github.com/benjitobz) in #487.
 - **Read-along highlights cover the whole sentence.** A sentence with italics, bold,
   a link, a drop cap, small caps or a page marker inside it was only partly
   highlighted, up to one sentence in ten in some books. Pages the narrator never
@@ -212,16 +219,11 @@ All notable changes to BookBridge will be documented in this file.
   timings drifted early through the book: a read-along's highlight ran more than a
   second ahead of the narrator by the last chapter, and minutes ahead in a few badly
   built files. Re-align an affected book, then regenerate its read-along.
-- Goodreads tracker failures use the same retry backoff as Hardcover and StoryGraph.
-- Hash reconciliation cannot recreate links to mappings deleted during a pass.
 - Ebooks with no Audiobookshelf item no longer stop syncing when ABS Ebook Sync
   is on. BookBridge sent their progress to an Audiobookshelf item that didn't
   exist, then marked the book 'error' as a stale mapping. Books that use
   Grimmory or BookOrbit audiobooks had the same problem. Re-match any book
   already showing the error once after updating (#486).
-- A Storyteller search that times out or fails now says so instead of showing
-  no matches. Searching also downloads the Storyteller library once instead of
-  once per match when the Storyteller assets path is set (#483).
 - Normal sync cycles check for stored alignment maps without loading them;
   recovery still validates a map before completing an unfinished job (#484, #485).
 - BookFusion uploads link the reader API ID used by progress endpoints, including
@@ -233,23 +235,19 @@ All notable changes to BookBridge will be documented in this file.
   unknown hashes up in CWA's checksum history when `CALIBRE_LIBRARY_PATH` is set (#302).
 - CWA search and UUID lookup tolerate bare HTML line breaks in Calibre-Web's
   XHTML review content while retaining strict metadata and XML security checks (#477).
-- Malformed shelf membership and filter data no longer appears as a valid empty
-  device manifest (#464).
-- Directory links under a mounted library can no longer expose files outside the
-  configured roots; lookup continues through the cache and provider fallbacks (#470).
-- Disabling aligned-shelf waiting no longer changes which account removes a
-  previously added shelf entry (#471).
-- Failed credential rotation no longer leaves a partial Grimmory KoSync login
-  saved (#475).
-- Comic matches can no longer enter bulk or automatic audiobook mappings (#459).
 - BookFusion duplicate uploads now accept author objects as well as strings while
   preserving exact title and author matching.
-- Ebook lookup continues through other libraries when a directory disappears or
-  a cached path encounters a stale filesystem handle.
 - KoSync discovery skips unavailable document hashes and continues scanning for
   a valid match without attempting to persist a null hash.
 - Concurrent credential saves preserve encryption and user isolation, and
   Grimmory cache updates recover when a competing operation removes the row.
+- Save dashboard account changes atomically and always keep an active admin, even
+  during concurrent updates. The primary admin can no longer be deleted, and
+  deleting an account disconnects its Audiobookshelf listener (#494).
+- Log once per reader when KoSync receives device progress while the integration
+  is switched off server-wide, so a device that still reports success no longer
+  leaves the stopped cross-service sync unexplained. Contributed by
+  [@splitsec2](https://github.com/splitsec2) in #517.
 
 ## [7.9.0] - 2026-10-05
 

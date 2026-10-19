@@ -4,6 +4,88 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.10.0]
+
+Listening stats work without Audiobookshelf, Suggestions can scan on a schedule,
+and scripts can provision readers. This release also adds CBZ ebook-only links,
+more control over Grimmory shelves and logins, and local Whisper language and
+non-speech filtering controls.
+
+### What's New
+
+- **Listening stats from BookBridge's own sessions** when your own ABS account is
+  not configured: daily totals, heatmap, recent sessions and yearly recap. Removing
+  a mapping keeps its reading and listening history.
+- **Scheduled Suggestions scans and cron full refreshes (#472, #488)** under
+  Settings → Features, using the primary admin's credentials.
+- **A reader provisioning API (#494)**, off unless an environment-only
+  `ADMIN_API_TOKEN` of at least 32 characters is set. It manages readers, protects
+  admins, and reports services disabled server-wide (#517).
+- **CBZ ebook-only links (#459)** without audiobook matching or alignment.
+- **Grimmory shelf download filters (#464)** and **aligned-only shelving** with
+  an optional shared Shelf Owner (#471).
+- **Optional Grimmory KoSync login mirroring (#475)** that preserves distinct
+  manually managed logins, and **ABS collection reconciliation (#474)**.
+- **Local Whisper language and optional non-speech filtering (#504)**, applied
+  only to new local transcriptions.
+- **Storyteller Library Timeout (#483)** for large or slow libraries.
+
+### Changed
+
+- Prefer available **mounted ebooks** over duplicate downloads (#470).
+- **Sync cycles reuse reads and fetch workers**, with bulk Audiobookshelf progress
+  and item access (#490–493).
+- **Suggestions read Calibre/EPUB metadata and understand subtitles (#487, #499)**
+  while keeping uncertain shortened-title matches below automatic thresholds.
+
+### Fixed
+
+- Read-along highlights cover **whole sentences**, skip unnarrated pages, and
+  remain on time through audiobook timestamp gaps.
+- Read-alongs **upload to BookOrbit when direct delivery is unavailable (#489)**;
+  failed replacement keeps the existing file.
+- **BridgeSync book identities and metadata paths**, plus empty status, log and
+  statistics uploads, work correctly with plugin **0.9.9**.
+- **KoSync recognises reordered filename hashes, compares verified copies of the
+  same EPUB, and fills missing follower positions (#497, #498, #500, #502)**.
+  Internal pushes stay with the correct reader (#512), and span-wrapped paragraphs
+  receive valid positions (#514).
+- **CWA uses the mapped ebook (#509–511)** and recognises modified downloads from
+  its checksum history when `CALIBRE_LIBRARY_PATH` is set (#302). Unreadable input
+  is refused before transcription. Completed transcripts survive failed alignment
+  (#503); proven legacy CWA failures can recover without transcribing again.
+- **BookFusion uploads link the correct progress API ID (#478, #480)**.
+- Books without ABS items keep syncing when **ABS Ebook Sync is enabled (#486)**,
+  and BookOrbit watch-shelf entries find their own recently added audio (#515).
+- **Listening stats use each reader's own ABS account (#508)**; saving a new ABS
+  key reconnects instant sync (#518).
+- **Readers cannot rewrite someone else's mapping or KoSync document link.**
+  KoSync login routes share password-attempt limits, support trusted proxy client
+  addresses, and reject sync-port bodies over 8 MiB.
+- **Diagnostics scrub unquoted known book titles (#513)** and group repeated
+  warnings; settings undo tracking (#506) and Calibre-Web/Kavita logos (#501)
+  are corrected.
+
+### Operational Notes
+
+- Back up `/data` before upgrading. **Database migrations run on startup**;
+  self-builds need a rebuild because the Dockerfile now includes a repair helper.
+- **Re-download BridgeSync 0.9.9 on each device**, close affected managed books,
+  then run **Bridge Sync → Sync Reading Stats** to repair saved book identities.
+  Positions and highlights are retained.
+- **Regenerate existing read-alongs** for complete sentence highlights. If timing
+  drifts ahead through a book, re-align it before regenerating.
+- Local listening totals are **estimates from retained sessions**; deleted history
+  cannot be reconstructed by this upgrade.
+- Re-match existing non-ABS stale-mapping errors once (#486). For invalid
+  BookFusion links, preview `scripts/repair_bookfusion_user_api_ids.py` before
+  adding `--apply` (#480).
+- Scheduled scans, new shelf/login automation and VAD remain optional; an existing
+  weekly Suggestions full refresh carries over. Behind a proxy, configure
+  `KOSYNC_TRUSTED_PROXIES` with only your proxy's addresses.
+
+---
+
 ## [7.9.0]
 
 A series can show as the book you're reading, Library cards pack together, and BookOrbit
