@@ -5105,7 +5105,8 @@ class SyncManager:
     def _active_sync_users(self):
         """Active users that have at least one configured client. Returns [] when
         multi-user isn't wired (registry/db missing) so callers fall back to the
-        single default cycle."""
+        single default cycle, and None when listing users failed so callers skip
+        the cycle instead of widening it to the global scope."""
         registry = self.user_client_registry
         db = self.database_service
         if registry is None or db is None or not hasattr(db, "list_users"):
@@ -5114,7 +5115,7 @@ class SyncManager:
             users = [u for u in db.list_users() if getattr(u, "active", 1)]
         except Exception as e:
             logger.warning("Could not list users for multi-user sync: %s", e, exc_info=True)
-            return []
+            return None
         eligible = []
         for user in users:
             try:
@@ -5130,6 +5131,8 @@ class SyncManager:
         progress/clients). Falls back to one default cycle when multi-user isn't
         available, preserving single-user behavior."""
         users = self._active_sync_users()
+        if users is None:
+            return
         if not users:
             self.sync_cycle(target_abs_id=target_abs_id)
             return
@@ -5318,9 +5321,10 @@ class SyncManager:
                     user_ids_to_watch = [u.id for u in db.list_users()
                                          if getattr(u, 'active', 1)]
                 except Exception:
-                    user_ids_to_watch = [None]
-                if not user_ids_to_watch:
-                    user_ids_to_watch = [None]
+                    user_ids_to_watch = []
+                else:
+                    if not user_ids_to_watch:
+                        user_ids_to_watch = [None]
             else:
                 # Legacy single-user / no-registry mode.
                 user_ids_to_watch = [None]

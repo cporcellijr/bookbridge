@@ -225,7 +225,7 @@ class ClientPoller:
             users = [u for u in self._db.list_users() if getattr(u, 'active', 1)]
         except Exception as e:
             logger.debug(f"ClientPoller: could not list users: {e}")
-            users = []
+            return []
         if not users:
             client = self._sync_clients.get(client_name)
             return [(None, client)] if client else []
@@ -261,15 +261,13 @@ class ClientPoller:
             # shelves, clients, and BookOrbit links are processed independently.
             watch_svc = self._shelf_watch_services.get(client_name)
             if watch_svc:
-                user_targets = []
+                user_targets = [None]
                 if self._registry and hasattr(self._db, 'list_users'):
                     try:
                         user_targets = [u.id for u in self._db.list_users()
-                                        if getattr(u, 'active', 1)]
+                                        if getattr(u, 'active', 1)] or [None]
                     except Exception:
-                        user_targets = []
-                if not user_targets:
-                    user_targets = [None]
+                        user_targets = []  # fail closed: never widen to the global scope
                 for uid in user_targets:
                     self._run_shelf_watch_for_user(watch_svc, client_name, uid)
             self._poll_client(client_name)
@@ -399,7 +397,7 @@ class ClientPoller:
                 linked_ids = self._db.get_linked_abs_ids(user_id)
             except Exception as e:
                 logger.debug(f"ClientPoller: could not resolve linked books for user {user_id}: {e}")
-                linked_ids = None
+                return 0
 
         checked = 0
         for book in active_books:

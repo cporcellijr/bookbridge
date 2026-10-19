@@ -60,7 +60,9 @@ class ABSSocketListener:
         sync_manager,
         user_id=None,
     ):
-        self._server_url = abs_server_url.rstrip("/").replace("/api", "")
+        self._server_url = abs_server_url.rstrip("/")
+        if self._server_url.endswith("/api"):
+            self._server_url = self._server_url[:-4]
         self._api_token = abs_api_token
         self._socket_token: str | None = None
         self._db = database_service

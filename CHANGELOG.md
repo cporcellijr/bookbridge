@@ -17,6 +17,13 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Connect Audiobookshelf instant sync when the server address starts with `api`,
+  such as `https://api.example.com`. The listener mangled those addresses and
+  never connected, while scheduled sync kept working.
+- Skip a sync or poll round on multi-user installs when the list of readers or a
+  reader's books can't be read, for example during a brief "database is locked"
+  error. That round used to run with the admin's integrations across every book;
+  the next round now runs normally.
 - Push KOReader reading to the audiobook when the two percentages happen to match
   but sit at different places in the book, as with an ebook that has long endnotes
   or an appendix the audiobook doesn't read out. Instant sync now also compares the
