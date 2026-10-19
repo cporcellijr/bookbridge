@@ -53,6 +53,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- Push KOReader reading to the audiobook when the two percentages happen to match
+  but sit at different places in the book, as with an ebook that has long endnotes
+  or an appendix the audiobook doesn't read out. Instant sync now also compares the
+  two positions in audiobook time, so reading ahead is no longer held back until the
+  percentages drift apart (#531). Contributed by
+  [@nmackler](https://github.com/nmackler) in #532.
 - Scrub stored ebook filenames and quoted paths containing apostrophes from
   outgoing diagnostics, including context, tracebacks and recent logs.
 - Tolerate a background job being deleted during a progress update without
