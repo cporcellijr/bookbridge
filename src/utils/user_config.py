@@ -33,7 +33,7 @@ PER_USER_CREDENTIAL_KEYS = frozenset({
     "DEVICE_SYNC_EXCLUDED_SHELVES", "DEVICE_SYNC_SHELF_FILTER", "DEVICE_SYNC_HARDCOVER_LISTS",
     "DEVICE_SYNC_HARDCOVER_LIST_NAMES",
     # Storyteller
-    "STORYTELLER_USER", "STORYTELLER_PASSWORD", "STORYTELLER_ENABLED",
+    "STORYTELLER_USER", "STORYTELLER_PASSWORD", "STORYTELLER_ENABLED", "STORYTELLER_AUTO_LINK",
     # Calibre-Web (Automated)
     "CWA_USERNAME", "CWA_PASSWORD", "CWA_ENABLED",
     "CWA_SYNC_TOKEN", "CWA_SYNC_ENABLED",
@@ -126,6 +126,7 @@ PER_USER_FIELD_GROUPS = [
         ("STORYTELLER_ENABLED", "Enabled", "bool"),
         ("STORYTELLER_USER", "Username", "text"),
         ("STORYTELLER_PASSWORD", "Password", "secret"),
+        ("STORYTELLER_AUTO_LINK", "Automatically link aligned Storyteller books", "bool"),
     ]),
     ("Grimmory", [
         ("BOOKLORE_ENABLED", "Enabled", "bool"),

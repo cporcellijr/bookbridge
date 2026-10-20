@@ -761,6 +761,116 @@ class StorytellerAPIClient:
 
         return False
 
+    def list_library_books(self) -> Optional[list]:
+        """List Storyteller books with alignment fingerprints; None means failure."""
+        response = self._make_request("GET", "/api/v2/books", timeout=self._library_request_timeout())
+        if response is None or response.status_code != 200:
+            return None
+        try:
+            books = response.json()
+            return books if isinstance(books, list) else None
+        except Exception as exc:
+            logger.warning("Storyteller library list decode failed: %s", exc, exc_info=True)
+            return None
+
+    def get_kosync_content_hash(self, book_uuid: str, file_format: str) -> Optional[str]:
+        """Hash exact OPDS-delivered bytes using KOReader's partial-MD5 ranges."""
+        import hashlib
+
+        if os.environ.get("KOSYNC_HASH_METHOD", "content").strip().lower() != "content":
+            return None
+        if not book_uuid or file_format not in {"ebook", "readaloud"}:
+            return None
+        token = self._get_fresh_token()
+        if not token:
+            return None
+
+        offsets = [0] + [1024 * (4 ** i) for i in range(11)]
+        digest = hashlib.md5(usedforsecurity=False)
+        url = f"{self.base_url}/api/v2/books/{book_uuid}/files"
+        for offset in offsets:
+            response = None
+            try:
+                for attempt in range(2):
+                    response = self.session.get(
+                        url,
+                        params={"format": file_format},
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Range": f"bytes={offset}-{offset + 1023}",
+                        },
+                        timeout=(10, 90),
+                        stream=True,
+                    )
+                    if response.status_code != 401 or attempt:
+                        break
+                    response.close()
+                    self._token = None
+                    token = self._get_fresh_token()
+                    if not token:
+                        return None
+
+                if response.status_code == 416:
+                    if offset == 0:
+                        return None
+                    break
+                if response.status_code == 206:
+                    content_range = response.headers.get("Content-Range", "")
+                    if content_range and not content_range.startswith(f"bytes {offset}-"):
+                        logger.warning("Storyteller hash: wrong range for %s (%s)", book_uuid, content_range)
+                        return None
+                    sample = response.content
+                    if not sample or len(sample) > 1024:
+                        return None
+                    digest.update(sample)
+                    if len(sample) < 1024:
+                        break
+                    continue
+                if response.status_code == 200:
+                    # Servers ignoring Range return the entire body. Stream the
+                    # requested samples without holding a multi-GB EPUB in RAM.
+                    samples = [bytearray() for _ in offsets]
+                    position = 0
+                    chunks = (response.iter_content(chunk_size=256 * 1024)
+                              if hasattr(response, "iter_content") else [response.content])
+                    for chunk in chunks:
+                        if not chunk:
+                            continue
+                        end = position + len(chunk)
+                        for idx, start in enumerate(offsets):
+                            if start >= end:
+                                break
+                            if start + 1024 <= position:
+                                continue
+                            samples[idx].extend(
+                                chunk[max(start - position, 0):min(start + 1024 - position, len(chunk))]
+                            )
+                        position = end
+                    if not samples[0]:
+                        return None
+                    full_digest = hashlib.md5(usedforsecurity=False)
+                    for sample in samples:
+                        if not sample:
+                            break
+                        full_digest.update(sample)
+                    return full_digest.hexdigest()
+
+                logger.info(
+                    "Storyteller hash: %s format=%s responded HTTP %s",
+                    book_uuid, file_format, response.status_code,
+                )
+                return None
+            except Exception as exc:
+                logger.warning(
+                    "Storyteller hash failed for %s format=%s at %d: %s",
+                    book_uuid, file_format, offset, exc, exc_info=True,
+                )
+                return None
+            finally:
+                if response is not None:
+                    response.close()
+        return digest.hexdigest()
+
     def search_books(self, query: str) -> Optional[list]:
         """Search Storyteller's library. Returns [] for no matches, None if the request failed."""
         response = self._make_request("GET", "/api/v2/books", None, timeout=self._library_request_timeout())

@@ -508,6 +508,36 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.series_name, "The Reckoning")
         self.assertEqual(saved_book.series_sequence, 3.0)
 
+    @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
+    @patch("src.web_server._download_storyteller_artifact",
+           return_value=("storyteller_abcd-1234.epub", None))
+    def test_auto_attach_storyteller_keeps_original_kosync_hash_and_epub(self, _download, _ingest):
+        from src.db.models import Book
+
+        existing = Book(
+            abs_id="existing-519", abs_title="Existing",
+            ebook_filename="original.epub",
+            kosync_doc_id="a" * 32, sync_mode="ebook_only",
+        )
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = existing
+        db.save_book.side_effect = lambda book: book
+
+        with patch("src.web_server.get_kosync_id_for_ebook") as recompute, \
+             patch("src.web_server._existing_mapping_access", return_value="modify"), \
+             patch("src.web_server._preserve_or_reset_mapping_status"), \
+             patch("src.web_server._enqueue_tracker_automatch"), \
+             patch("src.web_server._spawn_user_background"):
+            saved, error, _status = web_server._upsert_storyteller_mapping(
+                mode_hint="existing", existing_book=existing,
+                storyteller_uuid="abcd-1234", preserve_primary_kosync=True,
+            )
+        self.assertIsNone(error)
+        self.assertEqual(saved.storyteller_uuid, "abcd-1234")
+        self.assertEqual(saved.kosync_doc_id, "a" * 32)
+        self.assertEqual(saved.ebook_filename, "original.epub")
+        recompute.assert_not_called()
+
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="1234567890abcdef1234567890abcdef")
     def test_match_route_creates_ebook_only_mapping_from_storyteller_without_audiobook(self, _mock_kosync):
         self.mock_container.mock_storyteller_client.download_slim_book.return_value = True

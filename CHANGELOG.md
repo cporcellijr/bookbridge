@@ -8,6 +8,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Storyteller-only libraries now link both EPUB editions to the same reading progress** (#519). BookBridge registers the original EPUB hash and, when needed, the full read-aloud EPUB hash without changing the book's existing KoSync text. A bounded hourly check notices re-alignment and keeps old hashes valid. Each reader can also enable **Automatically link aligned Storyteller books** in their Storyteller integration settings; this is off by default and skips ambiguous matches.
 - Optionally generate a read-along EPUB for books auto-matched to a BookOrbit audiobook,
   whether the BookOrbit shelf watch (Settings → BookOrbit) or suggestions auto-match
   (Settings → Suggestions) made the match. Both are off by default. The Suggestions queue

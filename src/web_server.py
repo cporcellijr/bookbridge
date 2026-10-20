@@ -919,6 +919,8 @@ def _spawn_user_background(fn, *args, label="background"):
         user_id = user.id if user is not None else None
     except Exception:
         user_id = None
+    if user_id is None:
+        user_id = get_current_user_id()
     creds = get_current_user_credentials()
 
     def runner():
@@ -2195,6 +2197,7 @@ def sync_daemon():
         schedule.every(1).minutes.do(manager.flush_reading_sessions_for_all_users)
         schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_aligned_shelf)
         schedule.every(1).hours.do(_run_diagnostics_send)
+        schedule.every(1).hours.do(_run_storyteller_library_hourly)
         schedule.every(int(SYNC_PERIOD_MINS)).minutes.do(_reconcile_abs_collection)
 
         logger.info(f"🔄 Sync daemon started (period: {SYNC_PERIOD_MINS} minutes)")
@@ -3059,6 +3062,255 @@ def _adopt_kosync_progress_for_book(abs_id: str, kosync_doc_id: str) -> None:
         logger.warning(f"⚠️ Failed to adopt KoSync document for '{abs_id}': {e}", exc_info=True)
 
 
+def _storyteller_register_file_hashes(storyteller_uuid, abs_id):
+    """Register Storyteller OPDS hashes off the match request thread."""
+    from src.services.storyteller_library_watch import register_hashes
+
+    try:
+        book = database_service.get_book(abs_id)
+        if not book or book.storyteller_uuid != storyteller_uuid:
+            logger.info("Storyteller hashes: stale mapping %s; skipping", abs_id)
+            return
+        user_id = get_current_user_id()
+        client = (container.user_client_registry().get_clients(user_id).storyteller_client
+                  if user_id is not None else uc().storyteller_client)
+        register_hashes(
+            database_service, client, book,
+            _adopt_kosync_progress_for_book, user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning("Storyteller hashes: registration failed for %s: %s",
+                       storyteller_uuid, exc, exc_info=True)
+
+
+def _storyteller_auto_skip_state(user_id) -> dict:
+    """Books auto-link already declined for this reader, keyed by uuid -> read-aloud fingerprint."""
+    from src.services.storyteller_library_watch import state_key
+
+    try:
+        state = database_service.get_json_setting(state_key(user_id), default={})
+    except Exception:
+        return {}
+    skipped = state.get("_auto_skip") if isinstance(state, dict) else None
+    return dict(skipped) if isinstance(skipped, dict) else {}
+
+
+def _save_storyteller_auto_skip(user_id, skipped: dict) -> None:
+    """Persist the declined-book map next to the reader's Storyteller hash state."""
+    from src.services.storyteller_library_watch import _STATE_LOCK, state_key
+
+    key = state_key(user_id)
+    with _STATE_LOCK:
+        state = database_service.get_json_setting(key, default={})
+        state = state if isinstance(state, dict) else {}
+        state["_auto_skip"] = skipped
+        database_service.set_json_setting(key, state)
+
+
+def _storyteller_auto_link_candidates(user_id, client, library, books, claimed):
+    """Auto-link only aligned Storyteller books without touching existing KoSync primaries."""
+    from unicodedata import normalize
+
+    enabled = str(user_setting("STORYTELLER_AUTO_LINK", "false") or "").strip().lower()
+    if enabled not in {"true", "on", "1", "yes"}:
+        return 0
+
+    def title_key(text):
+        return re.sub(r"[\W_]+", "", normalize("NFKC", str(text or "")).casefold())
+
+    # A declined book would otherwise spend one of the pass's attempts every hour
+    # and, once six sit early in the library, starve every newer book.
+    skipped = _storyteller_auto_skip_state(user_id)
+    skipped_before = dict(skipped)
+    linked = 0
+    attempted = 0
+    for item in library:
+        if linked >= 3 or attempted >= 6:
+            break
+        if not isinstance(item, dict):
+            continue
+        uuid_value = str(item.get("uuid") or item.get("id") or "").strip()
+        readaloud = item.get("readaloud") or {}
+        if not uuid_value or not isinstance(readaloud, dict):
+            continue
+        if str(readaloud.get("status") or "").upper() != "ALIGNED" or readaloud.get("missing"):
+            logger.debug("Storyteller auto-link: %s not aligned; skipping", uuid_value)
+            continue
+        fingerprint = str(readaloud.get("fingerprint") or "")
+        try:
+            already = next((book for book in books if book.storyteller_uuid == uuid_value), None)
+            if already:
+                if claimed is not None and already.abs_id not in claimed:
+                    access = _existing_mapping_access(
+                        already, storyteller_uuid=uuid_value,
+                        ebook_filename=already.ebook_filename,
+                        kosync_doc_id=already.kosync_doc_id,
+                    )
+                    if access in {"join", "modify"}:
+                        _claim_book_for_user_id(user_id, already.abs_id)
+                        claimed.add(already.abs_id)
+                        logger.info("Storyteller auto-link: joined existing %s for user %s",
+                                    uuid_value, user_id)
+                else:
+                    logger.debug("Storyteller auto-link: %s already mapped; skipping", uuid_value)
+                continue
+
+            if uuid_value in skipped and skipped[uuid_value] == fingerprint:
+                logger.debug("Storyteller auto-link: %s declined earlier; skipping", uuid_value)
+                continue
+            if "ebook" in item and not item["ebook"]:
+                logger.debug("Storyteller auto-link: %s has no plain EPUB; skipping", uuid_value)
+                continue
+            attempted += 1
+            plain_hash = client.get_kosync_content_hash(uuid_value, "ebook")
+            if not isinstance(plain_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", plain_hash):
+                logger.info("Storyteller auto-link: plain hash unavailable for %s", uuid_value)
+                continue
+            existing = database_service.get_book_by_kosync_id(plain_hash)
+            if not existing:
+                doc = database_service.get_kosync_document(plain_hash)
+                existing = (database_service.get_book(doc.linked_abs_id)
+                            if doc and getattr(doc, "linked_abs_id", None) else None)
+            if existing:
+                access = _existing_mapping_access(
+                    existing, storyteller_uuid=uuid_value,
+                    ebook_filename=existing.ebook_filename,
+                    kosync_doc_id=existing.kosync_doc_id,
+                )
+                if access == "deny":
+                    skipped[uuid_value] = fingerprint
+                    logger.info("Storyteller auto-link: %s belongs to another reader; skipping", uuid_value)
+                    continue
+                saved, error, _status = _upsert_storyteller_mapping(
+                    mode_hint="existing", existing_book=existing,
+                    abs_id=existing.abs_id, abs_title=existing.abs_title,
+                    storyteller_uuid=uuid_value, preserve_primary_kosync=True,
+                )
+                if error or not saved:
+                    logger.info("Storyteller auto-link: attach failed for %s: %s", uuid_value, error)
+                    continue
+            else:
+                title = str(item.get("title") or "").strip()
+                authors = item.get("authors") or []
+                author_names = ", ".join(
+                    author.get("name", "") if isinstance(author, dict) else str(author)
+                    for author in authors
+                ) if isinstance(authors, list) else str(authors)
+                duplicate = False
+                for book in books:
+                    if title_key(book.abs_title) != title_key(title):
+                        continue
+                    # Older Book mappings have no author field. Fail closed on
+                    # their shared title rather than risk replacing an audio mapping.
+                    mapped_author = (getattr(book, "audio_author", None)
+                                     or getattr(book, "author", None) or "")
+                    if not mapped_author or not author_names or title_key(mapped_author) == title_key(author_names):
+                        duplicate = True
+                        break
+                if duplicate:
+                    skipped[uuid_value] = fingerprint
+                    logger.info("Storyteller auto-link: '%s' title/author collides; use Add Book", title)
+                    continue
+                saved = _create_ebook_only_mapping_from_queue_item({
+                    "storyteller_uuid": uuid_value,
+                    "abs_title": title,
+                })
+                if not saved:
+                    logger.info("Storyteller auto-link: create failed for %s", uuid_value)
+                    continue
+
+            _claim_book_for_user_id(user_id, saved.abs_id)
+            if claimed is not None:
+                claimed.add(saved.abs_id)
+            books.append(saved)
+            linked += 1
+            logger.info("Storyteller auto-link: linked %s to %s for user %s",
+                        uuid_value, saved.abs_id, user_id)
+        except Exception as exc:
+            logger.warning("Storyteller auto-link: failed for %s: %s",
+                           uuid_value, exc, exc_info=True)
+    if skipped != skipped_before:
+        try:
+            _save_storyteller_auto_skip(user_id, skipped)
+        except Exception as exc:
+            logger.warning("Storyteller auto-link: could not save declined books: %s", exc, exc_info=True)
+    return linked
+
+
+def _storyteller_user_library_pass(user_id):
+    """Reconcile and optionally auto-link this reader's Storyteller library."""
+    from src.services.storyteller_library_watch import scan_linked
+
+    try:
+        client = uc().storyteller_client
+        if not client or not client.is_configured():
+            return
+        library = client.list_library_books()
+        if library is None:
+            logger.info("Storyteller auto-link: library unavailable for user %s", user_id)
+            return
+        claimed = (
+            set(database_service.get_linked_abs_ids(user_id) or [])
+            if user_id is not None else None
+        )
+        all_books = list(database_service.get_all_books())
+        _storyteller_auto_link_candidates(user_id, client, library, all_books, claimed)
+        books = [
+            book for book in all_books
+            if book.storyteller_uuid and (claimed is None or book.abs_id in claimed)
+        ]
+        scan_linked(
+            database_service, client, books,
+            _adopt_kosync_progress_for_book, user_id, library=library,
+        )
+    except Exception as exc:
+        logger.warning("Storyteller hashes: pass failed for user %s: %s",
+                       user_id, exc, exc_info=True)
+
+
+def _run_storyteller_library_hourly():
+    """Dispatch per-user scans via the existing scoped background helper."""
+    from src.utils.user_config import (
+        _ALLOW_GLOBAL_FALLBACK_KEY, PER_USER_CREDENTIAL_KEYS, global_fallback_allowed,
+    )
+
+    try:
+        users = [user for user in database_service.list_users() if getattr(user, "active", 1)]
+    except Exception as exc:
+        logger.warning("Storyteller hashes: could not list users: %s", exc, exc_info=True)
+        return
+    for user in users:
+        uid_token = creds_token = bundle_token = None
+        try:
+            # Fail closed: uc() otherwise falls back to global clients when
+            # a reader's registry bundle is unavailable.
+            bundle = container.user_client_registry().get_clients(user.id)
+            client = getattr(bundle, "storyteller_client", None)
+            if not client or not client.is_configured():
+                continue
+            bundle_token = _active_bundle.set(bundle)
+            uid_token = set_current_user_id(user.id)
+            credentials = database_service.get_user_credentials(user.id) or {}
+            credentials = {key: val for key, val in credentials.items()
+                           if key in PER_USER_CREDENTIAL_KEYS}
+            credentials[_ALLOW_GLOBAL_FALLBACK_KEY] = global_fallback_allowed(database_service, user)
+            creds_token = set_current_user_credentials(credentials)
+            _spawn_user_background(
+                _storyteller_user_library_pass, user.id,
+                label=f"storyteller-library-{user.id}",
+            )
+        except Exception as exc:
+            logger.warning("Storyteller hashes: cannot schedule user %s: %s",
+                           user.id, exc, exc_info=True)
+        finally:
+            if creds_token is not None:
+                reset_current_user_credentials(creds_token)
+            if uid_token is not None:
+                reset_current_user_id(uid_token)
+            if bundle_token is not None:
+                _active_bundle.reset(bundle_token)
+
+
 def _upsert_storyteller_mapping(
     *,
     mode_hint,
@@ -3070,6 +3322,7 @@ def _upsert_storyteller_mapping(
     ebook_source_id=None,
     existing_book=None,
     duration=None,
+    preserve_primary_kosync=False,
 ):
     """
     Shared Storyteller/ebook mapping upsert for:
@@ -3093,6 +3346,8 @@ def _upsert_storyteller_mapping(
             target_book = database_service.get_book(requested_abs_id)
         if not target_book:
             return None, "Book not found", 404
+        if preserve_primary_kosync and not (target_book.kosync_doc_id and target_book.ebook_filename):
+            return None, "Existing book has no primary KoSync EPUB to preserve", 400
 
     original_ebook_filename = selected_ebook_filename
     if not original_ebook_filename and target_book and target_book.original_ebook_filename:
@@ -3121,7 +3376,10 @@ def _upsert_storyteller_mapping(
         return None, "Please select a text source (Storyteller or Standard Ebook)", 400
 
     kosync_doc_id = None
-    if selected_storyteller_uuid:
+    if preserve_primary_kosync:
+        kosync_doc_id = target_book.kosync_doc_id
+        resolved_ebook_filename = target_book.ebook_filename
+    elif selected_storyteller_uuid:
         log_prefix = "Storyteller link" if mode_hint == "existing" else "Ebook-only Tri-Link"
         kosync_doc_id = _compute_storyteller_trilink_kosync_id(
             original_ebook_filename,
@@ -3358,6 +3616,11 @@ def _upsert_storyteller_mapping(
         database_service.dismiss_suggestion(saved_book.kosync_doc_id)
     _adopt_kosync_progress_for_book(saved_book.abs_id, saved_book.kosync_doc_id)
 
+    if selected_storyteller_uuid:
+        _spawn_user_background(
+            _storyteller_register_file_hashes, selected_storyteller_uuid, saved_book.abs_id,
+            label="storyteller-link-hashes",
+        )
     return saved_book, None, None
 
 
