@@ -22,6 +22,12 @@
 {% endfor %}
 </div>
 <div class="queue-actions">
+    {% if queue|selectattr('audio_source', 'equalto', 'BookOrbit')|list %}
+    <label for="queueReadalongCheckbox" style="display:flex; align-items:center; gap:8px; margin:0 0 10px; font-size:13px; color:rgba(255,255,255,0.75); cursor:pointer;">
+        <input type="checkbox" id="queueReadalongCheckbox" value="true">
+        Also generate read-along EPUBs for the BookOrbit audiobooks in this queue
+    </label>
+    {% endif %}
     <form method="POST" action="/suggestions">
         <input type="hidden" name="action" value="process_queue">
         <button type="submit" class="btn btn-success w-100">✅ Match All ({{ queue|length }})</button>

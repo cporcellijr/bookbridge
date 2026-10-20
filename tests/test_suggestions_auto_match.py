@@ -202,6 +202,66 @@ class TestAutoMatchSuggestions(unittest.TestCase):
         finally:
             self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
 
+    @patch("src.web_server._shelve_saved_ebook")
+    @patch("src.web_server._record_readalong_intent_for_match")
+    @patch("src.web_server.container")
+    def test_readalong_requested_only_for_bookorbit_matches_when_enabled(self, mock_container, mock_record, _shelve):
+        """SUGGESTIONS_AUTO_MATCH_READALONG ('true' or 'on') requests a read-along for a BookOrbit-audio match only."""
+        keys = ("SUGGESTIONS_AUTO_MATCH_ENABLED", "SUGGESTIONS_AUTO_MATCH_READALONG")
+        old = {key: os.environ.get(key) for key in keys}
+        try:
+            self._set_env("SUGGESTIONS_AUTO_MATCH_ENABLED", "true")
+            for readalong, audio_source, expected in (
+                ("true", "BookOrbit", True),
+                ("on", "BookOrbit", True),
+                ("false", "BookOrbit", False),
+                (None, "BookOrbit", False),
+                ("true", "ABS", False),
+            ):
+                with self.subTest(readalong=readalong, audio_source=audio_source):
+                    mock_record.reset_mock()
+                    self._set_env("SUGGESTIONS_AUTO_MATCH_READALONG", readalong)
+                    mock_mapping = MagicMock()
+                    mock_mapping.create_audio_mapping_from_match.return_value = MagicMock(
+                        abs_id="book-1", audio_source=audio_source)
+                    mock_container.book_mapping_service.return_value = mock_mapping
+                    suggestion = _make_suggestion(audio_source=audio_source, matches=[_make_match(100.0)])
+
+                    out = _auto_match_suggestions({"suggestions": [suggestion], "stats": {}}, user_id=1)
+
+                    self.assertEqual(out["stats"].get("auto_matched"), 1)
+                    if expected:
+                        mock_record.assert_called_once_with("book-1")
+                    else:
+                        mock_record.assert_not_called()
+        finally:
+            for key, value in old.items():
+                self._restore_env(key, value)
+
+    @patch("src.web_server._shelve_saved_ebook")
+    @patch("src.web_server._record_readalong_intent_for_match", side_effect=RuntimeError("db locked"))
+    @patch("src.web_server.container")
+    def test_readalong_request_failure_keeps_the_auto_match(self, mock_container, _record, _shelve):
+        keys = ("SUGGESTIONS_AUTO_MATCH_ENABLED", "SUGGESTIONS_AUTO_MATCH_READALONG")
+        old = {key: os.environ.get(key) for key in keys}
+        try:
+            for key in keys:
+                self._set_env(key, "true")
+            mock_mapping = MagicMock()
+            mock_mapping.create_audio_mapping_from_match.return_value = MagicMock(
+                abs_id="book-1", audio_source="BookOrbit")
+            mock_container.book_mapping_service.return_value = mock_mapping
+            suggestion = _make_suggestion(audio_source="BookOrbit", matches=[_make_match(100.0)])
+
+            with self.assertLogs("src.web_server", level="WARNING"):
+                out = _auto_match_suggestions({"suggestions": [suggestion], "stats": {}}, user_id=1)
+
+            self.assertEqual(out["suggestions"], [])
+            self.assertEqual(out["stats"].get("auto_matched"), 1)
+        finally:
+            for key, value in old.items():
+                self._restore_env(key, value)
+
     @patch("src.web_server.container")
     def test_same_folder_100_not_auto_linked(self, mock_container):
         """

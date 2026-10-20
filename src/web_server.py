@@ -4760,6 +4760,7 @@ def settings():
             'TELEGRAM_ENABLED',
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
+            'SUGGESTIONS_AUTO_MATCH_READALONG',
             'SUGGESTIONS_FULL_REFRESH_ENABLED',
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'ABS_COLLECTION_RECONCILE',
@@ -7695,7 +7696,8 @@ def _create_audio_only_mapping_from_queue_item(item):
 
 
 def _record_readalong_intent_for_match(abs_id: str) -> None:
-    """Record "Also generate a read-along EPUB" for a Match All (non-forge) book.
+    """Record "Also generate a read-along EPUB" for a non-forge match (Match All,
+    suggestions auto-match).
 
     A book queued for alignment gets it consumed by the background job when its
     alignment completes (``SyncManager._dispatch_readalong_intent``). A re-match
@@ -8986,6 +8988,8 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
     matches), and if that candidate's score is at or above the configurable threshold,
     links the book automatically via book_mapping_service.create_audio_mapping_from_match.
     Suggestions that are not auto-matched remain in the list for human review.
+    With SUGGESTIONS_AUTO_MATCH_READALONG on, a BookOrbit-audio match also
+    requests a read-along EPUB.
 
     Args:
         results: The scan results object (expected to be a dict with 'suggestions' key).
@@ -9053,6 +9057,16 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
             f"🔗 Auto-matched '{suggestion.get('abs_title')}' to "
             f"'{top.get('display_name') or top.get('ebook_filename')}' at {score:.1f}%"
         )
+        if (getattr(saved, 'audio_source', None) == 'BookOrbit'
+                and env_truthy('SUGGESTIONS_AUTO_MATCH_READALONG')):
+            try:
+                _record_readalong_intent_for_match(saved.abs_id)
+                logger.info("📖 Auto-match: read-along requested for '%s'", suggestion.get('abs_title'))
+            except Exception as e:
+                logger.warning(
+                    "Auto-match: could not request a read-along for '%s': %s",
+                    suggestion.get('abs_title'), e, exc_info=True,
+                )
         try:
             _shelve_saved_ebook(saved)
         except Exception as shelf_err:
@@ -9577,6 +9591,16 @@ def _match_queue_response():
     return redirect(url_for('suggestions'))
 
 
+def _apply_queue_readalong_request(queue_items: list[dict]) -> None:
+    """Mark BookOrbit-audio queue items for a read-along when the Suggestions
+    queue's "Also generate read-along EPUBs" box was ticked at submit time."""
+    if (request.form.get('readalong_epub_requested') or '').strip().lower() not in {'true', '1', 'yes', 'on'}:
+        return
+    for item in queue_items:
+        if item.get('audio_source') == 'BookOrbit':
+            item['readalong_epub_requested'] = True
+
+
 def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     """Build a batch-match queue item from a scanned suggestion's top match (the ebook
     BookBridge is most confident about). Used by bulk add ('add all exact' / 'add
@@ -9790,12 +9814,14 @@ def suggestions_page():
             # Same forge/match-all path as the Add Book page: Storyteller items just match,
             # ebook-only items run the forge (transcribe + align) pipeline in the background.
             _queue_items = _match_queue_drain()
+            _apply_queue_readalong_request(_queue_items)
             _spawn_user_background(_process_forge_match_queue, _queue_items, label="batch-forge-match")
             flash(f"Forging + matching {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
         elif action == 'process_queue':
             _queue_items = _match_queue_drain()
+            _apply_queue_readalong_request(_queue_items)
             _spawn_user_background(_process_batch_queue, _queue_items, label="batch-match-process")
             flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))

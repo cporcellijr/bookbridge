@@ -881,6 +881,15 @@
                 event.preventDefault();
                 submitQueueMutation(form, action, submitter);
             } else if (action === 'process_queue' || action === 'forge_and_match_queue') {
+                form.querySelectorAll('input[name="readalong_epub_requested"]').forEach((el) => el.remove());
+                const readalong = document.getElementById('queueReadalongCheckbox');
+                if (readalong && readalong.checked) {
+                    const flag = document.createElement('input');
+                    flag.type = 'hidden';
+                    flag.name = 'readalong_epub_requested';
+                    flag.value = 'true';
+                    form.appendChild(flag);
+                }
                 // Navigates to the dashboard; show the working state, then submit natively.
                 if (submitter && !submitter.dataset.primaryAction) {
                     submitter.dataset.primaryAction = 'queue-actions';

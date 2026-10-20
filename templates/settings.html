@@ -1976,6 +1976,11 @@
                             ⚠️ Below 95% the top candidate is often a different book — a sequel, another edition, or
                             another title in the same series. A wrong link syncs your position into the wrong book.
                         </div>
+                        <div class="checkbox-wrapper" style="margin-top:12px;">
+                            <input type="checkbox" id="suggestions_auto_match_readalong" name="SUGGESTIONS_AUTO_MATCH_READALONG"
+                                {% if get_bool('SUGGESTIONS_AUTO_MATCH_READALONG') %}checked{% endif %}>
+                            <label for="suggestions_auto_match_readalong">Also generate a read-along EPUB for books auto-matched to a BookOrbit audiobook</label>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label>Scheduled scan interval (minutes)</label>

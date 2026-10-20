@@ -6,9 +6,17 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Optionally generate a read-along EPUB for books auto-matched to a BookOrbit audiobook,
+  whether the BookOrbit shelf watch (Settings → BookOrbit) or suggestions auto-match
+  (Settings → Suggestions) made the match. Both are off by default. The Suggestions queue
+  also has an "Also generate read-along EPUBs" box for the BookOrbit audiobooks you match
+  from it (#524).
+
 ### Fixed
 
-- **Grimmory highlights now select the correct text.** Highlights spanning italics, links or other inline formatting no longer point at the wrong part of a paragraph when synced between KOReader and Grimmory (#535). Previously synced highlights with incorrect positions need manual recreation.
+- **Grimmory highlights now select the correct text.** Highlights spanning italics, links or other inline formatting no longer point at the wrong part of a paragraph when synced between KOReader and Grimmory (#535). Highlights synced before this update may still be in the wrong place in Grimmory; editing one in KOReader sends it again at the right place. Don't delete them in Grimmory to fix them: that also deletes them from your device.
 - Connect Audiobookshelf instant sync when the server address starts with `api`,
   such as `https://api.example.com`. The listener mangled those addresses and
   never connected, while scheduled sync kept working.
@@ -27,8 +35,6 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- Optionally generate a read-along EPUB for books the BookOrbit shelf watch auto-matches to a
-  BookOrbit audiobook (Settings → BookOrbit, off by default) (#524).
 - Job Queue page (#529) in the top navigation: see which books are waiting,
   processing or recently finished, including requested EPUB3 read-alongs.
   Move staged Add Book items and books waiting for alignment up, down or to

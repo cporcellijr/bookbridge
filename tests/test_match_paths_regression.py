@@ -1098,6 +1098,29 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         db.set_readalong_epub_requested.assert_not_called()
 
+    def test_suggestions_queue_readalong_box_marks_only_bookorbit_items(self):
+        self.mock_container.mock_storyteller_client.is_configured.return_value = True
+        for action in ("process_queue", "forge_and_match_queue"):
+            for flag, expected in ((None, None), ("true", True)):
+                with self.subTest(action=action, flag=flag):
+                    items = [{"abs_id": "bo-1", "audio_source": "BookOrbit"},
+                             {"abs_id": "ab-1", "audio_source": "ABS"}]
+                    data = {"action": action}
+                    if flag:
+                        data["readalong_epub_requested"] = flag
+                    with patch.object(web_server, "_match_queue_drain", return_value=items),                             patch.object(web_server, "_spawn_user_background") as mock_spawn:
+                        self.client.post("/suggestions", data=data)
+                    queued = mock_spawn.call_args.args[1]
+                    self.assertEqual(queued[0].get("readalong_epub_requested"), expected)
+                    self.assertIsNone(queued[1].get("readalong_epub_requested"))
+
+    def test_queue_panel_offers_readalong_box_only_with_bookorbit_items(self):
+        template = self.client.application.jinja_env.get_template("_match_queue_panel.html")
+        with_bookorbit = template.render(queue=[{"abs_id": "bo-1", "audio_source": "BookOrbit"}])
+        abs_only = template.render(queue=[{"abs_id": "ab-1", "audio_source": "ABS"}])
+        self.assertIn('id="queueReadalongCheckbox"', with_bookorbit)
+        self.assertNotIn('id="queueReadalongCheckbox"', abs_only)
+
     @patch("src.web_server._create_audio_only_mapping_from_queue_item")
     def test_suggestions_drains_shared_audio_only_queue(self, mock_audio_only):
         self.client.post(

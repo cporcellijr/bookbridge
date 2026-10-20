@@ -96,6 +96,7 @@ class TestSettingsComprehensive(unittest.TestCase):
             'BOOKORBIT_READING_SESSIONS',
             'BOOKORBIT_SHELF_WATCH_ENABLED',
             'BOOKORBIT_SHELF_WATCH_READALONG',
+            'SUGGESTIONS_AUTO_MATCH_READALONG',
             'CALIBRE_USE_ABS_IDENTIFIER',
             'BOOKFUSION_POLL_WAIT_FOR_SETTLE',
         ]
@@ -191,6 +192,28 @@ class TestSettingsComprehensive(unittest.TestCase):
                 html = self._render_settings_template_source()
                 self.assertIn('id="bookorbit_shelf_watch_readalong"', html)
                 checkbox = html.split('name="BOOKORBIT_SHELF_WATCH_READALONG"', 1)[1].split('>', 1)[0]
+                self.assertIn('checked', checkbox)
+
+    @patch('src.web_server.restart_server')
+    def test_suggestions_auto_match_readalong_checkbox_accepts_true_and_on(self, _mock_restart):
+        from src.utils.config_loader import ALL_SETTINGS, DEFAULT_CONFIG, ConfigLoader
+
+        key = 'SUGGESTIONS_AUTO_MATCH_READALONG'
+        self.assertIn(key, ALL_SETTINGS)
+        self.assertEqual(DEFAULT_CONFIG[key], 'false')
+        for checked in ('true', 'on'):
+            with self.subTest(checked=checked):
+                response = self.client.post('/settings', data={
+                    'SYNC_PERIOD_MINS': '5', key: checked,
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(self.settings_store[key], 'true')
+                self.assertEqual(os.environ[key], 'true')
+                os.environ.pop(key, None)
+                ConfigLoader.load_settings(self.mock_container.mock_database_service)
+                html = self._render_settings_template_source()
+                self.assertIn('id="suggestions_auto_match_readalong"', html)
+                checkbox = html.split('name="SUGGESTIONS_AUTO_MATCH_READALONG"', 1)[1].split('>', 1)[0]
                 self.assertIn('checked', checkbox)
 
     @patch('src.web_server.restart_server')
