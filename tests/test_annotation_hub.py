@@ -831,6 +831,8 @@ class TestGrimmoryCFIResolver(unittest.TestCase):
         from src.utils.grimmory_cfi import GrimmoryCFIResolver
 
         class Parser:
+            CRENGINE_FRAGILE_INLINE_TAGS = set()
+
             def extract_text_and_map(self, path):
                 return "Hello world", [{
                     "spine_index": 1,
@@ -875,6 +877,102 @@ class TestGrimmoryCFIResolver(unittest.TestCase):
                 "/body/DocFragment[1]/body/p/text().5",
             ),
         )
+
+
+class TestGrimmoryCFIRealParser(unittest.TestCase):
+    def setUp(self):
+        from src.utils.ebook_utils import EbookParser
+        from src.utils.grimmory_cfi import GrimmoryCFIResolver
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.parser = EbookParser(books_dir=self.temp_dir.name)
+        self.resolver_class = GrimmoryCFIResolver
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def resolver(self, content, spine=8):
+        spine_map = [{"spine_index": spine, "content": content.encode(),
+                      "start": 0, "end": 10000}]
+        with patch.object(self.parser, "extract_text_and_map", return_value=("", spine_map)):
+            return self.resolver_class(self.parser, Path(self.temp_dir.name) / "test.epub")
+
+    def test_report_paragraph_second_text_node_exact_cfi(self):
+        paragraphs = "".join("<p>other</p>" for _ in range(23))
+        content = ("<html><head><title>Fixture</title></head><body><div><div>" + paragraphs
+                   + "<p>" + "a" * 143 + "<i>Journal of Psychosomatic Research</i>"
+                   + "b" * 226 + "</p></div></div></body></html>")
+        resolver = self.resolver(content)
+        base = "/body/DocFragment[8]/body/div/div/p[24]"
+        self.assertEqual(resolver.xpointer_range_to_cfi(base + "/text().0", base + "/text()[2].226"),
+                         "epubcfi(/6/16!/4/2/2/48,/1:0,/3:226)")
+
+    def test_grimmory_second_text_node_reverse(self):
+        paragraphs = "".join("<p>other</p>" for _ in range(28))
+        content = ("<html><head><title>Fixture</title></head><body><div><div id='chapter001'>"
+                   + paragraphs + "<p>before<i>title</i>" + "x" * 700
+                   + "</p></div></div></body></html>")
+        resolver = self.resolver(content, spine=7)
+        cfi = "epubcfi(/6/14!/4/2/2[chapter001]/58,/3:286,/3:652)"
+        self.assertEqual(resolver.cfi_range_to_xpointers(cfi), (
+            "/body/DocFragment[7]/body/div/div/p[29]/text()[2].286",
+            "/body/DocFragment[7]/body/div/div/p[29]/text()[2].652"))
+
+    def test_inline_span_third_child_both_directions(self):
+        content = ("<html><head><title>Fixture</title></head><body><div><p>first<span>x</span><span>y</span>"
+                   "<span>inline words</span>last</p></div></body></html>")
+        resolver = self.resolver(content)
+        xp = "/body/DocFragment[8]/body/div/p/span[3]/text().8"
+        cfi = resolver.xpointer_to_cfi(xp)
+        self.assertEqual(cfi, "epubcfi(/6/16!/4/2/2/6/1:8)")
+        self.assertEqual(resolver._cfi_point_to_xpointer(cfi), xp)
+
+    def test_third_text_node_and_explicit_first(self):
+        content = "<html><head><title>Fixture</title></head><body><p>one<br/>two<em>three</em>four</p></body></html>"
+        resolver = self.resolver(content)
+        root = "/body/DocFragment[8]/body/p"
+        self.assertEqual(resolver.xpointer_to_cfi(root + "/text()[3].3"),
+                         "epubcfi(/6/16!/4/2/5:3)")
+        self.assertEqual(resolver.xpointer_to_cfi(root + "/text()[1].1"),
+                         "epubcfi(/6/16!/4/2/1:1)")
+        self.assertEqual(resolver._cfi_point_to_xpointer("epubcfi(/6/16!/4/2/5:3)"),
+                         root + "/text()[3].3")
+
+    def test_unresolved_text_node_fails_closed(self):
+        resolver = self.resolver("<html><head><title>Fixture</title></head><body><p>one<br/>two</p></body></html>")
+        with self.assertRaises(ValueError):
+            resolver.xpointer_to_cfi("/body/DocFragment[8]/body/p/text()[3].1")
+        with self.assertRaises(ValueError):
+            resolver._cfi_point_to_xpointer("epubcfi(/6/16!/4/2/7:1)")
+
+    def test_reverse_position_does_not_rekey_existing_hub_row(self):
+        resolver = self.resolver("<html><head><title>Fixture</title></head><body><p>one<i>title</i>two</p></body></html>")
+        pos0 = resolver._cfi_point_to_xpointer("epubcfi(/6/16!/4/2/3:1)")
+        self.assertEqual(pos0, "/body/DocFragment[8]/body/p/text()[2].1")
+        with tempfile.TemporaryDirectory() as temp:
+            from src.db.database_service import DatabaseService
+            db = DatabaseService(str(Path(temp) / "test.db"))
+            original = _entry(pos0="/body/DocFragment[8]/body/p/text().0",
+                              pos1="/body/DocFragment[8]/body/p/text()[2].3")
+            db.exchange_koreader_annotations(None, "kobo", [_book(changes=[original], keys=_keys_for(db, [original]))])
+            state = db.get_annotation_spoke_state(None, DOC, "@booklore",
+                                                   server_id_field="booklore_server_id",
+                                                   version_field="booklore_version")
+            ann_id = state["changes"][0]["_id"]
+            db.mark_spoke_annotations_uploaded(None, "@booklore", [ann_id],
+                server_ids_by_annotation_id={str(ann_id): 501},
+                server_id_field="booklore_server_id", version_field="booklore_version",
+                synced_at_field="booklore_synced_at")
+            db.apply_spoke_annotations(None, DOC, "@booklore",
+                adds=[dict(_entry(datetime="2026-07-01 12:00:00", pos0=pos0), serverId=501,
+                           version=1)], edits=[], deletes=[], server_id_field="booklore_server_id",
+                version_field="booklore_version", synced_at_field="booklore_synced_at",
+                trust_positions=False)
+            rows = db.get_user_annotations_for_book(None, DOC)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].pos0, original["pos0"])
+            self.assertEqual(rows[0].datetime, original["datetime"])
+            db.db_manager.close()
 
 
 if __name__ == '__main__':

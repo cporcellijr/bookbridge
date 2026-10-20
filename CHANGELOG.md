@@ -6,17 +6,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-
-- Optional Audiobookshelf reading checkpoints (`ABS_READING_CHECKPOINTS`, off by default):
-  forward ebook-to-audiobook progress writes can create a recoverable ABS listening-history
-  entry by crediting one artificial second. Rewinds, resets, unchanged positions and
-  audiobook listening credit retain their existing behavior (#530, #495).
-- Bulk-delete dashboard books with one confirmation and existing per-user
-  shared-book protection.
-
 ### Fixed
 
+- **Grimmory highlights now select the correct text.** Highlights spanning italics, links or other inline formatting no longer point at the wrong part of a paragraph when synced between KOReader and Grimmory (#535). Previously synced highlights with incorrect positions need manual recreation.
 - Connect Audiobookshelf instant sync when the server address starts with `api`,
   such as `https://api.example.com`. The listener mangled those addresses and
   never connected, while scheduled sync kept working.
@@ -30,21 +22,6 @@ All notable changes to BookBridge will be documented in this file.
   two positions in audiobook time, so reading ahead is no longer held back until the
   percentages drift apart (#531). Contributed by
   [@nmackler](https://github.com/nmackler) in #532.
-- Scrub stored ebook filenames and quoted paths containing apostrophes from
-  outgoing diagnostics, including context, tracebacks and recent logs.
-- Tolerate a background job being deleted during a progress update without
-  recreating it or updating a different job.
-- Treat Audiobookshelf's explicit "Book already in collection" response as a
-  successful collection add, avoiding a false failure on repeated requests.
-- Treat Goodreads WebDriver error values as failed browser requests before URL
-  parsing or WAF navigation body handling, avoiding uncaught error dictionaries.
-- Opening an unmatched KOReader book now runs audiobook matching, searches
-  BookOrbit beyond already-linked books within the existing discovery budget,
-  and retains its BookOrbit identity for ebook-only sync. Discovery uses the
-  requesting reader's clients, including when an unlinked document already has
-  stored progress.
-- Goodreads tracker failures use the same retry backoff as Hardcover and StoryGraph.
-- Hash reconciliation cannot recreate links to mappings deleted during a pass.
 
 ## [7.10.0] - 2026-10-15
 

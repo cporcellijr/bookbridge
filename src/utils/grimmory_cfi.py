@@ -43,13 +43,19 @@ class GrimmoryCFIResolver:
             raise ValueError(f"Unsupported KOReader xpointer: {xpointer!r}")
         fragment_index = int(match.group(1))
         relative_path = match.group(2)
+        text_match = re.search(r"/text\(\)(?:\[(\d+)\])?(?:\.\d+)?$", relative_path)
+        text_index = int(text_match.group(1) or 1) if text_match else None
+        if text_index is not None and text_index < 1:
+            raise ValueError(f"Invalid xpointer text index: {xpointer!r}")
         clean_xpath, offset = self.ebook_parser._split_xpath_char_offset(relative_path)
+        if text_match:
+            clean_xpath = re.sub(r"/text\(\)(?:\[\d+\])?$", "", clean_xpath)
         if clean_xpath.startswith("/"):
             clean_xpath = "." + clean_xpath
-        return fragment_index, clean_xpath, int(offset or 0)
+        return fragment_index, clean_xpath, int(offset or 0), text_index
 
     def _resolve_xpointer_element(self, xpointer: str):
-        fragment_index, clean_xpath, offset = self._parse_xpointer(xpointer)
+        fragment_index, clean_xpath, offset, text_index = self._parse_xpointer(xpointer)
         item, _tree, element = self.ebook_parser._resolve_xpath_target_node(
             self.book_path.name,
             self.spine_map,
@@ -58,7 +64,7 @@ class GrimmoryCFIResolver:
         )
         if item is None or element is None:
             raise ValueError(f"Could not resolve xpointer: {xpointer!r}")
-        return int(item["spine_index"]), element, offset
+        return int(item["spine_index"]), element, offset, text_index
 
     def _element_to_cfi_steps(self, element) -> list[str]:
         chain = []
@@ -81,9 +87,23 @@ class GrimmoryCFIResolver:
         return steps
 
     def xpointer_to_cfi(self, xpointer: str) -> str:
-        fragment_index, element, offset = self._resolve_xpointer_element(xpointer)
+        fragment_index, element, offset, text_index = self._resolve_xpointer_element(xpointer)
         local_steps = self._element_to_cfi_steps(element)
-        local_steps.append(f"1:{max(0, int(offset or 0))}")
+        text_step = 1
+        if text_index is not None:
+            nodes = element.xpath("text()")
+            if text_index > len(nodes):
+                raise ValueError(f"Text node {text_index} not found: {xpointer!r}")
+            node = nodes[text_index - 1]
+            if not str(node):
+                raise ValueError(f"Empty text node: {xpointer!r}")
+            if node.is_tail:
+                children = self._element_children(element)
+                parent = node.getparent()
+                if parent not in children:
+                    raise ValueError(f"Unsupported tail node: {xpointer!r}")
+                text_step = 2 * children.index(parent) + 3
+        local_steps.append(f"{text_step}:{max(0, int(offset or 0))}")
         spine_step = fragment_index * 2
         return f"epubcfi(/6/{spine_step}!/{'/'.join(local_steps)})"
 
@@ -137,7 +157,7 @@ class GrimmoryCFIResolver:
         tree = html.fromstring(item["content"])
         current = tree
         offset = 0
-        text_step = False
+        text_step = None
 
         for part in parts:
             if ":" in part:
@@ -153,7 +173,7 @@ class GrimmoryCFIResolver:
             except ValueError:
                 continue
             if step_num % 2 == 1:
-                text_step = True
+                text_step = step_num
                 continue
             children = self._element_children(current)
             index = (step_num // 2) - 1
@@ -161,8 +181,39 @@ class GrimmoryCFIResolver:
                 raise ValueError(f"CFI step {step_num} does not resolve in fragment {fragment_index}")
             current = children[index]
 
-        xpath = self.ebook_parser._build_xpath(current)
-        suffix = "/text()" if text_step else "/text()"
+        anchor = current
+        inline = []
+        fragile = self.ebook_parser.CRENGINE_FRAGILE_INLINE_TAGS
+        while self._local_name(anchor) in fragile:
+            inline.append(anchor)
+            anchor = anchor.getparent()
+            if anchor is None:
+                raise ValueError(f"Missing structural ancestor in CFI: {cfi!r}")
+        xpath = self.ebook_parser._build_xpath(anchor)
+        for child in reversed(inline):
+            step = self.ebook_parser._build_inline_step(anchor, child)
+            if not step:
+                raise ValueError(f"Cannot reconstruct inline path: {cfi!r}")
+            xpath += step
+            anchor = child
+        if text_step is None:
+            text_step = 1
+        children = self._element_children(current)
+        if text_step == 1:
+            expected_parent = current
+            expected_tail = False
+        else:
+            index = (text_step - 3) // 2
+            if index < 0 or index >= len(children):
+                raise ValueError(f"CFI text step {text_step} does not resolve: {cfi!r}")
+            expected_parent = children[index]
+            expected_tail = True
+        nodes = current.xpath("text()")
+        matches = [i for i, node in enumerate(nodes, 1)
+                   if node.is_tail == expected_tail and node.getparent() is expected_parent and str(node)]
+        if len(matches) != 1:
+            raise ValueError(f"CFI text node does not resolve: {cfi!r}")
+        suffix = "/text()" if matches[0] == 1 else f"/text()[{matches[0]}]"
         return f"/body/DocFragment[{fragment_index}]/{xpath}{suffix}.{max(0, offset)}"
 
     def cfi_range_to_xpointers(self, cfi: str):
