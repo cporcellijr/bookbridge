@@ -241,7 +241,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+        self.mock_container.mock_database_service.adopt_kosync_document_if_unowned.assert_called_once_with(
             "hash-match-1", "ab-1"
         )
 
@@ -287,11 +287,8 @@ class TestMatchPathsRegression(unittest.TestCase):
     def test_match_route_never_steals_a_primary_hash_linked_elsewhere(self, _mock_kosync):
         """The primary hash gets the same fail-closed treatment as a sibling hash.
 
-        `_adopt_kosync_progress_for_book` reaches for `ensure_linked_kosync_document`,
-        whose upsert re-points a row that already names a different book — that is
-        deliberate for hash reconciliation's sibling hashes (#285) but wrong here.
-        Re-pointing would hide the losing book's stored progress behind the very join
-        the adoption exists to repair, relocating #431 instead of fixing it.
+        The database adoption operation checks ownership in the same statement
+        that links the hash. Consolidation's repointing operation stays separate.
         """
         owned = Mock()
         owned.document_hash = "hash-match-1"
@@ -318,7 +315,7 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         web_server._adopt_kosync_progress_for_book("ab-1", "hash-orphan")
 
-        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+        self.mock_container.mock_database_service.adopt_kosync_document_if_unowned.assert_called_once_with(
             "hash-orphan", "ab-1"
         )
 
@@ -328,7 +325,7 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         web_server._adopt_kosync_progress_for_book("ab-1", "hash-new")
 
-        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+        self.mock_container.mock_database_service.adopt_kosync_document_if_unowned.assert_called_once_with(
             "hash-new", "ab-1"
         )
 
@@ -341,7 +338,7 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         web_server._adopt_kosync_progress_for_book("ab-1", "hash-mine")
 
-        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_called_once_with(
+        self.mock_container.mock_database_service.adopt_kosync_document_if_unowned.assert_called_once_with(
             "hash-mine", "ab-1"
         )
 
@@ -356,10 +353,18 @@ class TestMatchPathsRegression(unittest.TestCase):
         owned.document_hash = "hash-theirs"
         owned.linked_abs_id = "some-other-book"
         self.mock_container.mock_database_service.get_kosync_document.return_value = owned
+        self.mock_container.mock_database_service.adopt_kosync_document_if_unowned.return_value = False
 
-        web_server._adopt_kosync_progress_for_book("ab-1", "hash-theirs")
+        with self.assertLogs("src.web_server", level="INFO") as logs:
+            web_server._adopt_kosync_progress_for_book("ab-1", "hash-theirs")
 
-        self.mock_container.mock_database_service.ensure_linked_kosync_document.assert_not_called()
+        self.mock_container.mock_database_service.adopt_kosync_document_if_unowned.assert_called_once_with(
+            "hash-theirs", "ab-1"
+        )
+        self.assertTrue(any(
+            "🔒 KoSync document 'hash-theirs' already belongs to 'some-other-book'" in line
+            for line in logs.output
+        ))
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="hash-match-1")
     def test_match_route_reuses_alignment_instead_of_requeueing_transcription(self, _mock_kosync):

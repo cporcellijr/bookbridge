@@ -590,22 +590,23 @@ class ConfigLoader:
         """
         try:
             settings = db_service.get_all_settings()
-            count = 0
-            
-            for key, value in settings.items():
+        except Exception as e:
+            logger.error(f"❌ Error loading settings from database: {e}", exc_info=True)
+            return
+
+        count = 0
+        for key, value in settings.items():
+            if key.startswith("STORYTELLER_519_HASHES:"):
+                continue
+            try:
                 # Apply validation or type conversion if needed (mostly string for env vars)
                 val_str = str(value) if value is not None else ""
                 
                 # DB values always win — if the user cleared a field, honor it
                 os.environ[key] = val_str
                 
-                # Mask secrets in logs
-                log_val = "******" if any(s in key for s in ['KEY', 'PASSWORD', 'TOKEN']) else val_str
-                # logger.debug(f"Loaded {key}={log_val}")
                 count += 1
-            
-            logger.info(f"⚙️  Loaded {count} settings from database")
-            
-        except Exception as e:
-            logger.error(f"❌ Error loading settings from database: {e}", exc_info=True)
-            # Do not re-raise, fall back to existing env vars
+            except Exception as e:
+                logger.error("❌ Error loading setting %s from database: %s", key, e, exc_info=True)
+
+        logger.info(f"⚙️  Loaded {count} settings from database")

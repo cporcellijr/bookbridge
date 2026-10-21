@@ -17,6 +17,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Storyteller auto-link keeps moving past failed books** (#519). Each reader's hourly scan rotates through candidates, retries declined matches after a week or re-alignment, and limits existing-book joins separately. Scans cannot overlap for the same reader and stop starting books after ten minutes. Hash linking now protects other books and deleted or changed mappings, avoids unnecessary database writes, and keeps large library caches out of environment settings.
 - **Grimmory highlights now select the correct text.** Highlights spanning italics, links or other inline formatting no longer point at the wrong part of a paragraph when synced between KOReader and Grimmory (#535). Highlights synced before this update may still be in the wrong place in Grimmory; editing one in KOReader sends it again at the right place. Don't delete them in Grimmory to fix them: that also deletes them from your device.
 - Connect Audiobookshelf instant sync when the server address starts with `api`,
   such as `https://api.example.com`. The listener mangled those addresses and

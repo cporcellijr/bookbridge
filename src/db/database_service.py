@@ -3123,6 +3123,34 @@ class DatabaseService:
                 return True
             return False
 
+    def adopt_kosync_document_if_unowned(
+        self, document_hash: str, abs_id: str, expected_storyteller_uuid: Optional[str] = None,
+    ) -> bool:
+        """Atomically adopt an unowned hash for an existing, optionally UUID-matched book."""
+        if not document_hash or not abs_id:
+            return False
+        from sqlalchemy import exists, literal, select
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        target = select(Book.abs_id).where(Book.abs_id == abs_id)
+        if expected_storyteller_uuid is not None:
+            target = target.where(Book.storyteller_uuid == expected_storyteller_uuid)
+        foreign_primary = exists().where(Book.kosync_doc_id == document_hash, Book.abs_id != abs_id)
+        now = utcnow()
+        stmt = sqlite_insert(KosyncDocument).from_select(
+            ["document_hash", "linked_abs_id", "first_seen", "last_updated"],
+            select(literal(document_hash), literal(abs_id), literal(now), literal(now)).where(
+                target.exists(), ~foreign_primary,
+            ),
+        )
+        with self.get_session() as session:
+            result = session.execute(stmt.on_conflict_do_update(
+                index_elements=["document_hash"],
+                set_={"linked_abs_id": abs_id, "last_updated": now},
+                where=KosyncDocument.linked_abs_id.is_(None),
+            ))
+            return bool(result.rowcount)
+
     def ensure_linked_kosync_document(self, document_hash: str, abs_id: str) -> bool:
         """Ensure a KosyncDocument row exists for ``document_hash`` and is linked to ``abs_id``.
 

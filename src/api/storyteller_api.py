@@ -768,9 +768,13 @@ class StorytellerAPIClient:
             return None
         try:
             books = response.json()
+            get_persistent_condition_logger().resolve(
+                logger, f"storyteller-library-decode:{self.username}", "Storyteller library list decode recovered")
             return books if isinstance(books, list) else None
         except Exception as exc:
-            logger.warning("Storyteller library list decode failed: %s", exc, exc_info=True)
+            get_persistent_condition_logger().warn(
+                logger, f"storyteller-library-decode:{self.username}",
+                "Storyteller library list decode failed: %s", exc, exc_info=True)
             return None
 
     def get_kosync_content_hash(self, book_uuid: str, file_format: str) -> Optional[str]:
@@ -785,6 +789,8 @@ class StorytellerAPIClient:
         if not token:
             return None
 
+        conditions = get_persistent_condition_logger()
+        failure_key = f"storyteller-hash:{self.username}:{book_uuid}:{file_format}"
         offsets = [0] + [1024 * (4 ** i) for i in range(11)]
         digest = hashlib.md5(usedforsecurity=False)
         url = f"{self.base_url}/api/v2/books/{book_uuid}/files"
@@ -817,7 +823,8 @@ class StorytellerAPIClient:
                 if response.status_code == 206:
                     content_range = response.headers.get("Content-Range", "")
                     if content_range and not content_range.startswith(f"bytes {offset}-"):
-                        logger.warning("Storyteller hash: wrong range for %s (%s)", book_uuid, content_range)
+                        conditions.warn(logger, failure_key, "Storyteller hash: wrong range for %s (%s)",
+                                        book_uuid, content_range)
                         return None
                     sample = response.content
                     if not sample or len(sample) > 1024:
@@ -853,6 +860,7 @@ class StorytellerAPIClient:
                         if not sample:
                             break
                         full_digest.update(sample)
+                    conditions.resolve(logger, failure_key, "Storyteller hash recovered for %s", book_uuid)
                     return full_digest.hexdigest()
 
                 logger.info(
@@ -861,14 +869,15 @@ class StorytellerAPIClient:
                 )
                 return None
             except Exception as exc:
-                logger.warning(
-                    "Storyteller hash failed for %s format=%s at %d: %s",
+                conditions.warn(
+                    logger, failure_key, "Storyteller hash failed for %s format=%s at %d: %s",
                     book_uuid, file_format, offset, exc, exc_info=True,
                 )
                 return None
             finally:
                 if response is not None:
                     response.close()
+        conditions.resolve(logger, failure_key, "Storyteller hash recovered for %s", book_uuid)
         return digest.hexdigest()
 
     def search_books(self, query: str) -> Optional[list]:
