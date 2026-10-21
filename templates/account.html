@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Account · BookBridge{% endblock %}
+{% block title %}{{ _('Account') }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -43,11 +43,11 @@
 {% block content %}
 <div class="account-wrap">
     <div class="nav">
-        <a href="{{ url_for('index') }}">← Back to dashboard</a>
+        <a href="{{ url_for('index') }}">← {{ _('Back to dashboard') }}</a>
     </div>
     <div class="card">
-        <h1>Account</h1>
-        <p class="sub">Signed in as <strong>{{ account_user.username }}</strong>{% if account_user.role == 'admin' %} (admin){% endif %}</p>
+        <h1>{{ _('Account') }}</h1>
+        <p class="sub">{% trans name=account_user.username %}Signed in as <strong>{{ name }}</strong>{% endtrans %}{% if account_user.role == 'admin' %} {{ _('(admin)') }}{% endif %}</p>
 
         {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
         {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
@@ -66,64 +66,65 @@
         {% endif %}
 
         <form method="POST" action="{{ url_for('account') }}">
-            <div class="section-title">Username</div>
-            <label for="username">Username</label>
+            <div class="section-title">{{ _('Username') }}</div>
+            <label for="username">{{ _('Username') }}</label>
             <input type="text" id="username" name="username" value="{{ account_user.username }}" autocomplete="username">
 
-            <div class="section-title">Change password</div>
-            <label for="new_password">New password</label>
+            <div class="section-title">{{ _('Change password') }}</div>
+            <label for="new_password">{{ _('New password') }}</label>
             <input type="password" id="new_password" name="new_password" autocomplete="new-password">
-            <label for="confirm_password">Confirm new password</label>
+            <label for="confirm_password">{{ _('Confirm new password') }}</label>
             <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password">
-            <p class="help">Leave password fields blank to keep your current password.</p>
+            <p class="help">{{ _('Leave password fields blank to keep your current password.') }}</p>
 
-            <div class="section-title">Confirm it's you</div>
-            <label for="current_password">Current password</label>
+            <div class="section-title">{{ _("Confirm it's you") }}</div>
+            <label for="current_password">{{ _('Current password') }}</label>
             <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
 
-            <button type="submit" class="btn btn-primary" style="width:100%;">Save changes</button>
+            <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
         </form>
     </div>
     <div class="card plugin-card">
-        <h2>My Integrations</h2>
+        <h2>{{ _('My Integrations') }}</h2>
         <p>
-            Manage the accounts, tokens, and sync toggles BookBridge uses for your own reader profile.
+            {{ _('Manage the accounts, tokens, and sync toggles BookBridge uses for your own reader profile.') }}
         </p>
         <div class="plugin-actions">
-            <a class="btn-link" href="{{ url_for('account_integrations') }}">Open integrations</a>
+            <a class="btn-link" href="{{ url_for('account_integrations') }}">{{ _('Open integrations') }}</a>
         </div>
     </div>
     <div class="card plugin-card">
-        <h2>Connect a KOReader device</h2>
+        <h2>{{ _('Connect a KOReader device') }}</h2>
         <p>
-            <strong>1 · Point KOReader at the bridge.</strong> On the device, open
+            <strong>{{ _('1 · Point KOReader at the bridge.') }}</strong>
+            {% trans trimmed url=url_for('account_integrations') %}On the device, open
             Tools → Progress sync → Custom sync server and enter this address, then sign in
             with your KoSync username &amp; password from
-            <a href="{{ url_for('account_integrations') }}" style="color:#aab4f5;">My Integrations</a>.
+            <a href="{{ url }}" style="color:#aab4f5;">My Integrations</a>.{% endtrans %}
         </p>
         <div class="url-row">
-            <input type="text" id="kosync_public_url" value="" aria-label="Sync server address"
+            <input type="text" id="kosync_public_url" value="" aria-label="{{ _('Sync server address') }}"
                 onclick="this.select()">
-            <button type="button" class="btn-link" onclick="copyPublicUrl(this)">Copy</button>
+            <button type="button" class="btn-link" onclick="copyPublicUrl(this)">{{ _('Copy') }}</button>
         </div>
         {% set kosync_split_port = get_val('KOSYNC_PORT', '')|trim %}
-        <p class="help">Suggested from this browser's address — adjust the host to one your devices
+        <p class="help">{% trans trimmed %}Suggested from this browser's address — adjust the host to one your devices
             can reach. Enter the base address only, with no <code>/api</code> or <code>/koreader</code>
-            suffix.{% if kosync_split_port and kosync_split_port != '5757' %} Split-port mode is on, so
-            KOSync listens on port {{ kosync_split_port }} — publish that port in Docker too.{% endif %}</p>
+            suffix.{% endtrans %}{% if kosync_split_port and kosync_split_port != '5757' %} {% trans trimmed port=kosync_split_port %}Split-port mode is on, so
+            KOSync listens on port {{ port }} — publish that port in Docker too.{% endtrans %}{% endif %}</p>
         <p class="help warning" id="kosync_url_warning" hidden>
-            This address uses localhost/loopback, which points back to the KOReader device itself.
-            Replace the host above with this server's LAN hostname or IP address before copying it.
+            {% trans trimmed %}This address uses localhost/loopback, which points back to the KOReader device itself.
+            Replace the host above with this server's LAN hostname or IP address before copying it.{% endtrans %}
         </p>
         <p>
-            <strong>2 · Install the BridgeSync plugin</strong>
+            <strong>{{ _('2 · Install the BridgeSync plugin') }}</strong>
             <span id="bridgesync_plugin_version" class="plugin-version"></span><br>
-            Delivers books from the bridge byte-for-byte (so progress auto-links with no manual
+            {% trans trimmed %}Delivers books from the bridge byte-for-byte (so progress auto-links with no manual
             matching), syncs reading stats, and relays highlights and notes. Download the zip, unzip it
-            into <code>koreader/plugins/</code>, then restart KOReader.
+            into <code>koreader/plugins/</code>, then restart KOReader.{% endtrans %}
         </p>
         <div class="plugin-actions">
-            <a class="btn-link" href="/api/kosync-plugin/download" download>Download plugin (.zip)</a>
+            <a class="btn-link" href="/api/kosync-plugin/download" download>{{ _('Download plugin (.zip)') }}</a>
         </div>
     </div>
 </div>

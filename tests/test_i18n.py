@@ -227,6 +227,45 @@ class RenderedTranslationTests(I18nTestBase):
         body = self.client.get('/').get_data(as_text=True)
         self.assertIn('Library', body)
 
+    def test_account_page_renders_russian(self):
+        _write_catalog(self.translations, 'ru', {
+            'Change password': 'Сменить пароль',
+            'Signed in as <strong>%(name)s</strong>': 'Вы вошли как <strong>%(name)s</strong>',
+        })
+        self._login()
+        self.client.post('/account/language', data={'language': 'ru'}, follow_redirects=False)
+        body = self.client.get('/account').get_data(as_text=True)
+        self.assertIn('Сменить пароль', body)
+        self.assertIn('Вы вошли как <strong>admin</strong>', body)
+
+
+class TemplateMessageTests(unittest.TestCase):
+    """Every msgid extracted from the templates must survive newstyle gettext.
+
+    Flask-Babel enables Jinja's newstyle gettext, which always applies
+    ``msgid % variables`` -- even with no variables. A bare ``%`` in a ``_()``
+    string (``_('50% done')``) therefore raises at render time, and only on the
+    page that contains it. ``{% trans %}`` blocks escape ``%`` themselves; ``_()``
+    strings must write ``%%``. This catches it at test time for every template.
+    """
+
+    def test_msgids_are_valid_newstyle_format_strings(self):
+        from collections import defaultdict
+        from babel.messages.extract import extract_from_dir
+
+        method_map = [('templates/**.html', 'jinja2')]
+        options_map = {'templates/**.html': {'extensions': 'jinja2.ext.i18n'}}
+        root = str(Path(__file__).parent.parent)
+        bad = []
+        for filename, lineno, message, _comments, _ctx in extract_from_dir(
+                root, method_map, options_map):
+            for msgid in (message if isinstance(message, tuple) else (message,)):
+                try:
+                    msgid % defaultdict(str)
+                except (ValueError, TypeError, KeyError) as exc:
+                    bad.append(f"{filename}:{lineno}: {msgid!r} ({exc})")
+        self.assertEqual(bad, [], "msgids that break newstyle gettext:\n" + "\n".join(bad))
+
 
 if __name__ == '__main__':
     unittest.main()

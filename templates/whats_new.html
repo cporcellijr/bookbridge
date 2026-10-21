@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = 'whats_new' %}
-{% block title %}What's New · BookBridge{% endblock %}
+{% block title %}{{ _("What's New") }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -58,15 +58,15 @@
 {% block content %}
 <div class="whats-new-wrap">
     <div class="whats-new-header">
-        <h1>What's New {% if app_version %}in {{ app_version }}{% endif %}</h1>
+        <h1>{% if app_version %}{{ _("What's New in %(version)s", version=app_version) }}{% else %}{{ _("What's New") }}{% endif %}</h1>
         <a class="whats-new-all-releases" href="https://github.com/cporcellijr/bookbridge/releases"
-            target="_blank" rel="noopener noreferrer">All releases</a>
+            target="_blank" rel="noopener noreferrer">{{ _('All releases') }}</a>
     </div>
     <div class="whats-new-notes">
         {% if notes_html %}
         {{ notes_html | safe }}
         {% else %}
-        <p>Release notes aren't available right now.</p>
+        <p>{{ _("Release notes aren't available right now.") }}</p>
         {% endif %}
     </div>
 </div>

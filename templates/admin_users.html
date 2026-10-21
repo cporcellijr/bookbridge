@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = 'settings' %}
-{% block title %}Users · BookBridge admin{% endblock %}
+{% block title %}{{ _('Users · BookBridge admin') }}{% endblock %}
 
 {% block head %}
 <style>
@@ -36,47 +36,47 @@
 
 {% block content %}
 <div class="admin-users-wrap">
-    <div class="nav"><a href="{{ url_for('index') }}">← Dashboard</a></div>
+    <div class="nav"><a href="{{ url_for('index') }}">← {{ _('Dashboard') }}</a></div>
 
     {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
     {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
 
     <div class="card">
-        <h1>Users</h1>
+        <h1>{{ _('Users') }}</h1>
         <table class="table">
-            <tr><th>User</th><th>Role</th><th>Status</th><th>Last login</th><th>Actions</th></tr>
+            <tr><th>{{ _('User') }}</th><th>{{ _('Role') }}</th><th>{{ _('Status') }}</th><th>{{ _('Last login') }}</th><th>{{ _('Actions') }}</th></tr>
             {% for u in users %}
             <tr>
-                <td>{{ u.username }}{% if u.id == current_user_id %} <span style="color:var(--muted-soft)">(you)</span>{% endif %}</td>
-                <td><span class="badge {{ u.role }}">{{ u.role }}</span></td>
-                <td>{% if u.active %}<span class="badge on">active</span>{% else %}<span class="badge off">disabled</span>{% endif %}</td>
+                <td>{{ u.username }}{% if u.id == current_user_id %} <span style="color:var(--muted-soft)">{{ _('(you)') }}</span>{% endif %}</td>
+                <td><span class="badge {{ u.role }}">{{ {'admin': _('admin'), 'user': _('user')}.get(u.role, u.role) }}</span></td>
+                <td>{% if u.active %}<span class="badge on">{{ _('active') }}</span>{% else %}<span class="badge off">{{ _('disabled') }}</span>{% endif %}</td>
                 <td style="color:var(--muted-soft)">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
                 <td class="row-actions">
-                    <a href="{{ url_for('admin_user_integrations', user_id=u.id) }}" class="btn btn-secondary btn-sm">Integrations</a>
+                    <a href="{{ url_for('admin_user_integrations', user_id=u.id) }}" class="btn btn-secondary btn-sm">{{ _('Integrations') }}</a>
                     <form method="POST" class="reset-inline">
                         <input type="hidden" name="action" value="reset_password">
                         <input type="hidden" name="user_id" value="{{ u.id }}">
-                        <input type="password" name="password" placeholder="new password" autocomplete="off">
-                        <button type="submit" class="btn btn-secondary btn-sm">Reset</button>
+                        <input type="password" name="password" placeholder="{{ _('new password') }}" autocomplete="off">
+                        <button type="submit" class="btn btn-secondary btn-sm">{{ _('Reset') }}</button>
                     </form>
                     <form method="POST">
                         <input type="hidden" name="action" value="toggle_active">
                         <input type="hidden" name="user_id" value="{{ u.id }}">
-                        <button type="submit" class="btn btn-secondary btn-sm">{{ 'Disable' if u.active else 'Enable' }}</button>
+                        <button type="submit" class="btn btn-secondary btn-sm">{{ _('Disable') if u.active else _('Enable') }}</button>
                     </form>
                     {% if u.id != primary_admin_id %}
-                    <form method="POST" onsubmit='return confirm({{ ('Make this account a regular user? They lose admin access to every book, user and setting.' if u.role == 'admin' else 'Make this account an administrator? Admins manage every book, user and setting. They keep using their own service logins — an admin does not inherit yours.') | tojson }});'>
+                    <form method="POST" onsubmit='return confirm({{ (_('Make this account a regular user? They lose admin access to every book, user and setting.') if u.role == 'admin' else _('Make this account an administrator? Admins manage every book, user and setting. They keep using their own service logins — an admin does not inherit yours.')) | tojson }});'>
                         <input type="hidden" name="action" value="set_role">
                         <input type="hidden" name="user_id" value="{{ u.id }}">
                         <input type="hidden" name="role" value="{{ 'user' if u.role == 'admin' else 'admin' }}">
-                        <button type="submit" class="btn btn-secondary btn-sm">{{ 'Make user' if u.role == 'admin' else 'Make admin' }}</button>
+                        <button type="submit" class="btn btn-secondary btn-sm">{{ _('Make user') if u.role == 'admin' else _('Make admin') }}</button>
                     </form>
                     {% endif %}
                     {% if u.id != current_user_id %}
-                    <form method="POST" onsubmit="return confirm('Delete {{ u.username }}? Their progress/credentials are removed.');">
+                    <form method="POST" onsubmit="return confirm('{{ _('Delete %(name)s? Their progress/credentials are removed.', name=u.username) }}');">
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="user_id" value="{{ u.id }}">
-                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                        <button type="submit" class="btn btn-danger btn-sm">{{ _('Delete') }}</button>
                     </form>
                     {% endif %}
                 </td>
@@ -86,25 +86,25 @@
     </div>
 
     <div class="card">
-        <h2>Shared library</h2>
-        <p>Shares the existing catalog with all active users. Requires the Shared Library setting (Features → Shared Library). This is one-way and cannot be undone in bulk.</p>
-        <form method="POST" onsubmit="return confirm('This will give every active user visibility of every book in the catalog. This cannot be undone in bulk.');">
+        <h2>{{ _('Shared library') }}</h2>
+        <p>{{ _('Shares the existing catalog with all active users. Requires the Shared Library setting (Features → Shared Library). This is one-way and cannot be undone in bulk.') }}</p>
+        <form method="POST" onsubmit="return confirm('{{ _('This will give every active user visibility of every book in the catalog. This cannot be undone in bulk.') }}');">
             <input type="hidden" name="action" value="share_library">
-            <button type="submit" class="btn btn-secondary btn-sm">📚 Share library with all users</button>
+            <button type="submit" class="btn btn-secondary btn-sm">📚 {{ _('Share library with all users') }}</button>
         </form>
     </div>
 
     <div class="card">
-        <h2>Create user</h2>
+        <h2>{{ _('Create user') }}</h2>
         <form method="POST" class="create-grid">
             <input type="hidden" name="action" value="create">
-            <input type="text" name="username" placeholder="username" autocomplete="off" required>
-            <input type="password" name="password" placeholder="password" autocomplete="new-password" required>
+            <input type="text" name="username" placeholder="{{ _('username') }}" autocomplete="off" required>
+            <input type="password" name="password" placeholder="{{ _('password') }}" autocomplete="new-password" required>
             <select name="role">
-                <option value="user">user</option>
-                <option value="admin">admin</option>
+                <option value="user">{{ _('user') }}</option>
+                <option value="admin">{{ _('admin') }}</option>
             </select>
-            <button type="submit" class="btn btn-primary">Create</button>
+            <button type="submit" class="btn btn-primary">{{ _('Create') }}</button>
         </form>
     </div>
 </div>

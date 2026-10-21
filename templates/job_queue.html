@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = 'job_queue' %}
-{% block title %}Job Queue — BookBridge{% endblock %}
+{% block title %}{{ _('Job Queue') }} — BookBridge{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="/static/css/job-queue.css">
 {% endblock %}
@@ -8,13 +8,13 @@
 <main class="job-queue-page"{% if queue_view['running'] %} data-auto-refresh="20"{% endif %}>
     <header class="job-queue-header">
         <div>
-            <h1>Job Queue</h1>
-            <p>See books waiting, processing, or recently finished. Move staged books or pending alignments before they start.</p>
+            <h1>{{ _('Job Queue') }}</h1>
+            <p>{{ _('See books waiting, processing, or recently finished. Move staged books or pending alignments before they start.') }}</p>
         </div>
-        <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">Refresh status</a>
+        <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">{{ _('Refresh status') }}</a>
     </header>
     {% if queue_view['running'] %}
-    <p class="job-queue-auto-refresh-note">Updates every 20 seconds while books are processing.</p>
+    <p class="job-queue-auto-refresh-note">{{ _('Updates every 20 seconds while books are processing.') }}</p>
     {% endif %}
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -30,9 +30,9 @@
     {% endwith %}
 
     {% set sections = [
-        ('running', 'Processing'),
-        ('pending', 'Waiting'),
-        ('recent', 'Recently finished (7 days)')
+        ('running', _('Processing')),
+        ('pending', _('Waiting')),
+        ('recent', _('Recently finished (7 days)'))
     ] %}
     {% for key, heading in sections %}
     <section class="job-queue-section" aria-labelledby="job-queue-{{ key }}">
@@ -47,12 +47,12 @@
             <table class="job-queue-table">
                 <thead>
                     <tr>
-                        <th scope="col">Book</th>
-                        <th scope="col">Operation</th>
-                        <th scope="col">Status / stage</th>
-                        <th scope="col">Progress</th>
-                        <th scope="col">Requested</th>
-                        <th scope="col">Order</th>
+                        <th scope="col">{{ _('Book') }}</th>
+                        <th scope="col">{{ _('Operation') }}</th>
+                        <th scope="col">{{ _('Status / stage') }}</th>
+                        <th scope="col">{{ _('Progress') }}</th>
+                        <th scope="col">{{ _('Requested') }}</th>
+                        <th scope="col">{{ _('Order') }}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -61,18 +61,18 @@
                         <td>
                             <strong>{{ job.title }}</strong>
                             {% if job.order is not none %}
-                            <span class="job-queue-sequence">#{{ job.order }} in its list</span>
+                            <span class="job-queue-sequence">{{ _('#%(position)s in its list', position=job.order) }}</span>
                             {% endif %}
                         </td>
                         <td>{{ job.operation }}</td>
                         <td>
                             <span class="job-queue-status job-queue-status-{{ job.status|replace(' ', '-') }}">{{ job.status|replace('_', ' ')|title }}</span>
                             {% if job.detail %}<small class="job-queue-detail">{{ job.detail }}</small>{% endif %}
-                            {% if job.timestamp %}<small class="job-queue-detail">Last attempt {{ job.timestamp|format_time_ago }} ago</small>{% endif %}
+                            {% if job.timestamp %}<small class="job-queue-detail">{{ _('Last attempt %(ago)s ago', ago=job.timestamp|format_time_ago) }}</small>{% endif %}
                         </td>
                         <td>
                             {% if job.percent is not none %}
-                            <div class="job-queue-progress" role="progressbar" aria-valuenow="{{ job.percent }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ job.title }} progress">
+                            <div class="job-queue-progress" role="progressbar" aria-valuenow="{{ job.percent }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ _('%(title)s progress', title=job.title) }}">
                                 <span style="width: {{ job.percent }}%"></span>
                             </div>
                             <small>{{ job.percent }}%</small>
@@ -82,12 +82,15 @@
                         <td>
                         {% if job.queue_key %}
                             <div class="job-queue-move-actions">
-                            {% for direction, text, available in [('up', '↑', job.can_move_up), ('down', '↓', job.can_move_down), ('top', '⇈', job.can_move_up)] %}
+                            {% for direction, text, available, label, hint in [
+                                ('up', '↑', job.can_move_up, _('Move %(title)s up', title=job.title), _('Move up')),
+                                ('down', '↓', job.can_move_down, _('Move %(title)s down', title=job.title), _('Move down')),
+                                ('top', '⇈', job.can_move_up, _('Move %(title)s to top', title=job.title), _('Move to top'))] %}
                                 <form method="POST" action="{{ url_for('job_queue_reorder') }}">
                                     <input type="hidden" name="queue_key" value="{{ job.queue_key }}">
                                     <input type="hidden" name="queue" value="{{ job.queue }}">
                                     <input type="hidden" name="direction" value="{{ direction }}">
-                                    <button type="submit" aria-label="Move {{ job.title }} {{ 'to top' if direction == 'top' else direction }}" title="Move {{ 'to top' if direction == 'top' else direction }}" {% if not available %}disabled{% endif %}>{{ text }}</button>
+                                    <button type="submit" aria-label="{{ label }}" title="{{ hint }}" {% if not available %}disabled{% endif %}>{{ text }}</button>
                                 </form>
                             {% endfor %}
                             </div>
@@ -99,7 +102,7 @@
             </table>
         </div>
         {% else %}
-        <p class="job-queue-empty">Nothing to show here.</p>
+        <p class="job-queue-empty">{{ _('Nothing to show here.') }}</p>
         {% endif %}
     </section>
     {% endfor %}
