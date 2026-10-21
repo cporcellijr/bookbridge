@@ -1285,6 +1285,10 @@ class SyncManager:
 
             start = int(target_item.get("start", 0))
             end = int(target_item.get("end", start))
+            # A finish outranks the chapter hint: Kobo files its 100% bookmark on the
+            # (often empty) title page, with in-chapter progress 0 (#537).
+            if pct is not None and total_text_len and pct >= self._completion_threshold():
+                return int(pct * total_text_len), "href_pct"
             if end <= start:
                 return max(0, start), "href_only"
 
@@ -1298,7 +1302,7 @@ class SyncManager:
 
             if chapter_progress is None and pct is not None and total_text_len:
                 pct_offset = int(pct * total_text_len)
-                if start <= pct_offset < end or pct >= self._completion_threshold():
+                if start <= pct_offset < end:
                     return pct_offset, "href_pct"
 
             return start, "href_only"

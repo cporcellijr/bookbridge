@@ -391,6 +391,31 @@ def test_normalization_href_only_uses_percentage_within_chapter():
     assert manager.alignment_service.get_time_for_text.call_args.kwargs["char_offset_hint"] == 420
 
 
+@pytest.mark.parametrize(
+    ("spine_item", "extra"),
+    [
+        ({"href": "titlepage.xhtml", "start": 0, "end": 0}, {}),
+        ({"href": "titlepage.xhtml", "start": 0, "end": 25}, {"chapter_progress": 0.0}),
+    ],
+    ids=["empty-title-page", "title-page-progress-zero"],
+)
+def test_normalization_kobo_finish_on_title_page_uses_percentage(spine_item, extra):
+    manager = _manager_with_mocks()
+    manager.ebook_parser.resolve_book_path.return_value = "book.epub"
+    manager.ebook_parser.extract_text_and_map.return_value = ("a" * 1000, [spine_item])
+    manager.alignment_service.get_time_for_text.return_value = 500.0
+    book = SimpleNamespace(abs_id="abs-1", transcript_file="DB_MANAGED", ebook_filename="book.epub")
+    config = {
+        "ABS": _state({"ts": 10.0}),
+        "BookLore": _state({"pct": 1.0, "href": "titlepage.xhtml", **extra}),
+    }
+    with patch.dict("os.environ", {"SYNC_COMPLETION_THRESHOLD": "99"}):
+        manager._normalize_for_cross_format_comparison(book, config)
+
+    assert config["BookLore"].current["_normalization_source"] == "href_pct"
+    assert manager.alignment_service.get_time_for_text.call_args.kwargs["char_offset_hint"] == 999
+
+
 def test_normalization_href_only_preserves_chapter_when_pct_outside_below_completion():
     manager = _manager_with_mocks()
     manager.ebook_parser.resolve_book_path.return_value = "book.epub"
