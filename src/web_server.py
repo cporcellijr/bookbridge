@@ -3100,12 +3100,10 @@ def _storyteller_auto_link_candidates(user_id, client, library, books, claimed, 
     skipped = dict(skipped) if isinstance(skipped, dict) else {}
     skipped_before = dict(skipped)
     start = int(state.get("_auto_cursor", 0) or 0) % len(library)
-    inspected = linked = attempted = joined = 0
+    inspected = linked = joined = 0
     conditions = get_persistent_condition_logger()
     now = time.time()
     for index in range(len(library)):
-        if linked >= 3 or attempted >= 6:
-            break
         if time.monotonic() >= deadline:
             logger.info("Storyteller auto-link: user %s reached pass time budget; stopping", user_id)
             break
@@ -3154,7 +3152,6 @@ def _storyteller_auto_link_candidates(user_id, client, library, books, claimed, 
             if "ebook" in item and not item["ebook"]:
                 logger.debug("Storyteller auto-link: %s has no plain EPUB; skipping", uuid_value)
                 continue
-            attempted += 1
             plain_hash = client.get_kosync_content_hash(uuid_value, "ebook")
             if not isinstance(plain_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", plain_hash):
                 logger.info("Storyteller auto-link: plain hash unavailable for %s", uuid_value)
@@ -3289,6 +3286,21 @@ def _storyteller_user_library_pass(user_id):
             book for book in all_books
             if book.storyteller_uuid and (claimed is None or book.abs_id in claimed)
         ]
+        # Add Book used to save a Storyteller-only book under the placeholder 'Ebook'.
+        titles = {
+            str(item.get("uuid") or item.get("id")): str(item.get("title") or "").strip()
+            for item in library if isinstance(item, dict)
+        }
+        for book in books:
+            title = titles.get(book.storyteller_uuid)
+            if getattr(book, "abs_title", None) == "Ebook" and title:
+                fields = {"abs_title": title}
+                if getattr(book, "audio_title", None) == "Ebook":
+                    fields["audio_title"] = title
+                if database_service.update_book_fields(book.abs_id, **fields):
+                    book.abs_title = title
+                    logger.info("Storyteller: renamed '%s' from 'Ebook' to its Storyteller title '%s'",
+                                book.abs_id, title)
         scan_linked(database_service, client, books, user_id, library=library, deadline=deadline)
         conditions.resolve(logger, failure_key, "Storyteller hashes: pass recovered for user %s", user_id)
     except Exception as exc:
@@ -8799,7 +8811,8 @@ def _queue_item_from_match_form(clients) -> "dict | None":
             bridge_key = f"ebook:{ebook_key}"
             audio_source_id = None
             audio_title = ebook_display_name or (
-                Path(ebook_filename).stem if ebook_filename else 'Ebook'
+                Path(ebook_filename).stem if ebook_filename
+                else _get_storyteller_display_metadata(storyteller_uuid).get('title') or 'Ebook'
             )
             audio_duration = None
             audio_cover_url = None

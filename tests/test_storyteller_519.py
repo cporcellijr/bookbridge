@@ -314,10 +314,13 @@ def test_auto_link_remembers_declined_books_so_newer_ones_still_link():
          patch.object(ws, "user_setting", return_value="on"), \
          patch.object(ws, "_create_ebook_only_mapping_from_queue_item", return_value=saved) as create, \
          patch.object(ws, "_claim_book_for_user_id"):
-        assert ws._storyteller_auto_link_candidates(3, client, library, list(mapped), set()) == 0
         assert ws._storyteller_auto_link_candidates(3, client, library, list(mapped), set()) == 1
+        client.get_kosync_content_hash.reset_mock()
+        assert ws._storyteller_auto_link_candidates(
+            3, client, library, list(mapped) + [saved], {"ebook-new"}) == 0
     create.assert_called_once()
     assert create.call_args.args[0]["storyteller_uuid"] == "fresh"
+    client.get_kosync_content_hash.assert_not_called()
 
 
 def test_auto_link_foreign_uuid_uses_existing_join_policy():
@@ -357,7 +360,7 @@ def test_periodic_pass_filters_foreign_books_before_hash_registration():
     assert scan.call_args.args[3] == 7
 
 
-def test_reconciliation_bounds_changed_hashes_per_pass():
+def test_reconciliation_hashes_every_changed_book_in_one_pass():
     db = Mock()
     state = {}
     db.get_json_setting.side_effect = lambda key, default=None: state.get(key, default)
@@ -381,8 +384,8 @@ def test_reconciliation_bounds_changed_hashes_per_pass():
     ]
     with patch.dict(os.environ, {"KOSYNC_HASH_METHOD": "content"}):
         scan_linked(db, client, books, user_id=12)
-    assert client.get_kosync_content_hash.call_count == 8  # 4 books x both editions
-    assert state["STORYTELLER_519_HASHES:12"]["_cursor"] == 4
+    assert client.get_kosync_content_hash.call_count == 16  # 8 books x both editions
+    assert state["STORYTELLER_519_HASHES:12"].get("_cursor", 0) == 0
 
 
 def test_per_user_auto_link_setting_registry():
@@ -601,7 +604,7 @@ def test_already_mapped_joins_have_a_separate_cap(auto_link_env, monkeypatch):
 
 
 @pytest.mark.parametrize("failure", ["hash", "attach", "create", "exception"])
-def test_auto_cursor_advances_past_every_failed_attempt(auto_link_env, monkeypatch, failure):
+def test_failed_attempts_do_not_stop_the_pass(auto_link_env, monkeypatch, failure):
     ws, db, client, store, create, claim = auto_link_env
     library = [aligned_item(f"u{i}") for i in range(7)]
     def content_hash(uuid, fmt):
@@ -622,23 +625,69 @@ def test_auto_cursor_advances_past_every_failed_attempt(auto_link_env, monkeypat
     if failure == "create":
         create.side_effect = lambda item: (SimpleNamespace(abs_id="fresh", storyteller_uuid="u6", abs_title="Fresh")
                                           if item["storyteller_uuid"] == "u6" else None)
-    assert ws._storyteller_auto_link_candidates(7, client, library, [], set()) == 0
-    assert store["STORYTELLER_519_HASHES:7"]["_auto_cursor"] == 6
-    client.get_kosync_content_hash.reset_mock()
     assert ws._storyteller_auto_link_candidates(7, client, library, [], set()) == 1
-    assert client.get_kosync_content_hash.call_args_list[0].args[0] == "u6"
+    assert [c.args[0] for c in client.get_kosync_content_hash.call_args_list] == [f"u{i}" for i in range(7)]
 
 
-def test_auto_cursor_is_per_reader(auto_link_env):
+def test_auto_cursor_is_per_reader(auto_link_env, monkeypatch):
     ws, db, client, store, create, claim = auto_link_env
+    clock = [0]
+    monkeypatch.setattr(ws.time, "monotonic", lambda: clock[0])
+    def slow_hash(uuid, fmt):
+        clock[0] += 1
+        return None
+    client.get_kosync_content_hash.side_effect = slow_hash
     library = [aligned_item(f"u{i}") for i in range(8)]
-    client.get_kosync_content_hash.return_value = None
-    ws._storyteller_auto_link_candidates(7, client, library, [], set())
-    ws._storyteller_auto_link_candidates(8, client, library, [], set())
+    for user_id in (7, 8, 7):
+        clock[0] = 0
+        ws._storyteller_auto_link_candidates(user_id, client, library, [], set(), deadline=3)
     calls = [c.args[0] for c in client.get_kosync_content_hash.call_args_list]
-    assert calls == [f"u{i}" for i in range(6)] * 2
+    assert calls == ["u0", "u1", "u2", "u0", "u1", "u2", "u3", "u4", "u5"]
     assert store["STORYTELLER_519_HASHES:7"]["_auto_cursor"] == 6
-    assert store["STORYTELLER_519_HASHES:8"]["_auto_cursor"] == 6
+    assert store["STORYTELLER_519_HASHES:8"]["_auto_cursor"] == 3
+
+
+def test_auto_link_links_every_aligned_book_in_one_pass(auto_link_env, caplog):
+    """#519: 127 aligned books were linked three per hourly pass."""
+    ws, db, client, store, create, claim = auto_link_env
+    library = [aligned_item(f"u{i}") for i in range(10)]
+    with caplog.at_level("INFO"):
+        assert ws._storyteller_auto_link_candidates(7, client, library, [], set()) == 10
+    assert create.call_count == 10
+    assert caplog.text.count("Storyteller auto-link: linked ") == 10
+
+
+def test_library_pass_renames_placeholder_ebook_titles(auto_link_env, monkeypatch, caplog):
+    ws, db, client, store, create, claim = auto_link_env
+    monkeypatch.setattr(ws, "user_setting", lambda *args: "false")
+    placeholder = SimpleNamespace(abs_id="ebook-1", abs_title="Ebook", audio_title="Ebook",
+                                  storyteller_uuid="u1", ebook_filename="storyteller_u1.epub")
+    named = SimpleNamespace(abs_id="ebook-2", abs_title="My Title", audio_title=None,
+                            storyteller_uuid="u2", ebook_filename="storyteller_u2.epub")
+    db.get_all_books.return_value = [placeholder, named]
+    db.get_linked_abs_ids.return_value = ["ebook-1", "ebook-2"]
+    db.update_book_fields.return_value = True
+    client.list_library_books.return_value = [aligned_item("u1", "Sapiens"), aligned_item("u2", "Other")]
+    monkeypatch.setattr(ws, "uc", lambda: SimpleNamespace(storyteller_client=client))
+    monkeypatch.setattr("src.services.storyteller_library_watch.scan_linked", Mock())
+    with caplog.at_level("INFO"):
+        ws._storyteller_user_library_pass(7)
+    db.update_book_fields.assert_called_once_with("ebook-1", abs_title="Sapiens", audio_title="Sapiens")
+    assert "renamed 'ebook-1' from 'Ebook' to its Storyteller title 'Sapiens'" in caplog.text
+
+
+def test_storyteller_only_queue_item_uses_the_storyteller_title(monkeypatch):
+    import flask
+    from src import web_server as ws
+    client = Mock()
+    client.is_configured.return_value = True
+    client.get_book_details.return_value = {"title": "Sapiens"}
+    clients = SimpleNamespace(storyteller_client=client, booklore_client=Mock(is_configured=Mock(return_value=False)))
+    monkeypatch.setattr(ws, "uc", lambda: clients)
+    with flask.Flask(__name__).test_request_context(
+            "/add-book", method="POST", data={"storyteller_uuid": "u1", "ebook_display_name": ""}):
+        item = ws._queue_item_from_match_form(clients)
+    assert item["abs_title"] == "Sapiens"
 
 
 def test_decline_stores_fingerprint_and_timestamp(auto_link_env, monkeypatch):

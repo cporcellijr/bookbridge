@@ -8,7 +8,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **Storyteller-only libraries now link both EPUB editions to the same reading progress** (#519). BookBridge registers the original EPUB hash and, when needed, the full read-aloud EPUB hash without changing the book's existing KoSync text. A bounded hourly check notices re-alignment and keeps old hashes valid. Each reader can also enable **Automatically link aligned Storyteller books** in their Storyteller integration settings; this is off by default and skips ambiguous matches.
+- **Storyteller-only libraries now link both EPUB editions to the same reading progress** (#519). BookBridge registers the original EPUB hash and, when needed, the full read-aloud EPUB hash without changing the book's existing KoSync text. An hourly check notices re-alignment and keeps old hashes valid. Each reader can also enable **Automatically link aligned Storyteller books** in their Storyteller integration settings; this is off by default and skips ambiguous matches. Each hourly check links as many aligned books as it can in ten minutes, so a large library is linked in the first hour or two instead of a few books at a time.
 - Optionally generate a read-along EPUB for books auto-matched to a BookOrbit audiobook,
   whether the BookOrbit shelf watch (Settings → BookOrbit) or suggestions auto-match
   (Settings → Suggestions) made the match. Both are off by default. The Suggestions queue
@@ -17,6 +17,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Storyteller books added without an ebook file now keep their title** (#519). Choosing only a Storyteller book in Add Book saved it as "Ebook". New ones use the Storyteller title, and books already named "Ebook" are renamed on the next hourly Storyteller check.
 - **Finishing a book on a Kobo synced through Grimmory now finishes it everywhere** (#537). Before, the finish was read as the start of the book, and BookBridge wrote the audiobook's position back over it, so the audiobook was never marked finished. Kobo positions from Grimmory also land inside their chapter instead of snapping back to its start. A finish that was already overwritten isn't recovered: sync it again from the Kobo, or mark the book finished in Audiobookshelf.
 - **Storyteller auto-link keeps moving past failed books** (#519). Each reader's hourly scan rotates through candidates, retries declined matches after a week or re-alignment, and limits existing-book joins separately. Scans cannot overlap for the same reader and stop starting books after ten minutes. Hash linking now protects other books and deleted or changed mappings, avoids unnecessary database writes, and keeps large library caches out of environment settings.
 - **Grimmory highlights now select the correct text.** Highlights spanning italics, links or other inline formatting no longer point at the wrong part of a paragraph when synced between KOReader and Grimmory (#535). Highlights synced before this update may still be in the wrong place in Grimmory; editing one in KOReader sends it again at the right place. Don't delete them in Grimmory to fix them: that also deletes them from your device.

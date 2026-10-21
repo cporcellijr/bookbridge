@@ -13,8 +13,6 @@ from src.utils.user_context import get_current_user_id
 
 logger = logging.getLogger(__name__)
 _STATE_LOCK = threading.Lock()
-PASS_LIMIT = 4
-SCAN_BOOK_LIMIT = 24
 
 
 def state_key(user_id: int | None) -> str:
@@ -121,7 +119,7 @@ def scan_linked(
     db: DatabaseService, client: StorytellerAPIClient, books: list[Book], user_id: int | None,
     library: list[dict] | None = None, deadline: float | None = None,
 ) -> None:
-    """Run a bounded, round-robin per-user backfill over already-linked books."""
+    """Run a time-budgeted, round-robin per-user backfill over already-linked books."""
     if not client or not client.is_configured():
         return
     if library is None:
@@ -141,7 +139,7 @@ def scan_linked(
     start = int(state.get("_cursor", 0) or 0) % len(entries)
     inspected = 0
     to_hash = 0
-    for index in range(min(len(entries), SCAN_BOOK_LIMIT)):
+    for index in range(len(entries)):
         if deadline is not None and time.monotonic() >= deadline:
             logger.info("Storyteller hashes: user %s reached pass time budget; stopping", user_id)
             break
@@ -160,8 +158,6 @@ def scan_linked(
         )
         if (previous.get("fingerprint") != fingerprint
                 or not _is_hash(previous.get("ebook")) or needs_readaloud):
-            if to_hash >= PASS_LIMIT:
-                break
             to_hash += 1
         register_hashes(db, client, mappings[uuid], details=item, user_id=user_id)
         inspected += 1
