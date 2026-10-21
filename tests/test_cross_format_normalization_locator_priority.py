@@ -1,7 +1,10 @@
 import sys
+import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Match existing tests that add project root for `src.*` imports.
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -252,6 +255,174 @@ def test_normalization_uses_href_progression_when_fragment_lookup_fails():
     assert config["BookLore"].current["_normalization_confidence"] == "high"
     _, kwargs = manager.alignment_service.get_time_for_text.call_args
     assert kwargs["char_offset_hint"] == 400
+
+
+def _kobo_finish_manager():
+    manager = _manager_with_mocks()
+    manager.cross_format_deadband_seconds = 2.0
+    manager.sync_clients = {
+        "ABS": _SyncLoopClient(supported_types={"audiobook"}),
+        "BookLore": _SyncLoopClient(),
+    }
+    manager.ebook_parser.resolve_book_path.return_value = "book.epub"
+    manager.ebook_parser.extract_text_and_map.return_value = (
+        "a" * 1000,
+        [{"href": "titlepage.xhtml", "start": 0, "end": 25}],
+    )
+    manager.alignment_service.get_time_for_text.side_effect = (
+        lambda _abs_id, _txt, char_offset_hint: 65.0 * char_offset_hint
+    )
+    manager._has_significant_delta = MagicMock(side_effect=lambda name, *_: name == "BookLore")
+    book = SimpleNamespace(
+        abs_id="abs-kobo", abs_title="Kobo Finish", duration=65000,
+        transcript_file="DB_MANAGED", ebook_filename="book.epub",
+        original_ebook_filename="book.epub", status="active",
+        audio_source="ABS", sync_mode="audiobook",
+    )
+    return manager, book
+
+
+def _kobo_finish_config():
+    config = {
+        "ABS": _state({"pct": 0.979311, "ts": 63650.0}),
+        "BookLore": _state({"pct": 1.0, "cfi": None, "href": "titlepage.xhtml"}),
+    }
+    config["ABS"].previous_pct = 0.979311
+    config["ABS"].delta = 0.0
+    config["BookLore"].previous_pct = 0.98
+    config["BookLore"].delta = 0.02
+    return config
+
+
+def test_grimmory_kobo_finish_reproduces_rollback_then_leads(caplog):
+    manager, book = _kobo_finish_manager()
+    caplog.set_level(logging.INFO)
+    # Reproduce the pre-fix href-only behavior through the real leader decision.
+    with patch.object(manager, "_resolve_href_to_char_offset", return_value=(0, "href_only")):
+        old_config = _kobo_finish_config()
+        old_leader, _ = manager._determine_leader(old_config, book, book.abs_id, book.abs_title)
+    assert old_leader == "ABS"
+    assert (
+        "Ignoring single-client delta from 'BookLore' "
+        "(material rollback on normalized timeline (> 30s behind): 0.0s vs max peer 63650.0s)"
+    ) in caplog.text
+    assert "ABS leads at 97.9311%" in caplog.text
+
+    caplog.clear()
+    config = _kobo_finish_config()
+    with patch.dict("os.environ", {"SYNC_COMPLETION_THRESHOLD": "99"}):
+        leader, pct = manager._determine_leader(config, book, book.abs_id, book.abs_title)
+    assert leader == "BookLore"
+    assert pct == 1.0
+    assert config["BookLore"].current["_normalization_source"] == "href_pct"
+    assert config["BookLore"].current["_normalized_ts"] == 64935.0
+    assert "Ignoring single-client delta from 'BookLore'" not in caplog.text
+
+
+def test_grimmory_kobo_finish_propagates_to_abs(caplog):
+    manager, book = _kobo_finish_manager()
+    manager.sync_delta_between_clients = 0.005
+    manager.delta_chars_thresh = 2000
+    manager._storyteller_epub_ensure_attempted = set()
+    manager._last_library_sync = 0
+    manager.library_service = None
+    manager.booklore_client = None
+    manager._promote_alignment_backed_book = MagicMock(return_value=False)
+    manager._record_reading_movement = MagicMock()
+    manager.database_service = MagicMock()
+    manager.database_service.get_book.return_value = book
+    manager.database_service.get_states_for_book.return_value = [
+        SimpleNamespace(client_name="abs", last_updated=1000, timestamp=63650.0, percentage=0.979311),
+        SimpleNamespace(client_name="booklore", last_updated=1000, timestamp=None, percentage=0.98),
+    ]
+    manager._fetch_states_parallel = MagicMock(return_value=_kobo_finish_config())
+    manager._resolve_alignment_locator_from_abs_timestamp = MagicMock(
+        return_value=(LocatorResult(percentage=1.0, match_index=999, cfi="epubcfi(/6/4!/4:0)"), "end text")
+    )
+    manager.sync_clients["ABS"].abs_client = MagicMock()
+    manager.sync_clients["ABS"].abs_client.mark_finished.return_value = True
+    caplog.set_level(logging.INFO)
+    with patch.dict("os.environ", {"SYNC_COMPLETION_THRESHOLD": "99", "SYNC_COMPLETION_PROPAGATION": "true"}):
+        manager._sync_cycle_internal(target_abs_id=book.abs_id)
+
+    assert "BookLore leads at 100.0000%" in caplog.text
+    manager.sync_clients["ABS"].update_progress.assert_called_once()
+    manager.sync_clients["ABS"].abs_client.mark_finished.assert_called_once_with(book.abs_id)
+    assert "completion propagated to 'ABS'" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(42, 0.42), (None, None), ("garbage", None), (250, 1.0), (-5, 0.0), (float("nan"), None)],
+)
+def test_grimmory_content_source_progress_is_normalized(raw, expected):
+    api = MagicMock()
+    api.get_progress_rich_by_book_id.return_value = {
+        "pct": 0.5, "cfi": None, "href": "chapter.xhtml", "content_source_pct": raw,
+    }
+    client = BookloreSyncClient(api, MagicMock())
+    book = SimpleNamespace(
+        ebook_source="Grimmory", ebook_source_id="42",
+        ebook_filename="book.epub", original_ebook_filename=None,
+    )
+    state = client.get_service_state(book, None)
+    assert state is not None
+    assert state.current["href"] == "chapter.xhtml"
+    if expected is None:
+        assert "chapter_progress" not in state.current
+    else:
+        assert state.current["chapter_progress"] == pytest.approx(expected)
+
+
+def test_normalization_href_only_uses_percentage_within_chapter():
+    manager = _manager_with_mocks()
+    manager.ebook_parser.resolve_book_path.return_value = "book.epub"
+    manager.ebook_parser.extract_text_and_map.return_value = (
+        "a" * 1000, [{"href": "chapter.xhtml", "start": 200, "end": 600}],
+    )
+    manager.alignment_service.get_time_for_text.return_value = 500.0
+    book = SimpleNamespace(abs_id="abs-1", transcript_file="DB_MANAGED", ebook_filename="book.epub")
+    config = {"ABS": _state({"ts": 10.0}), "BookLore": _state({"pct": 0.42, "href": "chapter.xhtml"})}
+
+    manager._normalize_for_cross_format_comparison(book, config)
+
+    assert config["BookLore"].current["_normalization_source"] == "href_pct"
+    assert config["BookLore"].current["_normalization_confidence"] == "low"
+    assert manager.alignment_service.get_time_for_text.call_args.kwargs["char_offset_hint"] == 420
+
+
+def test_normalization_href_only_preserves_chapter_when_pct_outside_below_completion():
+    manager = _manager_with_mocks()
+    manager.ebook_parser.resolve_book_path.return_value = "book.epub"
+    manager.ebook_parser.extract_text_and_map.return_value = (
+        "a" * 1000, [{"href": "chapter.xhtml", "start": 200, "end": 600}],
+    )
+    manager.alignment_service.get_time_for_text.return_value = 500.0
+    book = SimpleNamespace(abs_id="abs-1", transcript_file="DB_MANAGED", ebook_filename="book.epub")
+    config = {"ABS": _state({"ts": 10.0}), "BookLore": _state({"pct": 0.85, "href": "chapter.xhtml"})}
+    with patch.dict("os.environ", {"SYNC_COMPLETION_THRESHOLD": "99"}):
+        manager._normalize_for_cross_format_comparison(book, config)
+
+    assert config["BookLore"].current["_normalization_source"] == "href_only"
+    assert manager.alignment_service.get_time_for_text.call_args.kwargs["char_offset_hint"] == 200
+
+
+def test_normalization_href_only_reads_completion_threshold_per_call():
+    manager = _manager_with_mocks()
+    manager.ebook_parser.resolve_book_path.return_value = "book.epub"
+    manager.ebook_parser.extract_text_and_map.return_value = (
+        "a" * 1000, [{"href": "chapter.xhtml", "start": 200, "end": 600}],
+    )
+    manager.alignment_service.get_time_for_text.return_value = 500.0
+    book = SimpleNamespace(abs_id="abs-1", transcript_file="DB_MANAGED", ebook_filename="book.epub")
+    with patch.dict("os.environ", {"SYNC_COMPLETION_THRESHOLD": "99"}):
+        config = {"ABS": _state({"ts": 10.0}), "BookLore": _state({"pct": 0.97, "href": "chapter.xhtml"})}
+        manager._normalize_for_cross_format_comparison(book, config)
+        assert manager.alignment_service.get_time_for_text.call_args.kwargs["char_offset_hint"] == 200
+    with patch.dict("os.environ", {"SYNC_COMPLETION_THRESHOLD": "95"}):
+        config = {"ABS": _state({"ts": 10.0}), "BookLore": _state({"pct": 0.97, "href": "chapter.xhtml"})}
+        manager._normalize_for_cross_format_comparison(book, config)
+        assert manager.alignment_service.get_time_for_text.call_args.kwargs["char_offset_hint"] == 970
 
 
 def test_normalization_uses_cached_extract_once_per_book_per_cycle():

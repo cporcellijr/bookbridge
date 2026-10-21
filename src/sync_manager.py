@@ -1259,7 +1259,7 @@ class SyncManager:
         context_window = full_text[max(0, idx - 120):min(text_len, idx + 120)]
         return prefix_anchor, suffix_anchor, context_window
 
-    def _resolve_href_to_char_offset(self, ebook_filename: str, href: str, chapter_progress: float | None = None):
+    def _resolve_href_to_char_offset(self, ebook_filename: str, href: str, chapter_progress: float | None = None, pct: float | None = None, total_text_len: int | None = None):
         """Map an href (and optional chapter progression) to a global character offset."""
         if not ebook_filename or not href:
             return None, None
@@ -1295,6 +1295,11 @@ class SyncManager:
                     progress = None
                 if progress is not None:
                     return start + int((end - start) * progress), "href_progression"
+
+            if chapter_progress is None and pct is not None and total_text_len:
+                pct_offset = int(pct * total_text_len)
+                if start <= pct_offset < end or pct >= self._completion_threshold():
+                    return pct_offset, "href_pct"
 
             return start, "href_only"
         except Exception:
@@ -1973,7 +1978,8 @@ class SyncManager:
 
                 if char_offset is None and client_href:
                     char_offset, href_source = self._resolve_href_to_char_offset(
-                        client_epub, client_href, client_chapter_progress
+                        client_epub, client_href, client_chapter_progress,
+                        pct=client_pct, total_text_len=total_text_len,
                     )
                     if char_offset is not None:
                         normalization_source = href_source
