@@ -621,6 +621,32 @@ class AudioTranscriber:
             except OSError as cleanup_err:
                 logger.debug(f"Transcript cache cleanup skipped {artifact.name}: {cleanup_err}")
 
+    _CHUNK_NAME = re.compile(r"part_(\d+)(?:_normalized)?(?:_split_(\d+))?\.wav")
+
+    @classmethod
+    def _cached_chunks(cls, book_cache_dir: Path, part_count: int) -> Optional[List[Path]]:
+        """The cached WAV chunks of all ``part_count`` parts in transcription order, or None.
+
+        A part under the split length stays whole (``part_NNN.wav``, or
+        ``part_NNN_normalized.wav`` from a WAV source); a longer one becomes
+        ``part_NNN_split_XXX.wav``. Each step deletes its input only after its output is
+        complete, so a leftover source file, two whole files, or a whole file beside its
+        pieces means the cache was interrupted mid-step and can't be trusted.
+        """
+        parts: Dict[int, List[tuple]] = {}
+        for path in book_cache_dir.glob("part_*"):
+            match = cls._CHUNK_NAME.fullmatch(path.name)
+            if not match:
+                return None
+            piece = int(match.group(2)) if match.group(2) else None
+            parts.setdefault(int(match.group(1)), []).append((piece, path))
+        for pieces in parts.values():
+            if None in (piece for piece, _ in pieces) and len(pieces) > 1:
+                return None
+        if set(parts) != set(range(part_count)):
+            return None
+        return [path for idx in sorted(parts) for _, path in sorted(parts[idx], key=lambda p: p[0] or 0)]
+
     @time_execution
     def process_audio(
         self,
@@ -707,11 +733,10 @@ class AudioTranscriber:
                     full_transcript = progress.get('transcript', [])
                     vad_used = progress.get('vad_filter') is True
 
-                    # Find existing split files
-                    cached_files = sorted(book_cache_dir.glob("part_*_split_*.wav"))
+                    cached_files = self._cached_chunks(book_cache_dir, len(audio_urls))
 
                     if cached_files and chunks_completed > 0:
-                        downloaded_files = list(cached_files)
+                        downloaded_files = cached_files
                         resuming = True
                         logger.info(f"♻️ Resuming transcription: {chunks_completed} chunks previously done")
                 except Exception as e:
@@ -722,26 +747,20 @@ class AudioTranscriber:
 
             # Phase 1: Download and Normalize (if not resuming)
             if not resuming:
-                # Check that files exist for all parts before skipping.
-                existing_files = sorted(book_cache_dir.glob("part_*_split_*.wav"))
-                
-                # Check coverage: Do we have at least one file for every index in audio_urls?
-                missing_parts = False
-                for idx in range(len(audio_urls)):
-                    # Look for any file starting with part_{idx:03d}
-                    part_exists = any(f.name.startswith(f"part_{idx:03d}_") for f in existing_files)
-                    if not part_exists:
-                        missing_parts = True
-                        break
-                
-                if existing_files and not missing_parts:
+                # Skip the download only when every part is cached.
+                existing_files = self._cached_chunks(book_cache_dir, len(audio_urls))
+
+                if existing_files:
                     logger.info(f"♻️ Found valid cache ({len(existing_files)} files covering all {len(audio_urls)} parts). Skipping download.")
-                    downloaded_files = list(existing_files)
+                    downloaded_files = existing_files
                 else:
-                    if existing_files:
-                        logger.warning(f"⚠️ Found {len(existing_files)} cached files but some parts are missing. Wiping cache to start fresh")
-                        shutil.rmtree(book_cache_dir)
-                    
+                    stale_files = list(book_cache_dir.glob("part_*"))
+                    if stale_files:
+                        logger.warning(f"⚠️ Found {len(stale_files)} cached files but some parts are missing. Wiping cache to start fresh")
+                        # Keep `_progress.json`: its chunks were transcribed from complete
+                        # audio, and the re-download reproduces the same chunks.
+                        self._prune_audio_cache(book_cache_dir, remove_directories=True)
+
                     # Original logic: Wipe and Start Fresh
                     book_cache_dir.mkdir(parents=True, exist_ok=True)
                     downloaded_files = []
@@ -880,8 +899,10 @@ class AudioTranscriber:
             except ValueError as coverage_err:
                 # Wipe the chunks too — otherwise the retry "finds a valid cache" and
                 # re-checks the same short audio forever instead of re-downloading.
+                # `_progress.json` stays: chunks are transcribed only after this check
+                # passes, so a resume misreading the cache costs a download, not hours.
                 if not raw_audio:
-                    shutil.rmtree(book_cache_dir, ignore_errors=True)
+                    self._prune_audio_cache(book_cache_dir, remove_directories=True)
                 logger.error(
                     f"❌ '{abs_id}' {coverage_err} — the audio BookBridge fetched is shorter "
                     f"than the runtime the library reports. Cleared the audio cache; the job "

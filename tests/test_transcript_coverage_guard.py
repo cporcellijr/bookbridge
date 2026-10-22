@@ -265,8 +265,8 @@ class TestProcessAudioGuards(TranscriptCoverageTestCase):
             self.assertIn("Coverage too low", str(ctx.exception))
             provider.transcribe.assert_not_called()
 
-        self.assertFalse(
-            cache_dir.exists(),
+        self.assertEqual(
+            list(cache_dir.iterdir()), [],
             "the short audio cache must be cleared so the retry re-downloads",
         )
 
@@ -339,12 +339,14 @@ class TestStageAttribution(TranscriptCoverageTestCase):
         cache_dir = self.tmp / "audio_cache" / abs_id
         cache_dir.mkdir(parents=True, exist_ok=True)
         wav = cache_dir / "part_000.wav"
-        wav.write_bytes(b"RIFF")
 
         durations = {"source": REPORTED_AUDIO_DURATION, "wav": REPORTED_TRANSCRIPT_EXTENT}
         self.transcriber.get_audio_duration = MagicMock(
             side_effect=lambda p: durations["wav"] if str(p).endswith(".wav") else durations["source"])
-        self.transcriber.normalize_audio_to_wav = MagicMock(return_value=wav)
+        # The WAV appears only when normalization runs; one already present would be a
+        # complete cache and skip the download this test exercises.
+        self.transcriber.normalize_audio_to_wav = MagicMock(
+            side_effect=lambda _source: wav.write_bytes(b"RIFF") and wav)
 
         def fake_get(url, **kwargs):
             response = MagicMock()

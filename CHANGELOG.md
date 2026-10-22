@@ -17,6 +17,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **An interrupted Whisper transcription resumes instead of starting over** (#540). On resume, parts short enough to skip splitting were not found, so a multi-file audiobook looked too short, was rejected, and lost every finished chunk. Resume now finds every cached part, and a rejected cache costs a re-download rather than the transcript.
 - **Local File suggestions can auto-match using the ebook's KoSync file hash** (#507). Unhashable files and hashes already owned by other audiobooks or readers remain for review; unattended scans cannot absorb another reader's ebook-only mapping. Contributed by [@chemicalsno](https://github.com/chemicalsno) in #507.
 - **Suggestions distinguish series volumes, editions, and edited Calibre metadata** (#541). Matching now considers Calibre's live metadata database, series numbering and edition credits while preserving distinctive titles when volume schemes differ. Contributed by [@chemicalsno](https://github.com/chemicalsno) in #541.
 - **Hidden library folders no longer supply new Local File search or suggestion results** (#539). Calibre trash and hidden snapshot/sync directories are ignored, while previously mapped books remain resolvable. Contributed by [@chemicalsno](https://github.com/chemicalsno) in #539.
