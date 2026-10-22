@@ -73,7 +73,8 @@
                     </form>
                     {% endif %}
                     {% if u.id != current_user_id %}
-                    <form method="POST" onsubmit="return confirm('{{ _('Delete %(name)s? Their progress/credentials are removed.', name=u.username) }}');">
+                    {# |safe: tojson does the escaping here; letting _() HTML-escape the name too would show "o&#39;brien" in the dialog. #}
+                    <form method="POST" onsubmit='return confirm({{ _('Delete %(name)s? Their progress/credentials are removed.', name=u.username|safe) | tojson }});'>
                         <input type="hidden" name="action" value="delete">
                         <input type="hidden" name="user_id" value="{{ u.id }}">
                         <button type="submit" class="btn btn-danger btn-sm">{{ _('Delete') }}</button>
@@ -88,7 +89,7 @@
     <div class="card">
         <h2>{{ _('Shared library') }}</h2>
         <p>{{ _('Shares the existing catalog with all active users. Requires the Shared Library setting (Features → Shared Library). This is one-way and cannot be undone in bulk.') }}</p>
-        <form method="POST" onsubmit="return confirm('{{ _('This will give every active user visibility of every book in the catalog. This cannot be undone in bulk.') }}');">
+        <form method="POST" onsubmit='return confirm({{ _('This will give every active user visibility of every book in the catalog. This cannot be undone in bulk.') | tojson }});'>
             <input type="hidden" name="action" value="share_library">
             <button type="submit" class="btn btn-secondary btn-sm">📚 {{ _('Share library with all users') }}</button>
         </form>

@@ -57,6 +57,20 @@ def is_comic_ebook_filename(name: str | None) -> bool:
     return str(name or '').strip().lower().endswith(tuple(COMIC_EBOOK_EXTENSIONS))
 
 
+def is_in_hidden_folder(path, root) -> bool:
+    """True when ``path`` sits in a hidden folder under ``root``.
+
+    Hidden folders in a library hold copies nobody means to match: Calibre's
+    ``.caltrash``, desktop trash, sync and snapshot folders. Only folders below
+    ``root`` count, so a library mounted under a hidden path still scans.
+    """
+    try:
+        folders = Path(path).relative_to(root).parts[:-1]
+    except ValueError:
+        return False
+    return any(folder.startswith('.') for folder in folders)
+
+
 # Names the bridge writes into the epub cache when it acquires an ebook for an
 # ABS item: ``<item_id>_direct.<ext>``, ``<item_id>_cwa.<ext>`` and
 # ``<item_id>_abs_search.<ext>`` (see LibraryService.acquire_ebook).

@@ -57,7 +57,7 @@ from src.utils.transcription_cancel import (
 from src.utils.transcriber import TranscriptionCancelled
 from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 from src.utils.progress_metadata import state_metadata_kwargs
-from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_linkable_ebook_filename
+from src.utils.ebook_utils import LINKABLE_EBOOK_EXTENSIONS, is_in_hidden_folder, is_linkable_ebook_filename
 from src.utils.fixed_page_progress import coerce_page, is_cbz_book, is_cbz_filename
 from src.utils.ebook_sources import (
     is_grimmory_source,
@@ -2843,6 +2843,8 @@ class SyncManager:
                         if epub.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS or not epub.is_file():
                             continue
                         if epub.name in found_filenames or is_generated_readalong_epub(epub.name):
+                            continue
+                        if is_in_hidden_folder(epub, self.books_dir):
                             continue
                         if clean_title in epub.name.lower():
                             fs_matches += 1

@@ -47,6 +47,7 @@ from src.utils.ebook_utils import (
     LINKABLE_EBOOK_EXTENSIONS,
     LRUCache,
     is_comic_ebook_filename,
+    is_in_hidden_folder,
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
@@ -59,6 +60,9 @@ from src.services.job_queue_view import build_job_queue_view
 from src.services import whats_new
 from src.api.api_clients import ABS_DISABLED_SENTINEL, is_abs_disabled_value
 from src.api.kosync_server import kosync_sync_bp, kosync_admin_bp, init_kosync_server, signal_manifest_rebuild
+# This import adds the position-preview routes to kosync_admin_bp before
+# setup_dependencies registers the blueprint.
+from src.api import reading_position_preview_routes  # noqa: E402,F401
 from src.api.admin_api import admin_api_bp, init_admin_api
 from src.api.hardcover_routes import hardcover_bp, init_hardcover_routes
 from src.api.storygraph_routes import storygraph_bp, init_storygraph_routes
@@ -3973,6 +3977,7 @@ def get_suggestion_audiobooks():
                 "audio_source_id": source_id,
                 "audio_title": title,
                 "audio_subtitle": (item.subtitle or "").strip(),
+                "audio_series": (item.series_label or "").strip(),
                 "audio_author": author,
                 "audio_language": item.language or "",
                 "audio_duration": item.duration,
@@ -4010,7 +4015,7 @@ def _build_local_ebook_title_index():
             for eb in EBOOK_DIR.rglob('*'):
                 if eb.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
                     continue
-                if is_generated_readalong_epub(eb.name):
+                if is_generated_readalong_epub(eb.name) or is_in_hidden_folder(eb, EBOOK_DIR):
                     continue
                 stem = eb.stem
                 title_part = stem.split(" - ", 1)[0]
@@ -4227,6 +4232,7 @@ def get_searchable_ebooks(search_term):
                 eb for eb in EBOOK_DIR.rglob('*')
                 if eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS and eb.is_file()
                 and not is_generated_readalong_epub(eb.name)
+                and not is_in_hidden_folder(eb, EBOOK_DIR)
             ]
             for eb in all_ebooks:
                 fname_lower = eb.name.lower()
@@ -7231,6 +7237,8 @@ def forge_search_text():
             for epub in local_books_dir.rglob("*.epub"):
                 if "(readaloud)" in epub.name.lower() or is_generated_readalong_epub(epub.name):
                     continue
+                if is_in_hidden_folder(epub, local_books_dir):
+                    continue
                 if query_lower in epub.name.lower():
                     key = f"local_{epub.name}"
                     if key not in found_ids:
@@ -9345,6 +9353,56 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
             remaining.append(suggestion)
             continue
         try:
+            # The mapping service hashes by downloading from a library; a Local File
+            # has no library id, so hash the file itself as manual matching does.
+            # Without a hash the service can't link it either.
+            kosync_doc_id = None
+            if top.get('source') == 'Local File':
+                kosync_doc_id = get_kosync_id_for_ebook(
+                    top.get('ebook_filename') or '', source_path=top.get('source_path'),
+                )
+                if not kosync_doc_id:
+                    logger.warning(
+                        f"⚠️ Auto-match could not hash Local File '{top.get('ebook_filename')}' "
+                        f"for '{suggestion.get('abs_title')}'; left for review"
+                    )
+                    remaining.append(suggestion)
+                    continue
+                # Saving a mapping absorbs any other book on the same hash. With
+                # two audiobooks of one ebook, or two files sharing a filename
+                # hash, the second match deletes the first one's mapping.
+                audio_source_id = suggestion.get('audio_source_id') or suggestion.get('abs_id') or ''
+                holder = database_service.get_book_by_kosync_id(kosync_doc_id)
+                if (
+                    holder is not None
+                    and holder.sync_mode != 'ebook_only'
+                    and (holder.audio_source_id or holder.abs_id) != audio_source_id
+                ):
+                    logger.info(
+                        f"Auto-match skipped '{suggestion.get('abs_title')}': Local File "
+                        f"'{top.get('ebook_filename')}' is already linked to another audiobook "
+                        f"('{holder.abs_title}', {holder.abs_id}); left for review"
+                    )
+                    remaining.append(suggestion)
+                    continue
+                # Absorbing moves the holder's readers and progress, so unattended
+                # auto-match only folds in the scanning reader's own mapping.
+                document = database_service.get_kosync_document(kosync_doc_id)
+                document_owner = getattr(document, 'linked_abs_id', None) if document else None
+                other_readers = (
+                    holder is not None and holder.sync_mode == 'ebook_only'
+                    and any(uid != user_id for uid in database_service.get_book_user_ids(holder.abs_id))
+                )
+                if other_readers or document_owner not in (
+                    None, suggestion.get('abs_id'), getattr(holder, 'abs_id', None),
+                ):
+                    logger.info(
+                        f"Auto-match skipped '{suggestion.get('abs_title')}': Local File "
+                        f"'{top.get('ebook_filename')}' belongs to another reader's mapping; "
+                        f"left for review"
+                    )
+                    remaining.append(suggestion)
+                    continue
             saved = mapping_service.create_audio_mapping_from_match(
                 audio_source=suggestion.get('audio_source') or 'ABS',
                 audio_source_id=suggestion.get('audio_source_id') or suggestion.get('abs_id') or '',
@@ -9356,6 +9414,7 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
                 audio_provider_file_id=suggestion.get('audio_provider_file_id'),
                 ebook_source=top.get('source'),
                 ebook_source_id=str(top.get('source_id')) if top.get('source_id') is not None else None,
+                kosync_doc_id=kosync_doc_id,
                 user_id=user_id,
             )
         except Exception as e:

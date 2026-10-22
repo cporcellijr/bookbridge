@@ -131,6 +131,10 @@ class TestIntegrationPageRendering(unittest.TestCase):
 
         templates = Path(__file__).resolve().parent.parent / 'templates'
         env = Environment(loader=FileSystemLoader(str(templates)))
+        # The page wraps its text in _() / {% trans %}; render it untranslated,
+        # with newstyle gettext as Flask-Babel uses.
+        env.add_extension('jinja2.ext.i18n')
+        env.install_null_translations(newstyle=True)
         env.globals['url_for'] = lambda endpoint, **kw: f'/{endpoint}'
         # The page extends base.html; render only the group markup by pulling the
         # body block out of the child template.
@@ -201,6 +205,10 @@ class TestAdminIntegrationPageRendering(TestIntegrationPageRendering):
 
         templates = Path(__file__).resolve().parent.parent / 'templates'
         env = Environment(loader=FileSystemLoader(str(templates)))
+        # The page wraps its text in _() / {% trans %}; render it untranslated,
+        # with newstyle gettext as Flask-Babel uses.
+        env.add_extension('jinja2.ext.i18n')
+        env.install_null_translations(newstyle=True)
         env.globals['url_for'] = lambda endpoint, **kw: f'/{endpoint}'
         source = (templates / self.TEMPLATE).read_text(encoding='utf-8')
         start = source.index("{% block content %}")

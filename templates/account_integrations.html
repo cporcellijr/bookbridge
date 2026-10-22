@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}My Integrations - BookBridge{% endblock %}
+{% block title %}{{ _('My Integrations - BookBridge') }}{% endblock %}
 
 {% block head %}
 <style>
@@ -51,17 +51,17 @@
 {% block content %}
 <div class="integrations-wrap">
     <div class="nav">
-        <a href="{{ url_for('account') }}">Back to account</a>
-        <a href="{{ url_for('index') }}">Dashboard</a>
+        <a href="{{ url_for('account') }}">{{ _('Back to account') }}</a>
+        <a href="{{ url_for('index') }}">{{ _('Dashboard') }}</a>
     </div>
     <div class="card">
-        <h1>My Integrations</h1>
-        <p class="sub">Signed in as <strong>{{ account_user.username }}</strong>{% if account_user.role == 'admin' %} (admin){% endif %}. These accounts are used only for your reading progress, books, highlights, and trackers.</p>
+        <h1>{{ _('My Integrations') }}</h1>
+        <p class="sub">{% trans name=account_user.username %}Signed in as <strong>{{ name }}</strong>{% endtrans %}{% if account_user.role == 'admin' %} {{ _('(admin)') }}{% endif %}. {{ _('These accounts are used only for your reading progress, books, highlights, and trackers.') }}</p>
 
         {% if allow_master_fallback %}
-        <div class="note">Blank fields can inherit master Settings values for your admin account.</div>
+        <div class="note">{{ _('Blank fields can inherit master Settings values for your admin account.') }}</div>
         {% else %}
-        <div class="note">Blank account fields stay unavailable instead of inheriting an admin's library or tracker account.</div>
+        <div class="note">{{ _("Blank account fields stay unavailable instead of inheriting an admin's library or tracker account.") }}</div>
         {% endif %}
 
         {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
@@ -126,14 +126,14 @@
                         {{ group }}
                         {% if group == 'BookFusion' %}
                         <span id="bookfusion_link_pill" class="status-pill {% if creds.get('BOOKFUSION_ACCESS_TOKEN') %}linked{% else %}unlinked{% endif %}">
-                            {% if creds.get('BOOKFUSION_ACCESS_TOKEN') %}Linked{% else %}Not linked{% endif %}
+                            {% if creds.get('BOOKFUSION_ACCESS_TOKEN') %}{{ _('Linked') }}{% else %}{{ _('Not linked') }}{% endif %}
                         </span>
                         {% endif %}
                     </h2>
                     <div class="group-head-actions">
                         {% if gate_key or source_gate %}
                         <div class="toggle-switch-wrapper">
-                            <span class="toggle-label">{% if gate_globally_off %}Off server-wide{% else %}Enable{% endif %}</span>
+                            <span class="toggle-label">{% if gate_globally_off %}{{ _('Off server-wide') }}{% else %}{{ _('Enable') }}{% endif %}</span>
                             <label class="toggle-switch" for="{{ gate_id }}">
                                 <input type="checkbox" id="{{ gate_id }}"
                                     {% if gate_key %}name="{{ gate_key }}"{% endif %}
@@ -155,31 +155,31 @@
                 </div>
                 <div id="{{ body_id }}" class="group-body {% if (gate_key or source_gate) and not group_enabled %}collapsed{% endif %}">
                     {% if gate_globally_off %}
-                    <div class="note">Turned off for everyone in Settings → Integrations. Your own choice here is remembered and takes effect again when an admin switches this service back on.</div>
+                    <div class="note">{{ _('Turned off for everyone in Settings → Integrations. Your own choice here is remembered and takes effect again when an admin switches this service back on.') }}</div>
                     {% endif %}
                     {% if group == 'Storyteller' %}
-                    <div class="note">To create Storyteller editions, your Storyteller account needs Upload book and Book syncing permissions.</div>
+                    <div class="note">{{ _('To create Storyteller editions, your Storyteller account needs Upload book and Book syncing permissions.') }}</div>
                     {% endif %}
                     {% if group == 'KOReader / KoSync' %}
-                    <div class="note">The account your KOReader devices use with BookBridge's own sync server. Choose HTTP Basic only when relaying through Calibre-Web Automated, preferably over HTTPS.</div>
+                    <div class="note">{{ _("The account your KOReader devices use with BookBridge's own sync server. Choose HTTP Basic only when relaying through Calibre-Web Automated, preferably over HTTPS.") }}</div>
                     {% endif %}
                     {% if group == 'KOReader Collections' %}
-                    <div class="note">BridgeSync can create KOReader collections from your Grimmory shelves or Hardcover lists.</div>
+                    <div class="note">{{ _('BridgeSync can create KOReader collections from your Grimmory shelves or Hardcover lists.') }}</div>
                     {% endif %}
                     {% if group == 'BookOrbit' %}
-                    <div class="note">Username / Password is your BookOrbit web account. The KOReader sync fields are separate credentials used only for highlight and note relay.</div>
+                    <div class="note">{{ _('Username / Password is your BookOrbit web account. The KOReader sync fields are separate credentials used only for highlight and note relay.') }}</div>
                     {% endif %}
                     {% if group == 'BookFusion' %}
-                    <div class="note"><strong>Two separate credentials.</strong> The <strong>Access token</strong> authorizes reading progress &amp; highlights — get it with the <strong>Link BookFusion</strong> button below (device flow; the raw field is kept for recovery/manual setup). The <strong>Calibre API key</strong> is only needed to <strong>upload books</strong> to BookFusion, from the
-                        <a href="https://www.bookfusion.com/integrations/calibre" target="_blank" rel="noopener" style="color:#aab4f5;">BookFusion Calibre integration page</a>.</div>
+                    <div class="note">{% trans trimmed url='https://www.bookfusion.com/integrations/calibre' %}<strong>Two separate credentials.</strong> The <strong>Access token</strong> authorizes reading progress &amp; highlights — get it with the <strong>Link BookFusion</strong> button below (device flow; the raw field is kept for recovery/manual setup). The <strong>Calibre API key</strong> is only needed to <strong>upload books</strong> to BookFusion, from the
+                        <a href="{{ url }}" target="_blank" rel="noopener" style="color:#aab4f5;">BookFusion Calibre integration page</a>.{% endtrans %}</div>
                     <div class="link-actions">
-                        <button type="button" class="btn btn-secondary" onclick="startBookFusionLink()">Link BookFusion</button>
+                        <button type="button" class="btn btn-secondary" onclick="startBookFusionLink()">{{ _('Link BookFusion') }}</button>
                     </div>
                     <div id="bookfusion_link_status" class="inline-status"></div>
                     {% endif %}
                     {% if user_test_services.get(group) %}
                     <button type="button" class="test-btn" data-service="{{ user_test_services.get(group) }}"
-                        onclick="testUserIntegration(this)">Test</button>
+                        onclick="testUserIntegration(this)">{{ _('Test') }}</button>
                     {% endif %}
                     {% for key, label, ftype in fields %}
                     {% if key == gate_key %}
@@ -187,12 +187,12 @@
                     <div class="toggle-row">
                         <input type="checkbox" id="{{ key }}" name="{{ key }}"
                             {% if creds.get(key, '')|lower in ['true','1','yes','on'] %}checked{% endif %}>
-                        <label for="{{ key }}">{{ label }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">(master: {{ master.get(key) }})</span>{% endif %}</label>
+                        <label for="{{ key }}">{{ label }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">{{ _('(master: %(value)s)', value=master.get(key)) }}</span>{% endif %}</label>
                     </div>
                     {% elif ftype == 'secret' %}
                     <label for="{{ key }}">{{ label }}</label>
                     <input type="password" id="{{ key }}" name="{{ key }}" autocomplete="off"
-                        placeholder="{% if creds.get(key) %}set - leave blank to keep{% elif allow_master_fallback and master.get(key) %}inherits master (set){% else %}not set{% endif %}">
+                        placeholder="{% if creds.get(key) %}{{ _('set - leave blank to keep') }}{% elif allow_master_fallback and master.get(key) %}{{ _('inherits master (set)') }}{% else %}{{ _('not set') }}{% endif %}">
                     {% elif ftype.startswith('select:') %}
                     <label for="{{ key }}">{{ label }}</label>
                     {% if key == 'DEVICE_SYNC_COLLECTION_SOURCE' %}
@@ -214,25 +214,25 @@
                     <div style="display:flex; gap:8px; margin-bottom:14px;">
                         <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
                             style="margin-bottom:0; flex:1;"
-                            placeholder="{% if allow_master_fallback and master.get(key) %}inherits master: {{ master.get(key) }}{% else %}not set{% endif %}">
+                            placeholder="{% if allow_master_fallback and master.get(key) %}{{ _('inherits master: %(value)s', value=master.get(key)) }}{% else %}{{ _('not set') }}{% endif %}">
                         <button type="button" class="test-btn" style="white-space:nowrap;"
-                            onclick="findLibraries(this, '{{ 'abs' if key == 'ABS_LIBRARY_ID' else 'booklore' }}', '{{ key }}')">Find IDs</button>
+                            onclick="findLibraries(this, '{{ 'abs' if key == 'ABS_LIBRARY_ID' else 'booklore' }}', '{{ key }}')">{{ _('Find IDs') }}</button>
                     </div>
                     <select id="{{ key }}_picker"
                         style="display:none; width:100%; margin-bottom:14px; padding:10px 12px; background:#0e0e0e; border:1px solid #2c2c2c; border-radius:8px; color:#fff; font-size:14px;"
                         onchange="if(this.value){document.getElementById('{{ key }}').value=this.value;}">
-                        <option value="">Select a library...</option>
+                        <option value="">{{ _('Select a library...') }}</option>
                     </select>
                     {% else %}
                     <label for="{{ key }}">{{ label }}</label>
                     <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
-                        placeholder="{% if allow_master_fallback and master.get(key) %}inherits master: {{ master.get(key) }}{% else %}not set{% endif %}">
+                        placeholder="{% if allow_master_fallback and master.get(key) %}{{ _('inherits master: %(value)s', value=master.get(key)) }}{% else %}{{ _('not set') }}{% endif %}">
                     {% endif %}
                     {% endfor %}
                 </div>
             </div>
             {% endfor %}
-            <button type="submit" class="btn btn-primary" style="width:100%;">Save integrations</button>
+            <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save integrations') }}</button>
         </form>
     </div>
 </div>

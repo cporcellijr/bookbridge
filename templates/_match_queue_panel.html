@@ -41,7 +41,7 @@
     <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
     <form method="POST" action="/suggestions">
         <input type="hidden" name="action" value="clear_queue">
-        <button type="submit" class="btn btn-danger w-100" onclick="return confirm('{{ _('Clear entire queue?') }}')">🗑️ {{ _('Clear Queue') }}</button>
+        <button type="submit" class="btn btn-danger w-100" onclick='return confirm({{ _('Clear entire queue?') | tojson }})'>🗑️ {{ _('Clear Queue') }}</button>
     </form>
 </div>
 {% else %}
