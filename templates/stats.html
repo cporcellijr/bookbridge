@@ -17,7 +17,7 @@
         background: linear-gradient(135deg, rgba(102,126,234,.18), rgba(118,75,162,.15)), rgba(255,255,255,.04);
         border: 1px solid rgba(255,255,255,.08);
     }
-    .hero-top, .dashboard-header, .recent-item, .heatmap-legend { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    .hero-top, .dashboard-header, .recent-item { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
     .hero h1 { font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1.05; margin-bottom: 12px; letter-spacing: -.03em; }
     .hero p, .dashboard-header p, .empty-state p { color: var(--muted); line-height: 1.6; }
     .hero-meta { margin-top: 22px; gap: 10px; }
@@ -35,7 +35,7 @@
     .dashboard-shell, .recent-list, .heatmap-shell { display: grid; gap: 18px; }
     .dashboard-header, .panel { padding: 22px 24px; }
     .dashboard-header h2 { font-size: 30px; margin-bottom: 8px; }
-    .dashboard-note, .panel-head span, .summary-card-sub, .recent-time, .heatmap-days, .heatmap-legend, .heatmap-months { color: var(--muted-soft); font-size: 12px; }
+    .dashboard-note, .panel-head span, .summary-card-sub, .recent-time, .heatmap-days, .heatmap-legend, .heatmap-month-track { color: var(--muted-soft); font-size: 12px; }
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 16px; }
     .stat-card { padding: 20px 22px; background: linear-gradient(135deg, rgba(255,255,255,.08), transparent 55%), var(--panel); }
     .stat-card-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; margin-bottom: 10px; }
@@ -61,13 +61,16 @@
     .recent-meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
     .recent-side { text-align: right; flex-shrink: 0; }
     .recent-duration { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
-    .heatmap-months, .heatmap-main { display: grid; gap: 10px; }
-    .heatmap-months { grid-template-columns: 38px 1fr; font-weight: 600; }
-    .heatmap-month-track { position: relative; min-height: 14px; overflow: hidden; }
+    .heatmap-main { display: grid; gap: 10px; grid-template-columns: 28px minmax(0,1fr); align-items: start; }
+    /* Month labels share the grid's scroll container so they move with the weeks when swiped. */
+    .heatmap-scroll { overflow-x: auto; padding-bottom: 4px; }
+    .heatmap-canvas { display: grid; gap: 18px; width: max-content; }
+    .heatmap-month-track { position: relative; min-height: 14px; overflow: hidden; font-weight: 600; }
     .heatmap-month-label { position: absolute; top: 0; transform: translateX(-4px); white-space: nowrap; }
-    .heatmap-main { grid-template-columns: 28px minmax(0,1fr); align-items: start; }
     .heatmap-days, .heatmap-week { display: grid; gap: 4px; }
-    .heatmap-grid { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+    .heatmap-days { padding-top: 32px; } /* month track (14px) + canvas gap (18px) */
+    .heatmap-days span { height: 12px; line-height: 12px; } /* matches .heatmap-cell */
+    .heatmap-grid { display: flex; gap: 4px; }
     .heatmap-cell { width: 12px; height: 12px; border-radius: 4px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.05); }
     button.heatmap-cell { padding: 0; appearance: none; cursor: default; }
     .heatmap-cell.level-1 { background: rgba(102,126,234,.28); }
@@ -77,6 +80,7 @@
     .heatmap-cell.is-clickable { cursor: pointer; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
     .heatmap-cell.is-clickable:hover,
     .heatmap-cell.is-clickable:focus-visible { transform: translateY(-1px) scale(1.08); border-color: rgba(255,255,255,.35); outline: none; }
+    .heatmap-legend { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
     .legend-swatches { display: inline-flex; gap: 4px; }
     .empty-state { padding: 38px 28px; text-align: center; }
     .empty-state h3 { font-size: 24px; margin-bottom: 10px; }
@@ -193,6 +197,12 @@
     .pct-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; overflow: hidden; }
     .pct-bar > span { display: block; height: 100%; background: var(--success); }
     .scroll-list { max-height: 360px; overflow-y: auto; }
+    /* The books list fills the height its row gives it and scrolls inside, so it
+       never ends partway down the panel or stretches the panel beside it. */
+    .books-panel { display: flex; flex-direction: column; }
+    .books-panel .scroll-list { flex: 1 1 0; min-height: 360px; max-height: none; }
+    /* The heatmap keeps its own height beside the taller recent sessions list. */
+    #heatmap-panel { align-self: start; }
     .finished-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
     .finished-row:last-child { border-bottom: none; }
 </style>
@@ -310,7 +320,7 @@
         },
         listening: {
             title: "Listening activity",
-            subtitle: "Live Audiobookshelf user stats with weekly activity, recent sessions, and yearly listening heatmap.",
+            subtitle: "Live Audiobookshelf user stats with weekly activity, recent sessions, and a listening heatmap of the last 12 months.",
             emptyTitle: "Listening stats are unavailable",
             emptyBody: "Audiobookshelf may be unconfigured, offline, or temporarily unreachable. The rest of BookBridge will continue working normally.",
             cards: [
@@ -698,6 +708,23 @@
         `;
     }
 
+    // The server groups activity into days in its own time zone, with the same
+    // America/New_York fallback, so today's date comes from that zone.
+    function serverToday() {
+        const now = new Date();
+        for (const timeZone of [BRIDGE_TIMEZONE || "America/New_York", "America/New_York"]) {
+            try {
+                const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(now);
+                const part = type => Number(parts.find(item => item.type === type).value);
+                return new Date(part("year"), part("month") - 1, part("day"));
+            } catch (error) {
+                continue;
+            }
+        }
+        now.setHours(0, 0, 0, 0);
+        return now;
+    }
+
     function heatLevel(seconds, maxSeconds) {
         if (!seconds || seconds <= 0 || !maxSeconds) return 0;
         const ratio = seconds / maxSeconds;
@@ -707,21 +734,42 @@
         return 4;
     }
 
-    function heatmap(dataset) {
+    // Without a year, the 53 weeks ending this week, so the grid keeps rolling past
+    // New Year. With a year, that calendar year.
+    function heatmap(dataset, year = null) {
         const entries = Array.isArray(dataset.heatmap) ? dataset.heatmap : [];
         const readingInteractive = state.activeTab === "reading";
-        const year = new Date().getFullYear();
-        const start = new Date(year, 0, 1);
-        const end = new Date(year, 11, 31);
-        const firstSunday = new Date(start);
-        firstSunday.setDate(firstSunday.getDate() - firstSunday.getDay());
-        const lastSaturday = new Date(end);
-        lastSaturday.setDate(lastSaturday.getDate() + (6 - lastSaturday.getDay()));
+        const today = serverToday();
+        const monthYear = date => date.toLocaleString(undefined, { month: "short", year: "numeric" });
+        let firstDay, lastDay, firstSunday, lastSaturday, title, range;
+        if (year === null) {
+            const thisSunday = new Date(today);
+            thisSunday.setDate(today.getDate() - today.getDay());
+            firstSunday = new Date(thisSunday);
+            firstSunday.setDate(thisSunday.getDate() - 52 * 7);
+            lastSaturday = new Date(thisSunday);
+            lastSaturday.setDate(thisSunday.getDate() + 6);
+            firstDay = firstSunday;
+            lastDay = today;
+            title = "Last 12 months";
+            range = `${monthYear(firstSunday)} to ${monthYear(today)}`;
+        } else {
+            firstDay = new Date(year, 0, 1);
+            const yearEnd = new Date(year, 11, 31);
+            lastDay = yearEnd < today ? yearEnd : today;
+            firstSunday = new Date(firstDay);
+            firstSunday.setDate(firstDay.getDate() - firstDay.getDay());
+            lastSaturday = new Date(yearEnd);
+            lastSaturday.setDate(yearEnd.getDate() + (6 - yearEnd.getDay()));
+            title = String(year);
+            range = `${monthYear(firstDay)} to ${monthYear(yearEnd)}`;
+        }
         const map = new Map(entries.map(entry => [entry.date, Number(entry.seconds || 0)]));
         const maxSeconds = entries.reduce((max, entry) => Math.max(max, Number(entry.seconds || 0)), 0);
         const weeks = [];
         const labels = [];
         const cursor = new Date(firstSunday);
+        let currentWeek = -1;
 
         while (cursor <= lastSaturday) {
             const weekStart = new Date(cursor);
@@ -729,10 +777,12 @@
             for (let day = 0; day < 7; day += 1) {
                 const current = new Date(weekStart);
                 current.setDate(weekStart.getDate() + day);
-                const iso = current.toISOString().slice(0, 10);
-                const inYear = current.getFullYear() === year;
-                const seconds = inYear ? (map.get(iso) || 0) : 0;
-                cells.push({ iso, inYear, seconds, level: inYear ? heatLevel(seconds, maxSeconds) : 0 });
+                if (current.getTime() === today.getTime()) currentWeek = weeks.length;
+                // Local date: toISOString() would shift it a day east of UTC.
+                const iso = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(current.getDate()).padStart(2, "0")}`;
+                const inRange = current >= firstDay && current <= lastDay;
+                const seconds = inRange ? (map.get(iso) || 0) : 0;
+                cells.push({ iso, inRange, seconds, level: inRange ? heatLevel(seconds, maxSeconds) : 0 });
             }
             if (weekStart.getDate() <= 7) {
                 labels.push({ label: weekStart.toLocaleString(undefined, { month: "short" }), index: weeks.length });
@@ -742,20 +792,33 @@
         }
 
         return `
-            <section class="panel">
-                <div class="panel-head"><h3>Yearly heatmap</h3><span>${readingInteractive ? `${year} · Click a day to see books` : year}</span></div>
+            <section class="panel" id="heatmap-panel">
+                <div class="panel-head"><h3>${escapeHtml(title)}</h3><span>${readingInteractive ? `${range} · Click a day to see books` : range}</span></div>
                 <div class="heatmap-shell">
-                    <div class="heatmap-months"><div></div><div class="heatmap-month-track">${labels.map(label => `<span class="heatmap-month-label" style="left:${label.index * 16}px">${escapeHtml(label.label)}</span>`).join("")}</div></div>
                     <div class="heatmap-main">
                         <div class="heatmap-days"><span>Sun</span><span></span><span>Tue</span><span></span><span>Thu</span><span></span><span>Sat</span></div>
-                        <div class="heatmap-grid">
-                            ${weeks.map(week => `<div class="heatmap-week">${week.map(cell => `<button type="button" class="heatmap-cell ${cell.level ? `level-${cell.level}` : ""} ${readingInteractive && cell.inYear ? "is-clickable" : ""}" ${readingInteractive && cell.inYear ? `data-reading-date="${cell.iso}"` : ""} title="${cell.inYear ? `${cell.iso}: ${formatDurationLong(cell.seconds)}` : ""}" ${readingInteractive && cell.inYear ? `aria-label="Show reading books for ${cell.iso}"` : 'tabindex="-1" aria-hidden="true"'}></button>`).join("")}</div>`).join("")}
+                        <div class="heatmap-scroll">
+                            <div class="heatmap-canvas">
+                                <div class="heatmap-month-track">${labels.map(label => `<span class="heatmap-month-label" style="left:${label.index * 16}px">${escapeHtml(label.label)}</span>`).join("")}</div>
+                                <div class="heatmap-grid">
+                                    ${weeks.map((week, index) => `<div class="heatmap-week"${index === currentWeek ? " data-current-week" : ""}>${week.map(cell => `<button type="button" class="heatmap-cell ${cell.level ? `level-${cell.level}` : ""} ${readingInteractive && cell.inRange ? "is-clickable" : ""}" ${readingInteractive && cell.inRange ? `data-reading-date="${cell.iso}"` : ""} title="${cell.inRange ? `${cell.iso}: ${formatDurationLong(cell.seconds)}` : ""}" ${readingInteractive && cell.inRange ? `aria-label="Show reading books for ${cell.iso}"` : 'tabindex="-1" aria-hidden="true"'}></button>`).join("")}</div>`).join("")}
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="heatmap-legend"><span>Less</span><span class="legend-swatches"><span class="heatmap-cell"></span><span class="heatmap-cell level-1"></span><span class="heatmap-cell level-2"></span><span class="heatmap-cell level-3"></span><span class="heatmap-cell level-4"></span></span><span>More</span></div>
                 </div>
             </section>
         `;
+    }
+
+    // When the panel can't fit 53 weeks, open on this week, the last column.
+    function scrollHeatmapToCurrentWeek() {
+        const scroller = dashboardRoot.querySelector(".heatmap-scroll");
+        const week = scroller?.querySelector("[data-current-week]");
+        if (!week) return;
+        const weekRight = week.getBoundingClientRect().right - scroller.getBoundingClientRect().left + scroller.scrollLeft;
+        scroller.scrollLeft = weekRight - scroller.clientWidth;
     }
 
     function renderChart(dataset) {
@@ -838,7 +901,7 @@
             const pct = (b.percentComplete != null) ? `<div class="pct-bar"><span style="width:${Math.min(b.percentComplete, 100)}%"></span></div>` : "";
             return `<div class="books-row" data-book-key="${escapeHtml(b.bookKey)}"><div style="min-width:0"><div class="recent-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="books-meta">${meta.join(" · ") || "Activity"}</div>${pct}</div><div class="books-side"><div class="v">${escapeHtml(formatDurationCompact(b.totalSeconds || 0))}</div><div class="s">${escapeHtml(pace)}</div></div></div>`;
         }).join("");
-        return `<section class="panel"><div class="panel-head"><h3>Books</h3><span>${books.length} tracked · tap for detail</span></div><div class="scroll-list">${rows}</div></section>`;
+        return `<section class="panel books-panel"><div class="panel-head"><h3>Books</h3><span>${books.length} tracked · tap for detail</span></div><div class="scroll-list">${rows}</div></section>`;
     }
 
     function yearlyRecapInner(recap) {
@@ -853,7 +916,8 @@
         }).join("");
         const years = Array.isArray(recap.availableYears) ? recap.availableYears : [];
         const minYear = years.length ? years[0] : recap.year;
-        const maxYear = years.length ? years[years.length - 1] : recap.year;
+        // The current year stays reachable even before it has any activity.
+        const maxYear = Math.max(years.length ? years[years.length - 1] : recap.year, serverToday().getFullYear());
         const finished = (recap.finishedBooks || []).slice(0, 40).map(b =>
             `<div class="finished-row"><div class="recent-title" style="font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="s" style="color:var(--muted-soft);font-size:12px;flex-shrink:0">${escapeHtml(formatLongDate(new Date((b.finishedAt || 0) * 1000).toISOString().slice(0, 10)))}</div></div>`
         ).join("");
@@ -883,18 +947,31 @@
         const recap = dataset.yearlyRecap;
         if (!recap || !Array.isArray(recap.months)) return "";
         const hasAny = recap.months.some(m => Number(m.seconds || 0) > 0) || (recap.finishedBooks || []).length;
-        if (!hasAny) return "";
+        // An empty year still shows the panel when earlier years have activity, so
+        // the year buttons can reach them.
+        const hasHistory = (recap.availableYears || []).length > 0;
+        if (!hasAny && !hasHistory) return "";
         return `<section class="panel" id="recap-panel">${yearlyRecapInner(recap)}</section>`;
     }
 
     async function loadYearlyRecap(year) {
         const panel = document.getElementById("recap-panel");
         if (!panel) return;
+        const tab = state.activeTab;
         try {
-            const response = await fetch(`/api/stats/yearly-recap?year=${year}&scope=${state.activeTab}`, { cache: "no-store" });
+            const response = await fetch(`/api/stats/yearly-recap?year=${year}&scope=${tab}`, { cache: "no-store" });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || "Failed");
             panel.innerHTML = yearlyRecapInner(data);
+            // The heatmap follows the recap's year, and the current year rolls.
+            const heatmapPanel = document.getElementById("heatmap-panel");
+            if (heatmapPanel && state.activeTab === tab && Array.isArray(data.heatmap)) {
+                const thisYear = year === serverToday().getFullYear();
+                heatmapPanel.outerHTML = thisYear
+                    ? heatmap(state.payload?.[tab] || { heatmap: data.heatmap })
+                    : heatmap({ heatmap: data.heatmap }, year);
+                scrollHeatmapToCurrentWeek();
+            }
         } catch (error) {
             console.error(error);
         }
@@ -917,7 +994,7 @@
 
         dashboardRoot.innerHTML = `
             <section class="dashboard-shell">
-                <header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Last 7 days plus yearly activity</div></header>
+                <header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div></header>
                 <div class="stats-grid">${config.cards.map(card => `<article class="stat-card"><div class="stat-card-label">${escapeHtml(card[0])}</div><div class="stat-card-value">${escapeHtml(card[1](dataset))}</div><div class="stat-card-hint">${escapeHtml(card[2])}</div></article>`).join("")}</div>
                 <div class="insights-grid">
                     <section class="panel"><div class="panel-head"><h3>Weekly activity</h3><span>Daily totals</span></div><div class="chart-wrap"><canvas id="activity-chart" aria-label="Weekly activity chart"></canvas></div></section>
@@ -932,6 +1009,7 @@
             </section>
         `;
         renderChart(dataset);
+        scrollHeatmapToCurrentWeek();
         if (state.activeTab === "reading") {
             const container = dashboardRoot.querySelector(".insights-grid:last-child .panel:last-child");
             loadReadingCalendarMonth(state.readingCalendarMonth)

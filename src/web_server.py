@@ -11834,11 +11834,22 @@ def _recent_daily_from_mapping(days_map, tz, days=7):
     ]
 
 
-def _heatmap_from_mapping(days_map, year):
+# The stats page draws the 53 weeks ending this week. One extra day covers a
+# browser whose date is behind the server's.
+_HEATMAP_DAYS = 371
+
+
+def _heatmap_window(today):
+    """First and last date the stats heatmap can show."""
+    return today - timedelta(days=_HEATMAP_DAYS), today
+
+
+def _heatmap_from_mapping(days_map, start_date, end_date):
     days_map = days_map if isinstance(days_map, dict) else {}
+    first, last = start_date.isoformat(), end_date.isoformat()
     heatmap = []
     for key, value in days_map.items():
-        if str(key).startswith(f"{year}-"):
+        if first <= str(key)[:10] <= last:
             heatmap.append({
                 "date": str(key),
                 "seconds": int(round(float(value or 0))),
@@ -11988,7 +11999,7 @@ def _build_listening_stats_payload(tz):
 
     all_days = raw_stats.get("days") or {}
     daily = _recent_daily_from_mapping(all_days, tz, days=7)
-    heatmap = _heatmap_from_mapping(all_days, datetime.now(tz).year)
+    heatmap = _heatmap_from_mapping(all_days, *_heatmap_window(datetime.now(tz).date()))
     all_activity_dates = _activity_dates_from_daily([
         {"date": key, "seconds": value}
         for key, value in all_days.items()
@@ -12038,7 +12049,7 @@ def _build_reading_stats_payload(tz):
     tz_name = getattr(tz, "key", str(tz))
     summary = database_service.get_koreader_dashboard_summary(tz_name)
     daily = database_service.get_koreader_daily_totals(7, tz_name)
-    heatmap = database_service.get_koreader_heatmap(datetime.now(tz).year, tz_name)
+    heatmap = database_service.get_koreader_heatmap(*_heatmap_window(datetime.now(tz).date()), tz_name)
     recent_sessions = database_service.get_koreader_recent_sessions(10, tz_name)
     activity_dates = database_service.get_koreader_activity_dates(tz_name)
     hour_histogram = database_service.get_koreader_hour_histogram(tz_name)
@@ -12438,9 +12449,13 @@ def api_stats_yearly_recap():
         return jsonify({"error": "Invalid year"}), 400
 
     try:
+        # Each recap carries that calendar year's heatmap, so the page can show it.
+        first_day, last_day = datetime(year, 1, 1).date(), datetime(year, 12, 31).date()
         reading_recap = database_service.get_koreader_yearly_recap(year, tz_name)
+        reading_heatmap = database_service.get_koreader_heatmap(first_day, last_day, tz_name)
 
         listening_recap = None
+        listening_heatmap = []
         try:
             abs_client = _stats_abs_client()
             if abs_client:
@@ -12453,12 +12468,15 @@ def api_stats_yearly_recap():
             listening_recap = _build_listening_yearly_recap(
                 raw_stats.get("days") or {}, year, len(raw_stats.get("items") or {})
             )
+            listening_heatmap = _heatmap_from_mapping(raw_stats.get("days") or {}, first_day, last_day)
 
         if scope == "reading":
-            return jsonify(reading_recap)
+            return jsonify({**reading_recap, "heatmap": reading_heatmap})
         if scope == "listening":
-            return jsonify(listening_recap or _build_listening_yearly_recap({}, year, 0))
-        return jsonify(_build_combined_yearly_recap(reading_recap, listening_recap))
+            listening = listening_recap or _build_listening_yearly_recap({}, year, 0)
+            return jsonify({**listening, "heatmap": listening_heatmap})
+        combined = _build_combined_yearly_recap(reading_recap, listening_recap)
+        return jsonify({**combined, "heatmap": _merge_heatmap_activity(listening_heatmap, reading_heatmap)})
     except Exception as e:
         logger.warning("Stats API: yearly recap failed for %s/%s: %s", scope, year, e, exc_info=True)
         return jsonify({"error": "Failed to load yearly recap"}), 500
