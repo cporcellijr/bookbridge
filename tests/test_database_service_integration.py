@@ -11,7 +11,7 @@ import tempfile
 import time
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -838,7 +838,38 @@ class TestDatabaseServiceIntegration(unittest.TestCase):
         finished_keys = {b['bookKey'] for b in recap['finishedBooks']}
         self.assertEqual(recap['booksFinished'], 1)
         self.assertIn('koreader:md5-fin', finished_keys)   # 300/300 = 100% complete
+        finished = next(b for b in recap['finishedBooks'] if b['bookKey'] == 'koreader:md5-fin')
+        self.assertEqual(finished['finishedDate'], (base - timedelta(minutes=10)).date().isoformat())
         self.assertNotIn('abs:abs-a', finished_keys)       # 100/200 = 50%, not finished
+
+    def test_koreader_heatmap_range_runs_across_new_year(self):
+        """The heatmap's date range can start in one year and end in the next."""
+        book = self.Book(
+            abs_id='abs-h', abs_title='Book H', ebook_filename='h.epub',
+            kosync_doc_id='md5-h', status='active', duration=3600.0,
+        )
+        self.db_service.save_book(book)
+        self.db_service.upsert_koreader_book_stats(
+            device='KOReader', device_id='d1',
+            books=[{'md5': 'md5-h', 'title': 'Book H', 'authors': 'Auth H', 'pages': 100, 'total_read_pages': 10}],
+        )
+
+        def noon(year, month, day):
+            return datetime(year, month, day, 12, tzinfo=ZoneInfo("UTC")).timestamp()
+
+        self.db_service.bulk_insert_koreader_page_stats(
+            device='KOReader', device_id='d1',
+            page_stats=[
+                {'md5': 'md5-h', 'page': 1, 'start_time': noon(2024, 6, 1), 'duration': 60},
+                {'md5': 'md5-h', 'page': 2, 'start_time': noon(2025, 12, 30), 'duration': 90},
+                {'md5': 'md5-h', 'page': 3, 'start_time': noon(2026, 1, 2), 'duration': 120},
+            ],
+        )
+
+        heatmap = self.db_service.get_koreader_heatmap(date(2025, 1, 6), date(2026, 1, 5), 'UTC')
+
+        read_days = {row['date']: row['seconds'] for row in heatmap if row['seconds']}
+        self.assertEqual(read_days, {'2025-12-30': 90, '2026-01-02': 120})
 
     def test_koreader_page_stats_store_total_pages_and_suppress_echoes(self):
         """total_pages is persisted; re-uploads of another device's merged events are dropped."""

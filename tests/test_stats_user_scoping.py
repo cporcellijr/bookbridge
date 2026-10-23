@@ -99,7 +99,8 @@ class TestStatsUserScoping(unittest.TestCase):
             payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
         self.assertTrue(payload['available'])
         self.assertEqual(payload['stats']['totalSeconds'], 900)
-        self.assertEqual(payload['stats']['itemsFinished'], 1)
+        # Local sessions record time listened, not whether a book was finished.
+        self.assertEqual(payload['stats']['itemsFinished'], 0)
         self.assertEqual(payload['recentSessions'][0]['title'], "T")
         self.user_abs.get_listening_stats.assert_not_called()
 

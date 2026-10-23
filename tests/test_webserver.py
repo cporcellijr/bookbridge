@@ -2891,16 +2891,51 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         mock_write_cached.assert_called_once()
 
     def test_listening_yearly_recap_skips_out_of_range_months(self):
+        from datetime import timezone
+
         from src.web_server import _build_listening_yearly_recap
 
         recap = _build_listening_yearly_recap(
             {"2026-00-15": 10, "2026-13-01": 20, "2026-04-07": 30},
             2026,
-            0,
+            [],
+            timezone.utc,
         )
 
         self.assertEqual(recap["totalSeconds"], 30)
         self.assertEqual(recap["months"][3]["seconds"], 30)
+
+    def _past_year_recap_setup(self, mock_local_listening):
+        mock_local_listening.return_value = {'days': {'2024-03-02': 600, '2025-01-01': 50}, 'items': {}}
+        self.mock_database_service.get_koreader_yearly_recap.return_value = {
+            'year': 2024, 'months': [{'month': m, 'seconds': 0, 'pages': 0, 'finished': 0} for m in range(1, 13)],
+            'totalSeconds': 0, 'totalPages': 0, 'booksFinished': 0, 'finishedBooks': [], 'availableYears': [2024, 2026],
+        }
+        self.mock_database_service.get_koreader_heatmap.return_value = [{'date': '2024-03-02', 'seconds': 300, 'pages': 2}]
+
+    @patch('src.web_server._local_listening_stats')
+    @patch('src.web_server._stats_abs_client', return_value=None)
+    def test_yearly_recap_includes_that_years_combined_heatmap(self, _mock_abs_client, mock_local_listening):
+        self._past_year_recap_setup(mock_local_listening)
+
+        response = self.client.get('/api/stats/yearly-recap?scope=combined&year=2024')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['heatmap'], [
+            {'date': '2024-03-02', 'seconds': 900, 'listeningSeconds': 600, 'readingSeconds': 300},
+        ])
+        start, end = self.mock_database_service.get_koreader_heatmap.call_args.args[:2]
+        self.assertEqual((start.isoformat(), end.isoformat()), ('2024-01-01', '2024-12-31'))
+
+    @patch('src.web_server._local_listening_stats')
+    @patch('src.web_server._stats_abs_client', return_value=None)
+    def test_yearly_recap_includes_that_years_listening_heatmap(self, _mock_abs_client, mock_local_listening):
+        self._past_year_recap_setup(mock_local_listening)
+
+        response = self.client.get('/api/stats/yearly-recap?scope=listening&year=2024')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['heatmap'], [{'date': '2024-03-02', 'seconds': 600}])
 
     def test_api_stats_reading_day_supports_unlinked_books(self):
         payload = {

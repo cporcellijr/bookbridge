@@ -11834,11 +11834,22 @@ def _recent_daily_from_mapping(days_map, tz, days=7):
     ]
 
 
-def _heatmap_from_mapping(days_map, year):
+# The stats page draws the 53 weeks ending this week. One extra day covers a
+# browser whose date is behind the server's.
+_HEATMAP_DAYS = 371
+
+
+def _heatmap_window(today):
+    """First and last date the stats heatmap can show."""
+    return today - timedelta(days=_HEATMAP_DAYS), today
+
+
+def _heatmap_from_mapping(days_map, start_date, end_date):
     days_map = days_map if isinstance(days_map, dict) else {}
+    first, last = start_date.isoformat(), end_date.isoformat()
     heatmap = []
     for key, value in days_map.items():
-        if str(key).startswith(f"{year}-"):
+        if first <= str(key)[:10] <= last:
             heatmap.append({
                 "date": str(key),
                 "seconds": int(round(float(value or 0))),
@@ -11890,14 +11901,48 @@ def _years_from_days(all_days):
     return sorted(years)
 
 
-def _build_listening_yearly_recap(all_days, year, items_finished):
-    """Year-in-review for listening: monthly hours from the ABS daily map.
+def _abs_finished_books(progress, items, tz):
+    """Books ABS marks finished, newest first, with titles from the listening stats items."""
+    progress = progress if isinstance(progress, dict) else {}
+    items = items if isinstance(items, dict) else {}
+    titles = {}
+    finished = []
+    for item_id, entry in progress.items():
+        # Podcast episodes have their own progress entries; only whole books count.
+        if not isinstance(entry, dict) or not entry.get("isFinished") or entry.get("episodeId"):
+            continue
+        try:
+            finished_dt = datetime.fromtimestamp(float(entry["finishedAt"]) / 1000, tz)
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        metadata = (items.get(item_id) or {}).get("mediaMetadata") or {}
+        title = metadata.get("title")
+        if not title:
+            if not titles:
+                titles = {book.abs_id: book.abs_title for book in database_service.get_all_books()}
+            title = titles.get(item_id)
+        authors = metadata.get("authors") or []
+        author = ", ".join(a.get("name") for a in authors if isinstance(a, dict) and a.get("name"))
+        finished.append({
+            "bookKey": f"abs:{item_id}", "absId": item_id,
+            "title": title or "Unknown book", "author": author or None,
+            "finishedAt": int(finished_dt.timestamp()),
+            "finishedDate": finished_dt.date().isoformat(), "month": finished_dt.month,
+        })
+    finished.sort(key=lambda book: book["finishedAt"], reverse=True)
+    return finished
 
-    Per-month 'finished' is not available at daily granularity (would need an extra
-    ABS media-progress call), so finishedBooks stays empty and booksFinished reflects
-    the all-time items count for context only.
-    """
+
+def _build_listening_yearly_recap(all_days, year, finished_books, tz):
+    """Year-in-review for listening: monthly hours from the ABS daily map, and the
+    books ABS marks finished that year."""
     months = [{"month": m, "seconds": 0, "pages": 0, "finished": 0} for m in range(1, 13)]
+    finish_years = {
+        book["absId"]: datetime.fromtimestamp(book["finishedAt"], tz).year for book in (finished_books or [])
+    }
+    finished_books = [book for book in (finished_books or []) if finish_years[book["absId"]] == year]
+    for book in finished_books:
+        months[book["month"] - 1]["finished"] += 1
     total_seconds = 0
     for key, value in (all_days or {}).items():
         date_str = str(key)
@@ -11917,9 +11962,10 @@ def _build_listening_yearly_recap(all_days, year, items_finished):
         "months": months,
         "totalSeconds": total_seconds,
         "totalPages": 0,
-        "booksFinished": int(items_finished or 0),
-        "finishedBooks": [],
-        "availableYears": _years_from_days(all_days),
+        "booksFinished": len(finished_books),
+        "finishedBooks": finished_books,
+        # A book marked finished in a year with no listening time still needs its year listed.
+        "availableYears": sorted(set(_years_from_days(all_days)) | set(finish_years.values())),
     }
 
 
@@ -11988,7 +12034,7 @@ def _build_listening_stats_payload(tz):
 
     all_days = raw_stats.get("days") or {}
     daily = _recent_daily_from_mapping(all_days, tz, days=7)
-    heatmap = _heatmap_from_mapping(all_days, datetime.now(tz).year)
+    heatmap = _heatmap_from_mapping(all_days, *_heatmap_window(datetime.now(tz).date()))
     all_activity_dates = _activity_dates_from_daily([
         {"date": key, "seconds": value}
         for key, value in all_days.items()
@@ -12012,7 +12058,10 @@ def _build_listening_stats_payload(tz):
         total_days=len(all_activity_dates),
         reference_date=datetime.now(tz).date(),
     )
-    summary["itemsFinished"] = len(raw_stats.get("items") or {})
+    finished_books = _abs_finished_books(
+        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz
+    ) if use_abs else []
+    summary["itemsFinished"] = len(finished_books)
     summary["daysListened"] = len(all_activity_dates)
 
     session_durations = [int(s.get("durationSeconds") or 0) for s in normalized_sessions if s.get("durationSeconds")]
@@ -12030,7 +12079,7 @@ def _build_listening_stats_payload(tz):
             session.get("absId") for session in normalized_sessions if session.get("absId")
         }),
         "books": _build_listening_book_list(),
-        "yearlyRecap": _build_listening_yearly_recap(all_days, datetime.now(tz).year, summary["itemsFinished"]),
+        "yearlyRecap": _build_listening_yearly_recap(all_days, datetime.now(tz).year, finished_books, tz),
     }
 
 
@@ -12038,7 +12087,7 @@ def _build_reading_stats_payload(tz):
     tz_name = getattr(tz, "key", str(tz))
     summary = database_service.get_koreader_dashboard_summary(tz_name)
     daily = database_service.get_koreader_daily_totals(7, tz_name)
-    heatmap = database_service.get_koreader_heatmap(datetime.now(tz).year, tz_name)
+    heatmap = database_service.get_koreader_heatmap(*_heatmap_window(datetime.now(tz).date()), tz_name)
     recent_sessions = database_service.get_koreader_recent_sessions(10, tz_name)
     activity_dates = database_service.get_koreader_activity_dates(tz_name)
     hour_histogram = database_service.get_koreader_hour_histogram(tz_name)
@@ -12187,9 +12236,17 @@ def _build_combined_yearly_recap(reading_recap, listening_recap):
             "readingSeconds": read_secs,
             "listeningSeconds": listen_secs,
             "pages": int(rm.get("pages") or 0),
-            "finished": int(rm.get("finished") or 0) + int(lm.get("finished") or 0),
+            "finished": 0,
         })
-    finished_books = list((reading_recap or {}).get("finishedBooks") or [])
+    # A book finished as both an ebook and an audiobook counts once, at its first finish.
+    finished_by_book = {}
+    for book in list((reading_recap or {}).get("finishedBooks") or []) + list((listening_recap or {}).get("finishedBooks") or []):
+        key = book.get("absId") or book.get("bookKey")
+        if key not in finished_by_book or book["finishedAt"] < finished_by_book[key]["finishedAt"]:
+            finished_by_book[key] = book
+    finished_books = sorted(finished_by_book.values(), key=lambda book: book["finishedAt"], reverse=True)
+    for book in finished_books:
+        months[book["month"] - 1]["finished"] += 1
     available_years = sorted(
         set((reading_recap or {}).get("availableYears") or [])
         | set((listening_recap or {}).get("availableYears") or [])
@@ -12438,27 +12495,39 @@ def api_stats_yearly_recap():
         return jsonify({"error": "Invalid year"}), 400
 
     try:
+        # Each recap carries that calendar year's heatmap, so the page can show it.
+        first_day, last_day = datetime(year, 1, 1).date(), datetime(year, 12, 31).date()
         reading_recap = database_service.get_koreader_yearly_recap(year, tz_name)
+        reading_heatmap = database_service.get_koreader_heatmap(first_day, last_day, tz_name)
 
         listening_recap = None
+        listening_heatmap = []
+        finished_books = []
         try:
             abs_client = _stats_abs_client()
             if abs_client:
                 raw_stats = abs_client.get_listening_stats()
+                if raw_stats:
+                    finished_books = _abs_finished_books(
+                        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz
+                    )
             else:
                 raw_stats = _local_listening_stats(tz)
         except Exception:
             raw_stats = None
         if raw_stats:
             listening_recap = _build_listening_yearly_recap(
-                raw_stats.get("days") or {}, year, len(raw_stats.get("items") or {})
+                raw_stats.get("days") or {}, year, finished_books, tz
             )
+            listening_heatmap = _heatmap_from_mapping(raw_stats.get("days") or {}, first_day, last_day)
 
         if scope == "reading":
-            return jsonify(reading_recap)
+            return jsonify({**reading_recap, "heatmap": reading_heatmap})
         if scope == "listening":
-            return jsonify(listening_recap or _build_listening_yearly_recap({}, year, 0))
-        return jsonify(_build_combined_yearly_recap(reading_recap, listening_recap))
+            listening = listening_recap or _build_listening_yearly_recap({}, year, [], tz)
+            return jsonify({**listening, "heatmap": listening_heatmap})
+        combined = _build_combined_yearly_recap(reading_recap, listening_recap)
+        return jsonify({**combined, "heatmap": _merge_heatmap_activity(listening_heatmap, reading_heatmap)})
     except Exception as e:
         logger.warning("Stats API: yearly recap failed for %s/%s: %s", scope, year, e, exc_info=True)
         return jsonify({"error": "Failed to load yearly recap"}), 500

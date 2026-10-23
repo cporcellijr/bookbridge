@@ -5389,15 +5389,13 @@ class DatabaseService:
             dates = self._get_koreader_activity_dates(session, md5s, tz_name)
             return [day.isoformat() for day in sorted(dates)]
 
-    def get_koreader_heatmap(self, year: int, tz_name: str) -> list[dict]:
-        """Get KOReader daily totals for one calendar year."""
+    def get_koreader_heatmap(self, start_date, end_date, tz_name: str) -> list[dict]:
+        """Get KOReader daily totals for each date from start_date through end_date."""
         with self.get_session() as session:
             md5s = self._get_all_koreader_active_md5s(session)
             if not md5s:
                 return []
 
-            start_date = datetime(year, 1, 1).date()
-            end_date = datetime(year, 12, 31).date()
             return self._build_koreader_daily_totals(
                 session,
                 md5s,
@@ -5953,7 +5951,8 @@ class DatabaseService:
                 finished_books.append({
                     "bookKey": book_key, "absId": ctx["absId"],
                     "title": ctx["title"], "author": ctx["author"],
-                    "finishedAt": int(last_end), "month": finished_dt.month,
+                    "finishedAt": int(last_end),
+                    "finishedDate": finished_dt.date().isoformat(), "month": finished_dt.month,
                 })
                 months[finished_dt.month - 1]["finished"] += 1
             finished_books.sort(key=lambda item: item["finishedAt"], reverse=True)
