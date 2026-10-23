@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% set active_page = 'logs' %}
 {% set hide_chrome = embed %}
-{% block title %}Logs · BookBridge{% endblock %}
+{% block title %}{{ _('Logs') }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -287,15 +287,15 @@
 <div class="logs-wrap{% if embed %} embed{% endif %}">
     {% if not embed %}
     <div class="page-header">
-        <h1>Application Logs</h1>
-        <p>View, filter, and monitor system logs in real-time</p>
+        <h1>{{ _('Application Logs') }}</h1>
+        <p>{{ _('View, filter, and monitor system logs in real-time') }}</p>
     </div>
     {% endif %}
 
     <!-- Log Controls -->
     <div class="controls">
         <div class="control-group">
-            <label for="logLevel">Min Log Level:</label>
+            <label for="logLevel">{{ _('Min Log Level:') }}</label>
             <select id="logLevel">
                 <option value="DEBUG">🔍 DEBUG</option>
                 <option value="INFO" selected>ℹ️ INFO</option>
@@ -306,12 +306,12 @@
         </div>
 
         <div class="control-group">
-            <label for="searchInput">Filter by text:</label>
-            <input type="text" id="searchInput" class="search-input" placeholder="Search logs...">
+            <label for="searchInput">{{ _('Filter by text:') }}</label>
+            <input type="text" id="searchInput" class="search-input" placeholder="{{ _('Search logs...') }}">
         </div>
 
         <div class="control-group">
-            <label for="linesCount">Lines to show:</label>
+            <label for="linesCount">{{ _('Lines to show:') }}</label>
             <select id="linesCount">
                 <option value="100">100</option>
                 <option value="500">500</option>
@@ -323,46 +323,46 @@
 
         <div class="control-group">
             <label>&nbsp;</label>
-            <button id="refreshBtn" class="btn btn-primary">Refresh Logs</button>
+            <button id="refreshBtn" class="btn btn-primary">{{ _('Refresh Logs') }}</button>
         </div>
 
         <div class="control-group auto-refresh">
-            <label for="autoRefresh">Auto-refresh (30s):</label>
+            <label for="autoRefresh">{{ _('Auto-refresh (30s):') }}</label>
             <input type="checkbox" id="autoRefresh">
         </div>
 
         <div class="control-group auto-refresh">
-            <label for="liveMode">Live mode (real-time):</label>
+            <label for="liveMode">{{ _('Live mode (real-time):') }}</label>
             <input type="checkbox" id="liveMode">
         </div>
     </div>
 
     <!-- Log Stats -->
     <div class="log-stats">
-        <span id="totalLinesStats">Total: 0 lines</span>
-        <span id="displayedLinesStats">Showing: 0 lines</span>
-        <span id="lastUpdated">Last updated: Never</span>
+        <span id="totalLinesStats">{{ _('Total: 0 lines') }}</span>
+        <span id="displayedLinesStats">{{ _('Showing: 0 lines') }}</span>
+        <span id="lastUpdated">{{ _('Last updated: Never') }}</span>
     </div>
 
     <!-- Log Container -->
     <div class="log-container">
         <div class="log-header">
-            <h3>📜 Log Entries</h3>
+            <h3>📜 {{ _('Log Entries') }}</h3>
             <div>
                 <button id="scrollToTop" class="btn btn-secondary btn-sm">⬆️
-                    Top</button>
+                    {{ _('Top') }}</button>
                 <button id="scrollToBottom" class="btn btn-secondary btn-sm">⬇️
-                    Bottom</button>
+                    {{ _('Bottom') }}</button>
             </div>
         </div>
         <div id="logContent" class="log-content">
             <div class="loading">
                 <div class="spinner"></div>
-                Loading logs...
+                {{ _('Loading logs...') }}
             </div>
         </div>
         <div id="loadMore" class="load-more hidden">
-            <button class="btn btn-secondary">Load More Logs</button>
+            <button class="btn btn-secondary">{{ _('Load More Logs') }}</button>
         </div>
     </div>
 </div>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = 'suggestions' %}
-{% block title %}Suggestions · BookBridge{% endblock %}
+{% block title %}{{ _('Suggestions') }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -134,50 +134,50 @@
 {% block content %}
 <div class="suggestions-wrap">
     <div class="page-header">
-        <h2>Library Suggestions</h2>
-        <p class="subtitle">Scan your library to find unmatched audiobook/ebook pairs</p>
+        <h2>{{ _('Library Suggestions') }}</h2>
+        <p class="subtitle">{{ _('Scan your library to find unmatched audiobook/ebook pairs') }}</p>
     </div>
     <div class="toolbar">
         <div class="toolbar-actions">
             <form method="POST" action="/suggestions" id="scanForm">
                 <input type="hidden" name="action" value="scan">
-                <button type="submit" class="btn btn-primary" {% if scan_in_progress %}disabled{% endif %}>Scan Library</button>
+                <button type="submit" class="btn btn-primary" {% if scan_in_progress %}disabled{% endif %}>{{ _('Scan Library') }}</button>
             </form>
             <form method="POST" action="/suggestions" id="scanFullForm">
                 <input type="hidden" name="action" value="scan_full">
-                <button type="submit" class="btn btn-muted" {% if scan_in_progress %}disabled{% endif %}>Full Refresh</button>
+                <button type="submit" class="btn btn-muted" {% if scan_in_progress %}disabled{% endif %}>{{ _('Full Refresh') }}</button>
             </form>
         </div>
         <div class="toolbar-meta">
             <div class="sort-controls">
-                <label class="sort-label" for="sortMode">Sort</label>
+                <label class="sort-label" for="sortMode">{{ _('Sort') }}</label>
                 <select id="sortMode" class="sort-select">
-                    <option value="best">Best Match</option>
+                    <option value="best">{{ _('Best Match') }}</option>
                     <option value="az">A-Z</option>
                 </select>
             </div>
-            <span class="count" id="topCount">Showing {{ suggestions|length }} suggestions</span>
+            <span class="count" id="topCount">{{ ngettext('Showing %(num)s suggestion', 'Showing %(num)s suggestions', suggestions|length) }}</span>
         </div>
     </div>
     {% if scan_stats %}
     <div class="count" style="margin-top: 8px;">
-        Last scan: {{ scan_stats.scanned_new or 0 }} new scanned, {{ scan_stats.reused_cached or 0 }} reused from cache
+        {{ _('Last scan: %(new)s new scanned, %(cached)s reused from cache', new=scan_stats.scanned_new or 0, cached=scan_stats.reused_cached or 0) }}
     </div>
     {% endif %}
     {% if scan_error %}
-    <div class="flash-error">Last scan failed: {{ scan_error }}</div>
+    <div class="flash-error">{{ _('Last scan failed: %(error)s', error=scan_error) }}</div>
     {% endif %}
 
     <div class="layout">
         <div class="panel">
             <div class="panel-head">
-                <h3>Audiobooks</h3>
-                <span class="count" id="panelCount">{{ suggestions|length }} items</span>
+                <h3>{{ _('Audiobooks') }}</h3>
+                <span class="count" id="panelCount">{{ ngettext('%(num)s item', '%(num)s items', suggestions|length) }}</span>
             </div>
             {% if suggestions %}
             <div class="bulk-actions" id="bulkActions">
-                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ Add all exact (<span id="exactCount">0</span>)</button>
-                <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ Add selected (<span id="selectedCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ {{ _('Add all exact') }} (<span id="exactCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ {{ _('Add selected') }} (<span id="selectedCount">0</span>)</button>
                 <div id="bulkFeedback" class="submit-feedback block" aria-live="polite"></div>
             </div>
             {% endif %}
@@ -187,7 +187,7 @@
                     <div class="scan-progress-wrap">
                         <div class="scan-progress-bar" id="scanProgressBar"></div>
                     </div>
-                    <p class="scan-progress-text" id="scanProgressText">Scanning library... 0%</p>
+                    <p class="scan-progress-text" id="scanProgressText">{{ _('Scanning library... 0%%') }}</p>
                 </div>
                 {% if suggestions %}
                 <div class="suggestions-list" id="suggestionsList">
@@ -200,28 +200,28 @@
                          data-title="{{ s.audio_title or s.abs_title or '' }}"
                          onclick="selectSuggestion('{{ s.bridge_key or s.abs_id }}')">
                         <div class="suggestion-main">
-                            <img src="{{ s.audio_cover_url or s.cover_url }}" alt="Cover" class="cover" onerror="this.style.opacity='0.25';">
+                            <img src="{{ s.audio_cover_url or s.cover_url }}" alt="{{ _('Cover') }}" class="cover" onerror="this.style.opacity='0.25';">
                             <div>
                                 <div class="title">
                                     {{ s.audio_title or s.abs_title }}
-                                    <span class="source-badge {{ suggestion_source_class }}" title="Audiobook source">{{ suggestion_source_label }}</span>
-                                    {% if s.audio_language %}<span class="source-badge language" title="Language">{{ s.audio_language }}</span>{% endif %}
+                                    <span class="source-badge {{ suggestion_source_class }}" title="{{ _('Audiobook source') }}">{{ suggestion_source_label }}</span>
+                                    {% if s.audio_language %}<span class="source-badge language" title="{{ _('Language') }}">{{ s.audio_language }}</span>{% endif %}
                                 </div>
                                 {% if s.audio_author or s.abs_author %}<div class="author">{{ s.audio_author or s.abs_author }}</div>{% endif %}
-                                <div class="score">{% if s.matches and s.matches|length > 0 %}Match {{ s.matches[0].score|round|int }}%{% else %}Match --{% endif %}</div>
+                                <div class="score">{% if s.matches and s.matches|length > 0 %}{{ _('Match %(score)s%%', score=s.matches[0].score|round|int) }}{% else %}{{ _('Match --') }}{% endif %}</div>
                                 {% if s.matches and s.matches|length > 0 %}
                                 <div class="best" title="{{ s.matches[0].display_name }}">
-                                    Best: {{ s.matches[0].display_name }} ({{ s.matches[0].score|round|int }}%)
-                                    {% if s.matches[0].language %}<span class="source-badge language" title="Language">{{ s.matches[0].language }}</span>{% endif %}
+                                    {{ _('Best: %(name)s (%(score)s%%)', name=s.matches[0].display_name, score=s.matches[0].score|round|int) }}
+                                    {% if s.matches[0].language %}<span class="source-badge language" title="{{ _('Language') }}">{{ s.matches[0].language }}</span>{% endif %}
                                 </div>
                                 {% endif %}
                             </div>
                         </div>
                         <div class="card-actions">
                             <label class="suggestion-select" onclick="event.stopPropagation();">
-                                <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> Select
+                                <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> {{ _('Select') }}
                             </label>
-                            <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">Dismiss</button>
+                            <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">{{ _('Dismiss') }}</button>
                             <form method="POST" action="/suggestions" class="inline-form" onsubmit="event.stopPropagation();">
                                 <input type="hidden" name="action" value="never">
                                 <input type="hidden" name="bridge_key" value="{{ s.bridge_key or s.abs_id }}">
@@ -229,7 +229,7 @@
                                 <input type="hidden" name="audio_title" value="{{ s.audio_title or s.abs_title }}">
                                 <input type="hidden" name="audio_author" value="{{ s.audio_author or s.abs_author }}">
                                 <input type="hidden" name="cover_url" value="{{ s.audio_cover_url or s.cover_url }}">
-                                <button type="submit" class="btn btn-small btn-reject" onclick="event.stopPropagation();">Reject</button>
+                                <button type="submit" class="btn btn-small btn-reject" onclick="event.stopPropagation();">{{ _('Reject') }}</button>
                             </form>
                         </div>
                     </div>
@@ -238,9 +238,9 @@
                 {% else %}
                 <div class="empty" id="emptyState">
                     {% if scan_has_run %}
-                    <p>No suggestions found above 60% confidence.<br>Run another scan after your library changes.</p>
+                    <p>{{ _('No suggestions found above 60%% confidence.') }}<br>{{ _('Run another scan after your library changes.') }}</p>
                     {% else %}
-                    <p>No scan results yet.<br>Click "Scan Library" to begin.</p>
+                    <p>{{ _('No scan results yet.') }}<br>{{ _('Click "Scan Library" to begin.') }}</p>
                     {% endif %}
                 </div>
                 {% endif %}
@@ -249,16 +249,16 @@
 
         <div class="panel queue-panel">
             <div class="panel-head">
-                <h3>Batch Match Queue</h3>
-                <span class="count" id="queueCount">{{ queue|length }} items</span>
+                <h3>{{ _('Batch Match Queue') }}</h3>
+                <span class="count" id="queueCount">{{ ngettext('%(num)s item', '%(num)s items', queue|length) }}</span>
             </div>
 
             <div class="selection">
-                <h4>Selected Suggestion</h4>
-                <p class="selection-placeholder" id="selectionPlaceholder">Click a suggestion to review and add to queue.</p>
+                <h4>{{ _('Selected Suggestion') }}</h4>
+                <p class="selection-placeholder" id="selectionPlaceholder">{{ _('Click a suggestion to review and add to queue.') }}</p>
                 <div class="selection-details hidden" id="selectionDetails">
                     <div class="selected-book">
-                        <img id="selectedCover" src="" alt="Selected">
+                        <img id="selectedCover" src="" alt="{{ _('Selected') }}">
                         <div>
                             <div class="selected-title" id="selectedTitle"></div>
                             <div class="selected-author" id="selectedAuthor"></div>
@@ -281,18 +281,18 @@
                         <input type="hidden" name="ebook_source_id" id="selected_ebook_source_id" value="">
                         <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
                         <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
-                        <label class="field-label" for="storytellerCardGrid">Storyteller (Preferred)</label>
-                        <p class="field-hint">Optional. Choose this to create a tri-link.</p>
+                        <label class="field-label" for="storytellerCardGrid">{{ _('Storyteller (Preferred)') }}</label>
+                        <p class="field-hint">{{ _('Optional. Choose this to create a tri-link.') }}</p>
                         <div class="selection-grid-scroll">
                             <div id="storytellerCardGrid" class="resource-grid"></div>
                         </div>
                         <p id="storytellerGridEmpty" class="ebook-grid-empty hidden"></p>
-                        <label class="field-label" for="ebookCardGrid">Ebook Match</label>
+                        <label class="field-label" for="ebookCardGrid">{{ _('Ebook Match') }}</label>
                         <div class="selection-grid-scroll">
                             <div id="ebookCardGrid" class="ebook-grid"></div>
                         </div>
-                        <p id="ebookGridEmpty" class="ebook-grid-empty hidden">No ebook matches available for this suggestion. Storyteller-only queue is allowed.</p>
-                        <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>➕ Add to Queue</button>
+                        <p id="ebookGridEmpty" class="ebook-grid-empty hidden">{{ _('No ebook matches available for this suggestion. Storyteller-only queue is allowed.') }}</p>
+                        <button type="submit" class="btn btn-success w-100" id="addToQueueBtn" disabled>➕ {{ _('Add to Queue') }}</button>
                     </form>
                     <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
                 </div>

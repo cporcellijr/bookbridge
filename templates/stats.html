@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = 'stats' %}
-{% block title %}Stats · BookBridge{% endblock %}
+{% block title %}{{ _('Stats') }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -203,43 +203,43 @@
     <section class="hero">
         <div class="hero-top">
             <div>
-                <h1>Unified activity dashboard</h1>
-                <p>Live listening stats come from Audiobookshelf, reading stats come from KOReader uploads, and the combined view merges both into one BookBridge-native dashboard.</p>
+                <h1>{{ _('Unified activity dashboard') }}</h1>
+                <p>{{ _('Live listening stats come from Audiobookshelf, reading stats come from KOReader uploads, and the combined view merges both into one BookBridge-native dashboard.') }}</p>
                 <div class="hero-meta">
-                    <div class="hero-chip"><strong>Listening</strong> ABS live data</div>
-                    <div class="hero-chip"><strong>Reading</strong> KOReader sync uploads</div>
-                    <div class="hero-chip"><strong>Timezone</strong> <span id="timezone-chip">Loading…</span></div>
+                    <div class="hero-chip"><strong>{{ _('Listening') }}</strong> {{ _('ABS live data') }}</div>
+                    <div class="hero-chip"><strong>{{ _('Reading') }}</strong> {{ _('KOReader sync uploads') }}</div>
+                    <div class="hero-chip"><strong>{{ _('Timezone') }}</strong> <span id="timezone-chip">{{ _('Loading…') }}</span></div>
                 </div>
             </div>
-            <div class="dashboard-note" id="last-updated">Waiting for stats…</div>
+            <div class="dashboard-note" id="last-updated">{{ _('Waiting for stats…') }}</div>
         </div>
     </section>
     <section class="toolbar">
         <div class="tab-strip">
-            <button type="button" class="btn btn-secondary tab-btn is-active" data-tab="combined">Combined</button>
-            <button type="button" class="btn btn-secondary tab-btn" data-tab="reading">Reading</button>
-            <button type="button" class="btn btn-secondary tab-btn" data-tab="listening">Listening</button>
+            <button type="button" class="btn btn-secondary tab-btn is-active" data-tab="combined">{{ _('Combined') }}</button>
+            <button type="button" class="btn btn-secondary tab-btn" data-tab="reading">{{ _('Reading') }}</button>
+            <button type="button" class="btn btn-secondary tab-btn" data-tab="listening">{{ _('Listening') }}</button>
         </div>
         <div class="status-row">
-            <div class="status-pill unavailable" id="status-listening"><span class="status-dot"></span><span>Listening</span></div>
-            <div class="status-pill unavailable" id="status-reading"><span class="status-dot"></span><span>Reading</span></div>
-            <button type="button" class="btn btn-secondary" id="refresh-btn">↻ Refresh</button>
+            <div class="status-pill unavailable" id="status-listening"><span class="status-dot"></span><span>{{ _('Listening') }}</span></div>
+            <div class="status-pill unavailable" id="status-reading"><span class="status-dot"></span><span>{{ _('Reading') }}</span></div>
+            <button type="button" class="btn btn-secondary" id="refresh-btn">↻ {{ _('Refresh') }}</button>
         </div>
     </section>
     <section id="dashboard-root">
-        <div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading dashboard data…</span></div>
+        <div class="loading"><span class="spinner" aria-hidden="true"></span><span>{{ _('Loading dashboard data…') }}</span></div>
     </section>
 </main>
 <div class="day-detail-backdrop" id="day-detail-backdrop" aria-hidden="true">
     <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="day-detail-title">
         <div class="day-detail-head">
             <div>
-                <h3 id="day-detail-title">Books read on this day</h3>
-                <p id="day-detail-subtitle">Select a day from the reading calendar to see which books were active.</p>
+                <h3 id="day-detail-title">{{ _('Books read on this day') }}</h3>
+                <p id="day-detail-subtitle">{{ _('Select a day from the reading calendar to see which books were active.') }}</p>
             </div>
-            <button type="button" class="day-detail-close" id="day-detail-close" aria-label="Close">×</button>
+            <button type="button" class="day-detail-close" id="day-detail-close" aria-label="{{ _('Close') }}">×</button>
         </div>
-        <div class="day-detail-summary" id="day-detail-summary">No day selected.</div>
+        <div class="day-detail-summary" id="day-detail-summary">{{ _('No day selected.') }}</div>
         <div class="day-detail-body" id="day-detail-body"></div>
     </div>
 </div>
@@ -247,12 +247,12 @@
     <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
         <div class="day-detail-head">
             <div>
-                <h3 id="book-detail-title">Book detail</h3>
-                <p id="book-detail-subtitle">Per-book reading and listening statistics.</p>
+                <h3 id="book-detail-title">{{ _('Book detail') }}</h3>
+                <p id="book-detail-subtitle">{{ _('Per-book reading and listening statistics.') }}</p>
             </div>
-            <button type="button" class="day-detail-close" id="book-detail-close" aria-label="Close">×</button>
+            <button type="button" class="day-detail-close" id="book-detail-close" aria-label="{{ _('Close') }}">×</button>
         </div>
-        <div class="day-detail-summary" id="book-detail-summary">Loading…</div>
+        <div class="day-detail-summary" id="book-detail-summary">{{ _('Loading…') }}</div>
         <div class="day-detail-body" id="book-detail-body"></div>
     </div>
 </div>
