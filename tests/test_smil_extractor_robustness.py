@@ -1,4 +1,7 @@
+import io
+import json
 import unittest
+import zipfile
 import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 import sys
@@ -8,7 +11,7 @@ from pathlib import Path
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.utils.smil_extractor import SmilExtractor
+from src.utils.smil_extractor import AUDIO_DURATIONS_ENTRY, SmilExtractor
 
 class TestSmilExtractorRobustness(unittest.TestCase):
     def setUp(self):
@@ -104,6 +107,179 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0]['text'], 'Hello World')
         self.assertNotEqual(segments[0]['text'], 'FAIL_ENCODED')
+
+    def test_clip_times_are_placed_by_their_audio_file_chapter(self):
+        """Verify each audio file's clip times start at that file's audiobook chapter."""
+        opf = """<?xml version="1.0"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+            <manifest>
+                <item id="c1" href="ch1.html" media-type="application/xhtml+xml" media-overlay="m1"/>
+                <item id="c2" href="ch2.html" media-type="application/xhtml+xml" media-overlay="m2"/>
+                <item id="m1" href="ch1.smil" media-type="application/smil+xml"/>
+                <item id="m2" href="ch2.smil" media-type="application/smil+xml"/>
+            </manifest>
+            <spine><itemref idref="c1"/><itemref idref="c2"/></spine>
+        </package>"""
+
+        def smil(chapter, clips):
+            pars = ''.join(
+                f'<par><text src="ch{chapter}.html#p{n}"/>'
+                f'<audio src="Audio/{audio}" clipBegin="{begin}s" clipEnd="{end}s"/></par>'
+                for n, audio, begin, end in clips
+            )
+            return f'<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0"><body>{pars}</body></smil>'
+
+        def html(numbers):
+            return '<html><body>' + ''.join(f'<p id="p{n}">Sentence {n}.</p>' for n in numbers) + '</body></html>'
+
+        # The second text chapter starts in the first audio file and ends in the second.
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as zf:
+            zf.writestr('META-INF/container.xml',
+                        '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+            zf.writestr('OEBPS/content.opf', opf)
+            zf.writestr('OEBPS/ch1.smil', smil(1, [(1, '00000-00001.m4a', 0, 100), (2, '00000-00001.m4a', 100, 200)]))
+            zf.writestr('OEBPS/ch2.smil', smil(2, [(3, '00000-00001.m4a', 200, 300),
+                                                   (4, '00000-00002.m4a', 0, 50),
+                                                   (5, '00000-00002.m4a', 50, 120)]))
+            zf.writestr('OEBPS/ch1.html', html([1, 2]))
+            zf.writestr('OEBPS/ch2.html', html([3, 4, 5]))
+        chapters = [{'start': 0.0, 'end': 305.0}, {'start': 305.0, 'end': 430.0}]
+
+        transcript = self.extractor.extract_transcript(buffer, chapters)
+
+        self.assertEqual(
+            [(s['start'], s['text']) for s in transcript],
+            [(0.0, 'Sentence 1.'), (100.0, 'Sentence 2.'), (200.0, 'Sentence 3.'),
+             (305.0, 'Sentence 4.'), (355.0, 'Sentence 5.')],
+        )
+
+    def test_audio_file_offsets_need_one_file_per_chapter(self):
+        """Verify per-file offsets are used only when the audio files and chapters line up."""
+        def epub_with(audio_files, archived_audio=()):
+            pars = ''.join(
+                f'<par><text src="ch1.html#p{n}"/><audio src="{name}" clipBegin="0s" clipEnd="1s"/></par>'
+                for n, name in enumerate(audio_files)
+            )
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as zf:
+                zf.writestr('ch1.smil', f'<smil xmlns="http://www.w3.org/ns/SMIL"><body>{pars}</body></smil>')
+                for name in archived_audio:
+                    zf.writestr(name, b'')
+            return zipfile.ZipFile(buffer)
+
+        two_chapters = [{'start': 0.0, 'end': 10.0}, {'start': 10.0, 'end': 20.0}]
+        three_chapters = two_chapters + [{'start': 20.0, 'end': 30.0}]
+
+        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], two_chapters),
+                         {'a.mp3': 0.0, 'b.mp3': 10.0})
+        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], three_chapters), {})
+        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'a.mp3']), ['ch1.smil'], two_chapters), {})
+        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], None), {})
+        # An audio file the aligner left without clips still takes up its chapter.
+        self.assertEqual(
+            self.extractor._audio_file_offsets(
+                epub_with(['Audio/a.mp3', 'Audio/c.mp3'], ['Audio/a.mp3', 'Audio/b.mp3', 'Audio/c.mp3']),
+                ['ch1.smil'], three_chapters),
+            {'a.mp3': 0.0, 'b.mp3': 10.0, 'c.mp3': 20.0})
+
+    @staticmethod
+    def _numbered_audio_epub(lengths, clip_ends):
+        """A read-along with three numbered audio files, each timed up to its clip end."""
+        names = ['00000-00001.m4a', '00000-00002.m4a', '00000-00003.m4a']
+        pars = ''.join(
+            f'<par><text src="ch1.html#p{n}"/><audio src="Audio/{name}" clipBegin="0s" clipEnd="{end}s"/></par>'
+            for n, (name, end) in enumerate(zip(names, clip_ends)) if end is not None
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as zf:
+            zf.writestr('OEBPS/ch1.smil', f'<smil xmlns="http://www.w3.org/ns/SMIL"><body>{pars}</body></smil>')
+            for name in names:
+                zf.writestr(f'OEBPS/Audio/{name}', b'')
+            if lengths:
+                zf.writestr(AUDIO_DURATIONS_ENTRY, json.dumps(
+                    {f'OEBPS/Audio/{name}': length for name, length in zip(names, lengths) if length is not None}))
+        return zipfile.ZipFile(buffer)
+
+    def test_stored_audio_lengths_place_each_file_whatever_the_chapters(self):
+        """Verify recorded audio lengths set each file's start, even when the chapters don't line up."""
+        two_chapters = [{'start': 0.0, 'end': 150.0}, {'start': 150.0, 'end': 240.0}]
+        three_chapters = [{'start': 0.0, 'end': 121.0}, {'start': 121.0, 'end': 202.0}, {'start': 202.0, 'end': 243.0}]
+        placed = {'00000-00001.m4a': 0.0, '00000-00002.m4a': 120.0, '00000-00003.m4a': 200.0}
+        clip_ends = [119.9, 79.9, 39.9]
+
+        def offsets(lengths, chapters):
+            return self.extractor._audio_file_offsets(
+                self._numbered_audio_epub(lengths, clip_ends), ['OEBPS/ch1.smil'], chapters)
+
+        self.assertEqual(offsets([120.0, 80.0, 40.0], two_chapters), placed)
+        self.assertEqual(offsets([120.0, 80.0, 40.0], None), placed)
+        # A file with no recorded length falls back to one file per chapter.
+        self.assertEqual(offsets([120.0, 80.0, None], three_chapters),
+                         {'00000-00001.m4a': 0.0, '00000-00002.m4a': 121.0, '00000-00003.m4a': 202.0})
+
+    def test_a_placement_that_contradicts_the_clip_times_is_not_used(self):
+        """Verify each file is placed only when its clips end shortly before the length it is given."""
+        chapters = [{'start': 0.0, 'end': 120.0}, {'start': 120.0, 'end': 200.0}, {'start': 200.0, 'end': 240.0}]
+        clip_ends = [119.9, 79.9, 39.9]
+
+        def offsets(lengths, chapters, clip_ends=clip_ends):
+            return self.extractor._audio_file_offsets(
+                self._numbered_audio_epub(lengths, clip_ends), ['OEBPS/ch1.smil'], chapters)
+
+        by_chapter = {'00000-00001.m4a': 0.0, '00000-00002.m4a': 120.0, '00000-00003.m4a': 200.0}
+        # A recorded length 200 s too long, such as from a wrong MP3 header, gives way to the chapters.
+        self.assertEqual(offsets([320.0, 80.0, 40.0], chapters), by_chapter)
+        # With no chapters to fall back on, nothing is placed.
+        self.assertEqual(offsets([320.0, 80.0, 40.0], None), {})
+        # Chapters that leave a gap between them aren't one file each.
+        gapped = [{'start': 0.0, 'end': 120.0}, {'start': 125.0, 'end': 205.0}, {'start': 205.0, 'end': 245.0}]
+        self.assertEqual(offsets(None, gapped), {})
+        # Counts that match while the boundaries don't: the second file's clips run past its chapter.
+        misaligned = [{'start': 0.0, 'end': 150.0}, {'start': 150.0, 'end': 210.0}, {'start': 210.0, 'end': 240.0}]
+        self.assertEqual(offsets(None, misaligned), {})
+        # A file whose clips end more than a minute before its chapter does.
+        self.assertEqual(offsets(None, chapters, clip_ends=[119.9, 15.0, 39.9]), {})
+        # A file with no clips at all can't contradict its chapter.
+        self.assertEqual(offsets(None, chapters, clip_ends=[119.9, None, 39.9]), by_chapter)
+
+    def test_recorded_lengths_must_end_with_the_audiobook(self):
+        """Verify recorded lengths are used only when they add up to the audiobook's length."""
+        two_chapters = [{'start': 0.0, 'end': 200.0}, {'start': 200.0, 'end': 240.0}]
+        one_per_file = [{'start': 0.0, 'end': 120.0}, {'start': 120.0, 'end': 200.0}, {'start': 200.0, 'end': 240.0}]
+
+        def offsets(lengths, chapters, clip_ends=(119.9, 79.9, 39.9)):
+            return self.extractor._audio_file_offsets(
+                self._numbered_audio_epub(lengths, list(clip_ends)), ['OEBPS/ch1.smil'], chapters)
+
+        # A file with no clips, such as the credits, recorded 10 s short would start every later file early.
+        self.assertEqual(offsets([120.0, 70.0, 40.0], two_chapters, clip_ends=(119.9, None, 39.9)), {})
+        # Each re-encoded file runs a little long; that adds up and is allowed.
+        self.assertEqual(offsets([120.2, 80.2, 40.2], two_chapters),
+                         {'00000-00001.m4a': 0.0, '00000-00002.m4a': 120.2, '00000-00003.m4a': 200.4})
+        # Running 5 s long over three files is more than that.
+        self.assertEqual(offsets([121.7, 81.7, 41.6], two_chapters), {})
+        # When the files are one per chapter, the chapter starts are used: they're on the audiobook's own clock.
+        by_chapter = {'00000-00001.m4a': 0.0, '00000-00002.m4a': 120.0, '00000-00003.m4a': 200.0}
+        self.assertEqual(offsets([120.2, 80.2, 40.2], one_per_file), by_chapter)
+        # The last chapter ends at the audiobook's recorded length, which can fall short of the audio in the
+        # last file; clips past it can't move any other file. A middle file running that far over still fails.
+        self.assertEqual(offsets(None, one_per_file, clip_ends=(119.9, 79.9, 42.6)), by_chapter)
+        self.assertEqual(offsets(None, one_per_file, clip_ends=(119.9, 82.6, 39.9)), {})
+
+    def test_chapters_that_disagree_with_recorded_lengths_give_way(self):
+        """Verify chapter marks set away from the file boundaries don't override recorded lengths."""
+        def offsets(lengths, chapters, clip_ends=(119.9, 79.9, None)):
+            return self.extractor._audio_file_offsets(
+                self._numbered_audio_epub(lengths, list(clip_ends)), ['OEBPS/ch1.smil'], chapters)
+
+        # Every mark 8 s late: the first file gains an untimed tail, and the last file, the credits, has no clips.
+        shifted = [{'start': 0.0, 'end': 128.0}, {'start': 128.0, 'end': 208.0}, {'start': 208.0, 'end': 240.0}]
+        self.assertEqual(offsets([120.0, 80.0, 40.0], shifted),
+                         {'00000-00001.m4a': 0.0, '00000-00002.m4a': 120.0, '00000-00003.m4a': 200.0})
+        # Chapters that don't start at the beginning of the audiobook aren't one file each.
+        late_start = [{'start': 5.0, 'end': 125.0}, {'start': 125.0, 'end': 205.0}, {'start': 205.0, 'end': 245.0}]
+        self.assertEqual(offsets(None, late_start, clip_ends=(119.9, 79.9, 39.9)), {})
 
     def test_xml_parsing_with_prefixes(self):
         """Verify stripped XML is valid and parseable by ElementTree."""
