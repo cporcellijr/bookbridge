@@ -1,5 +1,8 @@
+import io
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+import zipfile
 from unittest.mock import MagicMock, patch
 import sys
 import os
@@ -7,6 +10,8 @@ from pathlib import Path
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
+
+from bs4 import BeautifulSoup
 
 from src.utils.smil_extractor import SmilExtractor
 
@@ -104,6 +109,75 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0]['text'], 'Hello World')
         self.assertNotEqual(segments[0]['text'], 'FAIL_ENCODED')
+
+    def test_nested_overlay_spans_keep_only_their_own_words(self):
+        """Verify an overlay span nested inside another isn't repeated at the outer span's time."""
+        smil = """
+        <smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body>
+                <par><text src="ch1.html#w1"/><audio src="a.mp3" clipBegin="10s" clipEnd="12s"/></par>
+                <par><text src="ch1.html#w2"/><audio src="a.mp3" clipBegin="12s" clipEnd="13s"/></par>
+                <par><text src="ch1.html#w3"/><audio src="a.mp3" clipBegin="13s" clipEnd="15s"/></par>
+            </body>
+        </smil>
+        """
+        html = (
+            '<html><body><p><span id="s1">'
+            '<span id="w3"><span id="w2"><span id="w1"><em>The storm door </em></span>'
+            '<em>had this </em></span><em>lock</em><a id="n1">*</a>.</span>'
+            '</span></p></body></html>'
+        )
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as zf:
+            zf.writestr('OEBPS/ch1.smil', smil)
+            zf.writestr('OEBPS/ch1.html', html)
+        with zipfile.ZipFile(buffer) as zf:
+            segments = self.extractor._process_smil_absolute(zf, 'OEBPS/ch1.smil')
+
+        self.assertEqual(
+            [(s['start'], s['text']) for s in segments],
+            [(10.0, 'The storm door'), (12.0, 'had this'), (13.0, 'lock * .')],
+        )
+
+    def test_nested_overlay_spans_do_not_depend_on_overlay_file_order(self):
+        """Verify a nested span is left out of its outer span whichever overlay file is read first."""
+        outer = ('<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0"><body>'
+                 '<par><text src="ch1.html#w2"/><audio src="a.mp3" clipBegin="12s" clipEnd="13s"/></par>'
+                 '</body></smil>')
+        nested = ('<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0"><body>'
+                  '<par><text src="ch1.html#w1"/><audio src="a.mp3" clipBegin="10s" clipEnd="12s"/></par>'
+                  '</body></smil>')
+        html = '<html><body><p><span id="w2"><span id="w1">The storm </span>door</span></p></body></html>'
+        opf = ('<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+               '<item id="o1" href="1.smil" media-type="application/smil+xml"/>'
+               '<item id="o2" href="2.smil" media-type="application/smil+xml"/>'
+               '</manifest><spine/></package>')
+        container = ('<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                     '<rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+
+        for first, second in ((outer, nested), (nested, outer)):
+            with tempfile.TemporaryDirectory() as tmp:
+                epub = os.path.join(tmp, 'book.epub')
+                with zipfile.ZipFile(epub, 'w') as zf:
+                    zf.writestr('META-INF/container.xml', container)
+                    zf.writestr('OEBPS/content.opf', opf)
+                    zf.writestr('OEBPS/1.smil', first)
+                    zf.writestr('OEBPS/2.smil', second)
+                    zf.writestr('OEBPS/ch1.html', html)
+                with patch.object(self.extractor, '_detect_timestamp_mode', return_value='absolute'):
+                    segments = self.extractor.extract_transcript(epub)
+
+            self.assertEqual(
+                [(s['start'], s['text']) for s in segments],
+                [(10.0, 'The storm'), (12.0, 'door')],
+            )
+
+    def test_own_strings_accepts_a_single_string_type(self):
+        """Verify an element whose string types are one class, as bs4 4.12 gives <rt>, still yields its text."""
+        element = BeautifulSoup('<ruby>漢<rt id="r1">kan</rt></ruby>', 'html.parser').find(id='r1')
+        element.interesting_string_types = type(element.contents[0])
+
+        self.assertEqual(self.extractor._own_strings(element, set()), ['kan'])
 
     def test_xml_parsing_with_prefixes(self):
         """Verify stripped XML is valid and parseable by ElementTree."""

@@ -6,6 +6,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString, Tag
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
@@ -25,6 +26,7 @@ class SmilExtractor:
     
     def __init__(self):
         self._xhtml_cache = {}
+        self._overlay_ids = {}
 
     def _strip_namespaces(self, xml_string: str) -> str:
         # Remove default xmlns
@@ -70,6 +72,7 @@ class SmilExtractor:
         """
         transcript = []
         self._xhtml_cache = {}
+        self._overlay_ids = {}
         
         try:
             with zipfile.ZipFile(epub_path, 'r') as zf:
@@ -91,7 +94,11 @@ class SmilExtractor:
                 logger.info(f"📖 Found {len(smil_files)} SMIL files in EPUB")
                 if abs_chapters:
                     logger.info(f"📖 Audio source has {len(abs_chapters)} chapters")
-                
+
+                # Another overlay file can time a span nested in this file's spans, so
+                # every file's ids must be known before any text is read.
+                self._register_all_overlay_ids(zf, smil_files)
+
                 # Detect timestamp mode
                 timestamp_mode = self._detect_timestamp_mode(zf, smil_files)
                 logger.info(f"⚙️ Detected timestamp mode: {timestamp_mode}")
@@ -255,6 +262,7 @@ class SmilExtractor:
             smil_content = self._strip_namespaces(smil_content)
             
             root = ET.fromstring(smil_content)
+            self._register_overlay_ids(root, smil_dir)
             
             for par in root.iter('par'):
                 text_elem = par.find('text')
@@ -461,6 +469,7 @@ class SmilExtractor:
             smil_content = self._strip_namespaces(smil_content)
             
             root = ET.fromstring(smil_content)
+            self._register_overlay_ids(root, smil_dir)
             
             for par in root.iter('par'):
                 text_elem = par.find('text')
@@ -633,10 +642,54 @@ class SmilExtractor:
         if fragment_id:
             element = soup.find(id=fragment_id)
             if element:
-                text = element.get_text(separator=' ', strip=True)
+                # Some aligners nest each word's span inside the next one's, so an
+                # element's full text repeats words that other pars already time.
+                overlay_ids = self._overlay_ids.get(full_path)
+                if overlay_ids:
+                    text = ' '.join(self._own_strings(element, overlay_ids))
+                else:
+                    text = element.get_text(separator=' ', strip=True)
                 return re.sub(r'\s+', ' ', text).strip()
         
         return None
+
+    def _own_strings(self, element, nested_ids: set) -> List[str]:
+        """Return the element's text pieces, leaving out elements with their own timing."""
+        string_types = element.interesting_string_types or element.MAIN_CONTENT_STRING_TYPES
+        # bs4 4.12 gives some elements, such as <rt>, a single class instead of a set.
+        if isinstance(string_types, type):
+            string_types = (string_types,)
+        pieces = []
+        stack = list(reversed(element.contents))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, NavigableString):
+                if type(node) in string_types and node.strip():
+                    pieces.append(node.strip())
+            elif isinstance(node, Tag) and node.get('id') not in nested_ids:
+                stack.extend(reversed(node.contents))
+        return pieces
+
+    def _register_overlay_ids(self, root, smil_dir: str) -> None:
+        """Record which element ids in each text file have their own overlay timing."""
+        for text_elem in root.iter('text'):
+            text_src = urllib.parse.unquote(text_elem.get('src', ''))
+            if '#' not in text_src:
+                continue
+            file_path, fragment_id = text_src.split('#', 1)
+            full_path = self._resolve_path(smil_dir, file_path)
+            self._overlay_ids.setdefault(full_path, set()).add(fragment_id)
+
+    def _register_all_overlay_ids(self, zf: zipfile.ZipFile, smil_files: List[str]) -> None:
+        """Record the timed element ids from every overlay file."""
+        for smil_path in smil_files:
+            try:
+                root = ET.fromstring(self._strip_namespaces(zf.read(smil_path).decode('utf-8')))
+            except (KeyError, UnicodeDecodeError, ET.ParseError, DefusedXmlException):
+                continue
+            smil_dir = str(Path(smil_path).parent)
+            if smil_dir == '.': smil_dir = ''
+            self._register_overlay_ids(root, smil_dir)
 
 
 def extract_transcript_from_epub(epub_path: str, abs_chapters: List[Dict] = None, 
