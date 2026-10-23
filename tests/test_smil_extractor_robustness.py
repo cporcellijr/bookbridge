@@ -8,6 +8,8 @@ from pathlib import Path
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
+from bs4.element import Tag
+
 from src.utils.smil_extractor import SmilExtractor
 
 class TestSmilExtractorRobustness(unittest.TestCase):
@@ -104,6 +106,32 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0]['text'], 'Hello World')
         self.assertNotEqual(segments[0]['text'], 'FAIL_ENCODED')
+
+    def test_text_lookups_search_each_chapter_once(self):
+        """Verify span lookups don't search the whole chapter again for every span."""
+        html = (
+            b'<html><body><p id="p1">One.</p><p id="p2">Two <span id="p3">three</span>.</p>'
+            b'<p id="p1">Duplicate.</p></body></html>'
+        )
+        mock_zf = MagicMock()
+        mock_zf.read.side_effect = lambda path: html
+        searches = []
+        original_find, original_find_all = Tag.find, Tag.find_all
+
+        def find(tag, *args, **kwargs):
+            searches.append('find')
+            return original_find(tag, *args, **kwargs)
+
+        def find_all(tag, *args, **kwargs):
+            searches.append('find_all')
+            return original_find_all(tag, *args, **kwargs)
+
+        with patch.object(Tag, 'find', find), patch.object(Tag, 'find_all', find_all):
+            texts = [self.extractor._get_text_content(mock_zf, 'OEBPS', f'ch1.html#{fragment}')
+                     for fragment in ('p1', 'p2', 'p3', 'missing')]
+
+        self.assertEqual(texts, ['One.', 'Two three .', 'three', None])
+        self.assertLessEqual(len(searches), 1)
 
     def test_xml_parsing_with_prefixes(self):
         """Verify stripped XML is valid and parseable by ElementTree."""

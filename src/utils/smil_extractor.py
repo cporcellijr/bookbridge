@@ -623,20 +623,27 @@ class SmilExtractor:
             for variant in [full_path, full_path.lstrip('/'), full_path.replace('\\', '/')]:
                 try:
                     content = zf.read(variant).decode('utf-8')
-                    self._xhtml_cache[full_path] = BeautifulSoup(content, 'html.parser')
+                    self._xhtml_cache[full_path] = self._index_ids(BeautifulSoup(content, 'html.parser'))
                     break
                 except KeyError: continue
         
-        soup = self._xhtml_cache.get(full_path)
-        if not soup: return None
+        elements_by_id = self._xhtml_cache.get(full_path)
+        if not elements_by_id: return None
         
         if fragment_id:
-            element = soup.find(id=fragment_id)
+            element = elements_by_id.get(fragment_id)
             if element:
                 text = element.get_text(separator=' ', strip=True)
                 return re.sub(r'\s+', ' ', text).strip()
         
         return None
+
+    def _index_ids(self, soup) -> Dict[str, object]:
+        """Map each id to its first element, so lookups don't search the whole chapter."""
+        elements_by_id = {}
+        for element in soup.find_all(id=True):
+            elements_by_id.setdefault(element['id'], element)
+        return elements_by_id
 
 
 def extract_transcript_from_epub(epub_path: str, abs_chapters: List[Dict] = None, 
