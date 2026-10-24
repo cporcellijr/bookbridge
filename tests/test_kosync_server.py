@@ -2514,6 +2514,65 @@ class TestKosyncEndpoints(unittest.TestCase):
             "\n".join(captured.output),
         )
 
+    def _post_session_for_removed_match(self, history_user_id):
+        """Seed history for a book whose match is gone, then upload a device session for it."""
+        from src import web_server
+        from src.api import kosync_server
+
+        with web_server.database_service.get_session() as session:
+            session.add(ReadingSession(
+                abs_id='bookorbit:6324', session_type='EPUB', start_time=1_742_900_000,
+                end_time=1_742_900_600, duration_seconds=600, start_progress=0.40,
+                end_progress=0.54, leader_client='BridgeSync_Plugin',
+                user_id=history_user_id, book_title='Parallax',
+            ))
+        payload = [{
+            'session_id': 'removed-match-session',
+            'abs_id': 'bookorbit:6324',
+            'session_type': 'EPUB',
+            'start_time': 1_742_910_000,
+            'end_time': 1_742_911_200,
+            'duration_seconds': 1200,
+            'start_progress': 54,
+            'end_progress': 74,
+        }]
+        with patch.object(kosync_server, '_manager', None):
+            return self.client.post(
+                '/koreader/device-sync/sessions', headers=self.auth_headers, json=payload,
+            )
+
+    def test_plugin_session_for_removed_match_is_kept_when_reader_has_history(self):
+        """Reported 2026-10-24: a device abandoned sessions for a book whose match was removed."""
+        from src import web_server
+
+        reader_id = web_server.database_service._default_user_id()
+        response = self._post_session_for_removed_match(reader_id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['accepted'], 1)
+        self.assertEqual(response.get_json()['rejected'], 0)
+        with web_server.database_service.get_session() as session:
+            rows = session.query(ReadingSession).filter(
+                ReadingSession.abs_id == 'bookorbit:6324',
+            ).order_by(ReadingSession.start_time).all()
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(rows[1].book_title, 'Parallax')
+            self.assertEqual(rows[1].leader_client, 'BridgeSync_Plugin')
+            self.assertEqual(rows[1].user_id, reader_id)
+            self.assertAlmostEqual(rows[1].end_progress, 0.74)
+
+    def test_plugin_session_for_removed_match_is_rejected_without_this_readers_history(self):
+        from src import web_server
+
+        other = web_server.database_service.create_user("other-reader", "secret", role="user")
+        try:
+            response = self._post_session_for_removed_match(other.id)
+
+            self.assertEqual(response.get_json()['rejected'], 1)
+            self.assertEqual(response.get_json()['results'][0]['reason'], 'book_not_found')
+        finally:
+            web_server.database_service.delete_user(other.id)
+
     def test_plugin_session_upload_resolves_linked_document_without_abs_id(self):
         """Hash-only plugin sessions use the document's linked book."""
         from src import web_server

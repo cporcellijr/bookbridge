@@ -6080,6 +6080,15 @@ class DatabaseService:
                 ReadingSession.user_id == uid,
             ).first() is not None
 
+    def has_reading_history(self, abs_id: str, user_id: int = None) -> bool:
+        """Whether the (ambient) user has any recorded session for abs_id."""
+        uid = self._resolve_uid(user_id)
+        with self.get_session() as session:
+            return session.query(ReadingSession.id).filter(
+                ReadingSession.abs_id == abs_id,
+                ReadingSession.user_id == uid,
+            ).first() is not None
+
     @staticmethod
     def _close_reading_session(session, row: ReadingSessionBuffer, now: float) -> None:
         """Close the buffer and insert local history in the same transaction."""
@@ -6312,6 +6321,11 @@ class DatabaseService:
                 book_title = db_session.query(
                     func.coalesce(func.nullif(Book.abs_title, ''), func.nullif(Book.audio_title, ''))
                 ).filter(Book.abs_id == abs_id).scalar()
+                if not book_title:
+                    # A removed book keeps the name its earlier sessions recorded.
+                    book_title = db_session.query(ReadingSession.book_title).filter(
+                        ReadingSession.abs_id == abs_id, func.nullif(ReadingSession.book_title, '').isnot(None),
+                    ).order_by(ReadingSession.end_time.desc()).limit(1).scalar()
             session = ReadingSession(
                 abs_id=abs_id,
                 session_type=session_type,

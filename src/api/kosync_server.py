@@ -2740,7 +2740,12 @@ def kosync_upload_sessions():
             if book:
                 abs_id = book.abs_id
 
-        if not book:
+        # A device keeps the abs_id its manifest gave it, so a match removed since
+        # then would otherwise cost the reader this time read.
+        if not book and abs_id and _database_service and _database_service.has_reading_history(abs_id):
+            logger.info("Session upload: keeping session for '%s': its match was removed, "
+                        "but this reader's history for it remains", abs_id)
+        elif not book:
             logger.warning(f"Session upload: book not found for abs_id='{abs_id}' hash='{doc_hash}'")
             rejected += 1
             record_result(index, session, False, "book_not_found")
@@ -2899,7 +2904,8 @@ def kosync_upload_sessions():
 
         # Forward to Grimmory if configured
         if (
-            os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
+            book
+            and os.environ.get("GRIMMORY_READING_SESSIONS", "true").lower() == "true"
             and _manager
             and hasattr(_manager, 'booklore_client')
             and _manager.booklore_client
