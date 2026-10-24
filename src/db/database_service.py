@@ -71,6 +71,9 @@ _EBOOK_INPUT_RECOVERY_IDENTITY_FIELDS = (
     "kosync_doc_id", "sync_mode",
 )
 
+# Audio positions are exact, so 99% is the end (KOReader's page-count finish uses 95%).
+_LISTENING_FINISHED_PROGRESS = 0.99
+
 _READING_SESSION_DESTINATIONS = {
     "grimmory": "grimmory_status",
     "bookorbit": "bookorbit_status",
@@ -6423,6 +6426,32 @@ class DatabaseService:
         for start_time, duration in rows:
             days[self._local_date_from_epoch(start_time, tz_name)] += int(max(duration or 0, 0))
         return dict(days)
+
+    def get_listening_finished_books(self, tz_name: str) -> list[dict]:
+        """Audiobooks the ambient user's own sessions reached the end of, newest first,
+        each at its first finish, in the stats-page finished-book shape."""
+        from sqlalchemy import func
+        uid = self._resolve_uid(None)
+        tz = ZoneInfo(tz_name)
+        with self.get_session() as session:
+            rows = session.query(
+                ReadingSession.abs_id, func.min(ReadingSession.end_time),
+                func.max(Book.abs_title), func.max(Book.audio_title), func.max(ReadingSession.book_title),
+            ).outerjoin(Book, Book.abs_id == ReadingSession.abs_id).filter(
+                ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.user_id == uid,
+                ReadingSession.end_progress >= _LISTENING_FINISHED_PROGRESS,
+            ).group_by(ReadingSession.abs_id).all()
+        books = []
+        for abs_id, finished_at, abs_title, audio_title, book_title in rows:
+            finished_dt = datetime.fromtimestamp(float(finished_at), tz)
+            books.append({
+                "bookKey": f"abs:{abs_id}", "absId": abs_id,
+                "title": abs_title or audio_title or book_title or "Unknown book", "author": None,
+                "finishedAt": int(finished_at),
+                "finishedDate": finished_dt.date().isoformat(), "month": finished_dt.month,
+            })
+        books.sort(key=lambda book: book["finishedAt"], reverse=True)
+        return books
 
     def get_recent_listening_sessions(self, limit: int = 10) -> list[dict]:
         """Newest-first AUDIOBOOK sessions of the ambient user, in the stats-page session shape."""

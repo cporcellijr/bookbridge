@@ -2964,6 +2964,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
             'totalSeconds': 0, 'totalPages': 0, 'booksFinished': 0, 'finishedBooks': [], 'availableYears': [2024, 2026],
         }
         self.mock_database_service.get_koreader_heatmap.return_value = [{'date': '2024-03-02', 'seconds': 300, 'pages': 2}]
+        self.mock_database_service.get_listening_finished_books.return_value = []
 
     @patch('src.web_server._local_listening_stats')
     @patch('src.web_server._stats_abs_client', return_value=None)

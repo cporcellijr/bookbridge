@@ -59,3 +59,50 @@ def test_recent_listening_sessions_scoped_newest_first_limited(database):
     assert [s["durationSeconds"] for s in sessions] == [120, 300]
     assert all(s["activityType"] == "listening" for s in sessions)
     assert _as_user(2, database.get_recent_listening_sessions, 10)[0]["durationSeconds"] == 7777
+
+
+def test_listening_finished_books_first_finish_scoped_and_titled(database):
+    # add finishing sessions with end_progress
+    with database.get_session() as session:
+        def add(uid, kind, abs_id, start_text, secs, end_prog, title=None):
+            begin = _epoch(start_text)
+            rs = ReadingSession(
+                abs_id=abs_id,
+                session_type=kind,
+                start_time=begin,
+                end_time=begin + secs,
+                duration_seconds=secs,
+                end_progress=end_prog,
+                user_id=uid,
+                book_title=title,
+            )
+            session.add(rs)
+        # b1 first finish, then later finish (first wins)
+        add(1, "AUDIOBOOK", "b1", "2026-07-05T09:50:00", 600, 0.995)
+        add(1, "AUDIOBOOK", "b1", "2026-07-06T09:50:00", 600, 0.996)
+        # b2 not finished
+        add(1, "AUDIOBOOK", "b2", "2026-07-07T09:50:00", 600, 0.98)
+        # b3 no book row, title from book_title
+        add(1, "AUDIOBOOK", "b3", "2026-07-04T09:50:00", 600, 1.0, title="Gone")
+        # EPUB excluded
+        add(1, "EPUB", "b1", "2026-07-08T09:50:00", 600, 1.0)
+        # user 2 finish not visible
+        add(2, "AUDIOBOOK", "b1", "2026-07-09T09:50:00", 600, 1.0)
+    books = _as_user(1, database.get_listening_finished_books, TZ)
+    # two finished books: b1 and b3
+    assert len(books) == 2
+    # newest first: b1 finished 2026-07-05, b3 finished 2026-07-04
+    assert books[0]["absId"] == "b1"
+    assert books[0]["title"] == "Book One"
+    assert books[1]["absId"] == "b3"
+    assert books[1]["title"] == "Gone"
+    # first finish wins for b1 (2026-07-05 10:00 local)
+    expected_first = _epoch("2026-07-05T10:00:00")
+    assert books[0]["finishedAt"] == int(expected_first)
+    assert books[0]["finishedDate"] == "2026-07-05"
+    assert books[0]["month"] == 7
+    # b3 date
+    expected_b3 = _epoch("2026-07-04T10:00:00")
+    assert books[1]["finishedAt"] == int(expected_b3)
+    assert books[1]["finishedDate"] == "2026-07-04"
+

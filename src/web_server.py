@@ -12122,7 +12122,7 @@ def _build_listening_stats_payload(tz):
     )
     finished_books = _abs_finished_books(
         abs_client.get_all_progress_raw(), raw_stats.get("items"), tz, abs_client
-    ) if use_abs else []
+    ) if use_abs else database_service.get_listening_finished_books(getattr(tz, "key", str(tz)))
     summary["itemsFinished"] = len(finished_books)
     summary["daysListened"] = len(all_activity_dates)
 
@@ -12575,6 +12575,7 @@ def api_stats_yearly_recap():
                     )
             else:
                 raw_stats = _local_listening_stats(tz)
+                finished_books = database_service.get_listening_finished_books(tz_name)
         except Exception:
             raw_stats = None
         if raw_stats:

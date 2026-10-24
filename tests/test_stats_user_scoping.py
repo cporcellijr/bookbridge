@@ -91,6 +91,15 @@ class TestStatsUserScoping(unittest.TestCase):
             "id": "local-1", "activityType": "listening", "absId": "a", "title": "T",
             "durationSeconds": 900, "startedAt": 1, "endedAt": 2,
         }]
+        db.get_listening_finished_books.return_value = [{
+            "bookKey": "abs:a",
+            "absId": "a",
+            "title": "T",
+            "author": None,
+            "finishedAt": 1775577600,
+            "finishedDate": "2026-04-07",
+            "month": 4,
+        }]
         self.user_abs.is_configured.return_value = False
 
     def test_listening_stats_without_abs_use_local_sessions(self):
@@ -99,8 +108,8 @@ class TestStatsUserScoping(unittest.TestCase):
             payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
         self.assertTrue(payload['available'])
         self.assertEqual(payload['stats']['totalSeconds'], 900)
-        # Local sessions record time listened, not whether a book was finished.
-        self.assertEqual(payload['stats']['itemsFinished'], 0)
+        # A local session that reaches the end of the audiobook records its finish.
+        self.assertEqual(payload['stats']['itemsFinished'], 1)
         self.assertEqual(payload['recentSessions'][0]['title'], "T")
         self.user_abs.get_listening_stats.assert_not_called()
 
@@ -117,13 +126,16 @@ class TestStatsUserScoping(unittest.TestCase):
         self.user_abs.get_listening_stats.assert_called()
         self.mock_database_service.get_listening_days.assert_not_called()
         self.mock_database_service.get_recent_listening_sessions.assert_not_called()
+        self.mock_database_service.get_listening_finished_books.assert_not_called()
 
     def test_yearly_recap_without_abs_uses_local_sessions(self):
         self._local_listening_setup()
         self.mock_database_service.get_koreader_yearly_recap.return_value = {}
         with patch.object(self.ws, 'current_user', return_value=_user(1)):
             response = self.client.get('/api/stats/yearly-recap?scope=listening&year=2026')
-        self.assertEqual(response.get_json()['totalSeconds'], 900)
+        json_data = response.get_json()
+        self.assertEqual(json_data['totalSeconds'], 900)
+        self.assertEqual(json_data['booksFinished'], 1)
         self.user_abs.get_listening_stats.assert_not_called()
 
     def test_stats_never_fall_back_to_global_abs_when_bundle_fails(self):
