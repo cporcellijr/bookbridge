@@ -238,6 +238,20 @@ class RenderedTranslationTests(I18nTestBase):
         self.assertIn('Сменить пароль', body)
         self.assertIn('Вы вошли как <strong>admin</strong>', body)
 
+    def test_add_book_renders_russian(self):
+        _write_catalog(self.translations, 'ru', {
+            'Add / Update Book': 'Добавить / обновить книгу',
+            'Reader Documents': 'Документы читалки',
+            'Searching...': 'Поиск...',
+        })
+        self._login()
+        self.client.post('/account/language', data={'language': 'ru'}, follow_redirects=False)
+        body = self.client.get('/add-book').get_data(as_text=True)
+        self.assertIn('<h2>Добавить / обновить книгу</h2>', body)
+        self.assertIn('Документы читалки', body)
+        # data-working-label is shown on the button while a search runs.
+        self.assertIn('data-working-label="Поиск..."', body)
+
     def test_integrations_pages_render_russian(self):
         _write_catalog(self.translations, 'ru', {
             'Save integrations': 'Сохранить интеграции',
