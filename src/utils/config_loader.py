@@ -174,7 +174,7 @@ ALL_SETTINGS = [
     'WHISPER_DEVICE', 'WHISPER_COMPUTE_TYPE',
     'WHISPER_VAD_FILTER', 'WHISPER_LANGUAGE',
     'TRANSCRIPTION_PROVIDER', 'DEEPGRAM_API_KEY', 'DEEPGRAM_MODEL', 'WHISPER_CPP_URL', 'WHISPER_CPP_TIMEOUT', 'WHISPER_CPP_SEND_ORIGINAL', 'WHISPER_CPP_CHUNK_MINUTES',
-    'CTC_ENABLED', 'CTC_MODEL', 'CTC_QUARTZNET_MODEL_PATH', 'CTC_DEVICE',
+    'CTC_ENABLED', 'CTC_MODEL', 'CTC_QUARTZNET_MODEL_PATH', 'CTC_DEVICE', 'SMIL_SKIP_CTC',
     'ALIGNMENT_SEGMENTED_MAPS',
     'CONTENT_MATCH_GUARD', 'CONTENT_MATCH_MIN_OVERLAP',
     'AUDIO_SPLIT_DURATION_MINUTES',
@@ -237,6 +237,9 @@ DEFAULT_CONFIG = {
     # Optional local QuartzNet model.onnx (or its folder); empty downloads it once.
     'CTC_QUARTZNET_MODEL_PATH': '',
     'CTC_DEVICE': 'auto',
+    # Use a read-along's own SMIL timings instead of forced alignment when they span
+    # the audio with no slips. Off: forced alignment runs first, as before.
+    'SMIL_SKIP_CTC': 'false',
     # Per-chapter RANSAC segment placement (issue #426 phase 2), replacing the global
     # monotonic LIS filter only for books whose narration order genuinely differs from
     # spine order. See docs/PLAN_OUT_OF_ORDER_NARRATION.md and

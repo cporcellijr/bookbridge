@@ -5108,6 +5108,7 @@ def settings():
             'WHISPER_CPP_SEND_ORIGINAL',
             'WHISPER_VAD_FILTER',
             'CTC_ENABLED',
+            'SMIL_SKIP_CTC',
             'ALIGNMENT_SEGMENTED_MAPS',
             'CONTENT_MATCH_GUARD',
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',

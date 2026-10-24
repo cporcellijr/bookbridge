@@ -3100,6 +3100,19 @@
                             does not follow the text closely enough, use transcription automatically. Turn off to
                             always use transcription.</div>
                     </div>
+                    <div class="form-group full-width">
+                        <label class="toggle-label">
+                            <input type="checkbox" name="SMIL_SKIP_CTC"
+                                {% if get_bool('SMIL_SKIP_CTC') %}checked{% endif %}>
+                            Use a read-along's own timings when they check out
+                        </label>
+                        <div class="help-text">When the ebook is a read-along (a Storyteller or StoryAlign EPUB
+                            with media overlays), uses the timings it already has instead of running forced
+                            alignment, as long as they match the text across the whole audiobook and never lose
+                            their place. That skips forced alignment's CPU time, which can be hours on a long
+                            book. A read-along whose timings fail the check is aligned as usual. Off: forced
+                            alignment runs first, and the read-along's timings are used only if it fails.</div>
+                    </div>
                     <details class="advanced-sub full-width">
                         <summary>Advanced — forced alignment model</summary>
                     <div class="dynamic-group full-width" style="display:contents;">

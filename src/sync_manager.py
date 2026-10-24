@@ -70,6 +70,7 @@ from src.utils.ebook_sources import (
 from src.services.alignment_service import AlignmentService, ContentMatchRejected, ingest_storyteller_transcripts
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import EbookInputError, LibraryService
+from src.services.map_quality import find_slips
 from src.services.readalong_delivery import is_generated_readalong_epub
 from src.services.migration_service import MigrationService
 from src.services.reading_session_aggregator import (
@@ -948,6 +949,33 @@ class SyncManager:
         if not source:
             return None
         return self.active_audio_source_adapters.get(source)
+
+    def _smil_timings_trusted(self, abs_id, transcript, book_text, spine_chapters) -> bool:
+        """Whether a read-along's own timings can be the map without a CTC pass.
+
+        The check runs on a map built in memory: when it fails, the stored map is
+        left as it was, since a CTC pass takes its chunk boundaries from it.
+        """
+        try:
+            alignment_map = self.alignment_service.preview_alignment_map(
+                transcript, book_text, abs_id=abs_id, spine_chapters=spine_chapters)
+            # Finding no slips means something only when matched words span the audio.
+            checkable = bool(AlignmentService._ctc_matched_anchors(alignment_map))
+            slips = find_slips(alignment_map) if checkable else []
+        except Exception as e:
+            logger.warning(f"Could not check the read-along timings for '{abs_id}': {e}", exc_info=True)
+            return False
+        if not checkable:
+            logger.info(f"⚠️ Read-along timings for '{abs_id}' match too little of the text to check; "
+                        "aligning with CTC")
+            return False
+        if not slips:
+            logger.info(f"✅ Read-along timings for '{abs_id}' have no slips; using them without CTC")
+            return True
+        described = ", ".join(f"{lo / 3600:.2f}h to {hi / 3600:.2f}h" for lo, hi in slips[:3])
+        logger.info(f"⚠️ Read-along timings for '{abs_id}' slip at {described}"
+                    + (f" and {len(slips) - 3} more" if len(slips) > 3 else "") + "; aligning with CTC")
+        return False
 
     def _ctc_local_audio_paths(self, audio_adapter, audio_source_id, abs_id):
         """Local audio file paths for CTC, or None unless every part is local.
@@ -3693,11 +3721,27 @@ class SyncManager:
                 else:
                     logger.info(f"Storyteller manifest unavailable for '{abs_id}', falling back to SMIL/Whisper")
 
+            # A read-along EPUB (Storyteller, storyalign) already carries SMIL timings for
+            # this text. With SMIL_SKIP_CTC on, timings with no slips are the map, so
+            # neither CTC pass runs; CTC would spend hours of CPU deriving the same timings.
+            smil_first = AlignmentService.smil_skip_ctc_enabled()
+            smil_trusted = False
+            if smil_first and not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
+                raw_transcript = self.transcriber.transcribe_from_smil(
+                    abs_id, epub_path, chapters,
+                    full_book_text=book_text,
+                    progress_callback=lambda p: update_progress(p, 2)
+                )
+                if raw_transcript:
+                    transcript_source = "smil"
+                    ensure_active()
+                    smil_trusted = self._smil_timings_trusted(abs_id, raw_transcript, book_text, spine_chapters)
+
             # CTC forced alignment (issue #426): align the audio directly against the
             # ebook text — no transcript. Preferred when enabled; falls back to
             # SMIL/Whisper on any failure, or when the audio is not fully local (CTC
             # needs local files to decode).
-            if not direct_aligned and AlignmentService.ctc_enabled():
+            if not direct_aligned and not smil_trusted and AlignmentService.ctc_enabled():
                 try:
                     ctc_local_paths = self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
                     if ctc_local_paths:
@@ -3721,7 +3765,7 @@ class SyncManager:
                     logger.warning(f"CTC alignment failed for '{abs_id}': {ctc_err}", exc_info=True)
 
             # Attempt SMIL extraction
-            if not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
+            if not smil_first and not direct_aligned and hasattr(self.transcriber, 'transcribe_from_smil'):
                   raw_transcript = self.transcriber.transcribe_from_smil(
                       abs_id, epub_path, chapters,
                       full_book_text=book_text,
@@ -3777,7 +3821,7 @@ class SyncManager:
                 # long book. Now that transcription built a lexical map, reuse it as chunk
                 # boundaries to upgrade to CTC (issue #426) — new long books get CTC on
                 # first mapping (not only via a manual Remap), regardless of Storyteller.
-                if success and AlignmentService.ctc_enabled():
+                if success and not smil_trusted and AlignmentService.ctc_enabled():
                     upgrade_paths = ctc_local_paths
                     if not (upgrade_paths and all(os.path.exists(p) for p in upgrade_paths)):
                         upgrade_paths = self._ctc_local_audio_paths(audio_adapter, audio_source_id, abs_id)
