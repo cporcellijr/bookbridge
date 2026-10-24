@@ -379,6 +379,10 @@ class AudioTranscriber:
             else:
                 logger.warning("⚠️ Skipping detailed SMIL validation (no ebook text provided)")
 
+            # Each clip's start and end are times the read-along measured, so the
+            # sentence rebuild must not merge clips that split a sentence.
+            for segment in transcript:
+                segment['timed_bounds'] = True
             logger.info(f"✅ SMIL Extraction complete: {len(transcript)} segments")
             return transcript # Return raw data!
         except Exception as e:
