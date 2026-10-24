@@ -1042,7 +1042,8 @@ class TestMultiUserAuth(unittest.TestCase):
 
         ebook_parser = MagicMock()
         ebook_parser.resolve_book_path.return_value = ebook_path
-        ebook_parser.get_kosync_id.return_value = "original-content-hash"
+        ebook_parser.hash_method = "content"
+        ebook_parser.get_kosync_content_id.return_value = "original-content-hash"
         service = KOReaderDeviceSyncService(
             database_service=self.svc,
             ebook_parser=ebook_parser,

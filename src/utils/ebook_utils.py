@@ -434,7 +434,15 @@ class EbookParser:
         filepath = Path(filepath)
         if self.hash_method == "filename":
             return hashlib.md5(filepath.name.encode('utf-8'), usedforsecurity=False).hexdigest()
-        
+        return self.get_kosync_content_id(filepath)
+
+    def get_kosync_content_id(self, filepath):
+        """KOReader's partial MD5 of the file's bytes, whatever the hash method is.
+
+        BridgeSync checks every download against this hash, so a device-sync
+        manifest has to carry it in filename mode too.
+        """
+        filepath = Path(filepath)
         md5 = hashlib.md5(usedforsecurity=False)
         try:
             file_size = os.path.getsize(filepath)
