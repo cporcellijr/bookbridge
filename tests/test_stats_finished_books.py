@@ -82,3 +82,31 @@ def test_a_year_with_a_finish_but_no_listening_time_is_listed():
     recap = _build_listening_yearly_recap({"2026-08-20": 600}, 2026, finished, DENVER)
 
     assert recap["availableYears"] == [2024, 2026]
+
+
+def test_title_falls_back_to_abs_item_details():
+    from unittest.mock import MagicMock
+    import src.web_server as web_server
+    progress = {
+        "no-item": {"libraryItemId": "no-item", "isFinished": True, "finishedAt": _ms(2026, 8, 20)},
+    }
+    items = {}
+    original_db = web_server.database_service
+    stub_db = MagicMock()
+    stub_db.get_all_books.return_value = []
+    web_server.database_service = stub_db
+    try:
+        class StubClient:
+            def get_item_details(self, item_id):
+                assert item_id == "no-item"
+                return {"media": {"metadata": {"title": "First-Time Caller", "authors": [{"name": "A. Writer"}]}}}
+        books = _abs_finished_books(progress, items, DENVER, StubClient())
+        assert len(books) == 1
+        book = books[0]
+        assert book["title"] == "First-Time Caller"
+        assert book["author"] == "A. Writer"
+        # Old 3-arg call still returns Unknown book
+        books2 = _abs_finished_books(progress, items, DENVER)
+        assert books2[0]["title"] == "Unknown book"
+    finally:
+        web_server.database_service = original_db

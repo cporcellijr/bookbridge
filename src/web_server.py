@@ -11958,7 +11958,7 @@ def _years_from_days(all_days):
     return sorted(years)
 
 
-def _abs_finished_books(progress, items, tz):
+def _abs_finished_books(progress, items, tz, abs_client=None):
     """Books ABS marks finished, newest first, with titles from the listening stats items."""
     progress = progress if isinstance(progress, dict) else {}
     items = items if isinstance(items, dict) else {}
@@ -11979,6 +11979,11 @@ def _abs_finished_books(progress, items, tz):
                 titles = {book.abs_id: book.abs_title for book in database_service.get_all_books()}
             title = titles.get(item_id)
         authors = metadata.get("authors") or []
+        # A book marked finished without a listening session: only ABS knows its title.
+        if not title and abs_client is not None:
+            metadata = ((abs_client.get_item_details(item_id) or {}).get("media") or {}).get("metadata") or {}
+            title = metadata.get("title")
+            authors = metadata.get("authors") or authors
         author = ", ".join(a.get("name") for a in authors if isinstance(a, dict) and a.get("name"))
         finished.append({
             "bookKey": f"abs:{item_id}", "absId": item_id,
@@ -12116,7 +12121,7 @@ def _build_listening_stats_payload(tz):
         reference_date=datetime.now(tz).date(),
     )
     finished_books = _abs_finished_books(
-        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz
+        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz, abs_client
     ) if use_abs else []
     summary["itemsFinished"] = len(finished_books)
     summary["daysListened"] = len(all_activity_dates)
@@ -12566,7 +12571,7 @@ def api_stats_yearly_recap():
                 raw_stats = abs_client.get_listening_stats()
                 if raw_stats:
                     finished_books = _abs_finished_books(
-                        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz
+                        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz, abs_client
                     )
             else:
                 raw_stats = _local_listening_stats(tz)
