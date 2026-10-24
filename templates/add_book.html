@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = 'add_book' %}
-{% block title %}Add / Update Book · BookBridge{% endblock %}
+{% block title %}{{ _('Add / Update Book') }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -960,22 +960,22 @@
 {% block content %}
 <div class="addbook-wrap">
     <div class="page-header">
-        <h2>Add / Update Book</h2>
-        <p class="subtitle">Pick text by itself, or pair audio with text and choose how the list should be processed</p>
+        <h2>{{ _('Add / Update Book') }}</h2>
+        <p class="subtitle">{{ _('Pick text by itself, or pair audio with text and choose how the list should be processed') }}</p>
     </div>
 
     <div class="layout">
         <!-- Selection Area -->
         <div class="selection-area">
             <form method="GET" action="{{ url_for('add_book') }}" id="searchForm">
-                <input type="text" name="search" placeholder="🔍 Search by title, author, or filename..."
+                <input type="text" name="search" placeholder="🔍 {{ _('Search by title, author, or filename...') }}"
                     class="search-box" value="{{ search }}" autofocus>
                 <button type="submit" class="btn btn-primary" id="searchBtn"
                     data-primary-action="search"
-                    data-working-label="Searching..."
-                    data-working-message="Searching the library..."
+                    data-working-label="{{ _('Searching...') }}"
+                    data-working-message="{{ _('Searching the library...') }}"
                     data-feedback-target="searchFeedback">
-                    Search
+                    {{ _('Search') }}
                 </button>
                 <div id="searchFeedback" class="submit-feedback" aria-live="polite"></div>
             </form>
@@ -1000,8 +1000,8 @@
                 <input type="hidden" name="audio_only" id="selected_audio_only" value="">
 
                 {% set single_ab_match = audiobooks|length == 1 %}
-                <h3 class="section-title"><span class="section-number">1</span>Select Audiobook <span
-                        style="font-size:12px; color:#aaa; font-weight:normal;">(optional)</span></h3>
+                <h3 class="section-title"><span class="section-number">1</span>{{ _('Select Audiobook') }} <span
+                        style="font-size:12px; color:#aaa; font-weight:normal;">{{ _('(optional)') }}</span></h3>
                 <div class="matching-grid">
                     <div class="book-card ghost-card {% if not single_ab_match %}selected{% endif %}"
                         data-value=""
@@ -1014,9 +1014,9 @@
                         data-audio-cover-url=""
                         onclick="selectAudiobook(this)">
                         <div class="book-cover-container">
-                            <div class="book-cover-placeholder">None</div>
+                            <div class="book-cover-placeholder">{{ _('None') }}</div>
                         </div>
-                        <div class="book-title">No audio</div>
+                        <div class="book-title">{{ _('No audio') }}</div>
                     </div>
                     {% for ab in audiobooks %}
                     <div class="book-card {% if single_ab_match %}selected{% endif %}"
@@ -1031,7 +1031,7 @@
                         onclick="selectAudiobook(this)">
                         <div class="book-cover-container">
                             {% if ab.cover_url %}
-                            <img src="{{ ab.cover_url }}" alt="Cover" class="book-cover"
+                            <img src="{{ ab.cover_url }}" alt="{{ _('Cover') }}" class="book-cover"
                                 onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
                             <div class="book-cover-placeholder hidden">🎧</div>
                             {% else %}
@@ -1043,7 +1043,7 @@
                             {% set ab_src = 'Grimmory' if ab.source == 'BookLore' else ab.source %}
                             <span class="source-badge {{ ab_src.lower().replace(' ', '') }}">{{ ab_src }}</span>
                             {% if ab.language %}
-                            <span class="source-badge language" title="Language">{{ ab.language }}</span>
+                            <span class="source-badge language" title="{{ _('Language') }}">{{ ab.language }}</span>
                             {% endif %}
                         </div>
                         {% set edition_label = ab.subtitle or ab.series_label %}
@@ -1056,20 +1056,20 @@
 
                 {% if storyteller_books %}
                 {% set single_st_match = storyteller_books|length == 1 %}
-                <h3 class="section-title"><span class="section-number">2</span>Storyteller (Preferred)</h3>
+                <h3 class="section-title"><span class="section-number">2</span>{{ _('Storyteller (Preferred)') }}</h3>
                 <div class="selection-grid-scroll">
                     <div class="resource-grid">
                     <div class="resource-card st-card ghost-card {% if not single_st_match %}selected{% endif %}"
                         id="st-none-card" data-value="" onclick="selectStoryteller(this, '')">
                         <div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div>
-                        <div class="resource-title" style="color: rgba(255,255,255,0.5);">None / Skip</div>
+                        <div class="resource-title" style="color: rgba(255,255,255,0.5);">{{ _('None / Skip') }}</div>
                     </div>
                     {% for st in storyteller_books %}
                     <div class="resource-card st-card {% if single_st_match %}selected{% endif %}"
                         data-value="{{ st.uuid }}" onclick="selectStoryteller(this, '{{ st.uuid }}')">
                         {% if st.has_transcript %}
                         <div class="card-badges">
-                            <span class="source-badge transcript">Transcript</span>
+                            <span class="source-badge transcript">{{ _('Transcript') }}</span>
                         </div>
                         {% endif %}
                         <div class="resource-icon">⚡</div>
@@ -1085,25 +1085,24 @@
                 </div>
                 {% elif storyteller_search_failed %}
                 <div class="st-search-failed" style="margin: 12px 0; padding: 10px 14px; border: 1px solid rgba(255,180,0,0.5); border-radius: 8px; color: #ffb400; font-size: 13px;">
-                    Storyteller didn't respond in time or returned an error, so its results are missing. If your library is large, raise Settings → Storyteller → Library Timeout.
+                    {{ _("Storyteller didn't respond in time or returned an error, so its results are missing. If your library is large, raise Settings → Storyteller → Library Timeout.") }}
                 </div>
                 {% endif %}
 
                 {% set single_eb_match = ebooks|length == 1 %}
                 <h3 class="section-title"><span class="section-number">{% if storyteller_books %}3{% else %}2{%
-                        endif %}</span>Select Ebook <span
-                        style="font-size:12px; color:#aaa; font-weight:normal;">(optional if Storyteller
-                        selected)</span></h3>
+                        endif %}</span>{{ _('Select Ebook') }} <span
+                        style="font-size:12px; color:#aaa; font-weight:normal;">{{ _('(optional if Storyteller selected)') }}</span></h3>
                 {% if ebooks %}
                 <div class="selection-grid-scroll">
                     <div class="resource-grid" id="ebook-card-grid">
                     <div class="resource-card eb-card audio-only-card ghost-card"
                         data-audio-only="true" onclick="selectAudioOnly(this)">
                         <div class="card-badges">
-                            <span class="source-badge">Audio only</span>
+                            <span class="source-badge">{{ _('Audio only') }}</span>
                         </div>
                         <div class="resource-icon">🎧</div>
-                        <div class="resource-title">Audio only (no ebook)</div>
+                        <div class="resource-title">{{ _('Audio only (no ebook)') }}</div>
                     </div>
                     {% for eb in ebooks %}
                     <div class="resource-card eb-card {% if single_eb_match %}selected{% endif %}"
@@ -1121,10 +1120,10 @@
                             <span class="source-badge {{ badge_cls }}">{{ eb.source }}</span>
                             {% endif %}
                             {% if eb.language %}
-                            <span class="source-badge language" title="Language">{{ eb.language }}</span>
+                            <span class="source-badge language" title="{{ _('Language') }}">{{ eb.language }}</span>
                             {% endif %}
                             {% if eb.abs_identifier %}
-                            <span class="source-badge linked" title="Authoritative match via Calibre audiobookshelf_id">📌 Linked</span>
+                            <span class="source-badge linked" title="{{ _('Authoritative match via Calibre audiobookshelf_id') }}">📌 {{ _('Linked') }}</span>
                             {% endif %}
                         </div>
                         {% endif %}
@@ -1140,26 +1139,25 @@
                     </div>
                 </div>
                 {% else %}
-                <div style="color: rgba(255,255,255,0.4); font-size: 13px; margin: 12px 0;">No ebooks found for this
-                    search.</div>
+                <div style="color: rgba(255,255,255,0.4); font-size: 13px; margin: 12px 0;">{{ _('No ebooks found for this search.') }}</div>
                 <div class="resource-card eb-card audio-only-card ghost-card"
                     data-audio-only="true" onclick="selectAudioOnly(this)">
                     <div class="resource-icon">🎧</div>
-                    <div class="resource-title">Audio only (no ebook)</div>
+                    <div class="resource-title">{{ _('Audio only (no ebook)') }}</div>
                 </div>
                 {% endif %}
 
                 <label id="readalongEpubOption" for="readalongEpubCheckbox" style="display:none; align-items:center; gap:8px; margin:10px 0; font-size:13px; color:rgba(255,255,255,0.75); cursor:pointer;">
                     <input type="checkbox" id="readalongEpubCheckbox" name="readalong_epub_requested" value="true" disabled>
-                    Also generate a read-along EPUB for BookOrbit once this book finishes forging
+                    {{ _('Also generate a read-along EPUB for BookOrbit once this book finishes forging') }}
                 </label>
 
                 <button type="submit" class="btn btn-success add-to-queue-btn" id="addToQueueBtn" disabled
                     data-primary-action="selection-actions"
-                    data-working-label="Adding to queue..."
-                    data-working-message="Adding this item to the queue..."
+                    data-working-label="{{ _('Adding to queue...') }}"
+                    data-working-message="{{ _('Adding this item to the queue...') }}"
                     data-feedback-target="selectionFeedback">
-                    Add to Queue
+                    {{ _('Add to Queue') }}
                 </button>
                 <div id="selectionFeedback" class="submit-feedback" aria-live="polite"></div>
             </form>
@@ -1167,32 +1165,32 @@
             <details class="kosync-section" id="kosync-documents">
                 <summary class="kosync-summary">
                     <span class="kosync-summary-main">
-                        <span class="kosync-summary-title">Reader Documents</span>
+                        <span class="kosync-summary-title">{{ _('Reader Documents') }}</span>
                         <span id="kosync-docs-badge" class="btn-badge hidden">0</span>
                     </span>
                     <span class="kosync-summary-meta">
-                        <span id="kosync-docs-summary">Checking...</span>
+                        <span id="kosync-docs-summary">{{ _('Checking...') }}</span>
                         <span class="kosync-summary-chevron">⌄</span>
                     </span>
                 </summary>
                 <div class="kosync-panel-body">
                     <div class="kosync-toolbar">
                         <input id="kosync-doc-search" class="kosync-search" type="search"
-                            placeholder="Search hash, device, or book">
-                        <div class="kosync-filter" aria-label="Reader document filter">
-                            <button type="button" data-filter="unlinked" class="active">Needs Linking</button>
-                            <button type="button" data-filter="linked">Linked</button>
-                            <button type="button" data-filter="all">All</button>
+                            placeholder="{{ _('Search hash, device, or book') }}">
+                        <div class="kosync-filter" aria-label="{{ _('Reader document filter') }}">
+                            <button type="button" data-filter="unlinked" class="active">{{ _('Needs Linking') }}</button>
+                            <button type="button" data-filter="linked">{{ _('Linked') }}</button>
+                            <button type="button" data-filter="all">{{ _('All') }}</button>
                         </div>
-                        <button type="button" id="kosync-show-all" class="kosync-show-toggle hidden">Show All</button>
+                        <button type="button" id="kosync-show-all" class="kosync-show-toggle hidden">{{ _('Show All') }}</button>
                     </div>
                     <div class="kosync-note">
-                        Books your e-reader has reported to the sync server, identified by file hash. BookBridge
+                        {% trans trimmed %}Books your e-reader has reported to the sync server, identified by file hash. BookBridge
                         links them to your books automatically; if a device copy doesn't match any library file
                         (progress not syncing), link it to the right book here. Old unlinked documents are usually
-                        just history — link one only when a current book is failing to sync.
+                        just history — link one only when a current book is failing to sync.{% endtrans %}
                     </div>
-                    <div id="kosync-doc-status" class="kosync-empty">Loading...</div>
+                    <div id="kosync-doc-status" class="kosync-empty">{{ _('Loading...') }}</div>
                     <div id="kosync-doc-list" class="kosync-doc-list"></div>
                 </div>
             </details>
@@ -1201,8 +1199,8 @@
         <!-- Queue Area -->
         <div class="queue-area">
             <div class="queue-header">
-                <h3>Queue</h3>
-                <span class="queue-count">{{ queue|length }} items</span>
+                <h3>{{ _('Queue') }}</h3>
+                <span class="queue-count">{{ ngettext('%(num)s item', '%(num)s items', queue|length) }}</span>
             </div>
 
             {% if queue %}
@@ -1215,16 +1213,16 @@
             {% for item in queue %}
             <div class="queue-item">
                 {% if item.cover_url %}
-                <img src="{{ item.cover_url }}" alt="Cover" class="queue-item-cover"
+                <img src="{{ item.cover_url }}" alt="{{ _('Cover') }}" class="queue-item-cover"
                     onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 60%22%3E%3Crect fill=%22%23667eea%22 width=%2240%22 height=%2260%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 font-size=%2224%22 fill=%22white%22%3E📖%3C/text%3E%3C/svg%3E';">
                 {% else %}
-                <div class="queue-item-cover book-cover-placeholder" style="font-size:18px;">Text</div>
+                <div class="queue-item-cover book-cover-placeholder" style="font-size:18px;">{{ _('Text') }}</div>
                 {% endif %}
                 <div class="queue-item-info">
                     <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
                     {% if item.audio_only %}
                     <p class="queue-item-ebook">
-                        <span style="color: #fbbf24; font-size: 11px;">🎧 Audio only</span>
+                        <span style="color: #fbbf24; font-size: 11px;">🎧 {{ _('Audio only') }}</span>
                         {% if item.audio_source %}
                         <span class="source-badge {{ item.audio_source.lower().replace(' ', '') }}">{{ item.audio_source }}</span>
                         {% endif %}
@@ -1240,7 +1238,7 @@
                         <span class="source-badge {{ item.audio_source.lower().replace(' ', '') }}">{{ item.audio_source }}</span>
                         {% endif %}
                         {% if item.readalong_epub_requested %}
-                        <span class="source-badge" style="background: rgba(52, 211, 153, 0.2); color: #34d399;" title="A read-along EPUB will be generated for BookOrbit once this book finishes forging">🔊 Read-along</span>
+                        <span class="source-badge" style="background: rgba(52, 211, 153, 0.2); color: #34d399;" title="{{ _('A read-along EPUB will be generated for BookOrbit once this book finishes forging') }}">🔊 {{ _('Read-along') }}</span>
                         {% endif %}
                     </p>
                     {% endif %}
@@ -1258,10 +1256,10 @@
                     <input type="hidden" name="action" value="process_queue">
                     <button type="submit" class="btn btn-success w-100"
                         data-primary-action="queue-actions"
-                        data-working-label="Processing queue..."
-                        data-working-message="Processing queued matches and returning to the dashboard..."
+                        data-working-label="{{ _('Processing queue...') }}"
+                        data-working-message="{{ _('Processing queued matches and returning to the dashboard...') }}"
                         data-feedback-target="queueFeedback">
-                        Match All ({{ queue|length }})
+                        {{ _('Match All (%(count)s)', count=queue|length) }}
                     </button>
                 </form>
 
@@ -1270,13 +1268,13 @@
                     <input type="hidden" name="action" value="forge_and_match_queue">
                     <button type="submit" class="btn btn-primary w-100"
                         data-primary-action="queue-actions"
-                        data-working-label="Creating Storyteller editions..."
-                        data-working-message="Creating queued Storyteller editions and saving matches..."
+                        data-working-label="{{ _('Creating Storyteller editions...') }}"
+                        data-working-message="{{ _('Creating queued Storyteller editions and saving matches...') }}"
                         data-feedback-target="queueFeedback">
-                        Create Storyteller Edition &amp; Match All ({{ queue|length }})
+                        {{ _('Create Storyteller Edition &amp; Match All (%(count)s)', count=queue|length) }}
                     </button>
                 </form>
-                <div class="queue-action-note">Creates Storyteller editions for audio plus standard ebook items; existing Storyteller or text-only items are matched directly.</div>
+                <div class="queue-action-note">{{ _('Creates Storyteller editions for audio plus standard ebook items; existing Storyteller or text-only items are matched directly.') }}</div>
                 {% endif %}
 
                 {% if storyteller_enabled and queue|length == 1 and queue_ns.forge_eligible == 1 %}
@@ -1285,24 +1283,24 @@
                     <input type="hidden" name="forge_stage_mode" id="forgeOnlyStageMode" value="">
                     <button type="submit" class="btn btn-primary w-100" id="forgeOnlyQueueBtn"
                         data-primary-action="queue-actions"
-                        data-working-label="Creating Storyteller edition..."
-                        data-working-message="Starting Storyteller edition creation and returning to the dashboard..."
+                        data-working-label="{{ _('Creating Storyteller edition...') }}"
+                        data-working-message="{{ _('Starting Storyteller edition creation and returning to the dashboard...') }}"
                         data-feedback-target="queueFeedback">
-                        Create Storyteller Edition Only
+                        {{ _('Create Storyteller Edition Only') }}
                     </button>
                 </form>
                 {% elif storyteller_enabled and queue|length > 1 and queue_ns.forge_eligible > 0 %}
-                <button type="button" class="btn btn-primary w-100" disabled title="Storyteller edition creation is available for one queued book at a time.">
-                    Create Storyteller Edition Only
+                <button type="button" class="btn btn-primary w-100" disabled title="{{ _('Storyteller edition creation is available for one queued book at a time.') }}">
+                    {{ _('Create Storyteller Edition Only') }}
                 </button>
-                <div class="queue-action-note">Storyteller edition-only creation is disabled when more than one item is queued.</div>
+                <div class="queue-action-note">{{ _('Storyteller edition-only creation is disabled when more than one item is queued.') }}</div>
                 {% endif %}
 
                 <form method="POST" action="{{ url_for('add_book') }}">
                     <input type="hidden" name="action" value="clear_queue">
                     <button type="submit" class="btn btn-danger w-100"
-                        onclick="return confirm('Clear entire queue?')">
-                        🗑️ Clear Queue
+                        onclick='return confirm({{ _('Clear entire queue?') | tojson }})'>
+                        🗑️ {{ _('Clear Queue') }}
                     </button>
                 </form>
                 <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
@@ -1310,7 +1308,7 @@
             {% else %}
             <div class="empty-queue">
                 <div class="empty-queue-icon">📋</div>
-                <p>Queue is empty<br>Add items to get started</p>
+                <p>{{ _('Queue is empty') }}<br>{{ _('Add items to get started') }}</p>
             </div>
             {% endif %}
         </div>
@@ -1320,20 +1318,20 @@
 {% if storyteller_enabled %}
 <div class="modal-overlay" id="forgeStageModal" aria-hidden="true">
     <div class="modal modal-card" role="dialog" aria-modal="true" aria-labelledby="forgeStageTitle">
-        <h3 id="forgeStageTitle">Storyteller edition staging</h3>
-        <p>Choose what happens to the staged source files after Storyteller finishes processing.</p>
+        <h3 id="forgeStageTitle">{{ _('Storyteller edition staging') }}</h3>
+        <p>{{ _('Choose what happens to the staged source files after Storyteller finishes processing.') }}</p>
         <div class="modal-options">
             <button type="button" class="modal-option" onclick="chooseForgeStageMode('cleanup')">
-                <strong>Delete staged sources</strong>
-                <span>Default. Copy files into Storyteller, then remove the staged audio and EPUB after processing completes.</span>
+                <strong>{{ _('Delete staged sources') }}</strong>
+                <span>{{ _('Default. Copy files into Storyteller, then remove the staged audio and EPUB after processing completes.') }}</span>
             </button>
             <button type="button" class="modal-option" onclick="chooseForgeStageMode('hardlink')">
-                <strong>Keep staged files / hardlink local</strong>
-                <span>Use hardlinks for local files when possible and skip staged-source cleanup. Remote downloads still fall back to copied files.</span>
+                <strong>{{ _('Keep staged files / hardlink local') }}</strong>
+                <span>{{ _('Use hardlinks for local files when possible and skip staged-source cleanup. Remote downloads still fall back to copied files.') }}</span>
             </button>
         </div>
         <div class="modal-actions">
-            <button type="button" class="btn btn-secondary" onclick="closeForgeStageModal()">Cancel</button>
+            <button type="button" class="btn btn-secondary" onclick="closeForgeStageModal()">{{ _('Cancel') }}</button>
         </div>
     </div>
 </div>

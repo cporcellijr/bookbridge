@@ -238,6 +238,20 @@ class RenderedTranslationTests(I18nTestBase):
         self.assertIn('Сменить пароль', body)
         self.assertIn('Вы вошли как <strong>admin</strong>', body)
 
+    def test_add_book_renders_russian(self):
+        _write_catalog(self.translations, 'ru', {
+            'Add / Update Book': 'Добавить / обновить книгу',
+            'Reader Documents': 'Документы читалки',
+            'Searching...': 'Поиск...',
+        })
+        self._login()
+        self.client.post('/account/language', data={'language': 'ru'}, follow_redirects=False)
+        body = self.client.get('/add-book').get_data(as_text=True)
+        self.assertIn('<h2>Добавить / обновить книгу</h2>', body)
+        self.assertIn('Документы читалки', body)
+        # data-working-label is shown on the button while a search runs.
+        self.assertIn('data-working-label="Поиск..."', body)
+
     def test_integrations_pages_render_russian(self):
         _write_catalog(self.translations, 'ru', {
             'Save integrations': 'Сохранить интеграции',
@@ -254,6 +268,23 @@ class RenderedTranslationTests(I18nTestBase):
         body = self.client.get(f'/admin/users/{user.id}/integrations').get_data(as_text=True)
         self.assertIn('Интеграции: reader', body)
         self.assertIn('Обычным пользователям нужны собственные учётные данные.', body)
+
+    def test_logs_stats_suggestions_render_russian(self):
+        _write_catalog(self.translations, 'ru', {
+            'Application Logs': 'Журнал приложения',
+            'Unified activity dashboard': 'Сводная панель активности',
+            'Library Suggestions': 'Предложения по библиотеке',
+            # Counts go through ngettext, so Russian gets all three plural forms.
+            ('%(num)s item', '%(num)s items'):
+                ('%(num)s элемент', '%(num)s элемента', '%(num)s элементов'),
+        })
+        self._login()
+        self.client.post('/account/language', data={'language': 'ru'}, follow_redirects=False)
+        self.assertIn('Журнал приложения', self.client.get('/logs').get_data(as_text=True))
+        self.assertIn('Сводная панель активности', self.client.get('/stats').get_data(as_text=True))
+        body = self.client.get('/suggestions').get_data(as_text=True)
+        self.assertIn('Предложения по библиотеке', body)
+        self.assertIn('id="queueCount">0 элементов</span>', body)
 
     def test_confirm_survives_an_apostrophe_in_the_translation(self):
         # A translated confirm() string is a JS string literal: an apostrophe in
