@@ -71,8 +71,8 @@ class TestReconcileHashes(unittest.TestCase):
 
     def test_counts_only_newly_linked_hashes(self):
         results = {
-            "a": {"path": Path("a"), "content_hash": "hash-a"},
-            "b": {"path": Path("b"), "content_hash": "hash-b"},
+            "a": {"path": Path("a"), "content_hash": "hash-a", "kosync_hash": "hash-a"},
+            "b": {"path": Path("b"), "content_hash": "hash-b", "kosync_hash": "hash-b"},
         }
         self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False: results[book.abs_id]
         self.service.database_service.ensure_linked_kosync_document.side_effect = [True, False]
@@ -91,7 +91,7 @@ class TestReconcileHashes(unittest.TestCase):
             seen.append(book.abs_id)
             if book.abs_id == "a":
                 raise RuntimeError("boom")
-            return {"path": Path("b"), "content_hash": "hash-b"}
+            return {"path": Path("b"), "content_hash": "hash-b", "kosync_hash": "hash-b"}
 
         self.service._resolve_download_artifact = resolve
         self.service.database_service.ensure_linked_kosync_document.return_value = True
@@ -118,7 +118,7 @@ class TestReconcileHashes(unittest.TestCase):
         Observed live: 'Northern Reach' and 'Salt Marsh' both pointed at the same EPUB,
         so each pass rebound the same hash to whichever book came last.
         """
-        same = {"path": Path("shared"), "content_hash": "shared-hash"}
+        same = {"path": Path("shared"), "content_hash": "shared-hash", "kosync_hash": "shared-hash"}
         self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False: dict(same)
         self.service.database_service.ensure_linked_kosync_document.return_value = True
 
@@ -137,7 +137,7 @@ class TestReconcileHashes(unittest.TestCase):
 
         def resolve(book, link_hashes=True, allow_revalidation=False):
             captured[book.abs_id] = link_hashes
-            return {"path": Path("p"), "content_hash": f"hash-{book.abs_id}"}
+            return {"path": Path("p"), "content_hash": f"hash-{book.abs_id}", "kosync_hash": f"hash-{book.abs_id}"}
 
         self.service._resolve_download_artifact = resolve
         self.service.database_service.ensure_linked_kosync_document.return_value = False

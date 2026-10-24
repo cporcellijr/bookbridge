@@ -218,7 +218,7 @@ class KOReaderDeviceSyncService:
                     return cached[2]
 
         try:
-            content_hash = self.ebook_parser.get_kosync_id(source_path)
+            content_hash = self.ebook_parser.get_kosync_content_id(source_path)
         except Exception as e:
             logger.warning(
                 "KOReader device-sync could not compute content hash for '%s': %s",
@@ -259,6 +259,7 @@ class KOReaderDeviceSyncService:
             )
             return None
 
+        kosync_hash = self._kosync_hash_for_path(source_path, content_hash)
         stored_hash = self._select_content_hash(book)
         abs_id = str(getattr(book, "abs_id", "") or "").strip()
 
@@ -266,10 +267,10 @@ class KOReaderDeviceSyncService:
         # downloaded it via BridgeSync links to this book regardless of which hash the
         # primary book.kosync_doc_id column currently points at.
         linked = False
-        if abs_id and content_hash and link_hashes:
-            linked = self._link_sibling_hash(abs_id, content_hash)
+        if abs_id and kosync_hash and link_hashes:
+            linked = self._link_sibling_hash(abs_id, kosync_hash)
 
-        if stored_hash and stored_hash != content_hash:
+        if stored_hash and kosync_hash and stored_hash != kosync_hash:
             # The primary hash may deliberately identify a different EPUB build, such
             # as a manually pinned or Storyteller-forged copy. Keep it primary and link
             # both hashes as siblings; GET/PUT resolution aggregates progress across
@@ -281,15 +282,35 @@ class KOReaderDeviceSyncService:
                 "(stored hash %s; served hash %s linked as sibling)",
                 sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
                 sanitize_log_data(stored_hash),
-                sanitize_log_data(content_hash),
+                sanitize_log_data(kosync_hash),
             )
 
         return {
             "path": source_path,
             "source_filename": source_filename,
             "content_hash": content_hash,
+            "kosync_hash": kosync_hash,
             "linked": linked,
         }
+
+    def _kosync_hash_for_path(self, source_path: Path, content_hash: str) -> Optional[str]:
+        """The hash a device reports for this file over KoSync.
+
+        In filename mode that's the filename's hash, not the content hash the
+        manifest carries, and it's the one progress lookups have to find.
+        """
+        if getattr(self.ebook_parser, "hash_method", None) != "filename":
+            return content_hash
+        try:
+            return str(self.ebook_parser.get_kosync_id(source_path) or "").strip() or None
+        except Exception as e:
+            logger.warning(
+                "KOReader device-sync could not compute the KoSync hash for '%s': %s",
+                sanitize_log_data(source_path.name),
+                e,
+                exc_info=True,
+            )
+            return None
 
     def _link_sibling_hash(self, abs_id: str, doc_hash: str) -> bool:
         """Ensure ``doc_hash`` exists as a KosyncDocument linked to ``abs_id`` (best effort).
@@ -342,30 +363,30 @@ class KOReaderDeviceSyncService:
                 summary["skipped"] += 1
                 continue
 
-            content_hash = resolved.get("content_hash")
+            doc_hash = resolved.get("kosync_hash")
             abs_id = str(getattr(book, "abs_id", "") or "").strip()
-            if not content_hash or not abs_id:
+            if not doc_hash or not abs_id:
                 summary["skipped"] += 1
                 continue
 
             # Two active books resolving to the same file would otherwise steal the
             # hash from each other on every pass. That is a catalogue mis-mapping, not
             # drift: leave the existing link alone and surface it instead.
-            owner = claimed_by.get(content_hash)
+            owner = claimed_by.get(doc_hash)
             if owner and owner != abs_id:
                 summary["conflicts"] += 1
                 logger.warning(
                     "🔗 Hash reconcile: '%s' resolves to the same file as '%s' (hash %s) — "
                     "leaving the existing link alone; check these books' ebook mapping",
-                    label, sanitize_log_data(owner), sanitize_log_data(content_hash),
+                    label, sanitize_log_data(owner), sanitize_log_data(doc_hash),
                 )
                 continue
-            claimed_by[content_hash] = abs_id
+            claimed_by[doc_hash] = abs_id
 
-            if self._link_sibling_hash(abs_id, content_hash):
+            if self._link_sibling_hash(abs_id, doc_hash):
                 summary["linked"] += 1
                 logger.info("🔗 Hash reconcile: bound new hash %s to '%s'",
-                            sanitize_log_data(content_hash), label)
+                            sanitize_log_data(doc_hash), label)
 
         logger.info(
             "🔗 Hash reconcile: checked=%d linked=%d skipped=%d conflicts=%d errors=%d",
