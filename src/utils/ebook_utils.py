@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 from collections import OrderedDict
 from src.sync_clients.sync_client_interface import LocatorResult
-from src.utils.cache_paths import safe_cache_path, is_plain_basename
+from src.utils.cache_paths import safe_cache_path, is_plain_basename, contained_library_file
 from src.utils.ebook_dom_map import (
     INLINE_TEXT_JOINER,
     content_string_nodes,
@@ -216,9 +216,14 @@ class EbookParser:
         return [self.books_dir, *self.extra_book_dirs]
 
     def resolve_book_path(self, filename):
-        # 0. Filename-only lookup: a name carrying a directory component or ".."
-        #    would let the glob scans below walk outside the library roots.
+        # 0. A name carrying a folder ("Author/Book.epub") is looked up only at that
+        #    exact path inside a library root: the glob scans below would follow its
+        #    "..", and a same-named file elsewhere is a different book.
         if not is_plain_basename(filename):
+            path = contained_library_file(self.search_dirs(), filename)
+            if path:
+                self._remember_resolved_path(filename, path)
+                return path
             logger.warning("Refused book path lookup for a non-basename filename: %s", filename)
             raise FileNotFoundError(f"Could not locate {filename}")
 

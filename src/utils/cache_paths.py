@@ -70,6 +70,28 @@ def safe_library_path(raw_path) -> Path | None:
     return None
 
 
+def contained_library_file(roots, relative_name) -> Path | None:
+    """The file ``relative_name`` names inside the first root that holds it, or None.
+
+    A stored ebook name may carry its folder within the library
+    ("Author/Book.epub"). Only that exact path is looked up: absolute names, ``..``
+    and symlinks that resolve outside a root are refused, like ``safe_library_path``.
+    """
+    raw = str(relative_name or "").strip()
+    if not raw:
+        return None
+    for root in roots:
+        try:
+            resolved_root = Path(root).resolve(strict=False)
+            candidate = (resolved_root / raw).resolve(strict=False)
+            candidate.relative_to(resolved_root)
+        except (OSError, ValueError):
+            continue
+        if candidate != resolved_root and candidate.is_file():
+            return candidate
+    return None
+
+
 def is_plain_basename(filename) -> bool:
     """True when ``filename`` is a bare file name with no directory component.
 

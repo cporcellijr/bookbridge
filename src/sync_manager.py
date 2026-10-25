@@ -46,7 +46,7 @@ from src.utils.user_context import (
 from src.utils.config_loader import env_truthy
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
-from src.utils.cache_paths import safe_cache_path
+from src.utils.cache_paths import safe_cache_path, is_plain_basename
 from src.utils.transcription_cancel import (
     CancellationToken,
     is_cancelled,
@@ -2292,8 +2292,12 @@ class SyncManager:
         # 2. Fallback: try filesystem glob directly (preserved for edge cases
         #    where parser search_dirs may differ from books_dir).
         books_search_dir = self.books_dir or Path("/books")
-        escaped_filename = glob.escape(ebook_filename)
-        filesystem_matches = list(books_search_dir.glob(f"**/{escaped_filename}"))
+        if is_plain_basename(ebook_filename):
+            escaped_filename = glob.escape(ebook_filename)
+            filesystem_matches = list(books_search_dir.glob(f"**/{escaped_filename}"))
+        else:
+            # The parser already looked a folder name up inside the roots; a glob would follow its "..".
+            filesystem_matches = []
         if filesystem_matches:
             logger.info(f"🔍 Found EPUB on filesystem: {filesystem_matches[0]}")
             return filesystem_matches[0]

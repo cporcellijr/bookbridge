@@ -42,7 +42,7 @@ from src.utils.user_config import SERVICE_ENABLE_KEYS
 from src.utils.kosync_url import is_builtin_kosync_url
 
 from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
-from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename
+from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename, contained_library_file
 from src.utils.ebook_utils import (
     LINKABLE_EBOOK_EXTENSIONS,
     LRUCache,
@@ -2304,6 +2304,9 @@ def _reconcile_abs_collection():
 
 def find_ebook_file(filename):
     if not is_plain_basename(filename):
+        path = contained_library_file([EBOOK_DIR], filename)
+        if path:
+            return path
         logger.warning(
             "Refused ebook lookup for a non-basename filename: %s",
             sanitize_log_data(str(filename or "")),
