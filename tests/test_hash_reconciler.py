@@ -67,7 +67,7 @@ class TestReconcileHashes(unittest.TestCase):
             bookorbit_client=MagicMock(),
         )
         self.books = [_book("a", "Book A"), _book("b", "Book B")]
-        self.service._get_active_books = lambda: list(self.books)
+        self.service._get_active_books = lambda all_users=False: list(self.books)
 
     def test_counts_only_newly_linked_hashes(self):
         results = {

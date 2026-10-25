@@ -1069,7 +1069,8 @@ class StorytellerAPIClient:
                     continue
                 ext = os.path.splitext(item.filename)[1].lower()
                 if ext in cls._AUDIO_EXTENSIONS:
-                    if item.file_size > 0:
+                    # A length already recorded (a builder's exact one) beats a padded re-probe.
+                    if item.file_size > 0 and item.filename not in durations:
                         probe_path = Path(scratch) / f"audio{ext}"
                         with zin.open(item) as audio, open(probe_path, "wb") as out:
                             shutil.copyfileobj(audio, out, 1 << 20)

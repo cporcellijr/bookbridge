@@ -271,17 +271,54 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         two_chapters = [{'start': 0.0, 'end': 10.0}, {'start': 10.0, 'end': 20.0}]
         three_chapters = two_chapters + [{'start': 20.0, 'end': 30.0}]
 
-        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], two_chapters),
+        self.assertEqual(self._offsets_by_name(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], two_chapters),
                          {'a.mp3': 0.0, 'b.mp3': 10.0})
-        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], three_chapters), {})
-        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'a.mp3']), ['ch1.smil'], two_chapters), {})
-        self.assertEqual(self.extractor._audio_file_offsets(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], None), {})
+        self.assertEqual(self._offsets_by_name(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], three_chapters), {})
+        self.assertEqual(self._offsets_by_name(epub_with(['a.mp3', 'a.mp3']), ['ch1.smil'], two_chapters), {})
+        self.assertEqual(self._offsets_by_name(epub_with(['a.mp3', 'b.mp3']), ['ch1.smil'], None), {})
         # An audio file the aligner left without clips still takes up its chapter.
         self.assertEqual(
-            self.extractor._audio_file_offsets(
+            self._offsets_by_name(
                 epub_with(['Audio/a.mp3', 'Audio/c.mp3'], ['Audio/a.mp3', 'Audio/b.mp3', 'Audio/c.mp3']),
                 ['ch1.smil'], three_chapters),
             {'a.mp3': 0.0, 'b.mp3': 10.0, 'c.mp3': 20.0})
+
+    def _offsets_by_name(self, *args):
+        """Placed offsets keyed by file name, for readable expectations."""
+        return {Path(path).name: start for path, start in self.extractor._audio_file_offsets(*args).items()}
+
+    def test_audio_files_sharing_a_name_in_different_folders_are_placed_apart(self):
+        """part1/01.mp3 and part2/01.mp3 are different files: keyed by name alone, the second
+        part's clips landed on the first part's times and the timings ended at 200s of 400s."""
+        files = ['Audio/part1/01.mp3', 'Audio/part1/02.mp3', 'Audio/part2/01.mp3', 'Audio/part2/02.mp3']
+        pars = ''.join(f'<par><text src="ch1.html#p{n}"/><audio src="{name}" clipBegin="0s" clipEnd="99s"/></par>'
+                       for n, name in enumerate(files))
+        html = ''.join(f'<p id="p{n}">Sentence number {n}.</p>' for n in range(len(files)))
+        opf = """<?xml version="1.0"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+            <manifest>
+                <item id="ch1" href="ch1.html" media-type="application/xhtml+xml" media-overlay="ch1_overlay"/>
+                <item id="ch1_overlay" href="ch1.smil" media-type="application/smil+xml"/>
+            </manifest>
+            <spine><itemref idref="ch1"/></spine>
+        </package>
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'parts.epub'
+            with zipfile.ZipFile(path, 'w') as zf:
+                zf.writestr('META-INF/container.xml',
+                            '<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+                zf.writestr('OEBPS/content.opf', opf)
+                zf.writestr('OEBPS/ch1.smil', f'<smil xmlns="http://www.w3.org/ns/SMIL"><body>{pars}</body></smil>')
+                zf.writestr('OEBPS/ch1.html', f'<html><body>{html}</body></html>')
+                for name in files:
+                    zf.writestr(f'OEBPS/{name}', b'')
+                zf.writestr(AUDIO_DURATIONS_ENTRY, json.dumps({f'OEBPS/{name}': 100.0 for name in files}))
+
+            segments = SmilExtractor().extract_transcript(str(path))
+
+        self.assertEqual([round(segment['start']) for segment in segments], [0, 100, 200, 300])
+        self.assertEqual(round(segments[-1]['end']), 399)
 
     @staticmethod
     def _numbered_audio_epub(lengths, clip_ends):
@@ -309,7 +346,7 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         clip_ends = [119.9, 79.9, 39.9]
 
         def offsets(lengths, chapters):
-            return self.extractor._audio_file_offsets(
+            return self._offsets_by_name(
                 self._numbered_audio_epub(lengths, clip_ends), ['OEBPS/ch1.smil'], chapters)
 
         self.assertEqual(offsets([120.0, 80.0, 40.0], two_chapters), placed)
@@ -324,7 +361,7 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         clip_ends = [119.9, 79.9, 39.9]
 
         def offsets(lengths, chapters, clip_ends=clip_ends):
-            return self.extractor._audio_file_offsets(
+            return self._offsets_by_name(
                 self._numbered_audio_epub(lengths, clip_ends), ['OEBPS/ch1.smil'], chapters)
 
         by_chapter = {'00000-00001.m4a': 0.0, '00000-00002.m4a': 120.0, '00000-00003.m4a': 200.0}
@@ -349,7 +386,7 @@ class TestSmilExtractorRobustness(unittest.TestCase):
         one_per_file = [{'start': 0.0, 'end': 120.0}, {'start': 120.0, 'end': 200.0}, {'start': 200.0, 'end': 240.0}]
 
         def offsets(lengths, chapters, clip_ends=(119.9, 79.9, 39.9)):
-            return self.extractor._audio_file_offsets(
+            return self._offsets_by_name(
                 self._numbered_audio_epub(lengths, list(clip_ends)), ['OEBPS/ch1.smil'], chapters)
 
         # A file with no clips, such as the credits, recorded 10 s short would start every later file early.
@@ -370,7 +407,7 @@ class TestSmilExtractorRobustness(unittest.TestCase):
     def test_chapters_that_disagree_with_recorded_lengths_give_way(self):
         """Verify chapter marks set away from the file boundaries don't override recorded lengths."""
         def offsets(lengths, chapters, clip_ends=(119.9, 79.9, None)):
-            return self.extractor._audio_file_offsets(
+            return self._offsets_by_name(
                 self._numbered_audio_epub(lengths, list(clip_ends)), ['OEBPS/ch1.smil'], chapters)
 
         # Every mark 8 s late: the first file gains an untimed tail, and the last file, the credits, has no clips.

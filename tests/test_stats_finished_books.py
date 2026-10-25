@@ -3,6 +3,9 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from unittest.mock import MagicMock, patch
+
+import src.web_server as web_server
 from src.web_server import _abs_finished_books, _build_combined_yearly_recap, _build_listening_yearly_recap
 
 DENVER = ZoneInfo("America/Denver")
@@ -99,7 +102,8 @@ def test_title_falls_back_to_abs_item_details():
         class StubClient:
             def get_item_details(self, item_id):
                 assert item_id == "no-item"
-                return {"media": {"metadata": {"title": "First-Time Caller", "authors": [{"name": "A. Writer"}]}}}
+                return {"media": {"audioFiles": [{"ino": "1"}], "duration": 42852.35,
+                                  "metadata": {"title": "First-Time Caller", "authors": [{"name": "A. Writer"}]}}}
         books = _abs_finished_books(progress, items, DENVER, StubClient())
         assert len(books) == 1
         book = books[0]
@@ -110,3 +114,38 @@ def test_title_falls_back_to_abs_item_details():
         assert books2[0]["title"] == "Unknown book"
     finally:
         web_server.database_service = original_db
+
+
+class _ItemDetails:
+    """A stand-in ABS client whose item details say whether each item has audio."""
+
+    def __init__(self, media_by_item):
+        self.media_by_item = media_by_item
+
+    def get_item_details(self, item_id):
+        media = self.media_by_item.get(item_id)
+        return None if media is None else {"media": media}
+
+
+def test_an_ebook_finished_in_abs_is_not_a_listening_finish():
+    """ABS keeps ebook reading in the same progress records; an ebook-only item has no audio."""
+    progress = {
+        "ebook": {"libraryItemId": "ebook", "isFinished": True, "finishedAt": _ms(2026, 8, 20),
+                  "duration": 0, "ebookProgress": 1},
+        "unplayed": {"libraryItemId": "unplayed", "isFinished": True, "finishedAt": _ms(2026, 8, 21),
+                     "duration": 0, "currentTime": 0},
+        "unknown": {"libraryItemId": "unknown", "isFinished": True, "finishedAt": _ms(2026, 8, 22),
+                    "duration": 0},
+    }
+    client = _ItemDetails({
+        "ebook": {"audioFiles": [], "duration": 0, "metadata": {"title": "An Ebook"}},
+        # Marked finished without being played: no duration in its progress, but it has audio.
+        "unplayed": {"audioFiles": [{"ino": "1"}], "duration": 42852.35, "metadata": {"title": "First-Time Caller"}},
+    })
+
+    with patch.object(web_server, "database_service", MagicMock(get_all_books=MagicMock(return_value=[]))):
+        books = _abs_finished_books(progress, {}, DENVER, client)
+
+    # An item ABS can't describe right now is kept rather than silently dropped.
+    assert [book["absId"] for book in books] == ["unknown", "unplayed"]
+    assert books[1]["title"] == "First-Time Caller"

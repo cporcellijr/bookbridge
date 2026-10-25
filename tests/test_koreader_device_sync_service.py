@@ -796,3 +796,39 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         )
         self.assertIsNone(self.db.get_kosync_document("content-kavita_187"))
 
+    def test_filename_mode_reconcile_uses_global_filename_map_across_users(self):
+        """Reader B adding another "Home" must not take the hash of reader A's Home.epub."""
+        self._use_filename_hashing()
+        self._write_book_file("HomeA.epub", content=b"epubA")
+        self._write_book_file("HomeB.epub", content=b"epubB")
+
+        user_a = self.db.create_user("userA", password="p")
+        user_b = self.db.create_user("userB", password="p")
+
+        self.db.save_book(Book(abs_id="abs-a", abs_title="Home", original_ebook_filename="HomeA.epub", status="active"))
+        self.db.save_book(Book(abs_id="abs-b", abs_title="Home", original_ebook_filename="HomeB.epub", status="active"))
+
+        self.db.link_user_book(user_a.id, "abs-a")
+        self.db.link_user_book(user_b.id, "abs-b")
+
+        # Reader A's hash already exists for the global manifest name
+        self.db.ensure_linked_kosync_document("name-Home.epub", "abs-a")
+
+        original_user_id = self.service.user_id
+        try:
+            self.service.user_id = user_b.id
+            self.service.reconcile_hashes()
+        finally:
+            self.service.user_id = original_user_id
+
+        # A's hash must still be linked to A's book
+        self.assertEqual(self.db.get_kosync_document("name-Home.epub").linked_abs_id, "abs-a")
+        # B's hash must be the suffixed global name, not the plain one
+        self.assertEqual(
+            self.db.get_kosync_document("name-Home__abs-b.epub").linked_abs_id, "abs-b"
+        )
+        # Ensure we didn't bind A's plain hash to B
+        doc = self.db.get_kosync_document("name-Home.epub")
+        self.assertIsNotNone(doc)
+        self.assertNotEqual(doc.linked_abs_id, "abs-b")
+

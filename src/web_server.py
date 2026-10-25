@@ -11973,6 +11973,14 @@ def _abs_finished_books(progress, items, tz, abs_client=None):
             finished_dt = datetime.fromtimestamp(float(entry["finishedAt"]) / 1000, tz)
         except (KeyError, TypeError, ValueError, OverflowError, OSError):
             continue
+        details = None
+        # ABS keeps ebook reading in the same progress records, with no duration. So does an
+        # audiobook marked finished unplayed, so only the item says whether it has audio.
+        if abs_client is not None and item_id not in items and not float(entry.get("duration") or 0) > 0:
+            details = abs_client.get_item_details(item_id)
+            media = (details or {}).get("media") or {}
+            if details is not None and not (media.get("audioFiles") or float(media.get("duration") or 0) > 0):
+                continue
         metadata = (items.get(item_id) or {}).get("mediaMetadata") or {}
         title = metadata.get("title")
         if not title:
@@ -11982,7 +11990,9 @@ def _abs_finished_books(progress, items, tz, abs_client=None):
         authors = metadata.get("authors") or []
         # A book marked finished without a listening session: only ABS knows its title.
         if not title and abs_client is not None:
-            metadata = ((abs_client.get_item_details(item_id) or {}).get("media") or {}).get("metadata") or {}
+            if details is None:
+                details = abs_client.get_item_details(item_id)
+            metadata = ((details or {}).get("media") or {}).get("metadata") or {}
             title = metadata.get("title")
             authors = metadata.get("authors") or authors
         author = ", ".join(a.get("name") for a in authors if isinstance(a, dict) and a.get("name"))

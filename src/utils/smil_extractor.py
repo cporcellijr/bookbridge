@@ -208,17 +208,16 @@ class SmilExtractor:
             smil_dir = str(Path(smil_path).parent)
             if smil_dir == '.': smil_dir = ''
             for audio_elem in root.iter('audio'):
-                name = self._audio_file_name(audio_elem)
+                name = self._audio_file_path(smil_dir, audio_elem)
                 if name:
                     names.add(name)
-                    full_path = self._resolve_path(smil_dir, urllib.parse.unquote(audio_elem.get('src', '')))
-                    folders.add(str(Path(full_path).parent))
+                    folders.add(str(Path(name).parent))
                     suffixes.add(Path(name).suffix.lower())
                     clip_end = self._parse_timestamp(audio_elem.get('clipEnd', '0s'))
                     clip_ends[name] = max(clip_ends.get(name, 0.0), clip_end)
         for entry in zf.namelist():
             if str(Path(entry).parent) in folders and Path(entry).suffix.lower() in suffixes:
-                names.add(Path(entry).name)
+                names.add(entry)
         audio_files = sorted(names, key=self._natural_sort_key)
         if len(audio_files) < 2:
             return {}
@@ -294,7 +293,7 @@ class SmilExtractor:
         return problems
 
     def _recorded_audio_lengths(self, zf: zipfile.ZipFile) -> Dict[str, float]:
-        """Audio file lengths an audio-stripped copy recorded, keyed by file name."""
+        """Audio file lengths an audio-stripped copy recorded, keyed by archive path."""
         try:
             recorded = json.loads(zf.read(AUDIO_DURATIONS_ENTRY))
         except (KeyError, ValueError):
@@ -304,13 +303,15 @@ class SmilExtractor:
         lengths = {}
         for path, seconds in recorded.items():
             try:
-                lengths[Path(path).name] = float(seconds)
+                lengths[path] = float(seconds)
             except (TypeError, ValueError):
                 continue
         return lengths
 
-    def _audio_file_name(self, audio_elem) -> str:
-        return Path(urllib.parse.unquote(audio_elem.get('src', ''))).name
+    def _audio_file_path(self, smil_dir: str, audio_elem) -> str:
+        """The archive path of a clip's audio file; two parts' "01.mp3" are different files."""
+        src = urllib.parse.unquote(audio_elem.get('src', ''))
+        return self._resolve_path(smil_dir, src) if src else ''
 
     def _detect_timestamp_mode(self, zf: zipfile.ZipFile, smil_files: List[str]) -> str:
         """
@@ -628,7 +629,7 @@ class SmilExtractor:
                 
                 clip_begin = self._parse_timestamp(audio_elem.get('clipBegin', '0s'))
                 clip_end = self._parse_timestamp(audio_elem.get('clipEnd', '0s'))
-                par_offset = file_offsets.get(self._audio_file_name(audio_elem), offset) if file_offsets else offset
+                par_offset = file_offsets.get(self._audio_file_path(smil_dir, audio_elem), offset) if file_offsets else offset
                 
                 text_src = urllib.parse.unquote(text_elem.get('src', ''))
                 text_content = self._get_text_content(zf, smil_dir, text_src)

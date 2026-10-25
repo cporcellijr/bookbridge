@@ -54,11 +54,11 @@ class KOReaderDeviceSyncService:
         self._content_hash_cache: dict[str, tuple[float, int, str]] = {}
         self._content_hash_cache_lock = threading.Lock()
 
-    def _get_active_books(self) -> list:
+    def _get_active_books(self, all_users: bool = False) -> list:
         # Audiobook-only mappings have no ebook file by design, so they're never
         # relevant to this ebook-focused device manifest -- including them just
         # produces a "no original ebook filename" warning every cycle, forever.
-        if self.user_id is not None:
+        if self.user_id is not None and not all_users:
             books = self.database_service.get_books_by_status("active", user_id=self.user_id)
         else:
             books = self.database_service.get_books_by_status("active")
@@ -69,6 +69,11 @@ class KOReaderDeviceSyncService:
             ),
             key=lambda book: (str(getattr(book, "abs_title", "") or "").lower(), str(book.abs_id)),
         )
+
+    def _device_filename_map(self) -> dict[str, str]:
+        """Each book's filename on the device: the manifest disambiguates names across every
+        reader's books, so a per-reader map would hash another reader's file."""
+        return self._build_manifest_filename_map(self._get_active_books(all_users=True))
 
     @staticmethod
     def _safe_file_size(path) -> Optional[int]:
@@ -145,7 +150,7 @@ class KOReaderDeviceSyncService:
 
     def _resolve_manifest_filename(self, target_book) -> str:
         target_abs_id = str(target_book.abs_id)
-        filename_map = self._build_manifest_filename_map(self._get_active_books())
+        filename_map = self._device_filename_map()
         if target_abs_id in filename_map:
             return filename_map[target_abs_id]
         source_filename = self._select_source_filename(target_book) or f"{target_abs_id}.epub"
@@ -339,7 +344,7 @@ class KOReaderDeviceSyncService:
         summary = {"checked": 0, "linked": 0, "skipped": 0, "errors": 0, "conflicts": 0}
         claimed_by: Dict[str, str] = {}
         books = self._get_active_books()
-        filename_map = self._build_manifest_filename_map(books)
+        filename_map = self._device_filename_map()
 
         for book in books:
             summary["checked"] += 1
