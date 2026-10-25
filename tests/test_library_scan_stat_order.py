@@ -25,4 +25,5 @@ def test_title_index_never_stats_non_ebook_files(tmp_path, monkeypatch):
         index = web_server._build_local_ebook_title_index()
 
     assert index["dune"] == "Dune - Frank Herbert.epub"
-    assert stat_targets == ["Dune - Frank Herbert.epub"]
+    # The ebook's metadata sidecar is checked for its title (#549); its audio never is.
+    assert set(stat_targets) == {"Dune - Frank Herbert.epub", "metadata.opf"}

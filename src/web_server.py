@@ -51,6 +51,7 @@ from src.utils.ebook_utils import (
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
+from src.utils.local_ebook_metadata import read_local_ebook_metadata
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.logging_utils import get_persistent_condition_logger
@@ -4007,8 +4008,10 @@ def _build_local_ebook_title_index():
 
     BookBridge and BookOrbit share the same files, so this lets us pair
     BookOrbit's clean metadata (title/author, no filename) with real filenames
-    without a per-book BookOrbit detail call. Indexes both the full stem and the
-    'Title' portion before ' - ' (filenames are 'Title - Author (year).epub')."""
+    without a per-book BookOrbit detail call. Indexes the full stem, the 'Title'
+    portion before ' - ' ('Title - Author (year).epub'), and the title in the
+    file's own metadata, which BookOrbit's title comes from whatever the naming
+    scheme ('Author - Series 15 - Title.epub', #549)."""
     index = {}
     try:
         if EBOOK_DIR.exists():
@@ -4019,7 +4022,8 @@ def _build_local_ebook_title_index():
                     continue
                 stem = eb.stem
                 title_part = stem.split(" - ", 1)[0]
-                for key in (_ebook_title_key(title_part), _ebook_title_key(stem)):
+                metadata_title = read_local_ebook_metadata(eb)[0]
+                for key in (_ebook_title_key(title_part), _ebook_title_key(stem), _ebook_title_key(metadata_title)):
                     if key:
                         index.setdefault(key, eb.name)
     except Exception as e:
