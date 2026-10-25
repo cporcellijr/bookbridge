@@ -275,6 +275,7 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 | Assets Path | `STORYTELLER_ASSETS_DIR` | empty | Root path that contains `/assets/{title}/transcriptions`. |
 | Library Timeout | `STORYTELLER_LIBRARY_TIMEOUT` | `10` | Seconds to wait for a whole-library response (5–300). Increase for large libraries or slow servers; connection timeout stays 10 seconds. Failed searches report the error instead of appearing empty. |
 | Upload Chunk Size | `STORYTELLER_UPLOAD_CHUNK_SIZE` | `5242880` | TUS PATCH chunk size in bytes for direct Storyteller uploads. |
+| Automatically link aligned Storyteller books | `STORYTELLER_AUTO_LINK` | `false` | Per-user (set in **Account -> My Integrations**). Once an hour, links Storyteller books that finished aligning to the reader's matching BookBridge books, skipping ambiguous matches. A declined book is retried after a week or after it is re-aligned. Each pass stops starting new books after ten minutes. |
 | Poll Mode | `STORYTELLER_POLL_MODE` | `global` | `global` uses the main sync cycle. `custom` polls Storyteller separately. |
 | Poll Interval | `STORYTELLER_POLL_SECONDS` | `45` | Used when Poll Mode is `custom`. |
 
@@ -379,6 +380,7 @@ Optional "Up Next" collection watch — drop a book onto a collection in BookOrb
 | Collection Name | `BOOKORBIT_SHELF_WATCH_NAME` | `Up Next` | Create this collection in BookOrbit. Books placed on it are auto-matched and moved to the collection above on success. |
 | Match Threshold | `BOOKORBIT_SHELF_WATCH_THRESHOLD` | `95` | Minimum match confidence (60–100) before a book is auto-linked. |
 | Rescan Interval (Hours) | `BOOKORBIT_SHELF_WATCH_RESCAN_HOURS` | `24` | How often a still-unmatched book on the watch collection is retried. |
+| Also generate a read-along EPUB for auto-matched books | `BOOKORBIT_SHELF_WATCH_READALONG` | `false` | When a watched-collection match uses a BookOrbit audiobook, also requests a [read-along EPUB](user-guide.md#read-along-epubs-for-bookorbit); it is generated once the book's alignment finishes. Ebook-only, Audiobookshelf-audio and Grimmory-audio matches are unaffected. |
 
 Optional matching of books you start reading — under **Books You Start Reading** on the BookOrbit card:
 
@@ -601,11 +603,14 @@ Ollama notes:
 
 ### Suggestions
 
-Enabled under **Settings -> Features**. The Suggestions page is a review workspace, not an auto-linker. It always waits for your approval before creating mappings.
+Enabled under **Settings -> Features**. The Suggestions page is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable Suggestions | `SUGGESTIONS_ENABLED` | `false` | Enables the Suggestions page and background suggestion discovery. |
+| Auto-match suggestions at or above a score | `SUGGESTIONS_AUTO_MATCH_ENABLED` | `false` | Links a book automatically when a scan finds a candidate at or above the threshold; lower-scoring suggestions stay on the page for review. |
+| Auto-Match Threshold (%) | `SUGGESTIONS_AUTO_MATCH_THRESHOLD` | `100` | 100 links only exact matches (an identifier agreement, or an identical title and author). Below 95 the top candidate is often a different book. |
+| Also generate a read-along EPUB for books auto-matched to a BookOrbit audiobook | `SUGGESTIONS_AUTO_MATCH_READALONG` | `false` | Requests a [read-along EPUB](user-guide.md#read-along-epubs-for-bookorbit) for each auto-match to a BookOrbit audiobook, generated once alignment finishes. |
 | Scheduled Scan Interval | `SUGGESTIONS_AUTO_SCAN_MINUTES` | `0` | Minutes between scheduled library scans, counted from the end of the previous one (0 = off, minimum 5). Runs as the primary admin, reusing cached results like a normal scan. |
 | Scheduled Full Refresh | `SUGGESTIONS_FULL_REFRESH_ENABLED` | `false` | Turns the scheduled full refresh on; the schedule field appears once it is ticked. |
 | Full Refresh Schedule | `SUGGESTIONS_FULL_REFRESH_CRON` | _(empty)_ | Five-field cron expression (minute hour day-of-month month day-of-week, in the `TZ` timezone; `*`, ranges, steps, lists and `jan`/`sun`-style names). Each time it fires the scan cache is cleared and the whole unmatched library is rescanned. A fire missed while BookBridge was down runs when it comes back, up to a day late. Used only while the full refresh is enabled; empty = off; an invalid expression turns it off and logs a warning. |
@@ -653,6 +658,7 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | CTC Model | `CTC_MODEL` | `quartznet` | `quartznet` (NVIDIA QuartzNet15x5, English only) runs on the CPU in every image. `mms_fa` (Meta MMS, ~1000 languages) needs a self-built image with `INSTALL_CTC=true` and effectively an NVIDIA GPU. Visible under Advanced once forced alignment is on. |
 | QuartzNet Model File | `CTC_QUARTZNET_MODEL_PATH` | empty | Optional path to a local `model.onnx` (or the folder holding it). Empty downloads it once (77 MB) from Storyteller's package registry into `/data/models/quartznet15x5-en/`; set this if that download fails. |
 | CTC Device | `CTC_DEVICE` | `auto` | MMS only — QuartzNet always runs on the CPU. Uses an NVIDIA GPU when available; CPU is practical only for short books with MMS. |
+| Use a read-along's own timings when they check out | `SMIL_SKIP_CTC` | `false` | Applies while forced alignment is on. When the ebook is a read-along (a Storyteller or StoryAlign EPUB with media overlays), checks its timings for places where they lose sync with the audio; timings that pass become the book's map without running forced alignment. Off: forced alignment runs first, and the read-along's timings are used only if it fails. |
 
 Transcription notes:
 

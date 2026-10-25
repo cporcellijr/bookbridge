@@ -97,6 +97,11 @@ past history. Deleting a book mapping keeps its reading and listening sessions,
 so removing a finished book no longer removes those totals. Previously deleted
 history is not reconstructed.
 
+The heatmap covers the last 12 months; step the yearly recap back a year to see
+that year on the heatmap. The recap's finished counts include the audiobooks you
+finished that year, as Audiobookshelf marks them or from BookBridge's own
+listening sessions, and a book finished as both ebook and audiobook counts once.
+
 ---
 
 ## Account and My Integrations
@@ -388,8 +393,30 @@ count whenever books are waiting in it.
 - Each entry can carry a standard ebook, a Storyteller title, or both.
 - **Audio only (no ebook)** entries are also queueable and activate immediately.
 - Picks approved on the **Suggestions** page land in this same queue.
+- When the queue holds a BookOrbit audiobook, tick **Also generate read-along EPUBs**
+  to request a [read-along EPUB](#read-along-epubs-for-bookorbit) for those books.
+
+The **Job Queue** page shows the queue's order and lets you change it before you
+process it.
 
 (Before 7.5.0 the queue lived on a separate **Batch Match** page.)
+
+---
+
+## Job Queue
+
+**Job Queue** in the top navigation shows the book work that is waiting, processing
+or recently finished: staged Add Book items, Add Book batches being processed,
+alignment, and requested read-along EPUBs with their progress. The page refreshes
+itself while books are processing.
+
+- **Move Up**, **Move Down** and **Move to Top** change the order of staged Add Book
+  items before you submit the batch.
+- Books waiting for alignment show their place (for example *#3 of 7*) and can be
+  moved the same way. The alignment worker starts the first book in that order, and
+  the order is kept across restarts.
+- You can move only your own books; other readers' books keep their places, and
+  work that is already processing can't be moved.
 
 ---
 
@@ -520,6 +547,12 @@ Two ways to start a generation job:
    EPUB**. The button shows live progress by stage while the job runs, and the card's
    read-along pill appears once it finishes. Use **Remove read-along EPUB** from the same menu
    to delete a generated one.
+
+Books matched automatically can get one too: turn on **Also generate a read-along EPUB
+for auto-matched books** for BookOrbit's watched collection (BookOrbit card in
+**Settings -> Integrations**) or **Also generate a read-along EPUB for books
+auto-matched to a BookOrbit audiobook** for Suggestions auto-match (**Settings ->
+Features**). Both are off by default.
 
 Generation preserves the book's original chapter markup and non-breaking whitespace, keeps
 each audio clip within its narrated segment, and refuses to publish an incomplete export
@@ -653,6 +686,20 @@ audiobook:
 - **No audiobook** — the book is added as **ebook-only**, so its progress syncs.
 
 A suggestion you dismiss is not offered again. Nothing is moved between collections.
+
+### Aligned Storyteller books
+
+With **Automatically link aligned Storyteller books** on (your Storyteller integration
+in **Account -> My Integrations**, off by default), an hourly check links Storyteller
+books that have finished aligning to your matching BookBridge books. Ambiguous
+matches are skipped, and a declined book is tried again after a week or once it is
+re-aligned.
+
+For a book whose ebook comes from Storyteller rather than a separate ebook file,
+BookBridge also links the original EPUB and Storyteller's read-aloud EPUB to the
+same KoSync progress, so KOReader picks up the
+same position whichever edition you open. Re-aligning a book keeps its old hashes
+valid.
 
 ### KOReader auto-discovery
 
