@@ -6,10 +6,27 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString, Tag
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
 logger = logging.getLogger(__name__)
+
+# Archive entry where an audio-stripped copy keeps each audio file's length in
+# seconds, keyed by its path in the archive.
+AUDIO_DURATIONS_ENTRY = "META-INF/bookbridge-audio-durations.json"
+
+# A read-along's last clip in each audio file ends at, or shortly before, the end of
+# that file: within 0.1 s in most StoryAlign builds, and 32 s at most in the ones
+# measured. An audio file is placed with a length only when its clips end no more
+# than UNTIMED_TAIL_SECONDS before that length and no more than OVERRUN_SECONDS past it.
+UNTIMED_TAIL_SECONDS = 60.0
+OVERRUN_SECONDS = 2.0
+# Each audio file a read-along builder re-encodes comes out a little longer than the
+# part of the audiobook it holds: 0 to 0.22 s per file in the books measured, 10 s
+# over A Naked Singularity's 45 files. Recorded lengths may add up to that much past
+# the audiobook's end, but never fall short of it.
+PADDING_PER_FILE_SECONDS = 0.25
 
 class SmilExtractor:
     """
@@ -25,6 +42,7 @@ class SmilExtractor:
     
     def __init__(self):
         self._xhtml_cache = {}
+        self._overlay_ids = {}
 
     def _strip_namespaces(self, xml_string: str) -> str:
         # Remove default xmlns
@@ -70,6 +88,7 @@ class SmilExtractor:
         """
         transcript = []
         self._xhtml_cache = {}
+        self._overlay_ids = {}
         
         try:
             with zipfile.ZipFile(epub_path, 'r') as zf:
@@ -91,12 +110,20 @@ class SmilExtractor:
                 logger.info(f"📖 Found {len(smil_files)} SMIL files in EPUB")
                 if abs_chapters:
                     logger.info(f"📖 Audio source has {len(abs_chapters)} chapters")
-                
+
+                # Another overlay file can time a span nested in this file's spans, so
+                # every file's ids must be known before any text is read.
+                self._register_all_overlay_ids(zf, smil_files)
+
                 # Detect timestamp mode
-                timestamp_mode = self._detect_timestamp_mode(zf, smil_files)
+                file_offsets = self._audio_file_offsets(zf, smil_files, abs_chapters)
+                timestamp_mode = 'per_audio_file' if file_offsets else self._detect_timestamp_mode(zf, smil_files)
                 logger.info(f"⚙️ Detected timestamp mode: {timestamp_mode}")
                 
-                if timestamp_mode == 'absolute':
+                if timestamp_mode == 'per_audio_file':
+                    for smil_path in smil_files:
+                        transcript.extend(self._process_smil_with_offset(zf, smil_path, 0.0, file_offsets))
+                elif timestamp_mode == 'absolute':
                     # Process all SMIL files with absolute timestamps
                     for idx, smil_path in enumerate(smil_files):
                         segments = self._process_smil_absolute(zf, smil_path)
@@ -156,6 +183,134 @@ class SmilExtractor:
         except Exception as e:
             logger.error(f"❌ Error extracting SMIL transcript: {e}", exc_info=True)
             return []
+
+    def _audio_file_offsets(self, zf: zipfile.ZipFile, smil_files: List[str],
+                            abs_chapters: Optional[List[Dict]]) -> Dict[str, float]:
+        """
+        Map each audio file to its start in the audiobook.
+        
+        Clip times count from the start of their own audio file. A read-along made by
+        splitting the audiobook at its chapters has one numbered file per chapter, and
+        each file starts at its chapter, on the audiobook's own clock. Otherwise, when
+        the archive records every file's length, each file starts where the files
+        before it end. Files the aligner gave no clips still take up their place, so
+        they're counted from the archive too. Either placement is used only when every
+        file's clips fit the length it gives that file. Returns an empty dict when
+        neither does.
+        """
+        names, folders, suffixes = set(), set(), set()
+        clip_ends: Dict[str, float] = {}
+        for smil_path in smil_files:
+            try:
+                root = ET.fromstring(self._strip_namespaces(zf.read(smil_path).decode('utf-8')))
+            except (KeyError, UnicodeDecodeError, ET.ParseError, DefusedXmlException):
+                continue
+            smil_dir = str(Path(smil_path).parent)
+            if smil_dir == '.': smil_dir = ''
+            for audio_elem in root.iter('audio'):
+                name = self._audio_file_name(audio_elem)
+                if name:
+                    names.add(name)
+                    full_path = self._resolve_path(smil_dir, urllib.parse.unquote(audio_elem.get('src', '')))
+                    folders.add(str(Path(full_path).parent))
+                    suffixes.add(Path(name).suffix.lower())
+                    clip_end = self._parse_timestamp(audio_elem.get('clipEnd', '0s'))
+                    clip_ends[name] = max(clip_ends.get(name, 0.0), clip_end)
+        for entry in zf.namelist():
+            if str(Path(entry).parent) in folders and Path(entry).suffix.lower() in suffixes:
+                names.add(Path(entry).name)
+        audio_files = sorted(names, key=self._natural_sort_key)
+        if len(audio_files) < 2:
+            return {}
+        audiobook_end = float(abs_chapters[-1].get('end', 0)) if abs_chapters else None
+
+        placements = []
+        if abs_chapters and len(audio_files) == len(abs_chapters):
+            starts = [float(chapter.get('start', 0)) for chapter in abs_chapters]
+            ends = [float(chapter.get('end', 0)) for chapter in abs_chapters]
+            if abs(starts[0]) <= 1.0 and all(abs(end - start) <= 1.0 for end, start in zip(ends, starts[1:])):
+                placements.append(("one file per chapter", dict(zip(audio_files, starts)),
+                                   {name: end - start for name, start, end in zip(audio_files, starts, ends)}))
+        recorded = self._recorded_audio_lengths(zf)
+        if all(name in recorded for name in audio_files):
+            offsets, start = {}, 0.0
+            for name in audio_files:
+                offsets[name] = start
+                start += recorded[name]
+            placements.append(("recorded lengths", offsets, {name: recorded[name] for name in audio_files}))
+
+        fitting = []
+        for method, offsets, lengths in placements:
+            problems = self._placement_problems(audio_files, offsets, lengths, clip_ends, audiobook_end)
+            if not problems:
+                fitting.append((method, offsets, sum(lengths.values()) - sum(clip_ends.values())))
+                continue
+            logger.info(f"⚠️ Not placing audio files by {method}: {'; '.join(problems[:3])}"
+                        + (f" (and {len(problems) - 3} more)" if len(problems) > 3 else ""))
+        if len(fitting) == 2:
+            # Chapter marks can sit away from where the files really start, while recorded
+            # lengths only drift by their padding, so chapters win only where they agree.
+            drift = max(abs(fitting[0][1][name] - fitting[1][1][name]) for name in audio_files)
+            if drift > OVERRUN_SECONDS + PADDING_PER_FILE_SECONDS * len(audio_files):
+                logger.info(f"⚠️ Not placing audio files by {fitting[0][0]}: "
+                            f"its starts are up to {drift:.0f}s from the recorded lengths'")
+                fitting = fitting[1:]
+        if not fitting:
+            return {}
+        method, offsets, untimed = fitting[0]
+        logger.info(f"📖 Placed {len(audio_files)} audio files by {method} ({untimed:.0f}s of audio has no clips)")
+        return offsets
+
+    @staticmethod
+    def _placement_problems(audio_files: List[str], offsets: Dict[str, float], lengths: Dict[str, float],
+                            clip_ends: Dict[str, float], audiobook_end: Optional[float]) -> List[str]:
+        """Why a placement contradicts the clip times; an empty list when it doesn't.
+
+        Files sit back to back, so a file whose clips run past its length overlaps the
+        next one, and a file whose clips end well before its length leaves audio that
+        nothing times, as a wrong pairing of files and chapters does.
+        """
+        problems = []
+        padding = OVERRUN_SECONDS + PADDING_PER_FILE_SECONDS * len(audio_files)
+        last = audio_files[-1]
+        for name in audio_files:
+            if name not in clip_ends:
+                continue
+            spare = lengths[name] - clip_ends[name]
+            # The last length can end at the audiobook's recorded length, which can fall
+            # short of the decoded audio; clips past it can't move another file.
+            if spare < -(padding if name == last else OVERRUN_SECONDS):
+                problems.append(f"{name} has clips {-spare:.0f}s past its {lengths[name]:.0f}s")
+            elif spare > UNTIMED_TAIL_SECONDS:
+                problems.append(f"{name} ends {spare:.0f}s before its {lengths[name]:.0f}s")
+        # Files with no clips can't be checked one by one, but a wrong length for one
+        # of them still moves the files' end away from the audiobook's.
+        if audiobook_end:
+            past_end = offsets[last] + lengths[last] - audiobook_end
+            if past_end < -OVERRUN_SECONDS:
+                problems.append(f"the files end {-past_end:.0f}s before the {audiobook_end:.0f}s audiobook")
+            elif past_end > padding:
+                problems.append(f"the files run {past_end:.0f}s past the {audiobook_end:.0f}s audiobook")
+        return problems
+
+    def _recorded_audio_lengths(self, zf: zipfile.ZipFile) -> Dict[str, float]:
+        """Audio file lengths an audio-stripped copy recorded, keyed by file name."""
+        try:
+            recorded = json.loads(zf.read(AUDIO_DURATIONS_ENTRY))
+        except (KeyError, ValueError):
+            return {}
+        if not isinstance(recorded, dict):
+            return {}
+        lengths = {}
+        for path, seconds in recorded.items():
+            try:
+                lengths[Path(path).name] = float(seconds)
+            except (TypeError, ValueError):
+                continue
+        return lengths
+
+    def _audio_file_name(self, audio_elem) -> str:
+        return Path(urllib.parse.unquote(audio_elem.get('src', ''))).name
 
     def _detect_timestamp_mode(self, zf: zipfile.ZipFile, smil_files: List[str]) -> str:
         """
@@ -255,6 +410,7 @@ class SmilExtractor:
             smil_content = self._strip_namespaces(smil_content)
             
             root = ET.fromstring(smil_content)
+            self._register_overlay_ids(root, smil_dir)
             
             for par in root.iter('par'):
                 text_elem = par.find('text')
@@ -450,8 +606,8 @@ class SmilExtractor:
         return transcript
 
     def _process_smil_with_offset(self, zf: zipfile.ZipFile, smil_path: str, 
-                                   offset: float) -> List[Dict]:
-        """Process SMIL file adding an offset to all timestamps."""
+                                   offset: float, file_offsets: Optional[Dict[str, float]] = None) -> List[Dict]:
+        """Process SMIL file adding an offset to all timestamps, or each audio file's own offset."""
         segments = []
         try:
             smil_content = zf.read(smil_path).decode('utf-8')
@@ -461,6 +617,7 @@ class SmilExtractor:
             smil_content = self._strip_namespaces(smil_content)
             
             root = ET.fromstring(smil_content)
+            self._register_overlay_ids(root, smil_dir)
             
             for par in root.iter('par'):
                 text_elem = par.find('text')
@@ -471,14 +628,15 @@ class SmilExtractor:
                 
                 clip_begin = self._parse_timestamp(audio_elem.get('clipBegin', '0s'))
                 clip_end = self._parse_timestamp(audio_elem.get('clipEnd', '0s'))
+                par_offset = file_offsets.get(self._audio_file_name(audio_elem), offset) if file_offsets else offset
                 
                 text_src = urllib.parse.unquote(text_elem.get('src', ''))
                 text_content = self._get_text_content(zf, smil_dir, text_src)
                 
                 if text_content:
                     segments.append({
-                        'start': round(clip_begin + offset, 3),
-                        'end': round(clip_end + offset, 3),
+                        'start': round(clip_begin + par_offset, 3),
+                        'end': round(clip_end + par_offset, 3),
                         'text': text_content
                     })
         
@@ -623,20 +781,71 @@ class SmilExtractor:
             for variant in [full_path, full_path.lstrip('/'), full_path.replace('\\', '/')]:
                 try:
                     content = zf.read(variant).decode('utf-8')
-                    self._xhtml_cache[full_path] = BeautifulSoup(content, 'html.parser')
+                    self._xhtml_cache[full_path] = self._index_ids(BeautifulSoup(content, 'html.parser'))
                     break
                 except KeyError: continue
         
-        soup = self._xhtml_cache.get(full_path)
-        if not soup: return None
+        elements_by_id = self._xhtml_cache.get(full_path)
+        if not elements_by_id: return None
         
         if fragment_id:
-            element = soup.find(id=fragment_id)
+            element = elements_by_id.get(fragment_id)
             if element:
-                text = element.get_text(separator=' ', strip=True)
+                # Some aligners nest each word's span inside the next one's, so an
+                # element's full text repeats words that other pars already time.
+                overlay_ids = self._overlay_ids.get(full_path)
+                if overlay_ids:
+                    text = ' '.join(self._own_strings(element, overlay_ids))
+                else:
+                    text = element.get_text(separator=' ', strip=True)
                 return re.sub(r'\s+', ' ', text).strip()
         
         return None
+
+    def _index_ids(self, soup) -> Dict[str, object]:
+        """Map each id to its first element, so lookups don't search the whole chapter."""
+        elements_by_id = {}
+        for element in soup.find_all(id=True):
+            elements_by_id.setdefault(element['id'], element)
+        return elements_by_id
+
+    def _own_strings(self, element, nested_ids: set) -> List[str]:
+        """Return the element's text pieces, leaving out elements with their own timing."""
+        string_types = element.interesting_string_types or element.MAIN_CONTENT_STRING_TYPES
+        # bs4 4.12 gives some elements, such as <rt>, a single class instead of a set.
+        if isinstance(string_types, type):
+            string_types = (string_types,)
+        pieces = []
+        stack = list(reversed(element.contents))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, NavigableString):
+                if type(node) in string_types and node.strip():
+                    pieces.append(node.strip())
+            elif isinstance(node, Tag) and node.get('id') not in nested_ids:
+                stack.extend(reversed(node.contents))
+        return pieces
+
+    def _register_overlay_ids(self, root, smil_dir: str) -> None:
+        """Record which element ids in each text file have their own overlay timing."""
+        for text_elem in root.iter('text'):
+            text_src = urllib.parse.unquote(text_elem.get('src', ''))
+            if '#' not in text_src:
+                continue
+            file_path, fragment_id = text_src.split('#', 1)
+            full_path = self._resolve_path(smil_dir, file_path)
+            self._overlay_ids.setdefault(full_path, set()).add(fragment_id)
+
+    def _register_all_overlay_ids(self, zf: zipfile.ZipFile, smil_files: List[str]) -> None:
+        """Record the timed element ids from every overlay file."""
+        for smil_path in smil_files:
+            try:
+                root = ET.fromstring(self._strip_namespaces(zf.read(smil_path).decode('utf-8')))
+            except (KeyError, UnicodeDecodeError, ET.ParseError, DefusedXmlException):
+                continue
+            smil_dir = str(Path(smil_path).parent)
+            if smil_dir == '.': smil_dir = ''
+            self._register_overlay_ids(root, smil_dir)
 
 
 def extract_transcript_from_epub(epub_path: str, abs_chapters: List[Dict] = None, 

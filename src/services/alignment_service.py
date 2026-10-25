@@ -229,6 +229,19 @@ class AlignmentService:
             return int(point['global_char'])
         return int(point.get('char', 0))
 
+    def preview_alignment_map(self, raw_segments: List[Dict], ebook_text: str,
+                              abs_id: Optional[str] = None,
+                              spine_chapters: Optional[List[Dict]] = None) -> List[Dict]:
+        """The lexical map `align_and_store` would build from these segments, without storing it.
+
+        Lets a caller judge a transcript's timings before they replace the stored
+        map, which a later CTC pass uses for its chunk boundaries.
+        """
+        rebuilt_segments = self.polisher.rebuild_fragmented_sentences(raw_segments, ebook_text)
+        alignment_map, _method, _segments = self._generate_alignment_map_with_method(
+            rebuilt_segments, ebook_text, abs_id=abs_id, spine_chapters=spine_chapters)
+        return alignment_map or []
+
     @time_execution
     def align_and_store(self, abs_id: str, raw_segments: List[Dict], ebook_text: str,
                         spine_chapters: List[Dict] = None,
@@ -332,6 +345,12 @@ class AlignmentService:
     def ctc_enabled() -> bool:
         """Whether CTC forced alignment is switched on (read per call)."""
         return AlignmentService._env_true("CTC_ENABLED", "false")
+
+    @staticmethod
+    def smil_skip_ctc_enabled() -> bool:
+        """Whether a read-along's own timings replace CTC when they check out (read per call).
+        Uses `env_truthy` so the settings checkbox's "on" spelling is honored."""
+        return env_truthy("SMIL_SKIP_CTC", "false")
 
     @staticmethod
     def segmented_maps_enabled() -> bool:

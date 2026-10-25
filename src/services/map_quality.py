@@ -714,3 +714,72 @@ def transcript_text_overlap(transcript_text: str, ebook_text: str,
             quartiles=[sum(region) / len(region) if region else None for region in regions],
         )
     return matched / len(offsets)
+
+
+# A slip in a read-along's timings pins a run of text to one moment and leaves the
+# audio after it with no text. Measured on 17 read-alongs, these windows found every
+# planted slip of 5 minutes or more and none in the clean maps; slips shorter than
+# the audio window go unseen.
+SLIP_TEXT_WINDOW_CHARS = 3000
+SLIP_AUDIO_WINDOW_SECONDS = 180.0
+SLIP_PACE_FACTOR = 4.0
+
+
+def _merge_ranges(ranges: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    merged: List[List[float]] = []
+    for lo, hi in sorted(ranges):
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [(lo, hi) for lo, hi in merged]
+
+
+def find_slips(alignment_map: Optional[List[Dict]]) -> List[Tuple[float, float]]:
+    """Audio time ranges, in seconds, where a map's own timings slipped.
+
+    Only matched anchors (those with a ``t_idx``) count. A stretch of text read far
+    faster than the book's pace marks text squeezed into too little audio; a
+    stretch of audio with far too little text marks audio the timings skipped.
+    Either one alone is ordinary: notes or code listings the narrator skips, or
+    music and an introduction the ebook doesn't have. A slip is audio without text
+    that starts within one audio window of squeezed text.
+    """
+    points = sorted((point_char(p), float(p.get('ts', 0.0)))
+                    for p in (alignment_map or []) if 't_idx' in p)
+    if len(points) < 2:
+        return []
+    chars = [c for c, _ in points]
+    times = [t for _, t in points]
+    span = max(times) - min(times)
+    if span <= 0 or chars[-1] <= chars[0]:
+        return []
+    rate = (chars[-1] - chars[0]) / span
+
+    squeezed = []
+    j = 0
+    for i in range(len(points)):
+        while j < len(points) and chars[j] < chars[i] + SLIP_TEXT_WINDOW_CHARS:
+            j += 1
+        if j == len(points):
+            break
+        if times[j] - times[i] < (chars[j] - chars[i]) / rate / SLIP_PACE_FACTOR:
+            squeezed.append((min(times[i], times[j]), max(times[i], times[j])))
+
+    by_time = sorted(range(len(points)), key=lambda k: times[k])
+    empty = []
+    j = 0
+    for a in range(len(by_time)):
+        i = by_time[a]
+        while j < len(by_time) and times[by_time[j]] < times[i] + SLIP_AUDIO_WINDOW_SECONDS:
+            j += 1
+        if j == len(by_time):
+            break
+        k = by_time[j]
+        if chars[k] - chars[i] < rate * (times[k] - times[i]) / SLIP_PACE_FACTOR:
+            empty.append((times[i], times[k]))
+
+    squeezed = _merge_ranges(squeezed)
+    return [(lo, hi) for lo, hi in _merge_ranges(empty)
+            if any(lo - SLIP_AUDIO_WINDOW_SECONDS <= s_hi and s_lo <= hi + SLIP_AUDIO_WINDOW_SECONDS
+                   for s_lo, s_hi in squeezed)]

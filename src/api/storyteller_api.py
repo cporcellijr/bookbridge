@@ -1,8 +1,10 @@
 import base64
+import json
 import logging
 import mimetypes
 import os
 import re
+import shutil
 import tempfile
 import time
 import zipfile
@@ -21,6 +23,8 @@ from src.utils.file_transfers import (
 )
 from src.sync_clients.sync_client_interface import LocatorResult
 from src.utils.logging_utils import get_persistent_condition_logger, sanitize_log_data
+from src.utils.audio_duration import probe_duration_seconds
+from src.utils.smil_extractor import AUDIO_DURATIONS_ENTRY
 from src.utils.user_config import resolve_setting
 
 logger = logging.getLogger(__name__)
@@ -1041,6 +1045,9 @@ class StorytellerAPIClient:
 
         Audio entries are kept in the archive (so the OPF manifest stays resolvable
         for ebooklib) but written empty, shrinking a ~100MB ReadAloud EPUB to ~1MB.
+        Each audio file's length is recorded first, in ``AUDIO_DURATIONS_ENTRY``:
+        SMIL clip times count from the start of their own audio file, so placing them
+        on the audiobook's timeline needs the length of every file before it.
         Every other resource (XHTML, SMIL overlays, OPF, nav, CSS, images) is copied
         verbatim, preserving each entry's original compression so the EPUB
         ``mimetype`` entry stays stored.
@@ -1048,15 +1055,35 @@ class StorytellerAPIClient:
         src_path = Path(src_path)
         dst_path = Path(dst_path)
         with zipfile.ZipFile(src_path, "r") as zin, \
-                zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zout:
+                zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zout, \
+                tempfile.TemporaryDirectory(dir=dst_path.parent, prefix=".audio-probe.") as scratch:
+            # A copy stripped before keeps the lengths it recorded then.
+            try:
+                durations = json.loads(zin.read(AUDIO_DURATIONS_ENTRY))
+            except (KeyError, ValueError):
+                durations = {}
+            if not isinstance(durations, dict):
+                durations = {}
             for item in zin.infolist():
+                if item.filename == AUDIO_DURATIONS_ENTRY:
+                    continue
                 ext = os.path.splitext(item.filename)[1].lower()
                 if ext in cls._AUDIO_EXTENSIONS:
+                    if item.file_size > 0:
+                        probe_path = Path(scratch) / f"audio{ext}"
+                        with zin.open(item) as audio, open(probe_path, "wb") as out:
+                            shutil.copyfileobj(audio, out, 1 << 20)
+                        seconds = probe_duration_seconds(probe_path)
+                        probe_path.unlink()
+                        if seconds is not None:
+                            durations[item.filename] = round(seconds, 3)
                     placeholder = zipfile.ZipInfo(item.filename, date_time=item.date_time)
                     placeholder.compress_type = zipfile.ZIP_DEFLATED
                     zout.writestr(placeholder, b"")
                 else:
                     zout.writestr(item, zin.read(item.filename))
+            if durations:
+                zout.writestr(AUDIO_DURATIONS_ENTRY, json.dumps(durations, sort_keys=True))
 
     @classmethod
     def _epub_has_embedded_audio(cls, path) -> bool:

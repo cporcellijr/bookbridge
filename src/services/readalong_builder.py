@@ -210,6 +210,7 @@ from src.utils.ebook_dom_map import (
 )
 from src.services.epub3_upgrade import _find_opf_path, upgrade_epub2_to_epub3
 from src.services.readalong_segments import SentenceClip, build_sentence_clips
+from src.utils.audio_duration import probe_duration_seconds as _probe_duration_seconds
 from src.utils.forced_aligner import container_timeline_filter
 
 if TYPE_CHECKING:
@@ -973,28 +974,6 @@ def _transcode_audio_for_embed(
             len(audio_paths), bitrate, e, exc_info=True,
         )
         return False
-
-
-def _probe_duration_seconds(path: Union[str, Path]) -> Optional[float]:
-    """The real duration, in seconds, of an audio file via ``ffprobe``.
-
-    Mirrors ``Transcriber.get_audio_duration``'s own ffprobe invocation
-    rather than importing it: that class's module pulls in the
-    transcription stack's heavier dependencies for what is, here, a single
-    stdlib subprocess call. Returns ``None`` -- never raises -- on any
-    failure, so the caller can degrade to leaving the book's final clip
-    un-extended instead of crashing the whole build.
-    """
-    cmd = [
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(path),
-    ]
-    try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        return float(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
-        logger.warning("Could not probe audio duration for '%s': %s", path, e, exc_info=True)
-        return None
 
 
 def _format_smil_clock(seconds: float) -> str:

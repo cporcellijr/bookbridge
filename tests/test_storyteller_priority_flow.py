@@ -391,6 +391,120 @@ def test_new_book_upgrades_to_ctc_after_transcription(tmp_path, monkeypatch):
     assert book.transcript_source == "ctc"
 
 
+def _run_read_along_job(tmp_path, monkeypatch, slips, skip_ctc_setting, ctc_enabled="true"):
+    monkeypatch.setenv("CTC_ENABLED", ctc_enabled)
+    if skip_ctc_setting is None:
+        monkeypatch.delenv("SMIL_SKIP_CTC", raising=False)
+    else:
+        monkeypatch.setenv("SMIL_SKIP_CTC", skip_ctc_setting)
+    manager, _db, _abs, transcriber, alignment_service = _build_manager(tmp_path)
+    transcript = [{"start": 0.0, "end": 11.9, "text": "x"}]
+    transcriber.transcribe_from_smil.return_value = transcript
+    preview = [{"char": 0, "ts": 0.0, "t_idx": 0}, {"char": 100, "ts": 11.9, "t_idx": 1}]
+    alignment_service.preview_alignment_map.return_value = preview
+    checked = []
+    monkeypatch.setattr("src.sync_manager.find_slips", lambda alignment_map: checked.append(alignment_map) or slips)
+    alignment_service.align_and_store.return_value = True
+    alignment_service.align_forced_and_store.return_value = True
+
+    audio = tmp_path / "a.m4b"
+    audio.write_text("x", encoding="utf-8")
+    adapter = MagicMock()
+    adapter.get_audio_files.return_value = [{"local_path": str(audio)}]
+    adapter.get_chapters.return_value = [{"start": 0.0, "end": 12.0}]
+    manager.audio_source_adapters = {"BookOrbit": adapter}
+
+    book = Book(
+        abs_id="read-along-1", abs_title="Read-Along Book", ebook_filename="book.epub",
+        kosync_doc_id="h", status="pending", duration=12.0,
+        audio_source="BookOrbit", audio_source_id="5961", sync_mode="audiobook",
+    )
+    manager._run_background_job(book)
+    return book, transcriber, alignment_service, checked, preview, transcript
+
+
+def _run_with_smil(tmp_path, monkeypatch, slips):
+    book, transcriber, alignment_service, checked, preview, transcript = _run_read_along_job(
+        tmp_path, monkeypatch, slips, skip_ctc_setting="true")
+    assert checked == [preview]
+    alignment_service.preview_alignment_map.assert_called_once()
+    assert alignment_service.preview_alignment_map.call_args.args[0] == transcript
+    return book, transcriber, alignment_service
+
+
+@pytest.mark.parametrize("skip_ctc_setting", [None, "false"])
+def test_read_along_smil_goes_through_ctc_unless_the_setting_is_on(tmp_path, monkeypatch, skip_ctc_setting):
+    """Off by default: CTC runs first, as before, and the read-along's timings aren't checked."""
+    book, _transcriber, alignment_service, checked, _preview, _transcript = _run_read_along_job(
+        tmp_path, monkeypatch, slips=[], skip_ctc_setting=skip_ctc_setting)
+
+    assert checked == []
+    alignment_service.preview_alignment_map.assert_not_called()
+    alignment_service.align_forced_and_store.assert_called()
+    assert book.transcript_source == "ctc"
+
+
+def test_read_along_setting_does_nothing_without_ctc(tmp_path, monkeypatch):
+    """With CTC off there is nothing to skip: the read-along's timings are used as before, unchecked."""
+    book, transcriber, alignment_service, checked, _preview, _transcript = _run_read_along_job(
+        tmp_path, monkeypatch, slips=[], skip_ctc_setting="true", ctc_enabled="false")
+
+    assert checked == []
+    alignment_service.preview_alignment_map.assert_not_called()
+    alignment_service.align_forced_and_store.assert_not_called()
+    transcriber.transcribe_from_smil.assert_called_once()
+    alignment_service.align_and_store.assert_called_once()
+    assert book.transcript_source == "smil"
+
+
+def test_read_along_smil_without_slips_skips_ctc(tmp_path, monkeypatch):
+    """A storyalign or Storyteller EPUB already has timings for this text, so CTC adds
+    hours of CPU and nothing else."""
+    book, transcriber, alignment_service = _run_with_smil(tmp_path, monkeypatch, slips=[])
+
+    alignment_service.align_forced_and_store.assert_not_called()
+    alignment_service.align_and_store.assert_called_once()
+    transcriber.process_audio.assert_not_called()
+    assert book.transcript_source == "smil"
+
+
+def test_read_along_smil_with_a_slip_still_uses_ctc(tmp_path, monkeypatch):
+    book, _transcriber, alignment_service = _run_with_smil(tmp_path, monkeypatch, slips=[(3600.0, 4500.0)])
+
+    alignment_service.align_forced_and_store.assert_called()
+    assert book.transcript_source == "ctc"
+
+
+@pytest.mark.parametrize("preview", [
+    [],
+    # Matched words only in the first third of the audio: too little to check for slips.
+    [{"char": 0, "ts": 0.0, "t_idx": 0}, {"char": 40, "ts": 4.0, "t_idx": 1}, {"char": 100, "ts": 11.9}],
+])
+def test_read_along_smil_too_sparse_to_check_still_uses_ctc(tmp_path, monkeypatch, preview):
+    monkeypatch.setenv("CTC_ENABLED", "true")
+    monkeypatch.setenv("SMIL_SKIP_CTC", "true")
+    manager, _db, _abs, _transcriber, alignment_service = _build_manager(tmp_path)
+    alignment_service.preview_alignment_map.return_value = preview
+    alignment_service.align_and_store.return_value = True
+    alignment_service.align_forced_and_store.return_value = True
+    audio = tmp_path / "a.m4b"
+    audio.write_text("x", encoding="utf-8")
+    adapter = MagicMock()
+    adapter.get_audio_files.return_value = [{"local_path": str(audio)}]
+    adapter.get_chapters.return_value = [{"start": 0.0, "end": 12.0}]
+    manager.audio_source_adapters = {"BookOrbit": adapter}
+    book = Book(
+        abs_id="read-along-2", abs_title="Read-Along Book", ebook_filename="book.epub",
+        kosync_doc_id="h", status="pending", duration=12.0,
+        audio_source="BookOrbit", audio_source_id="5961", sync_mode="audiobook",
+    )
+
+    manager._run_background_job(book)
+
+    alignment_service.align_forced_and_store.assert_called()
+    assert book.transcript_source == "ctc"
+
+
 def test_abs_book_reaches_ctc_without_the_reported_local_audio_fallback(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("CTC_ENABLED", "true")
     manager, _db, abs_client, transcriber, alignment_service = _build_manager(tmp_path)
