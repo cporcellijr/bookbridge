@@ -51,6 +51,7 @@ from src.services.readalong_builder import (
 )
 from src.services.readalong_segments import SentenceClip
 from src.utils.ebook_utils import EbookParser
+from src.utils.smil_extractor import AUDIO_DURATIONS_ENTRY, SmilExtractor
 
 pytestmark = pytest.mark.skipif(
     not (shutil.which("ffmpeg") and shutil.which("ffprobe")),
@@ -2130,6 +2131,16 @@ def test_audio_split_into_multiple_files_for_a_long_book(monkeypatch):
                 real_durations[name] = duration
 
             opf_bytes = zf.read("OEBPS/content.opf")
+            # Each file's recorded length lets a later import place its clip times.
+            audio_durations = json.loads(zf.read(AUDIO_DURATIONS_ENTRY))
+            assert set(audio_durations) == set(audio_names)
+            assert sum(audio_durations.values()) == pytest.approx(sum(real_durations.values()), abs=1.0)
+
+        # Re-importing the read-along places every file, so its timings span the whole audio
+        # (without the lengths, every file's clips started at 0s and coverage was one file's).
+        transcript = SmilExtractor().extract_transcript(str(output_path))
+        assert transcript[-1]["end"] == pytest.approx(5.0, abs=0.5)
+        assert all(b["start"] >= a["start"] for a, b in zip(transcript, transcript[1:]))
 
         # OPF: one audio manifest item per physical file, exactly one
         # publication-level (no refines=) media:duration regardless of file
@@ -2269,6 +2280,7 @@ def test_single_audio_file_case_is_untouched_by_split_machinery():
 
         with zipfile.ZipFile(output_path) as zf:
             audio_names = [n for n in zf.namelist() if n.startswith("OEBPS/readalong/audio")]
+            assert AUDIO_DURATIONS_ENTRY not in zf.namelist(), "single-file builds must not emit AUDIO_DURATIONS_ENTRY"
         assert audio_names == ["OEBPS/readalong/audio.m4a"]
 
         entries = _all_pars_with_audio(output_path)
