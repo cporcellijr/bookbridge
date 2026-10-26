@@ -25,7 +25,7 @@
       
       
       <link rel="icon" href="../assets/icon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -33,10 +33,10 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
       
         
-        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
       
       
 
@@ -1666,6 +1666,12 @@ reader in the log, since the device itself cannot tell that its progress stops t
 <td>Rewinds progress written back to ABS by this many seconds.</td>
 </tr>
 <tr>
+<td>Save reading checkpoints in ABS listening history</td>
+<td><code>ABS_READING_CHECKPOINTS</code></td>
+<td><code>false</code></td>
+<td>Adds one second of artificial listening time when ebook reading advances the ABS audiobook position, preserving a recoverable entry in ABS listening history. Labels reading as listening and slightly increases ABS listening statistics. Resets, rewinds, unchanged positions, and existing audiobook listening credit are unaffected.</td>
+</tr>
+<tr>
 <td>Limit Search to Configured Library</td>
 <td><code>ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID</code></td>
 <td><code>false</code></td>
@@ -2034,6 +2040,12 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td><code>STORYTELLER_UPLOAD_CHUNK_SIZE</code></td>
 <td><code>5242880</code></td>
 <td>TUS PATCH chunk size in bytes for direct Storyteller uploads.</td>
+</tr>
+<tr>
+<td>Automatically link aligned Storyteller books</td>
+<td><code>STORYTELLER_AUTO_LINK</code></td>
+<td><code>false</code></td>
+<td>Per-user (set in <strong>Account -&gt; My Integrations</strong>). Once an hour, links Storyteller books that finished aligning to the reader's matching BookBridge books, skipping ambiguous matches. A declined book is retried after a week or after it is re-aligned. Each pass stops starting new books after ten minutes.</td>
 </tr>
 <tr>
 <td>Poll Mode</td>
@@ -2436,6 +2448,12 @@ as an alignment source. The bridge talks to Storyteller through the REST API onl
 <td><code>BOOKORBIT_SHELF_WATCH_RESCAN_HOURS</code></td>
 <td><code>24</code></td>
 <td>How often a still-unmatched book on the watch collection is retried.</td>
+</tr>
+<tr>
+<td>Also generate a read-along EPUB for auto-matched books</td>
+<td><code>BOOKORBIT_SHELF_WATCH_READALONG</code></td>
+<td><code>false</code></td>
+<td>When a watched-collection match uses a BookOrbit audiobook, also requests a <a href="../user-guide/#read-along-epubs-for-bookorbit">read-along EPUB</a>; it is generated once the book's alignment finishes. Ebook-only, Audiobookshelf-audio and Grimmory-audio matches are unaffected.</td>
 </tr>
 </tbody>
 </table>
@@ -3055,7 +3073,7 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <li>Finer tuning knobs (score bands, judge margins, similarity thresholds) are available in the Settings UI if you want them, but the defaults are a sensible starting point.</li>
 </ul>
 <h3 id="suggestions">Suggestions</h3>
-<p>Enabled under <strong>Settings -&gt; Features</strong>. The Suggestions page is a review workspace, not an auto-linker. It always waits for your approval before creating mappings.</p>
+<p>Enabled under <strong>Settings -&gt; Features</strong>. The Suggestions page is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.</p>
 <table>
 <thead>
 <tr>
@@ -3071,6 +3089,24 @@ passed. See <a href="../troubleshooting/#hardcover-or-storygraph-gets-many-reque
 <td><code>SUGGESTIONS_ENABLED</code></td>
 <td><code>false</code></td>
 <td>Enables the Suggestions page and background suggestion discovery.</td>
+</tr>
+<tr>
+<td>Auto-match suggestions at or above a score</td>
+<td><code>SUGGESTIONS_AUTO_MATCH_ENABLED</code></td>
+<td><code>false</code></td>
+<td>Links a book automatically when a scan finds a candidate at or above the threshold; lower-scoring suggestions stay on the page for review.</td>
+</tr>
+<tr>
+<td>Auto-Match Threshold (%)</td>
+<td><code>SUGGESTIONS_AUTO_MATCH_THRESHOLD</code></td>
+<td><code>100</code></td>
+<td>100 links only exact matches (an identifier agreement, or an identical title and author). Below 95 the top candidate is often a different book.</td>
+</tr>
+<tr>
+<td>Also generate a read-along EPUB for books auto-matched to a BookOrbit audiobook</td>
+<td><code>SUGGESTIONS_AUTO_MATCH_READALONG</code></td>
+<td><code>false</code></td>
+<td>Requests a <a href="../user-guide/#read-along-epubs-for-bookorbit">read-along EPUB</a> for each auto-match to a BookOrbit audiobook, generated once alignment finishes.</td>
 </tr>
 <tr>
 <td>Scheduled Scan Interval</td>
@@ -3251,6 +3287,12 @@ If you use Storyteller, its transcript assets are preferred over SMIL and Whispe
 <td><code>CTC_DEVICE</code></td>
 <td><code>auto</code></td>
 <td>MMS only — QuartzNet always runs on the CPU. Uses an NVIDIA GPU when available; CPU is practical only for short books with MMS.</td>
+</tr>
+<tr>
+<td>Use a read-along's own timings when they check out</td>
+<td><code>SMIL_SKIP_CTC</code></td>
+<td><code>false</code></td>
+<td>Applies while forced alignment is on. When the ebook is a read-along (a Storyteller or StoryAlign EPUB with media overlays), checks its timings for places where they lose sync with the audio; timings that pass become the book's map without running forced alignment. Off: forced alignment runs first, and the read-along's timings are used only if it fails.</td>
 </tr>
 </tbody>
 </table>
@@ -3582,10 +3624,10 @@ CPU-only pipeline unchanged.</p>
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>

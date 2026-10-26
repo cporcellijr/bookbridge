@@ -25,7 +25,7 @@
       
       
       <link rel="icon" href="../assets/icon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
     
     
       
@@ -33,10 +33,10 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.57a0d79d.min.css">
       
         
-        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.fb2fffe2.min.css">
       
       
 
@@ -847,6 +847,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#job-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Job Queue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#suggestions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1113,6 +1124,17 @@
     <span class="md-ellipsis">
       
         Books you start reading in BookOrbit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aligned-storyteller-books" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aligned Storyteller books
       
     </span>
   </a>
@@ -1716,6 +1738,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#job-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Job Queue
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#suggestions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1989,6 +2022,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#aligned-storyteller-books" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aligned Storyteller books
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#koreader-auto-discovery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2212,6 +2256,10 @@ only sessions BookBridge recorded and retained, rather than a service's complete
 past history. Deleting a book mapping keeps its reading and listening sessions,
 so removing a finished book no longer removes those totals. Previously deleted
 history is not reconstructed.</p>
+<p>The heatmap covers the last 12 months; step the yearly recap back a year to see
+that year on the heatmap. The recap's finished counts include the audiobooks you
+finished that year, as Audiobookshelf marks them or from BookBridge's own
+listening sessions, and a book finished as both ebook and audiobook counts once.</p>
 <hr />
 <h2 id="account-and-my-integrations">Account and My Integrations</h2>
 <p>The <strong>Account</strong> page is where you manage your own login and reader-specific setup.</p>
@@ -2320,7 +2368,7 @@ books: a manual removal is undone on the next cycle while the option is on.</p>
 <p>Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing reading position, but they do not exchange highlights or notes.</p>
 <hr />
 <h2 id="keeping-multiple-koreader-devices-in-step">Keeping Multiple KOReader Devices in Step</h2>
-<p>Use <strong>BridgeSync 0.9.9</strong> on every device. When upgrading from an older plugin,
+<p>Use <strong>BridgeSync 0.9.10</strong> on every device. When upgrading from an older plugin,
 close affected managed books and run <strong>Bridge Sync → Sync Reading Stats</strong> to repair
 their saved book identities. Positions and highlights are retained. This also
 updates reading status when there are no local status changes to upload.</p>
@@ -2447,8 +2495,27 @@ count whenever books are waiting in it.</p>
 <li>Each entry can carry a standard ebook, a Storyteller title, or both.</li>
 <li><strong>Audio only (no ebook)</strong> entries are also queueable and activate immediately.</li>
 <li>Picks approved on the <strong>Suggestions</strong> page land in this same queue.</li>
+<li>When the queue holds a BookOrbit audiobook, tick <strong>Also generate read-along EPUBs</strong>
+  to request a <a href="#read-along-epubs-for-bookorbit">read-along EPUB</a> for those books.</li>
 </ul>
+<p>The <strong>Job Queue</strong> page shows the queue's order and lets you change it before you
+process it.</p>
 <p>(Before 7.5.0 the queue lived on a separate <strong>Batch Match</strong> page.)</p>
+<hr />
+<h2 id="job-queue">Job Queue</h2>
+<p><strong>Job Queue</strong> in the top navigation shows the book work that is waiting, processing
+or recently finished: staged Add Book items, Add Book batches being processed,
+alignment, and requested read-along EPUBs with their progress. The page refreshes
+itself while books are processing.</p>
+<ul>
+<li><strong>Move Up</strong>, <strong>Move Down</strong> and <strong>Move to Top</strong> change the order of staged Add Book
+  items before you submit the batch.</li>
+<li>Books waiting for alignment show their place (for example <em>#3 of 7</em>) and can be
+  moved the same way. The alignment worker starts the first book in that order, and
+  the order is kept across restarts.</li>
+<li>You can move only your own books; other readers' books keep their places, and
+  work that is already processing can't be moved.</li>
+</ul>
 <hr />
 <h2 id="suggestions">Suggestions</h2>
 <p>The <strong>Suggestions</strong> page is a review workspace for likely matches that are not linked yet.</p>
@@ -2558,6 +2625,11 @@ Whisper/lexical), so no separate Storyteller server is required.</p>
    read-along pill appears once it finishes. Use <strong>Remove read-along EPUB</strong> from the same menu
    to delete a generated one.</li>
 </ol>
+<p>Books matched automatically can get one too: turn on <strong>Also generate a read-along EPUB
+for auto-matched books</strong> for BookOrbit's watched collection (BookOrbit card in
+<strong>Settings -&gt; Integrations</strong>) or <strong>Also generate a read-along EPUB for books
+auto-matched to a BookOrbit audiobook</strong> for Suggestions auto-match (<strong>Settings -&gt;
+Features</strong>). Both are off by default.</p>
 <p>Generation preserves the book's original chapter markup and non-breaking whitespace, keeps
 each audio clip within its narrated segment, and refuses to publish an incomplete export
 rather than shipping a book with missing chapters. A failed regeneration leaves the previous
@@ -2706,6 +2778,17 @@ audiobook:</p>
 <li><strong>No audiobook</strong> — the book is added as <strong>ebook-only</strong>, so its progress syncs.</li>
 </ul>
 <p>A suggestion you dismiss is not offered again. Nothing is moved between collections.</p>
+<h3 id="aligned-storyteller-books">Aligned Storyteller books</h3>
+<p>With <strong>Automatically link aligned Storyteller books</strong> on (your Storyteller integration
+in <strong>Account -&gt; My Integrations</strong>, off by default), an hourly check links Storyteller
+books that have finished aligning to your matching BookBridge books. Ambiguous
+matches are skipped, and a declined book is tried again after a week or once it is
+re-aligned.</p>
+<p>For a book whose ebook comes from Storyteller rather than a separate ebook file,
+BookBridge also links the original EPUB and Storyteller's read-aloud EPUB to the
+same KoSync progress, so KOReader picks up the
+same position whichever edition you open. Re-aligning a book keeps its old hashes
+valid.</p>
 <h3 id="koreader-auto-discovery">KOReader auto-discovery</h3>
 <p>If KOReader syncs through KOSync, new reading activity can create work for you
 automatically:</p>
@@ -2830,10 +2913,10 @@ If you log out of StoryGraph in your browser, your session cookie might expire. 
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "search.suggest", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.c21346df.min.js"></script>
       
     
   </body>
