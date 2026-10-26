@@ -556,13 +556,13 @@ class TestCWAGetBookByIdPersistentCondition(unittest.TestCase):
         mock_get.return_value = not_found
 
         with self.assertLogs("src.api.cwa_client", level="DEBUG") as logs:
-            self.client.get_book_by_id("missing-book")
-            self.client.get_book_by_id("missing-book")
+            self.client.get_book_by_id("9999")
+            self.client.get_book_by_id("9999")
 
         warnings = [l for l in logs.output if l.startswith("WARNING") and "CWA metadata lookup failed" in l]
         debugs = [l for l in logs.output if l.startswith("DEBUG") and "CWA metadata lookup failed" in l]
         self.assertEqual(len(warnings), 1)
-        self.assertIn("ID 'missing-book'", warnings[0])
+        self.assertIn("ID '9999'", warnings[0])
         self.assertEqual(len(debugs), 1)
 
     @patch("requests.Session.get")
@@ -573,8 +573,8 @@ class TestCWAGetBookByIdPersistentCondition(unittest.TestCase):
         mock_get.return_value = not_found
 
         with self.assertLogs("src.api.cwa_client", level="DEBUG") as logs:
-            self.client.get_book_by_id("first-bad-id")
-            self.client.get_book_by_id("some-other-bad-id")
+            self.client.get_book_by_id("1001")
+            self.client.get_book_by_id("1002")
 
         warnings = [l for l in logs.output if l.startswith("WARNING") and "CWA metadata lookup failed" in l]
         self.assertEqual(len(warnings), 1)
