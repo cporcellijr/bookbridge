@@ -473,6 +473,10 @@ class ABSClient:
             return False
 
     def get_item_details(self, item_id):
+        # Keys BookBridge mints for books with no Audiobookshelf item (see
+        # web_server._is_synthetic_bridge_key); ABS can never serve them.
+        if str(item_id or "").lower().startswith(("ebook-", "ebook:", "booklore:", "bookorbit:")):
+            return None
         if not self.is_configured():
             logger.warning(
                 f"⚠️ ABS: get_item_details('{item_id}') skipped — client is not configured "

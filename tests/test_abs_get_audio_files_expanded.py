@@ -144,6 +144,18 @@ class TestABSGetAudioFilesExpanded(unittest.TestCase):
             "Expected a warning explaining the client is not configured",
         )
 
+    def test_get_item_details_skips_bridge_keys_without_a_warning(self):
+        """Matching a BookOrbit audiobook to Hardcover logged "ABS: get_item_details(
+        'bookorbit:5259') skipped — client is not configured" for a book ABS never had."""
+        unconfigured = ABSClient(credentials={"ABS_KEY": "", "__allow_global_fallback__": False})
+        unconfigured.session = MagicMock()
+        for client in (self.client, unconfigured):
+            for key in ("bookorbit:5259", "booklore:12", "ebook-0123456789abcdef", "ebook:queued"):
+                with self.subTest(configured=client is self.client, key=key):
+                    with self.assertNoLogs("src.api.api_clients", level="WARNING"):
+                        self.assertIsNone(client.get_item_details(key))
+                    client.session.get.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
