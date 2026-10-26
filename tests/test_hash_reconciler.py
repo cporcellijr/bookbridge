@@ -131,6 +131,23 @@ class TestReconcileHashes(unittest.TestCase):
             "the second book must not rebind the shared hash",
         )
 
+    def test_two_books_sharing_one_file_keep_their_filename_hashes(self):
+        """In filename mode each book has its own filename hash; only the shared
+        content hash is withheld from the second book."""
+        results = {
+            "a": {"path": Path("shared"), "content_hash": "shared-hash", "kosync_hash": "name-a"},
+            "b": {"path": Path("shared"), "content_hash": "shared-hash", "kosync_hash": "name-b"},
+        }
+        self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False, device_filename=None: results[book.abs_id]
+        self.service.database_service.ensure_linked_kosync_document.return_value = True
+
+        summary = self.service.reconcile_hashes()
+
+        linked = [c.args for c in self.service.database_service.ensure_linked_kosync_document.call_args_list]
+        self.assertEqual(linked, [("name-a", "a"), ("shared-hash", "a"), ("name-b", "b")])
+        self.assertEqual(summary["conflicts"], 1)
+        self.assertEqual(summary["linked"], 3)
+
     def test_resolution_during_reconcile_does_not_link_internally(self):
         """reconcile must resolve with link_hashes=False so it can veto a conflict."""
         captured = {}

@@ -774,7 +774,25 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertEqual(
             self.db.get_kosync_document("name-Dragon's Justice.epub").linked_abs_id, "abs-1"
         )
-        self.assertIsNone(self.db.get_kosync_document("content-kavita_187"))
+
+    def test_filename_mode_links_the_content_hash_for_reader_statistics(self):
+        """KOReader's statistics, reading statuses and highlights name a book by its
+        content hash in either hash method, so the served file's content hash is
+        linked too."""
+        self._use_filename_hashing()
+        self._write_book_file("kavita_187.epub")
+        self.db.save_book(
+            Book(
+                abs_id="abs-1",
+                abs_title="Dragon's Justice",
+                original_ebook_filename="kavita_187.epub",
+                status="active",
+            )
+        )
+
+        self.service.build_manifest()
+
+        self.assertEqual(self.db.get_kosync_document("content-kavita_187").linked_abs_id, "abs-1")
 
     def test_filename_mode_reconcile_binds_the_filename_hash(self):
         self._use_filename_hashing()
@@ -790,11 +808,11 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
 
         summary = self.service.reconcile_hashes()
 
-        self.assertEqual(summary["linked"], 1)
+        self.assertEqual(summary["linked"], 2)
         self.assertEqual(
             self.db.get_kosync_document("name-Dragon's Justice.epub").linked_abs_id, "abs-1"
         )
-        self.assertIsNone(self.db.get_kosync_document("content-kavita_187"))
+        self.assertEqual(self.db.get_kosync_document("content-kavita_187").linked_abs_id, "abs-1")
 
     def test_filename_mode_reconcile_uses_global_filename_map_across_users(self):
         """Reader B adding another "Home" must not take the hash of reader A's Home.epub."""

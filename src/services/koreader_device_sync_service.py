@@ -278,6 +278,10 @@ class KOReaderDeviceSyncService:
         linked = False
         if abs_id and kosync_hash and link_hashes:
             linked = self._link_sibling_hash(abs_id, kosync_hash)
+            # KOReader's statistics, reading statuses and highlights name a book by
+            # its content hash in either hash method, so link that one too.
+            if content_hash != kosync_hash:
+                self._link_sibling_hash(abs_id, content_hash)
 
         if stored_hash and kosync_hash and stored_hash != kosync_hash:
             # The primary hash may deliberately identify a different EPUB build, such
@@ -373,24 +377,32 @@ class KOReaderDeviceSyncService:
                 summary["skipped"] += 1
                 continue
 
-            # Two active books resolving to the same file would otherwise steal the
-            # hash from each other on every pass. That is a catalogue mis-mapping, not
-            # drift: leave the existing link alone and surface it instead.
-            owner = claimed_by.get(doc_hash)
-            if owner and owner != abs_id:
-                summary["conflicts"] += 1
-                logger.warning(
-                    "🔗 Hash reconcile: '%s' resolves to the same file as '%s' (hash %s) — "
-                    "leaving the existing link alone; check these books' ebook mapping",
-                    label, sanitize_log_data(owner), sanitize_log_data(doc_hash),
-                )
-                continue
-            claimed_by[doc_hash] = abs_id
+            # In filename mode the content hash differs and is bound too, for the
+            # reader statistics, statuses and highlights that use it.
+            hashes = [doc_hash]
+            content_hash = resolved.get("content_hash")
+            if content_hash and content_hash != doc_hash:
+                hashes.append(content_hash)
 
-            if self._link_sibling_hash(abs_id, doc_hash):
-                summary["linked"] += 1
-                logger.info("🔗 Hash reconcile: bound new hash %s to '%s'",
-                            sanitize_log_data(doc_hash), label)
+            for bound_hash in hashes:
+                # Two active books resolving to the same file would otherwise steal the
+                # hash from each other on every pass. That is a catalogue mis-mapping, not
+                # drift: leave the existing link alone and surface it instead.
+                owner = claimed_by.get(bound_hash)
+                if owner and owner != abs_id:
+                    summary["conflicts"] += 1
+                    logger.warning(
+                        "🔗 Hash reconcile: '%s' resolves to the same file as '%s' (hash %s) — "
+                        "leaving the existing link alone; check these books' ebook mapping",
+                        label, sanitize_log_data(owner), sanitize_log_data(bound_hash),
+                    )
+                    continue
+                claimed_by[bound_hash] = abs_id
+
+                if self._link_sibling_hash(abs_id, bound_hash):
+                    summary["linked"] += 1
+                    logger.info("🔗 Hash reconcile: bound new hash %s to '%s'",
+                                sanitize_log_data(bound_hash), label)
 
         logger.info(
             "🔗 Hash reconcile: checked=%d linked=%d skipped=%d conflicts=%d errors=%d",
