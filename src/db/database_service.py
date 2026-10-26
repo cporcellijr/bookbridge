@@ -6394,6 +6394,10 @@ class DatabaseService:
                     else_=0
                 )), 0).label('listen_seconds'),
                 func.coalesce(func.sum(case(
+                    (ReadingSession.session_type == 'AUDIOBOOK', 1),
+                    else_=0
+                )), 0).label('listen_session_count'),
+                func.coalesce(func.sum(case(
                     (ReadingSession.session_type != 'AUDIOBOOK', ReadingSession.duration_seconds),
                     else_=0
                 )), 0).label('read_seconds'),
@@ -6420,6 +6424,7 @@ class DatabaseService:
                     continue
                 result[row.abs_id] = {
                     'listen_seconds': int(row.listen_seconds),
+                    'listen_session_count': int(row.listen_session_count),
                     'read_seconds': int(row.read_seconds),
                     'session_count': int(row.session_count),
                     'avg_session_seconds': int(row.total_duration) // int(row.session_count),
@@ -6488,6 +6493,34 @@ class DatabaseService:
                 "endedAt": int(rs.end_time),
                 "coverPath": None,
             } for rs, abs_title, audio_title in rows]
+
+    def get_book_listening_detail(self, abs_id: str, session_limit: int = 40) -> Optional[dict]:
+        """One book's AUDIOBOOK totals and newest-first sessions for the ambient user."""
+        uid = self._resolve_uid(None)
+        with self.get_session() as session:
+            rows = session.query(ReadingSession).filter(
+                ReadingSession.abs_id == abs_id,
+                ReadingSession.session_type == 'AUDIOBOOK', ReadingSession.user_id == uid,
+            ).order_by(ReadingSession.end_time.desc()).all()
+            if not rows:
+                return None
+            total_seconds = sum(int(rs.duration_seconds or 0) for rs in rows)
+            latest_progress = next((rs.end_progress for rs in rows if rs.end_progress is not None), None)
+            return {
+                "totalSeconds": total_seconds,
+                "sessionCount": len(rows),
+                "avgSessionSeconds": total_seconds // len(rows),
+                "progressPercent": round(min(latest_progress, 1.0) * 100, 1) if latest_progress is not None else None,
+                "lastReadAt": int(rows[0].end_time),
+                "bookTitle": rows[0].book_title,
+                "sessions": [{
+                    "startTime": int(rs.start_time),
+                    "endTime": int(rs.end_time),
+                    "durationSeconds": int(rs.duration_seconds or 0),
+                    "startProgress": rs.start_progress,
+                    "endProgress": rs.end_progress,
+                } for rs in rows[:session_limit]],
+            }
 
     def delete_recent_estimated_kosync_session(
         self,

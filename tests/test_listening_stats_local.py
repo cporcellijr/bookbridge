@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import src.web_server as web_server
 from src.db.database_service import DatabaseService
 from src.db.models import Book, ReadingSession
 from src.utils.user_context import reset_current_user_id, set_current_user_id
@@ -61,6 +62,55 @@ def test_recent_listening_sessions_scoped_newest_first_limited(database):
     assert _as_user(2, database.get_recent_listening_sessions, 10)[0]["durationSeconds"] == 7777
 
 
+def test_book_listening_detail_counts_only_audiobook_sessions(database):
+    detail = _as_user(1, database.get_book_listening_detail, "b1")
+    assert detail["totalSeconds"] == 900
+    assert detail["sessionCount"] == 2
+    assert detail["avgSessionSeconds"] == 450
+    assert detail["lastReadAt"] == int(_epoch("2026-07-02T09:00:00") + 300)
+    assert [s["durationSeconds"] for s in detail["sessions"]] == [300, 600]
+
+
+def test_book_listening_detail_scoped_to_user(database):
+    assert _as_user(2, database.get_book_listening_detail, "b1") is None
+    assert _as_user(2, database.get_book_listening_detail, "b2")["totalSeconds"] == 7777
+
+
+def test_book_listening_detail_sessions_carry_progress_and_limit(database):
+    begin = _epoch("2026-07-04T09:00:00")
+    with database.get_session() as session:
+        session.add(ReadingSession(abs_id="b1", session_type="AUDIOBOOK", start_time=begin,
+                                   end_time=begin + 60, duration_seconds=60, user_id=1,
+                                   start_progress=0.25, end_progress=0.3))
+    detail = _as_user(1, database.get_book_listening_detail, "b1", 2)
+    assert detail["sessionCount"] == 3
+    assert len(detail["sessions"]) == 2
+    assert detail["sessions"][0] == {
+        "startTime": int(begin), "endTime": int(begin + 60), "durationSeconds": 60,
+        "startProgress": 0.25, "endProgress": 0.3,
+    }
+
+
+def test_book_listening_detail_progress_is_the_newest_known_position(database):
+    assert _as_user(1, database.get_book_listening_detail, "b1")["progressPercent"] is None
+    begin = _epoch("2026-07-04T09:00:00")
+    with database.get_session() as session:
+        session.add(ReadingSession(abs_id="b1", session_type="AUDIOBOOK", start_time=begin,
+                                   end_time=begin + 60, duration_seconds=60, user_id=1,
+                                   start_progress=0.25, end_progress=0.3046))
+        session.add(ReadingSession(abs_id="b1", session_type="AUDIOBOOK", start_time=begin + 120,
+                                   end_time=begin + 180, duration_seconds=60, user_id=1))
+    assert _as_user(1, database.get_book_listening_detail, "b1")["progressPercent"] == 30.5
+
+
+def test_listening_book_list_counts_and_averages_only_audiobook_sessions(database, monkeypatch):
+    monkeypatch.setattr(web_server, "database_service", database)
+    books = {b["absId"]: b for b in _as_user(1, web_server._build_listening_book_list)}
+    assert books["b1"]["totalSeconds"] == 900
+    assert books["b1"]["sessionCount"] == 2
+    assert books["b1"]["avgSessionSeconds"] == 450
+
+
 def test_listening_finished_books_first_finish_scoped_and_titled(database):
     # add finishing sessions with end_progress
     with database.get_session() as session:
@@ -105,4 +155,3 @@ def test_listening_finished_books_first_finish_scoped_and_titled(database):
     expected_b3 = _epoch("2026-07-04T10:00:00")
     assert books[1]["finishedAt"] == int(expected_b3)
     assert books[1]["finishedDate"] == "2026-07-04"
-

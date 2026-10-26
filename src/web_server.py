@@ -12061,6 +12061,7 @@ def _build_listening_book_list():
         if listen_seconds <= 0:
             continue
         book = books.get(abs_id)
+        listen_sessions = int(stats.get("listen_session_count") or 0)
         result.append({
             "bookKey": f"abs:{abs_id}",
             "absId": abs_id,
@@ -12068,8 +12069,8 @@ def _build_listening_book_list():
             "title": getattr(book, "abs_title", None) or stats.get("book_title") or "Unknown book",
             "author": None,
             "totalSeconds": listen_seconds,
-            "sessionCount": int(stats.get("session_count") or 0),
-            "avgSessionSeconds": int(stats.get("avg_session_seconds") or 0),
+            "sessionCount": listen_sessions,
+            "avgSessionSeconds": listen_seconds // listen_sessions if listen_sessions else 0,
             "lastReadAt": int(stats["last_session_time"]) if stats.get("last_session_time") else None,
         })
     result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
@@ -12538,16 +12539,14 @@ def api_stats_book_detail():
 
         listening = None
         if abs_id:
-            row = database_service.get_reading_stats(abs_id)
-            if row and int(row.get("listen_seconds") or 0) > 0:
+            detail = database_service.get_book_listening_detail(abs_id)
+            if detail and int(detail.get("totalSeconds") or 0) > 0:
                 book = database_service.get_book(abs_id)
+                snapshot_title = detail.pop("bookTitle", None)
                 listening = {
                     "absId": abs_id,
-                    "title": getattr(book, "abs_title", None) or row.get("book_title"),
-                    "totalSeconds": int(row.get("listen_seconds") or 0),
-                    "sessionCount": int(row.get("session_count") or 0),
-                    "avgSessionSeconds": int(row.get("avg_session_seconds") or 0),
-                    "lastReadAt": int(row["last_session_time"]) if row.get("last_session_time") else None,
+                    "title": getattr(book, "abs_title", None) or snapshot_title,
+                    **detail,
                 }
 
         if not reading and not listening:

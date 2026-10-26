@@ -402,6 +402,26 @@
         return `${Math.floor(abs / 86400)}d ago`;
     }
 
+    // Calendar date in the bridge's time zone, the same days the rest of the page groups by;
+    // toISOString() would roll late-evening sessions into the next UTC day.
+    function bridgeIsoDate(epochSeconds) {
+        if (!epochSeconds) return "";
+        const date = new Date(epochSeconds * 1000);
+        for (const timeZone of [BRIDGE_TIMEZONE || "America/New_York", "America/New_York"]) {
+            try {
+                return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+            } catch (error) {
+                continue;
+            }
+        }
+        return date.toISOString().slice(0, 10);
+    }
+
+    function formatProgressRange(start, end) {
+        if (start == null || end == null) return "Listening";
+        return `${Math.round(start * 100)}% → ${Math.round(end * 100)}%`;
+    }
+
     function formatLongDate(value) {
         if (!value) return "Unknown date";
         return new Intl.DateTimeFormat(undefined, {
@@ -1116,8 +1136,12 @@
             if (reading.percentComplete != null) chips.push(["Complete", `${reading.percentComplete}%`]);
         }
         if (listening) {
+            // Next to the reading cards, listening labels need the prefix to tell them apart.
+            const label = (plain, prefixed) => reading ? prefixed : plain;
             chips.push(["Listening time", formatDurationCompact(listening.totalSeconds || 0)]);
-            if (listening.sessionCount) chips.push(["Listen sessions", listening.sessionCount]);
+            chips.push([label("Sessions", "Listen sessions"), listening.sessionCount || 0]);
+            chips.push([label("Avg session", "Avg listen"), formatDurationCompact(listening.avgSessionSeconds || 0)]);
+            if (listening.progressPercent != null) chips.push([label("Progress", "Listen progress"), `${listening.progressPercent}%`]);
         }
         bookDetailSummary.innerHTML = `<div class="summary-grid">${chips.map(c => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(c[0])}</div><div class="summary-card-value">${escapeHtml(String(c[1]))}</div></article>`).join("")}</div>`;
 
@@ -1125,7 +1149,12 @@
         const sessions = (reading && Array.isArray(reading.sessions)) ? reading.sessions : [];
         if (sessions.length) {
             body += `<div class="panel-head" style="margin:4px 0 8px"><h3 style="font-size:14px">Recent reading sessions</h3><span>${sessions.length}</span></div>`;
-            body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(new Date((s.startTime || 0) * 1000).toISOString().slice(0, 10)))}</div><div class="books-meta">${s.pagesRead || 0} pages</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
+            body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(bridgeIsoDate(s.startTime)))}</div><div class="books-meta">${s.pagesRead || 0} pages</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
+        }
+        const listenSessions = (listening && Array.isArray(listening.sessions)) ? listening.sessions : [];
+        if (listenSessions.length) {
+            body += `<div class="panel-head" style="margin:${sessions.length ? "18px" : "4px"} 0 8px"><h3 style="font-size:14px">Recent listening sessions</h3><span>${listenSessions.length}</span></div>`;
+            body += `<div class="scroll-list">${listenSessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(bridgeIsoDate(s.startTime)))}</div><div class="books-meta">${escapeHtml(formatProgressRange(s.startProgress, s.endProgress))}</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
         }
         if (!body) body = `<div class="empty-state"><p>No session breakdown available for this book.</p></div>`;
         bookDetailBody.innerHTML = body;
