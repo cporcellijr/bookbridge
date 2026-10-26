@@ -182,6 +182,24 @@ class TestDeviceHashPairs(unittest.TestCase):
         self.assertEqual(response.get_json()['conflicts'], 1)
         self.assertIsNone(self.db.get_kosync_document(COPY_CONTENT_HASH).linked_abs_id)
 
+    def test_another_users_document_created_during_the_link_is_a_conflict(self):
+        """The ownership check is repeated in the adopt write: another reader's
+        device can create the document after the endpoint's own lookup."""
+        other = self.db.create_user("reader4", "secret4")
+        real_adopt = self.db.adopt_kosync_document_if_unowned
+
+        def adopt_after_other_reader_creates(*args, **kwargs):
+            self.db.save_kosync_document(KosyncDocument(document_hash=COPY_CONTENT_HASH, user_id=other.id))
+            return real_adopt(*args, **kwargs)
+
+        with patch.object(self.db, "adopt_kosync_document_if_unowned", adopt_after_other_reader_creates):
+            response = self._post([self._pair()])
+
+        self.assertEqual(response.get_json()['conflicts'], 1)
+        doc = self.db.get_kosync_document(COPY_CONTENT_HASH)
+        self.assertEqual(doc.user_id, other.id)
+        self.assertIsNone(doc.linked_abs_id)
+
     def test_other_users_book_is_not_linked(self):
         other = self.db.create_user("reader2", "secret2")
         with self.db.get_session() as session:

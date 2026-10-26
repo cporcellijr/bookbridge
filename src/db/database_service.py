@@ -62,6 +62,9 @@ from src.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
+# Default for adopt_kosync_document_if_unowned: None is a real owner (no user).
+_ANY_USER = object()
+
 # Reading-session buffer delivery destinations, mapped to the status column each
 # one owns. A buffered session is delivered to these independently, so one being
 # unreachable never holds up or duplicates the other.
@@ -3128,17 +3131,27 @@ class DatabaseService:
 
     def adopt_kosync_document_if_unowned(
         self, document_hash: str, abs_id: str, expected_storyteller_uuid: Optional[str] = None,
+        owner_user_id: object = _ANY_USER,
     ) -> bool:
-        """Atomically adopt an unowned hash for an existing, optionally UUID-matched book."""
+        """Atomically adopt an unowned hash for an existing, optionally UUID-matched book.
+
+        With ``owner_user_id``, an existing row is adopted only when it belongs to no
+        user or to that user, so another reader's document is never linked.
+        """
         if not document_hash or not abs_id:
             return False
-        from sqlalchemy import exists, literal, select
+        from sqlalchemy import exists, literal, or_, select
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         target = select(Book.abs_id).where(Book.abs_id == abs_id)
         if expected_storyteller_uuid is not None:
             target = target.where(Book.storyteller_uuid == expected_storyteller_uuid)
         foreign_primary = exists().where(Book.kosync_doc_id == document_hash, Book.abs_id != abs_id)
+        adoptable = KosyncDocument.linked_abs_id.is_(None)
+        if owner_user_id is not _ANY_USER:
+            adoptable = adoptable & or_(
+                KosyncDocument.user_id.is_(None), KosyncDocument.user_id == owner_user_id,
+            )
         now = utcnow()
         stmt = sqlite_insert(KosyncDocument).from_select(
             ["document_hash", "linked_abs_id", "first_seen", "last_updated"],
@@ -3150,7 +3163,7 @@ class DatabaseService:
             result = session.execute(stmt.on_conflict_do_update(
                 index_elements=["document_hash"],
                 set_={"linked_abs_id": abs_id, "last_updated": now},
-                where=KosyncDocument.linked_abs_id.is_(None),
+                where=adoptable,
             ))
             return bool(result.rowcount)
 

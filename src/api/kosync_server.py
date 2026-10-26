@@ -2631,7 +2631,8 @@ def _link_device_hash_pair(content_hash, filename_hash, user_id) -> str:
     # unlinked document; relinking would move them on every sync. The adopt
     # write repeats the book checks atomically and never relinks a linked row.
     if (current and current.linked_abs_id) or (owner and owner.abs_id != book.abs_id) or foreign_user \
-            or not _database_service.adopt_kosync_document_if_unowned(content_hash, book.abs_id):
+            or not _database_service.adopt_kosync_document_if_unowned(
+                content_hash, book.abs_id, owner_user_id=user_id):
         # A device reports the same pair on every stats sync, so warn only the
         # first time this process sees the conflict.
         log = logger.debug if (content_hash, book.abs_id) in _reported_hash_conflicts else logger.warning
