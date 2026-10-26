@@ -4,7 +4,7 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
-## [Unreleased]
+## [7.11.0]
 
 A Job Queue page shows and reorders BookBridge's work, Storyteller-only libraries
 link both EPUB editions to one reading position, and read-alongs can skip forced

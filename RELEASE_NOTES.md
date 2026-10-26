@@ -1,4 +1,4 @@
-# Release Notes - Unreleased
+# Release Notes - 7.11.0
 
 **A Job Queue page shows what BookBridge is working on and lets you change the
 order, Storyteller-only libraries link both EPUB editions to one reading

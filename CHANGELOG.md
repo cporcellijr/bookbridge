@@ -4,7 +4,7 @@
 
 All notable changes to BookBridge will be documented in this file.
 
-## [Unreleased]
+## [7.11.0] - 2026-10-26
 
 ### Added
 

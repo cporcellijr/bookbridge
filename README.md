@@ -35,10 +35,11 @@
 - **Web UI**: Management dashboard for tracking syncs and matching books.
 - **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk. Optional scheduled scans and cron full refreshes keep suggestions current.
 - **Scripted Reader Setup**: Provision readers and their integrations through an optional [admin API](docs/configuration.md#admin-api-optional).
+- **Job Queue**: See which books are waiting, processing or recently finished, and move staged work up or down before it starts.
 - **Same-Folder Matching**: Treat sibling audiobook and ebook files in the same
   title folder as high-confidence matches.
 - **Guided Settings Workflow**: Check your service settings from the UI and save everything in one place.
-- **Bridge Sync Plugin Companion**: If you install the Bridge Sync KOReader plugin, it can manage bridge-provided books, sync reading stats, sync highlights/notes, share reading status and recently-read History between your devices, and use Grimmory shelves to shape KOReader collections.
+- **Bridge Sync Plugin Companion**: If you install the Bridge Sync KOReader plugin, it can manage bridge-provided books, sync reading stats, sync highlights/notes, share reading status and recently-read History between your devices, and use Grimmory shelves to shape KOReader collections. Install it from the dashboard or from a KOReader plugin store such as [Storefront](https://github.com/ultimatejimmy/storefront.koplugin).
 - **Split-Port Security**: Expose only the sync API to the internet while keeping the dashboard on your LAN.
 - **Self-Hosted**: Runs entirely in Docker on your own server.
 
