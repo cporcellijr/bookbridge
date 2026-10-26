@@ -150,10 +150,13 @@ class BookOrbitClient:
 
         self.session = requests.Session()
         # Pages such as Suggestions load many BookOrbit covers at once through this
-        # session. At urllib3's default of 10 each burst logs "Connection pool is
-        # full, discarding connection" and reopens sockets.
+        # session (65 at once was seen). Requests past the pool size wait for a free
+        # connection instead of opening an extra one that urllib3 then discards with
+        # a "Connection pool is full" warning. Every request here has a timeout and
+        # releases its connection, so a wait is always short.
         _adapter = requests.adapters.HTTPAdapter(
-            pool_connections=_SESSION_POOL_SIZE, pool_maxsize=_SESSION_POOL_SIZE
+            pool_connections=_SESSION_POOL_SIZE, pool_maxsize=_SESSION_POOL_SIZE,
+            pool_block=True,
         )
         self.session.mount("http://", _adapter)
         self.session.mount("https://", _adapter)

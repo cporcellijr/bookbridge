@@ -35,12 +35,46 @@ def client():
 
 
 def test_session_pool_holds_a_page_of_concurrent_cover_requests(client):
-    """A page of covers fetched at once must not overflow urllib3's default pool of 10,
-    which logged "Connection pool is full, discarding connection" for every extra one."""
+    """A page of covers fetched at once must not overflow the pool, which logged
+    "Connection pool is full, discarding connection" for every extra request."""
     for prefix in ("http://", "https://"):
         adapter = client.session.get_adapter(prefix)
         assert adapter._pool_maxsize > 10
         assert adapter._pool_connections > 10
+        assert adapter._pool_block is True
+
+
+def test_a_cover_burst_larger_than_the_pool_logs_no_pool_warning(client, caplog):
+    """65 covers requested at once still overflowed a 32-connection pool."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = b"cover"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/cover"
+    try:
+        with caplog.at_level("WARNING", logger="urllib3.connectionpool"):
+            threads = [threading.Thread(target=client.session.get, args=(url,), kwargs={"timeout": 10})
+                       for _ in range(65)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert not [r for r in caplog.records if "Connection pool is full" in r.getMessage()]
 
 
 def test_is_configured_requires_all_fields(client):
