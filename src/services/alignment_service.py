@@ -1685,8 +1685,10 @@ class AlignmentService:
 
         Two independent evidence paths, in preference order:
         1. Embedding similarity (Ollama) -- used whenever a configured client is
-           available. Unchanged from before issue #426's lexical fallback: same log
-           line, same threshold (OLLAMA_ALIGN_CONTENT_MIN_SIM).
+           available, threshold OLLAMA_ALIGN_CONTENT_MIN_SIM. A refusal is overruled
+           when the lexical check below finds the ebook's own text in the transcript
+           (issue #556: models other than nomic-embed-text score correct pairings
+           below the default threshold).
         2. Lexical n-gram overlap (`map_quality.transcript_text_overlap`) -- the
            non-LLM fallback used whenever the embedding path renders no verdict,
            covering both "no client configured" and "client configured but
@@ -1749,9 +1751,28 @@ class AlignmentService:
                             best_overall = cos
 
                 if best_overall < min_sim:
+                    model = (f"{getattr(self.ollama_client, 'provider', 'ollama')}/"
+                             f"{getattr(self.ollama_client, 'embed_model', '?')}")
+                    # Three unaligned passages per side measure topic, not text, on a scale
+                    # that depends on the embedding model (#556). Exact n-gram overlap across
+                    # the whole book is the stronger evidence, so it may overturn a refusal.
+                    min_overlap = self._env_float("CONTENT_MATCH_MIN_OVERLAP", 0.15)
+                    diagnostics = {}
+                    overlap = map_quality.transcript_text_overlap(transcript_text, content_text,
+                                                                  diagnostics=diagnostics)
+                    judged = diagnostics.get("sampled", 0) > 0
+                    if judged and overlap >= min_overlap:
+                        logger.info(
+                            f"✅ Content-match guard: embedding similarity {best_overall:.2f} < {min_sim:.2f} "
+                            f"({model}) overruled for {abs_id or '?'} — {overlap:.1%} of sampled ebook "
+                            f"n-grams found in the transcript (need {min_overlap:.1%})"
+                        )
+                        return True
+                    lexical = (f"lexical overlap {overlap:.1%}, need {min_overlap:.1%}" if judged
+                               else "lexical overlap could not judge")
                     reason = (
                         f"🚫 Content-match guard: audio/ebook content diverges for {abs_id or '?'} "
-                        f"(best passage similarity {best_overall:.2f} < {min_sim:.2f}) — "
+                        f"(best passage similarity {best_overall:.2f} < {min_sim:.2f}; {model}; {lexical}) — "
                         "possible edition, partial narration, language or transcription mismatch. "
                         "Refusing to store a misleading alignment. Completed transcript retained; "
                         "check the ebook/audio pairing and use Remap to re-align."

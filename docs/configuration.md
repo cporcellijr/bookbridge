@@ -589,7 +589,7 @@ What it can do — each is a separate toggle, and the defaults below only take e
 | Alignment fallback | `OLLAMA_ALIGN_FALLBACK` | `true` | Locates a position by meaning when fuzzy text matching fails. |
 | Ebook position rescue | `OLLAMA_EBOOK_TEXT_FALLBACK` | `true` | The same idea for KoSync/Storyteller ebook lookups. |
 | Anchor rescue | `OLLAMA_ALIGN_ANCHOR_RESCUE` | `true` | Builds a real audio↔text map when n-gram alignment fails. |
-| Content guard | `OLLAMA_ALIGN_CONTENT_GUARD` | `true` | Refuses to store an alignment when the audio and ebook are clearly different content (wrong edition, abridged, translation). |
+| Content guard | `OLLAMA_ALIGN_CONTENT_GUARD` | `true` | Refuses to store an alignment when the audio and ebook are clearly different content (wrong edition, abridged, translation). The similarity cutoff (`OLLAMA_ALIGN_CONTENT_MIN_SIM`, default `0.45`) was set for the default `nomic-embed-text`; other embedding models score on their own scale, so a score below it is overruled when the transcript contains the ebook's own text. |
 | Tracker match verify | `OLLAMA_TRACKER_MATCH` | `true` | Double-checks Hardcover/StoryGraph matches before writing. |
 | Library match rescue | `OLLAMA_LIBRARY_MATCH` | `true` | When a Grimmory/BookOrbit ebook won't match by name, shortlists the library and lets the model pick the right book. |
 

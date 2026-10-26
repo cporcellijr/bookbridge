@@ -305,22 +305,61 @@ def test_ollama_align_content_guard_false_disables_everything(service):
     assert service._get_alignment("master_off") is not None
 
 
-def test_embedding_path_used_when_ollama_available_lexical_not_consulted(service, monkeypatch):
-    """When Ollama IS available, the existing embedding-similarity behaviour
-    runs unchanged and the new lexical path is never consulted."""
+def test_embedding_pass_does_not_consult_the_lexical_guard(service, monkeypatch):
+    """When the embedding similarity clears the threshold it decides alone; the
+    lexical check only ever runs to second-guess a refusal."""
     service.ollama_client = _TopicOllama()
     spy = MagicMock(wraps=map_quality.transcript_text_overlap)
     monkeypatch.setattr(map_quality, "transcript_text_overlap", spy)
 
     segments = [{"start": 0.0, "end": 5.0, "text": "the ocean sea waves"}]
-    ebook_text = "mountain " * 100
+    ebook_text = "ocean " * 100
 
     with pytest.MonkeyPatch.context() as mp:
         _guard_env(mp)
         ok = service._verify_content_match(segments, ebook_text, abs_id="x")
 
-    assert ok is False  # unchanged embedding-guard behaviour: divergent topics blocked
+    assert ok is True
     spy.assert_not_called()
+
+
+class _LowScoringEmbeddings:
+    """An OpenAI text-embedding-3-small stand-in: every transcript passage scores
+    0.38 against every book passage -- inside the 0.33-0.45 band #556 reported
+    for correct pairings, below the 0.45 default."""
+
+    provider = "openai"
+    embed_model = "text-embedding-3-small"
+
+    def is_configured(self) -> bool:
+        return True
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        half = len(texts) // 2  # the guard embeds transcript samples, then book samples
+        return [[1.0, 0.0]] * half + [[0.38, (1 - 0.38 ** 2) ** 0.5]] * (len(texts) - half)
+
+
+def test_low_embedding_score_is_overruled_by_lexical_overlap(tmp_path, caplog):
+    """#556: a correct pairing whose embedding similarity lands below the
+    threshold is stored when the transcript contains the ebook's own text,
+    instead of being refused before alignment runs."""
+    db, service = _service_with(tmp_path, _LowScoringEmbeddings(), "embed_low")
+    try:
+        ebook_text = _sequential_words(600)
+        segments = [{"start": 0.0, "end": 300.0, "text": ebook_text}]
+
+        with pytest.MonkeyPatch.context() as mp:
+            _guard_env(mp, min_overlap="0.15")
+            mp.setenv("OLLAMA_ALIGN_CONTENT_MIN_SIM", "0.45")
+            with caplog.at_level("INFO", logger="src.services.alignment_service"):
+                result = service.align_and_store("embed_low_book", segments, ebook_text)
+
+        assert result is True
+        assert service._get_alignment("embed_low_book") is not None
+        assert ("Content-match guard: embedding similarity 0.38 < 0.45 "
+                "(openai/text-embedding-3-small) overruled for embed_low_book") in caplog.text
+    finally:
+        db.db_manager.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -389,9 +428,9 @@ def test_embed_failure_does_not_block_matching_content(tmp_path):
         db.db_manager.close()
 
 
-def test_working_embedding_path_never_consults_the_lexical_guard(tmp_path):
-    """When embeddings DO produce a verdict it stands alone -- the lexical
-    fallback must not run, so the embedding path stays byte-for-byte as it was."""
+def test_embedding_refusal_stands_when_lexical_overlap_also_fails(tmp_path):
+    """An embedding refusal is second-guessed by the lexical check (#556), but a
+    genuine mismatch shares no n-grams, so the refusal stands and says why."""
     db, service = _service_with(tmp_path, _TopicOllama(), "embed_ok")
     try:
         # The topic keyword must appear in EVERY sampled passage, so interleave it
@@ -411,11 +450,12 @@ def test_working_embedding_path_never_consults_the_lexical_guard(tmp_path):
         with pytest.MonkeyPatch.context() as mp:
             _guard_env(mp)
             mp.setattr(map_quality, "transcript_text_overlap", _spy)
-            with pytest.raises(ContentMatchRejected):
+            with pytest.raises(ContentMatchRejected) as rejected:
                 service.align_and_store("embed_ok_book", segments, ebook_text)
 
         # The embedding verdict (ocean vs mountain => cosine 0.0 < 0.45) refuses.
-        assert calls == [], "lexical guard must not run when embeddings decided"
+        assert len(calls) == 1
+        assert "best passage similarity 0.00 < 0.45; ollama/?; lexical overlap 0.0%" in str(rejected.value)
     finally:
         db.db_manager.close()
 

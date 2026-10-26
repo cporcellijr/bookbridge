@@ -2226,8 +2226,8 @@
                         <label>Content-Match Min Similarity (0-1)</label>
                         <input type="number" step="0.01" name="OLLAMA_ALIGN_CONTENT_MIN_SIM"
                             value="{{ get_val('OLLAMA_ALIGN_CONTENT_MIN_SIM') }}">
-                        <small>Below this best-passage similarity the map is rejected. Keep low to avoid false
-                            rejections.</small>
+                        <small>Below this best-passage similarity the map is rejected, unless the transcript
+                            contains the ebook's own text. Keep low to avoid false rejections.</small>
                     </div>
 
                     <div class="checkbox-wrapper full-width">

@@ -10,6 +10,10 @@ All notable changes to BookBridge will be documented in this file.
 
 - **Matching a BookOrbit or Grimmory audiobook now links Hardcover and StoryGraph automatically.** These matches skipped
   the tracker auto-match the other match paths run, so every tracker had to be linked by hand from the dashboard.
+- **The content-match guard no longer refuses correct pairings on OpenAI embeddings.** OpenAI's `text-embedding-3-small`
+  scores correct audio/ebook pairings below the default 0.45 similarity, so they were refused before alignment ran. A low
+  embedding score is now overruled when the transcript contains the ebook's own text, and refusals name the embedding
+  model that scored them (#556).
 
 ## [7.11.0] - 2026-10-26
 
