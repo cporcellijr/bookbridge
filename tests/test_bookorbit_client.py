@@ -34,6 +34,15 @@ def client():
         yield BookOrbitClient()
 
 
+def test_session_pool_holds_a_page_of_concurrent_cover_requests(client):
+    """A page of covers fetched at once must not overflow urllib3's default pool of 10,
+    which logged "Connection pool is full, discarding connection" for every extra one."""
+    for prefix in ("http://", "https://"):
+        adapter = client.session.get_adapter(prefix)
+        assert adapter._pool_maxsize > 10
+        assert adapter._pool_connections > 10
+
+
 def test_is_configured_requires_all_fields(client):
     assert client.is_configured() is True
     with patch.dict(os.environ, {"BOOKORBIT_ENABLED": "false"}):

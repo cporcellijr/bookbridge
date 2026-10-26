@@ -1746,6 +1746,13 @@ class TestCoverProxyUserIsolation(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data, b"bookorbit-cover")
 
+    def test_bookorbit_cover_is_cacheable_by_the_browser(self):
+        """Each visit to a page of covers re-fetched every one from BookOrbit."""
+        self._login("reg", "pw")
+        resp = self.client.get('/api/bookorbit/audiobook-cover/bo-audio-1')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.headers.get('Cache-Control'), 'private, max-age=300')
+
 
 class TestForgeActiveUserIsolation(unittest.TestCase):
     """T1-b: /api/forge/active must scope results per user."""

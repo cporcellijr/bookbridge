@@ -13546,7 +13546,10 @@ def proxy_bookorbit_audiobook_cover(book_id):
             return "Cover not found", 404
         from flask import Response
 
-        return Response(content, content_type=content_type or "image/jpeg")
+        response = Response(content, content_type=content_type or "image/jpeg")
+        # Without it, every visit to a page of covers fetched each one from BookOrbit again.
+        response.headers['Cache-Control'] = 'private, max-age=300'
+        return response
     except Exception as e:
         logger.error(f"❌ Error proxying BookOrbit cover for '{book_id}': {e}", exc_info=True)
         return "Error loading cover", 500
