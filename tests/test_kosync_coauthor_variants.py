@@ -26,9 +26,11 @@ def library(monkeypatch):
     monkeypatch.setattr(kosync_server, "_database_service", db)
     kosync_server._invalidate_filename_variant_index()
     kosync_server._epub_author_cache.clear()
+    kosync_server._epub_author_retry_at.clear()
     yield book
     kosync_server._invalidate_filename_variant_index()
     kosync_server._epub_author_cache.clear()
+    kosync_server._epub_author_retry_at.clear()
 
 
 def test_second_author_variant_matches():
@@ -91,3 +93,40 @@ def test_unreadable_epub_falls_back(library, monkeypatch):
         _md5("Arkady Strugatsky - Roadside Picnic.epub"), user_id=1,
     )
     assert book is library
+
+
+def test_failed_author_read_retries_after_window(library, monkeypatch):
+    """A failed author read should not be retried until the backoff window expires."""
+    container = MagicMock()
+    get_authors = MagicMock(side_effect=[OSError("unreadable"), list(AUTHORS)])
+    container.ebook_parser.return_value.get_book_authors = get_authors
+    monkeypatch.setattr(kosync_server, "_container", container)
+
+    # Control monotonic time for deterministic backoff
+    monotonic = [1000.0]
+    monkeypatch.setattr(kosync_server.time, "monotonic", lambda: monotonic[0])
+
+    # First read fails -> empty tuple, retry window set
+    assert kosync_server._epub_authors_for(LIBRARY_NAME) == ()
+    assert LIBRARY_NAME in kosync_server._epub_author_retry_at
+    # Cache must stay empty
+    assert LIBRARY_NAME not in kosync_server._epub_author_cache
+
+    # Index build inside window must not queue warming
+    warmed = []
+    monkeypatch.setattr(kosync_server, "_start_author_warm", lambda names: warmed.append(list(names)))
+    kosync_server._filename_variant_index(1)
+    assert warmed == []
+
+    # Advance past the 600s retry window and force rebuild
+    monotonic[0] = 1000.0 + 600 + 1
+    kosync_server._invalidate_filename_variant_index()
+    warmed.clear()
+    kosync_server._filename_variant_index(1)
+    assert warmed == [[LIBRARY_NAME]]
+
+    # Warming should now succeed and cache the authors
+    kosync_server._warm_epub_authors([LIBRARY_NAME])
+    assert kosync_server._epub_authors_for(LIBRARY_NAME) == tuple(AUTHORS)
+    # Retry entry cleared on success
+    assert LIBRARY_NAME not in kosync_server._epub_author_retry_at

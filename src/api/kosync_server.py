@@ -4003,7 +4003,8 @@ def _filename_variant_index(user_id) -> tuple[dict, dict]:
             # Authors come only from the cache: reading every library EPUB here
             # would hold up the device request that triggered the build.
             authors = _epub_author_cache.get(filename, ()) if filename else ()
-            if filename and filename not in _epub_author_cache and " - " in Path(filename).name:
+            if filename and filename not in _epub_author_cache and " - " in Path(filename).name \
+                    and time.monotonic() >= _epub_author_retry_at.get(filename, 0):
                 unread.append(filename)
             exact, reordered = _filename_variant_hashes(filename, authors)
             for variant in exact:
@@ -4079,6 +4080,8 @@ def _epub_identifiers_for(filename: str) -> set:
 
 
 _epub_author_cache: dict = {}
+_epub_author_retry_at: dict = {}
+_AUTHOR_RETRY_SECONDS = 600
 
 
 def _epub_authors_for(filename: str) -> tuple:
@@ -4090,7 +4093,11 @@ def _epub_authors_for(filename: str) -> tuple:
     except Exception as e:
         logger.debug(f"KOSync: author read failed for '{filename}': {e}")
         authors = ()
-    _epub_author_cache[filename] = authors
+    if authors:
+        _epub_author_cache[filename] = authors
+        _epub_author_retry_at.pop(filename, None)
+    else:
+        _epub_author_retry_at[filename] = time.monotonic() + _AUTHOR_RETRY_SECONDS
     return authors
 
 
