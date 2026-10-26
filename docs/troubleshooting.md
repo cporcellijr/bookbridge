@@ -49,7 +49,7 @@ the corrected alignment accounts for timestamp gaps between audio chapters.
 
 ### KOReader sends progress under the wrong book
 
-Install **BridgeSync 0.9.9** on each device. Close affected managed books, then run
+Install **BridgeSync 0.9.10** on each device. Close affected managed books, then run
 **Bridge Sync → Sync Reading Stats** to repair their saved book identities.
 Positions and highlights are retained; do not delete the books' metadata to repair
 the checksum. The plugin also uses KOReader's metadata handling when managed books

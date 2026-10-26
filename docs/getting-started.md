@@ -186,7 +186,8 @@ Open **My Account → Connect a KOReader device** for a two-step card:
    through localhost, replace that host with the server's LAN hostname or IP address (or its
    Tailscale address for a device that leaves the network) before copying. This alone gives
    you progress sync.
-2. **Install the Bridge Sync plugin** (download on the same card). The plugin delivers books
+2. **Install the Bridge Sync plugin** (download on the same card, or install **BridgeSync**
+   from a KOReader plugin store such as Storefront). The plugin delivers books
    from the bridge byte-for-byte — so KOReader progress auto-links with no manual matching —
    and adds reading-stats sync plus highlight and note sync. Unzip it into
    `koreader/plugins/`, restart KOReader, then open **Tools -> Bridge Sync** to set the same

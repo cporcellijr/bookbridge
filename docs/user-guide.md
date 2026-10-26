@@ -242,7 +242,7 @@ Plain KOReader/KOSync clients and older Bridge Sync versions continue syncing re
 
 ## Keeping Multiple KOReader Devices in Step
 
-Use **BridgeSync 0.9.9** on every device. When upgrading from an older plugin,
+Use **BridgeSync 0.9.10** on every device. When upgrading from an older plugin,
 close affected managed books and run **Bridge Sync → Sync Reading Stats** to repair
 their saved book identities. Positions and highlights are retained. This also
 updates reading status when there are no local status changes to upload.

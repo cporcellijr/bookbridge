@@ -44,6 +44,12 @@ match Local Files, series volumes and BookOrbit ebooks more reliably.
   keeps a history entry you can go back to. It counts that reading as listening.
   Contributed by [@rafjaf](https://github.com/rafjaf).
 
+- **Install BridgeSync from a KOReader plugin store (#547).** BridgeSync is
+  listed in [Storefront](https://github.com/ultimatejimmy/storefront.koplugin) and
+  similar stores, so a device can find and install it without a computer. The
+  store carries the stable release's plugin; once installed, BridgeSync still
+  offers its own updates from your BookBridge server.
+
 - **Groundwork for translations (#516).** The interface is ready to be translated,
   and readers will choose a language on their Account page once a translation
   ships. None is included yet. Contributed by
@@ -91,6 +97,9 @@ match Local Files, series volumes and BookOrbit ebooks more reliably.
   `api`**, and multi-user installs skip a round instead of falling back to the
   admin's integrations when a reader's books can't be read.
 - **The `latest` image no longer shows a permanent "update available" banner.**
+- **Older Calibre-Web Automated books stay current for BridgeSync,** and pages
+  of BookOrbit covers and Hardcover or StoryGraph matching no longer fill the
+  log with warnings.
 
 ## Upgrading
 

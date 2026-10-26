@@ -22,7 +22,9 @@ This plugin is **not required** for normal bridge syncing — it is an optional 
 
 ## Install
 
-Prebuilt plugin ZIPs are attached to each [GitHub Release](../../releases) (built automatically by CI). To install:
+BridgeSync is listed in KOReader plugin stores such as [Storefront](https://github.com/ultimatejimmy/storefront.koplugin): search for **BridgeSync** on the device and install it. It is published from each stable release to [cporcellijr/bridgesync.koplugin](https://github.com/cporcellijr/bridgesync.koplugin).
+
+Prebuilt plugin ZIPs are attached to each [GitHub Release](../../releases) (built automatically by CI). To install by hand:
 
 1. Download `bridgesync-<version>.zip` from the latest release.
 2. Extract the ZIP.

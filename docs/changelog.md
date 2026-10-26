@@ -22,6 +22,7 @@ alignment when their own timings check out.
   (#524)**, plus an **Also generate read-along EPUBs** box in the Suggestions queue.
 - **Optional reading checkpoints in ABS listening history (#530).**
 - **Groundwork for interface translations (#516)**; no translations ship yet.
+- **BridgeSync is listed in KOReader plugin stores (#547)** such as Storefront.
 
 ### Fixed
 
@@ -49,6 +50,8 @@ alignment when their own timings check out.
 - ABS instant sync connects to **`api.` hostnames**; multi-user rounds **fail
   closed** when reader lookups fail; the `latest` image no longer shows a
   permanent update banner.
+- Older **Calibre-Web Automated** books refresh for BridgeSync again; BookOrbit
+  cover pages and Hardcover/StoryGraph matching no longer flood the log.
 
 ### Operational Notes
 
