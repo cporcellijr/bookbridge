@@ -4,6 +4,13 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Matching a BookOrbit or Grimmory audiobook now links Hardcover and StoryGraph automatically.** These matches skipped
+  the tracker auto-match the other match paths run, so every tracker had to be linked by hand from the dashboard.
+
 ## [7.11.0] - 2026-10-26
 
 ### Added

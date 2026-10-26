@@ -513,6 +513,32 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.series_name, "The Reckoning")
         self.assertEqual(saved_book.series_sequence, 3.0)
 
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="1234567890abcdef1234567890abcdef")
+    def test_library_audio_match_queues_tracker_automatch(self, _mock_kosync):
+        """A BookOrbit/Grimmory audio match queues the Hardcover/StoryGraph/Goodreads
+        automatch like the ABS and ebook-only paths, instead of leaving every tracker
+        to be linked by hand from the dashboard."""
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = None
+        db.get_book_by_audio_source.return_value = None
+        db.save_book.side_effect = lambda book: book
+
+        with patch("src.web_server._enqueue_tracker_automatch") as enqueue:
+            response = self.client.post(
+                "/match",
+                data={
+                    "audio_source": "BookOrbit",
+                    "audio_source_id": "6336",
+                    "ebook_filename": "b.epub",
+                    "ebook_source": "BookOrbit",
+                    "ebook_source_id": "2171",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args[0][1].abs_id, "bookorbit:6336")
+
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server._download_storyteller_artifact",
            return_value=("storyteller_abcd-1234.epub", None))

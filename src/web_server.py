@@ -4651,6 +4651,7 @@ def _create_or_update_library_audio_mapping(
     if isinstance(saved_book.kosync_doc_id, str) and saved_book.kosync_doc_id.strip():
         database_service.dismiss_suggestion(saved_book.kosync_doc_id)
     _adopt_kosync_progress_for_book(saved_book.abs_id, saved_book.kosync_doc_id)
+    _enqueue_tracker_automatch(uc().sync_clients, saved_book)
 
     return saved_book, None, None
 
