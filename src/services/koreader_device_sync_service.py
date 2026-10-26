@@ -281,7 +281,7 @@ class KOReaderDeviceSyncService:
             # KOReader's statistics, reading statuses and highlights name a book by
             # its content hash in either hash method, so link that one too.
             if content_hash != kosync_hash:
-                self._link_sibling_hash(abs_id, content_hash)
+                self._link_sibling_hash(abs_id, content_hash, adopt_only=True)
 
         if stored_hash and kosync_hash and stored_hash != kosync_hash:
             # The primary hash may deliberately identify a different EPUB build, such
@@ -317,13 +317,17 @@ class KOReaderDeviceSyncService:
         filename = device_filename or self._resolve_manifest_filename(book)
         return str(self.ebook_parser.get_kosync_id(Path(filename)) or "").strip() or None
 
-    def _link_sibling_hash(self, abs_id: str, doc_hash: str) -> bool:
+    def _link_sibling_hash(self, abs_id: str, doc_hash: str, adopt_only: bool = False) -> bool:
         """Ensure ``doc_hash`` exists as a KosyncDocument linked to ``abs_id`` (best effort).
 
         Returns True when a row was created or its link changed, so callers can
-        report how much drift a reconcile pass actually repaired.
+        report how much drift a reconcile pass actually repaired. ``adopt_only``
+        never takes a hash another book owns: in filename mode every book served
+        from the same file shares one content hash.
         """
         try:
+            if adopt_only:
+                return bool(self.database_service.adopt_kosync_document_if_unowned(doc_hash, abs_id))
             return bool(self.database_service.ensure_linked_kosync_document(doc_hash, abs_id))
         except Exception as e:
             logger.debug(
@@ -399,7 +403,7 @@ class KOReaderDeviceSyncService:
                     continue
                 claimed_by[bound_hash] = abs_id
 
-                if self._link_sibling_hash(abs_id, bound_hash):
+                if self._link_sibling_hash(abs_id, bound_hash, adopt_only=bound_hash != doc_hash):
                     summary["linked"] += 1
                     logger.info("🔗 Hash reconcile: bound new hash %s to '%s'",
                                 sanitize_log_data(bound_hash), label)

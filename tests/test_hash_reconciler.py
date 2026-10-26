@@ -139,12 +139,16 @@ class TestReconcileHashes(unittest.TestCase):
             "b": {"path": Path("shared"), "content_hash": "shared-hash", "kosync_hash": "name-b"},
         }
         self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False, device_filename=None: results[book.abs_id]
-        self.service.database_service.ensure_linked_kosync_document.return_value = True
+        db = self.service.database_service
+        db.ensure_linked_kosync_document.return_value = True
+        db.adopt_kosync_document_if_unowned.return_value = True
 
         summary = self.service.reconcile_hashes()
 
-        linked = [c.args for c in self.service.database_service.ensure_linked_kosync_document.call_args_list]
-        self.assertEqual(linked, [("name-a", "a"), ("shared-hash", "a"), ("name-b", "b")])
+        linked = [c.args for c in db.ensure_linked_kosync_document.call_args_list]
+        self.assertEqual(linked, [("name-a", "a"), ("name-b", "b")])
+        adopted = [c.args for c in db.adopt_kosync_document_if_unowned.call_args_list]
+        self.assertEqual(adopted, [("shared-hash", "a")])
         self.assertEqual(summary["conflicts"], 1)
         self.assertEqual(summary["linked"], 3)
 

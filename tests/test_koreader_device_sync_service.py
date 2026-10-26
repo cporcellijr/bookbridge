@@ -794,6 +794,24 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
 
         self.assertEqual(self.db.get_kosync_document("content-kavita_187").linked_abs_id, "abs-1")
 
+    def test_filename_mode_shared_content_hash_keeps_its_owner_across_reconcile_and_manifest(self):
+        """Two books served from one file share its content hash. Reconcile gives it
+        to the first book; building the manifest must not move it to the second."""
+        self._use_filename_hashing()
+        self._write_book_file("shared.epub")
+        for abs_id, title in (("abs-a", "Book A"), ("abs-b", "Book B")):
+            self.db.save_book(Book(abs_id=abs_id, abs_title=title,
+                                   original_ebook_filename="shared.epub", status="active"))
+
+        owners = []
+        for _ in range(2):
+            self.service.reconcile_hashes()
+            owners.append(self.db.get_kosync_document("content-shared").linked_abs_id)
+            self.service.build_manifest()
+            owners.append(self.db.get_kosync_document("content-shared").linked_abs_id)
+
+        self.assertEqual(len(set(owners)), 1, owners)
+
     def test_filename_mode_reconcile_binds_the_filename_hash(self):
         self._use_filename_hashing()
         self._write_book_file("kavita_187.epub")
