@@ -499,6 +499,25 @@ function APIClient:uploadBookStatus(payload)
     return true, scrubJsonNulls(result)
 end
 
+function APIClient:uploadHashPairs(payload)
+    markEmptyArray(payload and payload.pairs)
+    local body = json.encode(payload)
+    local ok, code, resp_body = self:_requestJSON("POST", "/koreader/device-sync/hashes", body, {
+        block_timeout = 20,
+        total_timeout = 60,
+        attempts = 2,
+    })
+    if not ok then
+        return false, resp_body or ("HTTP " .. tostring(code))
+    end
+    local parsed, result = pcall(json.decode, resp_body or "{}")
+    if not parsed or type(result) ~= "table" then
+        logger.warn("Bridge Sync API: Invalid hash pair upload JSON")
+        return false, "Invalid hash pair upload response"
+    end
+    return true, scrubJsonNulls(result)
+end
+
 function APIClient:getMergedBookStatus()
     local ok, code, body = self:_request("GET", "/koreader/device-sync/status/merged", nil, nil, {
         block_timeout = 30,

@@ -502,3 +502,42 @@ def test_without_only_if_absent_the_write_still_wins(database):
         "g4", status="complete", device_key="bridge", user_id=0)
     assert written == 1
     assert _winner(database, _hex("explicit"))["status"] == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Copies of one book
+# ---------------------------------------------------------------------------
+
+def _book_with_copies(database, abs_id, *md5s):
+    from src.db.models import Book
+    database.save_book(Book(abs_id=abs_id, abs_title=abs_id, status="active"))
+    for md5 in md5s:
+        database.ensure_linked_kosync_document(md5, abs_id)
+
+
+def test_a_copy_keeps_its_own_status(database):
+    """A sibling's newer status never overrules a decision made on this copy."""
+    own, managed = _hex("own-copy"), _hex("managed-copy")
+    _book_with_copies(database, "copies", own, managed)
+    _upload(database, "kobo", [{"md5": own, "status": "reading", "modified": "2026-10-20"}])
+    _upload(database, "kobo", [{"md5": managed, "status": "complete", "modified": "2026-10-24"}])
+
+    assert _winner(database, own)["status"] == "reading"
+    assert _winner(database, managed)["status"] == "complete"
+
+
+def test_linked_copy_without_a_status_gets_the_books_status(database):
+    reported, silent = _hex("reported-copy"), _hex("silent-copy")
+    _book_with_copies(database, "silent", reported, silent)
+    _upload(database, "kobo", [{"md5": reported, "status": "abandoned", "modified": "2026-10-22"}])
+
+    assert _winner(database, silent)["status"] == "abandoned"
+
+
+def test_unlinked_md5s_are_unchanged(database):
+    first, second = _hex("loose-one"), _hex("loose-two")
+    _upload(database, "kobo", [{"md5": first, "status": "reading", "modified": "2026-10-20"}])
+    _upload(database, "kobo", [{"md5": second, "status": "complete", "modified": "2026-10-24"}])
+
+    assert _winner(database, first)["status"] == "reading"
+    assert _winner(database, second)["status"] == "complete"

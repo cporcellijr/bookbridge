@@ -4453,6 +4453,11 @@ class DatabaseService:
         Returns ``[{md5, status, modified, source_device_key}]``. A device applies
         any entry whose status differs from its own sidecar; entries it already
         agrees with are a no-op there, so no per-device filtering happens here.
+
+        A hash linked to a book but with no status of its own (a copy the reader has
+        not opened yet) gets the book's winner. A copy that has its own status keeps
+        it: a status inferred from position must only fill a gap, never overrule a
+        decision made on another copy.
         """
         uid = self._resolve_uid(user_id)
         md5s = {str(m).strip() for m in (md5s or set()) if str(m).strip()}
@@ -4460,7 +4465,9 @@ class DatabaseService:
 
         # Select columns rather than ORM instances: the ranking below happens after
         # the session closes, and a detached instance would raise on attribute
-        # access the moment it needed a refresh.
+        # access the moment it needed a refresh. The md5 filter is applied to the
+        # result, not the query, because a requested copy can take its status from
+        # a sibling copy's row.
         with self.get_session() as session:
             query = session.query(
                 KOReaderBookStatus.md5,
@@ -4470,26 +4477,62 @@ class DatabaseService:
                 KOReaderBookStatus.received_at,
             )
             query = self._scope_koreader_user(query, KOReaderBookStatus, uid)
-            if md5s:
-                query = query.filter(KOReaderBookStatus.md5.in_(md5s))
             rows = query.all()
 
-        best: dict[str, tuple] = {}
-        for row in rows:
-            current = best.get(row.md5)
-            if current is None or self._koreader_status_sort_key(row) > self._koreader_status_sort_key(current):
-                best[row.md5] = row
+            best: dict[str, tuple] = {}
+            for row in rows:
+                current = best.get(row.md5)
+                if current is None or self._koreader_status_sort_key(row) > self._koreader_status_sort_key(current):
+                    best[row.md5] = row
 
-        winners = sorted(best.values(), key=lambda r: r.md5)[:limit]
+            hashes_by_book = self._linked_hashes_by_book(session, set(best))
+
+        for hashes in hashes_by_book.values():
+            book_best = max(
+                (best[h] for h in hashes if h in best), key=self._koreader_status_sort_key, default=None,
+            )
+            if book_best is not None:
+                for h in hashes:
+                    best.setdefault(h, book_best)
+
+        winners = sorted(
+            ((md5, row) for md5, row in best.items() if not md5s or md5 in md5s),
+            key=lambda item: item[0],
+        )[:limit]
         return [
             {
-                "md5": row.md5,
+                "md5": md5,
                 "status": row.status,
                 "modified": row.modified or "",
                 "source_device_key": row.device_key,
             }
-            for row in winners
+            for md5, row in winners
         ]
+
+    @staticmethod
+    def _linked_hashes_by_book(session, md5s: set[str]) -> dict[str, set[str]]:
+        """``{abs_id: every hash linked to it}`` for the books any of ``md5s`` belongs to."""
+        if not md5s:
+            return {}
+        abs_ids = {
+            abs_id for (abs_id,) in session.query(KosyncDocument.linked_abs_id).filter(
+                KosyncDocument.document_hash.in_(md5s), KosyncDocument.linked_abs_id.isnot(None),
+            )
+        } | {
+            abs_id for (abs_id,) in session.query(Book.abs_id).filter(Book.kosync_doc_id.in_(md5s))
+        }
+        if not abs_ids:
+            return {}
+        hashes_by_book: dict[str, set[str]] = defaultdict(set)
+        for doc_hash, abs_id in session.query(KosyncDocument.document_hash, KosyncDocument.linked_abs_id).filter(
+            KosyncDocument.linked_abs_id.in_(abs_ids)
+        ):
+            hashes_by_book[abs_id].add(doc_hash)
+        for kosync_doc_id, abs_id in session.query(Book.kosync_doc_id, Book.abs_id).filter(
+            Book.abs_id.in_(abs_ids), Book.kosync_doc_id.isnot(None)
+        ):
+            hashes_by_book[abs_id].add(kosync_doc_id)
+        return dict(hashes_by_book)
 
     # ------------------------------------------------------------------
     # KOReader annotation hub (highlights/notes sync between devices + web)

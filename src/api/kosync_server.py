@@ -124,6 +124,8 @@ _KOREADER_STATS_MAX_PAGE_STATS = 10000
 _KOREADER_STATS_MERGE_LIMIT = 10000
 _KOREADER_STATUS_MAX_BOOKS = 5000
 _KOREADER_STATUS_MERGE_LIMIT = 5000
+_DEVICE_HASH_PAIRS_MAX = 2000
+_reported_hash_conflicts: set = set()
 # KOReader's own vocabulary for sidecar summary.status. An unknown value is
 # rejected rather than stored: these strings are written straight back into a
 # device's sidecar, and a typo there is a status the reader can never clear.
@@ -2596,6 +2598,85 @@ def koreader_merged_book_status():
     return jsonify({"enabled": True, "books": winners}), 200
 
 
+def _link_device_hash_pair(content_hash, filename_hash, user_id) -> str:
+    """Link a reader's own copy's content hash to the book its filename hash names.
+
+    In filename mode KOSync identifies a copy by its filename hash, but KOReader's
+    statistics, statuses and highlights use its content hash, and a copy added
+    outside Bridge Sync has bytes the bridge never served. Returns the counter
+    this pair falls under: linked, unchanged, unresolved, conflicts or invalid.
+    """
+    if not (isinstance(content_hash, str) and isinstance(filename_hash, str)
+            and _is_valid_hex_hash(content_hash) and _is_valid_hex_hash(filename_hash)):
+        return "invalid"
+    content_hash, filename_hash = content_hash.lower(), filename_hash.lower()
+
+    doc = _database_service.get_kosync_document(filename_hash)
+    book = None
+    if doc and doc.linked_abs_id:
+        book = _database_service.get_book(doc.linked_abs_id)
+    if not book:
+        book = _database_service.get_book_by_kosync_id(filename_hash)
+    if not book:
+        book = _resolve_book_by_sibling_hash(filename_hash, doc, user_id=user_id, filename_variants=True)
+    if not book or not _kosync_user_may_access_book(book):
+        return "unresolved"
+
+    current = _database_service.get_kosync_document(content_hash)
+    if current and current.linked_abs_id == book.abs_id:
+        return "unchanged"
+    owner = _database_service.get_book_by_kosync_id(content_hash)
+    foreign_user = current is not None and current.user_id not in (None, user_id)
+    # The same bytes already belong to another book, or are another user's
+    # unlinked document; relinking would move them on every sync. The adopt
+    # write repeats the book checks atomically and never relinks a linked row.
+    if (current and current.linked_abs_id) or (owner and owner.abs_id != book.abs_id) or foreign_user \
+            or not _database_service.adopt_kosync_document_if_unowned(content_hash, book.abs_id):
+        # A device reports the same pair on every stats sync, so warn only the
+        # first time this process sees the conflict.
+        log = logger.debug if (content_hash, book.abs_id) in _reported_hash_conflicts else logger.warning
+        _reported_hash_conflicts.add((content_hash, book.abs_id))
+        log(
+            "⚠️ Device copy: content hash %s belongs to another book or user, not linking it to '%s'",
+            content_hash, book.abs_id,
+        )
+        return "conflicts"
+
+    logger.info(f"🔗 Device copy: linked content hash {content_hash} to '{book.abs_title}'")
+    return "linked"
+
+
+@kosync_sync_bp.route('/device-sync/hashes', methods=['POST'])
+@kosync_sync_bp.route('/koreader/device-sync/hashes', methods=['POST'])
+@kosync_auth_required
+def koreader_link_device_hashes():
+    """Link the content hashes of a reader's own copies to their books."""
+    data = request.json
+    if not data or not isinstance(data, dict):
+        return jsonify({"error": "Expected JSON object"}), 400
+    pairs = data.get("pairs")
+    if not isinstance(pairs, list):
+        return jsonify({"error": "Expected 'pairs' array"}), 400
+    if len(pairs) > _DEVICE_HASH_PAIRS_MAX:
+        return jsonify({"error": f"Too many pairs (max {_DEVICE_HASH_PAIRS_MAX})"}), 413
+    if not _database_service:
+        return jsonify({"error": "Database service unavailable"}), 503
+
+    user_id = getattr(g, "kosync_user_id", None)
+    counts = {"linked": 0, "unchanged": 0, "unresolved": 0, "conflicts": 0, "invalid": 0}
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            counts["invalid"] += 1
+            continue
+        try:
+            outcome = _link_device_hash_pair(pair.get("content_hash"), pair.get("filename_hash"), user_id)
+        except Exception as e:
+            logger.warning("Device copy: linking a hash pair failed: %s", e, exc_info=True)
+            outcome = "unresolved"
+        counts[outcome] += 1
+    return jsonify(counts), 200
+
+
 def _annotation_sync_enabled() -> bool:
     return os.environ.get("KOREADER_ANNOTATION_SYNC", "true").strip().lower() in ("true", "1", "yes", "on")
 
@@ -3848,13 +3929,17 @@ def _resolve_book_by_cwa_checksum(doc_id: str):
 _FILENAME_VARIANT_EXTENSIONS = (".kepub.epub", ".epub", ".pdf", ".mobi", ".azw3", ".cbz", ".fb2")
 
 
-def _filename_variant_hashes(filename) -> tuple[set, set]:
+def _filename_variant_hashes(filename, authors: tuple = ()) -> tuple[set, set]:
     """Return ``(exact, reordered)`` KOReader filename-mode hashes for a library filename.
 
     Calibre names the library file "Title - Author" but sends the device copy as
     "Author - Title", so the device hashes a reordering of the same " - " parts.
     Both Unicode forms are hashed because KOReader hashes the basename bytes as
     the device stores them, while the bridge's own filename hash does not normalize.
+
+    The library name carries only the first author, while an OPDS download can be
+    named after another one (KOReader keeps the last <author> of an Atom entry) or
+    after all of them, so ``authors`` adds those names for the same title.
     """
     if not isinstance(filename, str) or not filename.strip():
         return set(), set()
@@ -3865,7 +3950,15 @@ def _filename_variant_hashes(filename) -> tuple[set, set]:
         return set(), set()
     stem, ext = name[:-ext_length], name[-ext_length:]
     parts = stem.split(" - ")
-    reordered = {" - ".join(parts[i:] + parts[:i]) for i in range(1, len(parts))} - {stem}
+    reordered = {" - ".join(parts[i:] + parts[:i]) for i in range(1, len(parts))}
+    for author in authors:
+        suffix = f" - {author}"
+        if stem.endswith(suffix) and len(stem) > len(suffix):
+            title = stem[:-len(suffix)]
+            reordered |= {f"{name} - {title}" for name in authors}
+            reordered.add(f"{', '.join(authors)} - {title}")
+            break
+    reordered -= {stem}
 
     def _hashes(stems):
         return {
@@ -3903,9 +3996,15 @@ def _filename_variant_index(user_id) -> tuple[dict, dict]:
         return cached
     exact_map: dict = {}
     reordered_map: dict = {}
+    unread: list = []
     for book in _database_service.get_books_by_status("active", user_id=user_id) or []:
         for filename in (getattr(book, "original_ebook_filename", None), getattr(book, "ebook_filename", None)):
-            exact, reordered = _filename_variant_hashes(filename)
+            # Authors come only from the cache: reading every library EPUB here
+            # would hold up the device request that triggered the build.
+            authors = _epub_author_cache.get(filename, ()) if filename else ()
+            if filename and filename not in _epub_author_cache and " - " in Path(filename).name:
+                unread.append(filename)
+            exact, reordered = _filename_variant_hashes(filename, authors)
             for variant in exact:
                 exact_map.setdefault(variant, {}).setdefault(book.abs_id, filename)
             for variant in reordered - exact:
@@ -3914,6 +4013,8 @@ def _filename_variant_index(user_id) -> tuple[dict, dict]:
     with _variant_index_lock:
         if generation == _variant_index_generation:
             _variant_index[user_id] = built
+    if unread:
+        _start_author_warm(unread)
     return built
 
 
@@ -3974,6 +4075,50 @@ def _epub_identifiers_for(filename: str) -> set:
         ids = set()
     _epub_identifier_cache[filename] = ids
     return ids
+
+
+_epub_author_cache: dict = {}
+
+
+def _epub_authors_for(filename: str) -> tuple:
+    """Cached read of an ebook's dc:creator names (keyed by filename); () if unreadable."""
+    if filename in _epub_author_cache:
+        return _epub_author_cache[filename]
+    try:
+        authors = tuple(_container.ebook_parser().get_book_authors(filename))
+    except Exception as e:
+        logger.debug(f"KOSync: author read failed for '{filename}': {e}")
+        authors = ()
+    _epub_author_cache[filename] = authors
+    return authors
+
+
+_author_warm_lock = threading.Lock()
+_author_warm_running = False
+
+
+def _start_author_warm(filenames) -> None:
+    """Read these files' authors in the background; one warm runs at a time."""
+    global _author_warm_running
+    with _author_warm_lock:
+        if _author_warm_running:
+            return
+        _author_warm_running = True
+    threading.Thread(
+        target=_warm_epub_authors, args=(list(filenames),), name="epub-author-warm", daemon=True,
+    ).start()
+
+
+def _warm_epub_authors(filenames) -> None:
+    """Cache each file's authors, then rebuild the variant index so it uses them."""
+    global _author_warm_running
+    try:
+        for filename in filenames:
+            _epub_authors_for(filename)
+    finally:
+        with _author_warm_lock:
+            _author_warm_running = False
+        _invalidate_filename_variant_index()
 
 
 def _resolve_book_by_epub_identifier(epub_filename: str, doc_id: str = None):
