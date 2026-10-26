@@ -95,6 +95,21 @@ class TestCWAClient(unittest.TestCase):
         mock_get.return_value.text = feed
 
     @patch('requests.Session.get')
+    def test_get_book_by_id_resolves_a_stored_title_slug_to_its_download(self, mock_get):
+        # Matches made before the #427 parser fix stored the title slug. Refreshing
+        # such a book logged "CWA Download failed: 404 ... /opds/download/Alchemised/epub/"
+        # every TTL window because CWA has no download route for a slug.
+        self._mock_search(mock_get, self._SERIES_FEED)
+        target = self.client.get_book_by_id('Dungeon_Crawler_Carl')
+        self.assertEqual(target['id'], '505')
+        self.assertEqual(target['download_url'], 'http://cwa:8083/opds/download/505/epub/')
+
+    @patch('requests.Session.get')
+    def test_get_book_by_id_returns_none_for_an_unmatched_title_slug(self, mock_get):
+        self._mock_search(mock_get, self._SERIES_FEED)
+        self.assertIsNone(self.client.get_book_by_id('Some_Other_Book'))
+
+    @patch('requests.Session.get')
     def test_get_book_uuid_selects_matching_series_entry(self, mock_get):
         # Stored id is the title-derived slug; must resolve to Dungeon Crawler
         # Carl's UUID, not the first (The Butcher's Masquerade) entry.

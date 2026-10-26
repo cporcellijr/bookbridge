@@ -396,6 +396,11 @@ class CWAClient:
         if not self.is_configured(): return None
         if str(cwa_id or "").strip().lower() in {"", "none"}:
             return None
+        key = str(cwa_id).strip()
+        if not key.isdigit():
+            # Matches made before the #427 parser fix stored a title slug, and CWA
+            # has no download route for one: find the entry the slug names instead.
+            return self._find_entry_by_title_slug(key)
         # 1. Try standard OPDS lookup
         endpoints = [f"/opds/book/{cwa_id}", f"/opds/books/{cwa_id}"]
         
@@ -438,6 +443,32 @@ class CWAClient:
             "ext": "epub",
             "source": "CWA_Fallback"
         }
+
+    def _find_entry_by_title_slug(self, slug: str) -> dict | None:
+        """Return the search entry whose title slug equals ``slug`` and has a numeric id.
+
+        Uses the selection rule of ``_select_uuid_for_term``: only an unambiguous,
+        case-insensitive slug equality is accepted, never a lone or prefix match (#427).
+        """
+        slug_cf = slug.casefold()
+        matches = [
+            entry for entry in self.search_ebooks(slug)
+            if str(entry.get("id") or "").isdigit()
+            and re.sub(r'[^a-zA-Z0-9]', '_', entry.get("title") or "")[:30].casefold() == slug_cf
+        ]
+        condition = f"cwa_slug_unresolved:{slug}"
+        if len(matches) == 1:
+            get_persistent_condition_logger().resolve(
+                logger, condition, f"✅ CWA: Found the book stored as '{slug}' after prior failures",
+            )
+            return matches[0]
+        get_persistent_condition_logger().warn(
+            logger,
+            condition,
+            f"⚠️ CWA: Could not find a single book matching the stored id '{slug}' "
+            f"({len(matches)} candidates); re-match the book to repair it",
+        )
+        return None
 
     def download_ebook(self, download_url, output_path):
         """Download ebook file from URL to output_path."""
