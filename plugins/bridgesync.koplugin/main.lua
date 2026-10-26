@@ -61,6 +61,8 @@ local SESSION_MAX_BOOK_NOT_FOUND_ATTEMPTS = 5
 local SETTINGS_VERSION = 1
 local DEVICE_LOG_UPLOAD_MAX_BYTES = 24 * 1024
 local DEVICE_LOG_MAX_BYTES = 512 * 1024
+-- KOReader's progress sync stores its checksum method as 0 (binary) or 1 (filename).
+local KOSYNC_CHECKSUM_FILENAME = 1
 
 -- Forked children still alive, keyed by pid. Suspend has to be able to kill
 -- work started by any plugin instance, not just the one handling the event.
@@ -2156,6 +2158,27 @@ function BridgeSync:_resolveAbsId(file_path)
     return nil
 end
 
+-- With KOReader's progress sync set to filename checksums, the bridge links
+-- the hash of the file name to the book, not the content hash, so a session
+-- for a book added outside Bridge Sync must carry the same hash to be found.
+function BridgeSync:_sessionDocumentHash(file_path)
+    local ok, kosync = pcall(function()
+        local settings = LuaSettings:open(DataStorage:getSettingsDir() .. "/kosync.lua"):readSetting("settings")
+        -- KOReader kept these in the reader settings until its 20260623 migration (koreader#15591).
+        if type(settings) ~= "table" and G_reader_settings then
+            settings = G_reader_settings:readSetting("kosync")
+        end
+        return settings
+    end)
+    if ok and type(kosync) == "table" and kosync.checksum_method == KOSYNC_CHECKSUM_FILENAME then
+        local file_name = file_path:match("([^/]*)$")
+        if file_name and file_name ~= "" then
+            return md5(file_name)
+        end
+    end
+    return self:_calculateBookHash(file_path)
+end
+
 function BridgeSync:startSession()
     if not self.is_enabled or not self.session_tracking_enabled then
         return
@@ -2173,7 +2196,7 @@ function BridgeSync:startSession()
     local abs_id = self:_resolveAbsId(file_path)
     local doc_hash = nil
     if not abs_id then
-        doc_hash = self:_calculateBookHash(file_path)
+        doc_hash = self:_sessionDocumentHash(file_path)
     end
     local start_progress, start_page = self:_getCurrentProgress()
 

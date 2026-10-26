@@ -702,6 +702,63 @@ assert(bridge.session_upload_attempts["still-queued"] == 2,
 assert(bridge.session_upload_attempts["gone"] == nil,
     "pruning kept the counter for a session that is no longer queued")
 
+-- A book the reader added outside Bridge Sync is identified by hash. With
+-- KOReader's progress sync on filename checksums, the bridge links that
+-- filename hash to the book, so a session carrying the content hash instead
+-- was rejected as book_not_found and its reading time lost.
+do
+    local LuaSettings = require("luasettings")
+    local original_open = LuaSettings.open
+    local kosync_settings
+    LuaSettings.open = function(self, path)
+        if path == settings_dir .. "/kosync.lua" then
+            return { readSetting = function(_, key)
+                if key == "settings" then return kosync_settings end
+            end }
+        end
+        return original_open(self, path)
+    end
+
+    local managed = {}
+    local reader = BridgeSync:new{
+        is_enabled = true,
+        session_tracking_enabled = true,
+        ui = { document = { file = "/storage/emulated/0/Documents/David Scott Hay - The Butcher of Nazareth.epub", info = {} } },
+        _resolveAbsId = function(_, path) return managed[path] end,
+        _calculateBookHash = function() return "content-hash" end,
+        logInfo = function() end,
+    }
+    local function session_hash()
+        reader:startSession()
+        return reader.current_session.document_hash
+    end
+
+    kosync_settings = { checksum_method = 1 }
+    assert(session_hash() == "David Scott Hay - The Butcher of Nazareth.epub",
+        "with filename checksums a session must carry the hash of the file name")
+    kosync_settings = { checksum_method = 0 }
+    assert(session_hash() == "content-hash",
+        "with binary checksums a session must keep the content hash")
+    kosync_settings = nil
+    assert(session_hash() == "content-hash",
+        "without KOReader sync settings a session must keep the content hash")
+
+    -- KOReader kept these settings in the reader settings until its 20260623 migration.
+    G_reader_settings = { readSetting = function(_, key)
+        if key == "kosync" then return { checksum_method = 1 } end
+    end }
+    assert(session_hash() == "David Scott Hay - The Butcher of Nazareth.epub",
+        "an older KOReader's filename checksum setting must be honored too")
+    G_reader_settings = nil
+
+    kosync_settings = { checksum_method = 1 }
+    managed[reader.ui.document.file] = "abs-1"
+    assert(session_hash() == nil and reader.current_session.abs_id == "abs-1",
+        "a managed download is identified by its abs_id, not a hash")
+
+    LuaSettings.open = original_open
+end
+
 -- Drive the real manifest sweep: failed publication must keep the old file,
 -- its progress sidecar and its tracked entry, and leave the revision retryable.
 local function file_bytes(path)
