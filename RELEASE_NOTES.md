@@ -73,12 +73,15 @@ match Local Files, series volumes and BookOrbit ebooks more reliably.
   using Calibre's live metadata, hidden and trash folders are ignored, and BookOrbit
   is offered as the ebook source whatever the file is named. Contributed by
   [@chemicalsno](https://github.com/chemicalsno).
-- **Stats count correctly (#548, #550).** The heatmap shows the last 12 months and,
-  from the yearly recap, earlier years, with each day on its own date. The yearly
-  recap counts the audiobooks you finished that year, once per book. Contributed
-  by [@chemicalsno](https://github.com/chemicalsno).
-- **BridgeSync downloads managed books with filename hashing (#554).**
-  Contributed by [@chemicalsno](https://github.com/chemicalsno).
+- **Stats count correctly (#548, #550, #555).** The heatmap shows the last 12 months
+  and, from the yearly recap, earlier years, with each day on its own date. The
+  yearly recap counts the audiobooks you finished that year, once per book, and a
+  book's detail lists its listening sessions. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno).
+- **Filename hashing works for every book (#554, #557, #558, #559).** BridgeSync
+  downloads managed books, reading sessions reach the right book, and copies you
+  added yourself link to their book, so their statistics, statuses and highlights
+  arrive too. Contributed by [@chemicalsno](https://github.com/chemicalsno).
 - **KOReader reading time is kept after a book's match is removed**, and books
   whose saved filename includes their library folder sync again.
 - **A Kobo finish synced through Grimmory finishes the book everywhere (#537),**
@@ -98,8 +101,8 @@ docker compose pull && docker compose up -d
 ```
 
 Database migrations apply automatically on startup. If you build your own image,
-rebuild it: this release adds a Python dependency. BridgeSync is unchanged, so
-KOReader devices don't need a plugin update.
+rebuild it: this release adds a Python dependency. KOReader devices are offered
+BridgeSync 0.9.10; install it for the filename hashing fixes.
 
 ## Operational Notes
 

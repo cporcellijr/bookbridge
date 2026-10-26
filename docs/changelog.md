@@ -37,10 +37,13 @@ alignment when their own timings check out.
 - **Suggestions**: Local Files auto-match by hash (#507), series volumes and
   editions are told apart (#541), hidden folders are ignored (#539), and BookOrbit
   ebooks pair by their metadata title (#549).
-- **Stats**: a rolling 12-month heatmap with earlier years (#548) and correct
-  yearly finished-audiobook counts (#550).
-- **BridgeSync downloads managed books with filename hashing (#554)**; reading
-  time is kept after a match is removed; stored names with a folder resolve again.
+- **Stats**: a rolling 12-month heatmap with earlier years (#548), correct
+  yearly finished-audiobook counts (#550), and listening sessions in a book's
+  detail (#555).
+- **Filename hashing works for every book (#554, #557, #558, #559)** with
+  **BridgeSync 0.9.10**: managed downloads, reading sessions, and copies you
+  added yourself all reach the right book. Reading time is kept after a match is
+  removed; stored names with a folder resolve again.
 - **Kobo finishes through Grimmory (#537)** and **Grimmory highlights across inline
   formatting (#535)** sync correctly; Storyteller-only books keep their title (#519).
 - ABS instant sync connects to **`api.` hostnames**; multi-user rounds **fail
