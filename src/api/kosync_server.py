@@ -1324,18 +1324,27 @@ def _kosync_user_may_access_book(book) -> bool:
     return bool(_database_service.is_user_linked(user_id, book.abs_id))
 
 
-def _defer_kosync_book_access(doc_id: str, book, *, source: str):
+def _defer_kosync_book_access(doc_id: str, book, *, source: str, discover: bool = True):
     """Keep a foreign mapping private while discovery verifies the user's copy."""
     user_id = getattr(g, "kosync_user_id", None)
-    logger.warning(
-        "KOSync: hash '%s' resolved to book '%s' but user %s has no UserBook claim; "
-        "attempting user-scoped auto-discovery",
-        doc_id,
-        book.abs_id,
-        user_id,
-    )
-    if _is_valid_hex_hash(doc_id):
-        _schedule_auto_discovery(doc_id, user_id=user_id, source=source)
+    if discover:
+        logger.warning(
+            "KOSync: hash '%s' resolved to book '%s' but user %s has no UserBook claim; "
+            "attempting user-scoped auto-discovery",
+            doc_id,
+            book.abs_id,
+            user_id,
+        )
+        if _is_valid_hex_hash(doc_id):
+            _schedule_auto_discovery(doc_id, user_id=user_id, source=source)
+    else:
+        logger.info(
+            "KOSync: Not claiming '%s' for user %s from %s of %s: a match waits for this reader to read forward",
+            book.abs_id,
+            user_id,
+            source,
+            doc_id,
+        )
     if source == "get":
         return jsonify({"message": "Document not found on server"}), 404
     return jsonify({"error": "Document not found"}), 404
@@ -1527,7 +1536,10 @@ def kosync_get_progress(doc_id):
             book = _database_service.get_book(kosync_doc.linked_abs_id)
             if book:
                 if not _kosync_user_may_access_book(book):
-                    return _defer_kosync_book_access(doc_id, book, source="get")
+                    return _defer_kosync_book_access(
+                        doc_id, book, source="get",
+                        discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+                    )
                 return _respond_from_book_states(doc_id, book)
 
         resolved_book = _resolve_book_by_sibling_hash(
@@ -1535,7 +1547,10 @@ def kosync_get_progress(doc_id):
         )
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
-                return _defer_kosync_book_access(doc_id, resolved_book, source="get")
+                return _defer_kosync_book_access(
+                    doc_id, resolved_book, source="get",
+                    discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+                )
             _register_hash_for_book(doc_id, resolved_book, user_id=getattr(g, "kosync_user_id", None))
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1543,11 +1558,7 @@ def kosync_get_progress(doc_id):
         # Per-user device progress lives in kosync_user_progress. Fall back to the
         # shared kosync_doc row (legacy / pre-migration) only when it is this
         # user's own or unstamped (legacy) — never another user's position.
-        progress_row = _database_service.get_user_kosync_progress(doc_id, request_user_id)
-        if progress_row is None:
-            doc_user_id = getattr(kosync_doc, "user_id", None)
-            if request_user_id is None or doc_user_id in (None, request_user_id):
-                progress_row = kosync_doc
+        progress_row = _reader_progress_row(doc_id, kosync_doc, request_user_id)
         has_progress = (
             progress_row is not None
             and progress_row.percentage
@@ -1584,7 +1595,10 @@ def kosync_get_progress(doc_id):
     book = _database_service.get_book_by_kosync_id(doc_id)
     if book:
         if not _kosync_user_may_access_book(book):
-            return _defer_kosync_book_access(doc_id, book, source="get")
+            return _defer_kosync_book_access(
+                doc_id, book, source="get",
+                discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+            )
         # The book names this hash but an existing document row may still be unlinked,
         # which hides its stored per-user progress from _respond_from_book_states (#431).
         # Register it the way Step 3 does so the pairing heals on this read.
@@ -1605,7 +1619,10 @@ def kosync_get_progress(doc_id):
         resolved_book = _resolve_book_by_filename_variants(doc_id, user_id=getattr(g, "kosync_user_id", None))
     if resolved_book:
         if not _kosync_user_may_access_book(resolved_book):
-            return _defer_kosync_book_access(doc_id, resolved_book, source="get")
+            return _defer_kosync_book_access(
+                doc_id, resolved_book, source="get",
+                discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+            )
         _register_hash_for_book(doc_id, resolved_book, user_id=getattr(g, "kosync_user_id", None))
         return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1912,6 +1929,39 @@ def _kosync_position_is_held(doc_hash: str, kosync_doc, baseline, user_id) -> bo
     return bool(abs_id and _database_service.get_state(abs_id, "kosync", user_id=user_id))
 
 
+def _reader_progress_row(doc_hash: str, kosync_doc, user_id):
+    """Return per-user progress row for a doc, falling back to shared kosync_doc when appropriate."""
+    progress_row = _database_service.get_user_kosync_progress(doc_hash, user_id)
+    if progress_row is None:
+        doc_user_id = getattr(kosync_doc, "user_id", None) if kosync_doc else None
+        if user_id is None or doc_user_id in (None, user_id):
+            progress_row = kosync_doc
+    return progress_row
+
+
+def _forward_reading_threshold() -> float:
+    """How far a PUT must move past the stored position to count as reading on.
+
+    KoSync's own change threshold, so a page reflow's jitter is not mistaken for it."""
+    try:
+        return max(0.0, float(os.environ.get("SYNC_DELTA_KOSYNC_PERCENT", "1") or 1)) / 100.0
+    except (TypeError, ValueError):
+        return 0.01
+
+
+def _reader_position(doc_hash: str, kosync_doc, user_id) -> Optional[float]:
+    """Return the reader's stored percentage for this document, or None if there is none."""
+    row = _reader_progress_row(doc_hash, kosync_doc, user_id)
+    if row is not None and getattr(row, "percentage", None) is not None:
+        try:
+            pct = float(row.percentage)
+            if pct > 0:
+                return pct
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _book_for_put_baseline(doc_hash: str, kosync_doc, user_id):
     """The book a PUT's hash resolves to without writing anything, or None."""
     if kosync_doc is not None and kosync_doc.linked_abs_id:
@@ -1976,16 +2026,19 @@ def kosync_put_progress():
     _flush_stale_kosync_sessions(now_ts)
 
     kosync_doc = _database_service.get_kosync_document(doc_hash)
+    request_user_id = getattr(g, 'kosync_user_id', None)
+    prior = _reader_position(doc_hash, kosync_doc, request_user_id)
+    moved_forward = prior is not None and float(percentage) >= prior + _forward_reading_threshold()
+    is_internal = _is_internal_kosync_device(device, device_id)
+    may_match = moved_forward or is_internal
     if kosync_doc and kosync_doc.linked_abs_id:
         linked = _database_service.get_book(kosync_doc.linked_abs_id)
         if linked and not _kosync_user_may_access_book(linked):
-            return _defer_kosync_book_access(doc_hash, linked, source="put")
+            return _defer_kosync_book_access(doc_hash, linked, source="put", discover=may_match)
 
     # Optional "furthest wins" protection
     furthest_wins = env_truthy('KOSYNC_FURTHEST_WINS', 'true')
     force_update = data.get('force', False)
-    is_internal = _is_internal_kosync_device(device, device_id)
-    request_user_id = getattr(g, 'kosync_user_id', None)
 
     # This server does not read the service gate: devices keep authenticating and
     # their positions are kept, by design, so nothing is lost while KoSync is off
@@ -2169,7 +2222,7 @@ def kosync_put_progress():
 
     if linked_book and not is_internal:
         if not _kosync_user_may_access_book(linked_book):
-            return _defer_kosync_book_access(doc_hash, linked_book, source="put")
+            return _defer_kosync_book_access(doc_hash, linked_book, source="put", discover=may_match)
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
 
     # AUTO-DISCOVERY
@@ -2179,11 +2232,23 @@ def kosync_put_progress():
                 f"⚠️ KOSync: Rejected malformed document ID: '{doc_hash}' (PUT from {request.remote_addr})"
             )
         else:
-            _schedule_auto_discovery(
-                doc_hash,
-                user_id=request_user_id,
-                source="put",
-            )
+            if may_match:
+                _schedule_auto_discovery(
+                    doc_hash,
+                    user_id=request_user_id,
+                    source="put",
+                )
+            else:
+                if prior is None:
+                    reason = "no earlier position from this reader"
+                else:
+                    reason = f"{float(percentage):.2%} is not ahead of this reader's last position {prior:.2%}"
+                logger.info(
+                    "KOSync: Not matching %s from '%s' yet: %s — a match needs this reader to read forward",
+                    doc_hash,
+                    device,
+                    reason,
+                )
 
     if linked_book:
         # NOTE: We intentionally do NOT update book_states here.

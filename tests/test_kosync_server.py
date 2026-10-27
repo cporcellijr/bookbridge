@@ -901,8 +901,33 @@ class TestKosyncEndpoints(unittest.TestCase):
         self.assertAlmostEqual(second_get.get_json()["percentage"], 0.42)
         self.assertEqual(second_get.get_json()["progress"], "/body/reader-b")
 
-    def test_foreign_linked_hash_put_discovers_claim_for_requesting_user(self):
-        """Issue #335: PUT discovery must claim a verified existing mapping."""
+    def test_foreign_linked_hash_get_does_not_claim_when_reader_has_position(self):
+        """GET should not claim a foreign hash when the reader already has a position."""
+        from src.api import kosync_server
+
+        svc, reader, headers, doc_hash, abs_id, filename = self._setup_foreign_linked_hash(
+            "issue335-get-no-claim"
+        )
+        # Seed reader's per-user progress so the reader already has a position
+        svc.upsert_user_kosync_progress(doc_hash, 0.3, progress="/body/0", device="Kobo", device_id="B", user_id=reader.id)
+
+        def run_now(callback):
+            callback()
+            return MagicMock()
+
+        with (
+            patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+            self.assertLogs("src.api.kosync_server", level="INFO") as captured,
+        ):
+            first_get = self.client.get(f"/syncs/progress/{doc_hash}", headers=headers)
+
+        self.assertEqual(first_get.status_code, 404)
+        self.assertFalse(svc.is_user_linked(reader.id, abs_id))
+        self.assertTrue(any("Not claiming" in r.getMessage() for r in captured.records))
+
+    def test_foreign_linked_hash_put_claims_only_on_forward_reading(self):
+        """Issue #335: PUT discovery must claim a verified existing mapping only on forward reading."""
         from src.api import kosync_server
 
         svc, reader, headers, doc_hash, abs_id, filename = self._setup_foreign_linked_hash(
@@ -928,10 +953,24 @@ class TestKosyncEndpoints(unittest.TestCase):
 
         self.assertEqual(first_put.status_code, 404)
         self.assertEqual(first_put.get_json(), {"error": "Document not found"})
+        self.assertFalse(svc.is_user_linked(reader.id, abs_id))
+
+        # Seed reader's per-user progress so forward reading can be detected
+        svc.upsert_user_kosync_progress(
+            doc_hash, 0.15, progress="/body/0", device="Kobo", device_id="B", user_id=reader.id
+        )
+
+        with (
+            patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+        ):
+            second_put = self.client.put("/syncs/progress", headers=headers, json=payload)
+
+        self.assertEqual(second_put.status_code, 404)
         self.assertTrue(svc.is_user_linked(reader.id, abs_id))
 
-        second_put = self.client.put("/syncs/progress", headers=headers, json=payload)
-        self.assertEqual(second_put.status_code, 200, second_put.get_data(as_text=True))
+        third_put = self.client.put("/syncs/progress", headers=headers, json=payload)
+        self.assertEqual(third_put.status_code, 200, third_put.get_data(as_text=True))
         state = svc.get_state(abs_id, "kosync", user_id=reader.id)
         self.assertAlmostEqual(float(state.percentage), 0.21)
         self.assertEqual(state.xpath, "/body/reader-b")
