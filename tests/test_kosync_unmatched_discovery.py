@@ -69,6 +69,31 @@ class TestUnmatchedDiscovery(unittest.TestCase):
             response = self.client.get(f"/syncs/progress/{self.hash}", headers=self.headers)
         self.assertEqual(response.status_code, expected_status)
 
+    def _put(self, percentage):
+        def run_now(callback):
+            callback()
+            return MagicMock()
+
+        with (
+            patch.object(kosync_server, "authenticate_kosync", return_value=(True, self.user.id)),
+            patch.object(kosync_server, "_resolve_book_by_sibling_hash", return_value=None),
+            patch.object(kosync_server, "_resolve_book_by_cwa_checksum", return_value=None),
+            patch.object(kosync_server, "_try_find_epub_by_hash", return_value="Unmatched Book.epub"),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+        ):
+            response = self.client.put(
+                "/syncs/progress",
+                headers=self.headers,
+                json={
+                    "document": self.hash,
+                    "progress": "/body/p[1]",
+                    "percentage": percentage,
+                    "device": "Kobo_monza",
+                    "device_id": "K",
+                },
+            )
+        return response
+
     def test_open_checks_audiobook_and_maps_agreement(self):
         self.bundle.abs_client.is_configured.return_value = True
         self.bundle.abs_client.get_all_audiobooks.return_value = [{
@@ -104,13 +129,60 @@ class TestUnmatchedDiscovery(unittest.TestCase):
         self.assertIsNone(get_current_user_id())
         self.container.bookorbit_client.assert_not_called()
 
-    def test_open_unlinked_document_with_stored_progress_still_discovers(self):
+    def test_open_known_unlinked_document_does_not_match(self):
         self.db.save_kosync_document(KosyncDocument(
             document_hash=self.hash, percentage=0.2, progress="/body/p[1]", user_id=self.user.id,
         ))
-        self._open(expected_status=200)
-        self.assertIsNotNone(self.db.get_book_by_kosync_id(self.hash))
+        with self.assertLogs(kosync_server.logger, level="INFO") as logs:
+            self._open(expected_status=200)
+        self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
         self.assertAlmostEqual(float(self.db.get_kosync_document(self.hash).percentage), 0.2)
+        self.assertTrue(any(f"Not matching {self.hash} on open" in r.getMessage() for r in logs.records))
+
+    def test_stale_backward_put_on_removed_book_does_not_rematch(self):
+        from datetime import datetime
+        self.db.save_kosync_document(KosyncDocument(
+            document_hash=self.hash, percentage=0.4446, progress="/body/p[1]",
+            user_id=self.user.id, device="abs-sync-bot", device_id="abs-sync-bot",
+        ))
+        self.db.upsert_user_kosync_progress(
+            self.hash, 0.4446, progress="/body/p[1]",
+            device="abs-sync-bot", device_id="abs-sync-bot",
+            timestamp=datetime.utcnow(), user_id=self.user.id,
+        )
+        with self.assertLogs(kosync_server.logger, level="INFO") as logs:
+            resp = self._put(0.1658)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
+        self.assertTrue(any(
+            f"Not matching {self.hash} from 'Kobo_monza' yet" in r.getMessage()
+            and "16.58% is not ahead of this reader's last position 44.46%" in r.getMessage()
+            for r in logs.records
+        ))
+
+    def test_first_put_for_unseen_document_does_not_match(self):
+        with self.assertLogs(kosync_server.logger, level="INFO") as logs:
+            resp = self._put(0.05)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
+        self.assertTrue(any("no earlier position from this reader" in r.getMessage() for r in logs.records))
+
+    def test_forward_put_on_known_document_matches(self):
+        self._put(0.20)
+        with self.assertLogs(kosync_server.logger, level="INFO"):
+            resp = self._put(0.25)
+        self.assertEqual(resp.status_code, 200)
+        book = self.db.get_book_by_kosync_id(self.hash)
+        self.assertIsNotNone(book)
+        self.assertEqual(book.sync_mode, "ebook_only")
+        self.assertTrue(self.db.is_user_linked(self.user.id, book.abs_id))
+
+    def test_reflow_jitter_is_not_forward_reading(self):
+        self._put(0.20)
+        with self.assertLogs(kosync_server.logger, level="INFO") as logs:
+            resp = self._put(0.205)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(self.db.get_book_by_kosync_id(self.hash))
 
     def test_ambiguous_audio_becomes_suggestion_instead_of_ebook_only(self):
         self.bundle.abs_client.is_configured.return_value = True
