@@ -938,7 +938,26 @@ class TestKosyncEndpoints(unittest.TestCase):
             callback()
             return MagicMock()
 
-        payload = {
+        # First PUT anchors at 15% – no match yet
+        first_payload = {
+            "document": doc_hash,
+            "progress": "/body/0",
+            "percentage": 0.15,
+            "device": "KoboB",
+            "device_id": "B",
+        }
+        with (
+            patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+        ):
+            first_put = self.client.put("/syncs/progress", headers=headers, json=first_payload)
+
+        self.assertEqual(first_put.status_code, 404)
+        self.assertEqual(first_put.get_json(), {"error": "Document not found"})
+        self.assertFalse(svc.is_user_linked(reader.id, abs_id))
+
+        # Second PUT at 21% is forward reading – should claim now
+        second_payload = {
             "document": doc_hash,
             "progress": "/body/reader-b",
             "percentage": 0.21,
@@ -949,27 +968,13 @@ class TestKosyncEndpoints(unittest.TestCase):
             patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
             patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
         ):
-            first_put = self.client.put("/syncs/progress", headers=headers, json=payload)
-
-        self.assertEqual(first_put.status_code, 404)
-        self.assertEqual(first_put.get_json(), {"error": "Document not found"})
-        self.assertFalse(svc.is_user_linked(reader.id, abs_id))
-
-        # Seed reader's per-user progress so forward reading can be detected
-        svc.upsert_user_kosync_progress(
-            doc_hash, 0.15, progress="/body/0", device="Kobo", device_id="B", user_id=reader.id
-        )
-
-        with (
-            patch.object(kosync_server, "_try_find_epub_by_hash", return_value=filename),
-            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
-        ):
-            second_put = self.client.put("/syncs/progress", headers=headers, json=payload)
+            second_put = self.client.put("/syncs/progress", headers=headers, json=second_payload)
 
         self.assertEqual(second_put.status_code, 404)
         self.assertTrue(svc.is_user_linked(reader.id, abs_id))
 
-        third_put = self.client.put("/syncs/progress", headers=headers, json=payload)
+        # Third PUT after claim returns 200 and updates state
+        third_put = self.client.put("/syncs/progress", headers=headers, json=second_payload)
         self.assertEqual(third_put.status_code, 200, third_put.get_data(as_text=True))
         state = svc.get_state(abs_id, "kosync", user_id=reader.id)
         self.assertAlmostEqual(float(state.percentage), 0.21)

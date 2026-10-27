@@ -42,6 +42,7 @@ from src.utils.user_config import (
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
 from src.utils.ebook_sources import is_grimmory_source
+from src.utils.ebook_utils import LRUCache
 from src.services import kosync_device_arbiter, observation_trail
 from src.services.llm_matching import judge_best_candidate
 from src.db.models import State
@@ -119,6 +120,8 @@ _kosync_device_session_registry = None
 _kosync_device_session_registry_lock = threading.Lock()
 _kosync_recent_external_puts: dict = {}
 _kosync_recent_external_puts_lock = threading.Lock()
+_discovery_anchor_cache = LRUCache(capacity=1024)
+_discovery_anchor_cache_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
 _KOREADER_STATS_MERGE_LIMIT = 10000
@@ -1637,6 +1640,12 @@ def kosync_get_progress(doc_id):
             f"⚠️ KOSync: Rejected malformed document ID: '{doc_id}' (GET from {request.remote_addr})"
         )
         return jsonify({"message": "Document not found on server"}), 404
+    if _reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is not None:
+        logger.info(
+            "KOSync: Not matching %s on open: this reader already has a position for it; "
+            "it matches once they read forward from it", doc_id,
+        )
+        return jsonify({"message": "Document not found on server"}), 404
     _schedule_auto_discovery(
         doc_id,
         user_id=getattr(g, "kosync_user_id", None),
@@ -1963,13 +1972,38 @@ def _forward_reading_threshold() -> float:
         return 0.01
 
 
+def _discovery_anchor_may_match(
+    user_id, doc_hash, device_key, percentage: float, *, baseline=None,
+    minimum_delta=None, consume: bool = False,
+) -> bool:
+    """Observe fresh, cumulative forward reading by one user and device."""
+    if minimum_delta is None:
+        minimum_delta = _forward_reading_threshold()
+    now = time.monotonic()
+    pct = float(percentage or 0)
+    key = (user_id, doc_hash, device_key, _variant_index_generation, baseline)
+    with _discovery_anchor_cache_lock:
+        entry = _discovery_anchor_cache.get(key)
+        if entry is None or now - entry[2] >= 600 or pct < entry[1]:
+            _discovery_anchor_cache.put(key, (pct, pct, now))
+            return False
+        anchor, last_pct, _ = entry
+        advanced = pct > last_pct and pct - anchor + 1e-9 >= minimum_delta
+        _discovery_anchor_cache.put(key, (anchor, pct, now))
+        if advanced and consume:
+            _discovery_anchor_cache.delete(key)
+        return advanced
+
+
 def _reader_position(doc_hash: str, kosync_doc, user_id) -> Optional[float]:
     """Return the reader's stored percentage for this document, or None if there is none."""
     row = _reader_progress_row(doc_hash, kosync_doc, user_id)
     if row is not None and getattr(row, "percentage", None) is not None:
         try:
             pct = float(row.percentage)
-            if pct > 0:
+            if pct > 0 or row is not kosync_doc or any(
+                getattr(row, field, None) for field in ("progress", "device", "device_id", "timestamp")
+            ):
                 return pct
         except (TypeError, ValueError):
             return None
@@ -2041,14 +2075,23 @@ def kosync_put_progress():
 
     kosync_doc = _database_service.get_kosync_document(doc_hash)
     request_user_id = getattr(g, 'kosync_user_id', None)
-    prior = _reader_position(doc_hash, kosync_doc, request_user_id)
-    moved_forward = prior is not None and float(percentage) >= prior + _forward_reading_threshold()
     is_internal = _is_internal_kosync_device(device, device_id)
-    may_match = moved_forward or is_internal
-    if kosync_doc and kosync_doc.linked_abs_id:
-        linked = _database_service.get_book(kosync_doc.linked_abs_id)
-        if linked and not _kosync_user_may_access_book(linked):
-            return _defer_kosync_book_access(doc_hash, linked, source="put", discover=may_match)
+    device_key = _get_kosync_device_key(device, device_id)
+    may_match = is_internal or _discovery_anchor_may_match(
+        request_user_id, doc_hash, device_key, percentage,
+    )
+    put_book = None
+    if not is_internal:
+        put_book = _book_for_put_baseline(doc_hash, kosync_doc, request_user_id)
+    elif kosync_doc and kosync_doc.linked_abs_id:
+        put_book = _database_service.get_book(kosync_doc.linked_abs_id)
+    if put_book and not _kosync_user_may_access_book(put_book):
+        if not is_internal:
+            _database_service.upsert_user_kosync_progress(
+                doc_hash, percentage, progress=progress, device=device,
+                device_id=device_id, timestamp=now, user_id=request_user_id,
+            )
+        return _defer_kosync_book_access(doc_hash, put_book, source="put", discover=may_match)
 
     # Optional "furthest wins" protection
     furthest_wins = env_truthy('KOSYNC_FURTHEST_WINS', 'true')
@@ -2062,10 +2105,7 @@ def kosync_put_progress():
     if not is_internal:
         _note_kosync_off_server_wide(request_user_id, device)
 
-    # Allow rewinds if:
-    # 1. Force flag is set (e.g. from SyncManager)
-    # 2. Update comes from the SAME device (user moved slider back)
-    # 3. Update is internal (sync-bot) — must reach debounce-clear logic below
+    # Forced/internal writes bypass furthest-wins; linked device rewinds need fresh reading.
     # Furthest-wins compares against THIS user's own last position
     # (kosync_user_progress), so one user's rewind is never judged against
     # another user's further position on the same shared hash. Falls back to the
@@ -2083,14 +2123,14 @@ def kosync_put_progress():
     # a GET would hand out - so that is what a stale device must not regress.
     state_baseline = False
     observation_doc = kosync_doc
+    if put_book and not getattr(kosync_doc, "linked_abs_id", None):
+        observation_doc = SimpleNamespace(linked_abs_id=put_book.abs_id)
     if (baseline is None or not baseline.percentage) and furthest_wins and not is_internal and not force_update:
-        state_book = _book_for_put_baseline(doc_hash, kosync_doc, request_user_id)
+        state_book = put_book
         state = _database_service.get_state(state_book.abs_id, "kosync", user_id=request_user_id) if state_book else None
         if state is not None and state.percentage:
             baseline = SimpleNamespace(percentage=state.percentage, device=None, device_id=None, timestamp=None)
             state_baseline = True
-            if not getattr(kosync_doc, "linked_abs_id", None):
-                observation_doc = SimpleNamespace(linked_abs_id=state_book.abs_id)
     baseline_pct = float(baseline.percentage) if baseline and baseline.percentage else 0
     baseline_device = getattr(baseline, "device", None)
     baseline_device_id = getattr(baseline, "device_id", None)
@@ -2106,18 +2146,8 @@ def kosync_put_progress():
         # 409, not 200: the caller must not record the fill as the position held here.
         return jsonify({"document": doc_hash, "message": "Position already stored"}), 409
 
-    # Furthest-wins exists to stop one DEVICE from regressing another. When the
-    # position it is defending was never claimed by a real device — no device_id
-    # recorded, or BookBridge's own sync-bot write-back — there is no peer to
-    # protect and the guard degenerates into the bridge blocking the user from
-    # their own reader.
-    #
-    # That case is a deadlock, not an edge case: a device's identity is only
-    # recorded when a PUT is ACCEPTED, but a backward PUT is only accepted from an
-    # already-recorded device. So a reader that has only ever RECEIVED positions —
-    # which is every reader the bridge has pushed to and that has not yet pushed a
-    # forward position of its own — can never rewind, and the user's deliberate
-    # rewind is rejected against an echo of our own write (issue #215).
+    # Unlinked documents retain the legacy unclaimed-device behavior.
+    # Linked books need fresh reading proof even after a bot wrote the baseline.
     baseline_unclaimed = not state_baseline and (
         not baseline_device_id or _is_internal_kosync_device(baseline_device, baseline_device_id)
     )
@@ -2130,23 +2160,35 @@ def kosync_put_progress():
     if not is_internal:
         _record_external_kosync_observation(observation_doc, percentage, device, request_user_id)
 
+    linked_position = bool(getattr(observation_doc, "linked_abs_id", None))
     if (
         furthest_wins
         and baseline_pct
         and not force_update
-        and not same_device
+        and (linked_position or not same_device)
         and not is_internal
     ):
         new_pct = float(percentage)
         if new_pct < baseline_pct - 0.0001:
-            if baseline_unclaimed:
+            corroborated = False
+            fresh_movement = True
+            if linked_position or not baseline_unclaimed:
+                corroborated = _backward_move_is_corroborated(
+                    observation_doc, device, request_user_id,
+                )
+            if linked_position:
+                fresh_movement = _discovery_anchor_may_match(
+                    request_user_id, doc_hash, device_key, percentage,
+                    baseline=baseline_pct, minimum_delta=0.0, consume=corroborated,
+                )
+            if baseline_unclaimed and not linked_position:
                 logger.info(
                     f"KOSync: Allowing rewind from '{device}' for doc {doc_hash} "
                     f"({baseline_pct:.2%} -> {new_pct:.2%}): the higher position was never "
                     f"claimed by another device (stored device_id="
                     f"{baseline_device_id or 'none'}), so furthest-wins has no peer to defend"
                 )
-            elif _backward_move_is_corroborated(observation_doc, device, request_user_id):
+            elif corroborated and fresh_movement:
                 logger.info(
                     f"KOSync: Allowing rewind from '{device}' for doc {doc_hash} "
                     f"({baseline_pct:.2%} -> {new_pct:.2%}): that device has kept reading on "
@@ -2154,7 +2196,11 @@ def kosync_put_progress():
                     f"from a stale reader simply being opened"
                 )
             else:
-                logger.info(f"KOSync: Ignored progress from '{device}' for doc {doc_hash} (user has higher: {baseline_pct:.2f}% vs new {new_pct:.2f}%)")
+                logger.info(
+                    "KOSync: Ignored progress from '%s' for doc %s "
+                    "(user has higher: %.2f%% vs new %.2f%%): awaiting fresh forward reading",
+                    device, doc_hash, baseline_pct * 100, new_pct * 100,
+                )
                 return jsonify({
                     "document": doc_hash,
                     "timestamp": int(datetime_to_epoch(baseline.timestamp)) if baseline and baseline.timestamp else int(datetime_to_epoch(now))
@@ -2253,10 +2299,7 @@ def kosync_put_progress():
                     source="put",
                 )
             else:
-                if prior is None:
-                    reason = "no earlier position from this reader"
-                else:
-                    reason = f"{float(percentage):.2%} is not ahead of this reader's last position {prior:.2%}"
+                reason = "no qualifying forward reading from this device"
                 logger.info(
                     "KOSync: Not matching %s from '%s' yet: %s — a match needs this reader to read forward",
                     doc_hash,

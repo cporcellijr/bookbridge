@@ -66,6 +66,12 @@ class TestReconcileHashes(unittest.TestCase):
             epub_cache_dir=Path(self.tmp.name),
             bookorbit_client=MagicMock(),
         )
+        bindings = {"hash-a": "a", "hash-b": "b", "shared-hash": "a",
+                    "name-a": "a", "name-b": "b"}
+        self.service.database_service.get_kosync_document.side_effect = (
+            lambda doc_hash: SimpleNamespace(linked_abs_id=bindings[doc_hash])
+            if doc_hash in bindings else None
+        )
         self.books = [_book("a", "Book A"), _book("b", "Book B")]
         self.service._get_active_books = lambda all_users=False: list(self.books)
 
@@ -75,7 +81,7 @@ class TestReconcileHashes(unittest.TestCase):
             "b": {"path": Path("b"), "content_hash": "hash-b", "kosync_hash": "hash-b"},
         }
         self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False, device_filename=None: results[book.abs_id]
-        self.service.database_service.ensure_linked_kosync_document.side_effect = [True, False]
+        self.service.database_service.adopt_kosync_document_if_unowned.side_effect = [True, False]
 
         summary = self.service.reconcile_hashes()
 
@@ -94,7 +100,7 @@ class TestReconcileHashes(unittest.TestCase):
             return {"path": Path("b"), "content_hash": "hash-b", "kosync_hash": "hash-b"}
 
         self.service._resolve_download_artifact = resolve
-        self.service.database_service.ensure_linked_kosync_document.return_value = True
+        self.service.database_service.adopt_kosync_document_if_unowned.return_value = True
 
         summary = self.service.reconcile_hashes()
 
@@ -120,14 +126,14 @@ class TestReconcileHashes(unittest.TestCase):
         """
         same = {"path": Path("shared"), "content_hash": "shared-hash", "kosync_hash": "shared-hash"}
         self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False, device_filename=None: dict(same)
-        self.service.database_service.ensure_linked_kosync_document.return_value = True
+        self.service.database_service.adopt_kosync_document_if_unowned.return_value = True
 
         summary = self.service.reconcile_hashes()
 
         self.assertEqual(summary["conflicts"], 1)
         self.assertEqual(summary["linked"], 1, "only the first claimant links")
         self.assertEqual(
-            self.service.database_service.ensure_linked_kosync_document.call_count, 1,
+            self.service.database_service.adopt_kosync_document_if_unowned.call_count, 1,
             "the second book must not rebind the shared hash",
         )
 
@@ -140,15 +146,13 @@ class TestReconcileHashes(unittest.TestCase):
         }
         self.service._resolve_download_artifact = lambda book, link_hashes=True, allow_revalidation=False, device_filename=None: results[book.abs_id]
         db = self.service.database_service
-        db.ensure_linked_kosync_document.return_value = True
         db.adopt_kosync_document_if_unowned.return_value = True
 
         summary = self.service.reconcile_hashes()
 
-        linked = [c.args for c in db.ensure_linked_kosync_document.call_args_list]
-        self.assertEqual(linked, [("name-a", "a"), ("name-b", "b")])
         adopted = [c.args for c in db.adopt_kosync_document_if_unowned.call_args_list]
-        self.assertEqual(adopted, [("shared-hash", "a")])
+        # Primary filename hashes are adopted, content hash adopted for first book only
+        self.assertEqual(adopted, [("name-a", "a"), ("shared-hash", "a"), ("name-b", "b")])
         self.assertEqual(summary["conflicts"], 1)
         self.assertEqual(summary["linked"], 3)
 
@@ -183,6 +187,10 @@ class TestReconcilerSettings(unittest.TestCase):
 
     def setUp(self):
         self.original = {k: os.environ.get(k) for k in self.KEYS}
+        from src.api import kosync_server
+        activity = kosync_server._last_device_sync_activity
+        kosync_server._last_device_sync_activity = 0.0
+        self.addCleanup(setattr, kosync_server, "_last_device_sync_activity", activity)
 
     def tearDown(self):
         for key, value in self.original.items():
