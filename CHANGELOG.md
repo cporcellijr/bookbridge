@@ -8,6 +8,18 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The stats page's Listening books add up to its total when you use Audiobookshelf.** The book list, each book's
+  last-listened date and the book detail came from BookBridge's own sessions, which miss listening it credits to ABS,
+  so a book could show 1h33m while ABS had 4h22m for it. With ABS configured they now come from ABS's own listening
+  time and sessions. Contributed by [@chemicalsno](https://github.com/chemicalsno) in #560.
+- **Suggestions no longer offer the wrong volume of a series titled "Series: Book N".** Titles such as "My Struggle:
+  Book 1" (or "My Struggle_ Book 1" as a Calibre file name) kept their separator, so every volume scored the same.
+  "Book", "Volume" and "Vol." credits are now read after any separator, in digits, words or Roman numerals, and the
+  other side's series number decides between volumes. Contributed by [@chemicalsno](https://github.com/chemicalsno)
+  in #563.
+- **A book that ABS lists in several series is matched by its numbered series.** ABS joins every series into one
+  label ("The Stormlight Archive #1, The Cosmere"), which was read as one long series name with no number.
+  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #564.
 - **A few pages read on a KOReader device right after a sync are no longer rewound.** When BookBridge had just written
   a position to KoSync and you then read a little further, the next sync could take your new position for BookBridge's
   own write and move the device back to the audiobook. A position a device sent after BookBridge's write now always

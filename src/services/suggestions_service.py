@@ -224,6 +224,7 @@ class SuggestionsService:
                 except Exception as e:
                     self.logger.debug(f"Calibre identifier lookup failed for {source_id}: {e}")
 
+            volumes = [self._volume_number(title) for title, _ in hypotheses]
             edition_titles = {}
             for title, _ in hypotheses:
                 stripped = self._normalize_title_for_match(title)
@@ -238,7 +239,12 @@ class SuggestionsService:
                     (self._normalize_title_for_match(title), self._author_names(author))
                     for title, author in hypotheses
                 ],
-                "volume": next(filter(None, (self._volume_number(title) for title, _ in hypotheses)), None),
+                "volume": next((volume for volume in volumes if volume is not None), None),
+                "titled_volume": any(
+                    self._normalize_title_for_match(title)
+                    != self._normalize_title_for_match(title, strip_volume=False)
+                    for title, _ in hypotheses
+                ),
                 "series": series,
                 "edition_titles": edition_titles,
                 "language": candidate_language,
@@ -496,7 +502,8 @@ class SuggestionsService:
         return s[:words[start].start()].rstrip(" ,:;-([")
 
     @classmethod
-    def _normalize_title_for_match(cls, text: str, strip_editions: bool = True) -> str:
+    def _normalize_title_for_match(cls, text: str, strip_editions: bool = True,
+                                   strip_volume: bool = True) -> str:
         """Strip surface noise that wrecks fuzzy/embedding scoring: leading numbering
         ('01. ', '02 '), trailing parentheticals ('(2024)', '(Unabridged)', '(readaloud)'),
         trailing edition credits ('Centenary Edition', ', 3rd Edition'), ', Book N' tails,
@@ -516,13 +523,28 @@ class SuggestionsService:
             if new == s:
                 break
             s = new
-        s = re.sub(r",?\s*book\s+\d+\s*$", "", s, flags=re.I).strip()
+        if strip_volume:
+            s = cls._strip_volume_credit(s)
         m = re.match(r"^(.*?),\s*(the|a|an)$", s, flags=re.I)
         if m:
             s = f"{m.group(2)} {m.group(1)}".strip()
         return s
 
-    _VOLUME_RE = re.compile(r"\b(?:book|volume|vol\.?)\s+(\w+)\b", re.IGNORECASE)
+    @classmethod
+    def _strip_volume_credit(cls, s: str) -> str:
+        """Drop a trailing "Book 2", "Volume II", or "Vol.3" credit, unless it is the whole title."""
+        words = "|".join([*cls._VOLUME_WORDS, *cls._VOLUME_ROMAN])
+        # Some editions are titled "Series: Book N", and Calibre writes the colon as "_" in file names.
+        # A number word or numeral after "Book" needs the separator, since "The Jungle
+        # Book II" is a title.
+        stripped = re.sub(r"\s*[,.:;_-]?\s*(?<![^\W\d_])(?:book\s+|volume\s+|vol\.?\s*)\d+(?:\.\d+)?\s*$",
+                          "", s, flags=re.I).strip()
+        stripped = re.sub(rf"\s*[,.:;_-]\s*book\s+(?:{words})\s*$", "", stripped, flags=re.I).strip()
+        stripped = re.sub(rf"\s*[,.:;_-]?\s*(?<![^\W\d_])(?:volume\s+|vol\.\s*|vol\s+)(?:{words})\s*$",
+                          "", stripped, flags=re.I).strip()
+        return stripped or s
+
+    _VOLUME_RE = re.compile(r"(?<![^\W\d_])(?:book\s+|volume\s+|vol\.?\s*)(\d+\.\d+|\w+)\b", re.IGNORECASE)
     _VOLUME_WORDS = {
         word: n for n, word in enumerate(
             "one two three four five six seven eight nine ten eleven twelve".split(), start=1)
@@ -533,13 +555,16 @@ class SuggestionsService:
     }
 
     @classmethod
-    def _volume_number(cls, text: str) -> Optional[int]:
-        """The number in a "Book 3", "Book One", "Volume II", or "Vol. 2" credit, if any."""
+    def _volume_number(cls, text: str) -> Optional[float]:
+        """The number in a "Book 3", "Book 2.5", "Book One", "Volume II", or "Vol. 2" credit, if any."""
         text = text or ""
         for match in cls._VOLUME_RE.finditer(text):
             token = match.group(1).lower()
             if token.isdigit():
                 return int(token)
+            if "." in token:
+                # A novella between volumes ("Book 2.5") is a volume of its own.
+                return float(token)
             # A word or numeral counts only when it ends the credit, since "I" and
             # "Two" are also ordinary words ("The Book I Never Wrote").
             rest = text[match.end():].lstrip()
@@ -549,6 +574,20 @@ class SuggestionsService:
             if number:
                 return number
         return None
+
+    @classmethod
+    def _audio_volume(cls, title: str, subtitle: str) -> Optional[int]:
+        """The volume an audiobook's title names, or else its subtitle."""
+        volume = cls._volume_number(title)
+        return volume if volume is not None else cls._volume_number(subtitle)
+
+    @staticmethod
+    def _audio_subtitle(ab: dict) -> str:
+        return str(
+            ab.get("audio_subtitle")
+            or ((ab.get("media") or {}).get("metadata") or {}).get("subtitle")
+            or ""
+        ).strip()
 
     @classmethod
     def _series_key(cls, name: Optional[str], sequence: Optional[float]) -> Optional[tuple]:
@@ -809,11 +848,7 @@ class SuggestionsService:
             return self._suggestion_shell(ab, [authoritative])
 
         norm_audio_title = self._normalize_title_for_match(audio_title)
-        subtitle = str(
-            ab.get("audio_subtitle")
-            or ((ab.get("media") or {}).get("metadata") or {}).get("subtitle")
-            or ""
-        ).strip()
+        subtitle = self._audio_subtitle(ab)
         norm_audio_full_title = self._normalize_title_for_match(f"{audio_title}: {subtitle}") if subtitle else ""
         unstripped_audio_title = self._normalize_title_for_match(audio_title, strip_editions=False)
         unstripped_audio_full_title = self._normalize_title_for_match(
@@ -821,7 +856,13 @@ class SuggestionsService:
         matches = []
         audio_path = self._audio_path(ab)
         audio_names = self._author_names(audio_author)
-        audio_volume = self._volume_number(audio_title) or self._volume_number(subtitle)
+        audio_volume = self._audio_volume(audio_title, subtitle)
+        # A subtitle that is only a credit ("Book 5") numbers the title, unlike one that
+        # names a series ("The Stormlight Archive, Book 1").
+        audio_titled_volume = (
+            norm_audio_title != self._normalize_title_for_match(audio_title, strip_volume=False)
+            or (self._volume_number(subtitle) is not None and norm_audio_full_title == norm_audio_title)
+        )
         audio_series = self._audio_series(ab)
         same_folder_count = sum(
             1 for candidate_info in per_book_pool
@@ -864,11 +905,29 @@ class SuggestionsService:
             # Normalizing drops a ", Book N" tail, so two volumes of one series would
             # otherwise score as the same title.
             candidate_volume = candidate_info.get("volume")
-            if not series_number_compared and audio_volume and candidate_volume and audio_volume != candidate_volume:
+            if (not series_number_compared and None not in (audio_volume, candidate_volume)
+                    and audio_volume != candidate_volume):
                 continue
+            # Titles that agree only once one side's "Book N" tail is dropped could name any
+            # volume. The other side's series number, whatever the series is called, says
+            # which one it is.
+            volume_only_in_candidate = bool(candidate_info.get("titled_volume")) and audio_volume is None
+            volume_only_in_audio = audio_titled_volume and candidate_volume is None
+            volume_unconfirmed = False
+            if (volume_only_in_candidate or volume_only_in_audio) and not same_volume:
+                unnumbered = audio_series if volume_only_in_candidate else candidate_series
+                numbered = candidate_volume if volume_only_in_candidate else audio_volume
+                if not unnumbered or unnumbered[1] is None:
+                    volume_unconfirmed = True
+                elif unnumbered[1] != numbered:
+                    if unnumbered[0] == norm_audio_title.casefold():
+                        continue
+                    # Sources number some series differently, so leave it for review.
+                    volume_unconfirmed = True
 
             best = None
             for title_score, subtitle_stripped, names, edition_stripped in scored:
+                subtitle_stripped = subtitle_stripped or volume_unconfirmed
                 if audio_author:
                     score = (title_score * 0.7) + (self._score_author_names(audio_names, names) * 0.3)
                 else:
@@ -1196,6 +1255,7 @@ class SuggestionsService:
             avec = embedded.get(atext)
             if not avec:
                 continue
+            audio_volume = self._audio_volume(self._audio_title(ab), self._audio_subtitle(ab))
             a = np.asarray(avec, dtype=np.float32)
             a /= (np.linalg.norm(a) + 1e-8)
             sims = pool_matrix @ a
@@ -1217,6 +1277,9 @@ class SuggestionsService:
             new_matches = []
             for entry, cos in hits:
                 if (entry.get("source"), str(entry.get("source_id"))) in seen or entry.get("name") in seen:
+                    continue
+                # Normalized titles drop the volume, so every volume of a series embeds alike.
+                if None not in (audio_volume, entry.get("volume")) and entry.get("volume") != audio_volume:
                     continue
                 new_matches.append(self._match_from_pool(entry, min(100.0 * cos, score_cap)))
             if not new_matches:

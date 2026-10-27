@@ -68,7 +68,9 @@ def extract_series_from_abs_metadata(metadata: Any) -> SeriesTuple:
     name = (metadata.get("seriesName") or "").strip()
     raw_seq = None
     if name:
-        decorated = re.match(r"^(.+?)\s+#(\d+(?:\.\d+)?)\s*$", name)
+        # ABS joins every series a book is in ("Name #N, Umbrella"), so the first
+        # numbered series ends at the next ", " as well as at the end.
+        decorated = re.match(r"^(.+?)\s+#(\d+(?:\.\d+)?)\s*(?=,\s|$)", name)
         if decorated:
             name = decorated.group(1).strip()
             raw_seq = decorated.group(2)

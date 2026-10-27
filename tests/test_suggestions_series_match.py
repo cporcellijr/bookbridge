@@ -58,10 +58,11 @@ def _cold_cache():
 
 @pytest.fixture
 def library(tmp_path):
-    def add(title, index, series="My Struggle", author=AUTHOR):
-        folder = tmp_path / author / f"{title} ({index})"
+    def add(title, index, series="My Struggle", author=AUTHOR, file_title=None):
+        file_title = file_title or title
+        folder = tmp_path / author / f"{file_title} ({index})"
         folder.mkdir(parents=True)
-        epub = folder / f"{title} - {author}.epub"
+        epub = folder / f"{file_title} - {author}.epub"
         opf = _OPF.format(title=title, author=author, series=series, index=index)
         _write_epub(epub, opf)
         (folder / "metadata.opf").write_text(opf, encoding="utf-8")
@@ -89,6 +90,12 @@ def test_the_same_volume_of_the_same_series_is_suggested(library):
     assert scores == {"Boyhood Island": SuggestionsService._SERIES_MATCH_SCORE}
 
 
+def test_a_book_in_two_series_matches_by_its_numbered_series(library):
+    # ABS lists every series a book is in, such as an umbrella series after its own.
+    scores = _scan("My Struggle, Book 3", "My Struggle #3, Knausgaard Collection", library("Boyhood Island", 3))
+    assert scores == {"Boyhood Island": SuggestionsService._SERIES_MATCH_SCORE}
+
+
 def test_distinctive_title_survives_conflicting_series_and_title_numbers(library):
     candidate = library("The Daughters' War, Book 1", 0, series="Blacktongue", author="Christopher Buehlman")
     scores = _scan("The Daughters' War, Book 2", "Blacktongue #2", candidate, author="Christopher Buehlman")
@@ -102,6 +109,77 @@ def test_a_series_match_never_auto_matches(library):
 
 def test_another_volume_of_the_same_series_is_not_suggested(library):
     assert _scan("My Struggle, Book 5", "My Struggle #5", library("My Struggle", 4)) == {}
+
+
+def _calibre_volume(library, n):
+    # Some editions are titled "Series: Book N", and Calibre writes the colon as "_" in file names.
+    return library(f"My Struggle: Book {n}", n, file_title=f"My Struggle_ Book {n}")
+
+
+def test_another_volume_titled_series_and_book_number_is_not_suggested(library):
+    assert _scan("My Struggle, Book 5", "My Struggle #5", _calibre_volume(library, 4)) == {}
+
+
+def test_only_the_same_volume_titled_series_and_book_number_is_suggested(library):
+    scores = _scan(
+        "My Struggle, Book 5", "My Struggle #5",
+        _calibre_volume(library, 1), _calibre_volume(library, 4), _calibre_volume(library, 5),
+    )
+    assert list(scores) == ["My Struggle_ Book 5"]
+
+
+@pytest.mark.parametrize("title", ["My Struggle: Book 1", "My Struggle_ Book 1", "My Struggle - Book 1", "My Struggle, Book 1", "My Struggle. Book 1"])
+def test_normalizing_drops_a_book_number_after_any_separator(title):
+    assert SuggestionsService._normalize_title_for_match(title) == "My Struggle"
+
+
+@pytest.mark.parametrize("title", ["My Struggle: Book One", "My Struggle_ Book Two", "My Struggle, Book III"])
+def test_normalizing_drops_a_book_number_written_as_a_word_or_numeral(title):
+    assert SuggestionsService._normalize_title_for_match(title) == "My Struggle"
+
+
+@pytest.mark.parametrize("title", ["My Struggle, Volume 2", "My Struggle, Vol. 2", "My Struggle, Vol.2", "My Struggle Volume Two",
+                                   "My Struggle: Book 2.5"])
+def test_normalizing_drops_a_volume_number(title):
+    assert SuggestionsService._normalize_title_for_match(title) == "My Struggle"
+
+
+def test_another_volume_titled_after_a_period_is_not_suggested(library):
+    candidate = library("My Struggle. Book 4", 4, file_title="My Struggle. Book 4")
+    assert _scan("My Struggle, Book 5", "My Struggle #5", candidate) == {}
+
+
+@pytest.mark.parametrize("title", ["The Jungle Book II", "My Notebook Two", "My Notebook 2", "Dune Part 2", "Book 2", "Vol. 3"])
+def test_normalizing_keeps_a_number_that_is_part_of_the_title(title):
+    assert SuggestionsService._normalize_title_for_match(title) == title
+
+
+def test_another_volume_numbered_in_words_is_not_suggested(library):
+    candidate = library("My Struggle: Book One", 1, file_title="My Struggle_ Book One")
+    assert _scan("My Struggle, Book 5", "My Struggle #5", candidate) == {}
+
+
+def test_a_series_match_with_a_number_in_one_title_is_full(library):
+    assert _scan("Boyhood Island, Book 3", "My Struggle #3", library("Boyhood Island", 3)) == {"Boyhood Island": 100.0}
+
+
+def test_a_series_number_against_another_volume_in_the_title_is_capped(library):
+    candidate = library("The Way of Kings, Book 2", 2, series="The Stormlight Archive")
+    scores = _scan("The Way of Kings", "The Stormlight Archive #1", candidate)
+    assert scores == {"The Way of Kings, Book 2": SuggestionsService._SUBTITLE_STRIPPED_SCORE_CAP}
+
+
+def test_the_ebook_series_number_confirms_a_numbered_audiobook_title(library):
+    assert _scan("My Struggle, Book 5", "", library("My Struggle", 5)) == {"My Struggle": 100.0}
+
+
+def test_the_ebook_series_number_rules_out_another_volume(library):
+    assert _scan("My Struggle, Book 5", "", library("My Struggle", 1)) == {}
+
+
+def test_an_ebook_series_named_differently_leaves_another_volume_for_review(library):
+    scores = _scan("My Struggle, Book 5", "", library("My Struggle", 1, series="Min kamp"))
+    assert scores == {"My Struggle": SuggestionsService._SUBTITLE_STRIPPED_SCORE_CAP}
 
 
 def test_a_title_match_survives_sources_numbering_the_series_differently(library):

@@ -516,8 +516,8 @@ class ABSClient:
             logger.error(f"ABS: Error fetching listening stats: {e}", exc_info=True)
         return None
 
-    def get_listening_sessions(self, limit=10):
-        """Fetch recent listening sessions for the current ABS user."""
+    def get_listening_sessions(self, limit=10, page=0):
+        """Fetch one page of the current ABS user's listening sessions, newest first."""
         if not self.is_configured():
             return []
 
@@ -526,7 +526,7 @@ class ABSClient:
         try:
             r = self.session.get(
                 url,
-                params={"itemsPerPage": int(limit or 10)},
+                params={"itemsPerPage": int(limit or 10), "page": int(page or 0)},
                 timeout=self.timeout,
             )
             if r.status_code == 200:
@@ -540,6 +540,31 @@ class ABSClient:
         except Exception as e:
             logger.error(f"ABS: Error fetching listening sessions: {e}", exc_info=True)
         return []
+
+    def get_item_listening_sessions(self, item_id, items_per_page=100, page=0):
+        """Fetch one page of the current ABS user's sessions for one library item, newest first."""
+        if not self.is_configured():
+            return None
+
+        self._update_session_headers()
+        url = f"{self.base_url}/api/me/item/listening-sessions/{item_id}"
+        try:
+            r = self.session.get(
+                url,
+                params={"itemsPerPage": int(items_per_page or 100), "page": int(page or 0)},
+                timeout=self.timeout,
+            )
+            if r.status_code == 200:
+                return r.json() or {}
+            logger.warning(
+                "ABS: Failed to fetch listening sessions for item '%s' (%s) - %s",
+                item_id,
+                r.status_code,
+                sanitize_log_data(r.text),
+            )
+        except Exception as e:
+            logger.error(f"ABS: Error fetching listening sessions for item '{item_id}': {e}", exc_info=True)
+        return None
 
     def get_progress_with_status(self, item_id: str) -> tuple[dict | None, int | None]:
         """Return progress and its HTTP status, preserving an expected 404."""

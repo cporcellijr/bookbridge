@@ -12078,6 +12078,102 @@ def _build_listening_book_list():
     return result
 
 
+def _abs_last_listened(abs_client, item_ids, per_page=100, max_pages=10):
+    """Epoch seconds of each item's newest ABS listening session.
+
+    ABS returns sessions newest first, so paging stops once every item has a date.
+    Progress ``lastUpdate`` is no substitute: the bridge moves it when a reader leads.
+    """
+    wanted = set(item_ids or ())
+    found = {}
+    for page in range(max_pages):
+        if not wanted - found.keys():
+            break
+        sessions = abs_client.get_listening_sessions(limit=per_page, page=page)
+        if not isinstance(sessions, list):
+            break
+        for session in sessions:
+            item_id = session.get("libraryItemId") if isinstance(session, dict) else None
+            if item_id in wanted and item_id not in found and session.get("updatedAt"):
+                found[item_id] = int(session["updatedAt"]) // 1000
+        if len(sessions) < per_page:
+            break
+    return found
+
+
+def _abs_listening_book_list(items, last_listened, titles):
+    """Per-book rollup from ABS's own listening time, so the rows add up to its totals.
+
+    ``last_listened`` maps item ids to epoch seconds and ``titles`` maps BookBridge
+    abs_ids to titles. ABS gives no per-book session count.
+    """
+    last_listened = last_listened or {}
+    result = []
+    for item_id, item in (items or {}).items():
+        total_seconds = int(round(float((item or {}).get("timeListening") or 0)))
+        if total_seconds <= 0:
+            continue
+        metadata = item.get("mediaMetadata") or {}
+        authors = metadata.get("authors") or []
+        author = ", ".join(a.get("name") for a in authors if isinstance(a, dict) and a.get("name"))
+        result.append({
+            "bookKey": f"abs:{item_id}",
+            "absId": item_id,
+            "isLinked": item_id in titles,
+            "title": metadata.get("title") or titles.get(item_id) or "Unknown book",
+            "author": author or None,
+            "totalSeconds": total_seconds,
+            "sessionCount": None,
+            "avgSessionSeconds": None,
+            "lastReadAt": last_listened.get(item_id),
+        })
+    result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+    return result
+
+
+def _abs_book_listening_detail(abs_client, abs_id, session_limit=40, max_pages=20):
+    """One book's listening totals and newest-first sessions from ABS, or None if it has none.
+
+    Matches the shape of ``get_book_listening_detail`` so the book detail can use either.
+    """
+    per_page = 100
+    sessions = []
+    for page in range(max_pages):
+        data = abs_client.get_item_listening_sessions(abs_id, items_per_page=per_page, page=page)
+        if not isinstance(data, dict):
+            break
+        batch = [s for s in (data.get("sessions") or []) if isinstance(s, dict)]
+        sessions.extend(batch)
+        if len(batch) < per_page:
+            break
+    sessions = [s for s in sessions if float(s.get("timeListening") or 0) > 0]
+    if not sessions:
+        return None
+
+    def fraction(session, key):
+        duration = float(session.get("duration") or 0)
+        return float(session.get(key) or 0) / duration if duration > 0 else None
+
+    total_seconds = int(round(sum(float(s.get("timeListening") or 0) for s in sessions)))
+    newest = sessions[0]
+    newest_progress = fraction(newest, "currentTime")
+    return {
+        "totalSeconds": total_seconds,
+        "sessionCount": len(sessions),
+        "avgSessionSeconds": total_seconds // len(sessions),
+        "progressPercent": round(min(newest_progress, 1.0) * 100, 1) if newest_progress is not None else None,
+        "lastReadAt": int(newest.get("updatedAt") or 0) // 1000,
+        "bookTitle": newest.get("displayTitle"),
+        "sessions": [{
+            "startTime": int(s.get("startedAt") or 0) // 1000,
+            "endTime": int(s.get("updatedAt") or 0) // 1000,
+            "durationSeconds": int(round(float(s.get("timeListening") or 0))),
+            "startProgress": fraction(s, "startTime"),
+            "endProgress": fraction(s, "currentTime"),
+        } for s in sessions[:session_limit]],
+    }
+
+
 def _local_listening_stats(tz):
     """ABS-shaped listening stats from the bridge's own AUDIOBOOK sessions, or None if empty."""
     days = database_service.get_listening_days(getattr(tz, "key", str(tz)))
@@ -12140,9 +12236,17 @@ def _build_listening_stats_payload(tz):
         total_days=len(all_activity_dates),
         reference_date=datetime.now(tz).date(),
     )
-    finished_books = _abs_finished_books(
-        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz, abs_client
-    ) if use_abs else database_service.get_listening_finished_books(getattr(tz, "key", str(tz)))
+    if use_abs:
+        progress = abs_client.get_all_progress_raw()
+        finished_books = _abs_finished_books(progress, raw_stats.get("items"), tz, abs_client)
+        items = raw_stats.get("items") or {}
+        books = _abs_listening_book_list(
+            items, _abs_last_listened(abs_client, set(items)),
+            {book.abs_id: book.abs_title for book in database_service.get_all_books()},
+        )
+    else:
+        finished_books = database_service.get_listening_finished_books(getattr(tz, "key", str(tz)))
+        books = _build_listening_book_list()
     summary["itemsFinished"] = len(finished_books)
     summary["daysListened"] = len(all_activity_dates)
 
@@ -12160,7 +12264,7 @@ def _build_listening_stats_payload(tz):
         "trackedBookIds": sorted({
             session.get("absId") for session in normalized_sessions if session.get("absId")
         }),
-        "books": _build_listening_book_list(),
+        "books": books,
         "yearlyRecap": _build_listening_yearly_recap(all_days, datetime.now(tz).year, finished_books, tz),
     }
 
@@ -12540,7 +12644,12 @@ def api_stats_book_detail():
 
         listening = None
         if abs_id:
-            detail = database_service.get_book_listening_detail(abs_id)
+            # ABS holds the full listening history, including Storyteller-led time the
+            # bridge credits there; the bridge's own sessions only cover what it saw.
+            abs_client = _stats_abs_client()
+            detail = _abs_book_listening_detail(abs_client, abs_id) if abs_client else None
+            if detail is None:
+                detail = database_service.get_book_listening_detail(abs_id)
             if detail and int(detail.get("totalSeconds") or 0) > 0:
                 book = database_service.get_book(abs_id)
                 snapshot_title = detail.pop("bookTitle", None)
