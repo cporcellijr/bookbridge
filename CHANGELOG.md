@@ -8,6 +8,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A few pages read on a KOReader device right after a sync are no longer rewound.** When BookBridge had just written
+  a position to KoSync and you then read a little further, the next sync could take your new position for BookBridge's
+  own write and move the device back to the audiobook. A position a device sent after BookBridge's write now always
+  counts as your reading.
 - **Books no longer take over another book's KOReader hash during downloads or reconciliation.** If two mappings
   point at the same file, the existing hash stays with its book and the conflicting download is withheld until
   the ebook mapping is corrected.

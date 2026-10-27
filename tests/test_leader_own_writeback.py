@@ -30,10 +30,11 @@ more than SYNC_DELTA_BETWEEN_CLIENTS, so "resolve the discrepancy" never converg
 
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -245,6 +246,76 @@ class TestGuard4CrossFormatScaleArtifact(LeaderWritebackBase):
 
         self.assertIsNotNone(leader)
         self.assertNotIn("cross-format scale artifact", logs)
+
+
+class TestDevicePutAfterOurWriteIsUserMovement(LeaderWritebackBase):
+    """Live 2026-10-27: a Kindle read three pages past BookBridge's KoSync write and
+    the next cycle took that reading for our own echo and rewound it.
+
+        13:43:55  KoSync Updated: 26.8% with progress '/body/DocFragment[17]/body/p[70].0'
+        13:47:48  Received progress from 'KindlePaperWhite5SE' ... -> 27.26% (Updated from 27.16%)
+        13:50:41  Excluding own write-back candidate(s) ['BookOrbit', 'KoSync'] from leader selection
+        13:50:41  BookOrbitAudio leads at 26.6840% (normalized: 16806.4s, source=bookorbitaudio)
+        13:50:42  Received progress from 'abs-sync-bot' ... -> 26.85% (Updated from 27.26%)
+
+    27.26% sat within SYNC_DELTA_BETWEEN_CLIENTS of the 26.85% we wrote, and KoSync has
+    no position marker, so the percentage match called it an echo. But the built-in
+    server saw the device PUT that value 128s ago, after our write 406s ago.
+    """
+
+    LIVE_ID = "bookorbit:6343"
+    WRITTEN = 0.2684609437643723
+    KINDLE = 0.2726
+
+    def _record_write_ago(self, client, pct, seconds):
+        with patch("src.services.write_tracker.time.time", return_value=time.time() - seconds):
+            write_tracker.record_write(client, self.LIVE_ID, pct)
+
+    def _config(self, put_age):
+        kosync = {"pct": self.KINDLE, "xpath": "/body/DocFragment[17]/body/p[78].0",
+                  "_normalization_source": "xpath"}
+        if put_age is not None:
+            kosync.update({"_kosync_recent_external_put": True,
+                           "_kosync_last_put_device": "KindlePaperWhite5SE",
+                           "_kosync_last_put_age_seconds": put_age})
+        return {
+            "KoSync": _state(kosync, previous_pct=self.KINDLE),
+            "BookOrbit": _state({"pct": self.WRITTEN, "_normalization_source": "cfi"},
+                                previous_pct=self.WRITTEN),
+            "BookOrbitAudio": _state({"pct": 0.266840, "ts": 16806.4}, previous_pct=0.266840),
+        }
+
+    def _run(self, put_age):
+        self._record_write_ago("KoSync", self.WRITTEN, 406)
+        self._record_write_ago("BookOrbit", self.WRITTEN, 406)
+        manager = _manager(
+            normalized={"KoSync": 16844.68, "BookOrbit": 16799.80, "BookOrbitAudio": 16806.4},
+            client_names=("KoSync", "BookOrbit", "BookOrbitAudio"),
+        )
+        with self.assertLogs("src.sync_manager", level="INFO") as captured:
+            leader, leader_pct = manager._determine_leader(
+                self._config(put_age), _book(), self.LIVE_ID, "Live book")
+        return leader, leader_pct, "\n".join(captured.output)
+
+    def test_device_reading_after_our_write_leads(self):
+        leader, leader_pct, logs = self._run(put_age=128.0)
+
+        self.assertEqual(leader, "KoSync")
+        self.assertAlmostEqual(leader_pct, self.KINDLE)
+        self.assertIn("Excluding own write-back candidate(s) ['BookOrbit']", logs)
+        self.assertIn("after BookBridge's own write-back", logs)
+
+    def test_device_put_before_our_write_is_still_our_echo(self):
+        leader, _, logs = self._run(put_age=500.0)
+
+        self.assertEqual(leader, "BookOrbitAudio")
+        self.assertIn("Excluding own write-back candidate(s) ['BookOrbit', 'KoSync']", logs)
+
+    def test_without_a_device_put_the_percentage_match_still_decides(self):
+        leader, _, logs = self._run(put_age=None)
+
+        self.assertEqual(leader, "BookOrbitAudio")
+        self.assertIn("Excluding own write-back candidate(s) ['BookOrbit', 'KoSync']", logs)
 
 
 if __name__ == "__main__":
