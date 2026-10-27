@@ -713,6 +713,11 @@ automatically:
 
 Suggestions always require your approval before a real mapping is created.
 
+A single push never creates work: the bridge waits until the device reports you reading forward,
+by at least **Min Ebook Change**, before it looks for a match. A book you removed from BookBridge
+therefore stays removed when a device sends a late or stale position for it, and comes back only
+if you start reading it again.
+
 ### Books delivered by the Bridge Sync plugin
 
 Books sent to a device through the Bridge Sync plugin's **Sync books** action arrive
