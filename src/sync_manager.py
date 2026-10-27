@@ -74,6 +74,7 @@ from src.services.map_quality import find_slips
 from src.services.readalong_delivery import is_generated_readalong_epub
 from src.services.migration_service import MigrationService
 from src.services.reading_session_aggregator import (
+    IDLE_CLOSE_PATIENCE,
     MAX_SESSION_SECONDS,
     effective_session_gap_seconds,
     uncovered_fraction,
@@ -6418,6 +6419,9 @@ class SyncManager:
         try:
             now = time.time()
             self.database_service.close_reading_sessions(now, effective_session_gap_seconds())
+            abs_client = self.active_abs_client
+            if abs_client is not None and hasattr(abs_client, "close_idle_listening_sessions"):
+                abs_client.close_idle_listening_sessions(effective_session_gap_seconds() * IDLE_CLOSE_PATIENCE)
             rows = self.database_service.get_pending_reading_sessions()
             for row in rows:
                 duration = int(min(row.accumulated_seconds,

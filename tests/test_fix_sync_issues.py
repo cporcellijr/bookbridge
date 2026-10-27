@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import os
 
 # We verify imports work, but we will mock them in tests
+from src.services.reading_session_aggregator import effective_session_gap_seconds
 from src.sync_clients.abs_sync_client import ABSSyncClient
 from src.db.models import Book
 from src.sync_clients.sync_client_interface import ServiceState
@@ -87,7 +88,9 @@ class TestFixSyncIssues(unittest.TestCase):
         )
 
         self.assertEqual(adjusted_ts, 500.0)
-        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 500.0, 300.0)
+        self.mock_abs_client.update_progress.assert_called_once_with(
+            "abs-1", 500.0, 300.0, listening_gap_seconds=effective_session_gap_seconds()
+        )
 
     def test_update_progress_credit_listening_uses_audio_delta(self):
         """update_progress(credit_listening=True) credits ts_for_text - current ABS ts."""
@@ -109,7 +112,9 @@ class TestFixSyncIssues(unittest.TestCase):
         self.client.update_progress(book, request)
 
         # delta = 200.0 (new) - 100.0 (current ABS) = 100.0 listening seconds
-        self.mock_abs_client.update_progress.assert_called_once_with("abs-1", 200.0, 100.0)
+        self.mock_abs_client.update_progress.assert_called_once_with(
+            "abs-1", 200.0, 100.0, listening_gap_seconds=effective_session_gap_seconds()
+        )
 
     def test_update_progress_without_credit_listening_sends_zero(self):
         """Default (reading-driven) push still sends zero listening time."""

@@ -1,6 +1,7 @@
 import os
 import requests
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -29,6 +30,14 @@ def is_abs_disabled_value(value) -> bool:
 _ABS_ALL_ITEMS_PERMISSIONS = ("accessAllLibraries", "accessAllTags", "accessExplicitContent")
 
 _ABS_ITEM_LISTING_TTL_SECONDS = 1800
+
+# ABS closes a user's open sessions on the same device when it starts another, so
+# credited listening gets its own device, apart from the per-push "bookbridge-bot".
+_ABS_LISTENING_DEVICE_ID = "bookbridge-listening"
+# (server, token, item) -> (session id, last sync epoch). Module-level so it outlives
+# a per-user client rebuilt after a settings change.
+_listening_sessions: dict = {}
+_listening_sessions_lock = threading.Lock()
 
 
 class ABSBulkProgress(dict):
@@ -761,10 +770,12 @@ class ABSClient:
             logger.error(f"❌ Failed to update ABS ebook progress: {e}", exc_info=True)
             return False
 
-    def update_progress(self, abs_id, timestamp, time_listened):
+    def update_progress(self, abs_id, timestamp, time_listened,
+                        listening_gap_seconds: Optional[float] = None):
         """
         Update progress using session-based sync.
-        Creates a session, syncs progress, then closes the session.
+        Creates a session, syncs progress, then closes the session. With
+        ``listening_gap_seconds``, credited listening continues one open session instead.
         """
         if timestamp > 1000000:
             timestamp = timestamp / 1000.0
@@ -779,6 +790,8 @@ class ABSClient:
             "currentTime": timestamp,
             "timeListened": time_listened
         }
+        if listening_gap_seconds:
+            return self._sync_listening_session(abs_id, payload, listening_gap_seconds)
         return self.update_progress_using_payload(abs_id, payload)
 
     def update_progress_using_payload(self, abs_id, payload: dict):
@@ -786,14 +799,59 @@ class ABSClient:
         if not session_id:
             logger.error(f"❌ Failed to create ABS session for item '{abs_id}'")
             return {"success": False, "code": None, "reason": f"Failed to create ABS session for item {abs_id}"}
+        result = self._post_session_sync(abs_id, session_id, payload)
+        if result["success"]:
+            self.close_session(session_id)
+        return result
 
+    def _sync_listening_session(self, abs_id, payload: dict, gap_seconds: float) -> dict:
+        """Credit listening to one open session per sitting, as an ABS player does.
+
+        ABS saves a session on every sync, so its time is kept even if it is never closed.
+        """
+        from src.services.reading_session_aggregator import unexplained_idle_seconds
+
+        key = (self.base_url, self.token, abs_id)
+        now = time.time()
+        with _listening_sessions_lock:
+            entry = _listening_sessions.get(key)
+        if entry and unexplained_idle_seconds(now - entry[1], payload["timeListened"]) <= gap_seconds:
+            result = self._post_session_sync(abs_id, entry[0], payload)
+            # 404: ABS restarted or closed it, so start another below.
+            if result["code"] != 404:
+                if result["success"]:
+                    with _listening_sessions_lock:
+                        _listening_sessions[key] = (entry[0], now)
+                return result
+        session_id = self.create_session(abs_id, device_id=_ABS_LISTENING_DEVICE_ID)
+        if not session_id:
+            logger.error(f"❌ Failed to create ABS session for item '{abs_id}'")
+            return {"success": False, "code": None, "reason": f"Failed to create ABS session for item {abs_id}"}
+        result = self._post_session_sync(abs_id, session_id, payload)
+        with _listening_sessions_lock:
+            if result["success"]:
+                _listening_sessions[key] = (session_id, now)
+            else:
+                _listening_sessions.pop(key, None)
+        return result
+
+    def close_idle_listening_sessions(self, idle_seconds: float) -> None:
+        """Close this ABS user's listening sessions with no sync for ``idle_seconds``."""
+        now = time.time()
+        with _listening_sessions_lock:
+            idle = [key for key, (_, last) in _listening_sessions.items()
+                    if key[:2] == (self.base_url, self.token) and now - last > idle_seconds]
+            session_ids = [_listening_sessions.pop(key)[0] for key in idle]
+        for session_id in session_ids:
+            self.close_session(session_id)
+
+    def _post_session_sync(self, abs_id, session_id, payload: dict) -> dict:
         self._update_session_headers()
         try:
             url = f"{self.base_url}/api/session/{session_id}/sync"
             r = self.session.post(url, json=payload, timeout=self.timeout)
             if r.status_code in (200, 204):
                 logger.debug(f"ABS progress updated via session: {abs_id}, payload: {payload}")
-                self.close_session(session_id)
                 return {"success": True, "code": r.status_code, "response": r.text}
             elif r.status_code == 404:
                 logger.warning(f"⚠️ ABS session not found (404): '{session_id}'")
@@ -912,14 +970,14 @@ class ABSClient:
             logger.error(f"❌ Error fetching ABS in-progress: {e}", exc_info=True)
             return []
 
-    def create_session(self, abs_id):
+    def create_session(self, abs_id, device_id: str = "bookbridge-bot"):
         """Create a new ABS session for the given abs_id (item id). Returns session_id or None."""
         self._update_session_headers()
         play_url = f"{self.base_url}/api/items/{abs_id}/play"
         play_payload = {
             "deviceInfo": {
-                "id": "bookbridge-bot",
-                "deviceId": "bookbridge-bot",
+                "id": device_id,
+                "deviceId": device_id,
                 "clientName": "BookBridge",
                 "clientVersion": "1.0",
                 "manufacturer": "BookBridge",

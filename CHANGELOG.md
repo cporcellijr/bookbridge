@@ -8,6 +8,10 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Storyteller listening shows as one Audiobookshelf session per sitting** (#566). With **Count as Listening Time**
+  on, every sync opened and closed its own ABS listening session, so 30 minutes with a 3-minute sync showed as ten
+  3-minute sessions. BookBridge now keeps one ABS session open while you keep listening and closes it once you stop
+  for longer than the **Reading Session Merge Gap**, the same gap that groups its own reading sessions.
 - **The stats page's Listening books add up to its total when you use Audiobookshelf.** The book list, each book's
   last-listened date and the book detail came from BookBridge's own sessions, which miss listening it credits to ABS,
   so a book could show 1h33m while ABS had 4h22m for it. With ABS configured they now come from ABS's own listening
