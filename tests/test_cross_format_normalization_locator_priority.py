@@ -906,6 +906,49 @@ def test_recent_external_kosync_zero_delta_discrepancy_can_lead(caplog):
     ) in caplog.text
 
 
+def test_uncorroborated_recent_kosync_rewind_does_not_unfinish_a_finished_book(caplog):
+    """A device replaying an old position must not lead on recency alone.
+
+    Live: "KOSync: Allowing rewind from 'KindlePaperWhite5SE' for doc ... (100.00% -> 14.94%)",
+    then "Trusting recent external KoSync PUT from 'KindlePaperWhite5SE' during zero-delta
+    discrepancy resolution" wrote 13.2% to the finished audiobook. A rewind leads only
+    when corroborated.
+    """
+    caplog.set_level(logging.INFO)
+    manager = SyncManager.__new__(SyncManager)
+    manager.cross_format_deadband_seconds = 2.0
+
+    class _Client:
+        def can_be_leader(self):
+            return True
+
+    manager.sync_clients = {"BookOrbit": _Client(), "KoSync": _Client(), "BookOrbitAudio": _Client()}
+    manager._has_significant_delta = MagicMock(return_value=False)
+    manager._normalize_for_cross_format_comparison = MagicMock(
+        return_value={"BookOrbit": 11393.17, "KoSync": 1467.24, "BookOrbitAudio": 11411.0}
+    )
+    config = {
+        "BookOrbit": _state({"pct": 0.999995, "_normalization_source": "percent_fallback"}),
+        "KoSync": _state(
+            {
+                "pct": 0.1494,
+                "_normalization_source": "xpath",
+                "_kosync_recent_external_put": True,
+                "_kosync_last_put_device": "KindlePaperWhite5SE",
+                "_kosync_last_put_age_seconds": 125.0,
+            }
+        ),
+        "BookOrbitAudio": _state({"pct": 1.0, "ts": 11411.0}),
+    }
+    book = SimpleNamespace(duration=11411.0, transcript_file="DB_MANAGED", audio_source="BookOrbit")
+
+    leader, _ = manager._determine_leader(config, book, "stale-replay-book", "book")
+
+    assert leader == "BookOrbitAudio"
+    assert "Trusting recent external KoSync PUT" not in caplog.text
+    assert "Not trusting recent external KoSync PUT from 'KindlePaperWhite5SE'" in caplog.text
+
+
 def _percent_fallback_manager():
     manager = SyncManager.__new__(SyncManager)
     manager.cross_format_deadband_seconds = 2.0

@@ -4747,6 +4747,28 @@ class SyncManager:
                         candidate_source = config[candidate_name].current.get("_normalization_source")
                         if candidate_name == primary_audio_client or candidate_source != "percent_fallback":
                             high_conf_normalized_candidates[candidate_name] = candidate_ts
+                    # The hatch is for a reader that moved on. A PUT materially behind its
+                    # peers is a rewind, and a rewind leads only when corroborated (above):
+                    # trusted on recency alone, a device replaying an old position
+                    # un-finished a finished book.
+                    if recent_external_kosync and not corroborated_rewind:
+                        kosync_ts = normalized_candidates[recent_external_kosync]
+                        peer_ts = [
+                            ts for name, ts in high_conf_normalized_candidates.items()
+                            if name != recent_external_kosync and ts is not None
+                        ]
+                        if kosync_ts is not None and peer_ts and kosync_ts < max(peer_ts) - MATERIAL_ROLLBACK_SECONDS:
+                            device = (
+                                config[recent_external_kosync].current.get("_kosync_last_put_device")
+                                or "unknown"
+                            )
+                            logger.info(
+                                f"🛑 '{abs_id}' '{title_snip}' Not trusting recent external KoSync PUT from "
+                                f"'{device}': uncorroborated rewind {max(peer_ts) - kosync_ts:.1f}s behind its "
+                                f"max peer ({kosync_ts:.1f}s vs {max(peer_ts):.1f}s) during zero-delta "
+                                f"discrepancy resolution — a rewind leads only once the reader moves on from it"
+                            )
+                            recent_external_kosync = None
                     if corroborated_rewind:
                         rewind_name, rewind_ts, rewind_peer_ts, rewind_evidence = corroborated_rewind
                         selected_normalized_candidates = {rewind_name: rewind_ts}
