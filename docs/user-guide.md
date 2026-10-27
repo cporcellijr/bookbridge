@@ -79,8 +79,11 @@ resets progress. A CTC badge marks a book whose alignment came from forced align
 
 **Honor a Deliberate Rewind** is on by default in Settings → Sync. After you go back in
 one app, keep reading or listening from the new position so the bridge can distinguish
-your rewind from a stale report. The setting is independent of the normal protection
-against a different device pulling you backward.
+your rewind from a stale report. For a linked KOReader book, waking the reader or sending
+one backward report leaves the newer saved position in place, even when the device ID
+matches. Reading forward from the lower position supplies the evidence for an intentional
+rewind. The setting is independent of the normal protection against a different device
+pulling you backward.
 
 ---
 
@@ -716,7 +719,10 @@ Suggestions always require your approval before a real mapping is created.
 A single push never creates work: the bridge waits until the device reports you reading forward,
 by at least **Min Ebook Change**, before it looks for a match. A book you removed from BookBridge
 therefore stays removed when a device sends a late or stale position for it, and comes back only
-if you start reading it again.
+if you start reading it again. Small page turns on the same device add up from its first new
+report, even when that starts below the old position. You do not have to read past your
+pre-removal position. Another reader's, book's or device's progress does not count toward
+that evidence.
 
 ### Books delivered by the Bridge Sync plugin
 

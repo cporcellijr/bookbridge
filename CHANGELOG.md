@@ -8,6 +8,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **Books no longer take over another book's KOReader hash during downloads or reconciliation.** If two mappings
+  point at the same file, the existing hash stays with its book and the conflicting download is withheld until
+  the ebook mapping is corrected.
+- **A second reader can match a shared book after reading forward without changing the first reader's position.**
+  Initial reports are saved privately even when access to the existing mapping is deferred.
 - **Matching a BookOrbit or Grimmory audiobook now links Hardcover and StoryGraph automatically.** These matches skipped
   the tracker auto-match the other match paths run, so every tracker had to be linked by hand from the dashboard.
 - **The content-match guard no longer refuses correct pairings on OpenAI embeddings.** OpenAI's `text-embedding-3-small`
@@ -16,11 +21,14 @@ All notable changes to BookBridge will be documented in this file.
   model that scored them (#556).
 - **A KOReader device replaying an old position no longer rewinds your other apps.** A device could send a stale
   position for a book it did not even have open, and BookBridge pushed it to the audiobook and the other readers,
-  un-finishing a finished book. A KOReader position well behind your other apps now moves them only once you keep
-  reading from it; reading forward on the device syncs straight away as before.
+  un-finishing a finished book. Waking the same device or replaying its position now leaves the newer saved
+  position in place until that device reports fresh forward reading. Earlier reading evidence cannot be reused
+  after listening moves you ahead again; normal forward progress still syncs as before.
 - **A book you removed from BookBridge no longer comes back as an ebook-only match on its own.** A KOReader device
   sending a late or stale position for it recreated the match. A file BookBridge already has a position for now matches
   again only once you read forward in it by at least **Min Ebook Change**, and a single push never creates a match.
+  Small page turns accumulate from the first new report, including a lower position; you do not have to pass the old
+  pre-removal position. Reports from other readers, books or devices do not supply that evidence.
 
 ## [7.11.0] - 2026-10-26
 
