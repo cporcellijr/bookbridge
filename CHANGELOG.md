@@ -14,6 +14,10 @@ All notable changes to BookBridge will be documented in this file.
   scores correct audio/ebook pairings below the default 0.45 similarity, so they were refused before alignment ran. A low
   embedding score is now overruled when the transcript contains the ebook's own text, and refusals name the embedding
   model that scored them (#556).
+- **A KOReader device replaying an old position no longer rewinds your other apps.** A device could send a stale
+  position for a book it did not even have open, and BookBridge pushed it to the audiobook and the other readers,
+  un-finishing a finished book. A KOReader position well behind your other apps now moves them only once you keep
+  reading from it; reading forward on the device syncs straight away as before.
 
 ## [7.11.0] - 2026-10-26
 
