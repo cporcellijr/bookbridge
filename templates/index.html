@@ -474,7 +474,7 @@
     {% endmacro %}
 
     {% macro render_series_card(group, integrations) %}
-    {% if get_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}
+    {% if get_user_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}
     {# Single-card series design (issue #449): the lead book's own full card
        carries a series strip folded into its bottom (see the series_strip
        branch of render_book_card). The "other" children -- everyone but the

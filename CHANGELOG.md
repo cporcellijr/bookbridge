@@ -6,6 +6,37 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Saving settings no longer restarts BookBridge unless it has to.** Most changes now take effect the moment you
+  save. A setting marked **restart** is read once at startup: a server address, a folder, the sync period and a few
+  others. Saving a change to one of those still restarts the app, and the Save bar tells you so before you press it.
+- **Settings are grouped by what they are for.** The sidebar is now **Services**, **Reading & Sync**, **Library &
+  Matching**, **Alignment**, **AI**, **Server**, **Maintenance** and **Users**. The KOReader book-matching options
+  that sat under Suggestions, and the transcription and alignment options buried in System → Advanced, each have a
+  home of their own. The clean-up and backfill buttons live on **Maintenance**. Every on/off is now the same switch.
+- **One choice instead of one per app.** How often apps are checked, how often highlights sync, the "Up Next" shelf
+  that auto-matches books you put on it, and how long to wait before posting progress to Hardcover and StoryGraph
+  are each a single setting now, applied to every app you use. Apps you had set differently keep their own
+  values until you change that choice, and the card tells you they differ. Setting highlights to 0 now stops highlight
+  copying even while Readest uploads keep running. **Find shelves** on the "Up Next" card lists the shelves and
+  collections in every library app you use, not only Grimmory. Highlights, reading history, the "Up Next" shelf and posting to
+  trackers each have their own card, and KOReader's page-turn wait, backward-progress protection, history
+  switches and *Compare text positions when percentages disagree* sit beside the matching settings for every app
+  under **Reading & Sync**.
+- **More of BookBridge is in Settings.** Identifying books a KOReader device opens that BookBridge doesn't know yet,
+  the Storyteller collection for synced books, combining KOReader statistics across your devices, and the Whisper.cpp
+  server timeout used to be environment variables only.
+- **Find a setting searches every tab, and "Different from defaults" lists your customised settings.** Each changed setting has a
+  **reset** link back to its default.
+- **Each reader chooses their own reading preferences.** Highlight, reading-status and History sharing between
+  KOReader devices, protection from an out-of-date device, marking a finished book finished everywhere, Audiobookshelf
+  reading checkpoints, counting Storyteller as listening time, and the series view on your Library are now under
+  **My Integrations → Reading preferences**. Each starts at **Server default**, which follows the value in Settings,
+  and can be set to On or Off for just that reader.
+- **Settings are described in plain words.** Labels such as "Client Diff Threshold" and "Rollback Veto Tolerance"
+  now say what they do, and descriptions say what changes for you and when you would touch them.
+
 ### Fixed
 
 - **Storyteller listening shows as one Audiobookshelf session per sitting** (#566). With **Count as Listening Time**

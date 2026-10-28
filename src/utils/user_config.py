@@ -79,9 +79,37 @@ ENGINE_MIRROR_KEYS = (
 )
 
 
+# Reading preferences: how each reader wants their own books handled. The admin's
+# Settings value is the server default; a reader's own On/Off on My Integrations
+# overrides it, and a blank choice keeps following the default. Deliberately NOT
+# in PER_USER_CREDENTIAL_KEYS, so every reader, regular users included, falls back
+# to the global value.
+PER_USER_PREFERENCE_KEYS = frozenset({
+    "KOREADER_ANNOTATION_SYNC",
+    "KOREADER_STATUS_SYNC_ENABLED",
+    "KOREADER_SYNC_READ_HISTORY",
+    "KOSYNC_FURTHEST_WINS",
+    "SYNC_COMPLETION_PROPAGATION",
+    "ABS_READING_CHECKPOINTS",
+    "STORYTELLER_LISTENING_SESSIONS",
+    "SERIES_SHOW_CURRENT_BOOK_DETAIL",
+})
+
+
 # UI grouping for the per-user credentials page. (group_label, [(key, label, type)])
-# type: 'text' (blank clears), 'secret' (blank keeps existing), 'bool' (checkbox).
+# type: 'text' (blank clears), 'secret' (blank keeps existing), 'bool' (checkbox),
+# 'pref' (Server default / On / Off; blank follows the server default).
 PER_USER_FIELD_GROUPS = [
+    ("Reading preferences", [
+        ("KOREADER_ANNOTATION_SYNC", "Copy my highlights and notes between my KOReader devices", "pref"),
+        ("KOREADER_STATUS_SYNC_ENABLED", "Show a book as reading or finished on all my KOReader devices", "pref"),
+        ("KOREADER_SYNC_READ_HISTORY", "Show books I read on one KOReader device in the History of my others", "pref"),
+        ("KOSYNC_FURTHEST_WINS", "Don't let an out-of-date device move my place backwards", "pref"),
+        ("SYNC_COMPLETION_PROPAGATION", "When I finish a book in one app, mark it finished in all of them", "pref"),
+        ("ABS_READING_CHECKPOINTS", "Save my ebook reading as entries in my Audiobookshelf listening history", "pref"),
+        ("STORYTELLER_LISTENING_SESSIONS", "Count reading along in Storyteller as Audiobookshelf listening time", "pref"),
+        ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "Show each series on my Library as the book I'm on", "pref"),
+    ]),
     ("Audiobookshelf", [
         ("ABS_ENABLED", "Enabled", "bool"),
         ("ABS_KEY", "API token", "secret"),
@@ -313,6 +341,37 @@ def global_fallback_allowed(database_service, user) -> bool:
             getattr(user, "id", "?"), e, exc_info=True,
         )
         return False
+
+
+def user_preference(key: str, default: str = "", database_service=None) -> str:
+    """A reading preference for the ambient user: their own choice, else the
+    server-wide value from Settings, else ``default``.
+
+    Sync cycles carry the user's credentials in context. KoSync requests carry
+    only the user id, so pass ``database_service`` there to read the stored choice.
+    """
+    from src.utils.user_context import get_current_user_credentials, get_current_user_id
+    credentials = get_current_user_credentials()
+    own = None
+    if credentials is not None:
+        own = credentials.get(key)
+    elif database_service is not None and get_current_user_id() is not None:
+        user_id = get_current_user_id()
+        try:
+            own = database_service.get_user_credential(user_id, key)
+        except Exception as e:
+            logger.warning(
+                "Reading preference %s for user %s could not be read; using the server default: %s",
+                key, user_id, e, exc_info=True,
+            )
+    if own not in (None, ""):
+        return str(own)
+    return os.environ.get(key, default)
+
+
+def user_preference_enabled(key: str, default: str = "false", database_service=None) -> bool:
+    """Whether a boolean reading preference is on for the ambient user."""
+    return user_preference(key, default, database_service).strip().lower() in _TRUTHY_SETTING_VALUES
 
 
 def user_setting(key, default=None):

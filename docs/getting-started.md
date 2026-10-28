@@ -127,17 +127,17 @@ docker compose logs -f
 ## Step 5: Create your account and finish configuration
 
 Settings are split by scope: **server-wide connections** (URLs, engine behavior) live in
-**Settings → Integrations**, while **your personal logins** (tokens, usernames, passwords)
+**Settings → Services**, while **your personal logins** (tokens, usernames, passwords)
 live in **My Account → My Integrations**. Both pages show the same service cards, with the
 same names, in the same order.
 
 1. Open `http://localhost:8080`. The first time you open it, you will be asked to create your account — choose a username and password. This becomes your main (admin) account.
-2. Open **Settings → Integrations**.
+2. Open **Settings → Services**.
 3. On the **Audiobookshelf** card, enter your **Server URL** — or switch the card's **Enable** toggle off for an ebook-only install.
 4. Enable any optional services you use and enter their server URLs: Grimmory, BookOrbit, CWA, BookFusion, Storyteller, Readest, Hardcover, StoryGraph.
 5. Click **Save Settings** and wait for the app to come back.
 6. Open **Account → My Integrations** and enter your personal logins: your ABS API token and Library ID, KoSync username/password, and any other service accounts. Use the **Test** button on a card to check a login before saving.
-7. If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller` under **Settings → System**.
+7. If you mounted Storyteller assets, set **Storyteller Assets Path** to `/storyteller` under **Settings → Server**.
 
 !!! tip "Sharing with more than one reader?"
     Your main account can add other people from **Settings -> Users**. Each reader signs in to their own dashboard, opens **Account -> My Integrations**, enters their own service logins, and only sees the books they are reading - so everyone keeps their own progress, even on the same book. Admins can also fill those integrations for a reader from **Settings -> Users -> Integrations**.

@@ -506,7 +506,7 @@ class TestSingleCardSeriesTemplate(unittest.TestCase):
         macro_end = self.source.index("{% endmacro %}", macro_start)
         macro_body = self.source[macro_start:macro_end]
         self.assertIn(
-            "{% if get_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}",
+            "{% if get_user_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}",
             macro_body,
         )
 

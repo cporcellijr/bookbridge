@@ -81,11 +81,15 @@ class TestSettingsUiExposesThem(unittest.TestCase):
     def setUp(self):
         self.html = (Path(__file__).parent.parent / "templates" / "settings.html").read_text(encoding="utf-8")
 
-    def test_audio_poll_fields_are_rendered(self):
-        for prefix in ("BOOKORBIT_AUDIO", "BOOKLORE_AUDIO"):
-            for key in POLL_KEYS:
-                self.assertIn(f'name="{prefix}_{key}"', self.html,
-                              f"{prefix}_{key} has no field in settings.html")
+    def test_every_pollable_client_is_set_by_the_one_poll_control(self):
+        """Settings shows one poll control; saving copies it into every pollable
+        client's own keys, so a client missing from that list is unpollable again."""
+        from src.utils.config_loader import MERGED_SETTINGS
+        for key in POLL_KEYS:
+            self.assertIn(f'name="ALL_APPS_{key}"', self.html)
+            targets = MERGED_SETTINGS[f"ALL_APPS_{key}"]
+            for _client, prefix in ClientPoller._POLLABLE:
+                self.assertIn(f"{prefix}_{key}", targets, f"{prefix}_{key} is not set by the poll control")
 
 
 class TestPollerHonoursTheNewSettings(unittest.TestCase):

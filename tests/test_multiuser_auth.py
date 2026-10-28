@@ -741,6 +741,7 @@ class TestMultiUserAuth(unittest.TestCase):
             ("POST", "/api/test-connection/abs"),
             ("GET", "/api/booklore/libraries"),
             ("GET", "/api/booklore/shelves"),
+            ("GET", "/api/watch-shelves"),
             ("GET", "/api/abs/libraries"),
             ("POST", "/api/booklore/refresh"),
             ("GET", "/api/alignments/llm-status"),

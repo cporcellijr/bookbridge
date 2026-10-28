@@ -163,6 +163,9 @@
                     "KOReader sync" fields under BookOrbit below. Choose HTTP Basic only when relaying through
                     Calibre-Web Automated, preferably over HTTPS.{% endtrans %}</div>
                 {% endif %}
+                {% if group == 'Reading preferences' %}
+                <div class="note">{{ _("How this reader wants their own books handled. Server default follows Settings; On or Off is this reader's own choice.") }}</div>
+                {% endif %}
                 {% if group == 'KOReader Collections' %}
                 <div class="note">{% trans trimmed %}BridgeSync can create KOReader collections from either this user's Grimmory shelves
                     or this user's Hardcover lists. Choose one source here to avoid collection-name collisions. Only
@@ -193,6 +196,15 @@
                             {% if creds.get(key, '')|lower in ['true','1','yes','on'] %}checked{% endif %}>
                         <label for="{{ key }}">{{ label }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">{{ _('(master: %(value)s)', value=master.get(key)) }}</span>{% endif %}</label>
                     </div>
+                    {% elif ftype == 'pref' %}
+                    {% set own_pref = creds.get(key, '')|lower %}
+                    {% set server_on = master.get(key, '')|lower in ['true','1','yes','on'] %}
+                    <label for="{{ key }}">{{ label }}</label>
+                    <select id="{{ key }}" name="{{ key }}">
+                        <option value="" {% if own_pref not in ['true', 'false'] %}selected{% endif %}>{% if server_on %}{{ _('Server default (on)') }}{% else %}{{ _('Server default (off)') }}{% endif %}</option>
+                        <option value="true" {% if own_pref == 'true' %}selected{% endif %}>{{ _('On') }}</option>
+                        <option value="false" {% if own_pref == 'false' %}selected{% endif %}>{{ _('Off') }}</option>
+                    </select>
                     {% elif ftype == 'secret' %}
                     <label for="{{ key }}">{{ label }}</label>
                     <input type="password" id="{{ key }}" name="{{ key }}" autocomplete="off"

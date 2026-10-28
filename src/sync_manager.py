@@ -44,6 +44,7 @@ from src.utils.user_context import (
     set_current_user_credentials, reset_current_user_credentials,
 )
 from src.utils.config_loader import env_truthy
+from src.utils.user_config import user_preference_enabled
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.cache_paths import safe_cache_path, is_plain_basename
@@ -389,7 +390,7 @@ class SyncManager:
         return current
 
     def _completion_propagation_enabled(self) -> bool:
-        return env_truthy('SYNC_COMPLETION_PROPAGATION')
+        return user_preference_enabled('SYNC_COMPLETION_PROPAGATION')
 
     def _completion_threshold(self) -> float:
         try:
@@ -414,7 +415,7 @@ class SyncManager:
 
         Position is untouched here; only the status the file browser shows.
         """
-        if not env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+        if not user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', self.database_service):
             return
         try:
             written = self.database_service.record_koreader_status_for_book(
@@ -478,7 +479,7 @@ class SyncManager:
         reader explicitly marking it finished or abandoned, and must never
         overrule one.
         """
-        if not env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+        if not user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', self.database_service):
             return
         try:
             written = self.database_service.record_koreader_status_for_book(
@@ -5968,8 +5969,7 @@ class SyncManager:
                 primary_audio_client = self._get_primary_audio_client_name(book)
                 credit_listening_leader = (
                     leader == "Storyteller"
-                    and os.environ.get("STORYTELLER_LISTENING_SESSIONS", "true").strip().lower()
-                    in ("true", "1", "yes", "on")
+                    and user_preference_enabled("STORYTELLER_LISTENING_SESSIONS", "true")
                 )
                 # The leader's position already resolved onto the audio timeline by
                 # _normalize_for_cross_format_comparison (the same number leader
@@ -6526,7 +6526,7 @@ class SyncManager:
                 # 'complete' that prompted the clear (the usual reason for one is
                 # about to re-read it). This runs BEFORE the KosyncDocument delete
                 # below, which is what resolves the book's document hashes.
-                if env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+                if user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', self.database_service):
                     try:
                         cleared_hashes = self.database_service.record_koreader_status_for_book(
                             abs_id,

@@ -8,7 +8,7 @@ from src.api.api_clients import ABSClient
 from src.db.models import Book, State
 from src.services.reading_session_aggregator import effective_session_gap_seconds
 from src.sync_clients.sync_client_interface import SyncClient, SyncResult, UpdateProgressRequest, ServiceState, ABS_ITEM_NOT_FOUND
-from src.utils.config_loader import env_truthy
+from src.utils.user_config import user_preference_enabled
 from src.utils.ebook_utils import EbookParser
 from src.utils.progress_metadata import parse_service_timestamp
 from src.utils.transcriber import AudioTranscriber
@@ -349,7 +349,7 @@ class ABSSyncClient(SyncClient):
             time_listened == 0
             and ts > prev_abs_ts
             and adjusted_ts > prev_abs_ts
-            and env_truthy("ABS_READING_CHECKPOINTS")
+            and user_preference_enabled("ABS_READING_CHECKPOINTS")
         ):
             time_listened = 1.0
         time_listened = max(0.0, round(float(time_listened or 0.0), 2))

@@ -36,12 +36,15 @@ from src.utils.user_context import (
     set_current_user_credentials, reset_current_user_credentials,
     get_current_user_credentials, get_current_user_id,
 )
-from src.utils.user_config import resolve_setting, user_setting
+from src.utils.user_config import PER_USER_PREFERENCE_KEYS, resolve_setting, user_preference_enabled, user_setting
 from src.utils.user_config import global_fallback_allowed as _global_fallback_allowed
 from src.utils.user_config import SERVICE_ENABLE_KEYS
 from src.utils.kosync_url import is_builtin_kosync_url
 
-from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
+from src.utils.config_loader import (
+    ConfigLoader, DEFAULT_CONFIG, KNOWN_SETTING_KEYS, MERGED_BOOL_SETTINGS, MERGED_SETTINGS, merged_mixed_settings,
+    RESTART_REQUIRED_SETTINGS, env_truthy, merged_setting_values,
+)
 from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename, contained_library_file
 from src.utils.ebook_utils import (
     LINKABLE_EBOOK_EXTENSIONS,
@@ -571,7 +574,7 @@ _ADMIN_ONLY_ENDPOINTS = {
     'clean_cache', 'api_series_backfill', 'api_debug_abs_series', 'api_storyteller_backfill',
     'admin_users', 'admin_user_integrations',
     'api_restart', 'test_connection',
-    'get_booklore_libraries', 'get_booklore_shelves', 'get_abs_libraries',
+    'get_booklore_libraries', 'get_booklore_shelves', 'get_watch_shelves', 'get_abs_libraries',
     'api_booklore_refresh', 'alignments_llm_status', 'alignments_realign', 'alignments_restore',
     'kosync_admin.api_get_kosync_documents',
     'kosync_admin.api_link_kosync_document',
@@ -5056,6 +5059,30 @@ def settings():
             session['user_error'] = u_error
             return redirect(url_for('settings') + '#users')
 
+        # A merged control (one field standing for several apps) saves its value
+        # into each app's own setting. A checkbox posts a hidden 'off' plus 'on'
+        # when checked, so an unchecked one still reaches every app. A control left
+        # as the page showed it keeps each app's own value, so apps that used to
+        # differ are not evened out by a save that never touched the choice.
+        form = request.form.copy()
+        shown = merged_setting_values(os.environ)
+        for merged, targets in MERGED_SETTINGS.items():
+            if merged not in form:
+                continue
+            values = form.poplist(merged)
+            is_bool = merged in MERGED_BOOL_SETTINGS
+            posted = ('true' if 'on' in values else 'false') if is_bool else values[-1].strip()
+            unchanged = posted == shown[merged]
+            for target in targets:
+                form.poplist(target)
+                if unchanged:
+                    if is_bool and env_truthy(target):
+                        form[target] = 'on'
+                elif not is_bool:
+                    form[target] = posted
+                elif posted == 'true':
+                    form[target] = 'on'
+
         bool_keys = [
             'KOSYNC_CREDENTIALS_FROM_GRIMMORY',
             'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
@@ -5135,6 +5162,8 @@ def settings():
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',
             'REMOTE_AUTH_ENABLED',
             'SERIES_SHOW_CURRENT_BOOK_DETAIL',
+            'AUTO_CREATE_EBOOK_MAPPING',
+            'KOREADER_COMBINE_DEVICE_STATS',
         ]
 
         # Current settings in DB
@@ -5158,8 +5187,8 @@ def settings():
         ]
 
         def _normalized_form_value(key):
-            if key in request.form:
-                raw_value = request.form.get(key, '')
+            if key in form:
+                raw_value = form.get(key, '')
             else:
                 raw_value = current_settings.get(key, '')
 
@@ -5170,18 +5199,22 @@ def settings():
                     clean_value = f"http://{clean_value}"
             return clean_value
 
+        # Every value this save writes, to tell whether a restart is needed.
+        written = {}
+
         # 1. Handle Boolean Toggles (Checkbox logic)
         # Checkboxes are NOT sent if unchecked, so we must check every known bool key
         for key in bool_keys:
-            is_checked = (key in request.form)
+            is_checked = (key in form)
             # Save "true" or "false"
             val_str = str(is_checked).lower()
             database_service.set_setting(key, val_str)
             os.environ[key] = val_str # Immediate update for current process
+            written[key] = val_str
 
         # 2. Handle Text Inputs
         # Iterate over form to find other keys
-        for key, value in request.form.items():
+        for key, value in form.items():
             if key in bool_keys: continue
 
             # Only recognized settings are persisted. The posted form also carries
@@ -5212,9 +5245,11 @@ def settings():
             if clean_value:
                 database_service.set_setting(key, clean_value)
                 os.environ[key] = clean_value # Immediate update for current process
+                written[key] = clean_value
             elif key in current_settings:
                 database_service.set_setting(key, "")
                 os.environ[key] = "" # Immediate update for current process
+                written[key] = ""
 
         new_booklore_settings = {
             key: _normalized_form_value(key)
@@ -5228,6 +5263,23 @@ def settings():
                 client._book_cache.clear()
                 client._book_id_cache.clear()
                 client._cache_timestamp = 0
+
+        def _setting_changed(key):
+            if key not in written:
+                return False
+            old, new = current_settings.get(key) or '', written[key]
+            if key in bool_keys:
+                truthy = ('true', '1', 'yes', 'on')
+                return (old.strip().lower() in truthy) != (new.strip().lower() in truthy)
+            return old.strip() != new.strip()
+
+        restart_changes = sorted(k for k in RESTART_REQUIRED_SETTINGS if _setting_changed(k))
+        if not restart_changes:
+            logger.info("⚙️ Settings saved and applied without a restart")
+            session['message'] = "Settings saved. Your changes are already in effect."
+            return_tab = form.get('return_tab', '')
+            return redirect(url_for('settings') + (f"#{return_tab}" if return_tab.isidentifier() else ''))
+        logger.info("⚙️ Settings saved; restarting to apply %s", ", ".join(restart_changes))
 
         try:
             return render_restarting_page(
@@ -5264,7 +5316,13 @@ def settings():
                          current_user_id=(cu.id if cu else None),
                          primary_admin_id=primary_admin_id,
                          user_message=user_message,
-                         user_error=user_error))
+                         user_error=user_error,
+                         restart_keys=sorted(RESTART_REQUIRED_SETTINGS),
+                         reader_pref_keys=sorted(PER_USER_PREFERENCE_KEYS),
+                         merged_values=merged_setting_values(os.environ),
+                         merged_mixed=merged_mixed_settings(os.environ),
+                         setting_defaults={**{k: DEFAULT_CONFIG.get(k, '') for k in sorted(KNOWN_SETTING_KEYS)},
+                                           **merged_setting_values(DEFAULT_CONFIG)}))
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
 
@@ -11502,7 +11560,7 @@ def mark_complete(abs_id):
     # normally marks a book finished for KOReader -- never sees it. Pressing this
     # button is the most explicit "I finished this" the bridge has, so it would be
     # the worst one to miss.
-    if not perform_delete and env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+    if not perform_delete and user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', database_service):
         try:
             written = database_service.record_koreader_status_for_book(
                 abs_id,
@@ -13550,6 +13608,29 @@ def get_booklore_shelves():
         return jsonify({"error": str(e)}), 500
 
 
+def get_watch_shelves() -> Response:
+    """Shelves and collections that can be the "Up Next" shelf, from every library app in use."""
+    clients = uc()
+    apps = (('Grimmory', clients.booklore_client), ('BookOrbit', clients.bookorbit_client),
+            ('Kavita', clients.kavita_client))
+    found = {}
+    for app_name, client in apps:
+        if client is None or not client.is_configured():
+            continue
+        try:
+            shelves = client.get_all_shelves() or []
+        except Exception as e:
+            logger.warning(f"Could not list {app_name} shelves: {e}", exc_info=True)
+            continue
+        for shelf in shelves:
+            name = str(shelf.get('name') or shelf.get('title') or '').strip() if isinstance(shelf, dict) else ''
+            if name:
+                found.setdefault(name.lower(), (name, []))[1].append(app_name)
+    result = [{"id": name, "name": f"{name} ({', '.join(in_apps)})"} for name, in_apps in found.values()]
+    result.sort(key=lambda x: x["id"].lower())
+    return jsonify(result)
+
+
 def get_abs_libraries():
     """Return available Audiobookshelf libraries."""
     if not container.abs_client().is_configured():
@@ -15175,6 +15256,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/kavita/cover/<series_id>', 'proxy_kavita_cover', proxy_kavita_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
+    app.add_url_rule('/api/watch-shelves', 'get_watch_shelves', get_watch_shelves, methods=['GET'])
     app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/bookfusion/device/start', 'api_bookfusion_device_start', api_bookfusion_device_start, methods=['POST'])

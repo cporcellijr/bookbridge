@@ -39,6 +39,7 @@ from src.utils.user_config import (
     global_fallback_allowed,
     global_service_disabled,
     resolve_setting,
+    user_preference_enabled,
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
 from src.utils.ebook_sources import is_grimmory_source
@@ -2094,7 +2095,7 @@ def kosync_put_progress():
         return _defer_kosync_book_access(doc_hash, put_book, source="put", discover=may_match)
 
     # Optional "furthest wins" protection
-    furthest_wins = env_truthy('KOSYNC_FURTHEST_WINS', 'true')
+    furthest_wins = user_preference_enabled('KOSYNC_FURTHEST_WINS', 'true', _database_service)
     force_update = data.get('force', False)
 
     # This server does not read the service gate: devices keep authenticating and
@@ -2556,7 +2557,7 @@ def koreader_upload_statistics():
 @kosync_auth_required
 def koreader_merged_statistics():
     """Return other devices' page-stat events so the plugin can merge them locally."""
-    if os.environ.get("KOREADER_COMBINE_DEVICE_STATS", "true").lower() != "true":
+    if not env_truthy("KOREADER_COMBINE_DEVICE_STATS", "true"):
         return jsonify({"enabled": False, "page_stats": []}), 200
 
     device = str(request.args.get("device") or "").strip()
@@ -2609,7 +2610,7 @@ def koreader_merged_statistics():
         # Whether the device should also file these merged reads into KOReader's
         # own reading history. That list is per-device by design ("books I opened
         # here"), so widening it to "books I read anywhere" is opt-in.
-        "merge_history": env_truthy("KOREADER_SYNC_READ_HISTORY", "false"),
+        "merge_history": user_preference_enabled("KOREADER_SYNC_READ_HISTORY", "false", _database_service),
     }), 200
 
 
@@ -2618,7 +2619,7 @@ def koreader_merged_statistics():
 @kosync_auth_required
 def koreader_upload_book_status():
     """Receive each device's sidecar reading statuses (summary.status)."""
-    if not env_truthy("KOREADER_STATUS_SYNC_ENABLED", "true"):
+    if not user_preference_enabled("KOREADER_STATUS_SYNC_ENABLED", "true", _database_service):
         return jsonify({"enabled": False, "accepted": 0}), 200
 
     data = request.json
@@ -2685,7 +2686,7 @@ def koreader_merged_book_status():
     already agrees with, so a device that has never reported a book still learns
     that book's status.
     """
-    if not env_truthy("KOREADER_STATUS_SYNC_ENABLED", "true"):
+    if not user_preference_enabled("KOREADER_STATUS_SYNC_ENABLED", "true", _database_service):
         return jsonify({"enabled": False, "books": []}), 200
 
     if not _database_service:
@@ -2790,7 +2791,7 @@ def koreader_link_device_hashes():
 
 
 def _annotation_sync_enabled() -> bool:
-    return os.environ.get("KOREADER_ANNOTATION_SYNC", "true").strip().lower() in ("true", "1", "yes", "on")
+    return user_preference_enabled("KOREADER_ANNOTATION_SYNC", "true", _database_service)
 
 
 @kosync_sync_bp.route('/device-sync/annotations/exchange', methods=['POST'])
@@ -4323,7 +4324,7 @@ def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") 
     or AUTO_CREATE_EBOOK_MAPPING is off. Preserves _active_scans dedupe.
     """
     global _queued_discovery_count
-    auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
+    auto_create = env_truthy('AUTO_CREATE_EBOOK_MAPPING', 'true')
     if not auto_create:
         return
     with _active_scans_lock:
