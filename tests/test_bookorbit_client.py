@@ -806,3 +806,52 @@ def test_upload_transport_error_and_missing_token(client, tmp_path):
         error, post = _upload(client, tmp_path)
     assert isinstance(error, BookOrbitUploadError) and error.kind == "auth"
     post.assert_not_called()
+
+
+class _StreamResp(_Resp):
+    headers: dict = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _download(client, tmp_path, responses):
+    """Run download_file_to_path against a scripted series of responses/exceptions."""
+    with patch.object(client, "_get_fresh_token", return_value="tok"), \
+            patch.object(client.session, "get", side_effect=responses) as get, \
+            patch("src.api.bookorbit_client.stream_response_to_path", return_value=True), \
+            patch("src.api.bookorbit_client.time.sleep"):
+        ok = client.download_file_to_path(12820, tmp_path / "track_000.mp3")
+    return ok, get
+
+
+def test_a_proxy_502_on_a_track_download_is_retried(client, tmp_path, caplog):
+    """Live: "BookOrbit file download failed: file_id=12820 status=502" sent a book
+    from CTC to a 78-minute CPU Whisper run; the same file downloaded 14 s later."""
+    ok, get = _download(client, tmp_path, [_StreamResp(status_code=502), _StreamResp(status_code=200)])
+    assert ok is True
+    assert get.call_count == 2
+    assert "BookOrbit file download failed" not in caplog.text
+
+
+def test_a_dropped_connection_on_a_track_download_is_retried(client, tmp_path):
+    import requests
+    ok, get = _download(client, tmp_path, [requests.ConnectionError("reset"), _StreamResp(status_code=200)])
+    assert ok is True
+    assert get.call_count == 2
+
+
+def test_a_track_download_gives_up_after_three_server_errors(client, tmp_path, caplog):
+    ok, get = _download(client, tmp_path, [_StreamResp(status_code=502)] * 3)
+    assert ok is False
+    assert get.call_count == 3
+    assert "BookOrbit file download failed: file_id=12820 status=502" in caplog.text
+
+
+def test_a_client_error_on_a_track_download_is_not_retried(client, tmp_path):
+    ok, get = _download(client, tmp_path, [_StreamResp(status_code=404)])
+    assert ok is False
+    assert get.call_count == 1

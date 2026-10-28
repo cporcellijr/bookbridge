@@ -39,6 +39,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A brief BookOrbit hiccup no longer sends a book to slow Whisper transcription.** A single failed audio download
+  (a proxy 502 or a dropped connection) made fast CTC alignment give up, and the book was transcribed with Whisper
+  instead, which can take over an hour on a CPU. Audio downloads from BookOrbit now retry twice before giving up.
 - **Storyteller listening shows as one Audiobookshelf session per sitting** (#566). With **Count as Listening Time**
   on, every sync opened and closed its own ABS listening session, so 30 minutes with a 3-minute sync showed as ten
   3-minute sessions. BookBridge now keeps one ABS session open while you keep listening and closes it once you stop

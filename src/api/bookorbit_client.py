@@ -51,6 +51,9 @@ _DETAIL_TTL = 3600
 _TOKEN_MAX_AGE = 840
 _LOGIN_RETRY_COOLDOWN = 60
 _SESSION_POOL_SIZE = 32
+# A proxy blip (502) or dropped connection must not cost a book its CTC alignment.
+_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_RETRY_SECONDS = 5
 _EBOOK_FORMATS = {"epub", "kepub", "pdf", "cbz", "cbr", "cb7", "mobi", "azw3", "azw", "fb2"}
 _AUDIO_FORMATS = {"m4b", "mp3", "m4a", "opus", "ogg", "flac", "aax", "aac"}
 # Which cached light-info id a kind-specific lookup may fall back to.
@@ -1457,29 +1460,48 @@ class BookOrbitClient:
             return False
         url = f"{self._get_base_url()}/api/v1/books/files/{file_id}/download"
         headers = {"Authorization": f"Bearer {token}", "Accept-Encoding": "identity"}
-        try:
-            with self.session.get(url, headers=headers, stream=True, timeout=300) as resp:
-                if resp.status_code != 200:
-                    logger.error(
-                        "BookOrbit file download failed: file_id=%s status=%s",
-                        file_id, resp.status_code,
+        for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+            if attempt > 1:
+                time.sleep(_DOWNLOAD_RETRY_SECONDS * (attempt - 1))
+            try:
+                with self.session.get(url, headers=headers, stream=True, timeout=300) as resp:
+                    if resp.status_code >= 500 and attempt < _DOWNLOAD_ATTEMPTS:
+                        logger.warning(
+                            "BookOrbit file download got status=%s: file_id=%s, retrying (attempt %s of %s)",
+                            resp.status_code, file_id, attempt + 1, _DOWNLOAD_ATTEMPTS,
+                        )
+                        continue
+                    if resp.status_code != 200:
+                        logger.error(
+                            "BookOrbit file download failed: file_id=%s status=%s",
+                            file_id, resp.status_code,
+                        )
+                        return False
+                    expected_size = response_declares_size(resp)
+                    try:
+                        return stream_response_to_path(resp, output_path, expected_size=expected_size)
+                    except IncompleteTransferError as e:
+                        logger.error(
+                            "BookOrbit file download incomplete: file_id=%s got=%s expected=%s",
+                            file_id,
+                            e.actual_size,
+                            e.expected_size if e.expected_size is not None else "unknown",
+                            exc_info=True,
+                        )
+                        return False
+            except (requests.ConnectionError, requests.Timeout) as e:
+                if attempt < _DOWNLOAD_ATTEMPTS:
+                    logger.warning(
+                        "BookOrbit file download connection failed: file_id=%s, retrying (attempt %s of %s): %s",
+                        file_id, attempt + 1, _DOWNLOAD_ATTEMPTS, e, exc_info=True,
                     )
-                    return False
-                expected_size = response_declares_size(resp)
-                try:
-                    return stream_response_to_path(resp, output_path, expected_size=expected_size)
-                except IncompleteTransferError as e:
-                    logger.error(
-                        "BookOrbit file download incomplete: file_id=%s got=%s expected=%s",
-                        file_id,
-                        e.actual_size,
-                        e.expected_size if e.expected_size is not None else "unknown",
-                        exc_info=True,
-                    )
-                    return False
-        except Exception as e:
-            logger.error("BookOrbit file download error: file_id=%s: %s", file_id, e, exc_info=True)
-            return False
+                    continue
+                logger.error("BookOrbit file download error: file_id=%s: %s", file_id, e, exc_info=True)
+                return False
+            except Exception as e:
+                logger.error("BookOrbit file download error: file_id=%s: %s", file_id, e, exc_info=True)
+                return False
+        return False
 
     def get_cover_bytes(self, book_id) -> tuple:
         """Fetch a book's cover image. Returns (bytes, content_type) or (None, None)."""
