@@ -24,7 +24,7 @@ import time
 import logging
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 from difflib import SequenceMatcher
@@ -143,6 +143,7 @@ class BookOrbitClient:
         self._llm_match_cache: dict = {}
         self._detail_cache: dict = {}      # id -> (timestamp, detail dict)
         self._audiobook_api: Optional[str] = None
+        self._reading_progress_api: Optional[bool] = None
         self._audiobook_manifests: dict = {}
         self._audiobook_playback_states: dict = {}
         self._cache_timestamp: float = 0
@@ -1148,13 +1149,20 @@ class BookOrbitClient:
         }
 
     def update_ebook_progress(
-        self, book_info: dict, percentage: float, locator: Optional[LocatorResult] = None
+        self, book_info: dict, percentage: float, locator: Optional[LocatorResult] = None,
+        edited_at: Optional[float] = None,
     ) -> bool:
         """Push ebook progress (percentage is a 0-1 fraction).
 
         When the locator carries a truthy `perfect_ko_xpath`, it is sent as
         `koreaderProgress`. BookOrbit relays this value to KOReader as the pull
         position; without it BookOrbit derives a chapter-root xpointer from the CFI.
+
+        `edited_at` is BookOrbit's own `updatedAt` (epoch seconds) from this cycle's
+        read. With it, BookOrbit 3.6+ gets the write through
+        `PUT /api/v1/reading-progress` as a compare-and-set: a position saved in
+        BookOrbit after that read wins and the write is skipped (returns False).
+        Pre-3.6 servers 404 the route once and stay on the legacy POST.
         """
         book_id = book_info.get("id")
         file_id = self._resolve_primary_file_id(book_id, "ebook")
@@ -1175,6 +1183,51 @@ class BookOrbitClient:
         if file_id is None:
             logger.error("BookOrbit: cannot update ebook — no primary file id for book %s", book_id)
             return False
+
+        if edited_at is not None and self._reading_progress_api is not False:
+            # BookOrbit refuses the write when its stored ms is strictly newer, so
+            # its own ms must come back exactly: round, never truncate.
+            edited = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=round(edited_at * 1000))
+            iso_edited = edited.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            write = {
+                "fileId": int(file_id),
+                "percentage": round(percentage * 100.0, 4),
+                "editedAt": iso_edited,
+            }
+            if locator and locator.cfi:
+                write["text"] = {"cfi": locator.cfi}
+            if locator and locator.perfect_ko_xpath:
+                write["koreader"] = locator.perfect_ko_xpath
+            body = {"writes": [write]}
+            resp = self._make_request("PUT", "/api/v1/reading-progress", body)
+            if resp is not None and resp.status_code == 404:
+                self._reading_progress_api = False
+            elif resp is not None and resp.status_code == 200:
+                self._reading_progress_api = True
+                data = self._parse_json(resp)
+                results = data.get("results") if isinstance(data, dict) else None
+                result = results[0] if isinstance(results, list) and results else None
+                if isinstance(result, dict) and result.get("status") == "superseded":
+                    progress = result.get("progress") or {}
+                    logger.info(
+                        "BookOrbit: kept the newer position for %s — BookOrbit saved %.1f%% at %s, "
+                        "after this cycle read it at %s; skipping write",
+                        book_info.get("title") or book_id,
+                        progress.get("percentage") or 0.0,
+                        progress.get("updatedAt"),
+                        iso_edited,
+                    )
+                    return False
+                logger.info(
+                    "BookOrbit: %s → %.1f%% (koreader_xpath=%s)",
+                    book_info.get("title") or book_id, percentage * 100, "koreader" in write,
+                )
+                return True
+            else:
+                status = resp.status_code if resp is not None else "no response"
+                logger.error("BookOrbit ebook update failed: %s", status)
+                return False
+
         payload: dict = {"percentage": round(percentage * 100.0, 4)}
         if locator and locator.cfi:
             payload["cfi"] = locator.cfi

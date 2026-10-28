@@ -170,7 +170,10 @@ class BookOrbitSyncClient(SyncClient):
             return SyncResult(None, False, {})
 
         pct = request.locator_result.percentage
-        success = self.client.update_ebook_progress(info, pct, request.locator_result)
+        edited_at = None
+        if request.current_state is not None:
+            edited_at = request.current_state.current.get("service_updated_at")
+        success = self.client.update_ebook_progress(info, pct, request.locator_result, edited_at=edited_at)
         if success:
             try:
                 from src.services.write_tracker import record_write

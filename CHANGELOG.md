@@ -39,6 +39,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **BookBridge no longer overwrites a page you just turned to in BookOrbit.** If you read in BookOrbit while a sync
+  was already under way, BookBridge could push another app's older position over yours. On BookOrbit 3.6 or newer,
+  BookOrbit now keeps the newer position and BookBridge picks it up on the next sync.
 - **A brief BookOrbit hiccup no longer sends a book to slow Whisper transcription.** A single failed audio download
   (a proxy 502 or a dropped connection) made fast CTC alignment give up, and the book was transcribed with Whisper
   instead, which can take over an hour on a CPU. Audio downloads from BookOrbit now retry twice before giving up.
