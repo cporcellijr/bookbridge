@@ -93,6 +93,8 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
         discovery = patch.object(kosync_server, "_schedule_auto_discovery")
         self.schedule_discovery = discovery.start()
         self.addCleanup(discovery.stop)
+        kosync_server._book_positions_sent.clear()
+        self.addCleanup(kosync_server._book_positions_sent.clear)
 
     def _put(self, device):
         return self.client.put(
@@ -379,14 +381,15 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
 
         self.assertLess(self._book_pct(), 0.29)
 
-    def test_a_held_copy_is_held_for_its_own_reader_only(self):
+    def test_what_a_copy_was_sent_is_kept_for_its_own_reader_only(self):
         device_hash = self._catalog_title_book()
         self._book_state("struggle-1", 0.29)
-
         self._put_own_position(device_hash, 0.0164, 0.0170)
 
-        self.assertTrue(kosync_server._awaits_book_position(self.user_id, device_hash))
-        self.assertFalse(kosync_server._awaits_book_position(self._other_user_id(), device_hash))
+        self.client.get(f'/syncs/progress/{device_hash}', headers=self.auth_headers)
+
+        self.assertAlmostEqual(kosync_server._last_book_position_sent(self.user_id, device_hash), 0.29)
+        self.assertIsNone(kosync_server._last_book_position_sent(self._other_user_id(), device_hash))
 
     def test_a_get_that_sends_no_position_keeps_the_copy_held(self):
         """A book position with no locator answers 404, which sends the copy nothing."""
@@ -401,7 +404,7 @@ class TestFilenameVariantEndpoints(unittest.TestCase):
         self._push(device_hash, 0.0175)
 
         self.assertEqual(response.status_code, 404)
-        self.assertTrue(kosync_server._awaits_book_position(self.user_id, device_hash))
+        self.assertIsNone(kosync_server._last_book_position_sent(self.user_id, device_hash))
         self.assertAlmostEqual(self._book_pct(), 0.29)
 
     def test_the_bridges_own_push_to_a_held_copy_is_not_held(self):

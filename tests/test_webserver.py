@@ -14,7 +14,7 @@ import sys
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.utils.kosync_headers import KOSYNC_ACCEPT, hash_kosync_key
+from src.utils.kosync_headers import BRIDGE_INTERNAL_HEADER, KOSYNC_ACCEPT, hash_kosync_key
 
 
 def _http_response(status_code, payload=None, text="", headers=None):
@@ -2300,7 +2300,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
     @patch('src.web_server.requests.get')
     def test_test_connection_kosync_supports_cwa_basic_auth(self, mock_get):
         def fake_get(url, headers=None, auth=None, timeout=None):
-            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT})
+            self.assertEqual(headers, {'accept': KOSYNC_ACCEPT, BRIDGE_INTERNAL_HEADER: '1'})
             self.assertEqual(auth, ('reader', 'cwa-password'))
             self.assertEqual(timeout, 5)
             if url == 'https://cwa.example/kosync/healthcheck':

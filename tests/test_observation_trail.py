@@ -495,6 +495,8 @@ class TestIngestionHooks(unittest.TestCase):
 
         mock_db = MagicMock()
         mock_db.get_user_kosync_progress.return_value = None
+        # No KoSync State yet: a bare MagicMock State reads as 100% and holds the push.
+        mock_db.get_state.return_value = None
         original_db, original_manager = ks._database_service, ks._manager
         ks._database_service, ks._manager = mock_db, MagicMock()
         try:
