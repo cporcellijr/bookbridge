@@ -613,7 +613,7 @@ msgstr "Аккаунт, с которым ваши устройства с KORea
 
 #: templates/account_integrations.html:166
 msgid "How you want your own books handled. Server default follows whatever the admin sets in Settings; pick On or Off to choose for yourself."
-msgstr "Как обрабатывать ваши собственные книги. «По умолчанию на сервере» следует тому, что администратор задал в настройках; выберите «Вкл.» или «Выкл.», чтобы решить самому."
+msgstr "Как вы хотите, чтобы обрабатывались ваши собственные книги? По умолчанию сервер следует настройкам, которые администратор задал в разделе «Настройки»; выберите «Вкл.» или «Выкл.», чтобы настроить это самостоятельно."
 
 #: templates/account_integrations.html:169
 msgid "BridgeSync can create KOReader collections from your Grimmory shelves or Hardcover lists."
