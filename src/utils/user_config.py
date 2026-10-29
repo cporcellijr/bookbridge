@@ -99,6 +99,7 @@ PER_USER_PREFERENCE_KEYS = frozenset({
 # N_() is a no-op: setting keys, stored values and group comparisons such as
 # `group == 'KOReader Collections'` keep the English originals.
 def N_(text: str) -> str:
+    """Mark user-facing labels for catalog extraction without changing their stored values."""
     return text
 
 
