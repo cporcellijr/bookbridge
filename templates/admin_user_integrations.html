@@ -258,6 +258,12 @@
         const BF_DEVICE_START_URL = {{ url_for('admin_user_bookfusion_device_start', user_id=target_user.id)|tojson }};
         const BF_DEVICE_POLL_URL = {{ url_for('admin_user_bookfusion_device_poll', user_id=target_user.id)|tojson }};
 
+        function escapeBookFusionHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[ch]);
+        }
+
         function startBookFusionLink() {
             const status = document.getElementById('bookfusion_link_status');
             if (!status) return;
@@ -268,7 +274,7 @@
                     if (!data.ok) { status.textContent = data.message || {{ _('Could not start BookFusion link.')|tojson }}; return; }
                     const interval = Math.max(5, Number(data.interval || 5));
                     const expiresIn = Math.max(interval, Number(data.expires_in || 600));
-                    status.innerHTML = bbFormat({{ _('Go to <a href="{url}" target="_blank" style="color:#aab4f5;">{url}</a> and enter code <strong>{code}</strong> while signed in to this user\'s BookFusion account.')|tojson }}, { url: data.verification_uri, code: data.user_code });
+                    status.innerHTML = bbFormat({{ _('Go to <a href="{url}" target="_blank" style="color:#aab4f5;">{url}</a> and enter code <strong>{code}</strong> while signed in to this user\'s BookFusion account.')|tojson }}, { url: escapeBookFusionHtml(data.verification_uri), code: escapeBookFusionHtml(data.user_code) });
                     pollBookFusionToken(data.device_code, interval, Date.now() + expiresIn * 1000, status);
                 })
                 .catch(err => { status.textContent = bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: err }); });

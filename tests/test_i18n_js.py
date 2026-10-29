@@ -45,6 +45,44 @@ class StaticJsStringsTests(unittest.TestCase):
                 self.assertIsNone(bare.search(line), f"{path.name}:{lineno}: {line.strip()}")
 
 
+class BookFusionHtmlTests(unittest.TestCase):
+    """Translated markup must escape API-provided link and authorization code."""
+
+    def test_link_escapes_values_before_inserting_html(self):
+        source = (TEMPLATES / "admin_user_integrations.html").read_text(encoding="utf-8")
+        self.assertIn("url: escapeBookFusionHtml(data.verification_uri)", source)
+        self.assertIn("code: escapeBookFusionHtml(data.user_code)", source)
+        start = source.index("function escapeBookFusionHtml(value)")
+        end = source.index("function startBookFusionLink()", start)
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to check HTML escaping")
+        script = source[start:end] + "\nconsole.log(escapeBookFusionHtml('<img src=x onerror=\"x\">&'));"
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), '&lt;img src=x onerror=&quot;x&quot;&gt;&amp;')
+
+
+class BookFusionHtmlTests(unittest.TestCase):
+    """Authorization details must be escaped before translated HTML insertion."""
+
+    def test_authorization_link_escapes_dynamic_values(self):
+        source = (TEMPLATES / "admin_user_integrations.html").read_text(encoding="utf-8")
+        self.assertIn("url: escapeBookFusionHtml(data.verification_uri)", source)
+        self.assertIn("code: escapeBookFusionHtml(data.user_code)", source)
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required for this escaping test")
+        start = source.index("function escapeBookFusionHtml(value)")
+        end = source.index("function startBookFusionLink()", start)
+        script = source[start:end] + """
+            console.log(JSON.stringify(escapeBookFusionHtml('<img src=x onerror="alert(1)">&')));
+        """
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;&amp;')
+
+
 class PluralHelperTests(unittest.TestCase):
     """bbPlural from base.html picks the right Russian form for any count."""
 
@@ -63,7 +101,7 @@ class PluralHelperTests(unittest.TestCase):
             console.log(JSON.stringify(out));
         """
         prelude = "const window = globalThis; const document = { documentElement: { lang: 'ru' } };\n"
-        result = subprocess.run([node, "-e", prelude + script], capture_output=True, text=True, timeout=15)
+        result = subprocess.run([node, "-e", prelude + script], capture_output=True, text=True, encoding="utf-8", timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), [
             "1 книга", "2 книги", "5 книг", "11 книг", "21 книга", "22 книги", "25 книг", "101 книга",
