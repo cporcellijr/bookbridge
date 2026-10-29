@@ -117,7 +117,7 @@
             {% set gate_id = 'integration_gate_' ~ loop.index %}
             <div class="group">
                 <div class="group-head">
-                    <h2>{{ group }}</h2>
+                    <h2>{{ _(group) }}</h2>
                     <div class="group-head-actions">
                         {% if gate_key or source_gate %}
                         <div class="toggle-switch-wrapper">
@@ -193,23 +193,23 @@
                     <div class="toggle-row">
                         <input type="checkbox" id="{{ key }}" name="{{ key }}"
                             {% if creds.get(key, '')|lower in ['true','1','yes','on'] %}checked{% endif %}>
-                        <label for="{{ key }}">{{ label }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">{{ _('(master: %(value)s)', value=master.get(key)) }}</span>{% endif %}</label>
+                        <label for="{{ key }}">{{ _(label) }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">{{ _('(master: %(value)s)', value=master.get(key)) }}</span>{% endif %}</label>
                     </div>
                     {% elif ftype == 'pref' %}
                     {% set own_pref = creds.get(key, '')|lower %}
                     {% set server_on = master.get(key, '')|lower in ['true','1','yes','on'] %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <select id="{{ key }}" name="{{ key }}">
                         <option value="" {% if own_pref not in ['true', 'false'] %}selected{% endif %}>{% if server_on %}{{ _('Server default (on)') }}{% else %}{{ _('Server default (off)') }}{% endif %}</option>
                         <option value="true" {% if own_pref == 'true' %}selected{% endif %}>{{ _('On') }}</option>
                         <option value="false" {% if own_pref == 'false' %}selected{% endif %}>{{ _('Off') }}</option>
                     </select>
                     {% elif ftype == 'secret' %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <input type="password" id="{{ key }}" name="{{ key }}" autocomplete="off"
                         placeholder="{% if creds.get(key) %}{{ _('set - leave blank to keep') }}{% elif allow_master_fallback and master.get(key) %}{{ _('inherits master (set)') }}{% else %}{{ _('not set') }}{% endif %}">
                     {% elif ftype.startswith('select:') %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     {% if key == 'DEVICE_SYNC_COLLECTION_SOURCE' %}
                         {% set selected_value = source_raw %}
                     {% else %}
@@ -221,11 +221,11 @@
                             {% set parts = opt.split('=', 1) %}
                             {% set opt_value = parts[0] %}
                             {% set opt_label = parts[1] if parts|length > 1 else parts[0] %}
-                            <option value="{{ opt_value }}" {% if selected_value == opt_value %}selected{% endif %}>{{ opt_label }}</option>
+                            <option value="{{ opt_value }}" {% if selected_value == opt_value %}selected{% endif %}>{{ _(opt_label) }}</option>
                         {% endfor %}
                     </select>
                     {% elif key in ['ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'] %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <div style="display:flex; gap:8px; margin-bottom:14px;">
                         <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
                             style="margin-bottom:0; flex:1;"
@@ -239,7 +239,7 @@
                         <option value="">{{ _('Select a library…') }}</option>
                     </select>
                     {% else %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
                         placeholder="{% if allow_master_fallback and master.get(key) %}{{ _('inherits master: %(value)s', value=master.get(key)) }}{% else %}{{ _('not set') }}{% endif %}">
                     {% endif %}

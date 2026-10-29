@@ -112,7 +112,7 @@ class TestSeriesGroupingLayout(unittest.TestCase):
         next_css = source[next_css_start:source.index("}", next_css_start)]
         self.assertIn("text-overflow: ellipsis", next_css)
         self.assertIn("white-space: nowrap", next_css)
-        self.assertIn('title="Next: {{ group.next_book.display_title }}"', source)
+        self.assertIn('title="{{ _(\'Next: %(title)s\', title=group.next_book.display_title) }}"', source)
         focus_css_start = source.index(".series-header:focus-visible .series-next {")
         focus_css = source[focus_css_start:source.index("}", focus_css_start)]
         self.assertIn("white-space: normal", focus_css)
@@ -137,7 +137,7 @@ class TestSeriesGroupingLayout(unittest.TestCase):
         self.assertIn("{{ book.label }}", block)
         self.assertIn('style="width: {{ book.progress }}%"', block)
         self.assertIn("{% if group.preview_hidden_count %}", block)
-        self.assertIn("+{{ group.preview_hidden_count }} more in series", block)
+        self.assertIn("ngettext('+%(num)s more in series', '+%(num)s more in series', group.preview_hidden_count)", block)
 
 
 class TestSeriesPreviewBooks(unittest.TestCase):

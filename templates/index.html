@@ -4,6 +4,21 @@
 {# Macro for rendering a book card - used by both currently-reading and all-books grids #}
 {% macro render_book_card(mapping, integrations, series_strip=none) %}
     {% set sync_warning_pct = mapping.sync_warning_pct|default(0) %}
+    {# Book states are stored as English keys; show a translated label, and the
+       raw key for any state not listed here. The "book state" context keeps
+       them apart from the same words elsewhere (a user's "active" status). #}
+    {% set status_text = {
+        'active': pgettext('book state', 'active'),
+        'pending': pgettext('book state', 'pending'),
+        'processing': pgettext('book state', 'processing'),
+        'forging': pgettext('book state', 'forging'),
+        'manual_forge': pgettext('book state', 'manual_forge'),
+        'error': pgettext('book state', 'error'),
+        'failed': pgettext('book state', 'failed'),
+        'crashed': pgettext('book state', 'crashed'),
+        'failed_retry_later': pgettext('book state', 'failed_retry_later'),
+        'failed_permanent': pgettext('book state', 'failed_permanent'),
+    }.get(mapping.status, mapping.status) %}
     {% set full_display_title = mapping.display_title %}
     {% if mapping.display_subtitle %}
     {% set full_display_title = mapping.display_title ~ ': ' ~ mapping.display_subtitle %}
@@ -23,12 +38,12 @@
         <div class="book-media-column">
             <div class="book-cover-section">
             {% if mapping.kosync_doc_id %}
-            <img src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="Cover" class="book-cover"
+            <img src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="{{ _('Cover') }}" class="book-cover"
                 loading="lazy" decoding="async"
                 onerror="{% if mapping.cover_url %}this.onerror=null; this.src='{{ mapping.cover_url }}';{% else %}this.style.display='none'; this.nextElementSibling.classList.remove('hidden');{% endif %}">
             <div class="book-cover-placeholder hidden">📖</div>
             {% elif mapping.cover_url %}
-            <img src="{{ mapping.cover_url }}" alt="Cover" class="book-cover"
+            <img src="{{ mapping.cover_url }}" alt="{{ _('Cover') }}" class="book-cover"
                 loading="lazy" decoding="async"
                 onerror="this.style.display='none'; this.nextElementSibling.classList.remove('hidden');">
             <div class="book-cover-placeholder hidden">📖</div>
@@ -38,17 +53,17 @@
             </div>
 
             {% if mapping.storygraph_rating is not none or mapping.goodreads_rating is not none %}
-            <div class="rating-badges" aria-label="Book ratings">
+            <div class="rating-badges" aria-label="{{ _('Book ratings') }}">
                 {% if mapping.storygraph_rating is not none %}
                 <span class="rating-badge rating-badge-sg"
-                    title="StoryGraph: {{ '%.2f' | format(mapping.storygraph_rating) }}{% if mapping.storygraph_review_count %} based on {{ '{:,}'.format(mapping.storygraph_review_count) }} reviews{% endif %}">
+                    title="StoryGraph: {{ '%.2f' | format(mapping.storygraph_rating) }}{% if mapping.storygraph_review_count %} {{ ngettext('based on %(num)s review', 'based on %(num)s reviews', mapping.storygraph_review_count, num='{:,}'.format(mapping.storygraph_review_count)) }}{% endif %}">
                     <span class="rating-source">SG</span>
                     <span class="rating-value">{{ '%.1f' | format(mapping.storygraph_rating) }}</span>
                 </span>
                 {% endif %}
                 {% if mapping.goodreads_rating is not none %}
                 <span class="rating-badge rating-badge-gr"
-                    title="Goodreads: {{ '%.2f' | format(mapping.goodreads_rating) }}{% if mapping.goodreads_review_count %} based on {{ '{:,}'.format(mapping.goodreads_review_count) }} reviews{% endif %}">
+                    title="Goodreads: {{ '%.2f' | format(mapping.goodreads_rating) }}{% if mapping.goodreads_review_count %} {{ ngettext('based on %(num)s review', 'based on %(num)s reviews', mapping.goodreads_review_count, num='{:,}'.format(mapping.goodreads_review_count)) }}{% endif %}">
                     <span class="rating-source">GR</span>
                     <span class="rating-value">{{ '%.1f' | format(mapping.goodreads_rating) }}</span>
                 </span>
@@ -57,10 +72,10 @@
             {% endif %}
 
             <div class="card-feature-badges">
-                <span class="ctc-alignment-badge" title="CTC word alignment is ready"
+                <span class="ctc-alignment-badge" title="{{ _('CTC word alignment is ready') }}"
                     {% if not mapping.ctc_aligned %}hidden{% endif %}>CTC</span>
-                <span class="readalong-badge" role="img" aria-label="Read-along EPUB ready"
-                    title="Read-along EPUB ready" {% if not mapping.readalong_ready %}hidden{% endif %}>
+                <span class="readalong-badge" role="img" aria-label="{{ _('Read-along EPUB ready') }}"
+                    title="{{ _('Read-along EPUB ready') }}" {% if not mapping.readalong_ready %}hidden{% endif %}>
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                         <path d="M4.5 13.5a7.5 7.5 0 0 1 15 0" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round"/>
@@ -84,7 +99,7 @@
                     {% if mapping.status in ['processing', 'forging'] and mapping.job_progress is defined %}
                     {{ mapping.job_progress }}%
                     {% else %}
-                    {{ mapping.status }}
+                    {{ status_text }}
                     {% endif %}
                 </div>
             </div>
@@ -94,9 +109,9 @@
             {% endif %}
             {% if mapping.audio_source %}
             <div class="mapping-meta">
-                <span class="mapping-badge">{{ 'Grimmory' if mapping.audio_source == 'BookLore' else mapping.audio_source }} Audio</span>
+                <span class="mapping-badge">{{ _('%(source)s Audio', source='Grimmory' if mapping.audio_source == 'BookLore' else mapping.audio_source) }}</span>
                 {% if mapping.audio_url %}
-                <a href="{{ mapping.audio_url }}" target="_blank" rel="noopener noreferrer" class="mapping-link">Open Audio</a>
+                <a href="{{ mapping.audio_url }}" target="_blank" rel="noopener noreferrer" class="mapping-link">{{ _('Open Audio') }}</a>
                 {% endif %}
             </div>
             {% endif %}
@@ -110,12 +125,12 @@
             </div>
 
             {% if mapping.is_out_of_sync %}
-            <div class="sync-warning">Out of sync by {{ '%.1f' | format(sync_warning_pct) }}%</div>
+            <div class="sync-warning">{{ _('Out of sync by %(pct)s%%', pct='%.1f' | format(sync_warning_pct)) }}</div>
             {% endif %}
 
             {% if mapping.status in ['failed_retry_later', 'failed_permanent', 'error'] and mapping.job_last_error %}
             <details class="sync-warning">
-                <summary>Alignment needs attention</summary>
+                <summary>{{ _('Alignment needs attention') }}</summary>
                 <p style="white-space: normal; overflow-wrap: anywhere;">{{ mapping.job_last_error }}</p>
             </details>
             {% endif %}
@@ -130,9 +145,9 @@
                 <span class="rs-item"><span class="rs-icon">📖</span> <span class="rs-val">{{ mapping.reading_stats.read_seconds | format_duration }}</span></span>
                 <span class="rs-sep">·</span>
                 {% endif %}
-                <span class="rs-item"><span class="rs-val">{{ mapping.reading_stats.session_count }}</span> sessions</span>
+                <span class="rs-item">{% trans count=mapping.reading_stats.session_count %}<span class="rs-val">{{ count }}</span> session{% pluralize %}<span class="rs-val">{{ count }}</span> sessions{% endtrans %}</span>
                 <span class="rs-sep">·</span>
-                <span class="rs-item">avg <span class="rs-val">{{ mapping.reading_stats.avg_session_seconds | format_duration }}</span></span>
+                <span class="rs-item">{% trans duration=mapping.reading_stats.avg_session_seconds | format_duration %}avg <span class="rs-val">{{ duration }}</span>{% endtrans %}</span>
             </div>
             {% endif %}
 
@@ -142,10 +157,10 @@
             <div class="service-progress">
                 {% if integrations.bookloreaudio and mapping.audio_source == 'BookLore' and mapping.audio_url %}
                 <a href="{{ mapping.audio_url }}" target="_blank" rel="noopener noreferrer" class="service-item"
-                    title="Open Grimmory audiobook">
+                    title="{{ _('Open Grimmory audiobook') }}">
                     <img src="/static/grimmory.webp" alt="GRA" class="service-icon">
                     <span class="service-name">GR Audio</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'bookloreaudio' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'bookloreaudio' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     {% if mapping.states.bookloreaudio is defined %}
                     <span class="service-value">{{ '%.1f' | format(mapping.states.bookloreaudio.percentage|default(0)) }}%</span>
                     {% else %}
@@ -156,10 +171,10 @@
 
                 {% if integrations.bookorbitaudio and mapping.audio_source == 'BookOrbit' %}
                 <a href="{{ mapping.bookorbit_audio_url|default(get_val('BOOKORBIT_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
-                    class="service-item" title="Open BookOrbit audiobook">
+                    class="service-item" title="{{ _('Open BookOrbit audiobook') }}">
                     <img src="/static/bookorbit.svg" alt="BOA" class="service-icon">
                     <span class="service-name">BO Audio</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'bookorbitaudio' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'bookorbitaudio' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     {% if mapping.states.bookorbitaudio is defined %}
                     <span class="service-value">{{ '%.1f' | format(mapping.states.bookorbitaudio.percentage|default(0)) }}%</span>
                     {% else %}
@@ -169,11 +184,11 @@
                 {% endif %}
 
                 {% if integrations.abs and mapping.sync_mode != 'ebook_only' and mapping.abs_url %}
-                <a href="{{ mapping.abs_url }}" target="_blank" rel="noopener noreferrer" class="service-item"
-                    title="Open in Audiobookshelf">
+                <a href="{{ mapping.abs_url }}" target="_blank" rel="noopener noreferrer" class="service-item" data-service="abs"
+                    title="{{ _('Open in Audiobookshelf') }}">
                     <img src="/static/audiobookshelf.png" alt="ABS" class="service-icon">
                     <span class="service-name">ABS</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'abs' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'abs' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     {% if mapping.states.abs is defined %}
                     <span class="service-value">{{ '%d:%02d:%02d' | format((mapping.states.abs.timestamp|default(0)|int)
                         // 3600,
@@ -186,13 +201,13 @@
                 {% endif %}
 
                 {% if integrations.kosync %}
-                <div class="service-item cursor-pointer"
-                    title="Update KoReader Hash (Current: {{ mapping.kosync_doc_id }})"
+                <div class="service-item cursor-pointer" data-service="kosync"
+                    title="{{ _('Update KoReader Hash (Current: %(hash)s)', hash=mapping.kosync_doc_id) }}"
                     data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.abs_title|escape }}"
                     data-hash="{{ mapping.kosync_doc_id }}" onclick="updateKoSyncHash(event)">
                     <img src="/static/koreader.png" alt="KO" class="service-icon">
                     <span class="service-name">KoSync</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'kosync' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'kosync' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     {% if mapping.states.kosync is defined %}
                     <span class="service-value">{{ '%.1f' | format(mapping.states.kosync.percentage|default(0))
                         }}%</span>
@@ -204,26 +219,26 @@
 
                 {# [CHANGED] Show Storyteller on every card: progress when linked, Link affordance otherwise. #}
                 {% if integrations.storyteller %}
-                <div class="service-item" title="Storyteller">
+                <div class="service-item" data-service="storyteller" title="Storyteller">
                     <img src="/static/storyteller.png" alt="ST" class="service-icon">
                     <span class="service-name">Storyteller</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'storyteller' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'storyteller' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     {% if mapping.storyteller_legacy_link %}
                     <span class="service-value cursor-pointer" style="color: #FF9800;"
                         onclick='openStorytellerModal({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
-                        title="Legacy Link: Click to fix">
-                        Fix Link
+                        title="{{ _('Legacy Link: Click to fix') }}">
+                        {{ _('Fix Link') }}
                     </span>
                     {% elif mapping.states.storyteller is defined %}
                     <span class="service-value">{{ '%.1f' | format(mapping.states.storyteller.percentage|default(0))
                         }}%</span>
                     {% elif mapping.storyteller_uuid %}
-                    <span class="service-value" title="Linked via UUID">0.0%</span>
+                    <span class="service-value" title="{{ _('Linked via UUID') }}">0.0%</span>
                     {% else %}
                     <span class="service-value cursor-pointer" style="color: #4FC3F7;"
                         onclick='openStorytellerModal({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
-                        title="Link Storyteller">
-                        Link
+                        title="{{ _('Link Storyteller') }}">
+                        {{ _('Link') }}
                     </span>
                     {% endif %}
                 </div>
@@ -232,10 +247,10 @@
                 {# [CHANGED] Show Grimmory if state exists OR if it was successfully linked/resolved #}
                 {% if integrations.booklore and (mapping.states.booklore is defined or mapping.booklore_id) %}
                 <a href="{{ mapping.booklore_url|default('#') }}" target="_blank" rel="noopener noreferrer"
-                    class="service-item" title="Open in Grimmory">
+                    class="service-item" title="{{ _('Open in Grimmory') }}">
                     <img src="/static/grimmory.webp" alt="BL" class="service-icon">
                     <span class="service-name">Grimmory</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'booklore' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'booklore' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     <span class="service-value">
                         {% if mapping.states.booklore is defined %}
                         {{ '%.1f' | format(mapping.states.booklore.percentage) }}%
@@ -248,10 +263,10 @@
 
                 {% if integrations.bookorbit and (mapping.states.bookorbit is defined or mapping.ebook_source == 'BookOrbit') %}
                 <a href="{{ mapping.bookorbit_url|default(get_val('BOOKORBIT_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
-                    class="service-item" title="Open in BookOrbit">
+                    class="service-item" title="{{ _('Open in BookOrbit') }}">
                     <img src="/static/bookorbit.svg" alt="BO" class="service-icon">
                     <span class="service-name">BookOrbit</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'bookorbit' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'bookorbit' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     <span class="service-value">
                         {% if mapping.states.bookorbit is defined %}
                         {{ '%.1f' | format(mapping.states.bookorbit.percentage) }}%
@@ -264,10 +279,10 @@
 
                 {% if integrations.kavita and (mapping.states.kavita is defined or mapping.ebook_source == 'Kavita') %}
                 <a href="{{ mapping.kavita_url|default(get_val('KAVITA_WEB_URL') or get_val('KAVITA_SERVER'), true) }}" target="_blank" rel="noopener noreferrer"
-                    class="service-item" title="Open in Kavita">
+                    class="service-item" title="{{ _('Open in Kavita') }}">
                     <img src="/static/kavita.svg" alt="" class="service-icon">
                     <span class="service-name">Kavita</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'kavita' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'kavita' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     <span class="service-value">
                         {% if mapping.states.kavita is defined %}
                         {{ '%.1f' | format(mapping.states.kavita.percentage) }}%
@@ -279,11 +294,11 @@
                 {% endif %}
 
                 {% if integrations.bookfusion %}
-                <div class="service-item progress-item-hc" title="{% if mapping.bookfusion_linked %}BookFusion linked{% else %}Link to BookFusion{% endif %}">
+                <div class="service-item progress-item-hc" title="{% if mapping.bookfusion_linked %}{{ _('BookFusion linked') }}{% else %}{{ _('Link to BookFusion') }}{% endif %}">
                     <img src="/static/bookfusion.png" alt="BF"
                         class="service-icon {% if not mapping.bookfusion_linked %}grayscale-muted{% endif %}">
                     <span class="service-name">BookFusion</span>
-                    <span class="service-value cursor-pointer color-inherit" title="Click to edit BookFusion link"
+                    <span class="service-value cursor-pointer color-inherit" title="{{ _('Click to edit BookFusion link') }}"
                         data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.display_title|default(mapping.abs_title)|escape }}"
                         data-has-local-epub="{% if mapping.has_local_epub %}true{% else %}false{% endif %}"
                         data-has-storyteller="{% if mapping.storyteller_uuid %}true{% else %}false{% endif %}"
@@ -305,7 +320,7 @@
                 <div class="service-item progress-item-hc">
                     <a href="{{ mapping.hardcover_url|default('https://hardcover.app') }}" target="_blank"
                         rel="noopener noreferrer"
-                        title="{% if mapping.hardcover_book_id %}Open {{ mapping.hardcover_title }} in Hardcover{% else %}Not linked to Hardcover{% endif %}"
+                        title="{% if mapping.hardcover_book_id %}{{ _('Open %(title)s in Hardcover', title=mapping.hardcover_title) }}{% else %}{{ _('Not linked to Hardcover') }}{% endif %}"
                         class="hc-link {% if not mapping.hardcover_book_id %}pe-none{% endif %}">
                         <img src="/static/hardcover.svg" alt="HC"
                             class="service-icon {% if not mapping.hardcover_book_id %}grayscale-muted{% endif %}"
@@ -313,7 +328,7 @@
                         <span class="hidden service-icon-emoji">📚</span>
                     </a>
                     <span class="service-name">Hardcover</span>
-                    <span class="service-value cursor-pointer color-inherit" title="Click to edit Hardcover link"
+                    <span class="service-value cursor-pointer color-inherit" title="{{ _('Click to edit Hardcover link') }}"
                         data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.hardcover_title|default('')|escape }}"
                         onclick="linkHardcover(event)">
                         {% if mapping.hardcover_book_id %}
@@ -333,7 +348,7 @@
                 <div class="service-item progress-item-hc">
                     <a href="{% if mapping.storygraph_book_id %}{{ mapping.storygraph_url|default('https://app.thestorygraph.com') }}{% else %}#{% endif %}"
                         {% if mapping.storygraph_book_id %}target="_blank" rel="noopener noreferrer"{% endif %}
-                        title="{% if mapping.storygraph_book_id %}Open {{ mapping.storygraph_title }} in StoryGraph{% else %}Link to StoryGraph{% endif %}"
+                        title="{% if mapping.storygraph_book_id %}{{ _('Open %(title)s in StoryGraph', title=mapping.storygraph_title) }}{% else %}{{ _('Link to StoryGraph') }}{% endif %}"
                         class="hc-link {% if not mapping.storygraph_book_id %}cursor-pointer{% endif %}"
                         {% if not mapping.storygraph_book_id %}data-abs-id="{{ mapping.abs_id }}" data-title="" onclick="linkStorygraph(event); return false;"{% endif %}>
                         <img src="/static/storygraph.svg" alt="SG"
@@ -342,7 +357,7 @@
                         <span class="hidden service-icon-emoji">SG</span>
                     </a>
                     <span class="service-name">StoryGraph</span>
-                    <span class="service-value cursor-pointer color-inherit" title="Click to edit StoryGraph link"
+                    <span class="service-value cursor-pointer color-inherit" title="{{ _('Click to edit StoryGraph link') }}"
                         data-abs-id="{{ mapping.abs_id }}" data-title="{{ mapping.storygraph_title|default('')|escape }}"
                         onclick="linkStorygraph(event)">
                         {% if mapping.storygraph_book_id %}
@@ -359,10 +374,10 @@
                 {% endif %}
 
                 {% if integrations.cwa and (mapping.states.cwa is defined or mapping.ebook_source == 'CWA') %}
-                <div class="service-item" title="CWA Kobo Sync">
+                <div class="service-item" title="{{ _('CWA Kobo Sync') }}">
                     <img src="/static/calibre-web.png" alt="" class="service-icon">
                     <span class="service-name">CWA</span>
-                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'cwa' %}<span class="leader-dot" title="Last updated this position"></span>{% endif %}
+                    {% if mapping.last_leader_service is defined and mapping.last_leader_service == 'cwa' %}<span class="leader-dot" title="{{ _('Last updated this position') }}"></span>{% endif %}
                     <span class="service-value">
                         {% if mapping.states.cwa is defined %}
                         {{ '%.1f' | format(mapping.states.cwa.percentage|default(0)) }}%
@@ -377,37 +392,37 @@
 
             <div class="card-footer">
                 <div class="last-sync">
-                    <span class="last-sync-age">Synced {{ mapping.last_sync }}</span>
+                    <span class="last-sync-age">{{ _('Synced %(when)s', when=mapping.last_sync) }}</span>
                 </div>
                 <div class="quick-actions">
                     <button type="button" class="action-btn" onclick="syncNow('{{ mapping.abs_id }}', this)"
-                        title="Sync Now">⚡</button>
+                        title="{{ _('Sync Now') }}">⚡</button>
                     <button type="button" class="action-btn"
                         onclick='markComplete({{ mapping.abs_id|tojson }}, {{ mapping.abs_title|tojson }})'
-                        title="Mark Complete">✅</button>
+                        title="{{ _('Mark Complete') }}">✅</button>
                     <div class="reset-menu">
                         <button type="button" class="action-btn warning" aria-haspopup="true"
-                            aria-expanded="false" aria-label="Reset options"
-                            title="Reset / remap" onclick="toggleResetMenu(event, this)">🔄</button>
+                            aria-expanded="false" aria-label="{{ _('Reset options') }}"
+                            title="{{ _('Reset / remap') }}" onclick="toggleResetMenu(event, this)">🔄</button>
                         <div class="reset-menu-dropdown" role="menu" hidden>
                             <button type="button" role="menuitem" class="reset-menu-item"
-                                onclick='clearPosition({{ mapping.abs_id|tojson }})'>🧹 Clear position</button>
+                                onclick='clearPosition({{ mapping.abs_id|tojson }})'>🧹 {{ _('Clear position') }}</button>
                             <button type="button" role="menuitem" class="reset-menu-item remap-alignment-btn"
                                 data-ctc-aligned="{{ 'true' if mapping.ctc_aligned else 'false' }}"
-                                {% if mapping.ctc_aligned %}disabled title="This book already has a CTC alignment map"{% endif %}
-                                onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{{ '✓ Already using CTC' if mapping.ctc_aligned else '🎯 Remap alignment' }}</button>
+                                {% if mapping.ctc_aligned %}disabled title="{{ _('This book already has a CTC alignment map') }}"{% endif %}
+                                onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{% if mapping.ctc_aligned %}✓ {{ _('Already using CTC') }}{% else %}🎯 {{ _('Remap alignment') }}{% endif %}</button>
                             <button type="button" role="menuitem" class="reset-menu-item readalong-generate-btn"
                                 {% if not mapping.readalong_eligible %}title="{{ mapping.readalong_ineligible_reason }}"{% endif %}
-                                onclick='generateReadalongEpub({{ mapping.abs_id|tojson }}, this)'>📖 Create read-along EPUB</button>
+                                onclick='generateReadalongEpub({{ mapping.abs_id|tojson }}, this)'>📖 {{ _('Create read-along EPUB') }}</button>
                             {% if mapping.readalong_audio_ok %}
                             <button type="button" role="menuitem" class="reset-menu-item readalong-remove-btn"
-                                onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>🗑️ Remove read-along EPUB</button>
+                                onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>🗑️ {{ _('Remove read-along EPUB') }}</button>
                             {% endif %}
                         </div>
                     </div>
                     <form method="POST" action="/delete/{{ mapping.abs_id }}">
-                        <button type="submit" class="action-btn danger" aria-label="Delete Mapping"
-                            title="Delete mapping" onclick="return confirm('Delete this mapping?')">🗑️</button>
+                        <button type="submit" class="action-btn danger" aria-label="{{ _('Delete Mapping') }}"
+                            title="{{ _('Delete mapping') }}" onclick='return confirm({{ _("Delete this mapping?")|tojson }})'>🗑️</button>
                     </form>
                 </div>
             </div>
@@ -425,7 +440,7 @@
                 <span class="series-strip-name">{{ series_strip.series_name }}{% if series_strip.series_author %} &middot; {{ series_strip.series_author }}{% endif %}</span>
                 <span class="series-chevron" aria-hidden="true">&#9654;</span>
             </div>
-            <div class="series-strip-count">{{ series_strip.finished_count }}/{{ series_strip.child_count }} finished</div>
+            <div class="series-strip-count">{{ _('%(done)s/%(total)s finished', done=series_strip.finished_count, total=series_strip.child_count) }}</div>
             {% if series_strip.other_preview_books %}
             <div class="series-book-list">
                 {% for book in series_strip.other_preview_books %}
@@ -439,7 +454,7 @@
                 </div>
                 {% endfor %}
                 {% if series_strip.other_preview_hidden_count %}
-                <div class="series-book-more">+{{ series_strip.other_preview_hidden_count }} more in series</div>
+                <div class="series-book-more">{{ ngettext('+%(num)s more in series', '+%(num)s more in series', series_strip.other_preview_hidden_count) }}</div>
                 {% endif %}
             </div>
             {% endif %}
@@ -506,13 +521,13 @@
             {% endif %}
 
             <div class="series-meta-row">
-              <span class="series-count">{{ group.finished_count }}/{{ group.child_count }} finished</span>
+              <span class="series-count">{{ _('%(done)s/%(total)s finished', done=group.finished_count, total=group.child_count) }}</span>
               <span class="series-sep">·</span>
-              <span class="series-avg">{{ '%.1f'|format(group.avg_progress) }}% avg</span>
+              <span class="series-avg">{{ _('%(pct)s%% avg', pct='%.1f'|format(group.avg_progress)) }}</span>
             </div>
             {% if group.next_book and group.next_book.unified_progress < 100 %}
-            <div class="series-next" title="Next: {{ group.next_book.display_title }}">
-              Next: {{ group.next_book.display_title }}
+            <div class="series-next" title="{{ _('Next: %(title)s', title=group.next_book.display_title) }}">
+              {{ _('Next: %(title)s', title=group.next_book.display_title) }}
             </div>
             {% endif %}
 
@@ -537,7 +552,7 @@
           </div>
           {% endfor %}
           {% if group.preview_hidden_count %}
-          <div class="series-book-more">+{{ group.preview_hidden_count }} more in series</div>
+          <div class="series-book-more">{{ ngettext('+%(num)s more in series', '+%(num)s more in series', group.preview_hidden_count) }}</div>
           {% endif %}
         </div>
         {% endif %}
@@ -2244,14 +2259,14 @@
         {% if whats_new %}
         <div id="whats-new-banner" class="whats-new-banner">
             <div class="whats-new-banner-body">
-                <span class="whats-new-banner-headline">BookBridge updated to {{ whats_new.version }}</span>
-                <a href="/whats-new" class="whats-new-banner-link">What's new</a>
+                <span class="whats-new-banner-headline">{{ _('BookBridge updated to %(version)s', version=whats_new.version) }}</span>
+                <a href="/whats-new" class="whats-new-banner-link">{{ _("What's new") }}</a>
                 {% if whats_new.action_items %}
                 <span class="whats-new-banner-sep">&middot;</span>
-                <span class="whats-new-banner-action"><strong>Action required:</strong> {{ whats_new.action_items | join(' · ') }}</span>
+                <span class="whats-new-banner-action"><strong>{{ _('Action required:') }}</strong> {{ whats_new.action_items | join(' · ') }}</span>
                 {% endif %}
             </div>
-            <button type="button" class="whats-new-banner-close" onclick="dismissWhatsNewBanner()" aria-label="Dismiss">✕</button>
+            <button type="button" class="whats-new-banner-close" onclick="dismissWhatsNewBanner()" aria-label="{{ _('Dismiss') }}">✕</button>
         </div>
         <script>
             function dismissWhatsNewBanner() {
@@ -2268,9 +2283,9 @@
         <div id="forge-status-banner" class="forge-banner" style="display: none;">
             <div style="display: flex; align-items: center; gap: 12px;">
                 <div class="spinner-sm"></div>
-                <span id="forge-task-list">Creating Storyteller edition...</span>
+                <span id="forge-task-list">{{ _('Creating Storyteller edition...') }}</span>
             </div>
-            <small style="opacity: 0.8">Processing in background</small>
+            <small style="opacity: 0.8">{{ _('Processing in background') }}</small>
         </div>
         <script>
             function checkForgeStatus() {
@@ -2298,11 +2313,11 @@
         <div id="suggestions-section">
             <div class="suggestions-banner" id="suggestions-banner">
                 <div class="suggestions-title-group">
-                    <h2 class="suggestions-title">💡 Pending Suggestions</h2>
+                    <h2 class="suggestions-title">💡 {{ _('Pending Suggestions') }}</h2>
                     <span class="count-badge">{{ suggestions|length }}</span>
                 </div>
                 <div class="banner-hint">
-                    <span>Click to Review</span>
+                    <span>{{ _('Click to Review') }}</span>
                     <span class="chevron">↓</span>
                 </div>
             </div>
@@ -2322,16 +2337,16 @@
 
                                 <div
                                     style="font-size: 0.75rem; color: #4CAF50; margin-bottom: 8px; display: flex; align-items: center; gap: 4px;">
-                                    <span>📚</span> Found {{ suggestion.audiobook_count }} potential match(es)
+                                    <span>📚</span> {{ ngettext('Found %(num)s potential match', 'Found %(num)s potential matches', suggestion.audiobook_count) }}
                                 </div>
 
                                 <div class="suggestion-actions" style="display: flex; gap: 8px;">
                                     <a href="{{ url_for('add_book', search=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
-                                        style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">Review</a>
+                                        style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">{{ _('Review') }}</a>
                                     <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"
                                         class="btn btn-sm"
-                                        style="padding: 4px 10px; font-size: 0.8rem; background: rgba(255,255,255,0.1); border: none; cursor: pointer; color: #fff;">Dismiss</button>
+                                        style="padding: 4px 10px; font-size: 0.8rem; background: rgba(255,255,255,0.1); border: none; cursor: pointer; color: #fff;">{{ _('Dismiss') }}</button>
                                 </div>
                             </div>
                         </div>
@@ -2446,24 +2461,24 @@
         {% set author_options = mappings | map(attribute='display_author') | reject('none') | reject('equalto', '') | unique | sort(case_sensitive=False) %}
         <div class="controls-bar">
             <div class="control-group">
-                <input type="text" id="dashboard-search" class="form-input" placeholder="Search books...">
+                <input type="text" id="dashboard-search" class="form-input" placeholder="{{ _('Search books...') }}">
             </div>
             <div class="control-group">
-                <label for="filter-select">Format:</label>
+                <label for="filter-select">{{ _('Format:') }}</label>
                 <select id="filter-select" class="form-select">
-                    <option value="all">All Formats</option>
-                    <option value="has_audio">Has Audio</option>
-                    <option value="audiobook_only">Audiobook Only</option>
-                    <option value="ebook_only">Ebook Only</option>
+                    <option value="all">{{ _('All Formats') }}</option>
+                    <option value="has_audio">{{ _('Has Audio') }}</option>
+                    <option value="audiobook_only">{{ _('Audiobook Only') }}</option>
+                    <option value="ebook_only">{{ _('Ebook Only') }}</option>
                 </select>
             </div>
             <div class="control-group">
-                <label for="series-filter">Series:</label>
+                <label for="series-filter">{{ _('Series:') }}</label>
                 <select id="series-filter" class="form-select">
-                    <option value="all">All Books</option>
-                    <option value="none">No Series</option>
+                    <option value="all">{{ _('All Books') }}</option>
+                    <option value="none">{{ _('No Series') }}</option>
                     {% if series_options %}
-                    <optgroup label="Series">
+                    <optgroup label="{{ _('Series') }}">
                         {% for series_option_name in series_options %}
                         <option value="series:{{ series_option_name }}">{{ series_option_name }}</option>
                         {% endfor %}
@@ -2472,12 +2487,12 @@
                 </select>
             </div>
             <div class="control-group">
-                <label for="author-filter">Author:</label>
+                <label for="author-filter">{{ _('Author:') }}</label>
                 <select id="author-filter" class="form-select">
-                    <option value="all">All Authors</option>
-                    <option value="none">No Author</option>
+                    <option value="all">{{ _('All Authors') }}</option>
+                    <option value="none">{{ _('No Author') }}</option>
                     {% if author_options %}
-                    <optgroup label="Authors">
+                    <optgroup label="{{ _('Authors') }}">
                         {% for author_option_name in author_options %}
                         <option value="author:{{ author_option_name }}">{{ author_option_name }}</option>
                         {% endfor %}
@@ -2486,23 +2501,23 @@
                 </select>
             </div>
             <div class="control-group">
-                <label for="sort-select">Sort by:</label>
+                <label for="sort-select">{{ _('Sort by:') }}</label>
                 <select id="sort-select" class="form-select">
-                    <option value="title">Title</option>
-                    <option value="author">Author</option>
-                    <option value="series">Series</option>
-                    <option value="progress">Progress</option>
-                    <option value="status">Status</option>
-                    <option value="last_sync">Last Synced</option>
-                    <option value="added">Date Added</option>
-                    <option value="rating">Rating</option>
+                    <option value="title">{{ _('Title') }}</option>
+                    <option value="author">{{ _('Author') }}</option>
+                    <option value="series">{{ _('Series') }}</option>
+                    <option value="progress">{{ _('Progress') }}</option>
+                    <option value="status">{{ _('Status') }}</option>
+                    <option value="last_sync">{{ _('Last Synced') }}</option>
+                    <option value="added">{{ _('Date Added') }}</option>
+                    <option value="rating">{{ _('Rating') }}</option>
                 </select>
-                <span class="sort-direction" id="sort-direction" title="Click to Reverse Order">↓</span>
+                <span class="sort-direction" id="sort-direction" title="{{ _('Click to Reverse Order') }}">↓</span>
             </div>
             <div class="control-group">
-                <label class="series-grouping-label" for="series-grouping-toggle" title="Group books from the same series into a single stacked card">
+                <label class="series-grouping-label" for="series-grouping-toggle" title="{{ _('Group books from the same series into a single stacked card') }}">
                     <input type="checkbox" id="series-grouping-toggle" checked>
-                    <span>Group series</span>
+                    <span>{{ _('Group series') }}</span>
                 </label>
             </div>
             <div class="control-group filter-count-group">
@@ -2518,7 +2533,7 @@
         {% if section_flags.has_in_progress %}
         <div class="dashboard-section" id="in-progress-section">
             <div class="section-header">
-                <h2>In Progress</h2>
+                <h2>{{ _('In Progress') }}</h2>
             </div>
 
             <div class="book-grid" id="in-progress-grid">
@@ -2537,7 +2552,7 @@
         <div class="dashboard-section" id="not-started-section">
             <div class="section-header collapsible-section-header" id="not-started-header" role="button" tabindex="0"
                 aria-controls="not-started-grid" aria-expanded="false">
-                <h2>Not Started</h2>
+                <h2>{{ _('Not Started') }}</h2>
                 <span class="section-chevron" id="not-started-chevron" aria-hidden="true">▶</span>
             </div>
 
@@ -2556,7 +2571,7 @@
         {% if section_flags.has_finished %}
         <div class="dashboard-section" id="finished-section">
             <div class="section-header">
-                <h2>Finished</h2>
+                <h2>{{ _('Finished') }}</h2>
             </div>
 
             <div class="book-grid" id="finished-grid">
@@ -2581,9 +2596,9 @@
         {% else %}
                 <div class="empty-state">
                     <div class="empty-state-icon">📚</div>
-                    <h2>No books syncing yet</h2>
-                    <p>Start by adding your first audiobook mapping</p>
-                    <a href="{{ url_for('add_book') }}" class="btn btn-primary">Add Your First Book</a>
+                    <h2>{{ _('No books syncing yet') }}</h2>
+                    <p>{{ _('Start by adding your first audiobook mapping') }}</p>
+                    <a href="{{ url_for('add_book') }}" class="btn btn-primary">{{ _('Add Your First Book') }}</a>
                 </div>
                 {% endif %}
         </div>
@@ -3452,7 +3467,7 @@
                             }
 
                             // Update individual service values
-                            const absItem = card.querySelector('.service-item[title="Open in Audiobookshelf"] .service-value');
+                            const absItem = card.querySelector('.service-item[data-service="abs"] .service-value');
                             if (absItem && book.states && book.states.abs) {
                                 const ts = book.states.abs.timestamp || 0;
                                 const h = Math.floor(ts / 3600);
@@ -3461,12 +3476,12 @@
                                 absItem.textContent = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
                             }
 
-                            const kosyncItem = card.querySelector('.service-item[title^="Update KoReader Hash"] .service-value');
+                            const kosyncItem = card.querySelector('.service-item[data-service="kosync"] .service-value');
                             if (kosyncItem && book.states && book.states.kosync) {
                                 kosyncItem.textContent = `${book.states.kosync.percentage.toFixed(1)}%`;
                             }
 
-                            const stItem = card.querySelector('.service-item[title="Storyteller"] .service-value');
+                            const stItem = card.querySelector('.service-item[data-service="storyteller"] .service-value');
                             if (stItem && book.states && book.states.storyteller) {
                                 stItem.textContent = `${book.states.storyteller.percentage.toFixed(1)}%`;
                             }
@@ -3506,8 +3521,8 @@
             <div class="hc-modal-backdrop" onclick="closeHardcoverModal()"></div>
             <div class="hc-modal-content">
                 <div class="hc-modal-header">
-                    <h3>Link to Hardcover</h3>
-                    <button class="hc-modal-close" onclick="closeHardcoverModal()" aria-label="Close">
+                    <h3>{{ _('Link to Hardcover') }}</h3>
+                    <button class="hc-modal-close" onclick="closeHardcoverModal()" aria-label="{{ _('Close') }}">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round">
                             <path d="M1 1l12 12M13 1L1 13" />
@@ -3517,33 +3532,30 @@
                 <div class="hc-modal-body">
                     <div id="hc-loading" class="hc-loading" style="display:none;">
                         <div class="hc-loading-spinner"></div>
-                        <div class="hc-loading-text">Searching Hardcover...</div>
+                        <div class="hc-loading-text">{{ _('Searching Hardcover...') }}</div>
                     </div>
                     <div id="hc-found" style="display:none;">
                         <div class="hc-book-info">
                             <div class="hc-book-title" id="hc-title"></div>
                             <div class="hc-book-author" id="hc-author"></div>
                         </div>
-                        <div class="hc-editions-label">Select Edition</div>
+                        <div class="hc-editions-label">{{ _('Select Edition') }}</div>
                         <div id="hc-editions"></div>
-                        <p class="hc-text-muted"><a href="#" onclick="showManualInput(); return false;">Wrong book?
-                                Enter URL manually</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showManualInput(); return false;">{{ _('Wrong book? Enter URL manually') }}</a></p>
                     </div>
                     <div id="hc-manual" style="display:none;">
-                        <p>Enter Hardcover URL or book ID:</p>
+                        <p>{{ _('Enter Hardcover URL or book ID:') }}</p>
                         <input type="text" id="hc-input" placeholder="https://hardcover.app/books/...">
-                        <button onclick="resolveManualInput()">Search</button>
+                        <button onclick="resolveManualInput()">{{ _('Search') }}</button>
                     </div>
                     <div id="hc-error" style="display:none;">
                         <p id="hc-error-msg" class="hc-text-error"></p>
-                        <p class="hc-text-muted"><a href="#" onclick="showManualInput(); return false;">Try entering URL
-                                manually</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showManualInput(); return false;">{{ _('Try entering URL manually') }}</a></p>
                     </div>
                 </div>
                 <div class="hc-modal-footer">
-                    <button class="hc-btn-cancel" onclick="closeHardcoverModal()">Cancel</button>
-                    <button id="hc-link-btn" class="hc-btn-link" onclick="linkSelectedEdition()" disabled>Link
-                        Book</button>
+                    <button class="hc-btn-cancel" onclick="closeHardcoverModal()">{{ _('Cancel') }}</button>
+                    <button id="hc-link-btn" class="hc-btn-link" onclick="linkSelectedEdition()" disabled>{{ _('Link Book') }}</button>
                 </div>
             </div>
         </div>
@@ -3552,8 +3564,8 @@
             <div class="hc-modal-backdrop" onclick="closeStorygraphModal()"></div>
             <div class="hc-modal-content">
                 <div class="hc-modal-header">
-                    <h3>Link to StoryGraph</h3>
-                    <button class="hc-modal-close" onclick="closeStorygraphModal()" aria-label="Close">
+                    <h3>{{ _('Link to StoryGraph') }}</h3>
+                    <button class="hc-modal-close" onclick="closeStorygraphModal()" aria-label="{{ _('Close') }}">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round">
                             <path d="M1 1l12 12M13 1L1 13" />
@@ -3563,36 +3575,33 @@
                 <div class="hc-modal-body">
                     <div id="sg-loading" class="hc-loading" style="display:none;">
                         <div class="hc-loading-spinner"></div>
-                        <div class="hc-loading-text">Searching StoryGraph...</div>
+                        <div class="hc-loading-text">{{ _('Searching StoryGraph...') }}</div>
                     </div>
                     <div id="sg-found" style="display:none;">
                         <div class="hc-book-info">
                             <div class="hc-book-title" id="sg-title"></div>
                             <div class="hc-book-author" id="sg-author"></div>
                         </div>
-                        <div class="sg-editions-label" id="sg-editions-label">Select Edition</div>
+                        <div class="sg-editions-label" id="sg-editions-label">{{ _('Select Edition') }}</div>
                         <div id="sg-editions"></div>
                         <p class="hc-text-muted">
-                            <a id="sg-found-url" href="#" target="_blank" rel="noopener noreferrer">Open in StoryGraph</a>
+                            <a id="sg-found-url" href="#" target="_blank" rel="noopener noreferrer">{{ _('Open in StoryGraph') }}</a>
                         </p>
-                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">Wrong book?
-                                Enter URL, ID, or search text manually</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">{{ _('Wrong book? Enter URL, ID, or search text manually') }}</a></p>
                     </div>
                     <div id="sg-manual" style="display:none;">
-                        <p>Enter StoryGraph URL, book ID, or search text:</p>
+                        <p>{{ _('Enter StoryGraph URL, book ID, or search text:') }}</p>
                         <input type="text" id="sg-input" placeholder="https://app.thestorygraph.com/books/...">
-                        <button onclick="resolveStorygraphManualInput()">Resolve</button>
+                        <button onclick="resolveStorygraphManualInput()">{{ _('Resolve') }}</button>
                     </div>
                     <div id="sg-error" style="display:none;">
                         <p id="sg-error-msg" class="hc-text-error"></p>
-                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">Try entering a URL or search text
-                                manually</a></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">{{ _('Try entering a URL or search text manually') }}</a></p>
                     </div>
                 </div>
                 <div class="hc-modal-footer">
-                    <button class="hc-btn-cancel" onclick="closeStorygraphModal()">Cancel</button>
-                    <button id="sg-link-btn" class="hc-btn-link" onclick="linkSelectedStorygraphBook()" disabled>Link
-                        Book</button>
+                    <button class="hc-btn-cancel" onclick="closeStorygraphModal()">{{ _('Cancel') }}</button>
+                    <button id="sg-link-btn" class="hc-btn-link" onclick="linkSelectedStorygraphBook()" disabled>{{ _('Link Book') }}</button>
                 </div>
             </div>
         </div>
@@ -3601,15 +3610,15 @@
         <div id="st-modal" class="hidden">
             <div class="st-modal-content">
                 <div class="st-modal-header">
-                    <h3 id="st-modal-title">Link Storyteller</h3>
+                    <h3 id="st-modal-title">{{ _('Link Storyteller') }}</h3>
                     <button class="action-btn" onclick="closeStorytellerModal()"
                         style="background:none; border:none; color:white; font-size:1.2rem; cursor:pointer;">✕</button>
                 </div>
                 <div class="st-modal-body">
                     <div class="st-search-bar">
-                        <input type="text" id="st-search-input" placeholder="Search Storyteller..." class="hc-input"
+                        <input type="text" id="st-search-input" placeholder="{{ _('Search Storyteller...') }}" class="hc-input"
                             style="flex:1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white;">
-                        <button onclick="searchStoryteller()" class="btn btn-primary">Search</button>
+                        <button onclick="searchStoryteller()" class="btn btn-primary">{{ _('Search') }}</button>
                     </div>
                     <div id="st-results" class="st-results"></div>
                 </div>
@@ -3621,7 +3630,7 @@
             <span
                 style="font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 600; letter-spacing: 0.5px; font-family: monospace;">
                 {% if app_version.startswith('dev') %}
-                Build {{ app_version }}
+                {{ _('Build %(version)s', version=app_version) }}
                 {% else %}
                 v{{ app_version.lstrip('v') }}
                 {% endif %}
@@ -3631,7 +3640,7 @@
                 style="font-size: 11px; color: var(--accent); text-decoration: none; background: rgba(102,126,234,0.15); border: 1px solid rgba(102,126,234,0.3); border-radius: 4px; padding: 3px 8px; white-space: nowrap; transition: all 0.2s; font-weight: 600;"
                 onmouseover="this.style.background='rgba(102,126,234,0.25)'"
                 onmouseout="this.style.background='rgba(102,126,234,0.15)'">
-                ↑ v{{ latest_version }} Available
+                ↑ {{ _('v%(version)s Available', version=latest_version) }}
             </a>
             {% endif %}
         </div>
@@ -3971,8 +3980,8 @@
             <div class="hc-modal-backdrop" onclick="closeDeleteMappingModal()"></div>
             <div class="hc-modal-content" style="max-width:420px;">
                 <div class="hc-modal-header">
-                    <h3>Delete Mapping?</h3>
-                    <button class="hc-modal-close" onclick="closeDeleteMappingModal()" aria-label="Close">
+                    <h3>{{ _('Delete Mapping?') }}</h3>
+                    <button class="hc-modal-close" onclick="closeDeleteMappingModal()" aria-label="{{ _('Close') }}">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round">
                             <path d="M1 1l12 12M13 1L1 13" />
@@ -3981,15 +3990,14 @@
                 </div>
                 <div class="hc-modal-body">
                     <p style="color:rgba(255,255,255,0.75); margin:0; line-height:1.6;">
-                        Do you also want to delete the mapping and all cached files for this book?
+                        {{ _('Do you also want to delete the mapping and all cached files for this book?') }}
                     </p>
                 </div>
                 <div class="hc-modal-footer">
-                    <button class="hc-btn-cancel" onclick="closeDeleteMappingModal()">Cancel</button>
-                    <button class="hc-btn-link" onclick="_dmNoKeepMapping()">No, Keep Mapping</button>
+                    <button class="hc-btn-cancel" onclick="closeDeleteMappingModal()">{{ _('Cancel') }}</button>
+                    <button class="hc-btn-link" onclick="_dmNoKeepMapping()">{{ _('No, Keep Mapping') }}</button>
                     <button onclick="_dmYesDelete()"
-                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:linear-gradient(135deg,#e53e3e,#c53030); color:#fff;">Yes,
-                        Delete</button>
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:linear-gradient(135deg,#e53e3e,#c53030); color:#fff;">{{ _('Yes, Delete') }}</button>
                 </div>
             </div>
         </div>
@@ -3999,8 +4007,8 @@
             <div class="hc-modal-backdrop" onclick="closeBookFusionUploadModal()"></div>
             <div class="hc-modal-content" style="max-width:420px;">
                 <div class="hc-modal-header">
-                    <h3>Upload to BookFusion?</h3>
-                    <button class="hc-modal-close" onclick="closeBookFusionUploadModal()" aria-label="Close">
+                    <h3>{{ _('Upload to BookFusion?') }}</h3>
+                    <button class="hc-modal-close" onclick="closeBookFusionUploadModal()" aria-label="{{ _('Close') }}">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
                             stroke-width="2" stroke-linecap="round">
                             <path d="M1 1l12 12M13 1L1 13" />
@@ -4009,28 +4017,27 @@
                 </div>
                 <div class="hc-modal-body">
                     <p style="color:rgba(255,255,255,0.75); margin:0; line-height:1.6;">
-                        No match found in your BookFusion library. Upload
-                        <strong id="bf-upload-title">this book</strong>'s linked EPUB to your BookFusion library?
+                        {% trans %}No match found in your BookFusion library. Upload
+                        <strong id="bf-upload-title">this book</strong>'s linked EPUB to your BookFusion library?{% endtrans %}
                     </p>
                     <div id="bf-upload-variant-group" style="display:none;">
                         <label style="display:block; margin:10px 0 6px; color:rgba(255,255,255,0.85); font-size:0.9rem;">
-                            <input type="radio" name="bf-upload-variant" value="standard" checked> Standard EPUB
+                            <input type="radio" name="bf-upload-variant" value="standard" checked> {{ _('Standard EPUB') }}
                         </label>
                         <label style="display:block; margin:0 0 6px; color:rgba(255,255,255,0.85); font-size:0.9rem;">
-                            <input type="radio" name="bf-upload-variant" value="readaloud"> Storyteller ReadAloud EPUB (with narration audio)
+                            <input type="radio" name="bf-upload-variant" value="readaloud"> {{ _('Storyteller ReadAloud EPUB (with narration audio)') }}
                         </label>
                         <p style="color:rgba(255,255,255,0.5); font-size:0.78rem; margin:4px 0 0;">
-                            The ReadAloud EPUB is large (~100MB) and may take a few minutes to upload.
+                            {{ _('The ReadAloud EPUB is large (~100MB) and may take a few minutes to upload.') }}
                         </p>
                     </div>
                     <p id="bf-upload-status"
                         style="color:rgba(255,255,255,0.55); margin:12px 0 0; min-height:18px; font-size:0.85rem;"></p>
                 </div>
                 <div class="hc-modal-footer">
-                    <button class="hc-btn-cancel" onclick="closeBookFusionUploadModal()">No, Cancel</button>
+                    <button class="hc-btn-cancel" onclick="closeBookFusionUploadModal()">{{ _('No, Cancel') }}</button>
                     <button id="bf-upload-confirm-btn" onclick="_bfConfirmUpload()"
-                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">Yes,
-                        Upload</button>
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">{{ _('Yes, Upload') }}</button>
                 </div>
             </div>
         </div>
@@ -4040,8 +4047,8 @@
             <div class="hc-modal-backdrop" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'"></div>
             <div class="hc-modal-content" style="max-width:480px;">
                 <div class="hc-modal-header">
-                    <h3>Help improve BookBridge</h3>
-                    <button class="hc-modal-close" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'" aria-label="Close">
+                    <h3>{{ _('Help improve BookBridge') }}</h3>
+                    <button class="hc-modal-close" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'" aria-label="{{ _('Close') }}">
                         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                             <path d="M1 1l12 12M13 1L1 13" />
                         </svg>
@@ -4049,30 +4056,30 @@
                 </div>
                 <div class="hc-modal-body">
                     <p style="color:rgba(255,255,255,0.75); margin:0 0 12px; line-height:1.6;">
-                        Opt in to send a small daily diagnostic report so we can find and fix bugs faster.
+                        {% trans %}Opt in to send a small daily diagnostic report so we can find and fix bugs faster.
                         Reports contain warning messages from your sync logs with book titles, file paths and
-                        URLs replaced by anonymous tokens &mdash; never your library contents or credentials.
+                        URLs replaced by anonymous tokens &mdash; never your library contents or credentials.{% endtrans %}
                     </p>
                     <details style="margin-bottom:12px;">
-                        <summary style="color:rgba(255,255,255,0.65); font-size:0.85rem; cursor:pointer;">What exactly is sent?</summary>
+                        <summary style="color:rgba(255,255,255,0.65); font-size:0.85rem; cursor:pointer;">{{ _('What exactly is sent?') }}</summary>
                         <ul style="color:rgba(255,255,255,0.6); font-size:0.82rem; line-height:1.6; margin:8px 0 0 18px; padding:0;">
-                            <li>Deduplicated warning log lines (scrubbed)</li>
-                            <li>Recent scrubbed log context around each warning</li>
-                            <li>BookBridge version</li>
-                            <li>Which integrations are enabled (on/off flags only)</li>
-                            <li>Total number of synced books (count only)</li>
-                            <li>A random instance ID</li>
+                            <li>{{ _('Deduplicated warning log lines (scrubbed)') }}</li>
+                            <li>{{ _('Recent scrubbed log context around each warning') }}</li>
+                            <li>{{ _('BookBridge version') }}</li>
+                            <li>{{ _('Which integrations are enabled (on/off flags only)') }}</li>
+                            <li>{{ _('Total number of synced books (count only)') }}</li>
+                            <li>{{ _('A random instance ID') }}</li>
                         </ul>
                         <p style="color:rgba(255,255,255,0.5); font-size:0.78rem; margin:6px 0 0;">
-                            This can be changed anytime in Settings.
+                            {{ _('This can be changed anytime in Settings.') }}
                         </p>
                     </details>
                 </div>
                 <div class="hc-modal-footer">
-                    <button class="hc-btn-cancel" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'">Ask me later</button>
-                    <button class="hc-btn-cancel" onclick="_diagnosticsOptIn(false)">No thanks</button>
+                    <button class="hc-btn-cancel" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'">{{ _('Ask me later') }}</button>
+                    <button class="hc-btn-cancel" onclick="_diagnosticsOptIn(false)">{{ _('No thanks') }}</button>
                     <button onclick="_diagnosticsOptIn(true)"
-                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">Enable diagnostics</button>
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">{{ _('Enable diagnostics') }}</button>
                 </div>
             </div>
         </div>

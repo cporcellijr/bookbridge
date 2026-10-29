@@ -94,126 +94,164 @@ PER_USER_PREFERENCE_KEYS = frozenset({
 })
 
 
+# Display text in PER_USER_FIELD_GROUPS is marked with N_() so Babel extracts it
+# (see babel.cfg); it is translated only where it is shown, `{{ _(label) }}`.
+# N_() is a no-op: setting keys, stored values and group comparisons such as
+# `group == 'KOReader Collections'` keep the English originals.
+def N_(text: str) -> str:
+    return text
+
+
+def _select(*options) -> str:
+    """Build a 'select:value=Label|...' field type from (value, label) pairs.
+
+    Each label is its own N_() call, so a translator gets one msgid per option
+    and the template can translate the label it splits back out of the spec.
+    The spec string itself is unchanged, so its parsers do not need to change.
+    """
+    return "select:" + "|".join(f"{value}={label}" for value, label in options)
+
+
 # UI grouping for the per-user credentials page. (group_label, [(key, label, type)])
 # type: 'text' (blank clears), 'secret' (blank keeps existing), 'bool' (checkbox),
 # 'pref' (Server default / On / Off; blank follows the server default).
 PER_USER_FIELD_GROUPS = [
-    ("Reading preferences", [
-        ("KOREADER_ANNOTATION_SYNC", "Copy my highlights and notes between my KOReader devices", "pref"),
-        ("KOREADER_STATUS_SYNC_ENABLED", "Show a book as reading or finished on all my KOReader devices", "pref"),
-        ("KOREADER_SYNC_READ_HISTORY", "Show books I read on one KOReader device in the History of my others", "pref"),
-        ("KOSYNC_FURTHEST_WINS", "Don't let an out-of-date device move my place backwards", "pref"),
-        ("SYNC_COMPLETION_PROPAGATION", "When I finish a book in one app, mark it finished in all of them", "pref"),
-        ("ABS_READING_CHECKPOINTS", "Save my ebook reading as entries in my Audiobookshelf listening history", "pref"),
-        ("STORYTELLER_LISTENING_SESSIONS", "Count reading along in Storyteller as Audiobookshelf listening time", "pref"),
-        ("SERIES_SHOW_CURRENT_BOOK_DETAIL", "Show each series on my Library as the book I'm on", "pref"),
+    (N_("Reading preferences"), [
+        ("KOREADER_ANNOTATION_SYNC", N_("Copy my highlights and notes between my KOReader devices"), "pref"),
+        ("KOREADER_STATUS_SYNC_ENABLED", N_("Show a book as reading or finished on all my KOReader devices"), "pref"),
+        ("KOREADER_SYNC_READ_HISTORY", N_("Show books I read on one KOReader device in the History of my others"), "pref"),
+        ("KOSYNC_FURTHEST_WINS", N_("Don't let an out-of-date device move my place backwards"), "pref"),
+        ("SYNC_COMPLETION_PROPAGATION", N_("When I finish a book in one app, mark it finished in all of them"), "pref"),
+        ("ABS_READING_CHECKPOINTS", N_("Save my ebook reading as entries in my Audiobookshelf listening history"), "pref"),
+        ("STORYTELLER_LISTENING_SESSIONS", N_("Count reading along in Storyteller as Audiobookshelf listening time"), "pref"),
+        ("SERIES_SHOW_CURRENT_BOOK_DETAIL", N_("Show each series on my Library as the book I'm on"), "pref"),
     ]),
-    ("Audiobookshelf", [
-        ("ABS_ENABLED", "Enabled", "bool"),
-        ("ABS_KEY", "API token", "secret"),
-        ("ABS_LIBRARY_ID", "Library ID (optional, for a separate library)", "text"),
-        ("ABS_COLLECTION_NAME", "Collection name (synced books moved here)", "text"),
+    (N_("Audiobookshelf"), [
+        ("ABS_ENABLED", N_("Enabled"), "bool"),
+        ("ABS_KEY", N_("API token"), "secret"),
+        ("ABS_LIBRARY_ID", N_("Library ID (optional, for a separate library)"), "text"),
+        ("ABS_COLLECTION_NAME", N_("Collection name (synced books moved here)"), "text"),
     ]),
-    ("KOReader / KoSync", [
-        ("KOSYNC_ENABLED", "Enabled", "bool"),
+    (N_("KOReader / KoSync"), [
+        ("KOSYNC_ENABLED", N_("Enabled"), "bool"),
         (
             "KOSYNC_AUTH_METHOD",
-            "Authentication",
-            "select:kosync=KoSync headers (default)|basic=HTTP Basic (Calibre-Web Automated)",
+            N_("Authentication"),
+            _select(
+                ("kosync", N_("KoSync headers (default)")),
+                ("basic", N_("HTTP Basic (Calibre-Web Automated)")),
+            ),
         ),
-        ("KOSYNC_USER", "Sync username", "text"),
-        ("KOSYNC_KEY", "Sync password", "secret"),
+        ("KOSYNC_USER", N_("Sync username"), "text"),
+        ("KOSYNC_KEY", N_("Sync password"), "secret"),
         (
             "DEVICE_SYNC_SHELF_FILTER",
-            "Bridge Sync: only download books on these Grimmory shelves (comma-separated, blank = all)",
+            N_("Bridge Sync: only download books on these Grimmory shelves (comma-separated, blank = all)"),
             "text",
         ),
     ]),
-    ("KOReader Collections", [
+    (N_("KOReader Collections"), [
         (
             "DEVICE_SYNC_COLLECTION_SOURCE",
-            "Collection source",
-            "select:off=Off / Disabled|grimmory=Grimmory Shelves|hardcover=Hardcover Lists",
+            N_("Collection source"),
+            _select(
+                ("off", N_("Off / Disabled")),
+                ("grimmory", N_("Grimmory Shelves")),
+                ("hardcover", N_("Hardcover Lists")),
+            ),
         ),
         (
             "DEVICE_SYNC_COLLECTIONS",
-            "Grimmory shelf mode",
-            "select:off=Off / Disabled|all=All Shelves|magic=Magic Shelves Only|shelf=Regular Shelves Only",
+            N_("Grimmory shelf mode"),
+            _select(
+                ("off", N_("Off / Disabled")),
+                ("all", N_("All Shelves")),
+                ("magic", N_("Magic Shelves Only")),
+                ("shelf", N_("Regular Shelves Only")),
+            ),
         ),
-        ("DEVICE_SYNC_EXCLUDED_SHELVES", "Grimmory shelves to exclude", "text"),
+        ("DEVICE_SYNC_EXCLUDED_SHELVES", N_("Grimmory shelves to exclude"), "text"),
         (
             "DEVICE_SYNC_HARDCOVER_LISTS",
-            "Hardcover list mode",
-            "select:all=All Lists|selected=Selected Lists Only",
+            N_("Hardcover list mode"),
+            _select(
+                ("all", N_("All Lists")),
+                ("selected", N_("Selected Lists Only")),
+            ),
         ),
-        ("DEVICE_SYNC_HARDCOVER_LIST_NAMES", "Hardcover list names", "text"),
+        ("DEVICE_SYNC_HARDCOVER_LIST_NAMES", N_("Hardcover list names"), "text"),
     ]),
-    ("Storyteller", [
-        ("STORYTELLER_ENABLED", "Enabled", "bool"),
-        ("STORYTELLER_USER", "Username", "text"),
-        ("STORYTELLER_PASSWORD", "Password", "secret"),
-        ("STORYTELLER_AUTO_LINK", "Automatically link aligned Storyteller books", "bool"),
+    (N_("Storyteller"), [
+        ("STORYTELLER_ENABLED", N_("Enabled"), "bool"),
+        ("STORYTELLER_USER", N_("Username"), "text"),
+        ("STORYTELLER_PASSWORD", N_("Password"), "secret"),
+        ("STORYTELLER_AUTO_LINK", N_("Automatically link aligned Storyteller books"), "bool"),
     ]),
-    ("Grimmory", [
-        ("BOOKLORE_ENABLED", "Enabled", "bool"),
-        ("BOOKLORE_USER", "Username", "text"),
-        ("BOOKLORE_PASSWORD", "Password", "secret"),
-        ("BOOKLORE_SHELF_NAME", "Shelf name (synced books moved here)", "text"),
-        ("BOOKLORE_LIBRARY_ID", "Library ID (optional; blank uses all libraries)", "text"),
-        ("BOOKLORE_ANNOTATION_SYNC", "Highlight sync", "bool"),
+    (N_("Grimmory"), [
+        ("BOOKLORE_ENABLED", N_("Enabled"), "bool"),
+        ("BOOKLORE_USER", N_("Username"), "text"),
+        ("BOOKLORE_PASSWORD", N_("Password"), "secret"),
+        ("BOOKLORE_SHELF_NAME", N_("Shelf name (synced books moved here)"), "text"),
+        ("BOOKLORE_LIBRARY_ID", N_("Library ID (optional; blank uses all libraries)"), "text"),
+        ("BOOKLORE_ANNOTATION_SYNC", N_("Highlight sync"), "bool"),
     ]),
-    ("BookFusion", [
-        ("BOOKFUSION_ENABLED", "Enabled", "bool"),
-        ("BOOKFUSION_ACCESS_TOKEN", "Access token", "secret"),
-        ("BOOKFUSION_API_KEY", "Calibre API key (for uploads)", "secret"),
-        ("BOOKFUSION_ANNOTATION_SYNC", "Highlight sync", "bool"),
+    (N_("BookFusion"), [
+        ("BOOKFUSION_ENABLED", N_("Enabled"), "bool"),
+        ("BOOKFUSION_ACCESS_TOKEN", N_("Access token"), "secret"),
+        ("BOOKFUSION_API_KEY", N_("Calibre API key (for uploads)"), "secret"),
+        ("BOOKFUSION_ANNOTATION_SYNC", N_("Highlight sync"), "bool"),
     ]),
-    ("BookOrbit", [
-        ("BOOKORBIT_ENABLED", "Enabled", "bool"),
-        ("BOOKORBIT_USER", "Username", "text"),
-        ("BOOKORBIT_PASSWORD", "Password", "secret"),
-        ("BOOKORBIT_SHELF_NAME", "Collection name (synced books moved here)", "text"),
-        ("BOOKORBIT_KOSYNC_USER", "KOReader sync username (highlight sync)", "text"),
-        ("BOOKORBIT_KOSYNC_KEY", "KOReader sync password (highlight sync)", "secret"),
-        ("BOOKORBIT_KOSYNC_OWNER", "KOReader sync owner (must match BookOrbit username)", "text"),
+    (N_("BookOrbit"), [
+        ("BOOKORBIT_ENABLED", N_("Enabled"), "bool"),
+        ("BOOKORBIT_USER", N_("Username"), "text"),
+        ("BOOKORBIT_PASSWORD", N_("Password"), "secret"),
+        ("BOOKORBIT_SHELF_NAME", N_("Collection name (synced books moved here)"), "text"),
+        ("BOOKORBIT_KOSYNC_USER", N_("KOReader sync username (highlight sync)"), "text"),
+        ("BOOKORBIT_KOSYNC_KEY", N_("KOReader sync password (highlight sync)"), "secret"),
+        ("BOOKORBIT_KOSYNC_OWNER", N_("KOReader sync owner (must match BookOrbit username)"), "text"),
     ]),
-    ("Kavita", [
-        ("KAVITA_ENABLED", "Enabled", "bool"),
-        ("KAVITA_API_KEY", "Authentication key", "secret"),
-        ("KAVITA_LIBRARY_ID", "Library ID (optional; blank uses all libraries)", "text"),
-        ("KAVITA_COLLECTION_NAME", "Collection name (synced books moved here)", "text"),
+    (N_("Kavita"), [
+        ("KAVITA_ENABLED", N_("Enabled"), "bool"),
+        ("KAVITA_API_KEY", N_("Authentication key"), "secret"),
+        ("KAVITA_LIBRARY_ID", N_("Library ID (optional; blank uses all libraries)"), "text"),
+        ("KAVITA_COLLECTION_NAME", N_("Collection name (synced books moved here)"), "text"),
     ]),
-    ("Readest", [
-        ("READEST_ENABLED", "Enabled", "bool"),
-        ("READEST_ANNOTATION_SYNC", "Highlight sync", "bool"),
-        ("READEST_EMAIL", "Account email", "text"),
-        ("READEST_PASSWORD", "Account password", "secret"),
-        ("READEST_UPLOAD_ON_MATCH", "Upload matched books to Readest", "bool"),
-        ("READEST_UPLOAD_READING", "Upload books you are currently reading", "bool"),
-        ("READEST_GROUP_NAME", "Group name for uploaded books", "text"),
+    (N_("Readest"), [
+        ("READEST_ENABLED", N_("Enabled"), "bool"),
+        ("READEST_ANNOTATION_SYNC", N_("Highlight sync"), "bool"),
+        ("READEST_EMAIL", N_("Account email"), "text"),
+        ("READEST_PASSWORD", N_("Account password"), "secret"),
+        ("READEST_UPLOAD_ON_MATCH", N_("Upload matched books to Readest"), "bool"),
+        ("READEST_UPLOAD_READING", N_("Upload books you are currently reading"), "bool"),
+        ("READEST_GROUP_NAME", N_("Group name for uploaded books"), "text"),
     ]),
-    ("Calibre-Web Automated", [
-        ("CWA_ENABLED", "Enabled", "bool"),
-        ("CWA_USERNAME", "Username", "text"),
-        ("CWA_PASSWORD", "Password", "secret"),
-        ("CWA_SYNC_ENABLED", "Kobo sync enabled", "bool"),
-        ("CWA_SYNC_TOKEN", "Kobo sync token", "secret"),
+    (N_("Calibre-Web Automated"), [
+        ("CWA_ENABLED", N_("Enabled"), "bool"),
+        ("CWA_USERNAME", N_("Username"), "text"),
+        ("CWA_PASSWORD", N_("Password"), "secret"),
+        ("CWA_SYNC_ENABLED", N_("Kobo sync enabled"), "bool"),
+        ("CWA_SYNC_TOKEN", N_("Kobo sync token"), "secret"),
     ]),
-    ("Hardcover", [
-        ("HARDCOVER_ENABLED", "Enabled", "bool"),
-        ("HARDCOVER_TOKEN", "API token", "secret"),
+    (N_("Hardcover"), [
+        ("HARDCOVER_ENABLED", N_("Enabled"), "bool"),
+        ("HARDCOVER_TOKEN", N_("API token"), "secret"),
         (
             "HARDCOVER_GRIMMORY_LIST_SYNC",
-            "Grimmory shelves to Hardcover lists",
-            "select:off=Off / Disabled|all=All Shelves|magic=Magic Shelves Only|shelf=Regular Shelves Only",
+            N_("Grimmory shelves to Hardcover lists"),
+            _select(
+                ("off", N_("Off / Disabled")),
+                ("all", N_("All Shelves")),
+                ("magic", N_("Magic Shelves Only")),
+                ("shelf", N_("Regular Shelves Only")),
+            ),
         ),
-        ("HARDCOVER_GRIMMORY_LIST_PREFIX", "Hardcover list name prefix", "text"),
-        ("HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES", "Grimmory shelves to exclude", "text"),
+        ("HARDCOVER_GRIMMORY_LIST_PREFIX", N_("Hardcover list name prefix"), "text"),
+        ("HARDCOVER_GRIMMORY_LIST_EXCLUDED_SHELVES", N_("Grimmory shelves to exclude"), "text"),
     ]),
-    ("StoryGraph", [
-        ("STORYGRAPH_ENABLED", "Enabled", "bool"),
-        ("STORYGRAPH_SESSION_COOKIE", "Session cookie", "secret"),
-        ("STORYGRAPH_REMEMBER_USER_TOKEN", "Remember-user token", "secret"),
+    (N_("StoryGraph"), [
+        ("STORYGRAPH_ENABLED", N_("Enabled"), "bool"),
+        ("STORYGRAPH_SESSION_COOKIE", N_("Session cookie"), "secret"),
+        ("STORYGRAPH_REMEMBER_USER_TOKEN", N_("Remember-user token"), "secret"),
     ]),
 ]
 
