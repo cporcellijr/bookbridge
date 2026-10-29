@@ -6,6 +6,19 @@ All notable changes to BookBridge will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Russian is available as an interface language.** Choose it on your Account page. Text without a Russian
+  translation continues to appear in English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #567.
+- **The Library and each reader's integration fields are available in Russian.** Book cards, status labels, and
+  integration choices can follow your interface language without changing how books or settings are stored.
+  Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #570.
+- **Settings labels and explanations can follow your interface language.** This includes the updated explanation
+  that the Data Directory is configured outside Settings. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #571.
+- **Messages shown by buttons, dialogs, and statistics can be translated.** Search and linking messages, reading
+  positions, and counts now use your chosen language, including Russian plural forms. Contributed by
+  [@chuzhba1-art](https://github.com/chuzhba1-art) in #572.
+
 ### Changed
 
 - **Saving settings no longer restarts BookBridge unless it has to.** Most changes now take effect the moment you
@@ -39,6 +52,9 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The English-only CTC aligner recognizes text written in other alphabets.** A mostly Russian book quoting a few
+  English words could previously be mistaken for English because the other words were left out of the language
+  check. All alphabetic words now count. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #569.
 - **BookBridge starts with a `DATA_DIR` other than `/data`** (#573). The database update that runs at startup
   always looked in `/data`, so any other data folder stopped BookBridge with "unable to open database file".
   `DATA_DIR` is now read only from the environment: Settings shows it but no longer offers to change it, because
