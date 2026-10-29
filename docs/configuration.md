@@ -2,7 +2,8 @@
 
 > [!NOTE]
 > All configuration is managed through the **Web UI** at `/settings`.
-> Environment variables are mainly for first boot or advanced overrides. Once a value is saved in the UI, the database value takes precedence.
+> Environment variables only seed the settings database. On first boot BookBridge saves every setting there, from its environment variable or its default, even if you never open Settings. From then on the saved value wins, so changing an environment variable later does nothing; change the setting in the UI instead. (A setting added by a later update takes its first value from the environment in the same way.)
+> `DATA_DIR` is the exception: it is read only from the environment, because it says where the database is.
 
 ## Web UI Settings
 
@@ -728,7 +729,7 @@ Found under **Settings -> Server**.
 | --- | --- | --- | --- |
 | Timezone | `TZ` | `America/New_York` | Container timezone. |
 | Log Level | `LOG_LEVEL` | `INFO` | Application log level. |
-| Data Directory | `DATA_DIR` | `/data` | Database, cache, and working state. |
+| Data Directory | `DATA_DIR` | `/data` | Database, cache, and working state. Environment only; Settings shows it read-only. Changing it does not move existing data. |
 | Books Directory | `BOOKS_DIR` | `/books` | Local ebook library path inside the container. |
 | Extra Ebook Directories | `EXTRA_EBOOK_DIRS` | empty | Additional library folders to search, for multi-library setups where some ebooks live outside `BOOKS_DIR`. Comma- or newline-separated container paths. |
 | Audiobooks Directory | `AUDIOBOOKS_DIR` | `/audiobooks` | Local audiobook root. When ABS reports a track path inside this directory and its size matches, BookBridge reads that mounted file directly instead of downloading an audio cache copy. Other tracks keep the existing stream/download path. |

@@ -1801,7 +1801,7 @@ class SyncManager:
     def cleanup_stale_jobs(self):
         """Reset jobs that were interrupted mid-process on restart."""
         try:
-            sentinel = Path("/data/.last_exit_code")
+            sentinel = Path(os.environ.get("DATA_DIR", "/data")) / ".last_exit_code"
             restart_error = "Interrupted by restart"
             if sentinel.exists():
                 try:

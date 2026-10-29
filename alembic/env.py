@@ -29,6 +29,14 @@ config = context.config
 # [FIX] Handle Windows vs Linux/Docker path mismatch for SQLite
 # If URL is absolute unix path ///data/ and we are on Windows, fallback to relative path
 url = config.get_main_option("sqlalchemy.url")
+# The start.sh CLI run carries only the ini default; follow DATA_DIR like the app does (#573).
+data_dir = os.environ.get("DATA_DIR")
+if url == "sqlite:////data/database.db" and data_dir:
+    data_url = f"sqlite:///{Path(data_dir, 'database.db').as_posix()}"
+    if data_url != url:
+        os.makedirs(data_dir, exist_ok=True)
+        url = data_url
+        config.set_main_option("sqlalchemy.url", url)
 if url and url.startswith("sqlite:////data/") and os.name == 'nt':
     new_url = url.replace("sqlite:////data/", "sqlite:///data/")
     config.set_main_option("sqlalchemy.url", new_url)

@@ -39,6 +39,14 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **BookBridge starts with a `DATA_DIR` other than `/data`** (#573). The database update that runs at startup
+  always looked in `/data`, so any other data folder stopped BookBridge with "unable to open database file".
+  `DATA_DIR` is now read only from the environment: Settings shows it but no longer offers to change it, because
+  changing it never moved the database.
+- **The "no ebook source" startup warning names your real books folder** (#574). It always said to mount
+  `/books`, even when **Books Directory** pointed somewhere else, and it missed books found in your extra ebook
+  folders. The configuration guide now also says plainly that environment variables only seed Settings on first
+  boot; after that, change paths in Settings.
 - **BookBridge no longer overwrites a page you just turned to in BookOrbit.** If you read in BookOrbit while a sync
   was already under way, BookBridge could push another app's older position over yours. On BookOrbit 3.6 or newer,
   BookOrbit now keeps the newer position and BookBridge picks it up on the next sync.

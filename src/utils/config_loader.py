@@ -706,6 +706,9 @@ class ConfigLoader:
         for key, value in settings.items():
             if key.startswith("STORYTELLER_519_HASHES:"):
                 continue
+            # DATA_DIR locates this database, so a stored copy can only be stale (#573).
+            if key == "DATA_DIR":
+                continue
             try:
                 # Apply validation or type conversion if needed (mostly string for env vars)
                 val_str = str(value) if value is not None else ""

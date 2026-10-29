@@ -2951,8 +2951,8 @@
                 <div class="section-body">
                     <div class="form-group">
                         <label>Data Directory</label>
-                        <input type="text" name="DATA_DIR" value="{{ get_val('DATA_DIR') }}">
-                        <div class="help-text">Where BookBridge keeps its database and caches. It must match your Docker volume, so change it only if you moved that.</div>
+                        <input type="text" value="{{ get_val('DATA_DIR') }}" readonly>
+                        <div class="help-text">Where BookBridge keeps its database and caches. Set it with the <code>DATA_DIR</code> environment variable, because BookBridge needs it before it can open its database. Changing it does not move existing data.</div>
                     </div>
                     <div class="form-group">
                         <label>Download library ebooks again after (minutes)</label>

@@ -45,7 +45,7 @@ from src.utils.config_loader import (
     ConfigLoader, DEFAULT_CONFIG, KNOWN_SETTING_KEYS, MERGED_BOOL_SETTINGS, MERGED_SETTINGS, merged_mixed_settings,
     RESTART_REQUIRED_SETTINGS, env_truthy, merged_setting_values,
 )
-from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename, contained_library_file
+from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename, contained_library_file, library_roots
 from src.utils.ebook_utils import (
     LINKABLE_EBOOK_EXTENSIONS,
     LRUCache,
@@ -15324,6 +15324,28 @@ def create_app(test_container=None):
     return app, container
 
 
+def _log_ebook_source_status() -> None:
+    """Log where new matches will find ebooks, or warn that nothing can supply one."""
+    # library_roots() ends with the epub cache, which only holds downloaded copies.
+    mounted = [root for root in library_roots()[:-1] if root.exists()]
+    if container.booklore_client().is_configured():
+        logger.info(f"✅ Grimmory integration enabled - ebooks sourced from API")
+    elif container.bookorbit_client().is_configured():
+        logger.info(f"✅ BookOrbit integration enabled - ebooks sourced from API")
+    elif container.kavita_client().is_configured():
+        logger.info("Kavita integration enabled - ebooks sourced from API")
+    elif mounted:
+        logger.info(f"✅ Ebooks directory mounted at {', '.join(str(root) for root in mounted)}")
+    else:
+        logger.info(
+            "⚠️  NO EBOOK SOURCE CONFIGURED: No ebook source available. "
+            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD), "
+            "enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, BOOKORBIT_PASSWORD), "
+            "enable Kavita (KAVITA_SERVER, KAVITA_API_KEY), "
+            f"or mount the ebooks directory to {library_roots()[0]} (BOOKS_DIR) or an EXTRA_EBOOK_DIRS path."
+        )
+
+
 def create_sync_only_app() -> Flask:
     """The split-port KoSync server: the sync blueprint alone, with the body cap.
 
@@ -15492,29 +15514,7 @@ if __name__ == '__main__':
     except Exception as exc:
         logger.warning("StoryGraph rating backfill thread failed to start: %s", exc, exc_info=True)
 
-    # Check ebook source configuration
-    booklore_configured = container.booklore_client().is_configured()
-    bookorbit_configured = container.bookorbit_client().is_configured()
-    kavita_configured = container.kavita_client().is_configured()
-    books_volume_exists = container.books_dir().exists()
-
-    if booklore_configured:
-        logger.info(f"✅ Grimmory integration enabled - ebooks sourced from API")
-    elif bookorbit_configured:
-        logger.info(f"✅ BookOrbit integration enabled - ebooks sourced from API")
-    elif kavita_configured:
-        logger.info("Kavita integration enabled - ebooks sourced from API")
-    elif books_volume_exists:
-        logger.info(f"✅ Ebooks directory mounted at {container.books_dir()}")
-    else:
-        logger.info(
-            "⚠️  NO EBOOK SOURCE CONFIGURED: No ebook source available. "
-            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD), "
-            "enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, BOOKORBIT_PASSWORD), "
-            "enable Kavita (KAVITA_SERVER, KAVITA_API_KEY), "
-            "or mount the ebooks directory to /books."
-        )
-
+    _log_ebook_source_status()
 
     logger.info(f"🌐 Web interface starting on port 5757")
 
