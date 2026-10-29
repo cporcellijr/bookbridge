@@ -55,7 +55,7 @@ async function linkSelectedGoodreadsBook() {
     if (!goodreadsModal.book || !goodreadsModal.book.book_id) return;
     var button = document.getElementById('gr-link-btn');
     button.disabled = true;
-    button.textContent = 'Linking...';
+    button.textContent = bbT('Linking...');
     try {
         var response = await fetch('/link-goodreads/' + encodeURIComponent(goodreadsModal.absId), {
             method: 'POST',
@@ -63,11 +63,11 @@ async function linkSelectedGoodreadsBook() {
             body: JSON.stringify({book_id: goodreadsModal.book.book_id})
         });
         var data = await response.json();
-        if (!response.ok || !data.success) throw new Error(data.error || 'Link failed');
+        if (!response.ok || !data.success) throw new Error(data.error || bbT('Link failed'));
         window.location.reload();
     } catch (error) {
-        document.getElementById('gr-error-msg').textContent = error.message || 'Link failed';
+        document.getElementById('gr-error-msg').textContent = error.message || bbT('Link failed');
         showGoodreadsState('error');
-        button.textContent = 'Link Book';
+        button.textContent = bbT('Link Book');
     }
 }

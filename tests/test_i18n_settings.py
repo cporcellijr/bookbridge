@@ -96,7 +96,7 @@ class SettingsPageTests(I18nTestBase):
         text = re.sub(r"<[^>]+>", "\n", markup)
         allowed = {
             "Audiobookshelf", "KOReader / KoSync", "Storyteller", "Grimmory", "BookFusion",
-            "BookOrbit", "Kavita", "Calibre-Web Automated", "Hardcover", "StoryGraph",
+            "BookOrbit", "Kavita", "Calibre-Web Automated", "Hardcover", "StoryGraph", "Goodreads",
             "CPU", "Ollama", "OpenAI", "Readest",
         }
         leftovers = []

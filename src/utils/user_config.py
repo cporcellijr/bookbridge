@@ -256,12 +256,12 @@ PER_USER_FIELD_GROUPS = [
         ("STORYGRAPH_SESSION_COOKIE", N_("Session cookie"), "secret"),
         ("STORYGRAPH_REMEMBER_USER_TOKEN", N_("Remember-user token"), "secret"),
     ]),
-    ("Goodreads", [
-        ("GOODREADS_ENABLED", "Enabled", "bool"),
-        ("GOODREADS_SESSION_COOKIE", "Browser Cookie header", "secret"),
-        ("GOODREADS_COOKIE_REFRESH_URL", "Cookie refresher URL", "text"),
-        ("GOODREADS_COOKIE_REFRESH_TOKEN", "Cookie refresher token", "secret"),
-        ("GOODREADS_BROWSER_URL", "Signed-in Selenium URL (optional)", "text"),
+    (N_("Goodreads"), [
+        ("GOODREADS_ENABLED", N_("Enabled"), "bool"),
+        ("GOODREADS_SESSION_COOKIE", N_("Browser Cookie header"), "secret"),
+        ("GOODREADS_COOKIE_REFRESH_URL", N_("Cookie refresher URL"), "text"),
+        ("GOODREADS_COOKIE_REFRESH_TOKEN", N_("Cookie refresher token"), "secret"),
+        ("GOODREADS_BROWSER_URL", N_("Signed-in Selenium URL (optional)"), "text"),
     ]),
 ]
 
