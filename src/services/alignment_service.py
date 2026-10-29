@@ -382,9 +382,12 @@ class AlignmentService:
     @classmethod
     def _english_share(cls, text: str) -> float:
         """Share of English function words among the words of up to 200,000
-        characters from the middle of ``text`` (past any front matter)."""
+        characters from the middle of ``text`` (past any front matter). Words in
+        any script count, so a Cyrillic book quoting a few English words stays
+        near zero instead of being measured on its Latin words alone."""
         middle = len(text) // 2
-        words = re.findall(r"[a-zÀ-ɏ']+", text[max(0, middle - 100_000):middle + 100_000].lower())
+        sample = text[max(0, middle - 100_000):middle + 100_000].lower()
+        words = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)*", sample)
         if not words:
             return 0.0
         return sum(word in cls._ENGLISH_FUNCTION_WORDS for word in words) / len(words)
