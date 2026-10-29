@@ -46,7 +46,7 @@ async function autoResolveBook() {
             return;
         }
         if (!resp.ok) {
-            document.getElementById('hc-error-msg').textContent = (data && data.message) || 'Search failed';
+            document.getElementById('hc-error-msg').textContent = (data && data.message) || bbT('Search failed');
             showHcState('error');
             return;
         }
@@ -73,10 +73,10 @@ async function resolveManualInput() {
             displayBookWithEditions(data);
             return;
         }
-        document.getElementById('hc-error-msg').textContent = (data && data.message) || 'Book not found';
+        document.getElementById('hc-error-msg').textContent = (data && data.message) || bbT('Book not found');
         showHcState('error');
     } catch (err) {
-        document.getElementById('hc-error-msg').textContent = 'Search failed';
+        document.getElementById('hc-error-msg').textContent = bbT('Search failed');
         showHcState('error');
     }
 }
@@ -120,8 +120,8 @@ function createSvgIcon(type) {
 function displayBookWithEditions(data) {
     hardcoverModalState.bookData = data;
     hardcoverModalState.linkedEditionId = data.linked_edition_id || null;
-    document.getElementById('hc-title').textContent = data.title || 'Unknown Title';
-    document.getElementById('hc-author').textContent = data.author || 'Unknown Author';
+    document.getElementById('hc-title').textContent = data.title || bbT('Unknown Title');
+    document.getElementById('hc-author').textContent = data.author || bbT('Unknown Author');
 
     var container = document.getElementById('hc-editions');
     container.replaceChildren();
@@ -166,13 +166,13 @@ function displayBookWithEditions(data) {
 
             var formatSpan = document.createElement('span');
             formatSpan.className = 'hc-edition-format';
-            formatSpan.textContent = ed.format || 'Unknown';
+            formatSpan.textContent = ed.format || bbT('Unknown');
 
             // Add "Currently linked" badge if this is the linked edition
             if (isLinked) {
                 var linkedBadge = document.createElement('span');
                 linkedBadge.className = 'hc-edition-linked';
-                linkedBadge.textContent = 'Linked';
+                linkedBadge.textContent = bbT('Linked');
                 formatSpan.appendChild(linkedBadge);
             }
 
@@ -186,13 +186,13 @@ function displayBookWithEditions(data) {
                 var durDetail = document.createElement('span');
                 durDetail.className = 'hc-edition-detail';
                 durDetail.appendChild(createSvgIcon('clock'));
-                durDetail.appendChild(document.createTextNode(hours + 'h ' + mins + 'm'));
+                durDetail.appendChild(document.createTextNode(bbT('{hours}h {minutes}m', { hours: hours, minutes: mins })));
                 detailsDiv.appendChild(durDetail);
             } else if (ed.pages && ed.pages > 0) {
                 var pageDetail = document.createElement('span');
                 pageDetail.className = 'hc-edition-detail';
                 pageDetail.appendChild(createSvgIcon('book'));
-                pageDetail.appendChild(document.createTextNode(ed.pages + ' pp'));
+                pageDetail.appendChild(document.createTextNode(bbT('{count} pp', { count: ed.pages })));
                 detailsDiv.appendChild(pageDetail);
             }
 
@@ -234,11 +234,11 @@ function displayBookWithEditions(data) {
 
     var noneFormat = document.createElement('span');
     noneFormat.className = 'hc-edition-format';
-    noneFormat.textContent = 'No specific edition';
+    noneFormat.textContent = bbT('No specific edition');
 
     var noneDetails = document.createElement('div');
     noneDetails.className = 'hc-edition-details';
-    noneDetails.textContent = 'Track on Hardcover without progress sync';
+    noneDetails.textContent = bbT('Track on Hardcover without progress sync');
 
     noneMain.appendChild(noneFormat);
     noneMain.appendChild(noneDetails);
@@ -259,9 +259,9 @@ function formatEditionDetails(ed) {
     if (ed.audio_seconds && ed.audio_seconds > 0) {
         var hours = Math.floor(ed.audio_seconds / 3600);
         var mins = Math.floor((ed.audio_seconds % 3600) / 60);
-        parts.push(hours + 'h ' + mins + 'm');
+        parts.push(bbT('{hours}h {minutes}m', { hours: hours, minutes: mins }));
     } else if (ed.pages && ed.pages > 0) {
-        parts.push(ed.pages + ' pp');
+        parts.push(bbT('{count} pp', { count: ed.pages }));
     }
     if (ed.year) {
         parts.push(ed.year);
@@ -300,11 +300,11 @@ async function linkSelectedEdition() {
             closeHardcoverModal();
             location.reload();
         } else {
-            document.getElementById('hc-error-msg').textContent = 'Failed to link book';
+            document.getElementById('hc-error-msg').textContent = bbT('Failed to link book');
             showHcState('error');
         }
     } catch (err) {
-        document.getElementById('hc-error-msg').textContent = 'Failed to link book';
+        document.getElementById('hc-error-msg').textContent = bbT('Failed to link book');
         showHcState('error');
     }
 }

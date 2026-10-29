@@ -10,6 +10,33 @@
     {% if active_page == 'library' %}
     <link rel="stylesheet" href="/static/css/reading-position-preview.css">
     {% endif %}
+    <script>
+        // i18n helpers for strings the templates hand to JS (_('...') piped through tojson).
+        // bbFormat fills {name} placeholders. bbPlural picks the ngettext form for n
+        // with Intl.PluralRules; the forms come from plural_forms() in _i18n.html.
+        // These are formatting helpers only: every translation still comes from the
+        // .po catalog through _() / ngettext() in a template.
+        window.bbFormat = function (text, values) {
+            return String(text).replace(/\{(\w+)\}/g, function (match, key) {
+                return values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match;
+            });
+        };
+        window.bbPlural = function (forms, n, values) {
+            if (typeof forms === 'string') forms = { other: forms };
+            var category = 'other';
+            try { category = new Intl.PluralRules(document.documentElement.lang || 'en').select(n); } catch (e) { /* unknown locale */ }
+            var text = Object.prototype.hasOwnProperty.call(forms, category) ? forms[category] : forms.other;
+            return window.bbFormat(text, Object.assign({ count: n }, values || {}));
+        };
+        // Strings in static/js files: the including template puts their translations
+        // in window.BB_STRINGS, keyed by the English text (index.html does this for
+        // the files it loads). The English text is the fallback, so a missing key shows English.
+        window.bbT = function (text, values) {
+            var strings = window.BB_STRINGS || {};
+            var translated = Object.prototype.hasOwnProperty.call(strings, text) ? strings[text] : text;
+            return values ? window.bbFormat(translated, values) : translated;
+        };
+    </script>
     {% block head %}{% endblock %}
 </head>
 <body>

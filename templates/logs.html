@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_i18n.html" import plural_forms %}
 {% set active_page = 'logs' %}
 {% set hide_chrome = embed %}
 {% block title %}{{ _('Logs') }} · BookBridge{% endblock %}
@@ -388,6 +389,34 @@
     const scrollToBottom = document.getElementById('scrollToBottom');
     const loadMore = document.getElementById('loadMore');
 
+    const LINES_TOTAL = {% call(n) plural_forms() %}{{ ngettext('Total: {count} line', 'Total: {count} lines', n) }}{% endcall %};
+    const LINES_SHOWN = {% call(n) plural_forms() %}{{ ngettext('Showing: {count} line', 'Showing: {count} lines', n) }}{% endcall %};
+    const LINES_SHOWN_LIVE = {% call(n) plural_forms() %}{{ ngettext('Showing: {count} line (live mode)', 'Showing: {count} lines (live mode)', n) }}{% endcall %};
+
+    // While a filter change is loading, the log box holds a .loading element
+    // marked data-pending="switch" (level) or "apply" (search). Checked by
+    // marker rather than by its text, which is translated.
+    function showFilterPending(kind, text) {
+        logContent.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+        const loading = logContent.firstChild;
+        loading.dataset.pending = kind;
+        loading.append(text);
+    }
+
+    function filterPending(kind) {
+        return !!logContent.querySelector(kind ? `.loading[data-pending="${kind}"]` : '.loading[data-pending]');
+    }
+
+    function showNoLogsFound() {
+        logContent.innerHTML = `
+            <div class="log-line">
+                <span class="log-level INFO">INFO</span>
+                <span class="log-message"></span>
+            </div>
+        `;
+        logContent.querySelector('.log-message').textContent = {{ _('No logs found matching current filters')|tojson }};
+    }
+
     // Track if user is at bottom for auto-scroll
     let isAtBottom = true;
     let userScrolled = false;
@@ -415,7 +444,7 @@
             const data = await response.json();
 
             if (!response.ok) {
-                throw new Error(data.error || 'Failed to fetch logs');
+                throw new Error(data.error || {{ _('Failed to fetch logs')|tojson }});
             }
 
             displayLogs(data, append);
@@ -428,7 +457,7 @@
             logContent.innerHTML = `
                 <div class="log-line">
                     <span class="log-level ERROR">ERROR</span>
-                    <span class="log-message">Failed to fetch logs: ${error.message}</span>
+                    <span class="log-message">${escapeHtml(bbFormat({{ _('Failed to fetch logs: {error}')|tojson }}, { error: error.message }))}</span>
                 </div>
             `;
         }
@@ -447,22 +476,17 @@
             const data = await response.json();
 
             if (!response.ok) {
-                throw new Error(data.error || 'Failed to fetch live logs');
+                throw new Error(data.error || {{ _('Failed to fetch live logs')|tojson }});
             }
 
             if (data.logs && data.logs.length > 0) {
                 // For filter changes, force show all matching logs
-                const forceShow = logContent.innerHTML.includes('Switching filter') || logContent.innerHTML.includes('Applying filter');
+                const forceShow = filterPending();
                 appendNewLogs(data.logs, forceShow);
                 updateLastUpdated();
-            } else if (logContent.innerHTML.includes('Switching filter') || logContent.innerHTML.includes('Applying filter')) {
+            } else if (filterPending()) {
                 // No logs found with current filters
-                logContent.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-level INFO">INFO</span>
-                        <span class="log-message">No logs found matching current filters</span>
-                    </div>
-                `;
+                showNoLogsFound();
             }
 
             return data;
@@ -475,13 +499,8 @@
     function appendNewLogs(logs, forceShow = false) {
         if (!logs || logs.length === 0) {
             // If no logs and we're in a loading state, show no logs message
-            if (logContent.innerHTML.includes('Switching filter') || logContent.innerHTML.includes('Applying filter')) {
-                logContent.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-level INFO">INFO</span>
-                        <span class="log-message">No logs found matching current filters</span>
-                    </div>
-                `;
+            if (filterPending()) {
+                showNoLogsFound();
             }
             return;
         }
@@ -489,7 +508,7 @@
         const scrollToBottomAfter = isAtBottom;
 
         // Clear loading message and reset tracking if present
-        if (logContent.innerHTML.includes('Switching filter') || logContent.innerHTML.includes('Applying filter')) {
+        if (filterPending()) {
             logContent.innerHTML = '';
             shownLogs.clear(); // Clear tracking when filters change
             forceShow = true; // Show all logs when clearing filter
@@ -507,7 +526,7 @@
                 logLine.innerHTML = `
                     <span class="log-timestamp">${escapeHtml(log.timestamp)}</span>
                     <span class="log-level ${log.level}">${log.level}</span>
-                    <span class="log-module">${escapeHtml(log.module || 'unknown')}</span>
+                    <span class="log-module">${escapeHtml(log.module || {{ _('unknown')|tojson }})}</span>
                     <span class="log-message">${escapeHtml(log.message)}</span>
                 `;
 
@@ -535,7 +554,7 @@
 
         // Update stats
         const currentLines = logContent.children.length;
-        displayedLinesStats.textContent = `Showing: ${currentLines} lines (live mode)`;
+        displayedLinesStats.textContent = bbPlural(LINES_SHOWN_LIVE, currentLines);
     }
 
     // Display logs in the container
@@ -552,12 +571,7 @@
 
         if (logs.length === 0) {
             if (!append) {
-                logContent.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-level INFO">INFO</span>
-                        <span class="log-message">No logs found matching current filters</span>
-                    </div>
-                `;
+                showNoLogsFound();
             }
             return;
         }
@@ -569,7 +583,7 @@
             logLine.innerHTML = `
                 <span class="log-timestamp">${escapeHtml(log.timestamp)}</span>
                 <span class="log-level ${log.level}">${log.level}</span>
-                <span class="log-module" style="color: rgba(255,255,255,0.6); font-size: 11px; min-width: 80px;">${escapeHtml(log.module || 'unknown')}</span>
+                <span class="log-module" style="color: rgba(255,255,255,0.6); font-size: 11px; min-width: 80px;">${escapeHtml(log.module || {{ _('unknown')|tojson }})}</span>
                 <span class="log-message">${escapeHtml(log.message)}</span>
             `;
 
@@ -601,17 +615,17 @@
     // Update statistics display
     function updateStats(data) {
         if (data.total_lines !== undefined) {
-            totalLinesStats.textContent = `Total: ${data.total_lines || 0} lines`;
+            totalLinesStats.textContent = bbPlural(LINES_TOTAL, data.total_lines || 0);
         }
         if (data.displayed_lines !== undefined) {
-            displayedLinesStats.textContent = `Showing: ${data.displayed_lines || 0} lines`;
+            displayedLinesStats.textContent = bbPlural(LINES_SHOWN, data.displayed_lines || 0);
         }
     }
 
     // Update last updated timestamp
     function updateLastUpdated() {
         const now = new Date();
-        lastUpdated.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+        lastUpdated.textContent = bbFormat({{ _('Last updated: {time}')|tojson }}, { time: now.toLocaleTimeString() });
     }
 
     // Escape HTML to prevent XSS
@@ -639,7 +653,7 @@
         if (liveMode.checked) {
             // Load full history first so the user sees all lines, not just the last 50
             fetchLogs().then(() => {
-                displayedLinesStats.textContent = `Showing: ${logContent.children.length} lines (live mode)`;
+                displayedLinesStats.textContent = bbPlural(LINES_SHOWN_LIVE, logContent.children.length);
             });
             // Start polling for new entries
             liveRefreshInterval = setInterval(fetchLiveLogs, 2000); // Poll every 2 seconds
@@ -676,19 +690,14 @@
     logLevel.addEventListener('change', () => {
         if (liveMode.checked) {
             // In live mode, clear content and reset timestamp tracking for filter changes
-            logContent.innerHTML = '<div class="loading"><div class="spinner"></div>Switching filter...</div>';
+            showFilterPending('switch', {{ _('Switching filter...')|tojson }});
             lastLogTimestamp = null; // Reset timestamp so all matching logs will be shown
             setTimeout(() => {
                 fetchLiveLogs().then(() => {
                     // Ensure we show all matching logs by treating this as a forced refresh
-                    if (logContent.innerHTML.includes('Switching filter')) {
+                    if (filterPending('switch')) {
                         // If still showing loading, it means no logs matched
-                        logContent.innerHTML = `
-                            <div class="log-line">
-                                <span class="log-level INFO">INFO</span>
-                                <span class="log-message">No logs found matching current filters</span>
-                            </div>
-                        `;
+                        showNoLogsFound();
                     }
                 });
             }, 500);
@@ -706,19 +715,14 @@
     searchInput.addEventListener('input', debounce(() => {
         if (liveMode.checked) {
             // In live mode, clear content and reset timestamp tracking for filter changes
-            logContent.innerHTML = '<div class="loading"><div class="spinner"></div>Applying filter...</div>';
+            showFilterPending('apply', {{ _('Applying filter...')|tojson }});
             lastLogTimestamp = null; // Reset timestamp so all matching logs will be shown
             setTimeout(() => {
                 fetchLiveLogs().then(() => {
                     // Ensure we show all matching logs by treating this as a forced refresh
-                    if (logContent.innerHTML.includes('Applying filter')) {
+                    if (filterPending('apply')) {
                         // If still showing loading, it means no logs matched
-                        logContent.innerHTML = `
-                            <div class="log-line">
-                                <span class="log-level INFO">INFO</span>
-                                <span class="log-message">No logs found matching current filters</span>
-                            </div>
-                        `;
+                        showNoLogsFound();
                     }
                 });
             }, 500);

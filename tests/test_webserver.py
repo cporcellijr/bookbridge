@@ -1860,7 +1860,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('function kosyncMatchScore(', add_book_html)
         self.assertIn('KOSYNC_LIKELY_MATCH_THRESHOLD', add_book_html)
         self.assertIn('likely match', add_book_html)
-        self.assertIn('`File: ${doc.filename}`', add_book_html)
+        self.assertIn("bbFormat({{ _('File: {filename}')|tojson }}, { filename: doc.filename })", add_book_html)
 
     def test_batch_match_post_falls_back_to_unified_add_book_view(self):
         response = self.client.post('/batch-match')

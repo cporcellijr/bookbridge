@@ -299,7 +299,7 @@ class TestMultiUserAuth(unittest.TestCase):
 
         self.assertIn("host === 'localhost' || host === '127.0.0.1' || host === '::1'", page)
         self.assertIn('points back to the KOReader device itself', page)
-        self.assertIn("showCopyResult(btn, 'Replace host')", page)
+        self.assertIn('showCopyResult(btn, "Replace host")', page)
 
     def test_account_copy_reports_real_result_and_has_http_fallback(self):
         self.svc.create_user("reg", "pw", role="user")
@@ -309,9 +309,10 @@ class TestMultiUserAuth(unittest.TestCase):
 
         self.assertIn("navigator.clipboard.writeText(input.value)", page)
         self.assertIn("Promise.resolve(document.execCommand('copy'))", page)
-        self.assertIn("ok === false ? 'Copy failed' : 'Copied'", page)
+        # The labels come from {{ _('...')|tojson }}, so they render double-quoted.
+        self.assertIn('ok === false ? "Copy failed" : "Copied"', page)
         self.assertIn(".catch(function ()", page)
-        self.assertIn("showCopyResult(btn, 'Copy failed')", page)
+        self.assertIn('showCopyResult(btn, "Copy failed")', page)
 
     def test_regular_user_account_links_to_self_service_integrations(self):
         self.svc.create_user("alice", "pw", role="user")

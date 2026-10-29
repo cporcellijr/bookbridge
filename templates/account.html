@@ -172,7 +172,7 @@
     function copyPublicUrl(btn) {
         var input = document.getElementById('kosync_public_url');
         if (isLoopbackUrl(input.value)) {
-            showCopyResult(btn, 'Replace host');
+            showCopyResult(btn, {{ _('Replace host')|tojson }});
             return;
         }
         input.select();
@@ -186,9 +186,9 @@
             copied = Promise.reject(err);
         }
         copied.then(function (ok) {
-            showCopyResult(btn, ok === false ? 'Copy failed' : 'Copied');
+            showCopyResult(btn, ok === false ? {{ _('Copy failed')|tojson }} : {{ _('Copied')|tojson }});
         }).catch(function () {
-            showCopyResult(btn, 'Copy failed');
+            showCopyResult(btn, {{ _('Copy failed')|tojson }});
         });
     }
 </script>

@@ -261,24 +261,22 @@
         function startBookFusionLink() {
             const status = document.getElementById('bookfusion_link_status');
             if (!status) return;
-            status.textContent = 'Starting BookFusion link…';
+            status.textContent = {{ _('Starting BookFusion link…')|tojson }};
             fetch(BF_DEVICE_START_URL, { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
-                    if (!data.ok) { status.textContent = data.message || 'Could not start BookFusion link.'; return; }
+                    if (!data.ok) { status.textContent = data.message || {{ _('Could not start BookFusion link.')|tojson }}; return; }
                     const interval = Math.max(5, Number(data.interval || 5));
                     const expiresIn = Math.max(interval, Number(data.expires_in || 600));
-                    status.innerHTML = 'Go to <a href="' + data.verification_uri + '" target="_blank" style="color:#aab4f5;">'
-                        + data.verification_uri + '</a> and enter code <strong>' + data.user_code
-                        + '</strong> while signed in to this user\'s BookFusion account.';
+                    status.innerHTML = bbFormat({{ _('Go to <a href="{url}" target="_blank" style="color:#aab4f5;">{url}</a> and enter code <strong>{code}</strong> while signed in to this user\'s BookFusion account.')|tojson }}, { url: data.verification_uri, code: data.user_code });
                     pollBookFusionToken(data.device_code, interval, Date.now() + expiresIn * 1000, status);
                 })
-                .catch(err => { status.textContent = 'BookFusion link failed: ' + err; });
+                .catch(err => { status.textContent = bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: err }); });
         }
 
         function pollBookFusionToken(deviceCode, intervalSeconds, deadlineMs, status) {
             if (Date.now() > deadlineMs) {
-                status.textContent = 'BookFusion link expired. Start a new link and try again.';
+                status.textContent = {{ _('BookFusion link expired. Start a new link and try again.')|tojson }};
                 return;
             }
             window.setTimeout(function () {
@@ -289,15 +287,15 @@
                 })
                     .then(r => r.json())
                     .then(data => {
-                        if (data.ok) { status.textContent = 'BookFusion linked to this user. Save or refresh to see the stored token.'; return; }
+                        if (data.ok) { status.textContent = {{ _('BookFusion linked to this user. Save or refresh to see the stored token.')|tojson }}; return; }
                         if (data.error === 'authorization_pending' || data.error === 'slow_down') {
                             const nextInterval = data.error === 'slow_down' ? intervalSeconds + 5 : intervalSeconds;
                             pollBookFusionToken(deviceCode, nextInterval, deadlineMs, status);
                             return;
                         }
-                        status.textContent = data.message || ('BookFusion link failed: ' + (data.error || 'unknown error'));
+                        status.textContent = data.message || bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: (data.error || {{ _('unknown error')|tojson }}) });
                     })
-                    .catch(err => { status.textContent = 'BookFusion token poll failed: ' + err; });
+                    .catch(err => { status.textContent = bbFormat({{ _('BookFusion token poll failed: {error}')|tojson }}, { error: err }); });
             }, intervalSeconds * 1000);
         }
 
@@ -335,9 +333,10 @@
             })
                 .then((r) => r.json())
                 .then((data) => {
-                    if (data && data.error) { alert('Error: ' + data.error); return; }
+                    if (data && data.error) { alert(bbFormat({{ _('Error: {error}')|tojson }}, { error: data.error })); return; }
                     const picker = document.getElementById(fieldKey + '_picker');
-                    picker.innerHTML = '<option value="">Select a library…</option>';
+                    picker.innerHTML = '<option value=""></option>';
+                    picker.options[0].textContent = {{ _('Select a library…')|tojson }};
                     (data || []).forEach((lib) => {
                         const opt = document.createElement('option');
                         opt.value = lib.id;
@@ -346,12 +345,12 @@
                         picker.appendChild(opt);
                     });
                     if (!data || !data.length) {
-                        alert('No libraries found. Check the account fields above (no save needed).');
+                        alert({{ _('No libraries found. Check the account fields above (no save needed).')|tojson }});
                         return;
                     }
                     picker.style.display = 'block';
                 })
-                .catch((e) => alert('Lookup failed: ' + e))
+                .catch((e) => alert(bbFormat({{ _('Lookup failed: {error}')|tojson }}, { error: e })))
                 .finally(() => { btn.disabled = false; btn.textContent = original; });
         }
 
@@ -372,7 +371,7 @@
             const service = btn.dataset.service;
             btn.disabled = true;
             btn.classList.remove('ok', 'fail');
-            btn.textContent = 'Testing...';
+            btn.textContent = {{ _('Testing...')|tojson }};
 
             fetch(TEST_URL_BASE.replace('__service__', encodeURIComponent(service)), {
                 method: 'POST',
@@ -382,8 +381,8 @@
                 .then((response) => response.json())
                 .then((data) => {
                     btn.classList.add(data.ok ? 'ok' : 'fail');
-                    btn.textContent = data.ok ? 'Connected' : 'Failed';
-                    alert((data.ok ? 'Connected: ' : 'Failed: ') + data.message);
+                    btn.textContent = data.ok ? {{ _('Connected')|tojson }} : {{ _('Failed')|tojson }};
+                    alert(bbFormat(data.ok ? {{ _('Connected: {message}')|tojson }} : {{ _('Failed: {message}')|tojson }}, { message: data.message }));
                     window.setTimeout(() => {
                         btn.classList.remove('ok', 'fail');
                         btn.textContent = original;
@@ -391,8 +390,8 @@
                 })
                 .catch((err) => {
                     btn.classList.add('fail');
-                    btn.textContent = 'Error';
-                    alert('Test failed: ' + err);
+                    btn.textContent = {{ _('Error')|tojson }};
+                    alert(bbFormat({{ _('Test failed: {error}')|tojson }}, { error: err }));
                     window.setTimeout(() => {
                         btn.classList.remove('fail');
                         btn.textContent = original;

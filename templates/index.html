@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_i18n.html" import plural_forms %}
 {% set active_page = 'library' %}
 
 {# Macro for rendering a book card - used by both currently-reading and all-books grids #}
@@ -2296,7 +2297,9 @@
                         const list = document.getElementById('forge-task-list');
                         if (tasks && tasks.length > 0) {
                             banner.style.display = 'flex';
-                            const text = tasks.length === 1 ? `Creating Storyteller edition: ${tasks[0]}` : `Creating ${tasks.length} Storyteller editions...`;
+                            const text = tasks.length === 1
+                                ? bbFormat({{ _('Creating Storyteller edition: {title}')|tojson }}, { title: tasks[0] })
+                                : bbPlural({% call(n) plural_forms() %}{{ ngettext('Creating {count} Storyteller edition...', 'Creating {count} Storyteller editions...', n) }}{% endcall %}, tasks.length);
                             list.textContent = text;
                         } else {
                             banner.style.display = 'none';
@@ -2753,9 +2756,9 @@
 
                 const noResults = document.querySelectorAll('.dashboard-section:not(.hidden)').length === 0;
                 searchHandoffMsg.textContent = noResults
-                    ? 'No synced book matches “' + rawQuery + '”.'
+                    ? bbFormat({{ _('No synced book matches “{query}”.')|tojson }}, { query: rawQuery })
                     : '';
-                searchHandoffLink.textContent = 'Look for “' + rawQuery + '” in your libraries →';
+                searchHandoffLink.textContent = bbFormat({{ _('Look for “{query}” in your libraries →')|tojson }}, { query: rawQuery });
                 searchHandoffLink.href = addBookSearchUrl + encodeURIComponent(rawQuery);
                 searchHandoff.classList.toggle('no-results', noResults);
                 searchHandoff.classList.remove('hidden');
@@ -2923,7 +2926,7 @@
                 const title = item.dataset.title;
                 const currentHash = item.dataset.hash;
 
-                const msg = `Enter new KoSync MD5 Hash for '${title}'\n\nCurrent: ${currentHash}\n\n(Leave empty to automatically recalculate from the ebook file)`;
+                const msg = bbFormat({{ _("Enter new KoSync MD5 Hash for '{title}'\n\nCurrent: {hash}\n\n(Leave empty to automatically recalculate from the ebook file)")|tojson }}, { title: title, hash: currentHash });
                 const input = prompt(msg);
 
                 if (input !== null) {
@@ -2948,16 +2951,16 @@
                 const absId = item.dataset.absId;
                 const title = item.dataset.title || '';
                 const hasStoryteller = item.dataset.hasStoryteller === 'true';
-                const query = prompt('Search your BookFusion library:', title);
+                const query = prompt({{ _('Search your BookFusion library:')|tojson }}, title);
                 if (query === null || !query.trim()) return;
 
                 let data;
                 try {
                     const resp = await fetch('/api/bookfusion/search?q=' + encodeURIComponent(query.trim()));
                     data = await resp.json();
-                    if (!resp.ok) throw new Error(data.error || 'Search failed');
+                    if (!resp.ok) throw new Error(data.error || {{ _('Search failed')|tojson }});
                 } catch (err) {
-                    alert(err.message || 'BookFusion search failed');
+                    alert(err.message || {{ _('BookFusion search failed')|tojson }});
                     return;
                 }
 
@@ -2967,18 +2970,18 @@
                     if (hasLocal) {
                         openBookFusionUploadModal(absId, title, hasStoryteller);
                     } else {
-                        alert('No BookFusion books found.');
+                        alert({{ _('No BookFusion books found.')|tojson }});
                     }
                     return;
                 }
 
                 const choices = books.map((book, idx) => `${idx + 1}. ${book.title || book.id}${book.author ? ' - ' + book.author : ''}`).join('\n');
-                const selected = prompt('Choose a BookFusion book:\n\n' + choices, '1');
+                const selected = prompt(bbFormat({{ _('Choose a BookFusion book:\n\n{choices}')|tojson }}, { choices: choices }), '1');
                 if (selected === null) return;
                 const index = parseInt(selected, 10) - 1;
                 const book = books[index];
                 if (!book) {
-                    alert('Invalid selection.');
+                    alert({{ _('Invalid selection.')|tojson }});
                     return;
                 }
 
@@ -2993,10 +2996,10 @@
                         })
                     });
                     const payload = await resp.json().catch(() => ({}));
-                    if (!resp.ok) throw new Error(payload.error || 'Link failed');
+                    if (!resp.ok) throw new Error(payload.error || {{ _('Link failed')|tojson }});
                     location.reload();
                 } catch (err) {
-                    alert(err.message || 'BookFusion link failed');
+                    alert(err.message || {{ _('BookFusion link failed')|tojson }});
                 }
             }
 
@@ -3489,7 +3492,7 @@
                             // Update last sync text
                             const lastSync = card.querySelector('.last-sync-age');
                             if (lastSync && book.last_sync) {
-                                lastSync.textContent = `Synced ${book.last_sync}`;
+                                lastSync.textContent = bbFormat({{ _('Synced %(when)s', when='{when}')|tojson }}, { when: book.last_sync });
                             }
                         });
                     })
@@ -3559,6 +3562,57 @@
                 </div>
             </div>
         </div>
+        <script>
+            // Translations for the strings in static/js (Hardcover, StoryGraph and Storyteller
+            // modals, reading-position preview), keyed by their English text; bbT() in
+            // base.html looks them up. tests/test_i18n_js.py checks every bbT() key is here.
+            window.BB_STRINGS = Object.assign(window.BB_STRINGS || {}, {{ {
+            'Search failed': _('Search failed'),
+            'Book not found': _('Book not found'),
+            'Unknown Title': _('Unknown Title'),
+            'Unknown Author': _('Unknown Author'),
+            'Unknown': _('Unknown'),
+            'Linked': _('Linked'),
+            '{hours}h {minutes}m': _('{hours}h {minutes}m'),
+            '{count} pp': _('{count} pp'),
+            'No specific edition': _('No specific edition'),
+            'Track on Hardcover without progress sync': _('Track on Hardcover without progress sync'),
+            'Failed to link book': _('Failed to link book'),
+            '{hours}h': _('{hours}h'),
+            '{minutes}m': _('{minutes}m'),
+            'Open current StoryGraph link': _('Open current StoryGraph link'),
+            'Open in StoryGraph': _('Open in StoryGraph'),
+            'Audiobook': _('Audiobook'),
+            'Unknown format': _('Unknown format'),
+            'No details': _('No details'),
+            'Track on StoryGraph without progress sync': _('Track on StoryGraph without progress sync'),
+            'Linking...': _('Linking...'),
+            'Link failed': _('Link failed'),
+            'Link Book': _('Link Book'),
+            'Link Storyteller: {title}': _('Link Storyteller: {title}'),
+            'Searching...': _('Searching...'),
+            'Storyteller search failed.': _('Storyteller search failed.'),
+            'None - Do not link': _('None - Do not link'),
+            'Unlink current Storyteller book': _('Unlink current Storyteller book'),
+            'Unlink': _('Unlink'),
+            'No matching books found via search.': _('No matching books found via search.'),
+            'Link': _('Link'),
+            'Error: {error}': _('Error: {error}'),
+            'Linking and downloading...': _('Linking and downloading...'),
+            'Failed to link': _('Failed to link'),
+            'Link Failed: {error}': _('Link Failed: {error}'),
+            'Show position': _('Show position'),
+            'Current reading position': _('Current reading position'),
+            'Hide position': _('Hide position'),
+            'Resolving saved position…': _('Resolving saved position…'),
+            'Unavailable': _('Unavailable'),
+            'Approximate reading position': _('Approximate reading position'),
+            'Reading position unavailable': _('Reading position unavailable'),
+            'Could not load the preview': _('Could not load the preview'),
+            'Try again. Your saved progress was not changed.': _('Try again. Your saved progress was not changed.')
+            }|tojson }});
+            window.BB_STRINGS['{count} pages'] = {% call(n) plural_forms() %}{{ ngettext('{count} page', '{count} pages', n) }}{% endcall %};
+        </script>
         <script src="/static/js/hardcover-modal.js"></script>
         <div id="storygraph-modal" class="hc-modal" style="display:none;">
             <div class="hc-modal-backdrop" onclick="closeStorygraphModal()"></div>
@@ -3697,8 +3751,8 @@
                 if (!btn || btn.dataset.ctcAligned === String(isCtc)) return;
                 btn.dataset.ctcAligned = String(isCtc);
                 btn.disabled = isCtc;
-                btn.textContent = isCtc ? '✓ Already using CTC' : '🎯 Remap alignment';
-                btn.title = isCtc ? 'This book already has a CTC alignment map' : '';
+                btn.textContent = isCtc ? '✓ ' + {{ _('Already using CTC')|tojson }} : '🎯 ' + {{ _('Remap alignment')|tojson }};
+                btn.title = isCtc ? {{ _('This book already has a CTC alignment map')|tojson }} : '';
             }
 
             function _positionResetMenu(btn, menu) {
@@ -3751,7 +3805,7 @@
             }
 
             function clearPosition(absId) {
-                if (!confirm('Clear all progress for this book?')) {
+                if (!confirm({{ _('Clear all progress for this book?')|tojson }})) {
                     return;
                 }
                 // Preserve the original redirect-to-home behaviour of the POST form.
@@ -3765,19 +3819,20 @@
             function remapAlignment(absId, btn) {
                 btn.disabled = true;
                 const originalText = btn.innerHTML;
-                btn.innerHTML = '⏳ Remapping…';
+                btn.innerHTML = '⏳ ' + {{ _('Remapping…')|tojson }};
                 fetch('/api/remap-alignment/' + absId, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 }).then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            const label = data.backend === 'ctc' ? 'CTC forced alignment' : 'word-level alignment';
-                            btn.innerHTML = '✅ Queued (' + label + ')';
+                            btn.innerHTML = '✅ ' + (data.backend === 'ctc'
+                                ? {{ _('Queued (CTC forced alignment)')|tojson }}
+                                : {{ _('Queued (word-level alignment)')|tojson }});
                         } else if (data.status === 'up_to_date') {
-                            btn.innerHTML = 'ℹ️ Already optimal';
+                            btn.innerHTML = 'ℹ️ ' + {{ _('Already optimal')|tojson }};
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || 'Failed');
+                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
                         setTimeout(() => {
                             if (btn.dataset.ctcAligned === 'true') return;
@@ -3785,7 +3840,7 @@
                         }, 3000);
                     }).catch(error => {
                         console.error('Remap error:', error);
-                        btn.innerHTML = '❌ Failed';
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
                         setTimeout(() => {
                             if (btn.dataset.ctcAligned === 'true') return;
                             btn.innerHTML = originalText; btn.disabled = false;
@@ -3801,18 +3856,18 @@
                             // Show real stage/progress signal instead of a static
                             // "generating" message -- a long book's ffmpeg transcode
                             // alone can run several minutes with no other feedback.
-                            const label = data.stage_label || 'Generating';
+                            const label = data.stage_label || {{ _('Generating')|tojson }};
                             const pct = (typeof data.percent === 'number') ? ' ' + data.percent + '%' : '';
                             btn.innerHTML = '⏳ ' + label + '…' + pct;
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                             return;
                         }
                         if (data.state === 'done') {
-                            btn.innerHTML = data.warning ? '⚠️ Delivered (unconfirmed)' : '✅ Read-along ready';
+                            btn.innerHTML = data.warning ? '⚠️ ' + {{ _('Delivered (unconfirmed)')|tojson }} : '✅ ' + {{ _('Read-along ready')|tojson }};
                             _setReadalongBadge(absId, true);
                         } else if (data.state === 'failed') {
                             const stagePrefix = data.stage_label ? data.stage_label + ': ' : '';
-                            btn.innerHTML = '❌ ' + stagePrefix + (data.error || 'Failed');
+                            btn.innerHTML = '❌ ' + stagePrefix + (data.error || {{ _('Failed')|tojson }});
                         } else {
                             btn.innerHTML = originalText;
                         }
@@ -3826,56 +3881,56 @@
             function generateReadalongEpub(absId, btn) {
                 btn.disabled = true;
                 const originalText = btn.innerHTML;
-                btn.innerHTML = '⏳ Queuing…';
+                btn.innerHTML = '⏳ ' + {{ _('Queuing…')|tojson }};
                 fetch('/api/readalong-epub/' + absId, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 }).then(response => response.json())
                     .then(data => {
                         if (data.success) {
-                            btn.innerHTML = '⏳ Generating… (this can take minutes)';
+                            btn.innerHTML = '⏳ ' + {{ _('Generating… (this can take minutes)')|tojson }};
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || 'Failed');
+                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                             setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 4000);
                         }
                     }).catch(error => {
                         console.error('Read-along generation error:', error);
-                        btn.innerHTML = '❌ Failed';
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
                         setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 4000);
                     });
             }
 
             function removeReadalongEpub(absId, btn) {
-                if (!confirm('Remove the generated read-along EPUB for this book?')) {
+                if (!confirm({{ _('Remove the generated read-along EPUB for this book?')|tojson }})) {
                     return;
                 }
                 btn.disabled = true;
                 const originalText = btn.innerHTML;
-                btn.innerHTML = '⏳ Removing…';
+                btn.innerHTML = '⏳ ' + {{ _('Removing…')|tojson }};
                 fetch('/api/readalong-epub/' + absId + '/remove', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 }).then(response => response.json())
                     .then(data => {
                         if (data.success && data.removed) {
-                            btn.innerHTML = '✅ Removed';
+                            btn.innerHTML = '✅ ' + {{ _('Removed')|tojson }};
                             _setReadalongBadge(absId, false);
                         } else if (data.success) {
-                            btn.innerHTML = 'ℹ️ Nothing to remove';
+                            btn.innerHTML = 'ℹ️ ' + {{ _('Nothing to remove')|tojson }};
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || 'Failed');
+                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
                         setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
                     }).catch(error => {
                         console.error('Read-along removal error:', error);
-                        btn.innerHTML = '❌ Failed';
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
                         setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
                     });
             }
 
             function markComplete(absId, title) {
-                if (!confirm('Are you sure you want to mark "' + title + '" as complete? This will set progress to 100% on all synced platforms.')) {
+                if (!confirm(bbFormat({{ _('Are you sure you want to mark "{title}" as complete? This will set progress to 100%% on all synced platforms.')|tojson }}, { title: title }))) {
                     return;
                 }
                 window._mcAbsId = absId;
@@ -3907,11 +3962,11 @@
                                 window.location.reload();
                             }
                         } else {
-                            alert('Error marking book as complete: ' + (data.error || 'Unknown error'));
+                            alert(bbFormat({{ _('Error marking book as complete: {error}')|tojson }}, { error: (data.error || {{ _('Unknown error')|tojson }}) }));
                         }
                     }).catch(error => {
                         console.error('Error:', error);
-                        alert('Connection error while marking book as complete');
+                        alert({{ _('Connection error while marking book as complete')|tojson }});
                     });
             }
 
@@ -3920,7 +3975,7 @@
 
             function openBookFusionUploadModal(absId, title, hasStoryteller) {
                 window._bfUploadAbsId = absId;
-                document.getElementById('bf-upload-title').textContent = title || 'this book';
+                document.getElementById('bf-upload-title').textContent = title || {{ _('this book')|tojson }};
                 const status = document.getElementById('bf-upload-status');
                 status.textContent = '';
                 const btn = document.getElementById('bf-upload-confirm-btn');
@@ -3950,8 +4005,8 @@
                 const variantInput = document.querySelector('input[name="bf-upload-variant"]:checked');
                 const variant = variantInput ? variantInput.value : 'standard';
                 status.textContent = variant === 'readaloud'
-                    ? 'Downloading and uploading ReadAloud EPUB — this can take a few minutes…'
-                    : 'Uploading…';
+                    ? {{ _('Downloading and uploading ReadAloud EPUB — this can take a few minutes…')|tojson }}
+                    : {{ _('Uploading…')|tojson }};
                 try {
                     const resp = await fetch('/api/bookfusion/upload/' + encodeURIComponent(absId), {
                         method: 'POST',
@@ -3960,16 +4015,16 @@
                     });
                     const payload = await resp.json().catch(() => ({}));
                     if (payload.success) {
-                        status.textContent = 'Uploaded. Reloading…';
+                        status.textContent = {{ _('Uploaded. Reloading…')|tojson }};
                         location.reload();
                         return;
                     }
                     status.textContent = payload.duplicate
-                        ? 'Already in your BookFusion library. Use Search to link it.'
-                        : (payload.error || 'Upload failed');
+                        ? {{ _('Already in your BookFusion library. Use Search to link it.')|tojson }}
+                        : (payload.error || {{ _('Upload failed')|tojson }});
                     btn.disabled = false;
                 } catch (err) {
-                    status.textContent = err.message || 'BookFusion upload failed';
+                    status.textContent = err.message || {{ _('BookFusion upload failed')|tojson }};
                     btn.disabled = false;
                 }
             }

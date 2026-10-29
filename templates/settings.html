@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_i18n.html" import plural_forms %}
 {% set active_page = 'settings' %}
 {% block title %}{{ _('Settings - BookBridge') }}{% endblock %}
 
@@ -3214,26 +3215,37 @@
     </div>
 
     <script>
+        // Translated strings used further down. Kept out of the handler bodies so
+        // tests/test_settings_dirty_counter.js can run those as plain JavaScript.
+        const SHELF_BOOK_COUNT = {% call(n) plural_forms() %}{{ ngettext('{name} ({count} book)', '{name} ({count} books)', n) }}{% endcall %};
+        const UNSAVED_CHANGES = {% call(n) plural_forms() %}{{ ngettext('{count} unsaved change', '{count} unsaved changes', n) }}{% endcall %};
+        const UNSAVED_LEAVE_WARNING = {{ _('You have unsaved changes. Are you sure you want to leave?')|tojson }};
+
+        function resetLibrarySelect(select) {
+            select.innerHTML = '<option value=""></option>';
+            select.options[0].textContent = {{ _('Select a library ID...')|tojson }};
+        }
+
         function populateLibraryPicker({ endpoint, button, inputName, selectId, statusId, emptyMessage, labelBuilder }) {
             const originalText = button.innerHTML;
             const input = document.querySelector(`input[name="${inputName}"]`);
             const select = document.getElementById(selectId);
             const status = document.getElementById(statusId);
 
-            button.innerHTML = '⌛ Scanning...';
+            button.innerHTML = '⌛ ' + {{ _('Scanning...')|tojson }};
             button.disabled = true;
 
             fetch(endpoint)
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
-                        alert('Error: ' + data.error);
+                        alert(bbFormat({{ _('Error: {error}')|tojson }}, { error: data.error }));
                         return;
                     }
                     if (!Array.isArray(data) || data.length === 0) {
                         if (select) {
                             select.style.display = 'none';
-                            select.innerHTML = '<option value="">Select a library ID...</option>';
+                            resetLibrarySelect(select);
                         }
                         if (status) {
                             status.style.display = 'block';
@@ -3243,7 +3255,7 @@
                     }
 
                     const currentValue = input ? input.value.trim() : '';
-                    select.innerHTML = '<option value="">Select a library ID...</option>';
+                    resetLibrarySelect(select);
 
                     data.forEach(lib => {
                         const option = document.createElement('option');
@@ -3258,11 +3270,11 @@
                     select.style.display = 'block';
                     if (status) {
                         status.style.display = 'block';
-                        status.textContent = 'Select a library to fill the ID field.';
+                        status.textContent = {{ _('Select a library to fill the ID field.')|tojson }};
                     }
                 })
                 .catch(err => {
-                    alert('Failed to fetch libraries: ' + err);
+                    alert(bbFormat({{ _('Failed to fetch libraries: {error}')|tojson }}, { error: err }));
                 })
                 .finally(() => {
                     button.innerHTML = originalText;
@@ -3300,8 +3312,8 @@
                 inputName: 'DEVICE_SYNC_EXCLUDED_SHELVES', // Just used for reading current value optionally
                 selectId: 'booklore_shelf_picker',
                 statusId: 'booklore_shelf_picker_status',
-                emptyMessage: 'No shelves found. Check connection or try syncing first.',
-                labelBuilder: (shelf) => `${shelf.name} (${shelf.count} books)`,
+                emptyMessage: {{ _('No shelves found. Check connection or try syncing first.')|tojson }},
+                labelBuilder: (shelf) => bbPlural(SHELF_BOOK_COUNT, shelf.count, { name: shelf.name }),
             });
         }
 
@@ -3312,7 +3324,7 @@
                 inputName: 'ALL_APPS_SHELF_WATCH_NAME',
                 selectId: 'booklore_watch_shelf_picker',
                 statusId: 'booklore_watch_shelf_picker_status',
-                emptyMessage: 'No shelves or collections found. Create one in your library app first, then click Find again.',
+                emptyMessage: {{ _('No shelves or collections found. Create one in your library app first, then click Find again.')|tojson }},
                 labelBuilder: (shelf) => shelf.name,
             });
         }
@@ -3362,7 +3374,7 @@
 
         function testConnection(service, btn) {
             const originalText = btn.innerHTML;
-            btn.innerHTML = '⌛ Testing...';
+            btn.innerHTML = '⌛ ' + {{ _('Testing...')|tojson }};
             btn.disabled = true;
             fetch('/api/test-connection/' + service, {
                 method: 'POST',
@@ -3374,17 +3386,17 @@
                 .then(r => r.json())
                 .then(data => {
                     if (data.ok) {
-                        btn.innerHTML = '✅ Connected';
+                        btn.innerHTML = '✅ ' + {{ _('Connected')|tojson }};
                         alert('✅ ' + data.message);
                     } else {
-                        btn.innerHTML = '❌ Failed';
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
                         alert('❌ ' + data.message);
                     }
                     setTimeout(() => { btn.innerHTML = originalText; }, 3000);
                 })
                 .catch(err => {
-                    btn.innerHTML = '❌ Error';
-                    alert('❌ Test failed: ' + err);
+                    btn.innerHTML = '❌ ' + {{ _('Error')|tojson }};
+                    alert('❌ ' + bbFormat({{ _('Test failed: {error}')|tojson }}, { error: err }));
                     setTimeout(() => { btn.innerHTML = originalText; }, 3000);
                 })
                 .finally(() => { btn.disabled = false; });
@@ -3414,7 +3426,7 @@
             history.textContent = '';
             history.setAttribute('aria-busy', 'false');
             if (!Array.isArray(submissions) || submissions.length === 0) {
-                history.appendChild(_diagnosticsHistoryLine('help-text', 'No manual reports submitted yet.'));
+                history.appendChild(_diagnosticsHistoryLine('help-text', {{ _('No manual reports submitted yet.')|tojson }}));
                 return;
             }
 
@@ -3428,19 +3440,19 @@
                     const parsed = new Date(submittedAt);
                     if (!Number.isNaN(parsed.getTime())) submittedAt = parsed.toLocaleString();
                 }
-                header.appendChild(_diagnosticsHistoryLine('', submittedAt || 'Submitted report'));
+                header.appendChild(_diagnosticsHistoryLine('', submittedAt || {{ _('Submitted report')|tojson }}));
                 header.appendChild(_diagnosticsHistoryLine(
                     'diagnostics-submission-status',
-                    submission.status === 'replied' ? 'Maintainer replied' : 'Report received'
+                    submission.status === 'replied' ? {{ _('Maintainer replied')|tojson }} : {{ _('Report received')|tojson }}
                 ));
                 card.appendChild(header);
 
                 if (submission.user_message) {
-                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', 'Your note'));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', {{ _('Your note')|tojson }}));
                     card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.user_message));
                 }
                 if (submission.response_md) {
-                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', 'Maintainer response'));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', {{ _('Maintainer response')|tojson }}));
                     card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.response_md));
                 }
                 history.appendChild(card);
@@ -3460,7 +3472,7 @@
                 })
                 .then(function(data) { _renderDiagnosticsSubmissions(data.submissions); })
                 .catch(function() {
-                    history.textContent = 'Submitted reports are unavailable right now.';
+                    history.textContent = {{ _('Submitted reports are unavailable right now.')|tojson }};
                     history.setAttribute('aria-busy', 'false');
                 });
         }
@@ -3468,7 +3480,7 @@
         function _sendDiagnosticsNow(btn) {
             const status = document.getElementById('diag-send-status');
             const message = document.getElementById('diag-problem-message');
-            btn.textContent = 'Sending...';
+            btn.textContent = {{ _('Sending...')|tojson }};
             btn.disabled = true;
             if (status) status.textContent = '';
             fetch('/api/diagnostics/send-now', {
@@ -3483,24 +3495,24 @@
                 })
                 .then(function(result) {
                     if (result.ok && result.data.sent) {
-                        if (status) status.textContent = 'Report received.';
+                        if (status) status.textContent = {{ _('Report received.')|tojson }};
                         if (message) message.value = '';
                         _loadDiagnosticsSubmissions();
                     } else if (result.status === 429) {
-                        let retry = '';
+                        let text = {{ _('Please wait before sending another report.')|tojson }};
                         if (result.data.retry_after_hours) {
-                            retry = ' Try again in about ' + result.data.retry_after_hours + ' hours.';
+                            text = bbPlural({% call(n) plural_forms() %}{{ ngettext('Please wait before sending another report. Try again in about {count} hour.', 'Please wait before sending another report. Try again in about {count} hours.', n) }}{% endcall %}, result.data.retry_after_hours);
                         }
-                        if (status) status.textContent = 'Please wait before sending another report.' + retry;
+                        if (status) status.textContent = text;
                     } else if (status) {
-                        status.textContent = 'Report could not be sent.';
+                        status.textContent = {{ _('Report could not be sent.')|tojson }};
                     }
                 })
                 .catch(function() {
-                    if (status) status.textContent = 'Report could not be sent.';
+                    if (status) status.textContent = {{ _('Report could not be sent.')|tojson }};
                 })
                 .finally(function() {
-                    btn.textContent = 'Send bug report';
+                    btn.textContent = {{ _('Send bug report')|tojson }};
                     btn.disabled = false;
                 });
         }
@@ -3556,6 +3568,8 @@
             return '#81c784';
         }
 
+        const MAP_QUALITY_TITLE = {{ _('Map quality score (0-1, higher is better)')|tojson }};
+
         async function loadAlignmentHealth() {
             const summaryEl = document.getElementById('alignHealthSummary');
             const listEl = document.getElementById('alignHealthList');
@@ -3565,14 +3579,15 @@
                 const res = await fetch('/api/alignments/llm-status');
                 const data = await res.json();
                 const needs = data.needs_realign || 0;
-                summaryEl.textContent = `${needs} of ${data.total || 0} maps could benefit from LLM re-alignment (pre-LLM, linear, or low-quality).`;
+                summaryEl.textContent = bbFormat({{ _('{needs} of {total} maps could benefit from LLM re-alignment (pre-LLM, linear, or low-quality).')|tojson }}, { needs: needs, total: data.total || 0 });
 
                 const allBtn = document.getElementById('realignAllBtn');
                 if (allBtn) allBtn.disabled = needs === 0;
 
                 const recommended = (data.books || []).filter((book) => book.needs_realign);
                 if (recommended.length === 0) {
-                    listEl.innerHTML = '<div style="opacity:0.65;font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;">No maps need re-alignment.</div>';
+                    listEl.innerHTML = '<div style="opacity:0.65;font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;"></div>';
+                    listEl.firstChild.textContent = {{ _('No maps need re-alignment.')|tojson }};
                     return;
                 }
 
@@ -3583,31 +3598,31 @@
                     const row = document.createElement('div');
                     row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;';
                     row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(book.title)}</span>`
-                        + `<span style="color:${qualityScoreColor(score)};font-size:12px;min-width:44px;text-align:right;" title="Map quality score (0-1, higher is better)">${formatQualityScore(score)}</span>`
+                        + `<span style="color:${qualityScoreColor(score)};font-size:12px;min-width:44px;text-align:right;" title="${escapeHtml(MAP_QUALITY_TITLE)}">${formatQualityScore(score)}</span>`
                         + `<span style="color:#e57373;font-size:12px;min-width:120px;text-align:right;">${escapeHtml(method)}</span>`;
                     const realignBtn = document.createElement('button');
                     realignBtn.type = 'button';
-                    realignBtn.textContent = 'Re-align';
+                    realignBtn.textContent = {{ _('Re-align')|tojson }};
                     realignBtn.className = 'btn';
                     realignBtn.onclick = () => realignBook(book.abs_id, realignBtn);
                     row.appendChild(realignBtn);
                     const restoreBtn = document.createElement('button');
                     restoreBtn.type = 'button';
-                    restoreBtn.textContent = 'Restore previous';
+                    restoreBtn.textContent = {{ _('Restore previous')|tojson }};
                     restoreBtn.className = 'btn';
                     restoreBtn.onclick = () => restoreAlignment(book.abs_id, restoreBtn);
                     row.appendChild(restoreBtn);
                     listEl.appendChild(row);
                 });
             } catch (err) {
-                summaryEl.textContent = 'Failed to load alignment health.';
+                summaryEl.textContent = {{ _('Failed to load alignment health.')|tojson }};
             }
         }
 
         async function realignBook(absId, btn) {
             if (btn) {
                 btn.disabled = true;
-                btn.textContent = 'Queued';
+                btn.textContent = {{ _('Queued')|tojson }};
             }
             try {
                 await fetch('/api/alignments/realign', {
@@ -3618,7 +3633,7 @@
             } catch (err) {
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = 'Re-align';
+                    btn.textContent = {{ _('Re-align')|tojson }};
                 }
             }
         }
@@ -3626,7 +3641,7 @@
         async function restoreAlignment(absId, btn) {
             if (btn) {
                 btn.disabled = true;
-                btn.textContent = 'Restoring...';
+                btn.textContent = {{ _('Restoring...')|tojson }};
             }
             try {
                 const res = await fetch('/api/alignments/restore', {
@@ -3635,11 +3650,11 @@
                     body: JSON.stringify({ abs_id: absId })
                 });
                 const data = await res.json();
-                if (btn) btn.textContent = data.restored ? 'Restored' : 'No backup';
+                if (btn) btn.textContent = data.restored ? {{ _('Restored')|tojson }} : {{ _('No backup')|tojson }};
             } catch (err) {
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = 'Restore previous';
+                    btn.textContent = {{ _('Restore previous')|tojson }};
                 }
             }
         }
@@ -3648,7 +3663,7 @@
             const btn = document.getElementById('realignAllBtn');
             if (btn) {
                 btn.disabled = true;
-                btn.textContent = 'Queuing...';
+                btn.textContent = {{ _('Queuing...')|tojson }};
             }
             try {
                 const res = await fetch('/api/alignments/realign', {
@@ -3657,17 +3672,17 @@
                     body: JSON.stringify({ scope: 'all_non_llm' })
                 });
                 const data = await res.json();
-                if (btn) btn.textContent = `Queued ${data.queued || 0} - reprocessing in background`;
+                if (btn) btn.textContent = bbFormat({{ _('Queued {count} - reprocessing in background')|tojson }}, { count: data.queued || 0 });
             } catch (err) {
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = 'Re-align all pre-LLM / linear / low-quality maps';
+                    btn.textContent = {{ _('Re-align all pre-LLM / linear / low-quality maps')|tojson }};
                 }
             }
         }
 
         async function clearStaleSuggestions() {
-            if (!confirm("Are you sure you want to clear stale suggestions?\n\nThis will permanently delete all suggestions for books that are not currently matched in your bridge. Books you are already syncing will be preserved.")) {
+            if (!confirm({{ _('Are you sure you want to clear stale suggestions?\n\nThis will permanently delete all suggestions for books that are not currently matched in your bridge. Books you are already syncing will be preserved.')|tojson }})) {
                 return;
             }
 
@@ -3681,18 +3696,18 @@
 
                 const data = await response.json();
                 if (data.success) {
-                    alert(`✅ Success! Cleared ${data.count} stale suggestions.`);
+                    alert('✅ ' + bbPlural({% call(n) plural_forms() %}{{ ngettext('Success! Cleared {count} stale suggestion.', 'Success! Cleared {count} stale suggestions.', n) }}{% endcall %}, data.count));
                 } else {
-                    alert(`❌ Failed to clear suggestions: ${data.error || 'Unknown error'}`);
+                    alert('❌ ' + bbFormat({{ _('Failed to clear suggestions: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
                 }
             } catch (err) {
                 console.error('Error clearing suggestions:', err);
-                alert('❌ An error occurred while clearing suggestions. Check console for details.');
+                alert('❌ ' + {{ _('An error occurred while clearing suggestions. Check console for details.')|tojson }});
             }
         }
 
         async function cleanInactiveCache() {
-            if (!confirm("Clean all cached audio and transcript files for inactive books?\n\nActive books will not be affected.")) {
+            if (!confirm({{ _('Clean all cached audio and transcript files for inactive books?\n\nActive books will not be affected.')|tojson }})) {
                 return;
             }
 
@@ -3704,13 +3719,13 @@
 
                 const data = await response.json();
                 if (data.success) {
-                    alert(`Cleaned ${data.deleted_audio} audio cache(s), ${data.deleted_transcripts} transcript folder(s), and ${data.deleted_epubs} cached epub(s).`);
+                    alert(bbFormat({{ _('Cleaned {audio} audio cache(s), {transcripts} transcript folder(s), and {epubs} cached epub(s).')|tojson }}, { audio: data.deleted_audio, transcripts: data.deleted_transcripts, epubs: data.deleted_epubs }));
                 } else {
-                    alert(`Failed: ${data.error || 'Unknown error'}`);
+                    alert(bbFormat({{ _('Failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
                 }
             } catch (err) {
                 console.error('Error cleaning cache:', err);
-                alert('An error occurred while cleaning cache. Check console for details.');
+                alert({{ _('An error occurred while cleaning cache. Check console for details.')|tojson }});
             }
         }
 
@@ -3718,9 +3733,9 @@
             const statusEl = document.getElementById('booklore_refresh_status');
             const originalText = btn.innerHTML;
             btn.disabled = true;
-            btn.innerHTML = 'Refreshing...';
+            btn.innerHTML = {{ _('Refreshing...')|tojson }};
             if (statusEl) {
-                statusEl.textContent = ' Refresh in progress...';
+                statusEl.textContent = ' ' + {{ _('Refresh in progress...')|tojson }};
                 statusEl.style.color = 'rgba(255, 255, 255, 0.55)';
             }
 
@@ -3734,22 +3749,22 @@
 
                 const data = await response.json();
                 if (!response.ok || !data.success) {
-                    const message = data.error || 'Unknown error';
+                    const message = data.error || {{ _('Unknown error')|tojson }};
                     if (statusEl) {
-                        statusEl.textContent = ` Refresh failed: ${message}`;
+                        statusEl.textContent = ' ' + bbFormat({{ _('Refresh failed: {error}')|tojson }}, { error: message });
                         statusEl.style.color = '#e57373';
                     }
                     return;
                 }
 
                 if (statusEl) {
-                    statusEl.textContent = ' Refresh complete.';
+                    statusEl.textContent = ' ' + {{ _('Refresh complete.')|tojson }};
                     statusEl.style.color = '#81c784';
                 }
             } catch (err) {
                 console.error('Error refreshing Grimmory cache:', err);
                 if (statusEl) {
-                    statusEl.textContent = ` Refresh failed: ${err}`;
+                    statusEl.textContent = ' ' + bbFormat({{ _('Refresh failed: {error}')|tojson }}, { error: err });
                     statusEl.style.color = '#e57373';
                 }
             } finally {
@@ -3759,7 +3774,7 @@
         }
 
         async function backfillStorytellerTranscripts() {
-            if (!confirm("Run Storyteller backfill now?\n\nThis will scan all Storyteller-linked books, ingest available transcript files, and regenerate storyteller alignment maps.")) {
+            if (!confirm({{ _('Run Storyteller backfill now?\n\nThis will scan all Storyteller-linked books, ingest available transcript files, and regenerate storyteller alignment maps.')|tojson }})) {
                 return;
             }
 
@@ -3773,37 +3788,37 @@
 
                 const data = await response.json();
                 if (!response.ok || data.success === false) {
-                    alert(`Storyteller backfill failed: ${data.error || 'Unknown error'}`);
+                    alert(bbFormat({{ _('Storyteller backfill failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
                     return;
                 }
 
-                alert(
-                    `Storyteller backfill complete.\n` +
-                    `Scanned: ${data.scanned}\n` +
-                    `Ingested: ${data.ingested}\n` +
-                    `Aligned: ${data.aligned}\n` +
-                    `Missing: ${data.missing}\n` +
-                    `Failed: ${data.failed}\n` +
-                    `Duration: ${data.duration_seconds}s`
-                );
+                alert([
+                    {{ _('Storyteller backfill complete.')|tojson }},
+                    bbFormat({{ _('Scanned: {count}')|tojson }}, { count: data.scanned }),
+                    bbFormat({{ _('Ingested: {count}')|tojson }}, { count: data.ingested }),
+                    bbFormat({{ _('Aligned: {count}')|tojson }}, { count: data.aligned }),
+                    bbFormat({{ _('Missing: {count}')|tojson }}, { count: data.missing }),
+                    bbFormat({{ _('Failed: {count}')|tojson }}, { count: data.failed }),
+                    bbFormat({{ _('Duration: {seconds}s')|tojson }}, { seconds: data.duration_seconds }),
+                ].join('\n'));
             } catch (err) {
                 console.error('Error running storyteller backfill:', err);
-                alert('An error occurred while running storyteller backfill. Check console for details.');
+                alert({{ _('An error occurred while running storyteller backfill. Check console for details.')|tojson }});
             }
         }
 
         async function runSeriesBackfill(refresh, button) {
-            const label = refresh ? 'Series re-check' : 'Series backfill';
+            const label = refresh ? 'Series re-check' : 'Series backfill';  // console only
             const question = refresh
-                ? "Re-check every book's series?\n\nThis revisits books that already have a series and will remove one the source library no longer reports. Books whose library cannot be reached are left untouched."
-                : "Run series backfill now?\n\nThis looks up the series name and number for every book that is missing them, then groups them on the dashboard. It may take a few minutes on a large library.";
+                ? {{ _("Re-check every book's series?\n\nThis revisits books that already have a series and will remove one the source library no longer reports. Books whose library cannot be reached are left untouched.")|tojson }}
+                : {{ _('Run series backfill now?\n\nThis looks up the series name and number for every book that is missing them, then groups them on the dashboard. It may take a few minutes on a large library.')|tojson }};
             if (!confirm(question)) {
                 return;
             }
 
             const originalText = button ? button.innerHTML : null;
             if (button) {
-                button.innerHTML = refresh ? '⌛ Re-checking...' : '⌛ Backfilling...';
+                button.innerHTML = '⌛ ' + (refresh ? {{ _('Re-checking...')|tojson }} : {{ _('Backfilling...')|tojson }});
                 button.disabled = true;
             }
 
@@ -3818,40 +3833,35 @@
 
                 const data = await response.json();
                 if (!response.ok || data.success === false) {
-                    alert(`${label} failed: ${data.error || 'Unknown error'}`);
+                    alert(bbFormat(refresh ? {{ _('Series re-check failed: {error}')|tojson }} : {{ _('Series backfill failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
                     return;
                 }
 
-                let summary =
-                    `${label} complete.
-` +
-                    `Scanned: ${data.scanned}
-` +
-                    `Updated: ${data.updated}
-`;
+                const lines = [
+                    refresh ? {{ _('Series re-check complete.')|tojson }} : {{ _('Series backfill complete.')|tojson }},
+                    bbFormat({{ _('Scanned: {count}')|tojson }}, { count: data.scanned }),
+                    bbFormat({{ _('Updated: {count}')|tojson }}, { count: data.updated }),
+                ];
                 if (refresh) {
-                    summary +=
-                        `Series removed: ${data.cleared}
-` +
-                        `Already correct: ${data.unchanged}
-` +
-                        `Kept (library unreachable): ${data.kept_no_answer}
-`;
+                    lines.push(
+                        bbFormat({{ _('Series removed: {count}')|tojson }}, { count: data.cleared }),
+                        bbFormat({{ _('Already correct: {count}')|tojson }}, { count: data.unchanged }),
+                        bbFormat({{ _('Kept (library unreachable): {count}')|tojson }}, { count: data.kept_no_answer }),
+                    );
                 }
-                summary +=
-                    `No series found: ${data.unresolved}
-` +
-                    `Failed: ${data.failed}
-` +
-                    `Duration: ${data.duration_seconds}s`;
-                alert(summary);
+                lines.push(
+                    bbFormat({{ _('No series found: {count}')|tojson }}, { count: data.unresolved }),
+                    bbFormat({{ _('Failed: {count}')|tojson }}, { count: data.failed }),
+                    bbFormat({{ _('Duration: {seconds}s')|tojson }}, { seconds: data.duration_seconds }),
+                );
+                alert(lines.join('\n'));
 
                 if (data.updated > 0 || data.cleared > 0) {
                     location.reload();
                 }
             } catch (err) {
                 console.error(`Error running ${label.toLowerCase()}:`, err);
-                alert(`An error occurred while running the ${label.toLowerCase()}. Check console for details.`);
+                alert(refresh ? {{ _('An error occurred while running the series re-check. Check console for details.')|tojson }} : {{ _('An error occurred while running the series backfill. Check console for details.')|tojson }});
             } finally {
                 if (button) {
                     button.innerHTML = originalText;
@@ -3869,29 +3879,29 @@
         }
 
         function formatRunTime(seconds) {
-            if (!seconds) return 'unknown';
+            if (!seconds) return {{ _('unknown')|tojson }};
             const total = Math.round(Number(seconds));
             const h = Math.floor(total / 3600);
             const m = Math.round((total % 3600) / 60);
-            return h + 'h ' + String(m).padStart(2, '0') + 'm';
+            return bbFormat({{ _('{hours}h {minutes}m')|tojson }}, { hours: h, minutes: String(m).padStart(2, '0') });
         }
 
         async function planAudioRepoint(button) {
             const box = document.getElementById('audio_repoint_results');
             const original = button.textContent;
             button.disabled = true;
-            button.textContent = 'Checking your library...';
+            button.textContent = {{ _('Checking your library...')|tojson }};
             box.classList.remove('hidden');
             box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            box.innerHTML = '<p class="help-text">Matching every Audiobookshelf mapping against BookOrbit and confirming run times. This takes a minute or two the first time.</p>';
+            box.innerHTML = '<p class="help-text">' + escapeRepointText({{ _('Matching every Audiobookshelf mapping against BookOrbit and confirming run times. This takes a minute or two the first time.')|tojson }}) + '</p>';
             try {
                 const res = await fetch('/api/admin/audio-repoint/plan', { method: 'POST' });
                 const data = await res.json();
-                if (!data.success) throw new Error(data.error || 'plan failed');
+                if (!data.success) throw new Error(data.error || {{ _('plan failed')|tojson }});
                 audioRepointPlan = data;
                 renderAudioRepointPlan(data);
             } catch (err) {
-                box.innerHTML = '<p class="help-text">Could not build the plan: ' + escapeRepointText(err.message) + '</p>';
+                box.innerHTML = '<p class="help-text">' + escapeRepointText(bbFormat({{ _('Could not build the plan: {error}')|tojson }}, { error: err.message })) + '</p>';
             } finally {
                 button.disabled = false;
                 button.textContent = original;
@@ -3901,26 +3911,25 @@
         function renderAudioRepointPlan(plan) {
             const box = document.getElementById('audio_repoint_results');
             const c = plan.counts || {};
-            let html = '<p class="help-text"><strong>' + c.auto + ' of ' + c.total +
-                '</strong> can move automatically. <strong>' + c.review + '</strong> need a decision. <strong>' +
-                c.unmatched + '</strong> are not in BookOrbit and will stay on Audiobookshelf.</p>';
+            // Counts are numbers and the text comes from the catalog, so it can carry <strong>.
+            let html = '<p class="help-text">' + bbFormat({{ _('<strong>{auto} of {total}</strong> can move automatically. <strong>{review}</strong> need a decision. <strong>{unmatched}</strong> are not in BookOrbit and will stay on Audiobookshelf.')|tojson }}, { auto: Number(c.auto) || 0, total: Number(c.total) || 0, review: Number(c.review) || 0, unmatched: Number(c.unmatched) || 0 }) + '</p>';
 
             if ((plan.review || []).length) {
-                html += '<h4 style="margin: 18px 0 6px;">Needs your decision (' + plan.review.length + ')</h4>';
-                html += '<p class="help-text">Pick the right copy, or leave a book on Audiobookshelf:</p>';
+                html += '<h4 style="margin: 18px 0 6px;">' + escapeRepointText(bbFormat({{ _('Needs your decision ({count})')|tojson }}, { count: plan.review.length })) + '</h4>';
+                html += '<p class="help-text">' + escapeRepointText({{ _('Pick the right copy, or leave a book on Audiobookshelf:')|tojson }}) + '</p>';
                 plan.review.forEach(function (item, idx) {
                     html += '<div class="form-group" style="align-items: flex-start;">' +
                         '<label style="max-width: 320px;">' + escapeRepointText(item.title) +
                         '<br><span class="help-text">' + escapeRepointText(item.reason) +
-                        ' &middot; yours runs ' + formatRunTime(item.duration) + '</span></label><div>';
+                        ' &middot; ' + escapeRepointText(bbFormat({{ _('yours runs {time}')|tojson }}, { time: formatRunTime(item.duration) })) + '</span></label><div>';
                     // No name attribute: these controls live inside the settings form,
                     // and a named field would be POSTed to /settings and silently dropped.
                     html += '<select class="repoint-choice" data-repoint-idx="' + idx + '">';
-                    html += '<option value="">Leave on Audiobookshelf</option>';
+                    html += '<option value="">' + escapeRepointText({{ _('Leave on Audiobookshelf')|tojson }}) + '</option>';
                     (item.candidates || []).forEach(function (cand) {
                         html += '<option value="' + escapeRepointText(cand.id) + '">' +
                             escapeRepointText(cand.title) + ' &middot; ' + formatRunTime(cand.duration) +
-                            (cand.duration_agrees ? ' &middot; run time matches' : ' &middot; run time differs') +
+                            ' &middot; ' + (cand.duration_agrees ? escapeRepointText({{ _('run time matches')|tojson }}) : escapeRepointText({{ _('run time differs')|tojson }})) +
                             '</option>';
                     });
                     html += '</select></div></div>';
@@ -3928,9 +3937,8 @@
             }
 
             if ((plan.unmatched || []).length) {
-                html += '<h4 style="margin: 18px 0 6px;">Staying on Audiobookshelf (' +
-                    plan.unmatched.length + ')</h4>';
-                html += '<p class="help-text">Not found in BookOrbit, so nothing changes for these.</p>';
+                html += '<h4 style="margin: 18px 0 6px;">' + escapeRepointText(bbFormat({{ _('Staying on Audiobookshelf ({count})')|tojson }}, { count: plan.unmatched.length })) + '</h4>';
+                html += '<p class="help-text">' + escapeRepointText({{ _('Not found in BookOrbit, so nothing changes for these.')|tojson }}) + '</p>';
                 html += '<ul class="repoint-list">';
                 plan.unmatched.forEach(function (item) {
                     html += '<li>' + escapeRepointText(item.title) + '</li>';
@@ -3939,9 +3947,8 @@
             }
 
             if ((plan.auto || []).length) {
-                html += '<h4 style="margin: 18px 0 6px;">Moving automatically (' + plan.auto.length + ')</h4>';
-                html += '<p class="help-text">Title and run time both agree, so the existing alignment still fits. ' +
-                    'Untick anything you would rather leave alone.</p>';
+                html += '<h4 style="margin: 18px 0 6px;">' + escapeRepointText(bbFormat({{ _('Moving automatically ({count})')|tojson }}, { count: plan.auto.length })) + '</h4>';
+                html += '<p class="help-text">' + escapeRepointText({{ _('Title and run time both agree, so the existing alignment still fits. Untick anything you would rather leave alone.')|tojson }}) + '</p>';
                 html += '<div class="repoint-scroll">';
                 plan.auto.forEach(function (item, idx) {
                     html += '<label class="repoint-row">' +
@@ -3954,8 +3961,8 @@
             }
 
             html += '<div class="cleanup-group" style="margin-top: 16px;">' +
-                '<button type="button" class="btn btn-primary" onclick="applyAudioRepoint(this)">Apply</button>' +
-                '<p class="help-text flex-1 m-0">Applies the ticked automatic matches plus anything you chose above. Reversible with Undo.</p></div>';
+                '<button type="button" class="btn btn-primary" onclick="applyAudioRepoint(this)">' + escapeRepointText({{ _('Apply')|tojson }}) + '</button>' +
+                '<p class="help-text flex-1 m-0">' + escapeRepointText({{ _('Applies the ticked automatic matches plus anything you chose above. Reversible with Undo.')|tojson }}) + '</p></div>';
             box.innerHTML = html;
             box.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
@@ -3975,12 +3982,12 @@
                 }
             });
             if (!selections.length) {
-                alert('Nothing selected to move.');
+                alert({{ _('Nothing selected to move.')|tojson }});
                 return;
             }
             const original = textOf(button);
             button.disabled = true;
-            button.textContent = 'Moving ' + selections.length + ' book(s)...';
+            button.textContent = bbFormat({{ _('Moving {count} book(s)...')|tojson }}, { count: selections.length });
             try {
                 const res = await fetch('/api/admin/audio-repoint/apply', {
                     method: 'POST',
@@ -3988,11 +3995,11 @@
                     body: JSON.stringify({ selections: selections })
                 });
                 const data = await res.json();
-                if (!data.success) throw new Error(data.error || 'apply failed');
-                alert('Moved ' + data.updated + ' book(s) to BookOrbit audio. Skipped: ' + (data.skipped || []).length);
+                if (!data.success) throw new Error(data.error || {{ _('apply failed')|tojson }});
+                alert(bbFormat({{ _('Moved {count} book(s) to BookOrbit audio. Skipped: {skipped}')|tojson }}, { count: data.updated, skipped: (data.skipped || []).length }));
                 location.reload();
             } catch (err) {
-                alert('Could not apply: ' + err.message);
+                alert(bbFormat({{ _('Could not apply: {error}')|tojson }}, { error: err.message }));
                 button.disabled = false;
                 button.textContent = original;
             }
@@ -4003,10 +4010,10 @@
         }
 
         async function undoAudioRepoint(button) {
-            if (!confirm('Send every repointed book back to Audiobookshelf audio?')) return;
+            if (!confirm({{ _('Send every repointed book back to Audiobookshelf audio?')|tojson }})) return;
             const original = button.textContent;
             button.disabled = true;
-            button.textContent = 'Undoing...';
+            button.textContent = {{ _('Undoing...')|tojson }};
             try {
                 const res = await fetch('/api/admin/audio-repoint/undo', {
                     method: 'POST',
@@ -4014,11 +4021,11 @@
                     body: JSON.stringify({})
                 });
                 const data = await res.json();
-                if (!data.success) throw new Error(data.error || 'undo failed');
-                alert('Restored ' + data.restored + ' book(s) to Audiobookshelf audio.');
+                if (!data.success) throw new Error(data.error || {{ _('undo failed')|tojson }});
+                alert(bbFormat({{ _('Restored {count} book(s) to Audiobookshelf audio.')|tojson }}, { count: data.restored }));
                 location.reload();
             } catch (err) {
-                alert('Could not undo: ' + err.message);
+                alert(bbFormat({{ _('Could not undo: {error}')|tojson }}, { error: err.message }));
             } finally {
                 button.disabled = false;
                 button.textContent = original;
@@ -4099,7 +4106,7 @@
             if (deviceSelect) {
                 deviceSelect.addEventListener('change', function () {
                     if (this.value === 'cuda') {
-                        alert("Forcing GPU requires all three, or transcription will fail:\n\n1. The CUDA image (ghcr.io/cporcellijr/bookbridge:latest-cuda) — the default image has no CUDA libraries.\n2. The NVIDIA Container Toolkit on your host.\n3. A 'deploy' block with 'capabilities: [gpu]' in docker-compose.yml.\n\nAuto detects all three and falls back to CPU instead of failing.");
+                        alert({{ _("Forcing GPU requires all three, or transcription will fail:\n\n1. The CUDA image (ghcr.io/cporcellijr/bookbridge:latest-cuda) — the default image has no CUDA libraries.\n2. The NVIDIA Container Toolkit on your host.\n3. A 'deploy' block with 'capabilities: [gpu]' in docker-compose.yml.\n\nAuto detects all three and falls back to CPU instead of failing.")|tojson }});
                     }
                 });
             }
@@ -4172,7 +4179,7 @@
             if (note) {
                 const n = dirtyFields.size;
                 note.style.display = n ? '' : 'none';
-                note.textContent = n === 1 ? '1 unsaved change' : n + ' unsaved changes';
+                note.textContent = bbPlural(UNSAVED_CHANGES, n);
             }
         }
 
@@ -4198,7 +4205,7 @@
             window.addEventListener('beforeunload', function (e) {
                 if (isFormDirty) {
                     // Standard message (though most modern browsers show their own generic message)
-                    const msg = "You have unsaved changes. Are you sure you want to leave?";
+                    const msg = UNSAVED_LEAVE_WARNING;
                     e.returnValue = msg;
                     return msg;
                 }
@@ -4295,8 +4302,8 @@
                 reset.type = 'button';
                 reset.className = 'reset-default';
                 reset.dataset.for = field.name;
-                reset.title = 'Default: ' + (SETTING_DEFAULTS[field.name] || '(blank)');
-                reset.textContent = 'reset';
+                reset.title = bbFormat({{ _('Default: {value}')|tojson }}, { value: SETTING_DEFAULTS[field.name] || {{ _('(blank)')|tojson }} });
+                reset.textContent = {{ _('reset')|tojson }};
                 reset.addEventListener('click', function (e) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -4319,8 +4326,8 @@
             const restarts = Array.from(dirtyFields).some(function (f) { return RESTART_KEYS.has(f.name); });
             note.classList.toggle('warn', restarts);
             note.textContent = restarts
-                ? '⟳ Saving restarts BookBridge (about 10 seconds)'
-                : 'Changes take effect as soon as you save';
+                ? '⟳ ' + {{ _('Saving restarts BookBridge (about 10 seconds)')|tojson }}
+                : {{ _('Changes take effect as soon as you save')|tojson }};
         }
 
         function setupFieldMarkers() {
@@ -4331,15 +4338,15 @@
                     const badge = document.createElement('span');
                     badge.className = 'restart-badge';
                     badge.dataset.for = field.name;
-                    badge.title = 'Saving a change to this restarts BookBridge';
-                    badge.textContent = 'restart';
+                    badge.title = {{ _('Saving a change to this restarts BookBridge')|tojson }};
+                    badge.textContent = {{ _('restart')|tojson }};
                     fieldLabel(container).appendChild(badge);
                 }
                 if (container && READER_PREF_KEYS.has(field.name) && !container.querySelector('.reader-badge')) {
                     const badge = document.createElement('span');
                     badge.className = 'restart-badge reader-badge';
-                    badge.title = 'This is the default. Each reader can choose their own in My Integrations → Reading preferences.';
-                    badge.textContent = 'default for readers';
+                    badge.title = {{ _('This is the default. Each reader can choose their own in My Integrations → Reading preferences.')|tojson }};
+                    badge.textContent = {{ _('default for readers')|tojson }};
                     fieldLabel(container).appendChild(badge);
                 }
                 updateChangedMarker(field);
