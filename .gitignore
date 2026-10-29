@@ -71,3 +71,7 @@ diagnostics_receiver/.env
 # Credential-encryption key (never commit; lives in DATA_DIR at runtime)
 secret.key
 **/secret.key
+
+# i18n: compiled catalogs are built in the Docker image; the template is regenerated on demand
+translations/**/*.mo
+messages.pot
