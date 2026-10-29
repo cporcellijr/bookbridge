@@ -7,7 +7,7 @@ let currentAbsId = null;
 
 function openStorytellerModal(absId, title) {
     currentAbsId = absId;
-    document.getElementById('st-modal-title').textContent = `Link Storyteller: ${title}`;
+    document.getElementById('st-modal-title').textContent = bbT('Link Storyteller: {title}', { title: title });
     document.getElementById('st-modal').classList.remove('hidden');
     document.getElementById('st-search-input').value = title; // Pre-fill with title
     document.getElementById('st-search-input').focus();
@@ -27,7 +27,8 @@ async function searchStoryteller() {
     if (!query) return;
 
     const resultsDiv = document.getElementById('st-results');
-    resultsDiv.innerHTML = '<div class="st-loading">Searching...</div>';
+    resultsDiv.innerHTML = '<div class="st-loading"></div>';
+    resultsDiv.firstChild.textContent = bbT('Searching...');
 
     try {
         const response = await fetch(`/api/storyteller/search?q=${encodeURIComponent(query)}`);
@@ -37,7 +38,7 @@ async function searchStoryteller() {
             resultsDiv.innerHTML = '';
             const errDiv = document.createElement('div');
             errDiv.className = 'st-no-results';
-            errDiv.textContent = (payload && payload.error) || 'Storyteller search failed.';
+            errDiv.textContent = (payload && payload.error) || bbT('Storyteller search failed.');
             resultsDiv.appendChild(errDiv);
             return;
         }
@@ -53,18 +54,18 @@ async function searchStoryteller() {
         noneInfo.className = 'st-card-info';
         const noneTitle = document.createElement('div');
         noneTitle.className = 'st-card-title';
-        noneTitle.textContent = 'None - Do not link';
+        noneTitle.textContent = bbT('None - Do not link');
         const noneAuthor = document.createElement('div');
         noneAuthor.className = 'st-card-author';
         noneAuthor.style.fontStyle = 'italic';
         noneAuthor.style.color = '#888';
-        noneAuthor.textContent = 'Unlink current Storyteller book';
+        noneAuthor.textContent = bbT('Unlink current Storyteller book');
         noneInfo.appendChild(noneTitle);
         noneInfo.appendChild(noneAuthor);
         noneCard.appendChild(noneInfo);
         const unlinkBtn = document.createElement('button');
         unlinkBtn.className = 'action-btn secondary';
-        unlinkBtn.textContent = 'Unlink';
+        unlinkBtn.textContent = bbT('Unlink');
         unlinkBtn.addEventListener('click', function() { linkStoryteller('none'); });
         noneCard.appendChild(unlinkBtn);
         resultsDiv.appendChild(noneCard);
@@ -72,7 +73,7 @@ async function searchStoryteller() {
         if (books.length === 0) {
             const noRes = document.createElement('div');
             noRes.className = 'st-no-results';
-            noRes.textContent = 'No matching books found via search.';
+            noRes.textContent = bbT('No matching books found via search.');
             resultsDiv.appendChild(noRes);
             return;
         }
@@ -90,7 +91,7 @@ async function searchStoryteller() {
             author.textContent = Array.isArray(book.authors) ? book.authors.join(', ') : '';
             const button = document.createElement('button');
             button.className = 'action-btn success';
-            button.textContent = 'Link';
+            button.textContent = bbT('Link');
             button.addEventListener('click', () => linkStoryteller(String(book.uuid || '')));
             info.append(title, author);
             card.append(info, button);
@@ -98,7 +99,7 @@ async function searchStoryteller() {
         });
 
     } catch (e) {
-        resultsDiv.textContent = `Error: ${e.message}`;
+        resultsDiv.textContent = bbT('Error: {error}', { error: e.message });
     }
 }
 
@@ -109,7 +110,7 @@ async function linkStoryteller(uuid) {
     while (resultsDiv.firstChild) resultsDiv.removeChild(resultsDiv.firstChild);
     const loadingDiv = document.createElement('div');
     loadingDiv.className = 'st-loading';
-    loadingDiv.textContent = 'Linking and downloading...';
+    loadingDiv.textContent = bbT('Linking and downloading...');
     resultsDiv.appendChild(loadingDiv);
 
     try {
@@ -125,10 +126,10 @@ async function linkStoryteller(uuid) {
             window.location.reload();
         } else {
             const err = await response.json();
-            throw new Error(err.error || 'Failed to link');
+            throw new Error(err.error || bbT('Failed to link'));
         }
     } catch (e) {
-        resultsDiv.textContent = `Link Failed: ${e.message}`;
+        resultsDiv.textContent = bbT('Link Failed: {error}', { error: e.message });
     }
 }
 

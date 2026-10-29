@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_i18n.html" import plural_forms %}
 {% set active_page = 'stats' %}
 {% block title %}{{ _('Stats') }} · BookBridge{% endblock %}
 
@@ -291,44 +292,64 @@
         readingCalendarMonth: new Date().toISOString().slice(0, 7)
     };
 
+    // Translated strings and unit formats used across the page. Values go in {name}
+    // placeholders (bbFormat); counts that need agreement go through bbPlural.
+    const DUR_D = {{ _('{days}d')|tojson }};
+    const DUR_H = {{ _('{hours}h')|tojson }};
+    const DUR_M = {{ _('{minutes}m')|tojson }};
+    const DUR_HM = {{ _('{hours}h {minutes}m')|tojson }};
+    const PER_HOUR = {{ _('{count}/hr')|tojson }};
+    const DAYS = {% call(n) plural_forms() %}{{ ngettext('{count} day', '{count} days', n) }}{% endcall %};
+    const BOOKS = {% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% endcall %};
+    const PAGES = {% call(n) plural_forms() %}{{ ngettext('{count} page', '{count} pages', n) }}{% endcall %};
+    const PAGE_EVENTS = {% call(n) plural_forms() %}{{ ngettext('{count} page event', '{count} page events', n) }}{% endcall %};
+    const SESSIONS = {% call(n) plural_forms() %}{{ ngettext('{count} session', '{count} sessions', n) }}{% endcall %};
+    const UNKNOWN_ERROR = {{ _('Unknown error')|tojson }};
+    const UNKNOWN_BOOK = {{ _('Unknown book')|tojson }};
+    const UNLINKED = {{ _('Unlinked')|tojson }};
+    const NO_ACTIVITY = {{ _('No activity')|tojson }};
+    const REQUEST_FAILED = {{ _('Request failed with status {status}')|tojson }};
+    const MONTH_RANGE = {{ _('{start} to {end}')|tojson }};
+    const LOADING = {{ _('Loading…')|tojson }};
+
     const TAB_CONFIG = {
         combined: {
-            title: "Combined activity",
-            subtitle: "Reading and listening merged into one timeline, one heatmap, and one recent activity stream.",
-            emptyTitle: "No combined activity yet",
-            emptyBody: "Stats will appear here as soon as either Audiobookshelf listening data or KOReader reading uploads are available.",
+            title: {{ _('Combined activity')|tojson }},
+            subtitle: {{ _('Reading and listening merged into one timeline, one heatmap, and one recent activity stream.')|tojson }},
+            emptyTitle: {{ _('No combined activity yet')|tojson }},
+            emptyBody: {{ _('Stats will appear here as soon as either Audiobookshelf listening data or KOReader reading uploads are available.')|tojson }},
             cards: [
-                ["Active Days", d => d.stats?.activeDays ?? 0, "Days with any synced activity"],
-                ["Total Activity", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Reading + listening time"],
-                ["Daily Average", d => formatDurationCompact(d.stats?.dailyAverageSeconds ?? 0), "Average over the last 7 days"],
-                ["Current Streak", d => `${d.stats?.currentStreakDays ?? 0} days`, "Continuous active days"],
-                ["Books With Activity", d => d.stats?.booksWithActivity ?? 0, "Distinct books"]
+                [{{ _('Active Days')|tojson }}, d => d.stats?.activeDays ?? 0, {{ _('Days with any synced activity')|tojson }}],
+                [{{ _('Total Activity')|tojson }}, d => formatDurationCompact(d.stats?.totalSeconds ?? 0), {{ _('Reading + listening time')|tojson }}],
+                [{{ _('Daily Average')|tojson }}, d => formatDurationCompact(d.stats?.dailyAverageSeconds ?? 0), {{ _('Average over the last 7 days')|tojson }}],
+                [{{ _('Current Streak')|tojson }}, d => bbPlural(DAYS, d.stats?.currentStreakDays ?? 0), {{ _('Continuous active days')|tojson }}],
+                [{{ _('Books With Activity')|tojson }}, d => d.stats?.booksWithActivity ?? 0, {{ _('Distinct books')|tojson }}]
             ]
         },
         reading: {
-            title: "Reading activity",
-            subtitle: "Derived from KOReader page-level statistics uploads and grouped into approximate dashboard sessions.",
-            emptyTitle: "No reading stats yet",
-            emptyBody: "Use the Bridge Sync plugin menu item “Sync Reading Stats” to populate this view with KOReader reading activity.",
+            title: {{ _('Reading activity')|tojson }},
+            subtitle: {{ _('Derived from KOReader page-level statistics uploads and grouped into approximate dashboard sessions.')|tojson }},
+            emptyTitle: {{ _('No reading stats yet')|tojson }},
+            emptyBody: {{ _('Use the Bridge Sync plugin menu item “Sync Reading Stats” to populate this view with KOReader reading activity.')|tojson }},
             cards: [
-                ["Books Tracked", d => d.stats?.booksTracked ?? 0, "All KOReader books with activity"],
-                ["Days Read", d => d.stats?.daysRead ?? 0, "Days with reading events"],
-                ["Total Reading", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated reading time"],
-                ["Pages Read", d => (d.stats?.pagesRead ?? 0).toLocaleString(), "Matches KOReader's own count"],
-                ["Reading Pace", d => `${d.stats?.pagesPerHour ?? 0}/hr`, "Pages per hour read"]
+                [{{ _('Books Tracked')|tojson }}, d => d.stats?.booksTracked ?? 0, {{ _('All KOReader books with activity')|tojson }}],
+                [{{ _('Days Read')|tojson }}, d => d.stats?.daysRead ?? 0, {{ _('Days with reading events')|tojson }}],
+                [{{ _('Total Reading')|tojson }}, d => formatDurationCompact(d.stats?.totalSeconds ?? 0), {{ _('Accumulated reading time')|tojson }}],
+                [{{ _('Pages Read')|tojson }}, d => (d.stats?.pagesRead ?? 0).toLocaleString(), {{ _("Matches KOReader's own count")|tojson }}],
+                [{{ _('Reading Pace')|tojson }}, d => bbFormat(PER_HOUR, { count: d.stats?.pagesPerHour ?? 0 }), {{ _('Pages per hour read')|tojson }}]
             ]
         },
         listening: {
-            title: "Listening activity",
-            subtitle: "Live Audiobookshelf user stats with weekly activity, recent sessions, and a listening heatmap of the last 12 months.",
-            emptyTitle: "Listening stats are unavailable",
-            emptyBody: "Audiobookshelf may be unconfigured, offline, or temporarily unreachable. The rest of BookBridge will continue working normally.",
+            title: {{ _('Listening activity')|tojson }},
+            subtitle: {{ _('Live Audiobookshelf user stats with weekly activity, recent sessions, and a listening heatmap of the last 12 months.')|tojson }},
+            emptyTitle: {{ _('Listening stats are unavailable')|tojson }},
+            emptyBody: {{ _('Audiobookshelf may be unconfigured, offline, or temporarily unreachable. The rest of BookBridge will continue working normally.')|tojson }},
             cards: [
-                ["Items Finished", d => d.stats?.itemsFinished ?? 0, "Finished items reported by ABS"],
-                ["Days Listened", d => d.stats?.daysListened ?? 0, "Days with listening time"],
-                ["Total Listening", d => formatDurationCompact(d.stats?.totalSeconds ?? 0), "Accumulated listening time"],
-                ["Hours / Day", d => `${d.stats?.hoursPerDay ?? 0}h`, "Average over the last 7 days"],
-                ["Avg Session", d => formatDurationCompact(d.stats?.avgSessionSeconds ?? 0), "Recent session length"]
+                [{{ _('Items Finished')|tojson }}, d => d.stats?.itemsFinished ?? 0, {{ _('Finished items reported by ABS')|tojson }}],
+                [{{ _('Days Listened')|tojson }}, d => d.stats?.daysListened ?? 0, {{ _('Days with listening time')|tojson }}],
+                [{{ _('Total Listening')|tojson }}, d => formatDurationCompact(d.stats?.totalSeconds ?? 0), {{ _('Accumulated listening time')|tojson }}],
+                [{{ _('Hours / Day')|tojson }}, d => bbFormat(DUR_H, { hours: d.stats?.hoursPerDay ?? 0 }), {{ _('Average over the last 7 days')|tojson }}],
+                [{{ _('Avg Session')|tojson }}, d => formatDurationCompact(d.stats?.avgSessionSeconds ?? 0), {{ _('Recent session length')|tojson }}]
             ]
         }
     };
@@ -361,45 +382,45 @@
 
     function showError(message) {
         destroyChart();
-        dashboardRoot.innerHTML = `<div class="empty-state"><h3>Stats could not be loaded</h3><p>${escapeHtml(message)}</p></div>`;
+        dashboardRoot.innerHTML = `<div class="empty-state"><h3>${escapeHtml({{ _('Stats could not be loaded')|tojson }})}</h3><p>${escapeHtml(message)}</p></div>`;
     }
 
     function formatDurationCompact(totalSeconds) {
         const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours >= 24) return `${(hours / 24).toFixed(hours >= 48 ? 0 : 1)}d`;
-        if (hours > 0) return `${hours}h ${minutes}m`;
-        return `${minutes}m`;
+        if (hours >= 24) return bbFormat(DUR_D, { days: (hours / 24).toFixed(hours >= 48 ? 0 : 1) });
+        if (hours > 0) return bbFormat(DUR_HM, { hours, minutes });
+        return bbFormat(DUR_M, { minutes });
     }
 
     function formatDurationLong(totalSeconds) {
         const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
-        if (hours > 0) return `${hours}h ${minutes}m`;
-        return `${minutes}m`;
+        if (hours > 0) return bbFormat(DUR_HM, { hours, minutes });
+        return bbFormat(DUR_M, { minutes });
     }
 
     function formatDateLabel(value) {
-        if (!value) return "No activity";
+        if (!value) return NO_ACTIVITY;
         return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(`${value}T12:00:00`));
     }
 
     function formatBestDay(bestDay) {
-        if (!bestDay || !bestDay.date) return "No activity";
+        if (!bestDay || !bestDay.date) return NO_ACTIVITY;
         return `${formatDateLabel(bestDay.date)} · ${formatDurationLong(bestDay.seconds || 0)}`;
     }
 
     function formatRelativeTime(epochSeconds) {
         const timestamp = Number(epochSeconds || 0) * 1000;
-        if (!timestamp) return "Unknown time";
+        if (!timestamp) return {{ _('Unknown time')|tojson }};
         const diffSeconds = Math.round((Date.now() - timestamp) / 1000);
         const abs = Math.abs(diffSeconds);
-        if (abs < 60) return "Just now";
-        if (abs < 3600) return `${Math.floor(abs / 60)}m ago`;
-        if (abs < 86400) return `${Math.floor(abs / 3600)}h ago`;
-        return `${Math.floor(abs / 86400)}d ago`;
+        if (abs < 60) return {{ _('Just now')|tojson }};
+        if (abs < 3600) return bbFormat({{ _('{minutes}m ago')|tojson }}, { minutes: Math.floor(abs / 60) });
+        if (abs < 86400) return bbFormat({{ _('{hours}h ago')|tojson }}, { hours: Math.floor(abs / 3600) });
+        return bbFormat({{ _('{days}d ago')|tojson }}, { days: Math.floor(abs / 86400) });
     }
 
     // Calendar date in the bridge's time zone, the same days the rest of the page groups by;
@@ -418,12 +439,12 @@
     }
 
     function formatProgressRange(start, end) {
-        if (start == null || end == null) return "Listening";
+        if (start == null || end == null) return {{ _('Listening')|tojson }};
         return `${Math.round(start * 100)}% → ${Math.round(end * 100)}%`;
     }
 
     function formatLongDate(value) {
-        if (!value) return "Unknown date";
+        if (!value) return {{ _('Unknown date')|tojson }};
         return new Intl.DateTimeFormat(undefined, {
             weekday: "long",
             month: "long",
@@ -433,7 +454,7 @@
     }
 
     function formatMonthLabel(value) {
-        if (!value) return "Unknown month";
+        if (!value) return {{ _('Unknown month')|tojson }};
         return new Intl.DateTimeFormat(undefined, {
             month: "long",
             year: "numeric"
@@ -478,13 +499,17 @@
     }
 
     function renderReadingDayDetail(payload) {
-        dayDetailTitle.textContent = "Books read on this day";
+        dayDetailTitle.textContent = {{ _('Books read on this day')|tojson }};
         dayDetailSubtitle.textContent = formatLongDate(payload.date);
-        dayDetailSummary.textContent = `${payload.totalBooks || 0} books · ${formatDurationLong(payload.totalSeconds || 0)} total · ${payload.totalPages || 0} page events`;
+        dayDetailSummary.textContent = [
+            bbPlural(BOOKS, payload.totalBooks || 0),
+            bbFormat({{ _('{duration} total')|tojson }}, { duration: formatDurationLong(payload.totalSeconds || 0) }),
+            bbPlural(PAGE_EVENTS, payload.totalPages || 0),
+        ].join(' · ');
 
         const books = Array.isArray(payload.books) ? payload.books : [];
         if (!books.length) {
-            dayDetailBody.innerHTML = `<div class="empty-state"><h3>No KOReader books that day</h3><p>This day had no KOReader reading activity after timezone bucketing.</p></div>`;
+            dayDetailBody.innerHTML = `<div class="empty-state"><h3>${escapeHtml({{ _('No KOReader books that day')|tojson }})}</h3><p>${escapeHtml({{ _('This day had no KOReader reading activity after timezone bucketing.')|tojson }})}</p></div>`;
             return;
         }
 
@@ -493,14 +518,14 @@
                 ${books.map(book => `
                     <article class="day-book-item">
                         <div class="day-book-main">
-                            <div class="day-book-title">${escapeHtml(book.title || "Unknown book")}</div>
-                            <div class="day-book-meta">${escapeHtml([book.author || "Unknown author", book.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · "))}</div>
-                            <div class="day-book-meta">First activity ${escapeHtml(formatRelativeTime(book.firstStartedAt || 0))} · Last activity ${escapeHtml(formatRelativeTime(book.lastEndedAt || 0))}</div>
+                            <div class="day-book-title">${escapeHtml(book.title || UNKNOWN_BOOK)}</div>
+                            <div class="day-book-meta">${escapeHtml([book.author || {{ _('Unknown author')|tojson }}, book.isLinked === false ? UNLINKED : null].filter(Boolean).join(" · "))}</div>
+                            <div class="day-book-meta">${escapeHtml(bbFormat({{ _('First activity {first} · Last activity {last}')|tojson }}, { first: formatRelativeTime(book.firstStartedAt || 0), last: formatRelativeTime(book.lastEndedAt || 0) }))}</div>
                         </div>
                         <div class="day-book-stats">
                             <div class="day-book-stat">${escapeHtml(formatDurationLong(book.totalSeconds || 0))}</div>
-                            <div class="day-book-sub">${escapeHtml(`${book.pagesRead || 0} page events`)}</div>
-                            <div class="day-book-sub">${escapeHtml(`${book.sessionCount || 0} sessions`)}</div>
+                            <div class="day-book-sub">${escapeHtml(bbPlural(PAGE_EVENTS, book.pagesRead || 0))}</div>
+                            <div class="day-book-sub">${escapeHtml(bbPlural(SESSIONS, book.sessionCount || 0))}</div>
                         </div>
                     </article>
                 `).join("")}
@@ -511,10 +536,10 @@
     async function openReadingDay(dateStr) {
         if (!dateStr) return;
         openDayDetail();
-        dayDetailTitle.textContent = "Books read on this day";
+        dayDetailTitle.textContent = {{ _('Books read on this day')|tojson }};
         dayDetailSubtitle.textContent = formatLongDate(dateStr);
-        dayDetailSummary.textContent = "Loading KOReader day details…";
-        dayDetailBody.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading book activity…</span></div>`;
+        dayDetailSummary.textContent = {{ _('Loading KOReader day details…')|tojson }};
+        dayDetailBody.innerHTML = `<div class="loading"><span class="spinner" aria-hidden="true"></span><span>${escapeHtml({{ _('Loading book activity…')|tojson }})}</span></div>`;
 
         if (state.readingDayCache[dateStr]) {
             renderReadingDayDetail(state.readingDayCache[dateStr]);
@@ -523,21 +548,21 @@
 
         try {
             const response = await fetch(`/api/stats/reading-day?date=${encodeURIComponent(dateStr)}`, { cache: "no-store" });
-            if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+            if (!response.ok) throw new Error(bbFormat(REQUEST_FAILED, { status: response.status }));
             const payload = await response.json();
             state.readingDayCache[dateStr] = payload;
             renderReadingDayDetail(payload);
         } catch (error) {
-            dayDetailSummary.textContent = "Could not load day details";
-            dayDetailBody.innerHTML = `<div class="empty-state"><h3>Day details are unavailable</h3><p>${escapeHtml(error.message || "Unknown error")}</p></div>`;
+            dayDetailSummary.textContent = {{ _('Could not load day details')|tojson }};
+            dayDetailBody.innerHTML = `<div class="empty-state"><h3>${escapeHtml({{ _('Day details are unavailable')|tojson }})}</h3><p>${escapeHtml(error.message || UNKNOWN_ERROR)}</p></div>`;
         }
     }
 
     function calendarPanelSkeleton() {
         return `
             <section class="panel">
-                <div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div>
-                <div class="loading"><span class="spinner" aria-hidden="true"></span><span>Loading monthly reading calendar…</span></div>
+                <div class="panel-head"><h3>${escapeHtml({{ _('Reading calendar')|tojson }})}</h3><span>${escapeHtml({{ _('KOReader books by day')|tojson }})}</span></div>
+                <div class="loading"><span class="spinner" aria-hidden="true"></span><span>${escapeHtml({{ _('Loading monthly reading calendar…')|tojson }})}</span></div>
             </section>
         `;
     }
@@ -551,7 +576,9 @@
         const weekday = (firstGridDate.getDay() + 6) % 7;
         firstGridDate.setDate(firstGridDate.getDate() - weekday);
 
-        const weekdayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        // Monday-first short weekday names in the page language (1 Jan 2024 was a Monday).
+        const weekdayFormat = new Intl.DateTimeFormat(document.documentElement.lang || undefined, { weekday: "short" });
+        const weekdayLabels = Array.from({ length: 7 }, (_, i) => weekdayFormat.format(new Date(2024, 0, 1 + i)));
         const cells = [];
         for (let i = 0; i < 42; i += 1) {
             const cellDate = new Date(firstGridDate);
@@ -574,7 +601,7 @@
                     const key = String(book.bookKey || book.absId || book.md5 || `${cell.iso}-${book.title}`);
                     const existing = perBook.get(key) || {
                         key,
-                        title: book.title || "Unknown book",
+                        title: book.title || UNKNOWN_BOOK,
                         isLinked: book.isLinked !== false,
                         totalSeconds: 0,
                         days: [],
@@ -632,14 +659,14 @@
 
         return `
             <section class="panel">
-                <div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div>
+                <div class="panel-head"><h3>${escapeHtml({{ _('Reading calendar')|tojson }})}</h3><span>${escapeHtml({{ _('KOReader books by day')|tojson }})}</span></div>
                 <div class="calendar-panel">
                     <div class="calendar-nav">
                         <div class="calendar-month-title">${escapeHtml(formatMonthLabel(month))}</div>
                         <div class="calendar-actions">
-                            <button type="button" class="btn btn-secondary" data-calendar-shift="-1">← Prev</button>
-                            <button type="button" class="btn btn-secondary" data-calendar-today="1">Current Month</button>
-                            <button type="button" class="btn btn-secondary" data-calendar-shift="1">Next →</button>
+                            <button type="button" class="btn btn-secondary" data-calendar-shift="-1">← ${escapeHtml({{ _('Prev')|tojson }})}</button>
+                            <button type="button" class="btn btn-secondary" data-calendar-today="1">${escapeHtml({{ _('Current Month')|tojson }})}</button>
+                            <button type="button" class="btn btn-secondary" data-calendar-shift="1">${escapeHtml({{ _('Next')|tojson }})} →</button>
                         </div>
                     </div>
                     <div class="calendar-grid">
@@ -649,7 +676,7 @@
                                 <div class="calendar-week">
                                     ${week.cells.map(cell => `
                                         <div class="calendar-cell ${cell.inMonth ? "" : "is-outside"} ${cell.books.length ? "is-active-day" : ""}">
-                                            <button type="button" class="calendar-day-open" ${cell.books.length ? `data-reading-date="${cell.iso}"` : ""} ${cell.books.length ? `title="Show books for ${cell.iso}"` : 'tabindex="-1"'} ${cell.books.length ? "" : "disabled"}>
+                                            <button type="button" class="calendar-day-open" ${cell.books.length ? `data-reading-date="${cell.iso}"` : ""} ${cell.books.length ? `title="${escapeHtml(bbFormat({{ _('Show books for {date}')|tojson }}, { date: cell.iso }))}"` : 'tabindex="-1"'} ${cell.books.length ? "" : "disabled"}>
                                                 <div class="calendar-cell-top">
                                                     <div class="calendar-day-number">${cell.day}</div>
                                                     <div class="calendar-day-total">${cell.books.length ? escapeHtml(formatDurationLong(cell.totalSeconds)) : ""}</div>
@@ -662,7 +689,7 @@
                                             type="button"
                                             class="calendar-span"
                                             data-reading-date="${week.cells[segment.start].iso}"
-                                            title="${escapeHtml(segment.isLinked === false ? `Unlinked · ${segment.title}` : segment.title)}"
+                                            title="${escapeHtml(segment.isLinked === false ? `${UNLINKED} · ${segment.title}` : segment.title)}"
                                             style="grid-column:${segment.start + 1} / ${segment.end + 2}; grid-row:${segment.lane + 2}; background:${segment.color.background}; border-color:${segment.color.border};"
                                         >
                                             <span class="calendar-span-text">${escapeHtml(trimTitle(segment.title))}</span>
@@ -685,7 +712,7 @@
         }
 
         const response = await fetch(`/api/stats/reading-calendar?month=${encodeURIComponent(normalizedMonth)}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+        if (!response.ok) throw new Error(bbFormat(REQUEST_FAILED, { status: response.status }));
         const payload = await response.json();
         state.readingCalendarCache[normalizedMonth] = payload;
         return payload;
@@ -693,16 +720,16 @@
 
     function summaryCards(dataset) {
         const summary = [
-            ["Week Total", formatDurationLong(dataset.stats?.weekTotalSeconds ?? 0)],
-            ["Daily Average", formatDurationLong(dataset.stats?.dailyAverageSeconds ?? 0)],
-            ["Best Day", formatBestDay(dataset.stats?.bestDay)],
-            ["Current Streak", `${dataset.stats?.currentStreakDays ?? 0} days`]
+            [{{ _('Week Total')|tojson }}, formatDurationLong(dataset.stats?.weekTotalSeconds ?? 0)],
+            [{{ _('Daily Average')|tojson }}, formatDurationLong(dataset.stats?.dailyAverageSeconds ?? 0)],
+            [{{ _('Best Day')|tojson }}, formatBestDay(dataset.stats?.bestDay)],
+            [{{ _('Current Streak')|tojson }}, bbPlural(DAYS, dataset.stats?.currentStreakDays ?? 0)]
         ];
         return `
             <section class="panel">
-                <div class="panel-head"><h3>Weekly summary</h3><span>Last 7 days</span></div>
+                <div class="panel-head"><h3>${escapeHtml({{ _('Weekly summary')|tojson }})}</h3><span>${escapeHtml({{ _('Last 7 days')|tojson }})}</span></div>
                 <div class="summary-grid">
-                    ${summary.map(item => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(item[0])}</div><div class="summary-card-value">${escapeHtml(item[1])}</div><div class="summary-card-sub">Bucketed using the configured bridge timezone.</div></article>`).join("")}
+                    ${summary.map(item => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(item[0])}</div><div class="summary-card-value">${escapeHtml(item[1])}</div><div class="summary-card-sub">${escapeHtml({{ _('Bucketed using the configured bridge timezone.')|tojson }})}</div></article>`).join("")}
                 </div>
             </section>
         `;
@@ -711,17 +738,17 @@
     function recentSessions(dataset) {
         const sessions = Array.isArray(dataset.recentSessions) ? dataset.recentSessions : [];
         if (!sessions.length) {
-            return `<section class="panel"><div class="panel-head"><h3>Recent sessions</h3><span>No recent activity</span></div><div class="empty-state"><h3>Nothing recent yet</h3><p>Recent reading or listening sessions will show up here as the bridge receives activity.</p></div></section>`;
+            return `<section class="panel"><div class="panel-head"><h3>${escapeHtml({{ _('Recent sessions')|tojson }})}</h3><span>${escapeHtml({{ _('No recent activity')|tojson }})}</span></div><div class="empty-state"><h3>${escapeHtml({{ _('Nothing recent yet')|tojson }})}</h3><p>${escapeHtml({{ _('Recent reading or listening sessions will show up here as the bridge receives activity.')|tojson }})}</p></div></section>`;
         }
         return `
             <section class="panel">
-                <div class="panel-head"><h3>Recent sessions</h3><span>Newest activity first</span></div>
+                <div class="panel-head"><h3>${escapeHtml({{ _('Recent sessions')|tojson }})}</h3><span>${escapeHtml({{ _('Newest activity first')|tojson }})}</span></div>
                 <div class="recent-list">
                     ${sessions.map(session => {
                         const type = session.activityType === "reading" ? "reading" : "listening";
                         const icon = type === "reading" ? "📖" : "🎧";
-                        const meta = [session.author || null, type === "reading" && session.pagesRead ? `${session.pagesRead} pages` : null, type === "reading" && session.isLinked === false ? "Unlinked" : null].filter(Boolean).join(" · ");
-                        return `<article class="recent-item"><div class="recent-main"><div class="recent-badge ${type}">${icon}</div><div class="recent-text"><div class="recent-title">${escapeHtml(session.title || "Unknown title")}</div><div class="recent-meta">${escapeHtml(meta || (type === "reading" ? "Reading session" : "Listening session"))}</div></div></div><div class="recent-side"><div class="recent-duration">${escapeHtml(formatDurationLong(session.durationSeconds || 0))}</div><div class="recent-time">${escapeHtml(formatRelativeTime(session.endedAt || session.startedAt || 0))}</div></div></article>`;
+                        const meta = [session.author || null, type === "reading" && session.pagesRead ? bbPlural(PAGES, session.pagesRead) : null, type === "reading" && session.isLinked === false ? UNLINKED : null].filter(Boolean).join(" · ");
+                        return `<article class="recent-item"><div class="recent-main"><div class="recent-badge ${type}">${icon}</div><div class="recent-text"><div class="recent-title">${escapeHtml(session.title || {{ _('Unknown title')|tojson }})}</div><div class="recent-meta">${escapeHtml(meta || (type === "reading" ? {{ _('Reading session')|tojson }} : {{ _('Listening session')|tojson }}))}</div></div></div><div class="recent-side"><div class="recent-duration">${escapeHtml(formatDurationLong(session.durationSeconds || 0))}</div><div class="recent-time">${escapeHtml(formatRelativeTime(session.endedAt || session.startedAt || 0))}</div></div></article>`;
                     }).join("")}
                 </div>
             </section>
@@ -771,8 +798,8 @@
             lastSaturday.setDate(thisSunday.getDate() + 6);
             firstDay = firstSunday;
             lastDay = today;
-            title = "Last 12 months";
-            range = `${monthYear(firstSunday)} to ${monthYear(today)}`;
+            title = {{ _('Last 12 months')|tojson }};
+            range = bbFormat(MONTH_RANGE, { start: monthYear(firstSunday), end: monthYear(today) });
         } else {
             firstDay = new Date(year, 0, 1);
             const yearEnd = new Date(year, 11, 31);
@@ -782,7 +809,7 @@
             lastSaturday = new Date(yearEnd);
             lastSaturday.setDate(yearEnd.getDate() + (6 - yearEnd.getDay()));
             title = String(year);
-            range = `${monthYear(firstDay)} to ${monthYear(yearEnd)}`;
+            range = bbFormat(MONTH_RANGE, { start: monthYear(firstDay), end: monthYear(yearEnd) });
         }
         const map = new Map(entries.map(entry => [entry.date, Number(entry.seconds || 0)]));
         const maxSeconds = entries.reduce((max, entry) => Math.max(max, Number(entry.seconds || 0)), 0);
@@ -813,20 +840,20 @@
 
         return `
             <section class="panel" id="heatmap-panel">
-                <div class="panel-head"><h3>${escapeHtml(title)}</h3><span>${readingInteractive ? `${range} · Click a day to see books` : range}</span></div>
+                <div class="panel-head"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(readingInteractive ? bbFormat({{ _('{range} · Click a day to see books')|tojson }}, { range }) : range)}</span></div>
                 <div class="heatmap-shell">
                     <div class="heatmap-main">
-                        <div class="heatmap-days"><span>Sun</span><span></span><span>Tue</span><span></span><span>Thu</span><span></span><span>Sat</span></div>
+                        <div class="heatmap-days">${[0, 1, 2, 3, 4, 5, 6].map(i => `<span>${i % 2 ? "" : escapeHtml(weekdayShort(i))}</span>`).join("")}</div>
                         <div class="heatmap-scroll">
                             <div class="heatmap-canvas">
                                 <div class="heatmap-month-track">${labels.map(label => `<span class="heatmap-month-label" style="left:${label.index * 16}px">${escapeHtml(label.label)}</span>`).join("")}</div>
                                 <div class="heatmap-grid">
-                                    ${weeks.map((week, index) => `<div class="heatmap-week"${index === currentWeek ? " data-current-week" : ""}>${week.map(cell => `<button type="button" class="heatmap-cell ${cell.level ? `level-${cell.level}` : ""} ${readingInteractive && cell.inRange ? "is-clickable" : ""}" ${readingInteractive && cell.inRange ? `data-reading-date="${cell.iso}"` : ""} title="${cell.inRange ? `${cell.iso}: ${formatDurationLong(cell.seconds)}` : ""}" ${readingInteractive && cell.inRange ? `aria-label="Show reading books for ${cell.iso}"` : 'tabindex="-1" aria-hidden="true"'}></button>`).join("")}</div>`).join("")}
+                                    ${weeks.map((week, index) => `<div class="heatmap-week"${index === currentWeek ? " data-current-week" : ""}>${week.map(cell => `<button type="button" class="heatmap-cell ${cell.level ? `level-${cell.level}` : ""} ${readingInteractive && cell.inRange ? "is-clickable" : ""}" ${readingInteractive && cell.inRange ? `data-reading-date="${cell.iso}"` : ""} title="${cell.inRange ? `${cell.iso}: ${formatDurationLong(cell.seconds)}` : ""}" ${readingInteractive && cell.inRange ? `aria-label="${escapeHtml(bbFormat({{ _('Show reading books for {date}')|tojson }}, { date: cell.iso }))}"` : 'tabindex="-1" aria-hidden="true"'}></button>`).join("")}</div>`).join("")}
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="heatmap-legend"><span>Less</span><span class="legend-swatches"><span class="heatmap-cell"></span><span class="heatmap-cell level-1"></span><span class="heatmap-cell level-2"></span><span class="heatmap-cell level-3"></span><span class="heatmap-cell level-4"></span></span><span>More</span></div>
+                    <div class="heatmap-legend"><span>${escapeHtml({{ _('Less')|tojson }})}</span><span class="legend-swatches"><span class="heatmap-cell"></span><span class="heatmap-cell level-1"></span><span class="heatmap-cell level-2"></span><span class="heatmap-cell level-3"></span><span class="heatmap-cell level-4"></span></span><span>${escapeHtml({{ _('More')|tojson }})}</span></div>
                 </div>
             </section>
         `;
@@ -850,14 +877,14 @@
         let datasets;
         if (state.activeTab === "combined") {
             datasets = [
-                { label: "Listening", data: rows.map(row => Number(row.listeningSeconds || 0)), backgroundColor: "rgba(155,124,255,.72)", borderRadius: 10, stack: "activity" },
-                { label: "Reading", data: rows.map(row => Number(row.readingSeconds || 0)), backgroundColor: "rgba(79,195,247,.8)", borderRadius: 10, stack: "activity" }
+                { label: {{ _('Listening')|tojson }}, data: rows.map(row => Number(row.listeningSeconds || 0)), backgroundColor: "rgba(155,124,255,.72)", borderRadius: 10, stack: "activity" },
+                { label: {{ _('Reading')|tojson }}, data: rows.map(row => Number(row.readingSeconds || 0)), backgroundColor: "rgba(79,195,247,.8)", borderRadius: 10, stack: "activity" }
             ];
         } else {
             const isReading = state.activeTab === "reading";
             datasets = [
                 {
-                    label: isReading ? "Reading" : "Listening",
+                    label: isReading ? {{ _('Reading')|tojson }} : {{ _('Listening')|tojson }},
                     data: rows.map(row => Number(row.seconds || 0)),
                     backgroundColor: isReading ? "rgba(79,195,247,.82)" : "rgba(155,124,255,.78)",
                     borderColor: isReading ? "rgba(79,195,247,1)" : "rgba(155,124,255,1)",
@@ -890,8 +917,18 @@
         });
     }
 
+    // Month and weekday names in the page language (Intl), not hardcoded English.
     function monthFull(i) {
-        return ["January","February","March","April","May","June","July","August","September","October","November","December"][i] || "";
+        if (i < 0 || i > 11) return "";
+        return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { month: "long" }).format(new Date(2024, i, 1));
+    }
+
+    function monthNarrow(i) {
+        return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { month: "narrow" }).format(new Date(2024, i, 1));
+    }
+
+    function weekdayShort(i) {  // 0 = Sunday (7 Jan 2024 was a Sunday)
+        return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { weekday: "short" }).format(new Date(2024, 0, 7 + i));
     }
 
     function hourHistogramPanel(dataset) {
@@ -899,13 +936,17 @@
         const max = hours.reduce((m, h) => Math.max(m, Number(h.seconds || 0)), 0);
         if (!max) return "";
         const peak = hours.reduce((a, h) => (Number(h.seconds || 0) > Number(a.seconds || 0) ? h : a), hours[0]);
-        const hr = n => (n % 12 === 0 ? 12 : n % 12) + (n < 12 ? "a" : "p");
+        // Compact 12a/3p labels where the page language uses a 12-hour clock, 0-23 otherwise.
+        const hourCycle = new Intl.DateTimeFormat(document.documentElement.lang || undefined, { hour: "numeric" }).resolvedOptions().hourCycle;
+        const hr = (hourCycle === "h11" || hourCycle === "h12")
+            ? n => (n % 12 === 0 ? 12 : n % 12) + (n < 12 ? "a" : "p")
+            : n => String(n);
         const bars = hours.map(h => {
             const secs = Number(h.seconds || 0);
             const pct = max ? Math.round((secs / max) * 100) : 0;
             return `<div class="bar-col" title="${h.hour}:00 · ${escapeHtml(formatDurationLong(secs))}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${h.hour % 3 === 0 ? hr(h.hour) : ""}</div></div>`;
         }).join("");
-        return `<section class="panel"><div class="panel-head"><h3>Time of day</h3><span>Peak around ${hr(peak.hour)}</span></div><div class="bar-row">${bars}</div></section>`;
+        return `<section class="panel"><div class="panel-head"><h3>${escapeHtml({{ _('Time of day')|tojson }})}</h3><span>${escapeHtml(bbFormat({{ _('Peak around {hour}')|tojson }}, { hour: hr(peak.hour) }))}</span></div><div class="bar-row">${bars}</div></section>`;
     }
 
     function booksListPanel(dataset) {
@@ -914,39 +955,39 @@
         const rows = books.slice(0, 80).map(b => {
             const meta = [];
             if (b.author) meta.push(escapeHtml(b.author));
-            if (b.pagesRead) meta.push(`${Number(b.pagesRead).toLocaleString()} pages`);
-            if (b.sessionCount) meta.push(`${b.sessionCount} sessions`);
-            if (b.isLinked === false) meta.push("Unlinked");
-            const pace = b.pagesPerHour ? `${b.pagesPerHour}/hr` : (b.lastReadAt ? formatRelativeTime(b.lastReadAt) : "");
+            if (b.pagesRead) meta.push(escapeHtml(bbPlural(PAGES, Number(b.pagesRead), { count: Number(b.pagesRead).toLocaleString() })));
+            if (b.sessionCount) meta.push(escapeHtml(bbPlural(SESSIONS, b.sessionCount)));
+            if (b.isLinked === false) meta.push(escapeHtml(UNLINKED));
+            const pace = b.pagesPerHour ? bbFormat(PER_HOUR, { count: b.pagesPerHour }) : (b.lastReadAt ? formatRelativeTime(b.lastReadAt) : "");
             const pct = (b.percentComplete != null) ? `<div class="pct-bar"><span style="width:${Math.min(b.percentComplete, 100)}%"></span></div>` : "";
-            return `<div class="books-row" data-book-key="${escapeHtml(b.bookKey)}"><div style="min-width:0"><div class="recent-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="books-meta">${meta.join(" · ") || "Activity"}</div>${pct}</div><div class="books-side"><div class="v">${escapeHtml(formatDurationCompact(b.totalSeconds || 0))}</div><div class="s">${escapeHtml(pace)}</div></div></div>`;
+            return `<div class="books-row" data-book-key="${escapeHtml(b.bookKey)}"><div style="min-width:0"><div class="recent-title" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || UNKNOWN_BOOK)}</div><div class="books-meta">${meta.join(" · ") || escapeHtml({{ _('Activity')|tojson }})}</div>${pct}</div><div class="books-side"><div class="v">${escapeHtml(formatDurationCompact(b.totalSeconds || 0))}</div><div class="s">${escapeHtml(pace)}</div></div></div>`;
         }).join("");
-        return `<section class="panel books-panel"><div class="panel-head"><h3>Books</h3><span>${books.length} tracked · tap for detail</span></div><div class="scroll-list">${rows}</div></section>`;
+        return `<section class="panel books-panel"><div class="panel-head"><h3>${escapeHtml({{ _('Books')|tojson }})}</h3><span>${escapeHtml(bbFormat({{ _('{count} tracked · tap for detail')|tojson }}, { count: books.length }))}</span></div><div class="scroll-list">${rows}</div></section>`;
     }
 
     function yearlyRecapInner(recap) {
         const months = Array.isArray(recap.months) ? recap.months : [];
         const max = months.reduce((m, x) => Math.max(m, Number(x.seconds || 0)), 0);
-        const labels = ["J","F","M","A","M","J","J","A","S","O","N","D"];
+        const labels = Array.from({ length: 12 }, (_, i) => monthNarrow(i));
         const bars = months.map((mo, i) => {
             const secs = Number(mo.seconds || 0);
             const pct = max ? Math.round((secs / max) * 100) : 0;
-            const fin = mo.finished ? ` · ${mo.finished} finished` : "";
-            return `<div class="bar-col" title="${monthFull(i)}: ${escapeHtml(formatDurationLong(secs))}${fin}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${labels[i]}</div></div>`;
+            const fin = mo.finished ? " · " + bbFormat({{ _('{count} finished')|tojson }}, { count: mo.finished }) : "";
+            return `<div class="bar-col" title="${escapeHtml(monthFull(i))}: ${escapeHtml(formatDurationLong(secs))}${escapeHtml(fin)}"><div class="bar-fill ${secs ? "" : "muted"}" style="height:${Math.max(pct, 2)}%"></div><div class="bar-label">${labels[i]}</div></div>`;
         }).join("");
         const years = Array.isArray(recap.availableYears) ? recap.availableYears : [];
         const minYear = years.length ? years[0] : recap.year;
         // The current year stays reachable even before it has any activity.
         const maxYear = Math.max(years.length ? years[years.length - 1] : recap.year, serverToday().getFullYear());
         const finished = (recap.finishedBooks || []).slice(0, 40).map(b =>
-            `<div class="finished-row"><div class="recent-title" style="font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || "Unknown book")}</div><div class="s" style="color:var(--muted-soft);font-size:12px;flex-shrink:0">${escapeHtml(formatLongDate(b.finishedDate))}</div></div>`
+            `<div class="finished-row"><div class="recent-title" style="font-size:14px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(b.title || UNKNOWN_BOOK)}</div><div class="s" style="color:var(--muted-soft);font-size:12px;flex-shrink:0">${escapeHtml(formatLongDate(b.finishedDate))}</div></div>`
         ).join("");
         const finishedBlock = finished
-            ? `<div style="margin-top:16px"><div class="panel-head" style="margin-bottom:8px"><h3 style="font-size:14px">Finished this year</h3><span>${recap.booksFinished || 0} books</span></div><div class="scroll-list">${finished}</div></div>`
-            : `<div class="empty-state" style="margin-top:12px"><p>No books recorded as finished in ${recap.year}.</p></div>`;
+            ? `<div style="margin-top:16px"><div class="panel-head" style="margin-bottom:8px"><h3 style="font-size:14px">${escapeHtml({{ _('Finished this year')|tojson }})}</h3><span>${escapeHtml(bbPlural(BOOKS, recap.booksFinished || 0))}</span></div><div class="scroll-list">${finished}</div></div>`
+            : `<div class="empty-state" style="margin-top:12px"><p>${escapeHtml(bbFormat({{ _('No books recorded as finished in {year}.')|tojson }}, { year: recap.year }))}</p></div>`;
         return `
             <div class="panel-head">
-                <h3>${recap.year} in review</h3>
+                <h3>${escapeHtml(bbFormat({{ _('{year} in review')|tojson }}, { year: recap.year }))}</h3>
                 <div class="recap-toolbar">
                     <button type="button" class="recap-year-btn" data-recap-year="${recap.year - 1}" ${recap.year <= minYear ? "disabled" : ""}>‹</button>
                     <span class="recap-year-label">${recap.year}</span>
@@ -954,9 +995,9 @@
                 </div>
             </div>
             <div class="summary-grid" style="margin-bottom:14px">
-                <article class="summary-card"><div class="summary-card-label">Time</div><div class="summary-card-value">${escapeHtml(formatDurationCompact(recap.totalSeconds || 0))}</div><div class="summary-card-sub">This year</div></article>
-                <article class="summary-card"><div class="summary-card-label">Pages</div><div class="summary-card-value">${Number(recap.totalPages || 0).toLocaleString()}</div><div class="summary-card-sub">Read this year</div></article>
-                <article class="summary-card"><div class="summary-card-label">Finished</div><div class="summary-card-value">${recap.booksFinished || 0}</div><div class="summary-card-sub">Books completed</div></article>
+                <article class="summary-card"><div class="summary-card-label">${escapeHtml({{ _('Time')|tojson }})}</div><div class="summary-card-value">${escapeHtml(formatDurationCompact(recap.totalSeconds || 0))}</div><div class="summary-card-sub">${escapeHtml({{ _('This year')|tojson }})}</div></article>
+                <article class="summary-card"><div class="summary-card-label">${escapeHtml({{ _('Pages')|tojson }})}</div><div class="summary-card-value">${Number(recap.totalPages || 0).toLocaleString()}</div><div class="summary-card-sub">${escapeHtml({{ _('Read this year')|tojson }})}</div></article>
+                <article class="summary-card"><div class="summary-card-label">${escapeHtml({{ _('Finished')|tojson }})}</div><div class="summary-card-value">${recap.booksFinished || 0}</div><div class="summary-card-sub">${escapeHtml({{ _('Books completed')|tojson }})}</div></article>
             </div>
             <div class="bar-row">${bars}</div>
             ${finishedBlock}
@@ -981,7 +1022,7 @@
         try {
             const response = await fetch(`/api/stats/yearly-recap?year=${year}&scope=${tab}`, { cache: "no-store" });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || "Failed");
+            if (!response.ok) throw new Error(data.error || {{ _('Failed')|tojson }});
             panel.innerHTML = yearlyRecapInner(data);
             // The heatmap follows the recap's year, and the current year rolls.
             const heatmapPanel = document.getElementById("heatmap-panel");
@@ -1004,7 +1045,7 @@
         const hasData = Boolean(dataset && dataset.available && dataset.stats);
 
         if (!hasData) {
-            dashboardRoot.innerHTML = `<section class="dashboard-shell"><header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">Waiting for source data</div></header><article class="empty-state"><h3>${escapeHtml(config.emptyTitle)}</h3><p>${escapeHtml(config.emptyBody)}</p></article></section>`;
+            dashboardRoot.innerHTML = `<section class="dashboard-shell"><header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div><div class="dashboard-note">${escapeHtml({{ _('Waiting for source data')|tojson }})}</div></header><article class="empty-state"><h3>${escapeHtml(config.emptyTitle)}</h3><p>${escapeHtml(config.emptyBody)}</p></article></section>`;
             return;
         }
 
@@ -1017,7 +1058,7 @@
                 <header class="dashboard-header"><div><h2>${escapeHtml(config.title)}</h2><p>${escapeHtml(config.subtitle)}</p></div></header>
                 <div class="stats-grid">${config.cards.map(card => `<article class="stat-card"><div class="stat-card-label">${escapeHtml(card[0])}</div><div class="stat-card-value">${escapeHtml(card[1](dataset))}</div><div class="stat-card-hint">${escapeHtml(card[2])}</div></article>`).join("")}</div>
                 <div class="insights-grid">
-                    <section class="panel"><div class="panel-head"><h3>Weekly activity</h3><span>Daily totals</span></div><div class="chart-wrap"><canvas id="activity-chart" aria-label="Weekly activity chart"></canvas></div></section>
+                    <section class="panel"><div class="panel-head"><h3>${escapeHtml({{ _('Weekly activity')|tojson }})}</h3><span>${escapeHtml({{ _('Daily totals')|tojson }})}</span></div><div class="chart-wrap"><canvas id="activity-chart" aria-label="${escapeHtml({{ _('Weekly activity chart')|tojson }})}"></canvas></div></section>
                     ${summaryCards(dataset)}
                 </div>
                 ${(booksPanel || recapPanel) ? `<div class="insights-grid">${booksPanel}${recapPanel}</div>` : ""}
@@ -1039,29 +1080,29 @@
                 })
                 .catch(error => {
                     if (!container || state.activeTab !== "reading") return;
-                    container.outerHTML = `<section class="panel"><div class="panel-head"><h3>Reading calendar</h3><span>KOReader books by day</span></div><div class="empty-state"><h3>Calendar unavailable</h3><p>${escapeHtml(error.message || "Unknown error")}</p></div></section>`;
+                    container.outerHTML = `<section class="panel"><div class="panel-head"><h3>${escapeHtml({{ _('Reading calendar')|tojson }})}</h3><span>${escapeHtml({{ _('KOReader books by day')|tojson }})}</span></div><div class="empty-state"><h3>${escapeHtml({{ _('Calendar unavailable')|tojson }})}</h3><p>${escapeHtml(error.message || UNKNOWN_ERROR)}</p></div></section>`;
                 });
         }
     }
 
     async function loadStats(force = false) {
-        if (force) showLoading("Refreshing dashboard data…");
+        if (force) showLoading({{ _('Refreshing dashboard data…')|tojson }});
         try {
             const response = await fetch(`/api/stats${force ? `?t=${Date.now()}` : ""}`, { cache: "no-store" });
-            if (!response.ok) throw new Error(`Request failed with status ${response.status}`);
+            if (!response.ok) throw new Error(bbFormat(REQUEST_FAILED, { status: response.status }));
             state.payload = await response.json();
             if (force) {
                 state.readingDayCache = {};
                 state.readingCalendarCache = {};
             }
             timezoneChip.textContent = BRIDGE_TIMEZONE || "America/New_York";
-            lastUpdated.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+            lastUpdated.textContent = bbFormat({{ _('Updated {time}')|tojson }}, { time: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) });
             setStatusPill(statusListening, state.payload?.listening?.available);
             setStatusPill(statusReading, state.payload?.reading?.available);
             renderDashboard();
         } catch (error) {
             console.error(error);
-            showError(error.message || "Unknown error");
+            showError(error.message || UNKNOWN_ERROR);
         }
     }
 
@@ -1123,58 +1164,61 @@
     function renderBookDetail(data) {
         const reading = data.reading;
         const listening = data.listening;
-        bookDetailTitle.textContent = data.title || "Book detail";
-        bookDetailSubtitle.textContent = [reading ? "Reading" : null, listening ? "Listening" : null].filter(Boolean).join(" + ") + " statistics";
+        bookDetailTitle.textContent = data.title || {{ _('Book detail')|tojson }};
+        bookDetailSubtitle.textContent = reading && listening ? {{ _('Reading + Listening statistics')|tojson }}
+            : reading ? {{ _('Reading statistics')|tojson }}
+            : listening ? {{ _('Listening statistics')|tojson }}
+            : {{ _('statistics')|tojson }};
 
         const chips = [];
         if (reading) {
-            chips.push(["Reading time", formatDurationCompact(reading.totalSeconds || 0)]);
-            chips.push(["Pages", Number(reading.pagesRead || 0).toLocaleString()]);
-            chips.push(["Pace", `${reading.pagesPerHour || 0}/hr`]);
-            chips.push(["Sessions", reading.sessionCount || 0]);
-            chips.push(["Avg session", formatDurationCompact(reading.avgSessionSeconds || 0)]);
-            if (reading.percentComplete != null) chips.push(["Complete", `${reading.percentComplete}%`]);
+            chips.push([{{ _('Reading time')|tojson }}, formatDurationCompact(reading.totalSeconds || 0)]);
+            chips.push([{{ _('Pages')|tojson }}, Number(reading.pagesRead || 0).toLocaleString()]);
+            chips.push([{{ _('Pace')|tojson }}, bbFormat(PER_HOUR, { count: reading.pagesPerHour || 0 })]);
+            chips.push([{{ _('Sessions')|tojson }}, reading.sessionCount || 0]);
+            chips.push([{{ _('Avg session')|tojson }}, formatDurationCompact(reading.avgSessionSeconds || 0)]);
+            if (reading.percentComplete != null) chips.push([{{ _('Complete')|tojson }}, `${reading.percentComplete}%`]);
         }
         if (listening) {
             // Next to the reading cards, listening labels need the prefix to tell them apart.
             const label = (plain, prefixed) => reading ? prefixed : plain;
-            chips.push(["Listening time", formatDurationCompact(listening.totalSeconds || 0)]);
-            chips.push([label("Sessions", "Listen sessions"), listening.sessionCount || 0]);
-            chips.push([label("Avg session", "Avg listen"), formatDurationCompact(listening.avgSessionSeconds || 0)]);
-            if (listening.progressPercent != null) chips.push([label("Progress", "Listen progress"), `${listening.progressPercent}%`]);
+            chips.push([{{ _('Listening time')|tojson }}, formatDurationCompact(listening.totalSeconds || 0)]);
+            chips.push([label({{ _('Sessions')|tojson }}, {{ _('Listen sessions')|tojson }}), listening.sessionCount || 0]);
+            chips.push([label({{ _('Avg session')|tojson }}, {{ _('Avg listen')|tojson }}), formatDurationCompact(listening.avgSessionSeconds || 0)]);
+            if (listening.progressPercent != null) chips.push([label({{ _('Progress')|tojson }}, {{ _('Listen progress')|tojson }}), `${listening.progressPercent}%`]);
         }
         bookDetailSummary.innerHTML = `<div class="summary-grid">${chips.map(c => `<article class="summary-card"><div class="summary-card-label">${escapeHtml(c[0])}</div><div class="summary-card-value">${escapeHtml(String(c[1]))}</div></article>`).join("")}</div>`;
 
         let body = "";
         const sessions = (reading && Array.isArray(reading.sessions)) ? reading.sessions : [];
         if (sessions.length) {
-            body += `<div class="panel-head" style="margin:4px 0 8px"><h3 style="font-size:14px">Recent reading sessions</h3><span>${sessions.length}</span></div>`;
-            body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(bridgeIsoDate(s.startTime)))}</div><div class="books-meta">${s.pagesRead || 0} pages</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
+            body += `<div class="panel-head" style="margin:4px 0 8px"><h3 style="font-size:14px">${escapeHtml({{ _('Recent reading sessions')|tojson }})}</h3><span>${sessions.length}</span></div>`;
+            body += `<div class="scroll-list">${sessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(bridgeIsoDate(s.startTime)))}</div><div class="books-meta">${escapeHtml(bbPlural(PAGES, s.pagesRead || 0))}</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
         }
         const listenSessions = (listening && Array.isArray(listening.sessions)) ? listening.sessions : [];
         if (listenSessions.length) {
-            body += `<div class="panel-head" style="margin:${sessions.length ? "18px" : "4px"} 0 8px"><h3 style="font-size:14px">Recent listening sessions</h3><span>${listenSessions.length}</span></div>`;
+            body += `<div class="panel-head" style="margin:${sessions.length ? "18px" : "4px"} 0 8px"><h3 style="font-size:14px">${escapeHtml({{ _('Recent listening sessions')|tojson }})}</h3><span>${listenSessions.length}</span></div>`;
             body += `<div class="scroll-list">${listenSessions.slice(0, 40).map(s => `<div class="finished-row"><div style="min-width:0"><div class="recent-title" style="font-size:13px">${escapeHtml(formatLongDate(bridgeIsoDate(s.startTime)))}</div><div class="books-meta">${escapeHtml(formatProgressRange(s.startProgress, s.endProgress))}</div></div><div class="books-side"><div class="v">${escapeHtml(formatDurationLong(s.durationSeconds || 0))}</div><div class="s">${escapeHtml(formatRelativeTime(s.endTime || s.startTime || 0))}</div></div></div>`).join("")}</div>`;
         }
-        if (!body) body = `<div class="empty-state"><p>No session breakdown available for this book.</p></div>`;
+        if (!body) body = `<div class="empty-state"><p>${escapeHtml({{ _('No session breakdown available for this book.')|tojson }})}</p></div>`;
         bookDetailBody.innerHTML = body;
     }
 
     async function openBookDetail(key) {
         if (!key) return;
         openBookDetailModal();
-        bookDetailTitle.textContent = "Book detail";
-        bookDetailSubtitle.textContent = "Loading…";
-        bookDetailSummary.textContent = "Loading…";
+        bookDetailTitle.textContent = {{ _('Book detail')|tojson }};
+        bookDetailSubtitle.textContent = LOADING;
+        bookDetailSummary.textContent = LOADING;
         bookDetailBody.innerHTML = "";
         try {
             const response = await fetch(`/api/stats/book-detail?key=${encodeURIComponent(key)}`, { cache: "no-store" });
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || "Failed to load");
+            if (!response.ok) throw new Error(data.error || {{ _('Failed to load')|tojson }});
             renderBookDetail(data);
         } catch (error) {
-            bookDetailSubtitle.textContent = "Error";
-            bookDetailSummary.textContent = error.message || "Failed to load book detail.";
+            bookDetailSubtitle.textContent = {{ _('Error')|tojson }};
+            bookDetailSummary.textContent = error.message || {{ _('Failed to load book detail.')|tojson }};
         }
     }
 

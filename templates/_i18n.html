@@ -1,0 +1,21 @@
+{#- i18n helpers for strings handed to JavaScript.
+
+    Plain strings need no macro: {{ _('Copied')|tojson }}. Values go in {name}
+    placeholders filled by bbFormat() (base.html), so the whole sentence stays
+    one msgid: bbFormat({{ _('Showing {count} of {total}')|tojson }}, {count: n, total: t}).
+
+    plural_forms() turns one ngettext() call into the forms bbPlural() chooses
+    from with Intl.PluralRules, so languages with more than two forms (Russian
+    has three) get the right one for any count:
+
+        {% from "_i18n.html" import plural_forms %}
+        const DOCS = {% call(n) plural_forms() %}{{ ngettext('{count} document', '{count} documents', n) }}{% endcall %};
+        el.textContent = bbPlural(DOCS, docs.length);
+
+    The ngettext() literal stays at the call site, so Babel extracts it as usual.
+    The sample counts 1, 2 and 5 hit the "one", "few" and "many" forms of the
+    languages that have them; "other" (fractions in Russian) takes the "few" form.
+-#}
+{% macro plural_forms() -%}
+{{ {'one': caller(1), 'few': caller(2), 'many': caller(5), 'other': caller(2)}|tojson }}
+{%- endmacro %}

@@ -355,6 +355,12 @@ def test_english_share_separates_english_from_other_languages():
     assert AlignmentService._english_share("") == 0.0
 
 
+def test_english_share_counts_non_latin_words():
+    russian = ("Гарри посмотрел на Дамблдора, и тот кивнул ему в ответ. Он сказал: "
+               "I see. Потом они долго молчали у окна. ") * 40
+    assert AlignmentService._english_share(russian) < 0.15
+
+
 @pytest.fixture
 def real_service(tmp_path):
     from src.db.database_service import DatabaseService

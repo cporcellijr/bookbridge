@@ -45,6 +45,10 @@ RUN mkdir -p /app/src /app/templates /app/static /app/scripts /data/audio_cache 
 # 4. Copy Application Code
 COPY src/ /app/src/
 COPY templates/ /app/templates/
+# UI translations: only the .po sources are in git; compile them to .mo here.
+# A language without a compiled catalog is simply not offered (English fallback).
+COPY translations/ /app/translations/
+RUN pybabel compile -d /app/translations --statistics
 COPY static/ /app/static/
 COPY alembic/ /app/alembic/
 COPY alembic.ini /app/alembic.ini

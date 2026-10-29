@@ -24,7 +24,7 @@
         button.type = 'button';
         button.setAttribute('aria-expanded', 'false');
         button.setAttribute('aria-controls', panelId);
-        button.textContent = 'Show position';
+        button.textContent = bbT('Show position');
 
         const panel = makeElement('div', 'position-preview-panel', 'data-position-preview');
         panel.id = panelId;
@@ -34,7 +34,7 @@
 
         const header = makeElement('div', 'position-preview-header');
         const title = makeElement('strong', 'position-preview-title', 'data-position-preview-title');
-        title.textContent = 'Current reading position';
+        title.textContent = bbT('Current reading position');
         const meta = makeElement('span', 'position-preview-meta', 'data-position-preview-meta');
         header.append(title, meta);
 
@@ -78,15 +78,15 @@
 
     function setExpanded(button, panel, expanded) {
         button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        button.textContent = expanded ? 'Hide position' : 'Show position';
+        button.textContent = expanded ? bbT('Hide position') : bbT('Show position');
         panel.hidden = !expanded;
         syncGridPreviewLayout(button);
     }
 
     function setLoading(panel) {
         panel.dataset.state = 'loading';
-        panel.querySelector('[data-position-preview-title]').textContent = 'Current reading position';
-        panel.querySelector('[data-position-preview-meta]').textContent = 'Resolving saved position…';
+        panel.querySelector('[data-position-preview-title]').textContent = bbT('Current reading position');
+        panel.querySelector('[data-position-preview-meta]').textContent = bbT('Resolving saved position…');
         panel.querySelector('[data-position-preview-before]').textContent = '';
         panel.querySelector('[data-position-preview-after]').textContent = '';
         panel.querySelector('[data-position-preview-marker]').hidden = true;
@@ -96,7 +96,7 @@
     function renderPayload(panel, payload) {
         const state = payload && payload.status ? payload.status : 'error';
         const source = payload && payload.source ? String(payload.source) : 'BookBridge';
-        const confidence = payload && payload.confidence ? String(payload.confidence) : 'Unavailable';
+        const confidence = payload && payload.confidence ? String(payload.confidence) : bbT('Unavailable');
         const percentage = payload && Number.isFinite(Number(payload.percentage))
             ? `${Number(payload.percentage).toFixed(1)}%`
             : '';
@@ -107,9 +107,9 @@
 
         panel.dataset.state = state;
         panel.querySelector('[data-position-preview-title]').textContent =
-            state === 'approximate' ? 'Approximate reading position' :
-            state === 'unavailable' ? 'Reading position unavailable' :
-            'Current reading position';
+            state === 'approximate' ? bbT('Approximate reading position') :
+            state === 'unavailable' ? bbT('Reading position unavailable') :
+            bbT('Current reading position');
         panel.querySelector('[data-position-preview-meta]').textContent = meta;
         panel.querySelector('[data-position-preview-before]').textContent = before ? `…${before}` : '';
         panel.querySelector('[data-position-preview-after]').textContent = after ? `${after}…` : '';
@@ -120,13 +120,13 @@
 
     function renderError(panel) {
         panel.dataset.state = 'error';
-        panel.querySelector('[data-position-preview-title]').textContent = 'Reading position unavailable';
-        panel.querySelector('[data-position-preview-meta]').textContent = 'Could not load the preview';
+        panel.querySelector('[data-position-preview-title]').textContent = bbT('Reading position unavailable');
+        panel.querySelector('[data-position-preview-meta]').textContent = bbT('Could not load the preview');
         panel.querySelector('[data-position-preview-before]').textContent = '';
         panel.querySelector('[data-position-preview-after]').textContent = '';
         panel.querySelector('[data-position-preview-marker]').hidden = true;
         panel.querySelector('[data-position-preview-message]').textContent =
-            'Try again. Your saved progress was not changed.';
+            bbT('Try again. Your saved progress was not changed.');
     }
 
     async function loadPreview(panel, absId) {

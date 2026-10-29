@@ -4,6 +4,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const html = fs.readFileSync(path.join(__dirname, '../templates/settings.html'), 'utf8');
+// The i18n helpers (bbFormat/bbPlural) live in base.html's first <script>.
+const base = fs.readFileSync(path.join(__dirname, '../templates/base.html'), 'utf8');
+const helpers = base.slice(base.indexOf('<script>') + '<script>'.length, base.indexOf('</script>'));
 const start = html.indexOf('let isFormDirty = false;');
 const end = html.indexOf('// Initialize dirty check', start);
 assert.ok(start >= 0 && end > start);
@@ -27,6 +30,16 @@ const context = vm.createContext({
     },
     window: { addEventListener: (name, handler) => { windowHandlers[name] = handler; } },
 });
+context.document.documentElement = { lang: 'en' };
+vm.runInContext(helpers, context);
+context.bbPlural = context.window.bbPlural;
+context.bbFormat = context.window.bbFormat;
+// What plural_forms() renders for English (the template defines these at the top of its script).
+context.UNSAVED_CHANGES = {
+    one: '{count} unsaved change', few: '{count} unsaved changes',
+    many: '{count} unsaved changes', other: '{count} unsaved changes',
+};
+context.UNSAVED_LEAVE_WARNING = 'You have unsaved changes. Are you sure you want to leave?';
 vm.runInContext(html.slice(start, end), context);
 context.setupDirtyCheck();
 const warning = () => {
