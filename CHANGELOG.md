@@ -8,6 +8,12 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **A book your KOReader device syncs finds its Audiobookshelf copy on its own** (#576). When BookBridge meets
+  an EPUB it doesn't know yet and that same file is an Audiobookshelf book's ebook, the new book now keeps its
+  position in step with Audiobookshelf's reader, with no matching by hand. Turn on **Sync with Audiobookshelf's
+  own ebook reader** to use it. The file must have the same name and size, so it works when the two apps see
+  your library under different folders, and a file that fits more than one Audiobookshelf book is left alone.
+  A book found this way with no audiobook is also linked to its BookOrbit, Grimmory or Kavita copy.
 - **Russian is available as an interface language.** Choose it on your Account page. Text without a Russian
   translation continues to appear in English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #567.
 - **The Library and each reader's integration fields are available in Russian.** Book cards, status labels, and

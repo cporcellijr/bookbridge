@@ -1822,7 +1822,8 @@ def _resolve_library_ebook_source(epub_filename):
     """Resolve a filesystem EPUB to its library identity.
 
     The mapping must reference the library copy by source id so progress actually
-    syncs to BookOrbit/Grimmory/Kavita rather than treating it as a bare local file.
+    syncs to BookOrbit/Grimmory/Kavita/Audiobookshelf rather than treating it as a
+    bare local file.
     Returns (source, source_id) or (None, None).
     """
     try:
@@ -1849,6 +1850,18 @@ def _resolve_library_ebook_source(epub_filename):
                 return "Kavita", str(match["id"])
     except Exception as e:
         logger.debug(f"Auto-map: Kavita filename resolve failed: {e}")
+    try:
+        if env_truthy("SYNC_ABS_EBOOK"):
+            abs_client = _discovery_client("abs_client")
+            if abs_client and abs_client.is_configured():
+                item_id = abs_client.find_ebook_item_for_file(
+                    _container.ebook_parser().resolve_book_path(epub_filename)
+                )
+                if item_id:
+                    logger.info("Auto-map: '%s' is the ebook of Audiobookshelf item %s", epub_filename, item_id)
+                    return "ABS", item_id
+    except Exception as e:
+        logger.debug(f"Auto-map: Audiobookshelf ebook resolve failed: {e}")
     return None, None
 
 
