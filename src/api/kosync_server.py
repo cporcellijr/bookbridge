@@ -1817,7 +1817,8 @@ def _resolve_library_ebook_source(epub_filename):
     """Resolve a filesystem EPUB to its library identity.
 
     The mapping must reference the library copy by source id so progress actually
-    syncs to BookOrbit/Grimmory/Kavita rather than treating it as a bare local file.
+    syncs to BookOrbit/Grimmory/Kavita/Audiobookshelf rather than treating it as a
+    bare local file.
     Returns (source, source_id) or (None, None).
     """
     try:
@@ -1844,6 +1845,18 @@ def _resolve_library_ebook_source(epub_filename):
                 return "Kavita", str(match["id"])
     except Exception as e:
         logger.debug(f"Auto-map: Kavita filename resolve failed: {e}")
+    try:
+        if env_truthy("SYNC_ABS_EBOOK"):
+            abs_client = _discovery_client("abs_client")
+            if abs_client and abs_client.is_configured():
+                item_id = abs_client.find_ebook_item_for_file(
+                    _container.ebook_parser().resolve_book_path(epub_filename)
+                )
+                if item_id:
+                    logger.info("Auto-map: '%s' is the ebook of Audiobookshelf item %s", epub_filename, item_id)
+                    return "ABS", item_id
+    except Exception as e:
+        logger.debug(f"Auto-map: Audiobookshelf ebook resolve failed: {e}")
     return None, None
 
 
@@ -4427,14 +4440,18 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
             ))
         return
     book_id = f"ebook-{doc_hash_val[:16]}"
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
     _database_service.save_book(Book(
-        abs_id=book_id, abs_title=title, ebook_filename=epub_filename,
+        abs_id=book_id, abs_title=ebook_meta.get("title") or title, ebook_filename=epub_filename,
+        ebook_source=ebook_source, ebook_source_id=ebook_source_id,
         kosync_doc_id=doc_hash_val, status='active', sync_mode='ebook_only',
     ))
     _database_service.link_kosync_document(doc_hash_val, book_id)
     _database_service.dismiss_suggestion(doc_hash_val)
     if user_id is not None:
         _database_service.link_user_book(user_id, book_id)
+        if ebook_source == "BookOrbit":
+            _database_service.set_user_bookorbit_link(user_id, book_id, ebook_id=ebook_source_id)
     if _manager:
         _manager.run_sync_for_all_users(target_abs_id=book_id)
 

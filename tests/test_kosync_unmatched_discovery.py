@@ -185,6 +185,34 @@ class TestUnmatchedDiscovery(unittest.TestCase):
         self.assertEqual(self.db.get_book_user_ids("audio-1"), [self.user.id])
         self.assertFalse(self.db.is_user_linked(admin.id, "audio-1"))
 
+    def _discover_without_audio_or_bookorbit(self):
+        self.bundle.bookorbit_client.find_book_by_filename.return_value = None
+        self.bundle.abs_client.is_configured.return_value = True
+        self.bundle.abs_client.get_all_audiobooks.return_value = []
+        self.bundle.abs_client.find_ebook_item_for_file.return_value = "abs-ebook-1"
+        self._put(0.20)
+        self._put(0.25)
+        return self.db.get_book_by_kosync_id(self.hash)
+
+    @patch.dict(os.environ, {"SYNC_ABS_EBOOK": "true"})
+    def test_abs_hosted_epub_is_linked_to_its_abs_item(self):
+        """#576: a discovered EPUB that is an ABS item's primary ebook syncs to that item."""
+        from src.sync_clients.abs_ebook_sync_client import ABSEbookSyncClient
+
+        book = self._discover_without_audio_or_bookorbit()
+        self.assertEqual((book.ebook_source, book.ebook_source_id), ("ABS", "abs-ebook-1"))
+        abs_ebook = ABSEbookSyncClient(MagicMock(), MagicMock())
+        self.assertTrue(abs_ebook.supports_book(book))
+        self.assertEqual(abs_ebook._resolve_target_id(book), "abs-ebook-1")
+        self.container.abs_client.assert_not_called()
+
+    @patch.dict(os.environ, {"SYNC_ABS_EBOOK": "false"})
+    def test_abs_ebook_lookup_waits_for_abs_ebook_sync(self):
+        """#576: with ABS ebook sync off, discovery leaves Audiobookshelf alone."""
+        book = self._discover_without_audio_or_bookorbit()
+        self.assertIsNone(book.ebook_source)
+        self.bundle.abs_client.find_ebook_item_for_file.assert_not_called()
+
     def test_reflow_jitter_is_not_forward_reading(self):
         self._put(0.20)
         with self.assertLogs(kosync_server.logger, level="INFO") as logs:

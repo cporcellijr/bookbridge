@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from typing import Optional
+from pathlib import PurePosixPath
 
 from src.utils.file_transfers import (
     IncompleteTransferError,
@@ -378,6 +379,53 @@ class ABSClient:
         except Exception as e:
             logger.error(f"❌ Error getting ebook files: {e}", exc_info=True)
             return []
+
+    def find_ebook_item_for_file(self, local_path) -> Optional[str]:
+        """Return the ABS item whose primary ebook is the file at local_path, or None.
+
+        The primary ebook must have the same filename and size. ABS and BookBridge may
+        mount one library at different roots, so among several matches the one sharing
+        the most trailing folder names wins; a tie links nothing. Supplementary ebooks
+        never match because ABS keeps ebook progress on the primary file only.
+        """
+        local = PurePosixPath(str(local_path).replace("\\", "/"))
+        try:
+            local_size = os.stat(local_path).st_size
+        except OSError:
+            return None
+        if not self.is_configured():
+            return None
+        self._update_session_headers()
+        suffix = local.suffix.lstrip(".").lower()
+        scored = []
+        # shortcut: lists every library per lookup; cache the listing if discovery gets frequent.
+        for lib in self.get_libraries():
+            try:
+                r = self.session.get(f"{self.base_url}/api/libraries/{lib['id']}/items", timeout=self.timeout)
+                items = r.json().get("results", []) if r.status_code == 200 else []
+            except Exception as e:
+                logger.warning("ABS: Failed to list library %s for an ebook lookup: %s", lib.get("id"), e, exc_info=True)
+                continue
+            for item in items:
+                if str((item.get("media") or {}).get("ebookFormat") or "").lower() != suffix:
+                    continue
+                if PurePosixPath(str(item.get("path") or "")).name not in (local.parent.name, local.name):
+                    continue
+                ebook = ((self.get_item_details(item["id"]) or {}).get("media") or {}).get("ebookFile") or {}
+                meta = ebook.get("metadata") or {}
+                if meta.get("filename") != local.name or meta.get("size") != local_size:
+                    continue
+                shared = 0
+                for remote_part, local_part in zip(reversed(PurePosixPath(str(meta.get("path") or "")).parts), reversed(local.parts)):
+                    if remote_part != local_part:
+                        break
+                    shared += 1
+                scored.append((shared, str(item["id"])))
+        scored.sort(reverse=True)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            logger.info("ABS: '%s' matches %d Audiobookshelf ebooks equally; not linking it", local.name, len(scored))
+            return None
+        return scored[0][1] if scored else None
 
     def search_ebooks(self, query):
         """Search for ebooks across all book libraries.
