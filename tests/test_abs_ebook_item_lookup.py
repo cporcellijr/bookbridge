@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.api.api_clients import ABSClient
@@ -271,6 +273,122 @@ class TestABSEbookItemLookup(unittest.TestCase):
             # Ensure get_item_details not called
             details_urls = [u for u in calls if "/api/items/" in u and "/file/" not in u]
             self.assertEqual(len(details_urls), 0)
+
+    def test_library_list_non_200_returns_none(self):
+        """Library listing non-200 should fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            local_path = os.path.join(tmp, "Library", "Warlock", "Warlock.epub")
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "wb") as f:
+                f.write(b"a" * 100)
+            size = os.path.getsize(local_path)
+
+            lib1 = "lib1"
+            lib2 = "lib2"
+            item1 = "item1"
+            item2 = "item2"
+            libraries = [{"id": lib1}, {"id": lib2}]
+            items_lib1 = [{"id": item1, "path": "/x/Warlock", "media": {"ebookFormat": "epub"}}]
+            items_lib2 = [{"id": item2, "path": "/y/Warlock", "media": {"ebookFormat": "epub"}}]
+
+            def session_get(url, timeout=30, params=None):
+                if url.endswith("/api/libraries"):
+                    return self._make_libraries_response(libraries)
+                if f"/api/libraries/{lib1}/items" in url:
+                    return self._make_items_response(items_lib1)
+                if f"/api/libraries/{lib2}/items" in url:
+                    resp = MagicMock()
+                    resp.status_code = 503
+                    resp.json.return_value = {}
+                    return resp
+                if f"/api/items/{item1}" in url:
+                    return MagicMock(
+                        status_code=200,
+                        json=lambda: self._make_item_details(
+                            {"filename": "Warlock.epub", "size": size, "path": "/x/Warlock/Warlock.epub"}
+                        ),
+                    )
+                raise AssertionError(url)
+
+            self.client.session.get.side_effect = session_get
+            self.assertIsNone(self.client.find_ebook_item_for_file(local_path))
+
+    def test_item_details_non_200_returns_none(self):
+        """Item details returning falsy should fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            local_path = os.path.join(tmp, "Library", "Warlock", "Warlock.epub")
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "wb") as f:
+                f.write(b"a" * 100)
+            size = os.path.getsize(local_path)
+
+            lib1 = "lib1"
+            lib2 = "lib2"
+            item1 = "item1"
+            item2 = "item2"
+            libraries = [{"id": lib1}, {"id": lib2}]
+            items_lib1 = [{"id": item1, "path": "/x/Warlock", "media": {"ebookFormat": "epub"}}]
+            items_lib2 = [{"id": item2, "path": "/y/Warlock", "media": {"ebookFormat": "epub"}}]
+
+            def session_get(url, timeout=30, params=None):
+                if url.endswith("/api/libraries"):
+                    return self._make_libraries_response(libraries)
+                if f"/api/libraries/{lib1}/items" in url:
+                    return self._make_items_response(items_lib1)
+                if f"/api/libraries/{lib2}/items" in url:
+                    return self._make_items_response(items_lib2)
+                if f"/api/items/{item1}" in url:
+                    return MagicMock(
+                        status_code=200,
+                        json=lambda: self._make_item_details(
+                            {"filename": "Warlock.epub", "size": size, "path": "/x/Warlock/Warlock.epub"}
+                        ),
+                    )
+                if f"/api/items/{item2}" in url:
+                    resp = MagicMock()
+                    resp.status_code = 500
+                    resp.json.return_value = {}
+                    return resp
+                raise AssertionError(url)
+
+            self.client.session.get.side_effect = session_get
+            self.assertIsNone(self.client.find_ebook_item_for_file(local_path))
+
+    def test_library_list_exception_returns_none(self):
+        """Library listing exception should fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            local_path = os.path.join(tmp, "Library", "Warlock", "Warlock.epub")
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, "wb") as f:
+                f.write(b"a" * 100)
+            size = os.path.getsize(local_path)
+
+            lib1 = "lib1"
+            lib2 = "lib2"
+            item1 = "item1"
+            item2 = "item2"
+            libraries = [{"id": lib1}, {"id": lib2}]
+            items_lib1 = [{"id": item1, "path": "/x/Warlock", "media": {"ebookFormat": "epub"}}]
+            items_lib2 = [{"id": item2, "path": "/y/Warlock", "media": {"ebookFormat": "epub"}}]
+
+            def session_get(url, timeout=30, params=None):
+                if url.endswith("/api/libraries"):
+                    return self._make_libraries_response(libraries)
+                if f"/api/libraries/{lib1}/items" in url:
+                    return self._make_items_response(items_lib1)
+                if f"/api/libraries/{lib2}/items" in url:
+                    raise requests.exceptions.ConnectionError("boom")
+                if f"/api/items/{item1}" in url:
+                    return MagicMock(
+                        status_code=200,
+                        json=lambda: self._make_item_details(
+                            {"filename": "Warlock.epub", "size": size, "path": "/x/Warlock/Warlock.epub"}
+                        ),
+                    )
+                raise AssertionError(url)
+
+            self.client.session.get.side_effect = session_get
+            self.assertIsNone(self.client.find_ebook_item_for_file(local_path))
 
 
 if __name__ == "__main__":

@@ -400,18 +400,35 @@ class ABSClient:
         scored = []
         # shortcut: lists every library per lookup; cache the listing if discovery gets frequent.
         for lib in self.get_libraries():
+            # An unchecked library could hold a rival match, so fail closed.
             try:
                 r = self.session.get(f"{self.base_url}/api/libraries/{lib['id']}/items", timeout=self.timeout)
-                items = r.json().get("results", []) if r.status_code == 200 else []
+                if r.status_code != 200:
+                    logger.warning(
+                        "ABS: Library %s returned status %s for ebook lookup; file '%s' is not linked",
+                        lib.get("id"), r.status_code, local.name,
+                    )
+                    return None
+                items = r.json().get("results", []) or []
             except Exception as e:
-                logger.warning("ABS: Failed to list library %s for an ebook lookup: %s", lib.get("id"), e, exc_info=True)
-                continue
+                logger.warning(
+                    "ABS: Library %s failed for ebook lookup; file '%s' is not linked",
+                    lib.get("id"), local.name, exc_info=True,
+                )
+                return None
             for item in items:
                 if str((item.get("media") or {}).get("ebookFormat") or "").lower() != suffix:
                     continue
                 if PurePosixPath(str(item.get("path") or "")).name not in (local.parent.name, local.name):
                     continue
-                ebook = ((self.get_item_details(item["id"]) or {}).get("media") or {}).get("ebookFile") or {}
+                details = self.get_item_details(item["id"])
+                if not details:
+                    logger.warning(
+                        "ABS: Item %s details unavailable; file '%s' is not linked",
+                        item["id"], local.name,
+                    )
+                    return None
+                ebook = (details.get("media") or {}).get("ebookFile") or {}
                 meta = ebook.get("metadata") or {}
                 if meta.get("filename") != local.name or meta.get("size") != local_size:
                     continue

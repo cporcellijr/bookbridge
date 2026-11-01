@@ -166,6 +166,7 @@ class BookMappingService:
         booklore_ebook_id: Optional[str] = None,
         kosync_doc_id: Optional[str] = None,
         user_id: Optional[int] = None,
+        abs_ebook_item_id: Optional[str] = None,
     ) -> Optional[Book]:
         """Create or update a full sync mapping for a shelf-watch auto-match.
 
@@ -240,6 +241,8 @@ class BookMappingService:
         target_book.ebook_filename = ebook_filename
         target_book.original_ebook_filename = ebook_filename
         target_book.ebook_source = ebook_source or target_book.ebook_source
+        if abs_ebook_item_id:
+            target_book.abs_ebook_item_id = abs_ebook_item_id
         preserve_shared_orbit_id = False
         if user_id is not None and str(ebook_source or '').lower() == 'bookorbit' and existing_book:
             try:
