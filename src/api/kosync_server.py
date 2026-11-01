@@ -1822,8 +1822,7 @@ def _resolve_library_ebook_source(epub_filename):
     """Resolve a filesystem EPUB to its library identity.
 
     The mapping must reference the library copy by source id so progress actually
-    syncs to BookOrbit/Grimmory/Kavita/Audiobookshelf rather than treating it as a
-    bare local file.
+    syncs to BookOrbit/Grimmory/Kavita rather than treating it as a bare local file.
     Returns (source, source_id) or (None, None).
     """
     try:
@@ -1850,6 +1849,15 @@ def _resolve_library_ebook_source(epub_filename):
                 return "Kavita", str(match["id"])
     except Exception as e:
         logger.debug(f"Auto-map: Kavita filename resolve failed: {e}")
+    return None, None
+
+
+def _resolve_abs_ebook_item(epub_filename) -> Optional[str]:
+    """Return the Audiobookshelf item whose primary ebook is this file, or None.
+
+    Resolved on its own so a copy in BookOrbit/Grimmory/Kavita does not hide the ABS
+    link; only runs with ABS ebook sync on, as the reader.
+    """
     try:
         if env_truthy("SYNC_ABS_EBOOK"):
             abs_client = _discovery_client("abs_client")
@@ -1859,10 +1867,10 @@ def _resolve_library_ebook_source(epub_filename):
                 )
                 if item_id:
                     logger.info("Auto-map: '%s' is the ebook of Audiobookshelf item %s", epub_filename, item_id)
-                    return "ABS", item_id
+                    return item_id
     except Exception as e:
         logger.debug(f"Auto-map: Audiobookshelf ebook resolve failed: {e}")
-    return None, None
+    return None
 
 
 def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason, user_id=None):
@@ -1874,6 +1882,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
         return None
 
     ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
 
     saved = mapping_service.create_audio_mapping_from_match(
         audio_source="abs",
@@ -1887,6 +1896,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
         booklore_ebook_id=ebook_source_id if is_grimmory_source(ebook_source) else None,
         kosync_doc_id=doc_hash_val,
         user_id=user_id,
+        abs_ebook_item_id=abs_ebook_item_id,
     )
     if not saved:
         return None
@@ -4477,9 +4487,11 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None, *, epub_filen
         return
     book_id = f"ebook-{doc_hash_val[:16]}"
     ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
     _database_service.save_book(Book(
         abs_id=book_id, abs_title=ebook_meta.get("title") or title, ebook_filename=epub_filename,
         ebook_source=ebook_source, ebook_source_id=ebook_source_id,
+        abs_ebook_item_id=abs_ebook_item_id,
         kosync_doc_id=doc_hash_val, status='active', sync_mode='ebook_only',
     ))
     _database_service.link_kosync_document(doc_hash_val, book_id)
