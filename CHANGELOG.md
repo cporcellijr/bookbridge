@@ -59,6 +59,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **A book you put on BookOrbit's Up Next finds an audiobook you just added.** BookBridge reused a list of your
+  BookOrbit library that could be up to an hour old. An audiobook added shortly before you shelved its ebook was
+  missing from that list, so the book became ebook-only and left Up Next. BookBridge now reloads the list before
+  it looks for a match, both for Up Next and for books in Continue Reading. If BookOrbit can't be reached, it
+  uses the list it already has, as before.
 - **The English-only CTC aligner recognizes text written in other alphabets.** A mostly Russian book quoting a few
   English words could previously be mistaken for English because the other words were left out of the language
   check. All alphabetic words now count. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #569.
