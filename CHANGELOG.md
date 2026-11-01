@@ -55,6 +55,12 @@ All notable changes to BookBridge will be documented in this file.
 - **The English-only CTC aligner recognizes text written in other alphabets.** A mostly Russian book quoting a few
   English words could previously be mistaken for English because the other words were left out of the language
   check. All alphabetic words now count. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #569.
+- **A book found from a reader's KOReader device belongs to that reader only** (#575). With several users, a
+  book BookBridge matched on its own after a reader's device synced it also appeared on the first admin's
+  dashboard, and a book it paired with an audiobook went to the admin instead of the reader. The search for that
+  book now also uses the reader's own Audiobookshelf and library logins rather than the admin's. Books already
+  added to the admin's dashboard this way stay there; remove them from the admin's dashboard, and the reader keeps
+  the book and its progress.
 - **BookBridge starts with a `DATA_DIR` other than `/data`** (#573). The database update that runs at startup
   always looked in `/data`, so any other data folder stopped BookBridge with "unable to open database file".
   `DATA_DIR` is now read only from the environment: Settings shows it but no longer offers to change it, because
