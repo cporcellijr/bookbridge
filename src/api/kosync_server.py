@@ -33,7 +33,7 @@ from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
 from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
 from src.utils.time_utils import datetime_to_epoch, utcnow
-from src.utils.user_context import set_current_user_id, reset_current_user_id
+from src.utils.user_context import get_current_user_id, set_current_user_id, reset_current_user_id
 from src.utils.user_config import (
     _ALLOW_GLOBAL_FALLBACK_KEY,
     global_fallback_allowed,
@@ -1665,6 +1665,14 @@ def kosync_get_progress(doc_id):
     return jsonify({"message": "Document not found on server"}), 404
 
 
+def _discovery_client(provider_name: str):
+    """Use the requesting reader's clients in background discovery."""
+    user_id = get_current_user_id()
+    if user_id is not None:
+        return getattr(_container.user_client_registry().get_clients(user_id), provider_name)
+    return getattr(_container, provider_name)()
+
+
 def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
     """Score every ABS audiobook against the EPUB's title/author.
 
@@ -1673,7 +1681,7 @@ def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
     """
     candidates = []
     try:
-        abs_client = _container.abs_client()
+        abs_client = _discovery_client("abs_client")
     except Exception:
         return candidates
     if not abs_client.is_configured():
@@ -1813,7 +1821,7 @@ def _resolve_library_ebook_source(epub_filename):
     Returns (source, source_id) or (None, None).
     """
     try:
-        bookorbit = _container.bookorbit_client()
+        bookorbit = _discovery_client("bookorbit_client")
         if bookorbit and bookorbit.is_configured():
             match = bookorbit.find_book_by_filename(epub_filename, allow_refresh=False)
             if match and match.get("id") is not None:
@@ -1821,7 +1829,7 @@ def _resolve_library_ebook_source(epub_filename):
     except Exception as e:
         logger.debug(f"Auto-map: BookOrbit filename resolve failed: {e}")
     try:
-        booklore = _container.booklore_client()
+        booklore = _discovery_client("booklore_client")
         if booklore and booklore.is_configured():
             match = booklore.find_book_by_filename(epub_filename, allow_refresh=False)
             if match and match.get("id") is not None:
@@ -1829,7 +1837,7 @@ def _resolve_library_ebook_source(epub_filename):
     except Exception as e:
         logger.debug(f"Auto-map: Grimmory filename resolve failed: {e}")
     try:
-        kavita = _container.kavita_client()
+        kavita = _discovery_client("kavita_client")
         if kavita and kavita.is_configured():
             match = kavita.find_book_by_filename(epub_filename, allow_refresh=False)
             if match and match.get("id") is not None:
@@ -1839,7 +1847,7 @@ def _resolve_library_ebook_source(epub_filename):
     return None, None
 
 
-def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason):
+def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason, user_id=None):
     """Create a full ebook↔audiobook mapping and link the KOSync document. Returns Book or None."""
     try:
         mapping_service = _container.book_mapping_service()
@@ -1860,6 +1868,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         ebook_source_id=ebook_source_id,
         booklore_ebook_id=ebook_source_id if is_grimmory_source(ebook_source) else None,
         kosync_doc_id=doc_hash_val,
+        user_id=user_id,
     )
     if not saved:
         return None
@@ -3433,7 +3442,7 @@ def _scan_bookorbit_for_hash(doc_hash: str) -> Optional[str]:
     than the miss it is trying to avoid.
     """
     try:
-        bookorbit_client = _container.bookorbit_client()
+        bookorbit_client = _discovery_client("bookorbit_client")
     except Exception:
         return None
     if not bookorbit_client or not bookorbit_client.is_configured():
@@ -3530,7 +3539,8 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
             return matched
 
         # Fallback to Grimmory
-        if _container.booklore_client().is_configured():
+        booklore_client = _discovery_client("booklore_client")
+        if booklore_client.is_configured():
             logger.info("🔎 Starting Grimmory API search...")
 
             try:
@@ -3538,7 +3548,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                 books = _database_service.get_all_booklore_books()
                 scan_source = "Grimmory DB cache"
                 if not books:
-                    books = _container.booklore_client().get_all_books() or []
+                    books = booklore_client.get_all_books() or []
                     scan_source = "Grimmory in-memory cache"
 
                 logger.info(f"Scanning {len(books)} books from {scan_source}...")
@@ -3567,7 +3577,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                         book_title = book.get('title')
 
                         if book_id and not filename:
-                            hydrated = _container.booklore_client()._fetch_and_cache_detail(raw_id)
+                            hydrated = booklore_client._fetch_and_cache_detail(raw_id)
                             if hydrated:
                                 book = hydrated
                                 filename = hydrated.get('fileName')
@@ -3587,7 +3597,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                             return filename
 
                     try:
-                        book_content = _container.booklore_client().download_book(book_id)
+                        book_content = booklore_client.download_book(book_id)
                         if book_content:
                             computed_hash = _container.ebook_parser().get_kosync_id_from_bytes(filename, book_content)
 
@@ -4311,12 +4321,14 @@ def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") 
 
     def _wrapped():
         global _queued_discovery_count
+        token = set_current_user_id(user_id)
         try:
             if source == "get":
                 _run_get_auto_discovery(doc_id, user_id)
             else:
                 _run_put_auto_discovery_inner(doc_id, user_id)
         finally:
+            reset_current_user_id(token)
             with _active_scans_lock:
                 _active_scans.discard(doc_id)
             with _queued_discovery_lock:
@@ -4393,7 +4405,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
     candidates = _autodiscovery_audiobook_candidates(epub_filename, ebook_meta)
     if candidates and os.environ.get('KOSYNC_AUTO_MAP_ON_AGREEMENT', 'true').lower() == 'true':
         chosen, reason = _select_auto_map_candidate(ebook_meta, candidates)
-        if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason):
+        if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason, user_id=user_id):
             return
     matches = [
         {

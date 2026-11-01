@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -13,6 +14,13 @@ from src.api import kosync_server
 from src.db.database_service import DatabaseService
 from src.db.models import Book, KosyncDocument, State
 from src.utils.time_utils import utcnow
+
+
+def _run_on_discovery_thread(callback):
+    """Run a discovery job like ``_discovery_executor``: on a fresh thread, outside the request's user context."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(callback).result()
+    return MagicMock()
 
 
 class TestUnmatchedDiscovery(unittest.TestCase):
@@ -67,16 +75,12 @@ class TestUnmatchedDiscovery(unittest.TestCase):
         self.headers = {"x-auth-user": "reader", "x-auth-key": "secret"}
 
     def _open(self, expected_status=404):
-        def run_now(callback):
-            callback()
-            return MagicMock()
-
         with (
             patch.object(kosync_server, "authenticate_kosync", return_value=(True, self.user.id)),
             patch.object(kosync_server, "_resolve_book_by_sibling_hash", return_value=None),
             patch.object(kosync_server, "_resolve_book_by_cwa_checksum", return_value=None),
             patch.object(kosync_server, "_try_find_epub_by_hash", return_value="Unmatched Book.epub"),
-            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=_run_on_discovery_thread),
         ):
             response = self.client.get(f"/syncs/progress/{self.hash}", headers=self.headers)
         self.assertEqual(response.status_code, expected_status)
@@ -84,16 +88,12 @@ class TestUnmatchedDiscovery(unittest.TestCase):
 
     def _put(self, percentage, *, device_id="K", doc_hash=None, user_id=None):
         uid = self.user.id if user_id is None else user_id
-        def run_now(callback):
-            callback()
-            return MagicMock()
-
         with (
             patch.object(kosync_server, "authenticate_kosync", return_value=(True, uid)),
             patch.object(kosync_server, "_resolve_book_by_sibling_hash", return_value=None),
             patch.object(kosync_server, "_resolve_book_by_cwa_checksum", return_value=None),
             patch.object(kosync_server, "_try_find_epub_by_hash", return_value="Unmatched Book.epub"),
-            patch.object(kosync_server._discovery_executor, "submit", side_effect=run_now),
+            patch.object(kosync_server._discovery_executor, "submit", side_effect=_run_on_discovery_thread),
         ):
             response = self.client.put(
                 "/syncs/progress",
@@ -145,6 +145,45 @@ class TestUnmatchedDiscovery(unittest.TestCase):
         self.assertIsNotNone(book)
         self.assertEqual(book.sync_mode, "ebook_only")
         self.assertTrue(self.db.is_user_linked(self.user.id, book.abs_id))
+
+    @patch.dict(os.environ, {"SHARE_ALL_BOOKS_WITH_ALL_USERS": "false"})
+    def test_regular_readers_discovered_ebook_is_not_linked_to_admin(self):
+        """#575: an ebook-only mapping found from a reader's device belongs to that reader alone."""
+        admin = self.db.create_user("admin", "pw", role="admin")
+        self._put(0.20)
+        with self.assertNoLogs("src.db.database_service", level="WARNING"):
+            self._put(0.25)
+        book = self.db.get_book_by_kosync_id(self.hash)
+        self.assertEqual(book.sync_mode, "ebook_only")
+        self.assertEqual(self.db.get_book_user_ids(book.abs_id), [self.user.id])
+        self.assertFalse(self.db.is_user_linked(admin.id, book.abs_id))
+        self.container.abs_client.assert_not_called()
+
+    @patch.dict(os.environ, {"SHARE_ALL_BOOKS_WITH_ALL_USERS": "false"})
+    def test_regular_readers_auto_mapped_audiobook_is_not_linked_to_admin(self):
+        """#575: an audiobook auto-mapped from a reader's device belongs to that reader alone."""
+        from src.services.book_mapping_service import BookMappingService
+
+        admin = self.db.create_user("admin", "pw", role="admin")
+        self.bundle.abs_client.is_configured.return_value = True
+        self.bundle.abs_client.get_all_audiobooks.return_value = [{
+            "id": "audio-1", "media": {"duration": 1000, "metadata": {
+                "title": "Unmatched Book", "authorName": "Test Author", "isbn": "1234567890",
+            }},
+        }]
+        self.container.abs_client.return_value = self.bundle.abs_client
+        self.container.ebook_parser.return_value.get_book_metadata.return_value["isbn"] = "1234567890"
+        mapping = BookMappingService(self.db, None, MagicMock(), None, {})
+        self.container.book_mapping_service.return_value = mapping
+        with patch.object(
+            mapping, "create_audio_mapping_from_match", wraps=mapping.create_audio_mapping_from_match,
+        ) as create:
+            self._put(0.20)
+            self._put(0.25)
+        self.assertEqual(create.call_args.kwargs["user_id"], self.user.id)
+        self.assertEqual(self.db.get_kosync_document(self.hash).linked_abs_id, "audio-1")
+        self.assertEqual(self.db.get_book_user_ids("audio-1"), [self.user.id])
+        self.assertFalse(self.db.is_user_linked(admin.id, "audio-1"))
 
     def test_reflow_jitter_is_not_forward_reading(self):
         self._put(0.20)
