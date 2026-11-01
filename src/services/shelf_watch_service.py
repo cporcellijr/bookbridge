@@ -406,7 +406,7 @@ class ShelfWatchService:
                 continue
 
             if candidate_pool is None:
-                candidate_pool = self._get_suggestions_service()._build_audiobook_candidate_pool()
+                candidate_pool = self._build_candidate_pool(active_client)
                 if not candidate_pool:
                     # Pool unavailable (no adapters returning, transient API failure, etc.).
                     # Defer processing rather than create ebook-only mappings or set throttle
@@ -442,6 +442,21 @@ class ShelfWatchService:
                 stats['errors'],
             )
         return stats
+
+    def _build_candidate_pool(self, active_client) -> list:
+        """Build the audiobook candidate pool from a fresh BookOrbit listing.
+
+        The client caches its listing for up to an hour, so audio added shortly
+        before its ebook was shelved would be missing and the ebook would get an
+        ebook-only mapping. A failed refresh keeps the cached listing.
+        """
+        if self._source_name == 'BookOrbit' and active_client is not None:
+            try:
+                active_client._refresh_book_cache()
+            except Exception as e:
+                logger.warning("Shelf-watch: %s listing refresh failed: %s",
+                               self._display_name(), e, exc_info=True)
+        return self._get_suggestions_service()._build_audiobook_candidate_pool()
 
     # ---- per-book handling ---------------------------------------------
 
@@ -718,7 +733,7 @@ class ShelfWatchService:
                 continue
 
             if candidate_pool is None:
-                candidate_pool = self._get_suggestions_service()._build_audiobook_candidate_pool()
+                candidate_pool = self._build_candidate_pool(active_client)
                 if not candidate_pool:
                     # Pool unavailable (no adapters returning, transient API failure, etc.).
                     # Defer processing rather than create ebook-only mappings or set throttle
