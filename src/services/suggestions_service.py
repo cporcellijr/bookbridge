@@ -1488,6 +1488,10 @@ class SuggestionsService:
             if m.get("match_reason") == "same_series":
                 # Series metadata identifies these; their titles are unrelated text by design.
                 continue
+            if m.get("score", 0) >= 100:
+                # Exact title and agreeing author: blending would only knock it off 100,
+                # out of "Add all exact".
+                continue
             cand_vec = embedded.get(ct)
             cos = cosine_similarity(audio_vec, cand_vec) if cand_vec else 0.0
             m["score"] = round(0.6 * m.get("score", 0) + 40.0 * cos, 1)
