@@ -35,6 +35,7 @@
 - **Web UI**: Management dashboard for tracking syncs and matching books.
 - **Library Suggestions Page**: Scan your library for likely audiobook + ebook pairs, review them, and queue matches in bulk. Optional scheduled scans and cron full refreshes keep suggestions current.
 - **Scripted Reader Setup**: Provision readers and their integrations through an optional [admin API](docs/configuration.md#admin-api-optional).
+- **Interface Languages**: Each reader chooses English or Russian on their Account page.
 - **Job Queue**: See which books are waiting, processing or recently finished, and move staged work up or down before it starts.
 - **Same-Folder Matching**: Treat sibling audiobook and ebook files in the same
   title folder as high-confidence matches.

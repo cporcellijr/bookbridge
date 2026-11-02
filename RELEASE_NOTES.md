@@ -1,105 +1,84 @@
-# Release Notes - 7.11.0
+# Release Notes - 7.12.0
 
-**A Job Queue page shows what BookBridge is working on and lets you change the
-order, Storyteller-only libraries link both EPUB editions to one reading
-position, and read-alongs can skip forced alignment when their own timings
-check out.** You can also save reading checkpoints in Audiobookshelf's
-listening history and generate read-alongs for books matched automatically.
+**BookBridge speaks Russian, Settings are reorganized and apply without a
+restart, and each reader sets their own reading preferences.** A book your
+KOReader device syncs now finds its Audiobookshelf copy on its own, and a book
+you start reading in BookOrbit is matched to its audiobook when the match is
+certain.
 
-Read-along imports are more accurate, readers on the same EPUB get the exact
-position, the stats heatmap and yearly recap count correctly, and Suggestions
-match Local Files, series volumes and BookOrbit ebooks more reliably.
+Audiobooks and ebooks match more reliably across Suggestions, Up Next and
+Continue Reading, **Add all exact** only takes matches nobody needs to check,
+and KOReader positions are better protected from out-of-date devices.
 
 ## What's New
 
-- **Job Queue page (#529).** **Job Queue** in the top navigation lists the books
-  waiting, processing or recently finished, including requested read-along EPUBs.
-  Move staged Add Book items and books waiting for alignment up, down or to the
-  top before they start. The alignment order survives restarts, and you can only
-  move your own books.
-
-- **Storyteller editions share one reading position (#519).** For books in a
-  Storyteller-only library, BookBridge links the original EPUB and the read-aloud
-  EPUB to the same KoSync progress and keeps old hashes valid after re-alignment.
-  Turn on **Automatically link aligned Storyteller books** in your Storyteller
-  integration (Account → My Integrations) to have the hourly check link aligned
-  books it can match with confidence. It is off by default and skips ambiguous
-  matches.
-
-- **Use a read-along's own timings (#553).** **Use a read-along's own timings
-  when they check out** (Settings → System → Advanced Options, under forced
-  alignment) checks a Storyteller or StoryAlign EPUB's timings against the audio. Timings that pass
-  become the book's map without running forced alignment, which can take hours of
-  CPU on a long book. It is off by default. Contributed by
-  [@chemicalsno](https://github.com/chemicalsno).
-
-- **Read-alongs for automatic matches (#524).** BookOrbit's collection watch and
-  Suggestions auto-match can each generate a read-along EPUB for books they match
-  to a BookOrbit audiobook. Both are off by default. The Suggestions queue also
-  has an **Also generate read-along EPUBs** box.
-
-- **Reading checkpoints in Audiobookshelf (#530).** **Save reading checkpoints in
-  ABS listening history** (Audiobookshelf card in Settings → Integrations, off by
-  default) adds one second of listening time when ebook reading moves the audiobook forward, so ABS
-  keeps a history entry you can go back to. It counts that reading as listening.
-  Contributed by [@rafjaf](https://github.com/rafjaf).
-
-- **Install BridgeSync from a KOReader plugin store (#547).** BridgeSync is
-  listed in [Storefront](https://github.com/ultimatejimmy/storefront.koplugin) and
-  similar stores, so a device can find and install it without a computer. The
-  store carries the stable release's plugin; once installed, BridgeSync still
-  offers its own updates from your BookBridge server.
-
-- **Groundwork for translations (#516).** The interface is ready to be translated,
-  and readers will choose a language on their Account page once a translation
-  ships. None is included yet. Contributed by
+- **Russian interface (#516).** Each reader picks a language on their Account
+  page; the Library, Settings, buttons, dialogs and statistics follow it, and
+  anything not yet translated stays in English. Contributed by
   [@chuzhba1-art](https://github.com/chuzhba1-art).
+
+- **KOReader books find their Audiobookshelf copy (#576).** With **Sync with
+  Audiobookshelf's own ebook reader** on, a new EPUB that is the same file as an
+  Audiobookshelf book's ebook is linked to that book and kept in step with
+  Audiobookshelf's reader, with no matching by hand.
+
+- **Settings, reorganized.** The sidebar is grouped by purpose (Services,
+  Reading & Sync, Library & Matching, Alignment, AI, Server, Maintenance, Users),
+  settings are described in plain words, search covers every tab, and
+  **Different from defaults** lists what you've changed. Most saves apply
+  immediately; a setting marked **restart** still restarts BookBridge, and the
+  Save bar says so first.
+
+- **One setting per choice.** Polling, highlight sync, the "Up Next" shelf and
+  the tracker posting wait each apply to every app you use. **Find shelves**
+  lists collections from every library app. More options that used to be
+  environment variables only are now in Settings.
+
+- **Per-reader reading preferences.** Under **My Integrations → Reading
+  preferences**, each reader can turn highlight, status and History sharing,
+  out-of-date device protection, finish-everywhere, Audiobookshelf reading
+  checkpoints, Storyteller listening time and the series view on or off for
+  themselves. Everything starts at **Server default**.
+
+- **Continue Reading auto-match.** With **Auto-match books you start reading in
+  BookOrbit** on, a book whose audiobook scores 95 or higher is linked straight
+  away; weaker matches still wait in Suggestions.
 
 ## Fixed
 
-- **Readers using the same EPUB get the exact position (#523).** A KOReader or
-  Grimmory position is passed on as its exact XPath or CFI instead of being found
-  again by its text, which could land later in the book. **Show position** uses
-  the service that last led.
-- **KOReader reading reaches the audiobook when the percentages match by
-  coincidence (#531),** as in an ebook with long endnotes the audiobook doesn't
-  read. Contributed by [@nmackler](https://github.com/nmackler).
-- **Read-alongs import accurately (#543, #544, #545, #552).** Read-alongs with
-  audio split into several files are accepted, sentences no longer start up to 43
-  seconds late or drift up to 14 seconds inside long sentences, and long chapters
-  load in seconds instead of minutes. Contributed by
-  [@chemicalsno](https://github.com/chemicalsno).
-- **Transcripts survive Remap and interrupted runs (#527, #540).** Remap keeps
-  complete transcripts that split hyphenated words or numbers, and an interrupted
-  Whisper transcription resumes instead of starting over.
-- **The content-match guard handles hyphenation hints (#526),** so books with
-  invisible soft hyphens, common in Russian EPUBs, aren't refused as a mismatch.
-- **Suggestions match more reliably (#507, #539, #541, #549).** Local Files can
-  auto-match by their KoSync hash, series volumes and editions are told apart
-  using Calibre's live metadata, hidden and trash folders are ignored, and BookOrbit
-  is offered as the ebook source whatever the file is named. Contributed by
-  [@chemicalsno](https://github.com/chemicalsno).
-- **Stats count correctly (#548, #550, #555).** The heatmap shows the last 12 months
-  and, from the yearly recap, earlier years, with each day on its own date. The
-  yearly recap counts the audiobooks you finished that year, once per book, and a
-  book's detail lists its listening sessions. Contributed by
-  [@chemicalsno](https://github.com/chemicalsno).
-- **Filename hashing works for every book (#554, #557, #558, #559).** BridgeSync
-  downloads managed books, reading sessions reach the right book, and copies you
-  added yourself link to their book, so their statistics, statuses and highlights
-  arrive too. Contributed by [@chemicalsno](https://github.com/chemicalsno).
-- **KOReader reading time is kept after a book's match is removed**, and books
-  whose saved filename includes their library folder sync again.
-- **A Kobo finish synced through Grimmory finishes the book everywhere (#537),**
-  and Grimmory highlights spanning italics or links select the right text (#535).
-- **Storyteller books added without an ebook file keep their title (#519).**
-- **Audiobookshelf instant sync connects to servers whose address starts with
-  `api`**, and multi-user installs skip a round instead of falling back to the
-  admin's integrations when a reader's books can't be read.
-- **The `latest` image no longer shows a permanent "update available" banner.**
-- **Older Calibre-Web Automated books stay current for BridgeSync,** and pages
-  of BookOrbit covers and Hardcover or StoryGraph matching no longer fill the
-  log with warnings.
+- **Matching is more reliable.** Letter case, "(Unabridged)", accents, "&" or
+  "and", a leading "The", a missing author and subtitles such as "Stories" no
+  longer lower a correct match, while other volumes, similar titles by other
+  authors and reordered titles are no longer offered as sure matches. AI
+  re-ranking keeps exact matches at 100, and a tie is left for you to choose.
+- **Add all exact is safe to press.** It skips ties, other editions, unconfirmed
+  authors, same-title volumes and loose files on disk, rechecks on the server,
+  and each skipped card says why.
+- **Suggestions page:** progress shows until a scan finishes (including the AI
+  step), a second scan request joins the running one, suggestions from listening
+  progress skip other authors, and the wrong volume of a "Series: Book N" title
+  or a multi-series Audiobookshelf book is no longer offered (#563, #564).
+  Contributed by [@chemicalsno](https://github.com/chemicalsno).
+- **Up Next and Continue Reading:** Review opens with the right books selected,
+  approving another book no longer removes the shelved one, and an audiobook you
+  just added is found.
+- **KOReader positions are better protected.** A device replaying an old
+  position no longer rewinds your other apps, pages read right after a sync are
+  kept, a removed book no longer returns on its own, and books keep their own
+  KOReader hashes.
+- **Multi-user:** a book found from a reader's KOReader device belongs to that
+  reader and is found with their own logins (#575).
+- **BookOrbit:** a page you just turned to is no longer overwritten (BookOrbit
+  3.6+), a brief download hiccup no longer forces slow Whisper transcription, and
+  matching a BookOrbit or Grimmory audiobook links Hardcover and StoryGraph.
+- **Listening:** Storyteller listening shows as one Audiobookshelf session per
+  sitting (#566), and the stats page's listening books add up to its total with
+  Audiobookshelf (#560). Contributed by [@chemicalsno](https://github.com/chemicalsno).
+- **Alignment:** the content-match guard accepts correct pairings scored by
+  OpenAI embeddings (#556), and the English-only CTC aligner recognizes other
+  alphabets (#569). Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art).
+- **Startup:** a `DATA_DIR` other than `/data` works (#573), and the "no ebook
+  source" warning names your real books folder (#574).
 
 ## Upgrading
 
@@ -109,27 +88,27 @@ Back up your `/data` directory, then pull the new image and restart:
 docker compose pull && docker compose up -d
 ```
 
-Database migrations apply automatically on startup. If you build your own image,
-rebuild it: this release adds a Python dependency. KOReader devices are offered
-BridgeSync 0.9.10; install it for the filename hashing fixes.
+There are no database changes in this release. If you build your own image,
+rebuild it: translations are now compiled into the image. BridgeSync is
+unchanged (0.9.10).
 
 ## Operational Notes
 
-- **Multi-file read-alongs cached before this update** are still placed from the
-  audiobook's chapters. To use the new check, delete the book's cached
-  `storyteller_<id>.epub` from `/data/epub_cache` so BookBridge downloads it
-  again, then remap the book.
-- **Grimmory highlights synced before this update** may still be in the wrong
-  place in Grimmory. Edit one in KOReader to send it again; don't delete it in
-  Grimmory, because that also deletes it from your device.
-- **A Kobo finish that was already overwritten isn't recovered.** Sync it again
-  from the Kobo, or mark the book finished in Audiobookshelf.
-- **With filename hashing**, the first BridgeSync sync after upgrading may still
-  use the old book list; the next sync downloads the books.
-- **Reading checkpoints label reading as listening** and add slightly to ABS
-  listening stats. Leave the option off if you rely on those totals.
+- **Run Full Refresh on the Suggestions page once after updating.** Suggestions
+  found before the update are marked **Manual choice** until they're rescanned
+  with the new checks.
+- **`DATA_DIR` is set only in the environment** (for example in
+  `docker-compose.yml`). Settings shows it but no longer offers to change it.
+- **Your settings carried over.** If an option seems to have moved, use the
+  search box at the top of Settings. Reading preferences start at **Server
+  default**, so nothing changes for a reader until they override one.
+- **Books a reader's KOReader device added to the admin's dashboard before this
+  update** stay there. Remove them from the admin's dashboard; the reader keeps
+  the book and its progress.
+- **AI re-ranking needs Ollama's embedding model.** If the log shows
+  `Ollama /api/embeddings returned 404`, pull the model named in **Embedding
+  Model** (by default `ollama pull nomic-embed-text`); until then re-ranking is
+  skipped.
 
 Thanks to [@chemicalsno](https://github.com/chemicalsno),
-[@chuzhba1-art](https://github.com/chuzhba1-art),
-[@nmackler](https://github.com/nmackler),
-[@rafjaf](https://github.com/rafjaf), and everyone who contributed to this release.
+[@chuzhba1-art](https://github.com/chuzhba1-art), and everyone who contributed to this release.

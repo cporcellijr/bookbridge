@@ -4,169 +4,79 @@
 
 All notable changes to BookBridge will be documented in this file.
 
-## [Unreleased]
+## [7.12.0] - 2026-11-02
 
 ### Added
 
-- **A book your KOReader device syncs finds its Audiobookshelf copy on its own** (#576). When BookBridge meets
-  an EPUB it doesn't know yet and that same file is an Audiobookshelf book's ebook, the new book now keeps its
-  position in step with Audiobookshelf's reader, with no matching by hand. Turn on **Sync with Audiobookshelf's
-  own ebook reader** to use it. The file must have the same name and size, so it works when the two apps see
-  your library under different folders. A file that fits more than one Audiobookshelf book is left alone, and so
-  is any file found while Audiobookshelf can't be fully checked. A copy in BookOrbit, Grimmory or Kavita stays
-  linked as well, and a book found with no audiobook now gets that link too.
-- **Russian is available as an interface language.** Choose it on your Account page. Text without a Russian
-  translation continues to appear in English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #567.
-- **The Library and each reader's integration fields are available in Russian.** Book cards, status labels, and
-  integration choices can follow your interface language without changing how books or settings are stored.
-  Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #570.
-- **Settings labels and explanations can follow your interface language.** This includes the updated explanation
-  that the Data Directory is configured outside Settings. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #571.
-- **Messages shown by buttons, dialogs, and statistics can be translated.** Search and linking messages, reading
-  positions, and counts now use your chosen language, including Russian plural forms. Contributed by
-  [@chuzhba1-art](https://github.com/chuzhba1-art) in #572.
+- **The interface is available in Russian** (#516). Each reader picks a language on their Account page. The
+  Library, Settings, integration fields, buttons, dialogs and statistics follow it, and any text without a
+  translation stays in English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #567, #570,
+  #571 and #572.
+- **A book your KOReader device syncs finds its Audiobookshelf copy on its own** (#576). With **Sync with
+  Audiobookshelf's own ebook reader** on, a new EPUB that is the same file (same name and size) as an
+  Audiobookshelf book's ebook is linked to that book and keeps its position in step with Audiobookshelf's reader.
+  A file that fits more than one book is left alone.
 
 ### Changed
 
-- **A book you start reading in BookOrbit is matched to its audiobook on its own when the match is certain.**
-  With **Auto-match books you start reading in BookOrbit** on, a book in Continue Reading whose audiobook scores
-  95 or higher (the same bar as Up Next) is now linked straight away instead of waiting in Suggestions. Weaker
-  matches still wait for you to confirm, and nothing moves between shelves.
-
-- **Saving settings no longer restarts BookBridge unless it has to.** Most changes now take effect the moment you
-  save. A setting marked **restart** is read once at startup: a server address, a folder, the sync period and a few
-  others. Saving a change to one of those still restarts the app, and the Save bar tells you so before you press it.
-- **Settings are grouped by what they are for.** The sidebar is now **Services**, **Reading & Sync**, **Library &
-  Matching**, **Alignment**, **AI**, **Server**, **Maintenance** and **Users**. The KOReader book-matching options
-  that sat under Suggestions, and the transcription and alignment options buried in System → Advanced, each have a
-  home of their own. The clean-up and backfill buttons live on **Maintenance**. Every on/off is now the same switch.
-- **One choice instead of one per app.** How often apps are checked, how often highlights sync, the "Up Next" shelf
-  that auto-matches books you put on it, and how long to wait before posting progress to Hardcover and StoryGraph
-  are each a single setting now, applied to every app you use. Apps you had set differently keep their own
-  values until you change that choice, and the card tells you they differ. Setting highlights to 0 now stops highlight
-  copying even while Readest uploads keep running. **Find shelves** on the "Up Next" card lists the shelves and
-  collections in every library app you use, not only Grimmory. Highlights, reading history, the "Up Next" shelf and posting to
-  trackers each have their own card, and KOReader's page-turn wait, backward-progress protection, history
-  switches and *Compare text positions when percentages disagree* sit beside the matching settings for every app
-  under **Reading & Sync**.
-- **More of BookBridge is in Settings.** Identifying books a KOReader device opens that BookBridge doesn't know yet,
-  the Storyteller collection for synced books, combining KOReader statistics across your devices, and the Whisper.cpp
-  server timeout used to be environment variables only.
-- **Find a setting searches every tab, and "Different from defaults" lists your customised settings.** Each changed setting has a
-  **reset** link back to its default.
-- **Each reader chooses their own reading preferences.** Highlight, reading-status and History sharing between
-  KOReader devices, protection from an out-of-date device, marking a finished book finished everywhere, Audiobookshelf
-  reading checkpoints, counting Storyteller as listening time, and the series view on your Library are now under
-  **My Integrations → Reading preferences**. Each starts at **Server default**, which follows the value in Settings,
-  and can be set to On or Off for just that reader.
-- **Settings are described in plain words.** Labels such as "Client Diff Threshold" and "Rollback Veto Tolerance"
-  now say what they do, and descriptions say what changes for you and when you would touch them.
+- **Settings are reorganized, and most changes apply without a restart.** The sidebar is grouped by purpose
+  (**Services**, **Reading & Sync**, **Library & Matching**, **Alignment**, **AI**, **Server**, **Maintenance** and
+  **Users**), settings are described in plain words, search covers every tab, and **Different from defaults** lists
+  what you have changed, each with a reset link. A setting marked **restart** still restarts BookBridge when you
+  save it, and the Save bar says so first.
+- **One setting per choice instead of one per app.** How often apps are checked, how often highlights sync, the
+  "Up Next" shelf and the wait before posting progress to Hardcover and StoryGraph each apply to every app you use.
+  Apps you had set differently keep their values until you change that setting. **Find shelves** lists the
+  collections in every library app, not only Grimmory.
+- **Each reader sets their own reading preferences** under **My Integrations → Reading preferences**: sharing
+  highlights, reading status and History between KOReader devices, protection from an out-of-date device,
+  finishing a book everywhere, Audiobookshelf reading checkpoints, counting Storyteller as listening time, and the
+  Library's series view. Each starts at **Server default**.
+- **More options are in Settings instead of environment variables only**: identifying books a KOReader device
+  opens that BookBridge doesn't know yet, the Storyteller collection for synced books, combining KOReader
+  statistics across devices, and the Whisper.cpp server timeout.
+- **A book you start reading in BookOrbit is matched to its audiobook on its own when the match is certain.** With
+  **Auto-match books you start reading in BookOrbit** on, a Continue Reading book whose audiobook scores 95 or
+  higher is linked straight away. Weaker matches still wait for you in Suggestions.
 
 ### Fixed
 
-- **The Suggestions page matches audiobooks to ebooks more reliably.** It now follows the same rules as Up Next:
-  letter case and a missing author no longer lower a correct match, an ebook by a different author whose title is
-  only close is no longer suggested, and a different volume of a series stays below 90. A title with the same
-  words in a different order no longer counts as a perfect match, here or on Up Next.
-- **Titles that differ only in form now match fully.** "Wounds: Stories" and "Wounds", "Great & Secret Show" and
-  "The Great and Secret Show", "Alba Diaz" and "Alba Díaz", and "Hearthomancy Vol. 2" and "Hearthomancy Vol. 2:
-  Hearthomancy" now score 100 on the Suggestions page and in Up Next and Continue Reading matching. A subtitle that
-  names a different book, such as "Dune: Messiah", still keeps the match below 90.
-- **The Suggestions page shows its progress for the whole scan.** After **Full Refresh**, the page could show "No
-  scan results yet" while the scan was still running. It now finds your running scan and shows the progress bar,
-  and pressing a scan button again joins the scan instead of starting a second one. With the local LLM on, the bar
-  keeps filling while it checks matches and counts them as it goes, instead of sitting at 100%.
-- **AI re-ranking no longer pulls exact matches below 100.** With **Use AI to rank suggestions by meaning** on and
-  the embedding model installed, a perfect match was blended down to about 98, which kept it out of **Add all
-  exact** and sent it to the AI for a second check. A match whose title and author agree exactly now keeps its 100.
-- **"Add all exact" only adds matches that nobody needs to check.** It skips a match tied with another ebook, a file
-  on disk that isn't a library entry, a different edition or adaptation, an ebook whose author couldn't be
-  confirmed, and a book with another volume of the same title. BookBridge checks this again when you press the
-  button, and **Add selected** won't guess between two equally good ebooks either. Each skipped card says
-  **Manual choice** with the reason, and each card notes what decided its score, such as a missing author. Run a
-  full scan once after updating so older results can be checked. Auto-match follows the same rules when it's on.
-- **Suggestions from your listening progress skip ebooks by someone else.** A search hit by a different author
-  under a different title, or with another volume number, is dropped, and only a near-certain hit is marked high
-  confidence.
-- **Up Next and Continue Reading match audiobooks more reliably and suggest fewer wrong ones.** "(Unabridged)"
-  in an audiobook's title, letter case, or an audiobook with no author listed no longer drags a correct match
-  below the auto-match bar. An audiobook by a different author whose title is only close to your book's
-  is no longer suggested, and a different volume of a series is never matched on its own. When two audiobooks
-  tie for the best match, BookBridge asks you instead of picking one.
-- **Review on an Up Next or Continue Reading suggestion opens with the right books selected.** The Add Book page
-  now shows the ebook you shelved and the audiobook that was suggested, ready to add. Before, it searched by the
-  audiobook's title, which could miss the audiobook entirely or select a different book's ebook. Approving a
+- **Audiobooks and ebooks are matched more reliably** on the Suggestions page, Up Next and Continue Reading.
+  Letter case, "(Unabridged)", accents, "&" or "and", a leading "The", a missing author, and a subtitle such as
+  "Stories" or "A Novel" no longer lower a correct match. A different volume of a series, a similar title by
+  another author, or the same words in a different order is no longer offered as a sure match, and AI re-ranking
+  no longer pulls an exact match below 100. When two audiobooks tie, BookBridge asks you instead of picking one.
+- **"Add all exact" adds only matches nobody needs to check.** It skips ties, files on disk that aren't library
+  entries, other editions, authors it couldn't confirm and series volumes that share a title, and BookBridge checks
+  again when you press it. A skipped card says **Manual choice** with the reason, and each card notes what decided
+  its score.
+- **The Suggestions page shows a scan's progress until it finishes**, including the local-AI step, instead of
+  showing "No scan results yet" while it runs. Pressing a scan button again joins the running scan.
+- **Suggestions from your listening progress skip ebooks by someone else.**
+- **Review on an Up Next or Continue Reading suggestion opens with the right books selected**, and approving a
   different book from the same library no longer takes the shelved book off Up Next.
-
-- **A book you put on BookOrbit's Up Next finds an audiobook you just added.** BookBridge reused a list of your
-  BookOrbit library that could be up to an hour old. An audiobook added shortly before you shelved its ebook was
-  missing from that list, so the book became ebook-only and left Up Next. BookBridge now reloads the list before
-  it looks for a match, both for Up Next and for books in Continue Reading. If BookOrbit can't be reached, it
-  uses the list it already has, as before.
-- **The English-only CTC aligner recognizes text written in other alphabets.** A mostly Russian book quoting a few
-  English words could previously be mistaken for English because the other words were left out of the language
-  check. All alphabetic words now count. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #569.
-- **A book found from a reader's KOReader device belongs to that reader only** (#575). With several users, a
-  book BookBridge matched on its own after a reader's device synced it also appeared on the first admin's
-  dashboard, and a book it paired with an audiobook went to the admin instead of the reader. The search for that
-  book now also uses the reader's own Audiobookshelf and library logins rather than the admin's. Books already
-  added to the admin's dashboard this way stay there; remove them from the admin's dashboard, and the reader keeps
-  the book and its progress.
-- **BookBridge starts with a `DATA_DIR` other than `/data`** (#573). The database update that runs at startup
-  always looked in `/data`, so any other data folder stopped BookBridge with "unable to open database file".
-  `DATA_DIR` is now read only from the environment: Settings shows it but no longer offers to change it, because
-  changing it never moved the database.
-- **The "no ebook source" startup warning names your real books folder** (#574). It always said to mount
-  `/books`, even when **Books Directory** pointed somewhere else, and it missed books found in your extra ebook
-  folders. The configuration guide now also says plainly that environment variables only seed Settings on first
-  boot; after that, change paths in Settings.
-- **BookBridge no longer overwrites a page you just turned to in BookOrbit.** If you read in BookOrbit while a sync
-  was already under way, BookBridge could push another app's older position over yours. On BookOrbit 3.6 or newer,
-  BookOrbit now keeps the newer position and BookBridge picks it up on the next sync.
-- **A brief BookOrbit hiccup no longer sends a book to slow Whisper transcription.** A single failed audio download
-  (a proxy 502 or a dropped connection) made fast CTC alignment give up, and the book was transcribed with Whisper
-  instead, which can take over an hour on a CPU. Audio downloads from BookOrbit now retry twice before giving up.
-- **Storyteller listening shows as one Audiobookshelf session per sitting** (#566). With **Count as Listening Time**
-  on, every sync opened and closed its own ABS listening session, so 30 minutes with a 3-minute sync showed as ten
-  3-minute sessions. BookBridge now keeps one ABS session open while you keep listening and closes it once you stop
-  for longer than the **Reading Session Merge Gap**, the same gap that groups its own reading sessions.
-- **The stats page's Listening books add up to its total when you use Audiobookshelf.** The book list, each book's
-  last-listened date and the book detail came from BookBridge's own sessions, which miss listening it credits to ABS,
-  so a book could show 1h33m while ABS had 4h22m for it. With ABS configured they now come from ABS's own listening
-  time and sessions. Contributed by [@chemicalsno](https://github.com/chemicalsno) in #560.
-- **Suggestions no longer offer the wrong volume of a series titled "Series: Book N".** Titles such as "My Struggle:
-  Book 1" (or "My Struggle_ Book 1" as a Calibre file name) kept their separator, so every volume scored the same.
-  "Book", "Volume" and "Vol." credits are now read after any separator, in digits, words or Roman numerals, and the
-  other side's series number decides between volumes. Contributed by [@chemicalsno](https://github.com/chemicalsno)
-  in #563.
-- **A book that ABS lists in several series is matched by its numbered series.** ABS joins every series into one
-  label ("The Stormlight Archive #1, The Cosmere"), which was read as one long series name with no number.
-  Contributed by [@chemicalsno](https://github.com/chemicalsno) in #564.
-- **A few pages read on a KOReader device right after a sync are no longer rewound.** When BookBridge had just written
-  a position to KoSync and you then read a little further, the next sync could take your new position for BookBridge's
-  own write and move the device back to the audiobook. A position a device sent after BookBridge's write now always
-  counts as your reading.
-- **Books no longer take over another book's KOReader hash during downloads or reconciliation.** If two mappings
-  point at the same file, the existing hash stays with its book and the conflicting download is withheld until
-  the ebook mapping is corrected.
-- **A second reader can match a shared book after reading forward without changing the first reader's position.**
-  Initial reports are saved privately even when access to the existing mapping is deferred.
-- **Matching a BookOrbit or Grimmory audiobook now links Hardcover and StoryGraph automatically.** These matches skipped
-  the tracker auto-match the other match paths run, so every tracker had to be linked by hand from the dashboard.
-- **The content-match guard no longer refuses correct pairings on OpenAI embeddings.** OpenAI's `text-embedding-3-small`
-  scores correct audio/ebook pairings below the default 0.45 similarity, so they were refused before alignment ran. A low
-  embedding score is now overruled when the transcript contains the ebook's own text, and refusals name the embedding
-  model that scored them (#556).
-- **A KOReader device replaying an old position no longer rewinds your other apps.** A device could send a stale
-  position for a book it did not even have open, and BookBridge pushed it to the audiobook and the other readers,
-  un-finishing a finished book. Waking the same device or replaying its position now leaves the newer saved
-  position in place until that device reports fresh forward reading. Earlier reading evidence cannot be reused
-  after listening moves you ahead again; normal forward progress still syncs as before.
-- **A book you removed from BookBridge no longer comes back as an ebook-only match on its own.** A KOReader device
-  sending a late or stale position for it recreated the match. A file BookBridge already has a position for now matches
-  again only once you read forward in it by at least **Min Ebook Change**, and a single push never creates a match.
-  Small page turns accumulate from the first new report, including a lower position; you do not have to pass the old
-  pre-removal position. Reports from other readers, books or devices do not supply that evidence.
+- **A book you put on BookOrbit's Up Next finds an audiobook you added shortly before.**
+- **Suggestions no longer offer the wrong volume of a series titled "Series: Book N"**, and a book Audiobookshelf
+  lists in several series is matched by its numbered one. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #563 and #564.
+- **A book found from a reader's KOReader device belongs to that reader** (#575) instead of the first admin, and
+  the search for it uses the reader's own logins.
+- **BookBridge starts with a `DATA_DIR` other than `/data`** (#573). `DATA_DIR` is now set only in the environment.
+  The "no ebook source" startup warning names your real books folder (#574).
+- **BookBridge no longer overwrites a page you just turned to in BookOrbit** (BookOrbit 3.6 or newer).
+- **A brief BookOrbit hiccup no longer sends a book to slow Whisper transcription.** Audio downloads now retry
+  before giving up.
+- **Storyteller listening shows as one Audiobookshelf session per sitting** (#566).
+- **The stats page's listening books add up to its total when you use Audiobookshelf.** Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #560.
+- **KOReader positions are better protected.** A device replaying an old position no longer rewinds your other
+  apps, a few pages read right after a sync are no longer rewound, a book you removed no longer comes back on its
+  own from a stale report, and a book no longer takes over another book's KOReader hash.
+- **Matching a BookOrbit or Grimmory audiobook links Hardcover and StoryGraph automatically**, as the other ways
+  of matching do.
+- **The content-match guard no longer refuses correct pairings scored by OpenAI embeddings** (#556).
+- **The English-only CTC aligner recognizes text written in other alphabets**, so a mostly Russian book quoting a
+  few English words isn't taken for English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #569.
 
 ## [7.11.0] - 2026-10-26
 
