@@ -24,6 +24,9 @@ def _make_match(
         "source": source,
         "source_id": source_id,
         "score": score,
+        # Scan evidence the auto-match guard requires (an agreeing author, a distinct title).
+        "author_agrees": True,
+        "title_key": ebook_filename,
     }
     if match_reason is not None:
         m["match_reason"] = match_reason
@@ -177,6 +180,29 @@ class TestAutoMatchSuggestions(unittest.TestCase):
             self.assertEqual(len(out["suggestions"]), 1)
             self.assertEqual(out["suggestions"][0], suggestion)
             mock_mapping.create_audio_mapping_from_match.assert_not_called()
+        finally:
+            self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
+
+    @patch("src.web_server.container")
+    def test_same_title_alternative_keeps_a_100_match_in_review(self, mock_container):
+        """Another volume with the same title (scored lower) means a person picks; nothing is linked."""
+        old = os.environ.get("SUGGESTIONS_AUTO_MATCH_ENABLED")
+        try:
+            self._set_env("SUGGESTIONS_AUTO_MATCH_ENABLED", "true")
+            mock_mapping = MagicMock()
+            mock_container.book_mapping_service.return_value = mock_mapping
+            first = _make_match(100.0, ebook_filename="warlock-2.epub", source_id="2")
+            second = _make_match(89.0, ebook_filename="warlock-1.epub", source_id="1")
+            first["title_key"] = second["title_key"] = "warlock"
+            suggestion = _make_suggestion(matches=[first, second])
+
+            with self.assertLogs("src.web_server", level="INFO") as logs:
+                out = _auto_match_suggestions({"suggestions": [suggestion], "stats": {}}, user_id=1)
+
+            self.assertEqual(out["suggestions"], [suggestion])
+            mock_mapping.create_audio_mapping_from_match.assert_not_called()
+            self.assertTrue(any("Auto-match left 'Test Audiobook' for review" in line and "same_title" in line
+                                for line in logs.output))
         finally:
             self._restore_env("SUGGESTIONS_AUTO_MATCH_ENABLED", old)
 

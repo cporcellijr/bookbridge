@@ -64,6 +64,19 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Fixed
 
+- **The Suggestions page matches audiobooks to ebooks more reliably.** It now follows the same rules as Up Next:
+  letter case and a missing author no longer lower a correct match, an ebook by a different author whose title is
+  only close is no longer suggested, and a different volume of a series stays below 90. A title with the same
+  words in a different order no longer counts as a perfect match, here or on Up Next.
+- **"Add all exact" only adds matches that nobody needs to check.** It skips a match tied with another ebook, a file
+  on disk that isn't a library entry, a different edition or adaptation, an ebook whose author couldn't be
+  confirmed, and a book with another volume of the same title. BookBridge checks this again when you press the
+  button, and **Add selected** won't guess between two equally good ebooks either. Each skipped card says
+  **Manual choice** with the reason, and each card notes what decided its score, such as a missing author. Run a
+  full scan once after updating so older results can be checked. Auto-match follows the same rules when it's on.
+- **Suggestions from your listening progress skip ebooks by someone else.** A search hit by a different author
+  under a different title, or with another volume number, is dropped, and only a near-certain hit is marked high
+  confidence.
 - **Up Next and Continue Reading match audiobooks more reliably and suggest fewer wrong ones.** "(Unabridged)"
   in an audiobook's title, letter case, or an audiobook with no author listed no longer drags a correct match
   below the auto-match bar. An audiobook by a different author whose title is only close to your book's

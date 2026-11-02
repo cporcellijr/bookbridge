@@ -10,7 +10,7 @@ def suggestion(*filenames):
     return {
         'abs_id': 'audio-1', 'audio_source': 'ABS', 'audio_source_id': 'audio-1',
         'matches': [{'ebook_filename': name, 'source': 'BookLore', 'source_id': '45',
-                     'score': 100} for name in filenames],
+                     'score': 100, 'author_agrees': True, 'title_key': name} for name in filenames],
     }
 
 

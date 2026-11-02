@@ -295,7 +295,8 @@ class TestOtherShelvingPathsDefer:
         web_server.container.book_mapping_service.return_value.create_audio_mapping_from_match.return_value = book
         suggestion = {
             "abs_id": "a1", "abs_title": "Title a1", "audio_source": "ABS", "audio_source_id": "a1",
-            "matches": [{"ebook_filename": "a1.epub", "source": "BookLore", "source_id": "45", "score": 100.0}],
+            "matches": [{"ebook_filename": "a1.epub", "source": "BookLore", "source_id": "45", "score": 100.0,
+                         "author_agrees": True, "title_key": "a1"}],
         }
         return web_server._auto_match_suggestions({"suggestions": [suggestion], "stats": {}}, user_id=reader)
 

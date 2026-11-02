@@ -1608,6 +1608,65 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(exact_item["ebook_source_path"], "/books/x/exact.epub")
         self.assertEqual(exact_item["storyteller_uuid"], "")
 
+    def _bulk_guard_cache(self):
+        evidence = {"author_agrees": True, "source": "BookOrbit", "score": 100.0}
+
+        def suggestion(key, *matches):
+            return {"bridge_key": key, "abs_id": key, "audio_source": "ABS", "audio_source_id": key,
+                    "audio_title": key, "audio_duration": 3600, "audio_cover_url": "", "matches": list(matches)}
+
+        with self.client.session_transaction() as session_data:
+            session_data["suggestions_state_id"] = "state-guard"
+        with web_server.SUGGESTIONS_STATE_LOCK:
+            web_server.SUGGESTIONS_STATE_STORE["state-guard"] = {
+                "scan_results": [],
+                "scan_cache_by_abs": {
+                    "ok": suggestion("ok", dict(evidence, ebook_filename="ok.epub", display_name="Ok",
+                                                source_id="1", title_key="ok")),
+                    "tie": suggestion(
+                        "tie",
+                        dict(evidence, ebook_filename="tie-a.epub", display_name="Tie A", source_id="2", title_key="a"),
+                        dict(evidence, ebook_filename="tie-b.epub", display_name="Tie B", source_id="3", title_key="b")),
+                    "local": suggestion("local", dict(evidence, ebook_filename="local.epub", display_name="Local",
+                                                      source="Local File", source_id=None, title_key="local")),
+                },
+                "scan_cache_no_match_abs_ids": [],
+                "scan_last_stats": {},
+                "scan_has_run": True,
+                "updated_at": time.time(),
+            }
+
+    def test_add_all_exact_rechecks_eligibility_on_the_server(self):
+        self._bulk_guard_cache()
+        response = self.client.post(
+            "/suggestions",
+            data={"action": "add_many_to_queue", "bulk_intent": "exact", "bridge_keys": ["ok", "tie", "local"]},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(response.headers.get("X-Skipped-Manual"), "2")
+        self.assertEqual({item["bridge_key"] for item in web_server._load_match_queue()}, {"ok"})
+
+    def test_add_selected_skips_only_a_tie(self):
+        self._bulk_guard_cache()
+        response = self.client.post(
+            "/suggestions",
+            data={"action": "add_many_to_queue", "bridge_keys": ["ok", "tie", "local"]},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(response.headers.get("X-Skipped-Manual"), "1")
+        self.assertEqual({item["bridge_key"] for item in web_server._load_match_queue()}, {"ok", "local"})
+
+    def test_suggestion_cards_mark_what_add_all_exact_will_take(self):
+        self._bulk_guard_cache()
+        with web_server.SUGGESTIONS_STATE_LOCK:
+            state = web_server.SUGGESTIONS_STATE_STORE["state-guard"]
+            state["scan_results"] = list(state["scan_cache_by_abs"].values())
+        html = self.client.get("/suggestions").get_data(as_text=True)
+        self.assertRegex(html, r'data-abs-id="ok"[^>]*data-bulk-exact="1"')
+        self.assertRegex(html, r'data-abs-id="tie"[^>]*data-bulk-exact=""')
+        self.assertIn("Manual choice", html)
+        self.assertIn('title="Two ebooks match equally"', html)
+
     def test_suggestions_add_many_to_queue_uses_persisted_cache_after_restart(self):
         # #351 regression: bulk add must rehydrate from the persisted per-user cache
         # when the in-memory SUGGESTIONS_STATE_STORE is empty (container restart,
