@@ -4,6 +4,53 @@ For the full history of changes, please refer to the **[GitHub Releases](https:/
 
 ---
 
+## [7.12.0]
+
+BookBridge's interface is available in Russian, Settings are reorganized and apply
+without a restart, and each reader sets their own reading preferences.
+
+### What's New
+
+- **Russian interface (#516)**, chosen per reader on the Account page.
+- **KOReader books find their Audiobookshelf copy (#576)** with **Sync with
+  Audiobookshelf's own ebook reader** on.
+- **Settings reorganized by purpose**, with plain-language descriptions, search
+  across every tab, **Different from defaults**, and most saves applied without a
+  restart.
+- **One setting per choice** for polling, highlight sync, the "Up Next" shelf and
+  the tracker posting wait; more options moved out of environment variables.
+- **Per-reader reading preferences** under **My Integrations → Reading
+  preferences**, starting at **Server default**.
+- **Continue Reading auto-match** for books whose audiobook scores 95 or higher.
+
+### Fixed
+
+- **Matching** is more reliable across Suggestions, Up Next and Continue Reading,
+  AI re-ranking keeps exact matches at 100, and **Add all exact** takes only
+  matches nobody needs to check (#563, #564).
+- The **Suggestions page** shows progress until a scan finishes; Up Next Review
+  opens with the right books selected and finds newly added audiobooks.
+- **KOReader positions** are protected from stale devices, pages read right after
+  a sync are kept, removed books don't return on their own, and books keep their
+  own hashes.
+- **Multi-user** KOReader discoveries belong to the reader (#575); a non-default
+  `DATA_DIR` works (#573) and the startup warning names your books folder (#574).
+- **BookOrbit** keeps a page you just turned to, retries audio downloads, and its
+  audiobook matches link Hardcover and StoryGraph.
+- **Listening** shows one ABS session per Storyteller sitting (#566) and the stats
+  listening list matches its total (#560).
+- The **content-match guard** accepts OpenAI-embedding pairings (#556) and the CTC
+  aligner recognizes other alphabets (#569).
+
+### Operational Notes
+
+- Back up `/data` before upgrading. No database changes; self-builds need a
+  rebuild (translations are compiled into the image). BridgeSync is unchanged.
+- Run **Full Refresh** on the Suggestions page once after updating.
+- `DATA_DIR` is set only in the environment.
+
+---
+
 ## [7.11.0]
 
 A Job Queue page shows and reorders BookBridge's work, Storyteller-only libraries
