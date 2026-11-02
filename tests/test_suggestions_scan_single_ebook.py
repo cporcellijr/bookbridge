@@ -258,7 +258,8 @@ def test_identical_title_with_conflicting_author_stays_reviewable():
 
 
 def test_surname_only_credit_is_not_an_author_conflict():
-    top = _top("Lord of the Rings", "Tolkien", [_bookorbit_audio("1", "The Lord of the Rings", "J.R.R. Tolkien")])
+    # A different title by a different credited author is ruled out; a bare surname isn't one.
+    top = _top("Lord of the Rings", "Tolkien", [_bookorbit_audio("1", "The Lord of the Rings Saga", "J.R.R. Tolkien")])
     assert top is not None and top["score"] < 95
 
 

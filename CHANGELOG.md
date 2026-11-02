@@ -68,6 +68,14 @@ All notable changes to BookBridge will be documented in this file.
   letter case and a missing author no longer lower a correct match, an ebook by a different author whose title is
   only close is no longer suggested, and a different volume of a series stays below 90. A title with the same
   words in a different order no longer counts as a perfect match, here or on Up Next.
+- **Titles that differ only in form now match fully.** "Wounds: Stories" and "Wounds", "Great & Secret Show" and
+  "The Great and Secret Show", "Alba Diaz" and "Alba Díaz", and "Hearthomancy Vol. 2" and "Hearthomancy Vol. 2:
+  Hearthomancy" now score 100 on the Suggestions page and in Up Next and Continue Reading matching. A subtitle that
+  names a different book, such as "Dune: Messiah", still keeps the match below 90.
+- **The Suggestions page shows its progress for the whole scan.** After **Full Refresh**, the page could show "No
+  scan results yet" while the scan was still running. It now finds your running scan and shows the progress bar,
+  and pressing a scan button again joins the scan instead of starting a second one. With the local LLM on, the bar
+  keeps filling while it checks matches and counts them as it goes, instead of sitting at 100%.
 - **"Add all exact" only adds matches that nobody needs to check.** It skips a match tied with another ebook, a file
   on disk that isn't a library entry, a different edition or adaptation, an ebook whose author couldn't be
   confirmed, and a book with another volume of the same title. BookBridge checks this again when you press the

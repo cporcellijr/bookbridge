@@ -260,6 +260,31 @@ class TestSuggestionBatch(_OllamaEnvGuard):
         suppressed = svc._apply_ollama_reranking_batch(suggestions)
         self.assertIn("ab-x", suppressed)
 
+    def test_judge_gate_reports_progress_per_judged_suggestion(self):
+        # The scan page's bar fills through the judge pass instead of sitting at 100%.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "false"
+        os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_SUGGEST_JUDGE_GATE"] = "true"
+        os.environ["OLLAMA_SUGGEST_AUTOKEEP_SCORE"] = "90"
+        svc = _make_service(_StubOllama(judge_result={"choice": None, "confidence": 0}))
+
+        def suggestion(key, score):
+            return {"bridge_key": key, "audio_title": key, "audio_author": "A",
+                    "matches": [{"display_name": "X", "score": score, "ebook_filename": "x.epub"},
+                                {"display_name": "Y", "score": 50, "ebook_filename": "y.epub"}]}
+
+        calls = []
+        svc._apply_ollama_reranking_batch(
+            [suggestion("weak-1", 70), suggestion("strong", 95), suggestion("weak-2", 60)],
+            progress=lambda done, total: calls.append((done, total)))
+        self.assertEqual(calls, [(0, 2), (1, 2), (2, 2)])
+
+        def broken(_done, _total):
+            raise RuntimeError("progress sink failed")
+
+        suppressed = svc._apply_ollama_reranking_batch([suggestion("weak-3", 70)], progress=broken)
+        self.assertEqual(suppressed, {"weak-3"})
+
     def test_judge_gate_autokeeps_strong_match(self):
         # A strong fuzzy top match is trusted without spending a chat call or suppressing.
         os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"

@@ -5878,3 +5878,58 @@ msgstr "Все релизы"
 msgid "Release notes aren't available right now."
 msgstr "Примечания к релизу сейчас недоступны."
 
+#: templates/suggestions.html
+msgid "Calibre identifier"
+msgstr "Идентификатор Calibre"
+
+#: templates/suggestions.html
+msgid "Title only partly matches"
+msgstr "Название совпадает лишь частично"
+
+#: templates/suggestions.html
+msgid "Different edition"
+msgstr "Другое издание"
+
+#: templates/suggestions.html
+msgid "Author missing, title only"
+msgstr "Автор не указан, только название"
+
+#: templates/suggestions.html
+msgid "Different credited author"
+msgstr "Указан другой автор"
+
+#: templates/suggestions.html
+msgid "Two ebooks match equally"
+msgstr "Две электронные книги подходят одинаково"
+
+#: templates/suggestions.html
+msgid "A file on disk, not a library entry"
+msgstr "Файл на диске, а не запись в библиотеке"
+
+#: templates/suggestions.html
+msgid "The edition or adaptation may differ"
+msgstr "Издание или адаптация могут отличаться"
+
+#: templates/suggestions.html
+msgid "The author could not be confirmed"
+msgstr "Не удалось подтвердить автора"
+
+#: templates/suggestions.html
+msgid "Another ebook by this author has the same title"
+msgstr "У этого автора есть другая электронная книга с таким же названием"
+
+#: templates/suggestions.html
+msgid "A comic cannot pair with an audiobook"
+msgstr "Комикс нельзя связать с аудиокнигой"
+
+#: templates/suggestions.html
+msgid "Found before this check existed: run a full scan"
+msgstr "Найдено до появления этой проверки: запустите «Полное обновление»"
+
+#: templates/suggestions.html
+msgid "Manual choice"
+msgstr "Ручной выбор"
+
+#: templates/suggestions.html
+msgid "{count} skipped: choose the ebook on the card."
+msgstr "Пропущено: {count}. Выберите электронную книгу на карточке."

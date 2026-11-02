@@ -9362,10 +9362,31 @@ def _suggestions_auto_scan_tick():
 
 def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None):
     _prune_suggestions_scan_jobs()
+    bundle = uc()
+    try:
+        user = current_user()
+        user_id = user.id if user is not None else None
+    except Exception:
+        user_id = None
+    if user_id is None:
+        try:
+            user_id = get_current_user_id()
+        except Exception:
+            user_id = None
+    creds = get_current_user_credentials()
+
+    # Reuse an existing running scan for this user to avoid duplicate concurrent scans.
+    if user_id:
+        existing_id = _running_suggestions_scan_job_id(user_id)
+        if existing_id:
+            logger.info(f"Suggestions scan already running; reusing job {existing_id}")
+            return existing_id
+
     job_id = uuid.uuid4().hex
     with SUGGESTIONS_SCAN_JOBS_LOCK:
         SUGGESTIONS_SCAN_JOBS[job_id] = {
             "status": "running",
+            "user_id": user_id,
             "results": {},
             "error": None,
             "progress": {
@@ -9380,19 +9401,6 @@ def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_
             "started_at": time.time(),
             "updated_at": time.time(),
         }
-
-    bundle = uc()
-    try:
-        user = current_user()
-        user_id = user.id if user is not None else None
-    except Exception:
-        user_id = None
-    if user_id is None:
-        try:
-            user_id = get_current_user_id()
-        except Exception:
-            user_id = None
-    creds = get_current_user_credentials()
 
     def runner():
         tok_bundle = _active_bundle.set(bundle)
@@ -9669,6 +9677,17 @@ def _get_suggestions_scan_job(job_id):
         if not job:
             return None
         return dict(job)
+
+
+def _running_suggestions_scan_job_id(user_id: Optional[str]) -> Optional[str]:
+    """Return the job_id of a 'running' suggestions scan for the given user, if any."""
+    if not user_id:
+        return None
+    with SUGGESTIONS_SCAN_JOBS_LOCK:
+        for job_id, job in SUGGESTIONS_SCAN_JOBS.items():
+            if job.get('user_id') == user_id and job.get('status') == 'running':
+                return job_id
+    return None
 
 
 def _clear_legacy_suggestions_session_payload():
@@ -10376,35 +10395,50 @@ def suggestions_page():
     scan_in_progress = False
     scan_error = None
     job_id = session.get('suggestions_scan_job_id')
+    scan_job = None
     if job_id:
         scan_job = _get_suggestions_scan_job(job_id)
         if not scan_job:
             session.pop('suggestions_scan_job_id', None)
             session.modified = True
+            job_id = None
+    if not job_id or not scan_job:
+        # Fallback to a running job for the current user (e.g., new tab or lost session)
+        try:
+            user_id = get_current_user_id()
+        except Exception:
+            user_id = None
+        fallback_id = _running_suggestions_scan_job_id(user_id)
+        if fallback_id:
+            job_id = fallback_id
+            session['suggestions_scan_job_id'] = job_id
+            session.modified = True
+            scan_job = _get_suggestions_scan_job(job_id)
+
+    if scan_job:
+        status = scan_job.get('status')
+        if status == 'done':
+            scan_payload = scan_job.get('results', {}) or {}
+            suggestions_state['scan_results'] = scan_payload.get('suggestions', [])
+            suggestions_state['scan_cache_by_abs'] = scan_payload.get('cache_by_abs', {})
+            suggestions_state['scan_cache_no_match_abs_ids'] = scan_payload.get('no_match_abs_ids', [])
+            suggestions_state['scan_last_stats'] = scan_payload.get('stats', {})
+            suggestions_state['scanned_at'] = scan_job.get('scanned_at') or time.time()
+            suggestions_state['scan_has_run'] = True
+            suggestions_state['updated_at'] = time.time()
+            _persist_suggestions_state(suggestions_state)
+            session.pop('suggestions_scan_job_id', None)
+            session.modified = True
+            with SUGGESTIONS_SCAN_JOBS_LOCK:
+                SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
+        elif status == 'error':
+            scan_error = scan_job.get('error') or 'Scan failed'
+            session.pop('suggestions_scan_job_id', None)
+            session.modified = True
+            with SUGGESTIONS_SCAN_JOBS_LOCK:
+                SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
         else:
-            status = scan_job.get('status')
-            if status == 'done':
-                scan_payload = scan_job.get('results', {}) or {}
-                suggestions_state['scan_results'] = scan_payload.get('suggestions', [])
-                suggestions_state['scan_cache_by_abs'] = scan_payload.get('cache_by_abs', {})
-                suggestions_state['scan_cache_no_match_abs_ids'] = scan_payload.get('no_match_abs_ids', [])
-                suggestions_state['scan_last_stats'] = scan_payload.get('stats', {})
-                suggestions_state['scanned_at'] = scan_job.get('scanned_at') or time.time()
-                suggestions_state['scan_has_run'] = True
-                suggestions_state['updated_at'] = time.time()
-                _persist_suggestions_state(suggestions_state)
-                session.pop('suggestions_scan_job_id', None)
-                session.modified = True
-                with SUGGESTIONS_SCAN_JOBS_LOCK:
-                    SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
-            elif status == 'error':
-                scan_error = scan_job.get('error') or 'Scan failed'
-                session.pop('suggestions_scan_job_id', None)
-                session.modified = True
-                with SUGGESTIONS_SCAN_JOBS_LOCK:
-                    SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
-            else:
-                scan_in_progress = True
+            scan_in_progress = True
 
     if not scan_in_progress:
         suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
@@ -10534,13 +10568,26 @@ def suggestions_page():
 def suggestions_scan_status():
     _clear_legacy_suggestions_session_payload()
     job_id = session.get('suggestions_scan_job_id')
-    if not job_id:
-        return jsonify({"status": "idle"})
-
-    scan_job = _get_suggestions_scan_job(job_id)
+    scan_job = None
+    if job_id:
+        scan_job = _get_suggestions_scan_job(job_id)
+        if not scan_job:
+            session.pop('suggestions_scan_job_id', None)
+            session.modified = True
+            job_id = None
+    if not job_id or not scan_job:
+        # Fallback to running job for current user
+        try:
+            user_id = get_current_user_id()
+        except Exception:
+            user_id = None
+        fallback_id = _running_suggestions_scan_job_id(user_id)
+        if fallback_id:
+            job_id = fallback_id
+            session['suggestions_scan_job_id'] = job_id
+            session.modified = True
+            scan_job = _get_suggestions_scan_job(job_id)
     if not scan_job:
-        session.pop('suggestions_scan_job_id', None)
-        session.modified = True
         return jsonify({"status": "idle"})
 
     response = {
