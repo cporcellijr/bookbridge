@@ -37,7 +37,9 @@ class TestServiceTaxonomyParity(unittest.TestCase):
         # after KOReader / KoSync; it has no admin-side card.
         self.assertIn("KOReader Collections", labels)
         labels.remove("KOReader Collections")
-        self.assertEqual(labels, CANONICAL_SERVICES)
+        # Reading preferences is the reader's own non-service card, pinned first.
+        self.assertEqual(labels[0], "Reading preferences")
+        self.assertEqual(labels[1:], CANONICAL_SERVICES)
 
     def test_admin_integrations_panel_matches_canonical_order(self):
         source = (TEMPLATES / 'settings.html').read_text(encoding='utf-8')

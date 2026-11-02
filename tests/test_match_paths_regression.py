@@ -513,6 +513,32 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.series_name, "The Reckoning")
         self.assertEqual(saved_book.series_sequence, 3.0)
 
+    @patch("src.web_server.get_kosync_id_for_ebook", return_value="1234567890abcdef1234567890abcdef")
+    def test_library_audio_match_queues_tracker_automatch(self, _mock_kosync):
+        """A BookOrbit/Grimmory audio match queues the Hardcover/StoryGraph/Goodreads
+        automatch like the ABS and ebook-only paths, instead of leaving every tracker
+        to be linked by hand from the dashboard."""
+        db = self.mock_container.mock_database_service
+        db.get_book.return_value = None
+        db.get_book_by_audio_source.return_value = None
+        db.save_book.side_effect = lambda book: book
+
+        with patch("src.web_server._enqueue_tracker_automatch") as enqueue:
+            response = self.client.post(
+                "/match",
+                data={
+                    "audio_source": "BookOrbit",
+                    "audio_source_id": "6336",
+                    "ebook_filename": "b.epub",
+                    "ebook_source": "BookOrbit",
+                    "ebook_source_id": "2171",
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args[0][1].abs_id, "bookorbit:6336")
+
     @patch("src.web_server.ingest_storyteller_transcripts", return_value=None)
     @patch("src.web_server._download_storyteller_artifact",
            return_value=("storyteller_abcd-1234.epub", None))
@@ -1582,6 +1608,65 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(exact_item["ebook_source_path"], "/books/x/exact.epub")
         self.assertEqual(exact_item["storyteller_uuid"], "")
 
+    def _bulk_guard_cache(self):
+        evidence = {"author_agrees": True, "source": "BookOrbit", "score": 100.0}
+
+        def suggestion(key, *matches):
+            return {"bridge_key": key, "abs_id": key, "audio_source": "ABS", "audio_source_id": key,
+                    "audio_title": key, "audio_duration": 3600, "audio_cover_url": "", "matches": list(matches)}
+
+        with self.client.session_transaction() as session_data:
+            session_data["suggestions_state_id"] = "state-guard"
+        with web_server.SUGGESTIONS_STATE_LOCK:
+            web_server.SUGGESTIONS_STATE_STORE["state-guard"] = {
+                "scan_results": [],
+                "scan_cache_by_abs": {
+                    "ok": suggestion("ok", dict(evidence, ebook_filename="ok.epub", display_name="Ok",
+                                                source_id="1", title_key="ok")),
+                    "tie": suggestion(
+                        "tie",
+                        dict(evidence, ebook_filename="tie-a.epub", display_name="Tie A", source_id="2", title_key="a"),
+                        dict(evidence, ebook_filename="tie-b.epub", display_name="Tie B", source_id="3", title_key="b")),
+                    "local": suggestion("local", dict(evidence, ebook_filename="local.epub", display_name="Local",
+                                                      source="Local File", source_id=None, title_key="local")),
+                },
+                "scan_cache_no_match_abs_ids": [],
+                "scan_last_stats": {},
+                "scan_has_run": True,
+                "updated_at": time.time(),
+            }
+
+    def test_add_all_exact_rechecks_eligibility_on_the_server(self):
+        self._bulk_guard_cache()
+        response = self.client.post(
+            "/suggestions",
+            data={"action": "add_many_to_queue", "bulk_intent": "exact", "bridge_keys": ["ok", "tie", "local"]},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(response.headers.get("X-Skipped-Manual"), "2")
+        self.assertEqual({item["bridge_key"] for item in web_server._load_match_queue()}, {"ok"})
+
+    def test_add_selected_skips_only_a_tie(self):
+        self._bulk_guard_cache()
+        response = self.client.post(
+            "/suggestions",
+            data={"action": "add_many_to_queue", "bridge_keys": ["ok", "tie", "local"]},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        self.assertEqual(response.headers.get("X-Skipped-Manual"), "1")
+        self.assertEqual({item["bridge_key"] for item in web_server._load_match_queue()}, {"ok", "local"})
+
+    def test_suggestion_cards_mark_what_add_all_exact_will_take(self):
+        self._bulk_guard_cache()
+        with web_server.SUGGESTIONS_STATE_LOCK:
+            state = web_server.SUGGESTIONS_STATE_STORE["state-guard"]
+            state["scan_results"] = list(state["scan_cache_by_abs"].values())
+        html = self.client.get("/suggestions").get_data(as_text=True)
+        self.assertRegex(html, r'data-abs-id="ok"[^>]*data-bulk-exact="1"')
+        self.assertRegex(html, r'data-abs-id="tie"[^>]*data-bulk-exact=""')
+        self.assertIn("Manual choice", html)
+        self.assertIn('title="Two ebooks match equally"', html)
+
     def test_suggestions_add_many_to_queue_uses_persisted_cache_after_restart(self):
         # #351 regression: bulk add must rehydrate from the persisted per-user cache
         # when the in-memory SUGGESTIONS_STATE_STORE is empty (container restart,
@@ -1813,6 +1898,37 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         cached = mock_start_job.call_args.kwargs["cached_suggestions_by_abs"]
         self.assertEqual(list(cached), ["ab-scheduled"])
+
+    def _running_scan_as_user(self, owner_id, viewer_id, request):
+        """Seed a running scan owned by owner_id, then make one request as viewer_id."""
+        with web_server.SUGGESTIONS_SCAN_JOBS_LOCK:
+            web_server.SUGGESTIONS_SCAN_JOBS["job-running"] = {
+                "status": "running", "user_id": owner_id, "results": {}, "error": None,
+                "progress": {"phase": "reranking", "percent": 60, "message": "Checking matches with local LLM 3/10..."},
+                "started_at": time.time(), "updated_at": time.time(),
+            }
+        token = web_server.set_current_user_id(viewer_id)
+        try:
+            return request()
+        finally:
+            web_server.reset_current_user_id(token)
+
+    def test_suggestions_page_shows_a_running_scan_the_session_lost(self):
+        # Reported: after Full Refresh the page showed "No scan results yet" while the scan ran.
+        html = self._running_scan_as_user(7, 7, lambda: self.client.get("/suggestions")).get_data(as_text=True)
+        self.assertIn('class="scan-overlay show"', html)
+        status = self._running_scan_as_user(7, 7, lambda: self.client.get("/api/suggestions/scan-status"))
+        self.assertEqual(status.get_json()["status"], "running")
+
+    def test_suggestions_page_ignores_another_users_running_scan(self):
+        html = self._running_scan_as_user(8, 7, lambda: self.client.get("/suggestions")).get_data(as_text=True)
+        self.assertNotIn('class="scan-overlay show"', html)
+
+    def test_suggestions_scan_request_reuses_the_running_scan(self):
+        response = self._running_scan_as_user(7, 7, lambda: self.client.post(
+            "/suggestions", data={"action": "scan_full"}, headers={"X-Requested-With": "XMLHttpRequest"}))
+        self.assertEqual(response.get_json()["job_id"], "job-running")
+        self.assertEqual(list(web_server.SUGGESTIONS_SCAN_JOBS), ["job-running"])
 
     def test_suggestions_finished_session_scan_does_not_overwrite_newer_scan(self):
         live = self._open_session_behind_a_newer_scan()
@@ -2795,6 +2911,67 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.ebook_filename, "suggestions-original.epub")
         self.assertEqual(saved_book.original_ebook_filename, "suggestions-original.epub")
         self.assertEqual(saved_book.storyteller_uuid, "story-uuid-suggestions-nocache")
+
+
+    def _little_eyes_watch_suggestion(self, origin="shelf_watch"):
+        """Reported: the shelf watch suggested 'Little Eve' for the shelved 'Little Eyes'."""
+        pending = Mock(
+            origin=origin,
+            title="Little Eve",
+            matches=[{
+                "bridge_key": "bookorbit:5512", "audio_source": "BookOrbit",
+                "audio_source_id": "5512", "audio_title": "Little Eve",
+                "audio_author": "Catriona Ward", "audio_cover_url": "/api/bookorbit/audiobook-cover/5512",
+                "audio_duration": 40148.0, "audio_provider_book_id": "5512", "score": 60.0,
+            }],
+            origin_metadata={
+                "grimmory_id": "6367", "grimmory_filename": "Little Eyes (2020).epub",
+                "grimmory_title": "Little Eyes", "source_name": "BookOrbit",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "bookorbit:5512" else None
+        )
+        return [
+            web_server.EbookResult("Little Eyes (2020).epub", title="Little Eyes",
+                                   source="BookOrbit", source_id=6367),
+            web_server.EbookResult("Little Eve - Catriona Ward (2022).epub", title="Little Eve",
+                                   source="BookOrbit", source_id=1577),
+        ]
+
+    def test_review_preselects_the_watched_ebook_and_suggested_audiobook(self):
+        self.app.config["LOGIN_DISABLED"] = True
+        for origin in ("shelf_watch", "reading_watch"):
+            ebooks = self._little_eyes_watch_suggestion(origin)
+            with patch("src.web_server._search_ebooks_with_fallback", return_value=ebooks) as search,                     patch("src.web_server._search_audiobooks_with_fallback") as audio_search:
+                html = self.client.get(
+                    "/add-book?search=Little+Eve&review=bookorbit:5512").get_data(as_text=True)
+
+            search.assert_called_once_with("Little Eyes")
+            audio_search.assert_not_called()
+            self.assertRegex(html, r'class="resource-card eb-card selected"\s+data-value="Little Eyes \(2020\)\.epub"')
+            self.assertNotIn("Little Eve - Catriona Ward (2022).epub", html)
+            self.assertRegex(html, r'class="book-card selected"\s+data-value="5512"')
+
+    def test_review_of_a_non_watch_suggestion_keeps_the_title_search(self):
+        self.app.config["LOGIN_DISABLED"] = True
+        ebooks = self._little_eyes_watch_suggestion(origin=None)
+        with patch("src.web_server._search_ebooks_with_fallback", return_value=ebooks) as search,                 patch("src.web_server._search_audiobooks_with_fallback", return_value=[]):
+            self.client.get("/add-book?search=Little+Eve&review=bookorbit:5512")
+        search.assert_called_once_with("little eve")
+
+    def test_approving_another_book_from_the_watched_library_leaves_the_shelf_alone(self):
+        self._little_eyes_watch_suggestion()
+        item = {"bridge_key": "bookorbit:5512", "abs_id": "bookorbit:5512",
+                "ebook_source": "BookOrbit", "ebook_source_id": "1577"}
+        self.assertIsNone(web_server._queue_item_shelf_watch_metadata(item))
+
+        item["ebook_source_id"] = "6367"
+        self.assertEqual(web_server._queue_item_shelf_watch_metadata(item)["grimmory_id"], "6367")
+        # A copy from another library still completes the watch.
+        item.update(ebook_source="BookFusion", ebook_source_id="bf-77")
+        self.assertEqual(web_server._queue_item_shelf_watch_metadata(item)["grimmory_id"], "6367")
+
 
 
 if __name__ == "__main__":

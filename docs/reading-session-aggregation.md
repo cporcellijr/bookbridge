@@ -5,7 +5,7 @@ BookOrbit reading sessions. Progress propagation remains immediate. Session hist
 appears after an idle gap, completion, or a four-hour session boundary. KOReader
 keeps its device sessions, which the plugin already merges before upload.
 
-In **Settings → Sync Behavior**, **Reading Session Merge Gap** defaults to five
+In **Settings → Reading & Sync → Reading sessions**, **Reading Session Merge Gap** defaults to five
 minutes. Its effective value is the larger of that value and twice the global sync
 period, with the poll-derived part capped at 30 minutes. For a five-minute sync
 period the effective gap is ten minutes; an instant-sync install with a ten-hour

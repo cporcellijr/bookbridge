@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from src.utils.user_config import (
     PER_USER_CREDENTIAL_KEYS,
+    PER_USER_PREFERENCE_KEYS,
     _ALLOW_GLOBAL_FALLBACK_KEY,
     global_fallback_allowed,
 )
@@ -81,14 +82,16 @@ class UserClientRegistry:
         self._lock = threading.RLock()
 
     def _user_credentials(self, user_id: int) -> dict:
-        """Per-user override dict, limited to recognized per-user keys.
+        """Per-user override dict, limited to recognized per-user keys and
+        reading preferences (sync cycles read both from this dict).
 
         Raises on database exceptions so the caller can distinguish a transient
         DB failure from a legitimately empty credential set (which is valid and
         should be cached).
         """
         stored = self.database_service.get_user_credentials(user_id) or {}
-        creds = {k: v for k, v in stored.items() if k in PER_USER_CREDENTIAL_KEYS}
+        creds = {k: v for k, v in stored.items()
+                 if k in PER_USER_CREDENTIAL_KEYS or k in PER_USER_PREFERENCE_KEYS}
         user = self.database_service.get_user(user_id)
         creds[_ALLOW_GLOBAL_FALLBACK_KEY] = global_fallback_allowed(self.database_service, user)
         return creds

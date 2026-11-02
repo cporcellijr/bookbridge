@@ -50,9 +50,9 @@ while true; do
     # Record exit code so the next startup can report the real cause (e.g. OOM kill = 137)
     if [ "$EXIT_CODE" -eq 137 ]; then
         echo "💀 Process OOM-killed (exit 137). Writing sentinel..."
-        echo "137" > /data/.last_exit_code
+        echo "137" > "${DATA_DIR:-/data}/.last_exit_code"
     else
-        rm -f /data/.last_exit_code
+        rm -f "${DATA_DIR:-/data}/.last_exit_code"
     fi
 
     # If exit code is 0 (clean exit), maybe we should still restart?

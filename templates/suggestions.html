@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_i18n.html" import plural_forms %}
 {% set active_page = 'suggestions' %}
 {% block title %}{{ _('Suggestions') }} · BookBridge{% endblock %}
 
@@ -65,6 +66,8 @@
     .source-badge.transcript { background: rgba(167,139,250,0.2); color: #a78bfa; }
     .source-badge.samefolder { background: rgba(45,212,191,0.18); color: #5eead4; }
     .source-badge.sameseries { background: rgba(250,204,21,0.18); color: #fde68a; }
+    .source-badge.reason { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.75); text-transform: none; }
+    .source-badge.manual { background: rgba(255,180,0,0.16); color: #ffcc66; text-transform: none; }
     .score { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
     .card-actions { margin-top: 8px; width: 100%; display: flex; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
     .card-actions .btn { opacity: 1; border-width: 1px; font-weight: 700; }
@@ -193,10 +196,12 @@
                 <div class="suggestions-list" id="suggestionsList">
                     {% for s in suggestions %}
                     {% set suggestion_source_label, suggestion_source_class = suggestion_source_badge(s.audio_source, s.bridge_key or s.abs_id) %}
+                    {% set bulk_block = suggestion_bulk_block(s) %}
                     <div class="suggestion-card"
                          id="suggestion-{{ s.bridge_key or s.abs_id }}"
                          data-abs-id="{{ s.bridge_key or s.abs_id }}"
                          data-best-score="{% if s.matches and s.matches|length > 0 %}{{ s.matches[0].score }}{% else %}0{% endif %}"
+                         data-bulk-exact="{{ '' if bulk_block else '1' }}"
                          data-title="{{ s.audio_title or s.abs_title or '' }}"
                          onclick="selectSuggestion('{{ s.bridge_key or s.abs_id }}')">
                         <div class="suggestion-main">
@@ -209,6 +214,33 @@
                                 </div>
                                 {% if s.audio_author or s.abs_author %}<div class="author">{{ s.audio_author or s.abs_author }}</div>{% endif %}
                                 <div class="score">{% if s.matches and s.matches|length > 0 %}{{ _('Match %(score)s%%', score=s.matches[0].score|round|int) }}{% else %}{{ _('Match --') }}{% endif %}</div>
+                                {% if s.matches %}
+                                {% set top = s.matches[0] %}
+                                {% set reason_labels = {
+                                    'authoritative': _('Calibre identifier'),
+                                    'subtitle_only': _('Title only partly matches'),
+                                    'edition': _('Different edition'),
+                                    'author_missing': _('Author missing, title only'),
+                                    'author_conflict': _('Different credited author'),
+                                } %}
+                                {% set reason = top.match_reason if top.match_reason in reason_labels else (top.author_note or ('edition' if top.edition_credit else '')) %}
+                                {% set manual_labels = {
+                                    'tie': _('Two ebooks match equally'),
+                                    'local_file': _('A file on disk, not a library entry'),
+                                    'edition': _('The edition or adaptation may differ'),
+                                    'author_unconfirmed': _('The author could not be confirmed'),
+                                    'same_title': _('Another ebook by this author has the same title'),
+                                    'comic': _('A comic cannot pair with an audiobook'),
+                                    'needs_rescan': _('Found before this check existed: run a full scan'),
+                                } %}
+                                {% set manual = bulk_block in manual_labels and top.score >= 100 %}
+                                {% if reason or manual %}
+                                <div class="match-reasons">
+                                    {% if reason %}<span class="source-badge reason">{{ reason_labels[reason] }}</span>{% endif %}
+                                    {% if manual %}<span class="source-badge manual" title="{{ manual_labels[bulk_block] }}">{{ _('Manual choice') }}</span>{% endif %}
+                                </div>
+                                {% endif %}
+                                {% endif %}
                                 {% if s.matches and s.matches|length > 0 %}
                                 <div class="best" title="{{ s.matches[0].display_name }}">
                                     {{ _('Best: %(name)s (%(score)s%%)', name=s.matches[0].display_name, score=s.matches[0].score|round|int) }}
@@ -358,10 +390,10 @@
             submitter.disabled = true;
         }
 
-        setSuggestionButtonHtml(submitter, submitter.dataset.workingLabel || 'Working...');
+        setSuggestionButtonHtml(submitter, submitter.dataset.workingLabel || {{ _('Working...')|tojson }});
         showSuggestionSubmitFeedback(
             submitter.dataset.feedbackTarget || '',
-            submitter.dataset.workingMessage || 'Working...'
+            submitter.dataset.workingMessage || {{ _('Working...')|tojson }}
         );
         return true;
     }
@@ -372,7 +404,7 @@
         const progressText = document.getElementById('scanProgressText');
         displayedScanProgress = clamped;
         if (progressBar) progressBar.style.width = `${clamped}%`;
-        if (progressText) progressText.textContent = label || `Scanning library... ${clamped}%`;
+        if (progressText) progressText.textContent = label || bbFormat({{ _('Scanning library... {percent}%%')|tojson }}, { percent: clamped });
     }
 
     function startFakeScanProgress() {
@@ -423,12 +455,12 @@
                     applyBackendProgress(data.progress || {});
                 }
                 if (status === 'done') {
-                    stopFakeScanProgress('Finalizing results... 100%');
+                    stopFakeScanProgress({{ _('Finalizing results... 100%%')|tojson }});
                     setTimeout(() => { window.location.href = '/suggestions'; }, 350);
                     return;
                 }
                 if (status === 'error') {
-                    stopFakeScanProgress('Scan failed');
+                    stopFakeScanProgress({{ _('Scan failed')|tojson }});
                     setTimeout(() => { window.location.href = '/suggestions'; }, 350);
                     return;
                 }
@@ -493,12 +525,13 @@
         noneCard.className = 'resource-card st-card ghost-card selected';
         noneCard.dataset.value = '';
         noneCard.onclick = () => selectStoryteller(noneCard, '');
-        noneCard.innerHTML = '<div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div><div class="resource-title" style="color: rgba(255,255,255,0.5);">None / Skip</div>';
+        noneCard.innerHTML = '<div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div><div class="resource-title" style="color: rgba(255,255,255,0.5);"></div>';
+        noneCard.querySelector('.resource-title').textContent = {{ _('None / Skip')|tojson }};
         grid.appendChild(noneCard);
         selectStoryteller(noneCard, '');
 
         if (!storytellerEnabled) {
-            emptyLabel.textContent = 'Storyteller is not configured.';
+            emptyLabel.textContent = {{ _('Storyteller is not configured.')|tojson }};
             emptyLabel.classList.remove('hidden');
             return;
         }
@@ -507,13 +540,13 @@
             .map((s) => (s || '').trim())
             .filter((s) => !!s);
         if (!queryParts.length) {
-            emptyLabel.textContent = 'No title/author available to search Storyteller.';
+            emptyLabel.textContent = {{ _('No title/author available to search Storyteller.')|tojson }};
             emptyLabel.classList.remove('hidden');
             return;
         }
 
         const token = ++storytellerFetchToken;
-        emptyLabel.textContent = 'Searching Storyteller...';
+        emptyLabel.textContent = {{ _('Searching Storyteller...')|tojson }};
         emptyLabel.classList.remove('hidden');
 
         const query = queryParts.join(' ');
@@ -522,13 +555,13 @@
             .then(({ ok, body }) => {
                 if (token !== storytellerFetchToken) return;
                 if (!ok) {
-                    emptyLabel.textContent = (body && body.error) || 'Storyteller search failed.';
+                    emptyLabel.textContent = (body && body.error) || {{ _('Storyteller search failed.')|tojson }};
                     emptyLabel.classList.remove('hidden');
                     return;
                 }
                 const results = body;
                 if (!Array.isArray(results) || results.length === 0) {
-                    emptyLabel.textContent = 'No Storyteller matches found.';
+                    emptyLabel.textContent = {{ _('No Storyteller matches found.')|tojson }};
                     emptyLabel.classList.remove('hidden');
                     return;
                 }
@@ -538,7 +571,7 @@
                 results.forEach((item) => {
                     const uuid = item?.uuid || item?.id || '';
                     if (!uuid) return;
-                    const title = (item?.title || 'Untitled').toString();
+                    const title = (item?.title || {{ _('Untitled')|tojson }}).toString();
                     const subtitle = (item?.subtitle || '').toString();
                     let authors = '';
                     if (Array.isArray(item?.authors)) {
@@ -579,7 +612,7 @@
                     if (st.has_transcript) {
                         const badge = document.createElement('span');
                         badge.className = 'source-badge transcript';
-                        badge.textContent = 'Transcript';
+                        badge.textContent = {{ _('Transcript')|tojson }};
                         card.appendChild(badge);
                     }
 
@@ -595,7 +628,7 @@
             })
             .catch(() => {
                 if (token !== storytellerFetchToken) return;
-                emptyLabel.textContent = 'Storyteller search failed.';
+                emptyLabel.textContent = {{ _('Storyteller search failed.')|tojson }};
                 emptyLabel.classList.remove('hidden');
             });
     }
@@ -735,7 +768,7 @@
 
             const subtitle = document.createElement('div');
             subtitle.className = 'ebook-subtitle';
-            subtitle.textContent = author || `${score}% match`;
+            subtitle.textContent = author || bbFormat({{ _('{score}%% match')|tojson }}, { score: score });
 
             card.appendChild(icon);
             card.appendChild(title);
@@ -744,7 +777,7 @@
             if (author) {
                 const confidence = document.createElement('div');
                 confidence.className = 'ebook-subtitle';
-                confidence.textContent = `${score}% match`;
+                confidence.textContent = bbFormat({{ _('{score}%% match')|tojson }}, { score: score });
                 card.appendChild(confidence);
             }
 
@@ -758,7 +791,7 @@
             if (language) {
                 const languageBadge = document.createElement('span');
                 languageBadge.className = 'source-badge language';
-                languageBadge.title = 'Language';
+                languageBadge.title = {{ _('Language')|tojson }};
                 languageBadge.textContent = language;
                 card.appendChild(languageBadge);
             }
@@ -766,15 +799,15 @@
             if (matchReason === 'same_folder' || matchReason === 'same_folder_ambiguous') {
                 const folderBadge = document.createElement('span');
                 folderBadge.className = 'source-badge samefolder';
-                folderBadge.textContent = matchReason === 'same_folder' ? 'Same folder' : 'Same folder?';
+                folderBadge.textContent = matchReason === 'same_folder' ? {{ _('Same folder')|tojson }} : {{ _('Same folder?')|tojson }};
                 card.appendChild(folderBadge);
             }
 
             if (matchReason === 'same_series') {
                 const seriesBadge = document.createElement('span');
                 seriesBadge.className = 'source-badge sameseries';
-                seriesBadge.title = 'Same series and number as the audiobook';
-                seriesBadge.textContent = 'Same series';
+                seriesBadge.title = {{ _('Same series and number as the audiobook')|tojson }};
+                seriesBadge.textContent = {{ _('Same series')|tojson }};
                 card.appendChild(seriesBadge);
             }
 
@@ -800,17 +833,22 @@
         }
     }
 
+    // Same msgids as the server-rendered counts; num='{count}' keeps the placeholder for bbPlural.
+    const SHOWING_SUGGESTIONS = {% call(n) plural_forms() %}{{ ngettext('Showing %(num)s suggestion', 'Showing %(num)s suggestions', n, num='{count}') }}{% endcall %};
+    const ITEM_COUNT = {% call(n) plural_forms() %}{{ ngettext('%(num)s item', '%(num)s items', n, num='{count}') }}{% endcall %};
+
     function updateVisibleCounts() {
         const count = document.querySelectorAll('.suggestion-card').length;
-        document.getElementById('topCount').textContent = `Showing ${count} suggestions`;
-        document.getElementById('panelCount').textContent = `${count} items`;
+        document.getElementById('topCount').textContent = bbPlural(SHOWING_SUGGESTIONS, count);
+        document.getElementById('panelCount').textContent = bbPlural(ITEM_COUNT, count);
         updateBulkCounts();
         if (count === 0 && !document.getElementById('emptyState')) {
             const wrap = document.querySelector('.left-wrap');
             const empty = document.createElement('div');
             empty.className = 'empty';
             empty.id = 'emptyState';
-            empty.innerHTML = '<p>All current suggestions are hidden.<br>Run Scan Library to refresh.</p>';
+            empty.innerHTML = '<p></p>';
+            empty.firstChild.append({{ _('All current suggestions are hidden.')|tojson }}, document.createElement('br'), {{ _('Run Scan Library to refresh.')|tojson }});
             wrap.appendChild(empty);
             const list = document.getElementById('suggestionsList');
             if (list) list.remove();
@@ -844,7 +882,7 @@
     function renderQueueCount() {
         const count = document.querySelectorAll('#queueList .queue-item').length;
         const countEl = document.getElementById('queueCount');
-        if (countEl) countEl.textContent = `${count} item${count === 1 ? '' : 's'}`;
+        if (countEl) countEl.textContent = bbPlural(ITEM_COUNT, count);
     }
 
     function markSuggestionQueued(suggestionKey) {
@@ -902,8 +940,8 @@
                 // Navigates to the dashboard; show the working state, then submit natively.
                 if (submitter && !submitter.dataset.primaryAction) {
                     submitter.dataset.primaryAction = 'queue-actions';
-                    submitter.dataset.workingLabel = 'Processing queue...';
-                    submitter.dataset.workingMessage = 'Processing queued matches and returning to the dashboard...';
+                    submitter.dataset.workingLabel = {{ _('Processing queue...')|tojson }};
+                    submitter.dataset.workingMessage = {{ _('Processing queued matches and returning to the dashboard...')|tojson }};
                     submitter.dataset.feedbackTarget = 'queueFeedback';
                 }
                 if (submitter && !startSuggestionSubmitState(submitter)) {
@@ -919,7 +957,7 @@
     // cached suggestions and returns the refreshed queue panel fragment. ---
     function getExactKeys() {
         return Array.from(document.querySelectorAll('.suggestion-card:not(.is-queued)'))
-            .filter((card) => parseFloat(card.dataset.bestScore || '0') >= 100)
+            .filter((card) => card.dataset.bulkExact === '1')
             .map((card) => card.dataset.absId)
             .filter(Boolean);
     }
@@ -943,7 +981,7 @@
         if (selectedBtn) selectedBtn.disabled = selectedCount === 0;
     }
 
-    async function addManyToQueue(keys) {
+    async function addManyToQueue(keys, intent) {
         if (!keys.length) return;
         const bulkFeedback = document.getElementById('bulkFeedback');
         if (bulkFeedback) {
@@ -952,6 +990,7 @@
         }
         const formData = new FormData();
         formData.append('action', 'add_many_to_queue');
+        if (intent) formData.append('bulk_intent', intent);
         keys.forEach((key) => formData.append('bridge_keys', key));
         try {
             const response = await fetch('/suggestions', {
@@ -982,16 +1021,20 @@
             });
 
             if (bulkFeedback) {
-                if (landed === keys.length) {
-                    bulkFeedback.classList.remove('show');
-                    bulkFeedback.textContent = '';
-                } else if (landed > 0) {
-                    bulkFeedback.classList.add('show');
-                    bulkFeedback.textContent = `Added ${landed} of ${keys.length}. ${keys.length - landed} could not be queued — re-run Scan Library.`;
-                } else {
-                    bulkFeedback.classList.add('show');
-                    bulkFeedback.textContent = 'Scan results are no longer available on the server. Click Scan Library again.';
+                // Suggestions the server left for a person (see the card's "Manual choice").
+                const manual = Number.parseInt(response.headers.get('X-Skipped-Manual') || '0', 10) || 0;
+                const failed = keys.length - landed - manual;
+                const notes = [];
+                if (failed > 0 && landed > 0) {
+                    notes.push(bbFormat({{ _('Added {added} of {total}. {failed} could not be queued — re-run Scan Library.')|tojson }}, { added: landed, total: keys.length, failed: failed }));
+                } else if (failed > 0) {
+                    notes.push({{ _('Scan results are no longer available on the server. Click Scan Library again.')|tojson }});
                 }
+                if (manual > 0) {
+                    notes.push(bbFormat({{ _('{count} skipped: choose the ebook on the card.')|tojson }}, { count: manual }));
+                }
+                bulkFeedback.classList.toggle('show', notes.length > 0);
+                bulkFeedback.textContent = notes.join(' ');
             }
 
             updateBulkCounts();
@@ -1001,7 +1044,7 @@
         }
     }
 
-    function addAllExact() { addManyToQueue(getExactKeys()); }
+    function addAllExact() { addManyToQueue(getExactKeys(), 'exact'); }
     function addSelectedSuggestions() { addManyToQueue(getCheckedKeys()); }
 
     updateBulkCounts();

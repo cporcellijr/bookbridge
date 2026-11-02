@@ -135,6 +135,29 @@ def test_above_threshold_auto_matches_and_moves_shelf():
     'BOOKLORE_SHELF_NAME': 'Kobo',
     'BOOKLORE_SHELF_WATCH_THRESHOLD': '95',
 })
+def test_tied_top_score_creates_suggestion_not_auto_match():
+    """Two audiobooks tied at 100 ("Mana Immortal" / "Immortal Mana") need a person to pick."""
+    svc, bl, db, bms, _ = _build_service(
+        suggestions_result={"matches": [
+            _make_audio_match(score=100.0, audio_source_id="abs-1"),
+            _make_audio_match(score=100.0, audio_source_id="abs-2"),
+        ]},
+    )
+
+    stats = svc.process_watch_shelf()
+
+    assert stats['suggested'] == 1
+    assert stats['auto_matched'] == 0
+    bms.create_audio_mapping_from_match.assert_not_called()
+    bl.move_between_shelves.assert_not_called()
+
+
+@patch.dict(os.environ, {
+    'BOOKLORE_SHELF_WATCH_ENABLED': 'true',
+    'BOOKLORE_SHELF_WATCH_NAME': 'Up Next',
+    'BOOKLORE_SHELF_NAME': 'Kobo',
+    'BOOKLORE_SHELF_WATCH_THRESHOLD': '95',
+})
 def test_below_threshold_creates_suggestion_no_shelf_move():
     """Score 80 -> PendingSuggestion saved with origin metadata, shelf untouched."""
     svc, bl, db, bms, _ = _build_service(

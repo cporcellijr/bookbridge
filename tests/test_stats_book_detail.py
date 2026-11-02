@@ -4,7 +4,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from tests.test_webserver import MockContainer
 
@@ -32,6 +32,8 @@ class TestStatsBookDetail(unittest.TestCase):
         self.db = self.mock_container.mock_database_service
         self.db.get_all_books.return_value = []
         self.db.get_all_reading_stats.return_value = {}
+        # Existing cases cover the bridge's own sessions; ABS cases patch the client in.
+        self.mock_container.mock_user_client_registry.get_clients.return_value = MagicMock(abs_client=None)
 
         import src.db.migration_utils
         self._orig_init_db = src.db.migration_utils.initialize_database
@@ -93,6 +95,47 @@ class TestStatsBookDetail(unittest.TestCase):
         self.db.get_book_listening_detail.assert_called_once_with("b2")
         self.assertIsNone(payload["listening"])
         self.assertEqual(payload["title"], "Read Title")
+
+    def test_abs_users_get_listening_detail_from_abs_sessions(self):
+        abs_client = MagicMock()
+        abs_client.get_item_listening_sessions.return_value = {"sessions": [
+            {"startedAt": 1751475600000, "updatedAt": 1751475900000, "timeListening": 300.4,
+             "startTime": 400, "currentTime": 450, "duration": 1000, "displayTitle": "ABS Title"},
+            {"startedAt": 1751439000000, "updatedAt": 1751439600000, "timeListening": 600,
+             "startTime": 0, "currentTime": 0, "duration": 0, "displayTitle": "ABS Title"},
+        ]}
+        self.db.get_koreader_book_detail.return_value = None
+        self.db.get_book.return_value = None
+
+        with patch.object(self.ws, "_stats_abs_client", return_value=abs_client):
+            payload, status = self._detail("abs:b1")
+
+        listening = payload["listening"]
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            (listening["totalSeconds"], listening["sessionCount"], listening["lastReadAt"]),
+            (900, 2, 1751475900),
+        )
+        self.assertEqual(listening["progressPercent"], 45.0)
+        self.assertEqual(listening["sessions"][0], {
+            "startTime": 1751475600, "endTime": 1751475900, "durationSeconds": 300,
+            "startProgress": 0.4, "endProgress": 0.45,
+        })
+        self.assertIsNone(listening["sessions"][1]["endProgress"])
+        self.assertEqual(payload["title"], "ABS Title")
+        self.db.get_book_listening_detail.assert_not_called()
+
+    def test_abs_users_fall_back_to_bridge_sessions_when_abs_has_none(self):
+        abs_client = MagicMock()
+        abs_client.get_item_listening_sessions.return_value = {"sessions": []}
+        self.db.get_koreader_book_detail.return_value = None
+        self.db.get_book_listening_detail.return_value = dict(LISTENING_DETAIL)
+        self.db.get_book.return_value = None
+
+        with patch.object(self.ws, "_stats_abs_client", return_value=abs_client):
+            payload, _ = self._detail("abs:b1")
+
+        self.assertEqual(payload["listening"]["sessionCount"], 2)
 
     def test_book_without_any_activity_is_not_found(self):
         self.db.get_koreader_book_detail.return_value = None

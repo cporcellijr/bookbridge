@@ -47,7 +47,7 @@ async function autoResolveStorygraphBook() {
             return;
         }
         if (!resp.ok) {
-            document.getElementById('sg-error-msg').textContent = (data && data.message) || 'Search failed';
+            document.getElementById('sg-error-msg').textContent = (data && data.message) || bbT('Search failed');
             showStorygraphState('error');
             return;
         }
@@ -74,10 +74,10 @@ async function resolveStorygraphManualInput() {
             displayStorygraphBook(data);
             return;
         }
-        document.getElementById('sg-error-msg').textContent = (data && data.message) || 'Book not found';
+        document.getElementById('sg-error-msg').textContent = (data && data.message) || bbT('Book not found');
         showStorygraphState('error');
     } catch (err) {
-        document.getElementById('sg-error-msg').textContent = 'Search failed';
+        document.getElementById('sg-error-msg').textContent = bbT('Search failed');
         showStorygraphState('error');
     }
 }
@@ -98,22 +98,22 @@ function formatAudioDuration(seconds) {
     if (!seconds || seconds <= 0) return null;
     var hours = Math.floor(seconds / 3600);
     var mins = Math.floor((seconds % 3600) / 60);
-    if (hours > 0 && mins > 0) return hours + 'h ' + mins + 'm';
-    if (hours > 0) return hours + 'h';
-    return mins + 'm';
+    if (hours > 0 && mins > 0) return bbT('{hours}h {minutes}m', { hours: hours, minutes: mins });
+    if (hours > 0) return bbT('{hours}h', { hours: hours });
+    return bbT('{minutes}m', { minutes: mins });
 }
 
 function displayStorygraphBook(data) {
     storygraphModalState.bookData = data;
     storygraphModalState.linkedEditionId = data.linked_edition_id || null;
     
-    document.getElementById('sg-title').textContent = data.title || 'Unknown Title';
-    document.getElementById('sg-author').textContent = data.author || 'Unknown Author';
+    document.getElementById('sg-title').textContent = data.title || bbT('Unknown Title');
+    document.getElementById('sg-author').textContent = data.author || bbT('Unknown Author');
 
     var link = document.getElementById('sg-found-url');
     if (link) {
         link.href = data.url || '#';
-        link.textContent = data.linked ? 'Open current StoryGraph link' : 'Open in StoryGraph';
+        link.textContent = data.linked ? bbT('Open current StoryGraph link') : bbT('Open in StoryGraph');
     }
 
     var container = document.getElementById('sg-editions');
@@ -152,7 +152,7 @@ function displayStorygraphBook(data) {
                 formatSpan.className = 'hc-edition-format';
                 formatSpan.textContent = ed.format && ed.format !== 'Unknown'
                     ? ed.format
-                    : (edIsAudio ? 'Audiobook' : 'Unknown format');
+                    : (edIsAudio ? bbT('Audiobook') : bbT('Unknown format'));
 
                 if (isLinked) {
                     var linkedBadge = document.createElement('span');
@@ -163,7 +163,7 @@ function displayStorygraphBook(data) {
                     linkedBadge.style.background = 'rgba(76, 175, 80, 0.2)';
                     linkedBadge.style.color = '#4CAF50';
                     linkedBadge.style.borderRadius = '4px';
-                    linkedBadge.textContent = 'Linked';
+                    linkedBadge.textContent = bbT('Linked');
                     formatSpan.appendChild(linkedBadge);
                 }
 
@@ -175,10 +175,10 @@ function displayStorygraphBook(data) {
                     var dur = formatAudioDuration(ed.audio_seconds);
                     if (dur) detailParts.push(dur);
                 } else if (ed.pages && ed.pages > 0) {
-                    detailParts.push(ed.pages + ' pages');
+                    detailParts.push(bbPlural(bbT('{count} pages'), ed.pages));
                 }
                 if (ed.language) detailParts.push(ed.language);
-                detailsDiv.textContent = detailParts.join('  ·  ') || 'No details';
+                detailsDiv.textContent = detailParts.join('  ·  ') || bbT('No details');
 
                 mainDiv.appendChild(formatSpan);
                 mainDiv.appendChild(detailsDiv);
@@ -207,11 +207,11 @@ function displayStorygraphBook(data) {
 
         var noneFormat = document.createElement('span');
         noneFormat.className = 'hc-edition-format';
-        noneFormat.textContent = 'No specific edition';
+        noneFormat.textContent = bbT('No specific edition');
 
         var noneDetails = document.createElement('div');
         noneDetails.className = 'hc-edition-details';
-        noneDetails.textContent = 'Track on StoryGraph without progress sync';
+        noneDetails.textContent = bbT('Track on StoryGraph without progress sync');
 
         noneMain.appendChild(noneFormat);
         noneMain.appendChild(noneDetails);
@@ -253,7 +253,7 @@ async function linkSelectedStorygraphBook() {
 
     const button = document.getElementById('sg-link-btn');
     button.disabled = true;
-    button.textContent = 'Linking...';
+    button.textContent = bbT('Linking...');
 
     try {
         const resp = await fetch('/link-storygraph/' + storygraphModalState.absId, {
@@ -273,17 +273,17 @@ async function linkSelectedStorygraphBook() {
 
         if (!resp.ok) {
             const payload = await resp.json().catch(function() { return {}; });
-            throw new Error(payload.error || 'Link failed');
+            throw new Error(payload.error || bbT('Link failed'));
         }
 
         closeStorygraphModal();
         window.location.reload();
     } catch (err) {
         const errEl = document.getElementById('sg-error-msg');
-        if (errEl) errEl.textContent = err.message || 'Link failed';
+        if (errEl) errEl.textContent = err.message || bbT('Link failed');
         showStorygraphState('error');
     } finally {
         button.disabled = false;
-        button.textContent = 'Link Book';
+        button.textContent = bbT('Link Book');
     }
 }

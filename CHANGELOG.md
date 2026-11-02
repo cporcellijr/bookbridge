@@ -4,6 +4,80 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [7.12.0] - 2026-11-02
+
+### Added
+
+- **The interface is available in Russian** (#516). Each reader picks a language on their Account page. The
+  Library, Settings, integration fields, buttons, dialogs and statistics follow it, and any text without a
+  translation stays in English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #567, #570,
+  #571 and #572.
+- **A book your KOReader device syncs finds its Audiobookshelf copy on its own** (#576). With **Sync with
+  Audiobookshelf's own ebook reader** on, a new EPUB that is the same file (same name and size) as an
+  Audiobookshelf book's ebook is linked to that book and keeps its position in step with Audiobookshelf's reader.
+  A file that fits more than one book is left alone.
+
+### Changed
+
+- **Settings are reorganized, and most changes apply without a restart.** The sidebar is grouped by purpose
+  (**Services**, **Reading & Sync**, **Library & Matching**, **Alignment**, **AI**, **Server**, **Maintenance** and
+  **Users**), settings are described in plain words, search covers every tab, and **Different from defaults** lists
+  what you have changed, each with a reset link. A setting marked **restart** still restarts BookBridge when you
+  save it, and the Save bar says so first.
+- **One setting per choice instead of one per app.** How often apps are checked, how often highlights sync, the
+  "Up Next" shelf and the wait before posting progress to Hardcover and StoryGraph each apply to every app you use.
+  Apps you had set differently keep their values until you change that setting. **Find shelves** lists the
+  collections in every library app, not only Grimmory.
+- **Each reader sets their own reading preferences** under **My Integrations → Reading preferences**: sharing
+  highlights, reading status and History between KOReader devices, protection from an out-of-date device,
+  finishing a book everywhere, Audiobookshelf reading checkpoints, counting Storyteller as listening time, and the
+  Library's series view. Each starts at **Server default**.
+- **More options are in Settings instead of environment variables only**: identifying books a KOReader device
+  opens that BookBridge doesn't know yet, the Storyteller collection for synced books, combining KOReader
+  statistics across devices, and the Whisper.cpp server timeout.
+- **A book you start reading in BookOrbit is matched to its audiobook on its own when the match is certain.** With
+  **Auto-match books you start reading in BookOrbit** on, a Continue Reading book whose audiobook scores 95 or
+  higher is linked straight away. Weaker matches still wait for you in Suggestions.
+
+### Fixed
+
+- **Audiobooks and ebooks are matched more reliably** on the Suggestions page, Up Next and Continue Reading.
+  Letter case, "(Unabridged)", accents, "&" or "and", a leading "The", a missing author, and a subtitle such as
+  "Stories" or "A Novel" no longer lower a correct match. A different volume of a series, a similar title by
+  another author, or the same words in a different order is no longer offered as a sure match, and AI re-ranking
+  no longer pulls an exact match below 100. When two audiobooks tie, BookBridge asks you instead of picking one.
+- **"Add all exact" adds only matches nobody needs to check.** It skips ties, files on disk that aren't library
+  entries, other editions, authors it couldn't confirm and series volumes that share a title, and BookBridge checks
+  again when you press it. A skipped card says **Manual choice** with the reason, and each card notes what decided
+  its score.
+- **The Suggestions page shows a scan's progress until it finishes**, including the local-AI step, instead of
+  showing "No scan results yet" while it runs. Pressing a scan button again joins the running scan.
+- **Suggestions from your listening progress skip ebooks by someone else.**
+- **Review on an Up Next or Continue Reading suggestion opens with the right books selected**, and approving a
+  different book from the same library no longer takes the shelved book off Up Next.
+- **A book you put on BookOrbit's Up Next finds an audiobook you added shortly before.**
+- **Suggestions no longer offer the wrong volume of a series titled "Series: Book N"**, and a book Audiobookshelf
+  lists in several series is matched by its numbered one. Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #563 and #564.
+- **A book found from a reader's KOReader device belongs to that reader** (#575) instead of the first admin, and
+  the search for it uses the reader's own logins.
+- **BookBridge starts with a `DATA_DIR` other than `/data`** (#573). `DATA_DIR` is now set only in the environment.
+  The "no ebook source" startup warning names your real books folder (#574).
+- **BookBridge no longer overwrites a page you just turned to in BookOrbit** (BookOrbit 3.6 or newer).
+- **A brief BookOrbit hiccup no longer sends a book to slow Whisper transcription.** Audio downloads now retry
+  before giving up.
+- **Storyteller listening shows as one Audiobookshelf session per sitting** (#566).
+- **The stats page's listening books add up to its total when you use Audiobookshelf.** Contributed by
+  [@chemicalsno](https://github.com/chemicalsno) in #560.
+- **KOReader positions are better protected.** A device replaying an old position no longer rewinds your other
+  apps, a few pages read right after a sync are no longer rewound, a book you removed no longer comes back on its
+  own from a stale report, and a book no longer takes over another book's KOReader hash.
+- **Matching a BookOrbit or Grimmory audiobook links Hardcover and StoryGraph automatically**, as the other ways
+  of matching do.
+- **The content-match guard no longer refuses correct pairings scored by OpenAI embeddings** (#556).
+- **The English-only CTC aligner recognizes text written in other alphabets**, so a mostly Russian book quoting a
+  few English words isn't taken for English. Contributed by [@chuzhba1-art](https://github.com/chuzhba1-art) in #569.
+
 ## [7.11.0] - 2026-10-26
 
 ### Added

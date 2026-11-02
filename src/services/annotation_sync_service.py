@@ -37,6 +37,7 @@ from src.services.readest_annotation_sync import ReadestAnnotationSync
 from src.services.hardcover_annotation_sync import HardcoverAnnotationSync
 from src.services.bookfusion_annotation_sync import BookFusionAnnotationSync
 from src.utils.cache_paths import safe_cache_path
+from src.utils.config_loader import DEFAULT_CONFIG, MERGED_SETTINGS
 from src.utils.grimmory_cfi import GrimmoryCFIResolver
 from src.utils.user_config import (
     resolve_setting,
@@ -45,6 +46,19 @@ from src.utils.user_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _highlight_sync_scheduled() -> bool:
+    """False when Settings' highlight interval is 0. The daemon can still wake for
+    the Readest upload sweep, which must not copy highlights on its way past."""
+    for key in MERGED_SETTINGS["ALL_APPS_ANNOTATION_SYNC_MINUTES"]:
+        try:
+            if int(os.environ.get(key, DEFAULT_CONFIG.get(key, "0")) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
 
 SPOKE_KEY = "@bookorbit"
 BOOKLORE_SPOKE_KEY = "@booklore"
@@ -209,6 +223,9 @@ class AnnotationSyncService:
             return {"users": 0}
         try:
             users = self._enumerate_users()
+            highlights = _highlight_sync_scheduled()
+            if not highlights:
+                logger.debug("Highlight sync interval is 0; skipping highlight copying this cycle")
             synced_users = 0
             for user_id, creds in users:
                 synced_this_user = False
@@ -216,7 +233,7 @@ class AnnotationSyncService:
                 kosync_key = BookOrbitClient.normalize_kosync_key(
                     resolve_setting(creds, "BOOKORBIT_KOSYNC_KEY", "")
                 )
-                if kosync_user and kosync_key and self._annotation_owner_matches(user_id, creds, kosync_user):
+                if highlights and kosync_user and kosync_key and self._annotation_owner_matches(user_id, creds, kosync_user):
                     client = BookOrbitClient(credentials=creds)
                     if str(resolve_setting(creds, "BOOKORBIT_SERVER", "") or "").strip():
                         try:
@@ -225,7 +242,7 @@ class AnnotationSyncService:
                         except Exception as e:
                             logger.error("BookOrbit annotation sync failed for user %s: %s", user_id, e, exc_info=True)
 
-                if self._truthy(resolve_setting(creds, "BOOKLORE_ANNOTATION_SYNC", "false")):
+                if highlights and self._truthy(resolve_setting(creds, "BOOKLORE_ANNOTATION_SYNC", "false")):
                     client = BookloreClient(database_service=self.database_service, credentials=creds)
                     if client.is_configured():
                         try:
@@ -239,7 +256,7 @@ class AnnotationSyncService:
                 # stops all of it, whatever each user has chosen.
                 readest_on = self._truthy(resolve_setting(creds, "READEST_ENABLED", "true"))
 
-                if readest_on and self._truthy(resolve_setting(creds, "READEST_ANNOTATION_SYNC", "false")):
+                if highlights and readest_on and self._truthy(resolve_setting(creds, "READEST_ANNOTATION_SYNC", "false")):
                     try:
                         if self._readest_sync.sync_user(user_id, creds):
                             synced_this_user = True
@@ -261,14 +278,14 @@ class AnnotationSyncService:
                     except Exception as e:
                         logger.error("Readest upload sweep failed for user %s: %s", user_id, e, exc_info=True)
 
-                if self._truthy(resolve_setting(creds, "BOOKFUSION_ANNOTATION_SYNC", "false")):
+                if highlights and self._truthy(resolve_setting(creds, "BOOKFUSION_ANNOTATION_SYNC", "false")):
                     try:
                         if self._bookfusion_sync.sync_user(user_id, creds):
                             synced_this_user = True
                     except Exception as e:
                         logger.error("BookFusion annotation sync failed for user %s: %s", user_id, e, exc_info=True)
 
-                if self._truthy(resolve_setting(creds, "HARDCOVER_ANNOTATION_SYNC", "false")):
+                if highlights and self._truthy(resolve_setting(creds, "HARDCOVER_ANNOTATION_SYNC", "false")):
                     try:
                         if self._hardcover_sync.sync_user(user_id, creds):
                             synced_this_user = True

@@ -195,6 +195,73 @@ def test_empty_pool_without_same_entry_audio_stays_deferred():
     svc.database_service.upsert_shelf_watch_scan.assert_not_called()
 
 
+# ---- stale BookOrbit listing: audio added after the last cache refresh ----
+
+_STALE = {"bridge_key": "bookorbit:5512", "audio_source": "BookOrbit", "audio_source_id": "5512"}
+_FRESH = {"bridge_key": "bookorbit:6373", "audio_source": "BookOrbit", "audio_source_id": "6373"}
+
+
+def _stale_listing_svc(source_name='BookOrbit', env_prefix='BOOKORBIT', refresh_exc=None):
+    """The pool reflects the client's cached listing; the new audiobook appears
+    only once the listing is refreshed. Its ebook entry has no audio of its own."""
+    svc, client, bms, sugg = _same_entry_svc(
+        source_name=source_name, env_prefix=env_prefix, info={"tracks": []})
+    listing = [_STALE]
+    if refresh_exc:
+        client._refresh_book_cache.side_effect = refresh_exc
+    else:
+        client._refresh_book_cache.side_effect = lambda: listing.append(_FRESH) or True
+    sugg._build_audiobook_candidate_pool.side_effect = lambda: list(listing)
+    sugg._scan_single_ebook.side_effect = lambda anchor, pool: {"matches": [
+        dict(_FRESH, audio_title="Dear Edward", score=100.0)]} if _FRESH in pool else {"matches": []}
+    client.is_configured.return_value = True
+    svc._is_already_mapped = MagicMock(return_value=False)
+    svc._is_throttled = MagicMock(return_value=False)
+    return svc, client, bms, sugg
+
+
+def _run_up_next(svc, client):
+    client.list_books_on_shelf.return_value = [
+        {"id": "1575", "title": "Dear Edward", "fileName": "Dear Edward (2020).epub"}]
+    svc._is_enabled = MagicMock(return_value=True)
+    svc._watch_shelf_name = MagicMock(return_value="Up Next")
+    svc._kobo_shelf_name = MagicMock(return_value="Kobo")
+    return svc._process_watch_shelf(active_client=client)
+
+
+def test_up_next_matches_audiobook_added_after_cached_listing():
+    """Audio indexed after the client's last listing used to get "no audio above
+    60-point floor" and an ebook-only mapping; the pass now re-lists first."""
+    svc, client, bms, _ = _stale_listing_svc()
+    stats = _run_up_next(svc, client)
+    assert stats['auto_matched'] == 1 and stats['ebook_only'] == 0
+    assert bms.create_audio_mapping_from_match.call_args.kwargs['audio_source_id'] == '6373'
+    bms.create_ebook_only_mapping.assert_not_called()
+
+
+def test_reading_watch_matches_audiobook_added_after_cached_listing():
+    svc, client, bms, _ = _stale_listing_svc()
+    client.list_continue_reading_books.return_value = [
+        {"id": "1575", "title": "Dear Edward", "fileName": "Dear Edward (2020).epub"}]
+    svc._reading_watch_enabled = MagicMock(return_value=True)
+    stats = svc._process_reading_watch(active_client=client)
+    assert stats['auto_matched'] == 1 and stats['ebook_only'] == 0
+    bms.create_ebook_only_mapping.assert_not_called()
+
+
+def test_listing_refresh_failure_falls_back_to_cached_listing():
+    svc, client, bms, _ = _stale_listing_svc(refresh_exc=RuntimeError("boom"))
+    stats = _run_up_next(svc, client)
+    assert stats['ebook_only'] == 1 and stats['errors'] == 0
+    bms.create_audio_mapping_from_match.assert_not_called()
+
+
+def test_grimmory_watcher_does_not_refresh_client_listing():
+    svc, client, _, _ = _stale_listing_svc(source_name='BookLore', env_prefix='BOOKLORE')
+    _run_up_next(svc, client)
+    client._refresh_book_cache.assert_not_called()
+
+
 # ---- #524 optional read-along for BookOrbit-audio auto-matches -----------
 
 

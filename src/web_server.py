@@ -29,20 +29,23 @@ from zoneinfo import ZoneInfo
 import requests
 import schedule
 from dependency_injector import providers
-from flask import Flask, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context
+from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context
 from functools import wraps
 from src.utils.user_context import (
     set_current_user_id, reset_current_user_id,
     set_current_user_credentials, reset_current_user_credentials,
     get_current_user_credentials, get_current_user_id,
 )
-from src.utils.user_config import resolve_setting, user_setting
+from src.utils.user_config import PER_USER_PREFERENCE_KEYS, resolve_setting, user_preference_enabled, user_setting
 from src.utils.user_config import global_fallback_allowed as _global_fallback_allowed
 from src.utils.user_config import SERVICE_ENABLE_KEYS
 from src.utils.kosync_url import is_builtin_kosync_url
 
-from src.utils.config_loader import ConfigLoader, KNOWN_SETTING_KEYS, env_truthy
-from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename, contained_library_file
+from src.utils.config_loader import (
+    ConfigLoader, DEFAULT_CONFIG, KNOWN_SETTING_KEYS, MERGED_BOOL_SETTINGS, MERGED_SETTINGS, merged_mixed_settings,
+    RESTART_REQUIRED_SETTINGS, env_truthy, merged_setting_values,
+)
+from src.utils.cache_paths import safe_cache_path, safe_library_path, is_plain_basename, contained_library_file, library_roots
 from src.utils.ebook_utils import (
     LINKABLE_EBOOK_EXTENSIONS,
     LRUCache,
@@ -568,7 +571,7 @@ _ADMIN_ONLY_ENDPOINTS = {
     'clean_cache', 'api_series_backfill', 'api_debug_abs_series', 'api_storyteller_backfill',
     'admin_users', 'admin_user_integrations',
     'api_restart', 'test_connection',
-    'get_booklore_libraries', 'get_booklore_shelves', 'get_abs_libraries',
+    'get_booklore_libraries', 'get_booklore_shelves', 'get_watch_shelves', 'get_abs_libraries',
     'api_booklore_refresh', 'alignments_llm_status', 'alignments_realign', 'alignments_restore',
     'kosync_admin.api_get_kosync_documents',
     'kosync_admin.api_link_kosync_document',
@@ -4639,6 +4642,7 @@ def _create_or_update_library_audio_mapping(
     if isinstance(saved_book.kosync_doc_id, str) and saved_book.kosync_doc_id.strip():
         database_service.dismiss_suggestion(saved_book.kosync_doc_id)
     _adopt_kosync_progress_for_book(saved_book.abs_id, saved_book.kosync_doc_id)
+    _enqueue_tracker_automatch(uc().sync_clients, saved_book)
 
     return saved_book, None, None
 
@@ -5043,6 +5047,30 @@ def settings():
             session['user_error'] = u_error
             return redirect(url_for('settings') + '#users')
 
+        # A merged control (one field standing for several apps) saves its value
+        # into each app's own setting. A checkbox posts a hidden 'off' plus 'on'
+        # when checked, so an unchecked one still reaches every app. A control left
+        # as the page showed it keeps each app's own value, so apps that used to
+        # differ are not evened out by a save that never touched the choice.
+        form = request.form.copy()
+        shown = merged_setting_values(os.environ)
+        for merged, targets in MERGED_SETTINGS.items():
+            if merged not in form:
+                continue
+            values = form.poplist(merged)
+            is_bool = merged in MERGED_BOOL_SETTINGS
+            posted = ('true' if 'on' in values else 'false') if is_bool else values[-1].strip()
+            unchanged = posted == shown[merged]
+            for target in targets:
+                form.poplist(target)
+                if unchanged:
+                    if is_bool and env_truthy(target):
+                        form[target] = 'on'
+                elif not is_bool:
+                    form[target] = posted
+                elif posted == 'true':
+                    form[target] = 'on'
+
         bool_keys = [
             'KOSYNC_CREDENTIALS_FROM_GRIMMORY',
             'KOSYNC_USE_PERCENTAGE_FROM_SERVER',
@@ -5121,6 +5149,8 @@ def settings():
             'SHARE_ALL_BOOKS_WITH_ALL_USERS',
             'REMOTE_AUTH_ENABLED',
             'SERIES_SHOW_CURRENT_BOOK_DETAIL',
+            'AUTO_CREATE_EBOOK_MAPPING',
+            'KOREADER_COMBINE_DEVICE_STATS',
         ]
 
         # Current settings in DB
@@ -5144,8 +5174,8 @@ def settings():
         ]
 
         def _normalized_form_value(key):
-            if key in request.form:
-                raw_value = request.form.get(key, '')
+            if key in form:
+                raw_value = form.get(key, '')
             else:
                 raw_value = current_settings.get(key, '')
 
@@ -5156,18 +5186,22 @@ def settings():
                     clean_value = f"http://{clean_value}"
             return clean_value
 
+        # Every value this save writes, to tell whether a restart is needed.
+        written = {}
+
         # 1. Handle Boolean Toggles (Checkbox logic)
         # Checkboxes are NOT sent if unchecked, so we must check every known bool key
         for key in bool_keys:
-            is_checked = (key in request.form)
+            is_checked = (key in form)
             # Save "true" or "false"
             val_str = str(is_checked).lower()
             database_service.set_setting(key, val_str)
             os.environ[key] = val_str # Immediate update for current process
+            written[key] = val_str
 
         # 2. Handle Text Inputs
         # Iterate over form to find other keys
-        for key, value in request.form.items():
+        for key, value in form.items():
             if key in bool_keys: continue
 
             # Only recognized settings are persisted. The posted form also carries
@@ -5198,9 +5232,11 @@ def settings():
             if clean_value:
                 database_service.set_setting(key, clean_value)
                 os.environ[key] = clean_value # Immediate update for current process
+                written[key] = clean_value
             elif key in current_settings:
                 database_service.set_setting(key, "")
                 os.environ[key] = "" # Immediate update for current process
+                written[key] = ""
 
         new_booklore_settings = {
             key: _normalized_form_value(key)
@@ -5214,6 +5250,23 @@ def settings():
                 client._book_cache.clear()
                 client._book_id_cache.clear()
                 client._cache_timestamp = 0
+
+        def _setting_changed(key):
+            if key not in written:
+                return False
+            old, new = current_settings.get(key) or '', written[key]
+            if key in bool_keys:
+                truthy = ('true', '1', 'yes', 'on')
+                return (old.strip().lower() in truthy) != (new.strip().lower() in truthy)
+            return old.strip() != new.strip()
+
+        restart_changes = sorted(k for k in RESTART_REQUIRED_SETTINGS if _setting_changed(k))
+        if not restart_changes:
+            logger.info("⚙️ Settings saved and applied without a restart")
+            session['message'] = "Settings saved. Your changes are already in effect."
+            return_tab = form.get('return_tab', '')
+            return redirect(url_for('settings') + (f"#{return_tab}" if return_tab.isidentifier() else ''))
+        logger.info("⚙️ Settings saved; restarting to apply %s", ", ".join(restart_changes))
 
         try:
             return render_restarting_page(
@@ -5250,7 +5303,13 @@ def settings():
                          current_user_id=(cu.id if cu else None),
                          primary_admin_id=primary_admin_id,
                          user_message=user_message,
-                         user_error=user_error))
+                         user_error=user_error,
+                         restart_keys=sorted(RESTART_REQUIRED_SETTINGS),
+                         reader_pref_keys=sorted(PER_USER_PREFERENCE_KEYS),
+                         merged_values=merged_setting_values(os.environ),
+                         merged_mixed=merged_mixed_settings(os.environ),
+                         setting_defaults={**{k: DEFAULT_CONFIG.get(k, '') for k in sorted(KNOWN_SETTING_KEYS)},
+                                           **merged_setting_values(DEFAULT_CONFIG)}))
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     return response
 
@@ -5936,8 +5995,77 @@ def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
             continue
         if pending and getattr(pending, 'origin', None) == 'shelf_watch':
             metadata = pending.origin_metadata or {}
-            return dict(metadata) if isinstance(metadata, dict) else None
+            if not isinstance(metadata, dict):
+                return None
+            if _is_other_book_in_watched_library(item, metadata):
+                logger.info(
+                    "Shelf-watch approval: queued ebook %s:%s is not the watched book %s; leaving '%s' on the shelf",
+                    item.get('ebook_source'), item.get('ebook_source_id'),
+                    metadata.get('grimmory_id'), sanitize_log_data(metadata.get('grimmory_filename') or ''),
+                )
+                return None
+            return dict(metadata)
     return None
+
+
+def _watch_library_key(source: str) -> str:
+    """Grimmory's ebook cards say 'Grimmory'/'Booklore'; its watch metadata says 'BookLore'."""
+    key = str(source or '').strip().lower()
+    return 'booklore' if key == 'grimmory' else key
+
+
+def _is_other_book_in_watched_library(item: dict, metadata: dict) -> bool:
+    """True when the queued ebook is a different book from the watched book's own library.
+
+    A copy from another library (a BookFusion edition, say) still completes the
+    watch, but a second book from the same library is a different pairing.
+    """
+    watched_id = str(metadata.get('grimmory_id') or '').strip()
+    queued_id = str(item.get('ebook_source_id') or '').strip()
+    if not watched_id or not queued_id:
+        return False
+    same_library = (_watch_library_key(item.get('ebook_source'))
+                    == _watch_library_key(metadata.get('source_name') or 'BookLore'))
+    return same_library and queued_id != watched_id
+
+
+def _watch_suggestion_review(source_id: str) -> "tuple[list, list, str] | None":
+    """The recorded audiobook and ebook for Review on a shelf/reading-watch suggestion.
+
+    Searching the suggested audiobook's title can miss it (blank metadata) or turn up
+    another book's ebook, so Review offers exactly the pair the watcher scanned. The
+    page pre-selects a lone result. Admin-only, like the dashboard suggestions.
+    """
+    user = current_user()
+    if not (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False))):
+        return None
+    pending = database_service.get_pending_suggestion(source_id)
+    if not pending or getattr(pending, 'origin', None) not in ('shelf_watch', 'reading_watch'):
+        return None
+    metadata = pending.origin_metadata or {}
+    match = next((m for m in pending.matches if m.get('bridge_key') == source_id), None)
+    audiobooks = []
+    if match:
+        title = match.get('audio_title') or pending.title or ''
+        audiobooks = [AudioResult(
+            source=match.get('audio_source') or '',
+            source_id=str(match.get('audio_source_id') or ''),
+            title=title,
+            authors=match.get('audio_author') or '',
+            cover_url=match.get('audio_cover_url') or '',
+            duration=match.get('audio_duration'),
+            display_name=title,
+            provider_book_id=match.get('audio_provider_book_id') or None,
+            provider_file_id=match.get('audio_provider_file_id') or None,
+        )]
+    ebook_title = metadata.get('grimmory_title') or Path(metadata.get('grimmory_filename') or '').stem
+    watched = (_watch_library_key(metadata.get('source_name') or 'BookLore'),
+               str(metadata.get('grimmory_id') or ''))
+    ebooks = [
+        ebook for ebook in (_search_ebooks_with_fallback(ebook_title) if ebook_title else [])
+        if (_watch_library_key(ebook.source), str(ebook.source_id or '')) == watched
+    ]
+    return audiobooks, ebooks, ebook_title.lower()
 
 
 def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False, book=None) -> bool:
@@ -8883,7 +9011,11 @@ def _add_book_view():
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
     storyteller_search_failed = False
-    if search:
+    review = request.args.get('review', '').strip()
+    review_pair = _watch_suggestion_review(review) if review else None
+    if review_pair:
+        audiobooks, ebooks, search = review_pair
+    elif search:
         audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method
@@ -9201,10 +9333,31 @@ def _suggestions_auto_scan_tick():
 
 def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None):
     _prune_suggestions_scan_jobs()
+    bundle = uc()
+    try:
+        user = current_user()
+        user_id = user.id if user is not None else None
+    except Exception:
+        user_id = None
+    if user_id is None:
+        try:
+            user_id = get_current_user_id()
+        except Exception:
+            user_id = None
+    creds = get_current_user_credentials()
+
+    # Reuse an existing running scan for this user to avoid duplicate concurrent scans.
+    if user_id:
+        existing_id = _running_suggestions_scan_job_id(user_id)
+        if existing_id:
+            logger.info(f"Suggestions scan already running; reusing job {existing_id}")
+            return existing_id
+
     job_id = uuid.uuid4().hex
     with SUGGESTIONS_SCAN_JOBS_LOCK:
         SUGGESTIONS_SCAN_JOBS[job_id] = {
             "status": "running",
+            "user_id": user_id,
             "results": {},
             "error": None,
             "progress": {
@@ -9219,19 +9372,6 @@ def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_
             "started_at": time.time(),
             "updated_at": time.time(),
         }
-
-    bundle = uc()
-    try:
-        user = current_user()
-        user_id = user.id if user is not None else None
-    except Exception:
-        user_id = None
-    if user_id is None:
-        try:
-            user_id = get_current_user_id()
-        except Exception:
-            user_id = None
-    creds = get_current_user_credentials()
 
     def runner():
         tok_bundle = _active_bundle.set(bundle)
@@ -9307,6 +9447,8 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
     if not suggestions:
         return results
 
+    from src.services.suggestions_service import SuggestionsService
+
     threshold = _auto_match_threshold()
     mapping_service = container.book_mapping_service()
     cache_by_abs = results.get('cache_by_abs') or {}
@@ -9329,6 +9471,17 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
             )
         score = float(top.get('score') or 0.0) if top else 0.0
         if not top or score < threshold:
+            remaining.append(suggestion)
+            continue
+        block = SuggestionsService.bulk_ineligibility(
+            {'matches': sorted(eligible_matches, key=lambda m: m.get('score') or 0.0, reverse=True)},
+            min_score=threshold, allow_local_file=True,
+        )
+        if block:
+            logger.info(
+                "Auto-match left '%s' for review (score=%.1f): %s",
+                suggestion.get('abs_title'), score, block,
+            )
             remaining.append(suggestion)
             continue
         try:
@@ -9495,6 +9648,17 @@ def _get_suggestions_scan_job(job_id):
         if not job:
             return None
         return dict(job)
+
+
+def _running_suggestions_scan_job_id(user_id: Optional[str]) -> Optional[str]:
+    """Return the job_id of a 'running' suggestions scan for the given user, if any."""
+    if not user_id:
+        return None
+    with SUGGESTIONS_SCAN_JOBS_LOCK:
+        for job_id, job in SUGGESTIONS_SCAN_JOBS.items():
+            if job.get('user_id') == user_id and job.get('status') == 'running':
+                return job_id
+    return None
 
 
 def _clear_legacy_suggestions_session_payload():
@@ -9953,6 +10117,16 @@ def _apply_queue_readalong_request(queue_items: list[dict]) -> None:
             item['readalong_epub_requested'] = True
 
 
+def _suggestion_bulk_block(suggestion: dict) -> "str | None":
+    """Why "Add all exact" leaves this suggestion for a person; None when it can be added."""
+    from src.services.suggestions_service import SuggestionsService
+
+    matches = suggestion.get('matches') or []
+    if matches and is_comic_ebook_filename(matches[0].get('ebook_filename')):
+        return 'comic'
+    return SuggestionsService.bulk_ineligibility(suggestion)
+
+
 def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     """Build a batch-match queue item from a scanned suggestion's top match (the ebook
     BookBridge is most confident about). Used by bulk add ('add all exact' / 'add
@@ -10132,16 +10306,25 @@ def suggestions_page():
             suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
             cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
 
+            # "Add all exact" is rechecked here rather than trusting the page's list.
+            exact_only = request.form.get('bulk_intent') == 'exact'
+
             requested = len(keys)
             added = 0
             skipped_missing = 0
             skipped_no_item = 0
             already_queued = 0
+            skipped_manual = 0
 
             for key in keys:
                 suggestion = cache_by_abs.get(key)
                 if not suggestion:
                     skipped_missing += 1
+                    continue
+                block = _suggestion_bulk_block(suggestion)
+                # A tie needs the ebook picked on the card, even for a selected audiobook.
+                if block and (exact_only or block == 'tie'):
+                    skipped_manual += 1
                     continue
                 item = _queue_item_from_suggestion(suggestion)
                 if not item:
@@ -10158,9 +10341,11 @@ def suggestions_page():
                 )
             else:
                 logger.info(
-                    f"✅ add_many_to_queue: requested={requested} added={added} skipped_missing={skipped_missing} skipped_no_item={skipped_no_item} already_queued={already_queued}"
+                    f"✅ add_many_to_queue: requested={requested} added={added} skipped_missing={skipped_missing} skipped_no_item={skipped_no_item} already_queued={already_queued} skipped_manual={skipped_manual}"
                 )
-            return _match_queue_response()
+            response = make_response(_match_queue_response())
+            response.headers['X-Skipped-Manual'] = str(skipped_manual)
+            return response
 
         elif action == 'forge_and_match_queue':
             # Same forge/match-all path as the Add Book page: Storyteller items just match,
@@ -10181,35 +10366,50 @@ def suggestions_page():
     scan_in_progress = False
     scan_error = None
     job_id = session.get('suggestions_scan_job_id')
+    scan_job = None
     if job_id:
         scan_job = _get_suggestions_scan_job(job_id)
         if not scan_job:
             session.pop('suggestions_scan_job_id', None)
             session.modified = True
+            job_id = None
+    if not job_id or not scan_job:
+        # Fallback to a running job for the current user (e.g., new tab or lost session)
+        try:
+            user_id = get_current_user_id()
+        except Exception:
+            user_id = None
+        fallback_id = _running_suggestions_scan_job_id(user_id)
+        if fallback_id:
+            job_id = fallback_id
+            session['suggestions_scan_job_id'] = job_id
+            session.modified = True
+            scan_job = _get_suggestions_scan_job(job_id)
+
+    if scan_job:
+        status = scan_job.get('status')
+        if status == 'done':
+            scan_payload = scan_job.get('results', {}) or {}
+            suggestions_state['scan_results'] = scan_payload.get('suggestions', [])
+            suggestions_state['scan_cache_by_abs'] = scan_payload.get('cache_by_abs', {})
+            suggestions_state['scan_cache_no_match_abs_ids'] = scan_payload.get('no_match_abs_ids', [])
+            suggestions_state['scan_last_stats'] = scan_payload.get('stats', {})
+            suggestions_state['scanned_at'] = scan_job.get('scanned_at') or time.time()
+            suggestions_state['scan_has_run'] = True
+            suggestions_state['updated_at'] = time.time()
+            _persist_suggestions_state(suggestions_state)
+            session.pop('suggestions_scan_job_id', None)
+            session.modified = True
+            with SUGGESTIONS_SCAN_JOBS_LOCK:
+                SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
+        elif status == 'error':
+            scan_error = scan_job.get('error') or 'Scan failed'
+            session.pop('suggestions_scan_job_id', None)
+            session.modified = True
+            with SUGGESTIONS_SCAN_JOBS_LOCK:
+                SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
         else:
-            status = scan_job.get('status')
-            if status == 'done':
-                scan_payload = scan_job.get('results', {}) or {}
-                suggestions_state['scan_results'] = scan_payload.get('suggestions', [])
-                suggestions_state['scan_cache_by_abs'] = scan_payload.get('cache_by_abs', {})
-                suggestions_state['scan_cache_no_match_abs_ids'] = scan_payload.get('no_match_abs_ids', [])
-                suggestions_state['scan_last_stats'] = scan_payload.get('stats', {})
-                suggestions_state['scanned_at'] = scan_job.get('scanned_at') or time.time()
-                suggestions_state['scan_has_run'] = True
-                suggestions_state['updated_at'] = time.time()
-                _persist_suggestions_state(suggestions_state)
-                session.pop('suggestions_scan_job_id', None)
-                session.modified = True
-                with SUGGESTIONS_SCAN_JOBS_LOCK:
-                    SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
-            elif status == 'error':
-                scan_error = scan_job.get('error') or 'Scan failed'
-                session.pop('suggestions_scan_job_id', None)
-                session.modified = True
-                with SUGGESTIONS_SCAN_JOBS_LOCK:
-                    SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
-            else:
-                scan_in_progress = True
+            scan_in_progress = True
 
     if not scan_in_progress:
         suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
@@ -10339,13 +10539,26 @@ def suggestions_page():
 def suggestions_scan_status():
     _clear_legacy_suggestions_session_payload()
     job_id = session.get('suggestions_scan_job_id')
-    if not job_id:
-        return jsonify({"status": "idle"})
-
-    scan_job = _get_suggestions_scan_job(job_id)
+    scan_job = None
+    if job_id:
+        scan_job = _get_suggestions_scan_job(job_id)
+        if not scan_job:
+            session.pop('suggestions_scan_job_id', None)
+            session.modified = True
+            job_id = None
+    if not job_id or not scan_job:
+        # Fallback to running job for current user
+        try:
+            user_id = get_current_user_id()
+        except Exception:
+            user_id = None
+        fallback_id = _running_suggestions_scan_job_id(user_id)
+        if fallback_id:
+            job_id = fallback_id
+            session['suggestions_scan_job_id'] = job_id
+            session.modified = True
+            scan_job = _get_suggestions_scan_job(job_id)
     if not scan_job:
-        session.pop('suggestions_scan_job_id', None)
-        session.modified = True
         return jsonify({"status": "idle"})
 
     response = {
@@ -11444,7 +11657,7 @@ def mark_complete(abs_id):
     # normally marks a book finished for KOReader -- never sees it. Pressing this
     # button is the most explicit "I finished this" the bridge has, so it would be
     # the worst one to miss.
-    if not perform_delete and env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+    if not perform_delete and user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', database_service):
         try:
             written = database_service.record_koreader_status_for_book(
                 abs_id,
@@ -12020,6 +12233,102 @@ def _build_listening_book_list():
     return result
 
 
+def _abs_last_listened(abs_client, item_ids, per_page=100, max_pages=10):
+    """Epoch seconds of each item's newest ABS listening session.
+
+    ABS returns sessions newest first, so paging stops once every item has a date.
+    Progress ``lastUpdate`` is no substitute: the bridge moves it when a reader leads.
+    """
+    wanted = set(item_ids or ())
+    found = {}
+    for page in range(max_pages):
+        if not wanted - found.keys():
+            break
+        sessions = abs_client.get_listening_sessions(limit=per_page, page=page)
+        if not isinstance(sessions, list):
+            break
+        for session in sessions:
+            item_id = session.get("libraryItemId") if isinstance(session, dict) else None
+            if item_id in wanted and item_id not in found and session.get("updatedAt"):
+                found[item_id] = int(session["updatedAt"]) // 1000
+        if len(sessions) < per_page:
+            break
+    return found
+
+
+def _abs_listening_book_list(items, last_listened, titles):
+    """Per-book rollup from ABS's own listening time, so the rows add up to its totals.
+
+    ``last_listened`` maps item ids to epoch seconds and ``titles`` maps BookBridge
+    abs_ids to titles. ABS gives no per-book session count.
+    """
+    last_listened = last_listened or {}
+    result = []
+    for item_id, item in (items or {}).items():
+        total_seconds = int(round(float((item or {}).get("timeListening") or 0)))
+        if total_seconds <= 0:
+            continue
+        metadata = item.get("mediaMetadata") or {}
+        authors = metadata.get("authors") or []
+        author = ", ".join(a.get("name") for a in authors if isinstance(a, dict) and a.get("name"))
+        result.append({
+            "bookKey": f"abs:{item_id}",
+            "absId": item_id,
+            "isLinked": item_id in titles,
+            "title": metadata.get("title") or titles.get(item_id) or "Unknown book",
+            "author": author or None,
+            "totalSeconds": total_seconds,
+            "sessionCount": None,
+            "avgSessionSeconds": None,
+            "lastReadAt": last_listened.get(item_id),
+        })
+    result.sort(key=lambda item: int(item.get("lastReadAt") or 0), reverse=True)
+    return result
+
+
+def _abs_book_listening_detail(abs_client, abs_id, session_limit=40, max_pages=20):
+    """One book's listening totals and newest-first sessions from ABS, or None if it has none.
+
+    Matches the shape of ``get_book_listening_detail`` so the book detail can use either.
+    """
+    per_page = 100
+    sessions = []
+    for page in range(max_pages):
+        data = abs_client.get_item_listening_sessions(abs_id, items_per_page=per_page, page=page)
+        if not isinstance(data, dict):
+            break
+        batch = [s for s in (data.get("sessions") or []) if isinstance(s, dict)]
+        sessions.extend(batch)
+        if len(batch) < per_page:
+            break
+    sessions = [s for s in sessions if float(s.get("timeListening") or 0) > 0]
+    if not sessions:
+        return None
+
+    def fraction(session, key):
+        duration = float(session.get("duration") or 0)
+        return float(session.get(key) or 0) / duration if duration > 0 else None
+
+    total_seconds = int(round(sum(float(s.get("timeListening") or 0) for s in sessions)))
+    newest = sessions[0]
+    newest_progress = fraction(newest, "currentTime")
+    return {
+        "totalSeconds": total_seconds,
+        "sessionCount": len(sessions),
+        "avgSessionSeconds": total_seconds // len(sessions),
+        "progressPercent": round(min(newest_progress, 1.0) * 100, 1) if newest_progress is not None else None,
+        "lastReadAt": int(newest.get("updatedAt") or 0) // 1000,
+        "bookTitle": newest.get("displayTitle"),
+        "sessions": [{
+            "startTime": int(s.get("startedAt") or 0) // 1000,
+            "endTime": int(s.get("updatedAt") or 0) // 1000,
+            "durationSeconds": int(round(float(s.get("timeListening") or 0))),
+            "startProgress": fraction(s, "startTime"),
+            "endProgress": fraction(s, "currentTime"),
+        } for s in sessions[:session_limit]],
+    }
+
+
 def _local_listening_stats(tz):
     """ABS-shaped listening stats from the bridge's own AUDIOBOOK sessions, or None if empty."""
     days = database_service.get_listening_days(getattr(tz, "key", str(tz)))
@@ -12082,9 +12391,17 @@ def _build_listening_stats_payload(tz):
         total_days=len(all_activity_dates),
         reference_date=datetime.now(tz).date(),
     )
-    finished_books = _abs_finished_books(
-        abs_client.get_all_progress_raw(), raw_stats.get("items"), tz, abs_client
-    ) if use_abs else database_service.get_listening_finished_books(getattr(tz, "key", str(tz)))
+    if use_abs:
+        progress = abs_client.get_all_progress_raw()
+        finished_books = _abs_finished_books(progress, raw_stats.get("items"), tz, abs_client)
+        items = raw_stats.get("items") or {}
+        books = _abs_listening_book_list(
+            items, _abs_last_listened(abs_client, set(items)),
+            {book.abs_id: book.abs_title for book in database_service.get_all_books()},
+        )
+    else:
+        finished_books = database_service.get_listening_finished_books(getattr(tz, "key", str(tz)))
+        books = _build_listening_book_list()
     summary["itemsFinished"] = len(finished_books)
     summary["daysListened"] = len(all_activity_dates)
 
@@ -12102,7 +12419,7 @@ def _build_listening_stats_payload(tz):
         "trackedBookIds": sorted({
             session.get("absId") for session in normalized_sessions if session.get("absId")
         }),
-        "books": _build_listening_book_list(),
+        "books": books,
         "yearlyRecap": _build_listening_yearly_recap(all_days, datetime.now(tz).year, finished_books, tz),
     }
 
@@ -12482,7 +12799,12 @@ def api_stats_book_detail():
 
         listening = None
         if abs_id:
-            detail = database_service.get_book_listening_detail(abs_id)
+            # ABS holds the full listening history, including Storyteller-led time the
+            # bridge credits there; the bridge's own sessions only cover what it saw.
+            abs_client = _stats_abs_client()
+            detail = _abs_book_listening_detail(abs_client, abs_id) if abs_client else None
+            if detail is None:
+                detail = database_service.get_book_listening_detail(abs_id)
             if detail and int(detail.get("totalSeconds") or 0) > 0:
                 book = database_service.get_book(abs_id)
                 snapshot_title = detail.pop("bookTitle", None)
@@ -13379,6 +13701,29 @@ def get_booklore_shelves():
     except Exception as e:
         logger.error(f"Error fetching Grimmory shelves: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+def get_watch_shelves() -> Response:
+    """Shelves and collections that can be the "Up Next" shelf, from every library app in use."""
+    clients = uc()
+    apps = (('Grimmory', clients.booklore_client), ('BookOrbit', clients.bookorbit_client),
+            ('Kavita', clients.kavita_client))
+    found = {}
+    for app_name, client in apps:
+        if client is None or not client.is_configured():
+            continue
+        try:
+            shelves = client.get_all_shelves() or []
+        except Exception as e:
+            logger.warning(f"Could not list {app_name} shelves: {e}", exc_info=True)
+            continue
+        for shelf in shelves:
+            name = str(shelf.get('name') or shelf.get('title') or '').strip() if isinstance(shelf, dict) else ''
+            if name:
+                found.setdefault(name.lower(), (name, []))[1].append(app_name)
+    result = [{"id": name, "name": f"{name} ({', '.join(in_apps)})"} for name, in_apps in found.values()]
+    result.sort(key=lambda x: x["id"].lower())
+    return jsonify(result)
 
 
 def get_abs_libraries():
@@ -14858,6 +15203,7 @@ def create_app(test_container=None):
     app.context_processor(inject_global_vars)
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
     app.jinja_env.globals['suggestion_source_badge'] = suggestion_source_badge
+    app.jinja_env.globals['suggestion_bulk_block'] = _suggestion_bulk_block
 
     # i18n: gettext for the Jinja layer. The selector is passed as an argument
     # (Flask-Babel >= 3.0 dropped the @babel.localeselector decorator); it is
@@ -14979,6 +15325,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/kavita/cover/<series_id>', 'proxy_kavita_cover', proxy_kavita_cover, methods=['GET'])
     app.add_url_rule('/api/booklore/libraries', 'get_booklore_libraries', get_booklore_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/shelves', 'get_booklore_shelves', get_booklore_shelves, methods=['GET'])
+    app.add_url_rule('/api/watch-shelves', 'get_watch_shelves', get_watch_shelves, methods=['GET'])
     app.add_url_rule('/api/abs/libraries', 'get_abs_libraries', get_abs_libraries, methods=['GET'])
     app.add_url_rule('/api/booklore/refresh', 'api_booklore_refresh', api_booklore_refresh, methods=['POST'])
     app.add_url_rule('/api/bookfusion/device/start', 'api_bookfusion_device_start', api_bookfusion_device_start, methods=['POST'])
@@ -15044,6 +15391,28 @@ def create_app(test_container=None):
 
     # Return both app and container for external reference
     return app, container
+
+
+def _log_ebook_source_status() -> None:
+    """Log where new matches will find ebooks, or warn that nothing can supply one."""
+    # library_roots() ends with the epub cache, which only holds downloaded copies.
+    mounted = [root for root in library_roots()[:-1] if root.exists()]
+    if container.booklore_client().is_configured():
+        logger.info(f"✅ Grimmory integration enabled - ebooks sourced from API")
+    elif container.bookorbit_client().is_configured():
+        logger.info(f"✅ BookOrbit integration enabled - ebooks sourced from API")
+    elif container.kavita_client().is_configured():
+        logger.info("Kavita integration enabled - ebooks sourced from API")
+    elif mounted:
+        logger.info(f"✅ Ebooks directory mounted at {', '.join(str(root) for root in mounted)}")
+    else:
+        logger.info(
+            "⚠️  NO EBOOK SOURCE CONFIGURED: No ebook source available. "
+            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD), "
+            "enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, BOOKORBIT_PASSWORD), "
+            "enable Kavita (KAVITA_SERVER, KAVITA_API_KEY), "
+            f"or mount the ebooks directory to {library_roots()[0]} (BOOKS_DIR) or an EXTRA_EBOOK_DIRS path."
+        )
 
 
 def create_sync_only_app() -> Flask:
@@ -15214,29 +15583,7 @@ if __name__ == '__main__':
     except Exception as exc:
         logger.warning("StoryGraph rating backfill thread failed to start: %s", exc, exc_info=True)
 
-    # Check ebook source configuration
-    booklore_configured = container.booklore_client().is_configured()
-    bookorbit_configured = container.bookorbit_client().is_configured()
-    kavita_configured = container.kavita_client().is_configured()
-    books_volume_exists = container.books_dir().exists()
-
-    if booklore_configured:
-        logger.info(f"✅ Grimmory integration enabled - ebooks sourced from API")
-    elif bookorbit_configured:
-        logger.info(f"✅ BookOrbit integration enabled - ebooks sourced from API")
-    elif kavita_configured:
-        logger.info("Kavita integration enabled - ebooks sourced from API")
-    elif books_volume_exists:
-        logger.info(f"✅ Ebooks directory mounted at {container.books_dir()}")
-    else:
-        logger.info(
-            "⚠️  NO EBOOK SOURCE CONFIGURED: No ebook source available. "
-            "New book matches will fail. Enable Grimmory (BOOKLORE_SERVER, BOOKLORE_USER, BOOKLORE_PASSWORD), "
-            "enable BookOrbit (BOOKORBIT_SERVER, BOOKORBIT_USER, BOOKORBIT_PASSWORD), "
-            "enable Kavita (KAVITA_SERVER, KAVITA_API_KEY), "
-            "or mount the ebooks directory to /books."
-        )
-
+    _log_ebook_source_status()
 
     logger.info(f"🌐 Web interface starting on port 5757")
 

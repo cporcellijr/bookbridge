@@ -121,7 +121,9 @@ def test_reset_menu_renders_complete_click_handlers():
     fragment = template.split('<div class="reset-menu">', 1)[1].split(
         '<form method="POST" action="/delete/', 1,
     )[0]
-    rendered = Environment(autoescape=True).from_string(fragment).render(
+    env = Environment(autoescape=True, extensions=["jinja2.ext.i18n"])
+    env.install_null_translations(newstyle=True)
+    rendered = env.from_string(fragment).render(
         mapping={"abs_id": "bookorbit:5204"},
     )
     buttons = html.fromstring(rendered).xpath('//button[@role="menuitem"]')

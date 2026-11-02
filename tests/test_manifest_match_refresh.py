@@ -41,6 +41,8 @@ class TestManifestMatchRefresh(unittest.TestCase):
         parser = MagicMock()
         parser.resolve_book_path.side_effect = lambda filename: self.root / filename
         parser.get_kosync_id.side_effect = lambda path: Path(path).stem.ljust(32, "0")
+        # Distinct books need distinct hashes: a shared hash binds to one book only.
+        parser.get_kosync_content_id.side_effect = parser.get_kosync_id.side_effect
         service = KOReaderDeviceSyncService(
             self.db, parser, None, None, None, epub_cache_dir=self.root / "cache",
         )

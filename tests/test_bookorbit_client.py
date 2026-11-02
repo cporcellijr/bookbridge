@@ -806,3 +806,132 @@ def test_upload_transport_error_and_missing_token(client, tmp_path):
         error, post = _upload(client, tmp_path)
     assert isinstance(error, BookOrbitUploadError) and error.kind == "auth"
     post.assert_not_called()
+
+
+class _StreamResp(_Resp):
+    headers: dict = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _download(client, tmp_path, responses):
+    """Run download_file_to_path against a scripted series of responses/exceptions."""
+    with patch.object(client, "_get_fresh_token", return_value="tok"), \
+            patch.object(client.session, "get", side_effect=responses) as get, \
+            patch("src.api.bookorbit_client.stream_response_to_path", return_value=True), \
+            patch("src.api.bookorbit_client.time.sleep"):
+        ok = client.download_file_to_path(12820, tmp_path / "track_000.mp3")
+    return ok, get
+
+
+def test_a_proxy_502_on_a_track_download_is_retried(client, tmp_path, caplog):
+    """Live: "BookOrbit file download failed: file_id=12820 status=502" sent a book
+    from CTC to a 78-minute CPU Whisper run; the same file downloaded 14 s later."""
+    ok, get = _download(client, tmp_path, [_StreamResp(status_code=502), _StreamResp(status_code=200)])
+    assert ok is True
+    assert get.call_count == 2
+    assert "BookOrbit file download failed" not in caplog.text
+
+
+def test_a_dropped_connection_on_a_track_download_is_retried(client, tmp_path):
+    import requests
+    ok, get = _download(client, tmp_path, [requests.ConnectionError("reset"), _StreamResp(status_code=200)])
+    assert ok is True
+    assert get.call_count == 2
+
+
+def test_a_track_download_gives_up_after_three_server_errors(client, tmp_path, caplog):
+    ok, get = _download(client, tmp_path, [_StreamResp(status_code=502)] * 3)
+    assert ok is False
+    assert get.call_count == 3
+    assert "BookOrbit file download failed: file_id=12820 status=502" in caplog.text
+
+
+def test_a_client_error_on_a_track_download_is_not_retried(client, tmp_path):
+    ok, get = _download(client, tmp_path, [_StreamResp(status_code=404)])
+    assert ok is False
+    assert get.call_count == 1
+
+
+def test_update_ebook_progress_uses_compare_and_set_when_edited_at_present(client):
+    from src.utils.progress_metadata import parse_service_timestamp
+    captured = {}
+    edited_ts = parse_service_timestamp("2026-10-28T10:00:00.123Z")
+    locator = LocatorResult(percentage=0.5, cfi="epubcfi(/6/4)", perfect_ko_xpath="/body/DocFragment[1]")
+    with patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.update(method=m, endpoint=e, payload=p) or _Resp({
+        "results": [{"status": "saved", "progress": {"percentage": 50.0, "updatedAt": "2026-10-28T10:00:00.123Z"}}]
+    }, status_code=200)):
+        ok = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "X"}, 0.5, locator, edited_at=edited_ts)
+    assert ok is True
+    assert captured["method"] == "PUT"
+    assert captured["endpoint"] == "/api/v1/reading-progress"
+    writes = captured["payload"]["writes"]
+    assert len(writes) == 1
+    w = writes[0]
+    assert w["fileId"] == 12
+    assert w["percentage"] == pytest.approx(50.0)
+    assert w["editedAt"] == "2026-10-28T10:00:00.123Z"
+    assert w["text"] == {"cfi": "epubcfi(/6/4)"}
+    assert w["koreader"] == "/body/DocFragment[1]"
+
+
+def test_update_ebook_progress_compare_and_set_superseded(client, caplog):
+    from src.utils.progress_metadata import parse_service_timestamp
+    edited_ts = parse_service_timestamp("2026-10-28T10:00:00.123Z")
+    locator = LocatorResult(percentage=0.5, cfi="epubcfi(/6/4)")
+    with patch.object(client, '_make_request', return_value=_Resp({
+        "results": [{"status": "superseded", "progress": {"percentage": 60.0, "updatedAt": "2026-10-28T11:00:00.000Z"}}]
+    }, status_code=200)):
+        ok = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "Test Book"}, 0.5, locator, edited_at=edited_ts)
+    assert ok is False
+    assert "BookOrbit: kept the newer position for Test Book" in caplog.text
+    assert "BookOrbit saved 60.0%" in caplog.text
+    assert "after this cycle read it at 2026-10-28T10:00:00.123Z" in caplog.text
+
+
+def test_update_ebook_progress_compare_and_set_404_falls_back_to_legacy(client):
+    from src.utils.progress_metadata import parse_service_timestamp
+    edited_ts = parse_service_timestamp("2026-10-28T10:00:00.123Z")
+    calls = []
+
+    def fake_request(method, endpoint, payload=None):
+        calls.append((method, endpoint, payload))
+        if method == "PUT" and endpoint == "/api/v1/reading-progress":
+            return _Resp(status_code=404)
+        return _Resp(status_code=204)
+
+    with patch.object(client, '_resolve_primary_file_id', return_value=None), \
+         patch.object(client, '_make_request', side_effect=fake_request):
+        ok = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "X"}, 0.5, None, edited_at=edited_ts)
+    assert ok is True
+    put_calls = [c for c in calls if c[0] == "PUT"]
+    post_calls = [c for c in calls if c[0] == "POST"]
+    assert len(put_calls) == 1
+    assert put_calls[0][1] == "/api/v1/reading-progress"
+    assert len(post_calls) == 1
+    assert post_calls[0][1] == "/api/v1/books/files/12/progress"
+    # The 404 is remembered: the next write goes straight to the legacy route.
+    calls.clear()
+    with patch.object(client, '_resolve_primary_file_id', return_value=None), \
+         patch.object(client, '_make_request', side_effect=fake_request):
+        ok2 = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "X"}, 0.5, None, edited_at=edited_ts)
+    assert ok2 is True
+    put_calls = [c for c in calls if c[0] == "PUT"]
+    post_calls = [c for c in calls if c[0] == "POST"]
+    assert len(put_calls) == 0
+    assert len(post_calls) == 1
+
+
+def test_update_ebook_progress_no_edited_at_uses_legacy(client):
+    captured = []
+    with patch.object(client, '_resolve_primary_file_id', return_value=None), \
+         patch.object(client, '_make_request', side_effect=lambda m, e, p=None: captured.append((m, e, p)) or _Resp(status_code=204)):
+        ok = client.update_ebook_progress({"id": 3, "ebookFileId": 12, "title": "X"}, 0.5, None, edited_at=None)
+    assert ok is True
+    post_calls = [c for c in captured if c[0] == "POST"]
+    assert len(post_calls) == 1
+    assert post_calls[0][1] == "/api/v1/books/files/12/progress"

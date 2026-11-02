@@ -12,7 +12,7 @@ from typing import Optional, Dict
 from urllib.parse import quote
 
 from src.utils.cache_paths import safe_cache_path
-from src.utils.logging_utils import sanitize_log_data
+from src.utils.logging_utils import sanitize_log_data, get_persistent_condition_logger
 
 logger = logging.getLogger(__name__)
 
@@ -267,12 +267,26 @@ class KOReaderDeviceSyncService:
         stored_hash = self._select_content_hash(book)
         abs_id = str(getattr(book, "abs_id", "") or "").strip()
 
-        # Make the served file's hash resolvable as a linked sibling so a device that
-        # downloaded it via BridgeSync links to this book regardless of which hash the
-        # primary book.kosync_doc_id column currently points at.
         linked = False
-        if abs_id and kosync_hash and link_hashes:
-            linked = self._link_sibling_hash(abs_id, kosync_hash)
+        # Verify the atomic adoption before serving a hash another book may have claimed.
+        if link_hashes and abs_id and kosync_hash:
+            linked = self._link_sibling_hash(abs_id, kosync_hash, adopt_only=True)
+            existing = self.database_service.get_kosync_document(kosync_hash)
+            if not existing or existing.linked_abs_id != abs_id:
+                get_persistent_condition_logger().warn(
+                    logger,
+                    f"kosync_hash_primary_missing_binding:{abs_id}:{kosync_hash}",
+                    "KOReader device-sync: primary served hash %s for '%s' has no confirmed binding to this book — artifact unavailable",
+                    sanitize_log_data(kosync_hash),
+                    sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
+                )
+                return None
+            get_persistent_condition_logger().resolve(
+                logger, f"kosync_hash_primary_missing_binding:{abs_id}:{kosync_hash}",
+                "KOReader device-sync: primary served hash %s is available for '%s' again",
+                sanitize_log_data(kosync_hash),
+                sanitize_log_data(getattr(book, "abs_title", None) or abs_id),
+            )
             # KOReader's statistics, reading statuses and highlights name a book by
             # its content hash in either hash method, so link that one too.
             if content_hash != kosync_hash:
@@ -282,9 +296,9 @@ class KOReaderDeviceSyncService:
             # The primary hash may deliberately identify a different EPUB build, such
             # as a manually pinned or Storyteller-forged copy. Keep it primary and link
             # both hashes as siblings; GET/PUT resolution aggregates progress across
-            # every hash linked to this book.
+            # every hash linked to this book. Use atomic adopt to avoid stealing.
             if abs_id and link_hashes:
-                self._link_sibling_hash(abs_id, stored_hash)
+                self._link_sibling_hash(abs_id, stored_hash, adopt_only=True)
             logger.debug(
                 "KOReader device-sync: keeping primary kosync_doc_id for '%s' "
                 "(stored hash %s; served hash %s linked as sibling)",
@@ -317,11 +331,14 @@ class KOReaderDeviceSyncService:
 
         Returns True when a row was created or its link changed, so callers can
         report how much drift a reconcile pass actually repaired. ``adopt_only``
-        never takes a hash another book owns: in filename mode every book served
-        from the same file shares one content hash.
+        uses atomic adopt_kosync_document_if_unowned and never rebinds a hash
+        owned by another book. Served hashes and pinned primary hashes use adopt-only
+        to prevent hash theft across books/readers.
         """
         try:
             if adopt_only:
+                if self.user_id is not None:
+                    return bool(self.database_service.adopt_kosync_document_if_unowned(doc_hash, abs_id, owner_user_id=self.user_id))
                 return bool(self.database_service.adopt_kosync_document_if_unowned(doc_hash, abs_id))
             return bool(self.database_service.ensure_linked_kosync_document(doc_hash, abs_id))
         except Exception as e:
@@ -390,15 +407,36 @@ class KOReaderDeviceSyncService:
                 owner = claimed_by.get(bound_hash)
                 if owner and owner != abs_id:
                     summary["conflicts"] += 1
-                    logger.warning(
+                    get_persistent_condition_logger().warn(
+                        logger,
+                        f"hash_reconcile_conflict:{abs_id}:{bound_hash}",
                         "🔗 Hash reconcile: '%s' resolves to the same file as '%s' (hash %s) — "
                         "leaving the existing link alone; check these books' ebook mapping",
                         label, sanitize_log_data(owner), sanitize_log_data(bound_hash),
                     )
                     continue
-                claimed_by[bound_hash] = abs_id
 
-                if self._link_sibling_hash(abs_id, bound_hash, adopt_only=bound_hash != doc_hash):
+                was_linked = self._link_sibling_hash(abs_id, bound_hash, adopt_only=True)
+                existing = self.database_service.get_kosync_document(bound_hash)
+                if not existing or existing.linked_abs_id != abs_id:
+                    summary["conflicts"] += 1
+                    other_owner = existing.linked_abs_id if existing else None
+                    get_persistent_condition_logger().warn(
+                        logger,
+                        f"hash_reconcile_conflict:{abs_id}:{bound_hash}",
+                        "🔗 Hash reconcile: '%s' resolves to hash %s but binding is missing or owned by '%s' — "
+                        "not rebinding; check ebook mapping",
+                        label, sanitize_log_data(bound_hash), sanitize_log_data(other_owner or "none"),
+                    )
+                    continue
+
+                get_persistent_condition_logger().resolve(
+                    logger, f"hash_reconcile_conflict:{abs_id}:{bound_hash}",
+                    "🔗 Hash reconcile: hash %s is now bound to '%s'",
+                    sanitize_log_data(bound_hash), label,
+                )
+                claimed_by[bound_hash] = abs_id
+                if was_linked:
                     summary["linked"] += 1
                     logger.info("🔗 Hash reconcile: bound new hash %s to '%s'",
                                 sanitize_log_data(bound_hash), label)

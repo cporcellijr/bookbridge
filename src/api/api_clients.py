@@ -1,8 +1,10 @@
 import os
 import requests
 import logging
+import threading
 import time
 from typing import Optional
+from pathlib import PurePosixPath
 
 from src.utils.file_transfers import (
     IncompleteTransferError,
@@ -29,6 +31,14 @@ def is_abs_disabled_value(value) -> bool:
 _ABS_ALL_ITEMS_PERMISSIONS = ("accessAllLibraries", "accessAllTags", "accessExplicitContent")
 
 _ABS_ITEM_LISTING_TTL_SECONDS = 1800
+
+# ABS closes a user's open sessions on the same device when it starts another, so
+# credited listening gets its own device, apart from the per-push "bookbridge-bot".
+_ABS_LISTENING_DEVICE_ID = "bookbridge-listening"
+# (server, token, item) -> (session id, last sync epoch). Module-level so it outlives
+# a per-user client rebuilt after a settings change.
+_listening_sessions: dict = {}
+_listening_sessions_lock = threading.Lock()
 
 
 class ABSBulkProgress(dict):
@@ -370,6 +380,70 @@ class ABSClient:
             logger.error(f"❌ Error getting ebook files: {e}", exc_info=True)
             return []
 
+    def find_ebook_item_for_file(self, local_path) -> Optional[str]:
+        """Return the ABS item whose primary ebook is the file at local_path, or None.
+
+        The primary ebook must have the same filename and size. ABS and BookBridge may
+        mount one library at different roots, so among several matches the one sharing
+        the most trailing folder names wins; a tie links nothing. Supplementary ebooks
+        never match because ABS keeps ebook progress on the primary file only.
+        """
+        local = PurePosixPath(str(local_path).replace("\\", "/"))
+        try:
+            local_size = os.stat(local_path).st_size
+        except OSError:
+            return None
+        if not self.is_configured():
+            return None
+        self._update_session_headers()
+        suffix = local.suffix.lstrip(".").lower()
+        scored = []
+        # shortcut: lists every library per lookup; cache the listing if discovery gets frequent.
+        for lib in self.get_libraries():
+            # An unchecked library could hold a rival match, so fail closed.
+            try:
+                r = self.session.get(f"{self.base_url}/api/libraries/{lib['id']}/items", timeout=self.timeout)
+                if r.status_code != 200:
+                    logger.warning(
+                        "ABS: Library %s returned status %s for ebook lookup; file '%s' is not linked",
+                        lib.get("id"), r.status_code, local.name,
+                    )
+                    return None
+                items = r.json().get("results", []) or []
+            except Exception as e:
+                logger.warning(
+                    "ABS: Library %s failed for ebook lookup; file '%s' is not linked",
+                    lib.get("id"), local.name, exc_info=True,
+                )
+                return None
+            for item in items:
+                if str((item.get("media") or {}).get("ebookFormat") or "").lower() != suffix:
+                    continue
+                if PurePosixPath(str(item.get("path") or "")).name not in (local.parent.name, local.name):
+                    continue
+                details = self.get_item_details(item["id"])
+                if not details:
+                    logger.warning(
+                        "ABS: Item %s details unavailable; file '%s' is not linked",
+                        item["id"], local.name,
+                    )
+                    return None
+                ebook = (details.get("media") or {}).get("ebookFile") or {}
+                meta = ebook.get("metadata") or {}
+                if meta.get("filename") != local.name or meta.get("size") != local_size:
+                    continue
+                shared = 0
+                for remote_part, local_part in zip(reversed(PurePosixPath(str(meta.get("path") or "")).parts), reversed(local.parts)):
+                    if remote_part != local_part:
+                        break
+                    shared += 1
+                scored.append((shared, str(item["id"])))
+        scored.sort(reverse=True)
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            logger.info("ABS: '%s' matches %d Audiobookshelf ebooks equally; not linking it", local.name, len(scored))
+            return None
+        return scored[0][1] if scored else None
+
     def search_ebooks(self, query):
         """Search for ebooks across all book libraries.
 
@@ -516,8 +590,8 @@ class ABSClient:
             logger.error(f"ABS: Error fetching listening stats: {e}", exc_info=True)
         return None
 
-    def get_listening_sessions(self, limit=10):
-        """Fetch recent listening sessions for the current ABS user."""
+    def get_listening_sessions(self, limit=10, page=0):
+        """Fetch one page of the current ABS user's listening sessions, newest first."""
         if not self.is_configured():
             return []
 
@@ -526,7 +600,7 @@ class ABSClient:
         try:
             r = self.session.get(
                 url,
-                params={"itemsPerPage": int(limit or 10)},
+                params={"itemsPerPage": int(limit or 10), "page": int(page or 0)},
                 timeout=self.timeout,
             )
             if r.status_code == 200:
@@ -540,6 +614,31 @@ class ABSClient:
         except Exception as e:
             logger.error(f"ABS: Error fetching listening sessions: {e}", exc_info=True)
         return []
+
+    def get_item_listening_sessions(self, item_id, items_per_page=100, page=0):
+        """Fetch one page of the current ABS user's sessions for one library item, newest first."""
+        if not self.is_configured():
+            return None
+
+        self._update_session_headers()
+        url = f"{self.base_url}/api/me/item/listening-sessions/{item_id}"
+        try:
+            r = self.session.get(
+                url,
+                params={"itemsPerPage": int(items_per_page or 100), "page": int(page or 0)},
+                timeout=self.timeout,
+            )
+            if r.status_code == 200:
+                return r.json() or {}
+            logger.warning(
+                "ABS: Failed to fetch listening sessions for item '%s' (%s) - %s",
+                item_id,
+                r.status_code,
+                sanitize_log_data(r.text),
+            )
+        except Exception as e:
+            logger.error(f"ABS: Error fetching listening sessions for item '{item_id}': {e}", exc_info=True)
+        return None
 
     def get_progress_with_status(self, item_id: str) -> tuple[dict | None, int | None]:
         """Return progress and its HTTP status, preserving an expected 404."""
@@ -736,10 +835,12 @@ class ABSClient:
             logger.error(f"❌ Failed to update ABS ebook progress: {e}", exc_info=True)
             return False
 
-    def update_progress(self, abs_id, timestamp, time_listened):
+    def update_progress(self, abs_id, timestamp, time_listened,
+                        listening_gap_seconds: Optional[float] = None):
         """
         Update progress using session-based sync.
-        Creates a session, syncs progress, then closes the session.
+        Creates a session, syncs progress, then closes the session. With
+        ``listening_gap_seconds``, credited listening continues one open session instead.
         """
         if timestamp > 1000000:
             timestamp = timestamp / 1000.0
@@ -754,6 +855,8 @@ class ABSClient:
             "currentTime": timestamp,
             "timeListened": time_listened
         }
+        if listening_gap_seconds:
+            return self._sync_listening_session(abs_id, payload, listening_gap_seconds)
         return self.update_progress_using_payload(abs_id, payload)
 
     def update_progress_using_payload(self, abs_id, payload: dict):
@@ -761,14 +864,59 @@ class ABSClient:
         if not session_id:
             logger.error(f"❌ Failed to create ABS session for item '{abs_id}'")
             return {"success": False, "code": None, "reason": f"Failed to create ABS session for item {abs_id}"}
+        result = self._post_session_sync(abs_id, session_id, payload)
+        if result["success"]:
+            self.close_session(session_id)
+        return result
 
+    def _sync_listening_session(self, abs_id, payload: dict, gap_seconds: float) -> dict:
+        """Credit listening to one open session per sitting, as an ABS player does.
+
+        ABS saves a session on every sync, so its time is kept even if it is never closed.
+        """
+        from src.services.reading_session_aggregator import unexplained_idle_seconds
+
+        key = (self.base_url, self.token, abs_id)
+        now = time.time()
+        with _listening_sessions_lock:
+            entry = _listening_sessions.get(key)
+        if entry and unexplained_idle_seconds(now - entry[1], payload["timeListened"]) <= gap_seconds:
+            result = self._post_session_sync(abs_id, entry[0], payload)
+            # 404: ABS restarted or closed it, so start another below.
+            if result["code"] != 404:
+                if result["success"]:
+                    with _listening_sessions_lock:
+                        _listening_sessions[key] = (entry[0], now)
+                return result
+        session_id = self.create_session(abs_id, device_id=_ABS_LISTENING_DEVICE_ID)
+        if not session_id:
+            logger.error(f"❌ Failed to create ABS session for item '{abs_id}'")
+            return {"success": False, "code": None, "reason": f"Failed to create ABS session for item {abs_id}"}
+        result = self._post_session_sync(abs_id, session_id, payload)
+        with _listening_sessions_lock:
+            if result["success"]:
+                _listening_sessions[key] = (session_id, now)
+            else:
+                _listening_sessions.pop(key, None)
+        return result
+
+    def close_idle_listening_sessions(self, idle_seconds: float) -> None:
+        """Close this ABS user's listening sessions with no sync for ``idle_seconds``."""
+        now = time.time()
+        with _listening_sessions_lock:
+            idle = [key for key, (_, last) in _listening_sessions.items()
+                    if key[:2] == (self.base_url, self.token) and now - last > idle_seconds]
+            session_ids = [_listening_sessions.pop(key)[0] for key in idle]
+        for session_id in session_ids:
+            self.close_session(session_id)
+
+    def _post_session_sync(self, abs_id, session_id, payload: dict) -> dict:
         self._update_session_headers()
         try:
             url = f"{self.base_url}/api/session/{session_id}/sync"
             r = self.session.post(url, json=payload, timeout=self.timeout)
             if r.status_code in (200, 204):
                 logger.debug(f"ABS progress updated via session: {abs_id}, payload: {payload}")
-                self.close_session(session_id)
                 return {"success": True, "code": r.status_code, "response": r.text}
             elif r.status_code == 404:
                 logger.warning(f"⚠️ ABS session not found (404): '{session_id}'")
@@ -887,14 +1035,14 @@ class ABSClient:
             logger.error(f"❌ Error fetching ABS in-progress: {e}", exc_info=True)
             return []
 
-    def create_session(self, abs_id):
+    def create_session(self, abs_id, device_id: str = "bookbridge-bot"):
         """Create a new ABS session for the given abs_id (item id). Returns session_id or None."""
         self._update_session_headers()
         play_url = f"{self.base_url}/api/items/{abs_id}/play"
         play_payload = {
             "deviceInfo": {
-                "id": "bookbridge-bot",
-                "deviceId": "bookbridge-bot",
+                "id": device_id,
+                "deviceId": device_id,
                 "clientName": "BookBridge",
                 "clientVersion": "1.0",
                 "manufacturer": "BookBridge",

@@ -117,7 +117,7 @@
             {% set gate_id = 'integration_gate_' ~ loop.index %}
             <div class="group">
                 <div class="group-head">
-                    <h2>{{ group }}</h2>
+                    <h2>{{ _(group) }}</h2>
                     <div class="group-head-actions">
                         {% if gate_key or source_gate %}
                         <div class="toggle-switch-wrapper">
@@ -162,6 +162,9 @@
                     "KOReader sync" fields under BookOrbit below. Choose HTTP Basic only when relaying through
                     Calibre-Web Automated, preferably over HTTPS.{% endtrans %}</div>
                 {% endif %}
+                {% if group == 'Reading preferences' %}
+                <div class="note">{{ _("How this reader wants their own books handled. Server default follows Settings; On or Off is this reader's own choice.") }}</div>
+                {% endif %}
                 {% if group == 'KOReader Collections' %}
                 <div class="note">{% trans trimmed %}BridgeSync can create KOReader collections from either this user's Grimmory shelves
                     or this user's Hardcover lists. Choose one source here to avoid collection-name collisions. Only
@@ -190,14 +193,23 @@
                     <div class="toggle-row">
                         <input type="checkbox" id="{{ key }}" name="{{ key }}"
                             {% if creds.get(key, '')|lower in ['true','1','yes','on'] %}checked{% endif %}>
-                        <label for="{{ key }}">{{ label }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">{{ _('(master: %(value)s)', value=master.get(key)) }}</span>{% endif %}</label>
+                        <label for="{{ key }}">{{ _(label) }}{% if allow_master_fallback and key not in creds and master.get(key) %} <span style="color:#666">{{ _('(master: %(value)s)', value=master.get(key)) }}</span>{% endif %}</label>
                     </div>
+                    {% elif ftype == 'pref' %}
+                    {% set own_pref = creds.get(key, '')|lower %}
+                    {% set server_on = master.get(key, '')|lower in ['true','1','yes','on'] %}
+                    <label for="{{ key }}">{{ _(label) }}</label>
+                    <select id="{{ key }}" name="{{ key }}">
+                        <option value="" {% if own_pref not in ['true', 'false'] %}selected{% endif %}>{% if server_on %}{{ _('Server default (on)') }}{% else %}{{ _('Server default (off)') }}{% endif %}</option>
+                        <option value="true" {% if own_pref == 'true' %}selected{% endif %}>{{ _('On') }}</option>
+                        <option value="false" {% if own_pref == 'false' %}selected{% endif %}>{{ _('Off') }}</option>
+                    </select>
                     {% elif ftype == 'secret' %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <input type="password" id="{{ key }}" name="{{ key }}" autocomplete="off"
                         placeholder="{% if creds.get(key) %}{{ _('set - leave blank to keep') }}{% elif allow_master_fallback and master.get(key) %}{{ _('inherits master (set)') }}{% else %}{{ _('not set') }}{% endif %}">
                     {% elif ftype.startswith('select:') %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     {% if key == 'DEVICE_SYNC_COLLECTION_SOURCE' %}
                         {% set selected_value = source_raw %}
                     {% else %}
@@ -209,11 +221,11 @@
                             {% set parts = opt.split('=', 1) %}
                             {% set opt_value = parts[0] %}
                             {% set opt_label = parts[1] if parts|length > 1 else parts[0] %}
-                            <option value="{{ opt_value }}" {% if selected_value == opt_value %}selected{% endif %}>{{ opt_label }}</option>
+                            <option value="{{ opt_value }}" {% if selected_value == opt_value %}selected{% endif %}>{{ _(opt_label) }}</option>
                         {% endfor %}
                     </select>
                     {% elif key in ['ABS_LIBRARY_ID', 'BOOKLORE_LIBRARY_ID'] %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <div style="display:flex; gap:8px; margin-bottom:14px;">
                         <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
                             style="margin-bottom:0; flex:1;"
@@ -227,7 +239,7 @@
                         <option value="">{{ _('Select a library…') }}</option>
                     </select>
                     {% else %}
-                    <label for="{{ key }}">{{ label }}</label>
+                    <label for="{{ key }}">{{ _(label) }}</label>
                     <input type="text" id="{{ key }}" name="{{ key }}" value="{{ creds.get(key, '') }}" autocomplete="off"
                         placeholder="{% if allow_master_fallback and master.get(key) %}{{ _('inherits master: %(value)s', value=master.get(key)) }}{% else %}{{ _('not set') }}{% endif %}">
                     {% endif %}
@@ -246,27 +258,31 @@
         const BF_DEVICE_START_URL = {{ url_for('admin_user_bookfusion_device_start', user_id=target_user.id)|tojson }};
         const BF_DEVICE_POLL_URL = {{ url_for('admin_user_bookfusion_device_poll', user_id=target_user.id)|tojson }};
 
+        function escapeBookFusionHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[ch]);
+        }
+
         function startBookFusionLink() {
             const status = document.getElementById('bookfusion_link_status');
             if (!status) return;
-            status.textContent = 'Starting BookFusion link…';
+            status.textContent = {{ _('Starting BookFusion link…')|tojson }};
             fetch(BF_DEVICE_START_URL, { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
-                    if (!data.ok) { status.textContent = data.message || 'Could not start BookFusion link.'; return; }
+                    if (!data.ok) { status.textContent = data.message || {{ _('Could not start BookFusion link.')|tojson }}; return; }
                     const interval = Math.max(5, Number(data.interval || 5));
                     const expiresIn = Math.max(interval, Number(data.expires_in || 600));
-                    status.innerHTML = 'Go to <a href="' + data.verification_uri + '" target="_blank" style="color:#aab4f5;">'
-                        + data.verification_uri + '</a> and enter code <strong>' + data.user_code
-                        + '</strong> while signed in to this user\'s BookFusion account.';
+                    status.innerHTML = bbFormat({{ _('Go to <a href="{url}" target="_blank" style="color:#aab4f5;">{url}</a> and enter code <strong>{code}</strong> while signed in to this user\'s BookFusion account.')|tojson }}, { url: escapeBookFusionHtml(data.verification_uri), code: escapeBookFusionHtml(data.user_code) });
                     pollBookFusionToken(data.device_code, interval, Date.now() + expiresIn * 1000, status);
                 })
-                .catch(err => { status.textContent = 'BookFusion link failed: ' + err; });
+                .catch(err => { status.textContent = bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: err }); });
         }
 
         function pollBookFusionToken(deviceCode, intervalSeconds, deadlineMs, status) {
             if (Date.now() > deadlineMs) {
-                status.textContent = 'BookFusion link expired. Start a new link and try again.';
+                status.textContent = {{ _('BookFusion link expired. Start a new link and try again.')|tojson }};
                 return;
             }
             window.setTimeout(function () {
@@ -277,15 +293,15 @@
                 })
                     .then(r => r.json())
                     .then(data => {
-                        if (data.ok) { status.textContent = 'BookFusion linked to this user. Save or refresh to see the stored token.'; return; }
+                        if (data.ok) { status.textContent = {{ _('BookFusion linked to this user. Save or refresh to see the stored token.')|tojson }}; return; }
                         if (data.error === 'authorization_pending' || data.error === 'slow_down') {
                             const nextInterval = data.error === 'slow_down' ? intervalSeconds + 5 : intervalSeconds;
                             pollBookFusionToken(deviceCode, nextInterval, deadlineMs, status);
                             return;
                         }
-                        status.textContent = data.message || ('BookFusion link failed: ' + (data.error || 'unknown error'));
+                        status.textContent = data.message || bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: (data.error || {{ _('unknown error')|tojson }}) });
                     })
-                    .catch(err => { status.textContent = 'BookFusion token poll failed: ' + err; });
+                    .catch(err => { status.textContent = bbFormat({{ _('BookFusion token poll failed: {error}')|tojson }}, { error: err }); });
             }, intervalSeconds * 1000);
         }
 
@@ -323,9 +339,10 @@
             })
                 .then((r) => r.json())
                 .then((data) => {
-                    if (data && data.error) { alert('Error: ' + data.error); return; }
+                    if (data && data.error) { alert(bbFormat({{ _('Error: {error}')|tojson }}, { error: data.error })); return; }
                     const picker = document.getElementById(fieldKey + '_picker');
-                    picker.innerHTML = '<option value="">Select a library…</option>';
+                    picker.innerHTML = '<option value=""></option>';
+                    picker.options[0].textContent = {{ _('Select a library…')|tojson }};
                     (data || []).forEach((lib) => {
                         const opt = document.createElement('option');
                         opt.value = lib.id;
@@ -334,12 +351,12 @@
                         picker.appendChild(opt);
                     });
                     if (!data || !data.length) {
-                        alert('No libraries found. Check the account fields above (no save needed).');
+                        alert({{ _('No libraries found. Check the account fields above (no save needed).')|tojson }});
                         return;
                     }
                     picker.style.display = 'block';
                 })
-                .catch((e) => alert('Lookup failed: ' + e))
+                .catch((e) => alert(bbFormat({{ _('Lookup failed: {error}')|tojson }}, { error: e })))
                 .finally(() => { btn.disabled = false; btn.textContent = original; });
         }
 
@@ -360,7 +377,7 @@
             const service = btn.dataset.service;
             btn.disabled = true;
             btn.classList.remove('ok', 'fail');
-            btn.textContent = 'Testing...';
+            btn.textContent = {{ _('Testing...')|tojson }};
 
             fetch(TEST_URL_BASE.replace('__service__', encodeURIComponent(service)), {
                 method: 'POST',
@@ -370,8 +387,8 @@
                 .then((response) => response.json())
                 .then((data) => {
                     btn.classList.add(data.ok ? 'ok' : 'fail');
-                    btn.textContent = data.ok ? 'Connected' : 'Failed';
-                    alert((data.ok ? 'Connected: ' : 'Failed: ') + data.message);
+                    btn.textContent = data.ok ? {{ _('Connected')|tojson }} : {{ _('Failed')|tojson }};
+                    alert(bbFormat(data.ok ? {{ _('Connected: {message}')|tojson }} : {{ _('Failed: {message}')|tojson }}, { message: data.message }));
                     window.setTimeout(() => {
                         btn.classList.remove('ok', 'fail');
                         btn.textContent = original;
@@ -379,8 +396,8 @@
                 })
                 .catch((err) => {
                     btn.classList.add('fail');
-                    btn.textContent = 'Error';
-                    alert('Test failed: ' + err);
+                    btn.textContent = {{ _('Error')|tojson }};
+                    alert(bbFormat({{ _('Test failed: {error}')|tojson }}, { error: err }));
                     window.setTimeout(() => {
                         btn.classList.remove('fail');
                         btn.textContent = original;

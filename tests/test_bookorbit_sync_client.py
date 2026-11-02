@@ -56,6 +56,38 @@ def test_ebook_update_records_write():
     assert res.updated_state["cfi"] == "cfiZ"
 
 
+def test_ebook_update_passes_edited_at_from_current_state():
+    from src.sync_clients.sync_client_interface import ServiceState
+    client = MagicMock()
+    client.get_book_by_id.return_value = {"id": 7}
+    client.update_ebook_progress.return_value = True
+    sc = BookOrbitSyncClient(client, ebook_parser=None)
+    book = _book(ebook_source="BookOrbit", ebook_source_id="7", abs_id="abs1",
+                 original_ebook_filename=None, ebook_filename="X.epub")
+    current_state = ServiceState(current={"pct": 0.4, "service_updated_at": 1761645600.123}, previous_pct=0.0, delta=0.4, threshold=0.01, is_configured=True, display=("BookOrbit", ""), value_formatter=lambda v: f"{v}")
+    req = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5, cfi="cfiZ"), current_state=current_state)
+    res = sc.update_progress(book, req)
+    assert res.success is True
+    client.update_ebook_progress.assert_called_once()
+    _, kwargs = client.update_ebook_progress.call_args
+    assert kwargs["edited_at"] == 1761645600.123
+
+
+def test_ebook_update_edited_at_none_when_no_current_state():
+    client = MagicMock()
+    client.get_book_by_id.return_value = {"id": 7}
+    client.update_ebook_progress.return_value = True
+    sc = BookOrbitSyncClient(client, ebook_parser=None)
+    book = _book(ebook_source="BookOrbit", ebook_source_id="7", abs_id="abs1",
+                 original_ebook_filename=None, ebook_filename="X.epub")
+    req = UpdateProgressRequest(locator_result=LocatorResult(percentage=0.5, cfi="cfiZ"), current_state=None)
+    res = sc.update_progress(book, req)
+    assert res.success is True
+    client.update_ebook_progress.assert_called_once()
+    _, kwargs = client.update_ebook_progress.call_args
+    assert kwargs["edited_at"] is None
+
+
 def test_ebook_update_sends_koreader_xpointer_through_to_bookorbit():
     """The KOReader XPointer must survive the sync-client -> API-client hop (#415).
 

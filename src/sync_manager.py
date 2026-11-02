@@ -44,6 +44,7 @@ from src.utils.user_context import (
     set_current_user_credentials, reset_current_user_credentials,
 )
 from src.utils.config_loader import env_truthy
+from src.utils.user_config import user_preference_enabled
 from src.utils.storyteller_transcript import StorytellerTranscript
 # Logging utilities (placed at top to ensure availability during sync)
 from src.utils.cache_paths import safe_cache_path, is_plain_basename
@@ -74,6 +75,7 @@ from src.services.map_quality import find_slips
 from src.services.readalong_delivery import is_generated_readalong_epub
 from src.services.migration_service import MigrationService
 from src.services.reading_session_aggregator import (
+    IDLE_CLOSE_PATIENCE,
     MAX_SESSION_SECONDS,
     effective_session_gap_seconds,
     uncovered_fraction,
@@ -385,7 +387,7 @@ class SyncManager:
         return current
 
     def _completion_propagation_enabled(self) -> bool:
-        return env_truthy('SYNC_COMPLETION_PROPAGATION')
+        return user_preference_enabled('SYNC_COMPLETION_PROPAGATION')
 
     def _completion_threshold(self) -> float:
         try:
@@ -410,7 +412,7 @@ class SyncManager:
 
         Position is untouched here; only the status the file browser shows.
         """
-        if not env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+        if not user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', self.database_service):
             return
         try:
             written = self.database_service.record_koreader_status_for_book(
@@ -474,7 +476,7 @@ class SyncManager:
         reader explicitly marking it finished or abandoned, and must never
         overrule one.
         """
-        if not env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+        if not user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', self.database_service):
             return
         try:
             written = self.database_service.record_koreader_status_for_book(
@@ -1107,6 +1109,7 @@ class SyncManager:
     def _peer_position_is_own_writeback(
         self, abs_id: str, client_name: str, observed_pct: float, margin: float,
         observed_marker: object = None, title_snip: str = "",
+        external_write_age: Optional[float] = None,
     ) -> bool:
         """Whether a peer's current position is the echo of BookBridge's own write.
 
@@ -1126,7 +1129,11 @@ class SyncManager:
         match: a user read landing within `margin` of our last write is no longer
         mistaken for our own echo, and a marker that has moved on is never
         mistaken for an echo just because the percentage still happens to be
-        close."""
+        close.
+
+        `external_write_age` is how long ago a device wrote the observed value, as
+        the built-in KoSync server saw it. A device write newer than ours is user
+        movement however close the percentages land."""
         try:
             from src.services.write_tracker import GLOBAL_USER, get_recent_write, marker_echo_verdict
         except ImportError:
@@ -1139,6 +1146,15 @@ class SyncManager:
                 client_name, abs_id, suppression_window=window, user_id=GLOBAL_USER
             )
         if not recent:
+            return False
+
+        # Same process clock (the built-in server); read slightly earlier, so any skew errs toward echo.
+        if isinstance(external_write_age, (int, float)) and external_write_age < recent['age']:
+            logger.info(
+                f"🪞 '{abs_id}' '{title_snip}' '{client_name}' ({observed_pct:.2%}) was written by a "
+                f"device {external_write_age:.0f}s ago, after BookBridge's own write-back "
+                f"{recent['age']:.0f}s ago - treating it as user movement"
+            )
             return False
 
         verdict = marker_echo_verdict(recent, observed_marker)
@@ -1782,7 +1798,7 @@ class SyncManager:
     def cleanup_stale_jobs(self):
         """Reset jobs that were interrupted mid-process on restart."""
         try:
-            sentinel = Path("/data/.last_exit_code")
+            sentinel = Path(os.environ.get("DATA_DIR", "/data")) / ".last_exit_code"
             restart_error = "Interrupted by restart"
             if sentinel.exists():
                 try:
@@ -2802,6 +2818,37 @@ class SyncManager:
         except Exception as e:
             logger.error(f"❌ Error checking suggestions: {e}", exc_info=True)
 
+    @staticmethod
+    def _screen_suggestion_matches(title: str, author: str, matches: list) -> list:
+        """Score search hits with the shelf-watch title/author rules.
+
+        A hit by a different credited author under a different title, or with another
+        volume number, is dropped; only a near-certain hit stays "high". The ebook
+        attached to the audiobook's own item is kept as found.
+        """
+        from src.services.suggestions_service import SuggestionsService
+
+        kept = []
+        for match in matches:
+            if match.get('source') == 'abs_direct' or not title:
+                kept.append(match)
+                continue
+            ebook_title, ebook_author = match.get('title'), match.get('author')
+            if isinstance(ebook_author, list):
+                ebook_author = ', '.join(str(name) for name in ebook_author if name)
+            if not ebook_title:
+                ebook_title, ebook_author = SuggestionsService._split_title_author_stem(
+                    Path(match.get('filename') or '').stem)
+            score = SuggestionsService._ebook_audio_pair_score(
+                ebook_title or '', SuggestionsService._author_names(ebook_author or ''), title, author or '')
+            if score is None:
+                continue
+            match['confidence'] = 'high' if score >= 95 else 'medium'
+            kept.append(match)
+        if len(kept) < len(matches):
+            logger.debug(f"Suggestion for '{title}': dropped {len(matches) - len(kept)} hit(s) by another author or volume")
+        return kept
+
     def _create_suggestion(self, abs_id, progress_data):
         """Create a new suggestion for an unmapped book."""
         logger.info(f"🔍 Found potential new book for suggestion: '{abs_id}'")
@@ -2951,6 +2998,8 @@ class SyncManager:
                 except Exception as e:
                     logger.warning(f"⚠️ ABS Search failed during suggestion: {e}", exc_info=True)
             
+            matches = self._screen_suggestion_matches(title, author, matches)
+
             # 3. Save to DB
             if not matches:
                 logger.debug(f"No matches found for '{title}', skipping suggestion creation")
@@ -4417,6 +4466,7 @@ class SyncManager:
                             abs_id, other_name, other_pct, regression_margin,
                             observed_marker=config[other_name].current.get('_position_marker'),
                             title_snip=title_snip,
+                            external_write_age=config[other_name].current.get('_kosync_last_put_age_seconds'),
                         ):
                             logger.info(
                                 f"🪞 '{abs_id}' '{title_snip}' Rollback veto skipped: "
@@ -4456,6 +4506,7 @@ class SyncManager:
                     abs_id, client_name, observed_pct, client_echo_margin,
                     observed_marker=config[client_name].current.get('_position_marker'),
                     title_snip=title_snip,
+                    external_write_age=config[client_name].current.get('_kosync_last_put_age_seconds'),
                 ):
                     echo_clients.add(client_name)
             for client_name in sorted(echo_clients):
@@ -4725,6 +4776,28 @@ class SyncManager:
                         candidate_source = config[candidate_name].current.get("_normalization_source")
                         if candidate_name == primary_audio_client or candidate_source != "percent_fallback":
                             high_conf_normalized_candidates[candidate_name] = candidate_ts
+                    # The hatch is for a reader that moved on. A PUT materially behind its
+                    # peers is a rewind, and a rewind leads only when corroborated (above):
+                    # trusted on recency alone, a device replaying an old position
+                    # un-finished a finished book.
+                    if recent_external_kosync and not corroborated_rewind:
+                        kosync_ts = normalized_candidates[recent_external_kosync]
+                        peer_ts = [
+                            ts for name, ts in high_conf_normalized_candidates.items()
+                            if name != recent_external_kosync and ts is not None
+                        ]
+                        if kosync_ts is not None and peer_ts and kosync_ts < max(peer_ts) - MATERIAL_ROLLBACK_SECONDS:
+                            device = (
+                                config[recent_external_kosync].current.get("_kosync_last_put_device")
+                                or "unknown"
+                            )
+                            logger.info(
+                                f"🛑 '{abs_id}' '{title_snip}' Not trusting recent external KoSync PUT from "
+                                f"'{device}': uncorroborated rewind {max(peer_ts) - kosync_ts:.1f}s behind its "
+                                f"max peer ({kosync_ts:.1f}s vs {max(peer_ts):.1f}s) during zero-delta "
+                                f"discrepancy resolution — a rewind leads only once the reader moves on from it"
+                            )
+                            recent_external_kosync = None
                     if corroborated_rewind:
                         rewind_name, rewind_ts, rewind_peer_ts, rewind_evidence = corroborated_rewind
                         selected_normalized_candidates = {rewind_name: rewind_ts}
@@ -5904,8 +5977,7 @@ class SyncManager:
                 primary_audio_client = self._get_primary_audio_client_name(book)
                 credit_listening_leader = (
                     leader == "Storyteller"
-                    and os.environ.get("STORYTELLER_LISTENING_SESSIONS", "true").strip().lower()
-                    in ("true", "1", "yes", "on")
+                    and user_preference_enabled("STORYTELLER_LISTENING_SESSIONS", "true")
                 )
                 # The leader's position already resolved onto the audio timeline by
                 # _normalize_for_cross_format_comparison (the same number leader
@@ -6355,6 +6427,9 @@ class SyncManager:
         try:
             now = time.time()
             self.database_service.close_reading_sessions(now, effective_session_gap_seconds())
+            abs_client = self.active_abs_client
+            if abs_client is not None and hasattr(abs_client, "close_idle_listening_sessions"):
+                abs_client.close_idle_listening_sessions(effective_session_gap_seconds() * IDLE_CLOSE_PATIENCE)
             rows = self.database_service.get_pending_reading_sessions()
             for row in rows:
                 duration = int(min(row.accumulated_seconds,
@@ -6459,7 +6534,7 @@ class SyncManager:
                 # 'complete' that prompted the clear (the usual reason for one is
                 # about to re-read it). This runs BEFORE the KosyncDocument delete
                 # below, which is what resolves the book's document hashes.
-                if env_truthy('KOREADER_STATUS_SYNC_ENABLED', 'true'):
+                if user_preference_enabled('KOREADER_STATUS_SYNC_ENABLED', 'true', self.database_service):
                     try:
                         cleared_hashes = self.database_service.record_koreader_status_for_book(
                             abs_id,

@@ -2,9 +2,9 @@
 
 Covers `BookOrbitClient.list_continue_reading_books` (parsing + progress
 filtering) and `ShelfWatchService`'s reading-watch pass, which reuses the
-shelf-watch matching pipeline but ALWAYS creates a PendingSuggestion on a
-match (never auto-maps) and creates an ebook-only mapping with no shelf move
-when there is no candidate. Also covers the shared dismissed-suggestion guard
+shelf-watch matching pipeline: a unique match at the shelf-watch threshold is
+auto-mapped, a weaker one becomes a PendingSuggestion, and no candidate creates
+an ebook-only mapping. Reading-watch never moves shelves. Also covers the shared dismissed-suggestion guard
 in `_create_pending_suggestion`, which both the shelf-watch and reading-watch
 flows now go through.
 """
@@ -238,11 +238,32 @@ class TestReadingWatchOutcomes(unittest.TestCase):
         _args, kwargs2 = db.upsert_shelf_watch_scan.call_args
         self.assertEqual(kwargs2.get('status'), 'ebook_only')
 
-    def test_match_is_always_a_suggestion_never_auto_mapped(self):
-        """Score 100 clears the normal 95-point auto-match threshold, but
-        reading-watch never auto-maps -- it is always a suggestion."""
+    def test_match_at_threshold_is_auto_mapped_without_shelf_move(self):
+        """A unique match clearing the 95-point threshold is mapped; the book
+        is being read, so no shelf moves."""
         svc, client, db, bms, _ss = _build_service(
             suggestions_result={"matches": [_make_audio_match(score=100.0)]},
+        )
+        with patch.dict(os.environ, READING_WATCH_ON, clear=False):
+            stats = svc._process_reading_watch(user_id=None)
+
+        self.assertEqual(stats['auto_matched'], 1)
+        self.assertEqual(stats['suggested'], 0)
+        bms.create_audio_mapping_from_match.assert_called_once()
+        kwargs = bms.create_audio_mapping_from_match.call_args.kwargs
+        self.assertEqual(kwargs['audio_source_id'], 'abs-1')
+        self.assertEqual(kwargs['ebook_source'], 'BookOrbit')
+        self.assertEqual(kwargs['ebook_source_id'], '5')
+        client.move_between_shelves.assert_not_called()
+        client.add_book_id_to_shelf.assert_not_called()
+        db.save_pending_suggestion.assert_not_called()
+
+        _args, kwargs = db.upsert_shelf_watch_scan.call_args
+        self.assertEqual(kwargs.get('status'), 'auto_matched')
+
+    def test_match_below_threshold_is_a_suggestion(self):
+        svc, client, db, bms, _ss = _build_service(
+            suggestions_result={"matches": [_make_audio_match(score=74.0)]},
         )
         with patch.dict(os.environ, READING_WATCH_ON, clear=False):
             stats = svc._process_reading_watch(user_id=None)
@@ -258,6 +279,20 @@ class TestReadingWatchOutcomes(unittest.TestCase):
 
         _args, kwargs = db.upsert_shelf_watch_scan.call_args
         self.assertEqual(kwargs.get('status'), 'suggested')
+
+    def test_tied_top_matches_are_a_suggestion(self):
+        svc, _client, db, bms, _ss = _build_service(
+            suggestions_result={"matches": [
+                _make_audio_match(score=100.0, audio_source_id="abs-1", audio_title="Mana Immortal"),
+                _make_audio_match(score=100.0, audio_source_id="abs-2", audio_title="Immortal Mana"),
+            ]},
+        )
+        with patch.dict(os.environ, READING_WATCH_ON, clear=False):
+            stats = svc._process_reading_watch(user_id=None)
+
+        self.assertEqual(stats['suggested'], 1)
+        bms.create_audio_mapping_from_match.assert_not_called()
+        db.save_pending_suggestion.assert_called_once()
 
     def test_already_mapped_book_is_skipped_no_scan(self):
         svc, _client, db, bms, ss = _build_service(
@@ -302,7 +337,7 @@ class TestReadingWatchOutcomes(unittest.TestCase):
 class TestReadingWatchDismissedGuard(unittest.TestCase):
     def test_dismissed_suggestion_is_not_resurrected(self):
         svc, _client, db, _bms, _ss = _build_service(
-            suggestions_result={"matches": [_make_audio_match()]},
+            suggestions_result={"matches": [_make_audio_match(score=80.0)]},
             suggestion_exists=True, pending_suggestion=None,
         )
         with patch.dict(os.environ, READING_WATCH_ON, clear=False):
@@ -317,7 +352,7 @@ class TestReadingWatchDismissedGuard(unittest.TestCase):
         """suggestion_exists True + an actual pending row (a re-scan of an
         already-pending suggestion) must still save/update normally."""
         svc, _client, db, _bms, _ss = _build_service(
-            suggestions_result={"matches": [_make_audio_match()]},
+            suggestions_result={"matches": [_make_audio_match(score=80.0)]},
             suggestion_exists=True, pending_suggestion=MagicMock(),
         )
         with patch.dict(os.environ, READING_WATCH_ON, clear=False):
@@ -380,7 +415,7 @@ def test_readalong_toggle_does_not_request_for_continue_reading_ebook_only():
 
 def test_readalong_toggle_does_not_turn_continue_reading_suggestion_into_audio_match():
     svc, _client, db, bms, _ss = _build_service(
-        suggestions_result={'matches': [_make_audio_match(score=100.0, audio_source='BookOrbit')]})
+        suggestions_result={'matches': [_make_audio_match(score=80.0, audio_source='BookOrbit')]})
     with patch.dict(os.environ, dict(READING_WATCH_ON, BOOKORBIT_SHELF_WATCH_READALONG='true')):
         stats = svc._process_reading_watch()
     assert stats['suggested'] == 1

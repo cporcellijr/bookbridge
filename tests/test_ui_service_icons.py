@@ -119,7 +119,8 @@ class ServiceIconUiTestCase(unittest.TestCase):
 
     def test_shelf_watch_bodies_use_section_body_collapse(self):
         html = (ROOT / "templates" / "settings.html").read_text(encoding="utf-8")
-        for body in ("shelf_watch_body", "bookorbit_shelf_watch_body", "kavita_shelf_watch_body"):
+        # One "Up Next" shelf card now covers Grimmory, BookOrbit and Kavita.
+        for body in ("all_apps_shelf_watch_body",):
             with self.subTest(body=body):
                 tag = html[html.index(f'<div id="{body}"'):].split(">", 1)[0]
                 self.assertIn("section-body", tag)

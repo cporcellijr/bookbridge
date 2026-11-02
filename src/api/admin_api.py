@@ -254,6 +254,12 @@ def _validate_field(key: str, ftype: str, value) -> str:
         if not isinstance(value, bool):
             raise ValueError(f"{key} must be true or false")
         return "true" if value else "false"
+    if ftype == "pref":
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if value not in ("", "true", "false"):
+            raise ValueError(f'{key} must be true, false or "" (server default)')
+        return value
     if not isinstance(value, str):
         raise ValueError(f"{key} must be a string")
     if ftype.startswith("select:"):

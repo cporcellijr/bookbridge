@@ -2,11 +2,12 @@
 
 > [!NOTE]
 > All configuration is managed through the **Web UI** at `/settings`.
-> Environment variables are mainly for first boot or advanced overrides. Once a value is saved in the UI, the database value takes precedence.
+> Environment variables only seed the settings database. On first boot BookBridge saves every setting there, from its environment variable or its default, even if you never open Settings. From then on the saved value wins, so changing an environment variable later does nothing; change the setting in the UI instead. (A setting added by a later update takes its first value from the environment in the same way.)
+> `DATA_DIR` is the exception: it is read only from the environment, because it says where the database is.
 
 ## Web UI Settings
 
-The **Settings** page is the easiest way to manage the bridge. Saving settings restarts the app automatically and brings you back to the dashboard when it is ready.
+The **Settings** page is the easiest way to manage the bridge. Most changes take effect as soon as you save. A setting marked **restart** is read once at startup, so saving a change to it restarts the app and brings you back to the dashboard when it is ready. **Different from defaults** in the sidebar lists every setting that differs from its default, each with a **reset** link.
 
 The Settings sidebar is organized into:
 
@@ -148,7 +149,7 @@ Audiobookshelf remains the default audiobook source when a mapping is not explic
 | Keep every match in its auto-add collection | `ABS_COLLECTION_RECONCILE` | `false` | Global. Every sync cycle, each matched Audiobookshelf audiobook missing from its owner's auto-add collection is added again, so an add that failed at match time is not permanent. An Audiobookshelf collection only holds books from one library, so with several audiobook libraries a collection of that name is kept in each. Add-only: while on, a book removed from the collection by hand is added back. |
 | Progress Offset | `ABS_PROGRESS_OFFSET_SECONDS` | `0` | Rewinds progress written back to ABS by this many seconds. |
 | Save reading checkpoints in ABS listening history | `ABS_READING_CHECKPOINTS` | `false` | Adds one second of artificial listening time when ebook reading advances the ABS audiobook position, preserving a recoverable entry in ABS listening history. Labels reading as listening and slightly increases ABS listening statistics. Resets, rewinds, unchanged positions, and existing audiobook listening credit are unaffected. |
-| Limit Search to Configured Library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
+| Only search the chosen Audiobookshelf library | `ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID` | `false` | In the UI this is a checkbox. Direct env usage can also be set to a library ID string. |
 | Enable ABS Ebook Sync | `SYNC_ABS_EBOOK` | `false` | Turns on bidirectional reading-progress sync with the ebook file attached to an Audiobookshelf item. |
 | ABS Ebook Position Format | `ABS_EBOOK_LOCATOR_FORMAT` | `cfi` | `cfi`, `readium`, or `auto`. See the note below. |
 
@@ -174,13 +175,13 @@ The bridge **is** a KoSync server — KOReader devices sync directly with it. De
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Enable | `KOSYNC_ENABLED` | `false` | Turns on KOSync support. |
-| Hash Method | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
+| How devices recognise a book | `KOSYNC_HASH_METHOD` | `content` | `content` is safest. `filename` is faster but less reliable. |
 | Take each reader's sync login from Grimmory | `KOSYNC_CREDENTIALS_FROM_GRIMMORY` | `false` | Global. At startup and each sync cycle, an active reader's KoSync username and password are taken from the KOReader login of their Grimmory account, and keep following it when it changes there. A reader who already has a different KoSync login set in BookBridge keeps it — clear their KoSync username to switch to the Grimmory one. A Grimmory username that another BookBridge user already has is skipped. Both cases are logged as warnings; readers without a Grimmory KOReader login are left alone. |
-| PUT Debounce | `KOSYNC_PUT_DEBOUNCE_SECONDS` | `300` | Wait this long after KOReader stops pushing before running the sync cycle. |
+| KOReader: wait after the last page turn | `KOSYNC_PUT_DEBOUNCE_SECONDS` | `300` | Under **Reading & Sync → When BookBridge syncs**. Wait this long after KOReader stops pushing before running the sync cycle. |
 | Use Percentage from Server | `KOSYNC_USE_PERCENTAGE_FROM_SERVER` | `false` | Uses raw percentage instead of text matching. |
 | Highlight Sync | `KOREADER_ANNOTATION_SYNC` | `true` | Enables bridge-side annotation exchange for the Bridge Sync KOReader plugin. Requires the current Bridge Sync plugin on each device. |
 | Sync Reading Status Between Devices | `KOREADER_STATUS_SYNC_ENABLED` | `true` | Shares each book's KOReader status (reading / finished / abandoned) across your devices — including filling it in from your reading position, marking a book finished when the bridge decides it is complete, and clearing it when you clear progress. Requires the **BridgeSync 0.9.6** plugin (or newer) on each device. |
-| Share Recently-Read Books Between Devices | `KOREADER_SYNC_READ_HISTORY` | `false` | Adds a book you read on one device into KOReader's History on your others, so views built from History (like a "Recent" shelf) look the same everywhere. Bounded per sync: only books whose file is already on the device, nothing read more than 30 days ago, and at most 25 books. Requires the **BridgeSync 0.9.6** plugin (or newer) on each device. |
+| KOReader: share recently-read books between devices | `KOREADER_SYNC_READ_HISTORY` | `false` | Under **Reading & Sync → Reading history & stats**. Adds a book you read on one device into KOReader's History on your others, so views built from History (like a "Recent" shelf) look the same everywhere. Bounded per sync: only books whose file is already on the device, nothing read more than 30 days ago, and at most 25 books. Requires the **BridgeSync 0.9.6** plugin (or newer) on each device. |
 | Target KOSync URL | `KOSYNC_SERVER` | empty | Under **Advanced** on the card. An empty value uses the built-in server at `http://127.0.0.1:<KOSYNC_PORT or 5757>`, including installs configured only through environment variables. Set another URL only to relay through a separate external KoSync instance. |
 | Split-Port Listener | `KOSYNC_PORT` | empty | Optional dedicated KOSync port for internet-safe exposure. |
 | Trusted Proxy Addresses | `KOSYNC_TRUSTED_PROXIES` | empty | Under **Advanced — behind a reverse proxy**. Comma-separated IPs or CIDR ranges of the proxy or tunnel in front of the KoSync port. Requests from them are rate-limited under the client address in `X-Forwarded-For`. Empty trusts only localhost. List only your proxy: any address covered here can claim to be any client. |
@@ -284,7 +285,7 @@ Storyteller notes:
 - Storyteller edition uploads use the Storyteller REST/TUS API directly. A Storyteller library mount is optional unless you want local fallback access to generated artifacts.
 - If you mount `/path/to/storyteller/assets:/storyteller/assets`, set **Storyteller Assets Path** to `/storyteller`.
 - Storyteller timing data stays the preferred alignment source whenever valid transcript assets are available.
-- **Settings -> System -> Advanced -> Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
+- **Settings -> Maintenance -> Storyteller Backfill** rechecks existing Storyteller-linked books and rebuilds their alignment data without rerunning Whisper.
 
 #### Grimmory
 
@@ -316,7 +317,7 @@ Grimmory notes:
 - The dashboard shows **BL Audio** progress when a mapping is driven by Grimmory audio.
 - When **Record Reading Sessions** is enabled, Grimmory gets session updates as you make progress.
 - Enable **Highlight Sync** in each reader's Grimmory integration if you want Grimmory web-reader highlights and notes to round-trip through the bridge.
-- **Settings -> System -> Advanced -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
+- **Settings -> Maintenance -> Refresh Grimmory Cache** forces a fresh cache rebuild after imports, removals, or large metadata changes.
 - Use **Find IDs** next to **Library ID** in Settings to load your available Grimmory libraries and fill the field from a dropdown.
 - The **KOReader Collections** settings only matter if you use the optional **Bridge Sync** KOReader plugin.
 - KOReader collections are configured per reader under **Account -> My Integrations -> KOReader Collections**.
@@ -520,7 +521,7 @@ StoryGraph notes:
 #### Progress Trackers
 
 Hardcover and StoryGraph are independent - enable either or both on their cards in
-**Settings -> Integrations**. Each reader then picks which they use, and supplies their own
+**Settings -> Services**. Each reader then picks which they use, and supplies their own
 token/cookies, under **Account -> My Integrations**. Admins can also manage those values under
 **Settings -> Users -> Integrations**.
 
@@ -532,7 +533,7 @@ passed. See [troubleshooting](troubleshooting.md#hardcover-or-storygraph-gets-ma
 
 #### Telegram Notifications
 
-Found under **Settings -> Features**.
+Found under **Settings -> Server**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -543,7 +544,7 @@ Found under **Settings -> Features**.
 
 #### Shelfmark
 
-Found under **Settings -> Features**.
+Found under **Settings -> Library & Matching**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -551,7 +552,7 @@ Found under **Settings -> Features**.
 
 #### Series Display
 
-Found under **Settings -> Features**.
+Found under **Settings -> Library & Matching**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -576,7 +577,7 @@ Connection:
 | Server URL | `OLLAMA_URL` | `http://ollama:11434` | Your Ollama server. Use container DNS (`http://ollama:11434`) or `http://localhost:11434`. |
 | Embedding Model | `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Used for similarity. Pull it first: `ollama pull nomic-embed-text`. |
 | Chat / Judge Model | `OLLAMA_CHAT_MODEL` | `qwen2.5:14b` | Used to judge ambiguous matches. |
-| Keep Alive | `OLLAMA_KEEP_ALIVE` | `5m` | How long models stay loaded after a request (`5m`, `1h`, `-1` = forever, `0` = unload now). |
+| Keep the model loaded for | `OLLAMA_KEEP_ALIVE` | `5m` | How long models stay loaded after a request (`5m`, `1h`, `-1` = forever, `0` = unload now). |
 | Chat Context Length | `OLLAMA_NUM_CTX` | empty | Context window for judge calls. Empty = server default. |
 
 What it can do — each is a separate toggle, and the defaults below only take effect once **Enable** is on:
@@ -589,7 +590,7 @@ What it can do — each is a separate toggle, and the defaults below only take e
 | Alignment fallback | `OLLAMA_ALIGN_FALLBACK` | `true` | Locates a position by meaning when fuzzy text matching fails. |
 | Ebook position rescue | `OLLAMA_EBOOK_TEXT_FALLBACK` | `true` | The same idea for KoSync/Storyteller ebook lookups. |
 | Anchor rescue | `OLLAMA_ALIGN_ANCHOR_RESCUE` | `true` | Builds a real audio↔text map when n-gram alignment fails. |
-| Content guard | `OLLAMA_ALIGN_CONTENT_GUARD` | `true` | Refuses to store an alignment when the audio and ebook are clearly different content (wrong edition, abridged, translation). |
+| Content guard | `OLLAMA_ALIGN_CONTENT_GUARD` | `true` | Refuses to store an alignment when the audio and ebook are clearly different content (wrong edition, abridged, translation). The similarity cutoff (`OLLAMA_ALIGN_CONTENT_MIN_SIM`, default `0.45`) was set for the default `nomic-embed-text`; other embedding models score on their own scale, so a score below it is overruled when the transcript contains the ebook's own text. |
 | Tracker match verify | `OLLAMA_TRACKER_MATCH` | `true` | Double-checks Hardcover/StoryGraph matches before writing. |
 | Library match rescue | `OLLAMA_LIBRARY_MATCH` | `true` | When a Grimmory/BookOrbit ebook won't match by name, shortlists the library and lets the model pick the right book. |
 
@@ -603,7 +604,7 @@ Ollama notes:
 
 ### Suggestions
 
-Enabled under **Settings -> Features**. The Suggestions page is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
+Enabled under **Settings -> Library & Matching**. The Suggestions page is a review workspace: it waits for your approval before creating mappings unless you turn on auto-match.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
@@ -629,7 +630,7 @@ Suggestions notes:
 
 ### Transcription Settings
 
-Found under **Settings -> System -> Advanced Options**. Transcription powers the bridge's own
+Found under **Settings -> Alignment**. Transcription powers the bridge's own
 audio ↔ text alignment; it runs locally by default and needs no external services.
 
 > [!TIP]
@@ -640,7 +641,7 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | Provider | `TRANSCRIPTION_PROVIDER` | `local` | `local`, `deepgram`, or `whispercpp`. |
 | Whisper Model | `WHISPER_MODEL` | `tiny` | Local Whisper model size or a custom Whisper.cpp model name. |
 | Whisper Language | `WHISPER_LANGUAGE` | empty | Local Whisper only. Blank detects each chunk's language; a code such as `ru` or `en` fixes it. Applies to new transcriptions; saved transcripts are reused. |
-| Filter Non-Speech Audio | `WHISPER_VAD_FILTER` | `false` | Local Whisper only. Uses voice activity detection to reduce transcription over music and silence while preserving audio timestamps. Check quiet narration before enabling broadly. Applies to new transcriptions. |
+| Skip music and silence | `WHISPER_VAD_FILTER` | `false` | Local Whisper only. Uses voice activity detection to reduce transcription over music and silence while preserving audio timestamps. Check quiet narration before enabling broadly. Applies to new transcriptions. |
 | Whisper Device | `WHISPER_DEVICE` | `auto` | `auto`, `cpu`, or `cuda`. |
 | Whisper Compute Type | `WHISPER_COMPUTE_TYPE` | `auto` | Precision mode for local Whisper. |
 | Whisper.cpp URL | `WHISPER_CPP_URL` | empty | Full endpoint URL, including the path — e.g. `http://HOST:8080/v1/audio/transcriptions`. |
@@ -651,13 +652,13 @@ audio ↔ text alignment; it runs locally by default and needs no external servi
 | Deepgram API Key | `DEEPGRAM_API_KEY` | empty | Deepgram API key. |
 | Deepgram Model | `DEEPGRAM_MODEL` | `nova-2` | Deepgram model tier. |
 | SMIL Validation Threshold | `SMIL_VALIDATION_THRESHOLD` | `60` | Minimum token match percentage for accepting SMIL timing data. |
-| Content-Match Guard | `CONTENT_MATCH_GUARD` | `true` | Refuses to store an alignment when transcript and ebook wording overlap too little, even without Ollama. |
+| Refuse alignments that look like a different book | `CONTENT_MATCH_GUARD` | `true` | Refuses to store an alignment when transcript and ebook wording overlap too little, even without Ollama. |
 | Content-Match Min Overlap | `CONTENT_MATCH_MIN_OVERLAP` | `0.15` | Minimum direct word n-gram overlap required by the guard. Raise only when you knowingly align a rough edition. |
-| Segmented Alignment Maps | `ALIGNMENT_SEGMENTED_MAPS` | `false` | Experimental. Enable only for a collection whose audiobook narrates sections in a different order from the EPUB spine, then remap that book. |
+| Handle chapters read aloud out of order | `ALIGNMENT_SEGMENTED_MAPS` | `false` | Experimental. Enable only for a collection whose audiobook narrates sections in a different order from the EPUB spine, then remap that book. |
 | Use Forced Alignment | `CTC_ENABLED` | `true` | Recommended. Aligns each audiobook directly against its ebook's text, word by word, instead of transcribing it first; also locates each chapter directly in the audio, so long books skip Whisper entirely. Runs on the CPU in every image via the default QuartzNet model. Off always uses transcription (Whisper/lexical). New installs default on; existing installs keep whatever they had. |
-| CTC Model | `CTC_MODEL` | `quartznet` | `quartznet` (NVIDIA QuartzNet15x5, English only) runs on the CPU in every image. `mms_fa` (Meta MMS, ~1000 languages) needs a self-built image with `INSTALL_CTC=true` and effectively an NVIDIA GPU. Visible under Advanced once forced alignment is on. |
+| Alignment model | `CTC_MODEL` | `quartznet` | `quartznet` (NVIDIA QuartzNet15x5, English only) runs on the CPU in every image. `mms_fa` (Meta MMS, ~1000 languages) needs a self-built image with `INSTALL_CTC=true` and effectively an NVIDIA GPU. Visible under Advanced once forced alignment is on. |
 | QuartzNet Model File | `CTC_QUARTZNET_MODEL_PATH` | empty | Optional path to a local `model.onnx` (or the folder holding it). Empty downloads it once (77 MB) from Storyteller's package registry into `/data/models/quartznet15x5-en/`; set this if that download fails. |
-| CTC Device | `CTC_DEVICE` | `auto` | MMS only — QuartzNet always runs on the CPU. Uses an NVIDIA GPU when available; CPU is practical only for short books with MMS. |
+| Run the MMS model on | `CTC_DEVICE` | `auto` | MMS only — QuartzNet always runs on the CPU. Uses an NVIDIA GPU when available; CPU is practical only for short books with MMS. |
 | Use a read-along's own timings when they check out | `SMIL_SKIP_CTC` | `false` | Applies while forced alignment is on. When the ebook is a read-along (a Storyteller or StoryAlign EPUB with media overlays), checks its timings for places where they lose sync with the audio; timings that pass become the book's map without running forced alignment. Off: forced alignment runs first, and the read-along's timings are used only if it fails. |
 
 Transcription notes:
@@ -666,30 +667,49 @@ Transcription notes:
 - The `whispercpp` provider works with any OpenAI-compatible transcription endpoint — whisper.cpp server, speaches, parakeet, or a proxy such as llama-swap — not just whisper.cpp itself. Use the 🔗 **Test** button next to the URL to check the endpoint before saving. Inside Docker, do not use `localhost`; use the host's LAN IP or the whisper container's service name.
 - **Split Uploads** exists for servers that return one merged segment per request (parakeet does this). Alignment can only be as precise as the segments it gets back, so on those servers set it low — 2 or 3 minutes — and leave it at `0` for servers that already return fine-grained segments.
 - **Send Original Audio** skips local ffmpeg normalization and splitting, which saves minutes per book, but only works on servers that decode arbitrary formats *and* chunk long audio themselves (e.g. parakeet with `-long-audio`). Leave it off for whisper.cpp, which requires 16kHz WAV input. When it is on, **Audio Split Length** no longer applies — the server controls chunking.
-- **Content-Match Guard** is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.
-- **Segmented Alignment Maps** is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use **Remap alignment** for the affected book.
+- **Refuse alignments that look like a different book** is the safe default. It prevents a wrong, abridged, or otherwise incompatible ebook/audio pairing from replacing a usable map when semantic matching is unavailable. Check the selected editions before lowering its threshold.
+- **Handle chapters read aloud out of order** is an opt-in fix for an unusual edition where the EPUB's chapter order does not match narration order. It does nothing for normally ordered books. Enable it, then use **Remap alignment** for the affected book.
 - **Forced alignment** is the recommended, default-on method: it runs on the CPU in every published image (standard and `-cuda`) using QuartzNet, and it finds each chapter directly in the audio, so long books skip the Whisper transcript entirely — a 22-hour audiobook takes about 7.5 minutes on a modern 8-thread CPU, a 39-hour one about 15. It falls back to transcription automatically, with no user action needed, for a book that is not in English, whose audio does not follow the text closely enough, whose chapters are narrated out of order, or that appears to be a different book — that fallback is expected, not an error. New installs default it on; existing installs keep whatever they had.
-- For a non-English book, switch **CTC Model** to `mms_fa` under **Advanced — forced alignment model**. MMS needs a self-built image (`INSTALL_CTC=true`) and effectively an NVIDIA GPU — see [Forced alignment for non-English books (MMS)](#forced-alignment-for-non-english-books-mms) below.
+- For a non-English book, switch **Alignment model** to `mms_fa` under **Advanced — forced alignment model**. MMS needs a self-built image (`INSTALL_CTC=true`) and effectively an NVIDIA GPU — see [Forced alignment for non-English books (MMS)](#forced-alignment-for-non-english-books-mms) below.
+
+### Shared choices
+
+A few choices that used to be repeated on every service card are now one control each
+on the Settings page. Saving copies the value into every service's own setting, so the
+per-service environment variables in the tables above still work and still seed a first
+boot. Where the services currently hold different values, the card says so and each service
+keeps its own value until you change that control; the changed value then goes to all of them.
+
+| Settings control | Where | Saves into |
+| --- | --- | --- |
+| When to check / Check every / Wait until you pause | Reading & Sync → How often each app is checked | `*_POLL_MODE`, `*_POLL_SECONDS`, `*_POLL_WAIT_FOR_SETTLE` for Storyteller, Grimmory (+ audiobooks), BookOrbit (+ audiobooks), Kavita, CWA Kobo sync and BookFusion |
+| Sync highlights every (minutes) | Reading & Sync → Highlights & notes | `BOOKORBIT_`, `BOOKLORE_`, `READEST_` and `HARDCOVER_ANNOTATION_SYNC_MINUTES` (the highlight timer always ran on the shortest of these) |
+| "Up Next" shelf | Library & Matching → "Up Next" shelf | `BOOKORBIT_`, `BOOKLORE_` and `KAVITA_SHELF_WATCH_ENABLED` / `_NAME` / `_THRESHOLD` / `_RESCAN_HOURS` |
+| Wait before posting progress (minutes) | Reading & Sync → Posting to trackers | `HARDCOVER_`, `STORYGRAPH_` and `GOODREADS_UPDATE_COOLDOWN_MINS` |
+
+When the services currently disagree, the control shows the fastest custom check timer,
+"on" if any service has a switch on, the shortest highlight interval and the longest tracker
+cooldown.
 
 ### Sync Tuning
 
-Found under **Settings -> Sync**, alongside instant-sync options and Alignment Health.
+Found under **Settings -> Reading & Sync**. Each app that cannot notify BookBridge has one row in **How often each app is checked**; Alignment Health is under **Settings -> Alignment**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
-| Sync Period (Minutes) | `SYNC_PERIOD_MINS` | `5` | Main background sync interval. |
-| Min ABS Change (Seconds) | `SYNC_DELTA_ABS_SECONDS` | `60` | Minimum ABS timestamp change before it counts as real movement. |
-| Min Ebook Change (%) | `SYNC_DELTA_KOSYNC_PERCENT` | `0.5` | Minimum ebook percentage change before it counts as real movement. |
+| Sync every (minutes) | `SYNC_PERIOD_MINS` | `5` | Main background sync interval. |
+| Smallest audio move that counts (seconds) | `SYNC_DELTA_ABS_SECONDS` | `60` | Minimum ABS timestamp change before it counts as real movement. |
+| Smallest ebook move that counts (%) | `SYNC_DELTA_KOSYNC_PERCENT` | `0.5` | Minimum ebook percentage change before it counts as real movement. |
 | Min Ebook Change (Words) | `SYNC_DELTA_KOSYNC_WORDS` | `400` | Extra guardrail for ebook movement. |
-| Client Diff Threshold (%) | `SYNC_DELTA_BETWEEN_CLIENTS_PERCENT` | `0.5` | Minimum gap between clients before propagation begins. |
-| Fuzzy Match Threshold | `FUZZY_MATCH_THRESHOLD` | `80` | Matching threshold used by several book and text lookups. |
-| Job Max Retries | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs. |
+| Treat apps this close as already in step (%) | `SYNC_DELTA_BETWEEN_CLIENTS_PERCENT` | `0.5` | Minimum gap between clients before propagation begins. |
+| Text matching strictness (0–100) | `FUZZY_MATCH_THRESHOLD` | `80` | Matching threshold used by several book and text lookups. |
+| Retry a failed job up to (times) | `JOB_MAX_RETRIES` | `5` | Retry count for failed background jobs. |
 | Job Retry Delay (Minutes) | `JOB_RETRY_DELAY_MINS` | `15` | Delay before retrying failed jobs. |
 | Reading Session Merge Gap (Minutes) | `READING_SESSION_MERGE_MINUTES` | `5` | Groups non-KOReader progress into one session. The effective idle gap is at least twice the sync period and at most 30 minutes. |
 | Cross-Format Deadband (Seconds) | `CROSSFORMAT_DEADBAND_SECONDS` | `2.0` | Prevents tiny cross-format gaps from causing leader flips while avoiding backward writes to newer high-confidence ebook locators. |
 | Cross-Format Roundtrip Tolerance | `CROSSFORMAT_ROUNDTRIP_TOLERANCE_CHARS` | `2` | Locator roundtrip tolerance used when stabilizing cross-format locators. |
 | Honor a Deliberate Rewind | `SYNC_TRUST_CORROBORATED_REWIND` | `true` | Lets a rewind lead after the same app reports you continuing from the new position; an isolated stale backward report is held briefly. |
-| Locator Round-Trip Tolerance (Seconds) | `LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS` | `30` | Rejects an otherwise character-close rebuilt locator when it lands far away on the audio timeline, which protects segmented maps at a section seam. |
+| Position double-check tolerance (seconds) | `LOCATOR_ROUNDTRIP_TOLERANCE_SECONDS` | `30` | Rejects an otherwise character-close rebuilt locator when it lands far away on the audio timeline, which protects segmented maps at a section seam. |
 
 ### Advanced Toggles
 
@@ -703,13 +723,13 @@ Found under **Settings -> Sync**, alongside instant-sync options and Alignment H
 
 ### Paths and System
 
-Found under **Settings -> System**.
+Found under **Settings -> Server**.
 
 | Setting | Env Var | Default | Notes |
 | --- | --- | --- | --- |
 | Timezone | `TZ` | `America/New_York` | Container timezone. |
 | Log Level | `LOG_LEVEL` | `INFO` | Application log level. |
-| Data Directory | `DATA_DIR` | `/data` | Database, cache, and working state. |
+| Data Directory | `DATA_DIR` | `/data` | Database, cache, and working state. Environment only; Settings shows it read-only. Changing it does not move existing data. |
 | Books Directory | `BOOKS_DIR` | `/books` | Local ebook library path inside the container. |
 | Extra Ebook Directories | `EXTRA_EBOOK_DIRS` | empty | Additional library folders to search, for multi-library setups where some ebooks live outside `BOOKS_DIR`. Comma- or newline-separated container paths. |
 | Audiobooks Directory | `AUDIOBOOKS_DIR` | `/audiobooks` | Local audiobook root. When ABS reports a track path inside this directory and its size matches, BookBridge reads that mounted file directly instead of downloading an audio cache copy. Other tracks keep the existing stream/download path. |
@@ -783,7 +803,7 @@ Consider raising **Whisper Model** to `small` or `medium` if your GPU can handle
 
 Forced alignment's default model, QuartzNet, needs no build and already runs on the
 CPU in every published image — see [Transcription Settings](#transcription-settings)
-above. For a book that is not in English, switch **CTC Model** to `mms_fa` (Meta MMS,
+above. For a book that is not in English, switch **Alignment model** to `mms_fa` (Meta MMS,
 ~1000 languages) instead. MMS is not included in the published images; build your own
 with its torch and torchaudio dependencies, then select `mms_fa` under **Advanced —
 forced alignment model** in Settings and use **Remap alignment** on the book:
@@ -794,5 +814,5 @@ docker compose up -d
 ```
 
 Use an NVIDIA GPU for full-length audiobooks with MMS. CPU mode is available for short
-books but is very slow. Leaving **CTC Model** on `quartznet` keeps the default
+books but is very slow. Leaving **Alignment model** on `quartznet` keeps the default
 CPU-only pipeline unchanged.

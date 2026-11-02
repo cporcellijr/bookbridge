@@ -33,15 +33,17 @@ from src.utils.logging_utils import get_persistent_condition_logger
 from src.utils.progress_metadata import get_kosync_approved_rewind_at, parse_service_timestamp, state_metadata_kwargs
 from src.utils.fixed_page_progress import is_cbz_book, page_from_persisted_state
 from src.utils.time_utils import datetime_to_epoch, utcnow
-from src.utils.user_context import set_current_user_id, reset_current_user_id
+from src.utils.user_context import get_current_user_id, set_current_user_id, reset_current_user_id
 from src.utils.user_config import (
     _ALLOW_GLOBAL_FALLBACK_KEY,
     global_fallback_allowed,
     global_service_disabled,
     resolve_setting,
+    user_preference_enabled,
 )
 from src.utils.string_utils import calculate_similarity, clean_book_title
 from src.utils.ebook_sources import is_grimmory_source
+from src.utils.ebook_utils import LRUCache
 from src.services import kosync_device_arbiter, observation_trail
 from src.services.llm_matching import judge_best_candidate
 from src.db.models import State
@@ -119,6 +121,8 @@ _kosync_device_session_registry = None
 _kosync_device_session_registry_lock = threading.Lock()
 _kosync_recent_external_puts: dict = {}
 _kosync_recent_external_puts_lock = threading.Lock()
+_discovery_anchor_cache = LRUCache(capacity=1024)
+_discovery_anchor_cache_lock = threading.Lock()
 _KOREADER_STATS_MAX_BOOKS = 1000
 _KOREADER_STATS_MAX_PAGE_STATS = 10000
 _KOREADER_STATS_MERGE_LIMIT = 10000
@@ -1324,18 +1328,27 @@ def _kosync_user_may_access_book(book) -> bool:
     return bool(_database_service.is_user_linked(user_id, book.abs_id))
 
 
-def _defer_kosync_book_access(doc_id: str, book, *, source: str):
+def _defer_kosync_book_access(doc_id: str, book, *, source: str, discover: bool = True):
     """Keep a foreign mapping private while discovery verifies the user's copy."""
     user_id = getattr(g, "kosync_user_id", None)
-    logger.warning(
-        "KOSync: hash '%s' resolved to book '%s' but user %s has no UserBook claim; "
-        "attempting user-scoped auto-discovery",
-        doc_id,
-        book.abs_id,
-        user_id,
-    )
-    if _is_valid_hex_hash(doc_id):
-        _schedule_auto_discovery(doc_id, user_id=user_id, source=source)
+    if discover:
+        logger.warning(
+            "KOSync: hash '%s' resolved to book '%s' but user %s has no UserBook claim; "
+            "attempting user-scoped auto-discovery",
+            doc_id,
+            book.abs_id,
+            user_id,
+        )
+        if _is_valid_hex_hash(doc_id):
+            _schedule_auto_discovery(doc_id, user_id=user_id, source=source)
+    else:
+        logger.info(
+            "KOSync: Not claiming '%s' for user %s from %s of %s: a match waits for this reader to read forward",
+            book.abs_id,
+            user_id,
+            source,
+            doc_id,
+        )
     if source == "get":
         return jsonify({"message": "Document not found on server"}), 404
     return jsonify({"error": "Document not found"}), 404
@@ -1527,7 +1540,10 @@ def kosync_get_progress(doc_id):
             book = _database_service.get_book(kosync_doc.linked_abs_id)
             if book:
                 if not _kosync_user_may_access_book(book):
-                    return _defer_kosync_book_access(doc_id, book, source="get")
+                    return _defer_kosync_book_access(
+                        doc_id, book, source="get",
+                        discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+                    )
                 return _respond_from_book_states(doc_id, book)
 
         resolved_book = _resolve_book_by_sibling_hash(
@@ -1535,7 +1551,10 @@ def kosync_get_progress(doc_id):
         )
         if resolved_book:
             if not _kosync_user_may_access_book(resolved_book):
-                return _defer_kosync_book_access(doc_id, resolved_book, source="get")
+                return _defer_kosync_book_access(
+                    doc_id, resolved_book, source="get",
+                    discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+                )
             _register_hash_for_book(doc_id, resolved_book, user_id=getattr(g, "kosync_user_id", None))
             return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1543,11 +1562,7 @@ def kosync_get_progress(doc_id):
         # Per-user device progress lives in kosync_user_progress. Fall back to the
         # shared kosync_doc row (legacy / pre-migration) only when it is this
         # user's own or unstamped (legacy) — never another user's position.
-        progress_row = _database_service.get_user_kosync_progress(doc_id, request_user_id)
-        if progress_row is None:
-            doc_user_id = getattr(kosync_doc, "user_id", None)
-            if request_user_id is None or doc_user_id in (None, request_user_id):
-                progress_row = kosync_doc
+        progress_row = _reader_progress_row(doc_id, kosync_doc, request_user_id)
         has_progress = (
             progress_row is not None
             and progress_row.percentage
@@ -1584,7 +1599,10 @@ def kosync_get_progress(doc_id):
     book = _database_service.get_book_by_kosync_id(doc_id)
     if book:
         if not _kosync_user_may_access_book(book):
-            return _defer_kosync_book_access(doc_id, book, source="get")
+            return _defer_kosync_book_access(
+                doc_id, book, source="get",
+                discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+            )
         # The book names this hash but an existing document row may still be unlinked,
         # which hides its stored per-user progress from _respond_from_book_states (#431).
         # Register it the way Step 3 does so the pairing heals on this read.
@@ -1605,7 +1623,10 @@ def kosync_get_progress(doc_id):
         resolved_book = _resolve_book_by_filename_variants(doc_id, user_id=getattr(g, "kosync_user_id", None))
     if resolved_book:
         if not _kosync_user_may_access_book(resolved_book):
-            return _defer_kosync_book_access(doc_id, resolved_book, source="get")
+            return _defer_kosync_book_access(
+                doc_id, resolved_book, source="get",
+                discover=_reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is None
+            )
         _register_hash_for_book(doc_id, resolved_book, user_id=getattr(g, "kosync_user_id", None))
         return _respond_from_book_states(doc_id, resolved_book)
 
@@ -1613,6 +1634,12 @@ def kosync_get_progress(doc_id):
     if not _is_valid_hex_hash(doc_id):
         logger.warning(
             f"⚠️ KOSync: Rejected malformed document ID: '{doc_id}' (GET from {request.remote_addr})"
+        )
+        return jsonify({"message": "Document not found on server"}), 404
+    if _reader_position(doc_id, kosync_doc, getattr(g, "kosync_user_id", None)) is not None:
+        logger.info(
+            "KOSync: Not matching %s on open: this reader already has a position for it; "
+            "it matches once they read forward from it", doc_id,
         )
         return jsonify({"message": "Document not found on server"}), 404
     _schedule_auto_discovery(
@@ -1638,6 +1665,14 @@ def kosync_get_progress(doc_id):
     return jsonify({"message": "Document not found on server"}), 404
 
 
+def _discovery_client(provider_name: str):
+    """Use the requesting reader's clients in background discovery."""
+    user_id = get_current_user_id()
+    if user_id is not None:
+        return getattr(_container.user_client_registry().get_clients(user_id), provider_name)
+    return getattr(_container, provider_name)()
+
+
 def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
     """Score every ABS audiobook against the EPUB's title/author.
 
@@ -1646,7 +1681,7 @@ def _autodiscovery_audiobook_candidates(epub_filename, ebook_meta):
     """
     candidates = []
     try:
-        abs_client = _container.abs_client()
+        abs_client = _discovery_client("abs_client")
     except Exception:
         return candidates
     if not abs_client.is_configured():
@@ -1786,7 +1821,7 @@ def _resolve_library_ebook_source(epub_filename):
     Returns (source, source_id) or (None, None).
     """
     try:
-        bookorbit = _container.bookorbit_client()
+        bookorbit = _discovery_client("bookorbit_client")
         if bookorbit and bookorbit.is_configured():
             match = bookorbit.find_book_by_filename(epub_filename, allow_refresh=False)
             if match and match.get("id") is not None:
@@ -1794,7 +1829,7 @@ def _resolve_library_ebook_source(epub_filename):
     except Exception as e:
         logger.debug(f"Auto-map: BookOrbit filename resolve failed: {e}")
     try:
-        booklore = _container.booklore_client()
+        booklore = _discovery_client("booklore_client")
         if booklore and booklore.is_configured():
             match = booklore.find_book_by_filename(epub_filename, allow_refresh=False)
             if match and match.get("id") is not None:
@@ -1802,7 +1837,7 @@ def _resolve_library_ebook_source(epub_filename):
     except Exception as e:
         logger.debug(f"Auto-map: Grimmory filename resolve failed: {e}")
     try:
-        kavita = _container.kavita_client()
+        kavita = _discovery_client("kavita_client")
         if kavita and kavita.is_configured():
             match = kavita.find_book_by_filename(epub_filename, allow_refresh=False)
             if match and match.get("id") is not None:
@@ -1812,7 +1847,28 @@ def _resolve_library_ebook_source(epub_filename):
     return None, None
 
 
-def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason):
+def _resolve_abs_ebook_item(epub_filename) -> Optional[str]:
+    """Return the Audiobookshelf item whose primary ebook is this file, or None.
+
+    Resolved on its own so a copy in BookOrbit/Grimmory/Kavita does not hide the ABS
+    link; only runs with ABS ebook sync on, as the reader.
+    """
+    try:
+        if env_truthy("SYNC_ABS_EBOOK"):
+            abs_client = _discovery_client("abs_client")
+            if abs_client and abs_client.is_configured():
+                item_id = abs_client.find_ebook_item_for_file(
+                    _container.ebook_parser().resolve_book_path(epub_filename)
+                )
+                if item_id:
+                    logger.info("Auto-map: '%s' is the ebook of Audiobookshelf item %s", epub_filename, item_id)
+                    return item_id
+    except Exception as e:
+        logger.debug(f"Auto-map: Audiobookshelf ebook resolve failed: {e}")
+    return None
+
+
+def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason, user_id=None):
     """Create a full ebook↔audiobook mapping and link the KOSync document. Returns Book or None."""
     try:
         mapping_service = _container.book_mapping_service()
@@ -1821,6 +1877,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         return None
 
     ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
 
     saved = mapping_service.create_audio_mapping_from_match(
         audio_source="abs",
@@ -1833,6 +1890,8 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason)
         ebook_source_id=ebook_source_id,
         booklore_ebook_id=ebook_source_id if is_grimmory_source(ebook_source) else None,
         kosync_doc_id=doc_hash_val,
+        user_id=user_id,
+        abs_ebook_item_id=abs_ebook_item_id,
     )
     if not saved:
         return None
@@ -1912,6 +1971,64 @@ def _kosync_position_is_held(doc_hash: str, kosync_doc, baseline, user_id) -> bo
     return bool(abs_id and _database_service.get_state(abs_id, "kosync", user_id=user_id))
 
 
+def _reader_progress_row(doc_hash: str, kosync_doc, user_id):
+    """Return per-user progress row for a doc, falling back to shared kosync_doc when appropriate."""
+    progress_row = _database_service.get_user_kosync_progress(doc_hash, user_id)
+    if progress_row is None:
+        doc_user_id = getattr(kosync_doc, "user_id", None) if kosync_doc else None
+        if user_id is None or doc_user_id in (None, user_id):
+            progress_row = kosync_doc
+    return progress_row
+
+
+def _forward_reading_threshold() -> float:
+    """How far a PUT must move past the stored position to count as reading on.
+
+    KoSync's own change threshold, so a page reflow's jitter is not mistaken for it."""
+    try:
+        return max(0.0, float(os.environ.get("SYNC_DELTA_KOSYNC_PERCENT", "1") or 1)) / 100.0
+    except (TypeError, ValueError):
+        return 0.01
+
+
+def _discovery_anchor_may_match(
+    user_id, doc_hash, device_key, percentage: float, *, baseline=None,
+    minimum_delta=None, consume: bool = False,
+) -> bool:
+    """Observe fresh, cumulative forward reading by one user and device."""
+    if minimum_delta is None:
+        minimum_delta = _forward_reading_threshold()
+    now = time.monotonic()
+    pct = float(percentage or 0)
+    key = (user_id, doc_hash, device_key, _variant_index_generation, baseline)
+    with _discovery_anchor_cache_lock:
+        entry = _discovery_anchor_cache.get(key)
+        if entry is None or now - entry[2] >= 600 or pct < entry[1]:
+            _discovery_anchor_cache.put(key, (pct, pct, now))
+            return False
+        anchor, last_pct, _ = entry
+        advanced = pct > last_pct and pct - anchor + 1e-9 >= minimum_delta
+        _discovery_anchor_cache.put(key, (anchor, pct, now))
+        if advanced and consume:
+            _discovery_anchor_cache.delete(key)
+        return advanced
+
+
+def _reader_position(doc_hash: str, kosync_doc, user_id) -> Optional[float]:
+    """Return the reader's stored percentage for this document, or None if there is none."""
+    row = _reader_progress_row(doc_hash, kosync_doc, user_id)
+    if row is not None and getattr(row, "percentage", None) is not None:
+        try:
+            pct = float(row.percentage)
+            if pct > 0 or row is not kosync_doc or any(
+                getattr(row, field, None) for field in ("progress", "device", "device_id", "timestamp")
+            ):
+                return pct
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _book_for_put_baseline(doc_hash: str, kosync_doc, user_id):
     """The book a PUT's hash resolves to without writing anything, or None."""
     if kosync_doc is not None and kosync_doc.linked_abs_id:
@@ -1976,16 +2093,28 @@ def kosync_put_progress():
     _flush_stale_kosync_sessions(now_ts)
 
     kosync_doc = _database_service.get_kosync_document(doc_hash)
-    if kosync_doc and kosync_doc.linked_abs_id:
-        linked = _database_service.get_book(kosync_doc.linked_abs_id)
-        if linked and not _kosync_user_may_access_book(linked):
-            return _defer_kosync_book_access(doc_hash, linked, source="put")
+    request_user_id = getattr(g, 'kosync_user_id', None)
+    is_internal = _is_internal_kosync_device(device, device_id)
+    device_key = _get_kosync_device_key(device, device_id)
+    may_match = is_internal or _discovery_anchor_may_match(
+        request_user_id, doc_hash, device_key, percentage,
+    )
+    put_book = None
+    if not is_internal:
+        put_book = _book_for_put_baseline(doc_hash, kosync_doc, request_user_id)
+    elif kosync_doc and kosync_doc.linked_abs_id:
+        put_book = _database_service.get_book(kosync_doc.linked_abs_id)
+    if put_book and not _kosync_user_may_access_book(put_book):
+        if not is_internal:
+            _database_service.upsert_user_kosync_progress(
+                doc_hash, percentage, progress=progress, device=device,
+                device_id=device_id, timestamp=now, user_id=request_user_id,
+            )
+        return _defer_kosync_book_access(doc_hash, put_book, source="put", discover=may_match)
 
     # Optional "furthest wins" protection
-    furthest_wins = env_truthy('KOSYNC_FURTHEST_WINS', 'true')
+    furthest_wins = user_preference_enabled('KOSYNC_FURTHEST_WINS', 'true', _database_service)
     force_update = data.get('force', False)
-    is_internal = _is_internal_kosync_device(device, device_id)
-    request_user_id = getattr(g, 'kosync_user_id', None)
 
     # This server does not read the service gate: devices keep authenticating and
     # their positions are kept, by design, so nothing is lost while KoSync is off
@@ -1995,10 +2124,7 @@ def kosync_put_progress():
     if not is_internal:
         _note_kosync_off_server_wide(request_user_id, device)
 
-    # Allow rewinds if:
-    # 1. Force flag is set (e.g. from SyncManager)
-    # 2. Update comes from the SAME device (user moved slider back)
-    # 3. Update is internal (sync-bot) — must reach debounce-clear logic below
+    # Forced/internal writes bypass furthest-wins; linked device rewinds need fresh reading.
     # Furthest-wins compares against THIS user's own last position
     # (kosync_user_progress), so one user's rewind is never judged against
     # another user's further position on the same shared hash. Falls back to the
@@ -2016,14 +2142,14 @@ def kosync_put_progress():
     # a GET would hand out - so that is what a stale device must not regress.
     state_baseline = False
     observation_doc = kosync_doc
+    if put_book and not getattr(kosync_doc, "linked_abs_id", None):
+        observation_doc = SimpleNamespace(linked_abs_id=put_book.abs_id)
     if (baseline is None or not baseline.percentage) and furthest_wins and not is_internal and not force_update:
-        state_book = _book_for_put_baseline(doc_hash, kosync_doc, request_user_id)
+        state_book = put_book
         state = _database_service.get_state(state_book.abs_id, "kosync", user_id=request_user_id) if state_book else None
         if state is not None and state.percentage:
             baseline = SimpleNamespace(percentage=state.percentage, device=None, device_id=None, timestamp=None)
             state_baseline = True
-            if not getattr(kosync_doc, "linked_abs_id", None):
-                observation_doc = SimpleNamespace(linked_abs_id=state_book.abs_id)
     baseline_pct = float(baseline.percentage) if baseline and baseline.percentage else 0
     baseline_device = getattr(baseline, "device", None)
     baseline_device_id = getattr(baseline, "device_id", None)
@@ -2039,18 +2165,8 @@ def kosync_put_progress():
         # 409, not 200: the caller must not record the fill as the position held here.
         return jsonify({"document": doc_hash, "message": "Position already stored"}), 409
 
-    # Furthest-wins exists to stop one DEVICE from regressing another. When the
-    # position it is defending was never claimed by a real device — no device_id
-    # recorded, or BookBridge's own sync-bot write-back — there is no peer to
-    # protect and the guard degenerates into the bridge blocking the user from
-    # their own reader.
-    #
-    # That case is a deadlock, not an edge case: a device's identity is only
-    # recorded when a PUT is ACCEPTED, but a backward PUT is only accepted from an
-    # already-recorded device. So a reader that has only ever RECEIVED positions —
-    # which is every reader the bridge has pushed to and that has not yet pushed a
-    # forward position of its own — can never rewind, and the user's deliberate
-    # rewind is rejected against an echo of our own write (issue #215).
+    # Unlinked documents retain the legacy unclaimed-device behavior.
+    # Linked books need fresh reading proof even after a bot wrote the baseline.
     baseline_unclaimed = not state_baseline and (
         not baseline_device_id or _is_internal_kosync_device(baseline_device, baseline_device_id)
     )
@@ -2063,23 +2179,35 @@ def kosync_put_progress():
     if not is_internal:
         _record_external_kosync_observation(observation_doc, percentage, device, request_user_id)
 
+    linked_position = bool(getattr(observation_doc, "linked_abs_id", None))
     if (
         furthest_wins
         and baseline_pct
         and not force_update
-        and not same_device
+        and (linked_position or not same_device)
         and not is_internal
     ):
         new_pct = float(percentage)
         if new_pct < baseline_pct - 0.0001:
-            if baseline_unclaimed:
+            corroborated = False
+            fresh_movement = True
+            if linked_position or not baseline_unclaimed:
+                corroborated = _backward_move_is_corroborated(
+                    observation_doc, device, request_user_id,
+                )
+            if linked_position:
+                fresh_movement = _discovery_anchor_may_match(
+                    request_user_id, doc_hash, device_key, percentage,
+                    baseline=baseline_pct, minimum_delta=0.0, consume=corroborated,
+                )
+            if baseline_unclaimed and not linked_position:
                 logger.info(
                     f"KOSync: Allowing rewind from '{device}' for doc {doc_hash} "
                     f"({baseline_pct:.2%} -> {new_pct:.2%}): the higher position was never "
                     f"claimed by another device (stored device_id="
                     f"{baseline_device_id or 'none'}), so furthest-wins has no peer to defend"
                 )
-            elif _backward_move_is_corroborated(observation_doc, device, request_user_id):
+            elif corroborated and fresh_movement:
                 logger.info(
                     f"KOSync: Allowing rewind from '{device}' for doc {doc_hash} "
                     f"({baseline_pct:.2%} -> {new_pct:.2%}): that device has kept reading on "
@@ -2087,7 +2215,11 @@ def kosync_put_progress():
                     f"from a stale reader simply being opened"
                 )
             else:
-                logger.info(f"KOSync: Ignored progress from '{device}' for doc {doc_hash} (user has higher: {baseline_pct:.2f}% vs new {new_pct:.2f}%)")
+                logger.info(
+                    "KOSync: Ignored progress from '%s' for doc %s "
+                    "(user has higher: %.2f%% vs new %.2f%%): awaiting fresh forward reading",
+                    device, doc_hash, baseline_pct * 100, new_pct * 100,
+                )
                 return jsonify({
                     "document": doc_hash,
                     "timestamp": int(datetime_to_epoch(baseline.timestamp)) if baseline and baseline.timestamp else int(datetime_to_epoch(now))
@@ -2169,7 +2301,7 @@ def kosync_put_progress():
 
     if linked_book and not is_internal:
         if not _kosync_user_may_access_book(linked_book):
-            return _defer_kosync_book_access(doc_hash, linked_book, source="put")
+            return _defer_kosync_book_access(doc_hash, linked_book, source="put", discover=may_match)
         _record_user_kosync_state(linked_book, percentage, progress, now, request_user_id)
 
     # AUTO-DISCOVERY
@@ -2179,11 +2311,20 @@ def kosync_put_progress():
                 f"⚠️ KOSync: Rejected malformed document ID: '{doc_hash}' (PUT from {request.remote_addr})"
             )
         else:
-            _schedule_auto_discovery(
-                doc_hash,
-                user_id=request_user_id,
-                source="put",
-            )
+            if may_match:
+                _schedule_auto_discovery(
+                    doc_hash,
+                    user_id=request_user_id,
+                    source="put",
+                )
+            else:
+                reason = "no qualifying forward reading from this device"
+                logger.info(
+                    "KOSync: Not matching %s from '%s' yet: %s — a match needs this reader to read forward",
+                    doc_hash,
+                    device,
+                    reason,
+                )
 
     if linked_book:
         # NOTE: We intentionally do NOT update book_states here.
@@ -2434,7 +2575,7 @@ def koreader_upload_statistics():
 @kosync_auth_required
 def koreader_merged_statistics():
     """Return other devices' page-stat events so the plugin can merge them locally."""
-    if os.environ.get("KOREADER_COMBINE_DEVICE_STATS", "true").lower() != "true":
+    if not env_truthy("KOREADER_COMBINE_DEVICE_STATS", "true"):
         return jsonify({"enabled": False, "page_stats": []}), 200
 
     device = str(request.args.get("device") or "").strip()
@@ -2487,7 +2628,7 @@ def koreader_merged_statistics():
         # Whether the device should also file these merged reads into KOReader's
         # own reading history. That list is per-device by design ("books I opened
         # here"), so widening it to "books I read anywhere" is opt-in.
-        "merge_history": env_truthy("KOREADER_SYNC_READ_HISTORY", "false"),
+        "merge_history": user_preference_enabled("KOREADER_SYNC_READ_HISTORY", "false", _database_service),
     }), 200
 
 
@@ -2496,7 +2637,7 @@ def koreader_merged_statistics():
 @kosync_auth_required
 def koreader_upload_book_status():
     """Receive each device's sidecar reading statuses (summary.status)."""
-    if not env_truthy("KOREADER_STATUS_SYNC_ENABLED", "true"):
+    if not user_preference_enabled("KOREADER_STATUS_SYNC_ENABLED", "true", _database_service):
         return jsonify({"enabled": False, "accepted": 0}), 200
 
     data = request.json
@@ -2563,7 +2704,7 @@ def koreader_merged_book_status():
     already agrees with, so a device that has never reported a book still learns
     that book's status.
     """
-    if not env_truthy("KOREADER_STATUS_SYNC_ENABLED", "true"):
+    if not user_preference_enabled("KOREADER_STATUS_SYNC_ENABLED", "true", _database_service):
         return jsonify({"enabled": False, "books": []}), 200
 
     if not _database_service:
@@ -2668,7 +2809,7 @@ def koreader_link_device_hashes():
 
 
 def _annotation_sync_enabled() -> bool:
-    return os.environ.get("KOREADER_ANNOTATION_SYNC", "true").strip().lower() in ("true", "1", "yes", "on")
+    return user_preference_enabled("KOREADER_ANNOTATION_SYNC", "true", _database_service)
 
 
 @kosync_sync_bp.route('/device-sync/annotations/exchange', methods=['POST'])
@@ -3324,7 +3465,7 @@ def _scan_bookorbit_for_hash(doc_hash: str) -> Optional[str]:
     than the miss it is trying to avoid.
     """
     try:
-        bookorbit_client = _container.bookorbit_client()
+        bookorbit_client = _discovery_client("bookorbit_client")
     except Exception:
         return None
     if not bookorbit_client or not bookorbit_client.is_configured():
@@ -3421,7 +3562,8 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
             return matched
 
         # Fallback to Grimmory
-        if _container.booklore_client().is_configured():
+        booklore_client = _discovery_client("booklore_client")
+        if booklore_client.is_configured():
             logger.info("🔎 Starting Grimmory API search...")
 
             try:
@@ -3429,7 +3571,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                 books = _database_service.get_all_booklore_books()
                 scan_source = "Grimmory DB cache"
                 if not books:
-                    books = _container.booklore_client().get_all_books() or []
+                    books = booklore_client.get_all_books() or []
                     scan_source = "Grimmory in-memory cache"
 
                 logger.info(f"Scanning {len(books)} books from {scan_source}...")
@@ -3458,7 +3600,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                         book_title = book.get('title')
 
                         if book_id and not filename:
-                            hydrated = _container.booklore_client()._fetch_and_cache_detail(raw_id)
+                            hydrated = booklore_client._fetch_and_cache_detail(raw_id)
                             if hydrated:
                                 book = hydrated
                                 filename = hydrated.get('fileName')
@@ -3478,7 +3620,7 @@ def _try_find_epub_by_hash(doc_hash: str) -> Optional[str]:
                             return filename
 
                     try:
-                        book_content = _container.booklore_client().download_book(book_id)
+                        book_content = booklore_client.download_book(book_id)
                         if book_content:
                             computed_hash = _container.ebook_parser().get_kosync_id_from_bytes(filename, book_content)
 
@@ -4170,7 +4312,7 @@ def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") 
     or AUTO_CREATE_EBOOK_MAPPING is off. Preserves _active_scans dedupe.
     """
     global _queued_discovery_count
-    auto_create = os.environ.get('AUTO_CREATE_EBOOK_MAPPING', 'true').lower() == 'true'
+    auto_create = env_truthy('AUTO_CREATE_EBOOK_MAPPING', 'true')
     if not auto_create:
         return
     with _active_scans_lock:
@@ -4202,12 +4344,14 @@ def _schedule_auto_discovery(doc_id: str, user_id=None, *, source: str = "get") 
 
     def _wrapped():
         global _queued_discovery_count
+        token = set_current_user_id(user_id)
         try:
             if source == "get":
                 _run_get_auto_discovery(doc_id, user_id)
             else:
                 _run_put_auto_discovery_inner(doc_id, user_id)
         finally:
+            reset_current_user_id(token)
             with _active_scans_lock:
                 _active_scans.discard(doc_id)
             with _queued_discovery_lock:
@@ -4284,7 +4428,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
     candidates = _autodiscovery_audiobook_candidates(epub_filename, ebook_meta)
     if candidates and os.environ.get('KOSYNC_AUTO_MAP_ON_AGREEMENT', 'true').lower() == 'true':
         chosen, reason = _select_auto_map_candidate(ebook_meta, candidates)
-        if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason):
+        if chosen and _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, chosen, reason, user_id=user_id):
             return
     matches = [
         {
@@ -4306,14 +4450,20 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None) -> None:
             ))
         return
     book_id = f"ebook-{doc_hash_val[:16]}"
+    ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
+    abs_ebook_item_id = _resolve_abs_ebook_item(epub_filename)
     _database_service.save_book(Book(
-        abs_id=book_id, abs_title=title, ebook_filename=epub_filename,
+        abs_id=book_id, abs_title=ebook_meta.get("title") or title, ebook_filename=epub_filename,
+        ebook_source=ebook_source, ebook_source_id=ebook_source_id,
+        abs_ebook_item_id=abs_ebook_item_id,
         kosync_doc_id=doc_hash_val, status='active', sync_mode='ebook_only',
     ))
     _database_service.link_kosync_document(doc_hash_val, book_id)
     _database_service.dismiss_suggestion(doc_hash_val)
     if user_id is not None:
         _database_service.link_user_book(user_id, book_id)
+        if ebook_source == "BookOrbit":
+            _database_service.set_user_bookorbit_link(user_id, book_id, ebook_id=ebook_source_id)
     if _manager:
         _manager.run_sync_for_all_users(target_abs_id=book_id)
 

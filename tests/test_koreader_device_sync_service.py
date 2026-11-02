@@ -814,3 +814,112 @@ class TestKOReaderDeviceSyncService(unittest.TestCase):
         self.assertIsNotNone(doc)
         self.assertNotEqual(doc.linked_abs_id, "abs-b")
 
+    def test_content_mode_shared_file_hash_stays_with_first_owner_and_second_manifest_skipped(self):
+        """Two books share one EPUB in content mode. The first owner keeps the hash;
+        repeated manifests/downloads/reconcile must not steal it, and the second book
+        must not appear in the manifest/download once the conflict exists."""
+        self._write_book_file("shared.epub")
+        self.db.save_book(Book(abs_id="abs-a", abs_title="Book A",
+                               original_ebook_filename="shared.epub", status="active"))
+        self.db.save_book(Book(abs_id="abs-b", abs_title="Book B",
+                               original_ebook_filename="shared.epub", status="active"))
+
+        manifest = self.service.build_manifest()
+        winner = self.db.get_kosync_document("hash-shared").linked_abs_id
+        self.assertEqual(len(manifest["books"]), 1)
+        self.assertEqual(manifest["books"][0]["abs_id"], winner)
+
+        owners = []
+        for _ in range(3):
+            self.service.reconcile_hashes()
+            owners.append(self.db.get_kosync_document("hash-shared").linked_abs_id)
+            self.service.build_manifest()
+            owners.append(self.db.get_kosync_document("hash-shared").linked_abs_id)
+        self.assertEqual(len(set(owners)), 1, owners)
+
+        resolved_b = self.service.resolve_download("abs-b")
+        self.assertIsNone(resolved_b, "Second book must be unavailable due to hash conflict")
+
+    def test_atomic_concurrent_adoption_refusal(self):
+        """Interleaving regression: a foreign ensure_linked inside adopt must not allow A to serve."""
+        self._write_book_file("shared.epub")
+        self.db.save_book(Book(abs_id="abs-a", abs_title="Book A",
+                               original_ebook_filename="shared.epub", status="active"))
+        self.db.save_book(Book(abs_id="abs-b", abs_title="Book B",
+                               original_ebook_filename="shared.epub", status="active"))
+
+        original_adopt = self.service.database_service.adopt_kosync_document_if_unowned
+        def adopt_with_interleaving(doc_hash, abs_id, expected_storyteller_uuid=None, owner_user_id=None):
+            # Simulate another book linking the hash after pre-read but before atomic write
+            if abs_id == "abs-a":
+                self.db.ensure_linked_kosync_document(doc_hash, "abs-b")
+            return original_adopt(doc_hash, abs_id, expected_storyteller_uuid=expected_storyteller_uuid, owner_user_id=owner_user_id)
+
+        with patch.object(self.service.database_service, "adopt_kosync_document_if_unowned", side_effect=adopt_with_interleaving):
+            resolved = self.service._resolve_download_artifact(
+                self.db.get_book("abs-a"), link_hashes=True, allow_revalidation=False
+            )
+        # Artifact must be unavailable because adopt verification sees owner B
+        self.assertIsNone(resolved)
+        self.assertEqual(self.db.get_kosync_document("hash-shared").linked_abs_id, "abs-b")
+
+    def test_scoped_user_cannot_adopt_unlinked_document_owned_by_other_user(self):
+        """A scoped service must not adopt a document that belongs to another user."""
+        self._write_book_file("shared.epub")
+        user_a = self.db.create_user("userC", password="p")
+        user_b = self.db.create_user("userD", password="p")
+        self.db.save_book(Book(abs_id="abs-a", abs_title="Book A",
+                               original_ebook_filename="shared.epub", status="active", user_id=user_a.id))
+        self.db.save_book(Book(abs_id="abs-b", abs_title="Book B",
+                               original_ebook_filename="shared.epub", status="active", user_id=user_b.id))
+        # Create an unlinked document owned by user A
+        from src.db.models import KosyncDocument
+        doc = KosyncDocument(document_hash="hash-shared", user_id=user_a.id)
+        self.db.save_kosync_document(doc)
+        self.service.user_id = user_b.id
+        resolved = self.service._resolve_download_artifact(
+            self.db.get_book("abs-b"), link_hashes=True, allow_revalidation=False
+        )
+        # Adopt should be refused because document is owned by user A
+        self.assertIsNone(resolved)
+        # Document remains unlinked to abs-b
+        doc_after = self.db.get_kosync_document("hash-shared")
+        self.assertEqual(doc_after.linked_abs_id, None)
+
+    def test_primary_hash_reserved_by_another_book_without_document_row(self):
+        """If another book has kosync_doc_id set to the hash but no KosyncDocument row exists,
+        adopt must refuse and artifact must be unavailable."""
+        self._write_book_file("shared.epub")
+        self.db.save_book(Book(abs_id="abs-a", abs_title="Book A",
+                               original_ebook_filename="shared.epub", status="active",
+                               kosync_doc_id="hash-shared"))
+        self.db.save_book(Book(abs_id="abs-b", abs_title="Book B",
+                               original_ebook_filename="shared.epub", status="active"))
+        # No KosyncDocument row for hash-shared
+        resolved = self.service._resolve_download_artifact(
+            self.db.get_book("abs-b"), link_hashes=True, allow_revalidation=False
+        )
+        self.assertIsNone(resolved)
+
+    def test_filename_mode_shared_content_hash_does_not_block_unique_filename_hash(self):
+        """In filename mode the content hash may be shared, but each book has a unique
+        filename hash. A content-hash conflict must not prevent the unique filename-hash
+        artifact from being served."""
+        self._use_filename_hashing()
+        self._write_book_file("shared.epub")
+        self.db.save_book(Book(abs_id="abs-a", abs_title="Book A",
+                               original_ebook_filename="shared.epub", status="active"))
+        self.db.save_book(Book(abs_id="abs-b", abs_title="Book B",
+                               original_ebook_filename="shared.epub", status="active"))
+
+        manifest = self.service.build_manifest()
+        # Both books should appear because their filename hashes are unique
+        abs_ids = {item["abs_id"] for item in manifest["books"]}
+        self.assertEqual(abs_ids, {"abs-a", "abs-b"})
+        # Content hash is shared, so it should stay with the first owner
+        content_owner = self.db.get_kosync_document("content-shared").linked_abs_id
+        self.assertIn(content_owner, ("abs-a", "abs-b"))
+        # Filename hashes must be linked correctly
+        self.assertIsNotNone(self.db.get_kosync_document("name-Book A.epub"))
+        self.assertIsNotNone(self.db.get_kosync_document("name-Book B.epub"))
+

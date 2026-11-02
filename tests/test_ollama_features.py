@@ -191,6 +191,21 @@ class TestSuggestionRerank(_OllamaEnvGuard):
         result = svc._ollama_rerank_band("Beta book", "Y", matches)
         self.assertEqual(result[0]["display_name"], "Beta")
 
+    def test_rerank_leaves_an_exact_match_at_100(self):
+        # Reported: with the embed model installed, "Add all exact" fell from 538 to 110
+        # because blending turned every 100 into ~98.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        vectors = {"Wounds: Stories Nathan Ballingrud": [1.0, 0.0], "Wounds Nathan Ballingrud": [0.8, 0.6],
+                   "Wounded Someone": [0.6, 0.8]}
+        svc = _make_service(_StubOllama(vectors=vectors))
+        matches = [
+            {"display_name": "Wounds", "author": "Nathan Ballingrud", "score": 100.0, "ebook_filename": "w.epub"},
+            {"display_name": "Wounded", "author": "Someone", "score": 70.0, "ebook_filename": "x.epub"},
+        ]
+        result = svc._ollama_rerank_band("Wounds: Stories", "Nathan Ballingrud", matches)
+        self.assertEqual([(m["display_name"], m["score"]) for m in result],
+                         [("Wounds", 100.0), ("Wounded", 66.0)])
+
 
 class TestSuggestionBatch(_OllamaEnvGuard):
     def test_embeds_all_before_judging_any(self):
@@ -259,6 +274,31 @@ class TestSuggestionBatch(_OllamaEnvGuard):
         }]
         suppressed = svc._apply_ollama_reranking_batch(suggestions)
         self.assertIn("ab-x", suppressed)
+
+    def test_judge_gate_reports_progress_per_judged_suggestion(self):
+        # The scan page's bar fills through the judge pass instead of sitting at 100%.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "false"
+        os.environ["OLLAMA_JUDGE_SUGGESTIONS"] = "true"
+        os.environ["OLLAMA_SUGGEST_JUDGE_GATE"] = "true"
+        os.environ["OLLAMA_SUGGEST_AUTOKEEP_SCORE"] = "90"
+        svc = _make_service(_StubOllama(judge_result={"choice": None, "confidence": 0}))
+
+        def suggestion(key, score):
+            return {"bridge_key": key, "audio_title": key, "audio_author": "A",
+                    "matches": [{"display_name": "X", "score": score, "ebook_filename": "x.epub"},
+                                {"display_name": "Y", "score": 50, "ebook_filename": "y.epub"}]}
+
+        calls = []
+        svc._apply_ollama_reranking_batch(
+            [suggestion("weak-1", 70), suggestion("strong", 95), suggestion("weak-2", 60)],
+            progress=lambda done, total: calls.append((done, total)))
+        self.assertEqual(calls, [(0, 2), (1, 2), (2, 2)])
+
+        def broken(_done, _total):
+            raise RuntimeError("progress sink failed")
+
+        suppressed = svc._apply_ollama_reranking_batch([suggestion("weak-3", 70)], progress=broken)
+        self.assertEqual(suppressed, {"weak-3"})
 
     def test_judge_gate_autokeeps_strong_match(self):
         # A strong fuzzy top match is trusted without spending a chat call or suppressing.

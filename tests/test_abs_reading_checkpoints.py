@@ -16,6 +16,7 @@ def abs_sync(monkeypatch):
     monkeypatch.setenv("ABS_PROGRESS_OFFSET_SECONDS", "0")
     monkeypatch.setenv("ABS_SERVER", "http://abs.test")
     monkeypatch.setattr("src.services.write_tracker.record_write", Mock())
+    monkeypatch.setattr("src.api.api_clients._listening_sessions", {})
     api = ABSClient()
     api.session = Mock()
     api.session.post.return_value = SimpleNamespace(status_code=200, text="")

@@ -128,6 +128,29 @@ class TestStatsUserScoping(unittest.TestCase):
         self.mock_database_service.get_recent_listening_sessions.assert_not_called()
         self.mock_database_service.get_listening_finished_books.assert_not_called()
 
+    def test_listening_books_with_abs_come_from_abs_items(self):
+        self.user_abs.is_configured.return_value = True
+        self.user_abs.get_listening_stats.return_value = {
+            "days": {"2026-04-07": 900}, "totalTime": 900, "recentSessions": [],
+            "items": {"a": {"timeListening": 900, "mediaMetadata": {"title": "A"}}},
+        }
+        self.user_abs.get_all_progress_raw.return_value = {"a": {"lastUpdate": 1}}
+        self.user_abs.get_listening_sessions.return_value = [{"libraryItemId": "a", "updatedAt": 1775570400000}]
+        with self.app.test_request_context('/api/stats'), \
+                patch.object(self.ws, 'current_user', return_value=_user(1)):
+            payload = self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
+        self.assertEqual([(b["absId"], b["totalSeconds"]) for b in payload["books"]], [("a", 900)])
+        self.assertEqual(payload["books"][0]["lastReadAt"], 1775570400)
+        self.mock_database_service.get_all_reading_stats.assert_not_called()
+        self.user_abs.get_all_progress_raw.assert_called_once()
+
+    def test_listening_books_without_abs_come_from_local_sessions(self):
+        self._local_listening_setup()
+        with self.app.test_request_context('/api/stats'), \
+                patch.object(self.ws, 'current_user', return_value=_user(1)):
+            self.ws._build_listening_stats_payload(self.ws._get_stats_timezone())
+        self.mock_database_service.get_all_reading_stats.assert_called()
+
     def test_yearly_recap_without_abs_uses_local_sessions(self):
         self._local_listening_setup()
         self.mock_database_service.get_koreader_yearly_recap.return_value = {}

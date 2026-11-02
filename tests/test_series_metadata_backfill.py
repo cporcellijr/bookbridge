@@ -89,6 +89,23 @@ class TestAbsSeriesExtraction(unittest.TestCase):
             ("A Mage's Cultivation", 1.0),
         )
 
+    def test_a_joined_series_name_takes_the_first_numbered_series(self):
+        """ABS joins every series a book belongs to as "Name #N, Name"."""
+        self.assertEqual(
+            extract_series_from_abs_metadata({"seriesName": "The Stormlight Archive #1, The Cosmere"}),
+            ("The Stormlight Archive", 1.0),
+        )
+        self.assertEqual(
+            extract_series_from_abs_metadata({"seriesName": "The Stormlight Archive #3.5, The Cosmere #9"}),
+            ("The Stormlight Archive", 3.5),
+        )
+
+    def test_a_series_name_with_a_comma_keeps_its_whole_name(self):
+        self.assertEqual(
+            extract_series_from_abs_metadata({"seriesName": "Love, Death & Robots #2"}),
+            ("Love, Death & Robots", 2.0),
+        )
+
 
 class TestReportedTitlesDefeatTheTitleHeuristic(unittest.TestCase):
     """The old backfill fell back to the title for non-ABS books; that is why
