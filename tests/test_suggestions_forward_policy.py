@@ -138,3 +138,34 @@ def test_dashboard_suggestion_partial_titles_are_medium_confidence():
 def test_dashboard_suggestion_accepts_an_author_list():
     hits = [{"source": "booklore", "title": "Little Eve", "author": ["Catriona Ward"], "confidence": "medium"}]
     assert SyncManager._screen_suggestion_matches("Little Eve", "Catriona Ward", hits)[0]["confidence"] == "high"
+
+
+# ---- titles that differ only in form ----------------------------------------
+
+# Reported on the Suggestions page at 73-89% though they name the same book.
+_SAME_BOOK_IN_ANOTHER_FORM = [
+    ("Wounds: Stories", "Nathan Ballingrud", "Wounds", "Nathan Ballingrud"),
+    ("Great & Secret Show", "Clive Barker", "The Great and Secret Show", "Clive Barker"),
+    ("Hearthomancy Vol. 2", "M.E. Thorne", "Hearthomancy Vol. 2: Hearthomancy", "M. E. Thorne"),
+    ("The Possession of Alba Diaz", "Isabel Canas", "The Possession of Alba Díaz", "Isabel Cañas"),
+    ("Awakening: A Fantasy Adventure", "Sarah Hawke", "Awakening", "Sarah Hawke"),
+]
+
+
+def test_a_form_only_subtitle_ampersand_article_or_accent_does_not_lower_the_score():
+    for audio, audio_author, ebook, ebook_author in _SAME_BOOK_IN_ANOTHER_FORM:
+        assert _scores(_scan(audio, audio_author, (ebook, ebook_author)))[ebook] == 100.0, audio
+
+
+def test_the_automatic_paths_score_form_differences_the_same_way():
+    for audio, audio_author, ebook, ebook_author in _SAME_BOOK_IN_ANOTHER_FORM:
+        score = SuggestionsService._ebook_audio_pair_score(
+            ebook, SuggestionsService._author_names(ebook_author), audio, audio_author)
+        assert score == 100.0, audio
+
+
+def test_a_naming_subtitle_or_other_volume_still_differs():
+    assert _scores(_scan("Dune: Messiah", "Frank Herbert", ("Dune", "Frank Herbert")))["Dune"] <= 89.0
+    assert "Hearthomancy Vol. 1: Hearthomancy" not in _scores(
+        _scan("Hearthomancy Vol. 2", "M.E. Thorne", ("Hearthomancy Vol. 1: Hearthomancy", "M. E. Thorne")))
+    assert _scores(_scan("Eden's Revenge", "Barry Kirwan", ("Eden's Endgame", "Barry Kirwan")))["Eden's Endgame"] < 95.0

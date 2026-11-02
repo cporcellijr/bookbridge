@@ -156,6 +156,8 @@ class SuggestionsService:
             return 0.0
 
         def ratio(a, b):
+            a, b = ("".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+                    for s in (a, b))
             return fuzz.token_sort_ratio(a, b, processor=utils.default_process)
 
         best = ratio(" & ".join(names), " & ".join(candidate_names))
@@ -615,10 +617,36 @@ class SuggestionsService:
         metadata = {"seriesName": label} if label else ((ab.get("media") or {}).get("metadata") or {})
         return self._series_key(*extract_series_from_abs_metadata(metadata))
 
-    @staticmethod
-    def _title_score(audio_title: str, audio_full_title: str, candidate_title: str) -> tuple[float, bool]:
+    # A subtitle that only names the form ("Stories", "A Novel", "A Fantasy Adventure")
+    # doesn't say which book it is.
+    _GENERIC_SUBTITLE_RE = re.compile(
+        r"(?:(?:a|an|the)\s+)?(?:[\w'-]+\s+){0,2}(?:novel|novella|novelette|story|stories|tales|"
+        r"memoir|thriller|mystery|romance|adventure|collection|anthology|poems|essays)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _comparable_title(cls, title: str) -> str:
+        """The form two titles compare in: accents, "&" vs "and", a leading article, a
+        form-only subtitle, and a subtitle repeating a numbered title ("Hearthomancy
+        Vol. 2: Hearthomancy") don't tell books apart."""
+        s = "".join(c for c in unicodedata.normalize("NFKD", title or "") if not unicodedata.combining(c))
+        s = re.sub(r"\s+&\s+", " and ", s)
+        head, sep, sub = (part.strip() for part in s.partition(":"))
+        if sep and head and (
+            cls._GENERIC_SUBTITLE_RE.fullmatch(sub)
+            or (cls._volume_number(head) is not None
+                and set(sub.casefold().split()) <= set(head.casefold().split()))
+        ):
+            s = cls._strip_volume_credit(head)
+        return re.sub(r"^(?:the|a|an)\s+", "", s.strip(), flags=re.IGNORECASE)
+
+    @classmethod
+    def _title_score(cls, audio_title: str, audio_full_title: str, candidate_title: str) -> tuple[float, bool]:
         from rapidfuzz import fuzz
 
+        audio_title, audio_full_title, candidate_title = (
+            cls._comparable_title(t) for t in (audio_title, audio_full_title, candidate_title))
         score = float(fuzz.token_sort_ratio(audio_title, candidate_title))
         if audio_full_title:
             score = max(score, float(fuzz.token_sort_ratio(audio_full_title, candidate_title)))
@@ -1694,9 +1722,9 @@ class SuggestionsService:
         def last(ns): return {n.split()[-1].casefold() for n in ns if n.split()}
         return bool(bare(names) & last(other_names) or bare(other_names) & last(names))
 
-    @staticmethod
-    def _same_words_in_order(title: str, other: str) -> bool:
-        return bool(title) and title.split() == other.split()
+    @classmethod
+    def _same_words_in_order(cls, title: str, other: str) -> bool:
+        return bool(title) and cls._comparable_title(title).split() == cls._comparable_title(other).split()
 
     @staticmethod
     def _reordered_title(title_score: float, exact_title: bool) -> bool:
