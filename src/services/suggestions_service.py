@@ -202,6 +202,8 @@ class SuggestionsService:
             candidate_language = str(getattr(candidate, 'language', None) or '').strip()
             candidate_source = (getattr(candidate, 'source', None) or '').strip()
             hypotheses = [(candidate_title, candidate_author)]
+            # Author credits from metadata, not guessed from a filename.
+            trusted_author = candidate_author
             series = None
             # The library scan builds Local File candidates from the filename alone.
             if candidate_source == "Local File" and not candidate_author:
@@ -209,6 +211,7 @@ class SuggestionsService:
                 meta_title, meta_authors = (
                     read_local_ebook_metadata(local_path) if local_path else ("", "")
                 )
+                trusted_author = meta_authors
                 hypotheses = self._title_author_hypotheses(candidate_title, meta_title, meta_authors)
                 candidate_title, candidate_author = hypotheses[0]
                 if local_path:
@@ -224,7 +227,8 @@ class SuggestionsService:
                 except Exception as e:
                     self.logger.debug(f"Calibre identifier lookup failed for {source_id}: {e}")
 
-            volumes = [self._volume_number(title) for title, _ in hypotheses]
+            folded_titles = [self._normalize_title_for_match(title).casefold() for title, _ in hypotheses]
+            volumes = [self._title_number(title, folded) for (title, _), folded in zip(hypotheses, folded_titles)]
             edition_titles = {}
             for title, _ in hypotheses:
                 stripped = self._normalize_title_for_match(title)
@@ -239,12 +243,15 @@ class SuggestionsService:
                     (self._normalize_title_for_match(title), self._author_names(author))
                     for title, author in hypotheses
                 ],
+                "trusted_names": self._author_names(trusted_author),
                 "volume": next((volume for volume in volumes if volume is not None), None),
+                # A "Book N" credit dropped by normalizing, or a bare trailing number ("Rescue 3").
                 "titled_volume": any(
                     self._normalize_title_for_match(title)
                     != self._normalize_title_for_match(title, strip_volume=False)
                     for title, _ in hypotheses
-                ),
+                ) or any(self._TRAILING_NUMBER_RE.search(folded) for folded in folded_titles),
+                "edition_credit": self._has_edition_credit(candidate_title),
                 "series": series,
                 "edition_titles": edition_titles,
                 "language": candidate_language,
@@ -437,6 +444,7 @@ class SuggestionsService:
                     "source_id": candidate_info.get("source_id"),
                     "source_path": candidate_info.get("path") or "",
                     "score": 100.0,
+                    "match_reason": "authoritative",
                 }
         return None
 
@@ -795,6 +803,56 @@ class SuggestionsService:
             return 100.0, "same_folder"
         return 94.0, "same_folder_ambiguous"
 
+    @classmethod
+    def _bulk_evidence(cls, candidate_info: dict, audio_names: List[str], names: List[str],
+                       author_note: Optional[str], title_key: str, edition_credit: bool) -> dict:
+        """Facts `bulk_ineligibility` needs, kept on the match so a cached scan can be rechecked."""
+        return {
+            "author_agrees": bool(cls._score_author_names(audio_names, names)),
+            "author_note": author_note,
+            "title_key": title_key,
+            "edition_credit": bool(edition_credit or candidate_info.get("edition_credit")),
+        }
+
+    @staticmethod
+    def _match_identity(match: dict) -> tuple:
+        return (match.get("source") or "", str(match.get("source_id") or match.get("ebook_filename") or ""))
+
+    @classmethod
+    def bulk_ineligibility(cls, suggestion: dict, min_score: float = 100.0,
+                           allow_local_file: bool = False) -> Optional[str]:
+        """Why a suggestion's top match needs a person to pick it; None when it can be added unattended.
+
+        "Add all exact" (checked again on the server) and auto-match share this; only
+        auto-match, which hashes the file and guards its owner, accepts a Local File. A
+        match cached before its evidence was recorded fails closed until the next full scan.
+        """
+        matches = (suggestion or {}).get("matches") or []
+        if not matches:
+            return "no_match"
+        top = matches[0]
+        score = float(top.get("score") or 0.0)
+        if score < min_score:
+            return "below_threshold"
+        others = [m for m in matches[1:] if cls._match_identity(m) != cls._match_identity(top)]
+        if any(float(m.get("score") or 0.0) >= score for m in others):
+            return "tie"
+        if top.get("match_reason") == "authoritative":
+            return None
+        if "author_agrees" not in top:
+            return "needs_rescan"
+        if (top.get("source") or "") == "Local File" and not allow_local_file:
+            return "local_file"
+        if top.get("edition_credit") or top.get("match_reason") in ("same_folder_ambiguous", "subtitle_only", "edition"):
+            return "edition"
+        if not top.get("author_agrees"):
+            return "author_unconfirmed"
+        title_key = top.get("title_key")
+        # Volumes of one series can share a title ("Warlock" #1-#3) even when only one scores 100.
+        if not title_key or any(m.get("title_key") == title_key and m.get("author_agrees") for m in others):
+            return "same_title"
+        return None
+
     def _suggestion_shell(self, ab: dict, matches: List[dict]) -> dict:
         """Build the suggestion dict skeleton (audio metadata + matches)."""
         audio_source = self._audio_source(ab)
@@ -874,21 +932,41 @@ class SuggestionsService:
             1 for candidate_info in per_book_pool
             if self._paths_share_parent(audio_path, candidate_info.get("path"))
         )
+        # Titles compare casefolded; the normalized forms above keep their case for the volume checks.
+        cf_audio_title = norm_audio_title.casefold()
+        cf_audio_full_title = norm_audio_full_title.casefold()
+        cf_unstripped_title = unstripped_audio_title.casefold()
+        cf_unstripped_full_title = unstripped_audio_full_title.casefold()
+        trailing_number = self._TRAILING_NUMBER_RE.search(cf_audio_title)
+        if trailing_number:
+            audio_titled_volume = True
+            if audio_volume is None:
+                audio_volume = int(trailing_number.group(1))
+        audio_edition_credit = self._has_edition_credit(audio_title)
         for candidate_info in per_book_pool:
+            trusted_names = candidate_info.get("trusted_names") or []
             scored = []
             for norm_title, names in candidate_info["hypotheses"]:
-                title_score, subtitle_stripped = self._title_score(norm_audio_title, norm_audio_full_title, norm_title)
+                folded = norm_title.casefold()
+                title_score, subtitle_stripped = self._title_score(cf_audio_title, cf_audio_full_title, folded)
                 # Whether only dropping the candidate's edition credit made the titles agree.
                 unstripped = candidate_info.get("edition_titles", {}).get(norm_title)
                 edition_stripped = bool(unstripped) and self._title_score(
-                    unstripped_audio_title, unstripped_audio_full_title, unstripped)[0] < title_score
-                scored.append((title_score, subtitle_stripped, names, edition_stripped))
+                    cf_unstripped_title, cf_unstripped_full_title, unstripped.casefold())[0] < title_score
+                exact_title = any(self._same_words_in_order(folded, audio_form)
+                                  for audio_form in (cf_audio_title, cf_audio_full_title))
+                subtitle_stripped = subtitle_stripped or self._reordered_title(title_score, exact_title)
+                # A filename reading with no author can't hide the metadata's credit.
+                scored.append((title_score, subtitle_stripped, names or trusted_names,
+                               edition_stripped, exact_title, folded))
 
             if self._paths_share_parent(audio_path, candidate_info.get("path")):
-                title_score = max(t for t, _, _, _ in scored)
+                title_score, _, names, _, _, folded = max(scored, key=lambda s: s[0])
                 score, match_reason = self._same_folder_tier(same_folder_count, title_score)
                 match = self._match_from_pool(candidate_info, score)
                 match["match_reason"] = match_reason
+                match.update(self._bulk_evidence(
+                    candidate_info, audio_names, names, None, folded, audio_edition_credit))
                 matches.append(match)
                 continue
 
@@ -932,21 +1010,23 @@ class SuggestionsService:
                     volume_unconfirmed = True
 
             best = None
-            for title_score, subtitle_stripped, names, edition_stripped in scored:
+            for title_score, subtitle_stripped, names, edition_stripped, exact_title, folded in scored:
                 subtitle_stripped = subtitle_stripped or volume_unconfirmed
-                if audio_author:
-                    score = (title_score * 0.7) + (self._score_author_names(audio_names, names) * 0.3)
-                else:
-                    score = title_score
+                score, author_note = self._author_weighted_score(title_score, exact_title, audio_names, names)
+                if score is None:
+                    continue
                 if subtitle_stripped:
                     score = min(score, self._SUBTITLE_STRIPPED_SCORE_CAP)
                 if edition_stripped:
                     score = min(score, self._EDITION_STRIPPED_SCORE_CAP)
                 if best is None or score > best[0]:
-                    best = (score, title_score, subtitle_stripped, edition_stripped)
-            score, title_score, subtitle_stripped, edition_stripped = best
+                    best = (score, title_score, subtitle_stripped, edition_stripped, names, author_note, folded)
+            if best is None:
+                # Every reading of this ebook credits a different author under a different title.
+                continue
+            score, title_score, subtitle_stripped, edition_stripped, names, author_note, folded = best
             series_match = same_volume and any(
-                self._score_author_names(audio_names, names) for _, _, names, _ in scored
+                self._score_author_names(audio_names, names) for _, _, names, _, _, _ in scored
             )
 
             if series_match:
@@ -967,6 +1047,9 @@ class SuggestionsService:
 
             match = self._match_from_pool(candidate_info, max(score, 0.0))
             match["_direct_match"] = direct_match
+            match.update(self._bulk_evidence(
+                candidate_info, audio_names, names, author_note, folded,
+                audio_edition_credit or edition_stripped))
             if series_match:
                 match["match_reason"] = "same_series"
             elif subtitle_stripped:
@@ -1595,6 +1678,50 @@ class SuggestionsService:
         def last(ns): return {n.split()[-1].casefold() for n in ns if n.split()}
         return bool(bare(names) & last(other_names) or bare(other_names) & last(names))
 
+    @staticmethod
+    def _same_words_in_order(title: str, other: str) -> bool:
+        return bool(title) and title.split() == other.split()
+
+    @staticmethod
+    def _reordered_title(title_score: float, exact_title: bool) -> bool:
+        """Token-sort scoring ignores word order, so "Immortal Mana" scores 100 against
+        "Mana Immortal"; that stays reviewable, like a dropped subtitle."""
+        return title_score >= 100 and not exact_title
+
+    @classmethod
+    def _author_weighted_score(cls, title_score: float, exact_title: bool, names: List[str],
+                               other_names: List[str]) -> tuple[Optional[float], Optional[str]]:
+        """Combine a title score with author evidence: ``(score, note)``; a None score rules the pair out.
+
+        Agreeing authors weigh 30%. Missing evidence on either side (or a bare surname
+        credit) scores the title alone, and only an exact title reaches auto-match
+        confidence. Credited authors who are different people rule out a different
+        title; an identical title stays reviewable. The note is "author_missing" or
+        "author_conflict" when that evidence decided the score.
+        """
+        author_score = cls._score_author_names(names, other_names)
+        if author_score:
+            return (title_score * 0.7) + (author_score * 0.3), None
+        if names and other_names and not cls._bare_surname_overlap(names, other_names):
+            return (cls._AUTHOR_CONFLICT_SCORE if exact_title else None), "author_conflict"
+        score = title_score if exact_title else min(title_score, cls._NO_AUTHOR_INEXACT_SCORE_CAP)
+        return score, "author_missing"
+
+    _EDITION_CREDIT_WORDS = (_EDITION_QUALIFIERS - {"unabridged"}) | frozenset((
+        "edition adaptation dramatized dramatised dramatization dramatisation").split())
+
+    @classmethod
+    def _has_edition_credit(cls, title: str) -> bool:
+        """Whether matching ignores an edition or adaptation credit in the title
+        ("Expanded Edition", "(20th Anniversary Edition)", "[Dramatized Adaptation]").
+        "(Unabridged)" is not one."""
+        if cls._normalize_title_for_match(title, strip_editions=False) != cls._normalize_title_for_match(title):
+            return True
+        return any(
+            {word.lower() for word in re.findall(r"[^\W\d_]+", group)} & cls._EDITION_CREDIT_WORDS
+            for group in re.findall(r"[\(\[]([^\)\]]*)[\)\]]", title or "")
+        )
+
     @classmethod
     def _ebook_audio_pair_score(cls, ebook_title: str, ebook_names: List[str],
                                 audio_title: str, audio_author: str) -> Optional[float]:
@@ -1614,22 +1741,13 @@ class SuggestionsService:
         if None not in (ebook_number, audio_number) and ebook_number != audio_number:
             return None
         title_score, subtitle_stripped = cls._title_score(norm_ebook, "", norm_audio)
-        exact_title = norm_ebook == norm_audio
-
-        audio_names = cls._author_names(audio_author)
-        author_score = cls._score_author_names(ebook_names, audio_names)
-        if author_score:
-            score = (title_score * 0.7) + (author_score * 0.3)
-        elif ebook_names and audio_names and not cls._bare_surname_overlap(ebook_names, audio_names):
-            if not exact_title:
-                return None
-            return cls._AUTHOR_CONFLICT_SCORE
-        elif exact_title:
-            score = title_score
-        else:
-            score = min(title_score, cls._NO_AUTHOR_INEXACT_SCORE_CAP)
-
-        if subtitle_stripped or (ebook_number is None) != (audio_number is None):
+        exact_title = cls._same_words_in_order(norm_ebook, norm_audio)
+        score, _note = cls._author_weighted_score(
+            title_score, exact_title, ebook_names, cls._author_names(audio_author))
+        if score is None:
+            return None
+        if (subtitle_stripped or cls._reordered_title(title_score, exact_title)
+                or (ebook_number is None) != (audio_number is None)):
             score = min(score, cls._SUBTITLE_STRIPPED_SCORE_CAP)
         return score
 

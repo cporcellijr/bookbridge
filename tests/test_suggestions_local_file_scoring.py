@@ -379,3 +379,10 @@ def test_nfd_filename_scores_like_nfc_metadata():
     stem = unicodedata.normalize("NFD", "Les Misérables - Victor Hugo")
     assert _top("Les Misérables", "Victor Hugo", _local(f"{stem}.epub"))["score"] == 100.0
     assert SuggestionsService._author_score(unicodedata.normalize("NFD", "Roberto Bolaño"), "Roberto Bolaño") == 100.0
+
+
+def test_a_filename_with_no_author_cannot_hide_the_metadata_author(tmp_path):
+    # The bare-filename reading has no author; without carrying the metadata's credit it
+    # would score the exact title alone (100) against an audiobook by someone else.
+    book = _calibre_book(tmp_path, "The Road.epub", embedded_opf=_opf("The Road", ("Jack London", "aut")))
+    assert _top("The Road", "Cormac McCarthy", book)["score"] == 70.0

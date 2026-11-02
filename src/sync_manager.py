@@ -2818,6 +2818,37 @@ class SyncManager:
         except Exception as e:
             logger.error(f"❌ Error checking suggestions: {e}", exc_info=True)
 
+    @staticmethod
+    def _screen_suggestion_matches(title: str, author: str, matches: list) -> list:
+        """Score search hits with the shelf-watch title/author rules.
+
+        A hit by a different credited author under a different title, or with another
+        volume number, is dropped; only a near-certain hit stays "high". The ebook
+        attached to the audiobook's own item is kept as found.
+        """
+        from src.services.suggestions_service import SuggestionsService
+
+        kept = []
+        for match in matches:
+            if match.get('source') == 'abs_direct' or not title:
+                kept.append(match)
+                continue
+            ebook_title, ebook_author = match.get('title'), match.get('author')
+            if isinstance(ebook_author, list):
+                ebook_author = ', '.join(str(name) for name in ebook_author if name)
+            if not ebook_title:
+                ebook_title, ebook_author = SuggestionsService._split_title_author_stem(
+                    Path(match.get('filename') or '').stem)
+            score = SuggestionsService._ebook_audio_pair_score(
+                ebook_title or '', SuggestionsService._author_names(ebook_author or ''), title, author or '')
+            if score is None:
+                continue
+            match['confidence'] = 'high' if score >= 95 else 'medium'
+            kept.append(match)
+        if len(kept) < len(matches):
+            logger.debug(f"Suggestion for '{title}': dropped {len(matches) - len(kept)} hit(s) by another author or volume")
+        return kept
+
     def _create_suggestion(self, abs_id, progress_data):
         """Create a new suggestion for an unmapped book."""
         logger.info(f"🔍 Found potential new book for suggestion: '{abs_id}'")
@@ -2967,6 +2998,8 @@ class SyncManager:
                 except Exception as e:
                     logger.warning(f"⚠️ ABS Search failed during suggestion: {e}", exc_info=True)
             
+            matches = self._screen_suggestion_matches(title, author, matches)
+
             # 3. Save to DB
             if not matches:
                 logger.debug(f"No matches found for '{title}', skipping suggestion creation")

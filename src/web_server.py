@@ -9439,6 +9439,8 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
     if not suggestions:
         return results
 
+    from src.services.suggestions_service import SuggestionsService
+
     threshold = _auto_match_threshold()
     mapping_service = container.book_mapping_service()
     cache_by_abs = results.get('cache_by_abs') or {}
@@ -9461,6 +9463,17 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
             )
         score = float(top.get('score') or 0.0) if top else 0.0
         if not top or score < threshold:
+            remaining.append(suggestion)
+            continue
+        block = SuggestionsService.bulk_ineligibility(
+            {'matches': sorted(eligible_matches, key=lambda m: m.get('score') or 0.0, reverse=True)},
+            min_score=threshold, allow_local_file=True,
+        )
+        if block:
+            logger.info(
+                "Auto-match left '%s' for review (score=%.1f): %s",
+                suggestion.get('abs_title'), score, block,
+            )
             remaining.append(suggestion)
             continue
         try:
@@ -10085,6 +10098,16 @@ def _apply_queue_readalong_request(queue_items: list[dict]) -> None:
             item['readalong_epub_requested'] = True
 
 
+def _suggestion_bulk_block(suggestion: dict) -> "str | None":
+    """Why "Add all exact" leaves this suggestion for a person; None when it can be added."""
+    from src.services.suggestions_service import SuggestionsService
+
+    matches = suggestion.get('matches') or []
+    if matches and is_comic_ebook_filename(matches[0].get('ebook_filename')):
+        return 'comic'
+    return SuggestionsService.bulk_ineligibility(suggestion)
+
+
 def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     """Build a batch-match queue item from a scanned suggestion's top match (the ebook
     BookBridge is most confident about). Used by bulk add ('add all exact' / 'add
@@ -10264,16 +10287,25 @@ def suggestions_page():
             suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
             cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
 
+            # "Add all exact" is rechecked here rather than trusting the page's list.
+            exact_only = request.form.get('bulk_intent') == 'exact'
+
             requested = len(keys)
             added = 0
             skipped_missing = 0
             skipped_no_item = 0
             already_queued = 0
+            skipped_manual = 0
 
             for key in keys:
                 suggestion = cache_by_abs.get(key)
                 if not suggestion:
                     skipped_missing += 1
+                    continue
+                block = _suggestion_bulk_block(suggestion)
+                # A tie needs the ebook picked on the card, even for a selected audiobook.
+                if block and (exact_only or block == 'tie'):
+                    skipped_manual += 1
                     continue
                 item = _queue_item_from_suggestion(suggestion)
                 if not item:
@@ -10290,9 +10322,11 @@ def suggestions_page():
                 )
             else:
                 logger.info(
-                    f"✅ add_many_to_queue: requested={requested} added={added} skipped_missing={skipped_missing} skipped_no_item={skipped_no_item} already_queued={already_queued}"
+                    f"✅ add_many_to_queue: requested={requested} added={added} skipped_missing={skipped_missing} skipped_no_item={skipped_no_item} already_queued={already_queued} skipped_manual={skipped_manual}"
                 )
-            return _match_queue_response()
+            response = make_response(_match_queue_response())
+            response.headers['X-Skipped-Manual'] = str(skipped_manual)
+            return response
 
         elif action == 'forge_and_match_queue':
             # Same forge/match-all path as the Add Book page: Storyteller items just match,
@@ -15122,6 +15156,7 @@ def create_app(test_container=None):
     app.context_processor(inject_global_vars)
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
     app.jinja_env.globals['suggestion_source_badge'] = suggestion_source_badge
+    app.jinja_env.globals['suggestion_bulk_block'] = _suggestion_bulk_block
 
     # i18n: gettext for the Jinja layer. The selector is passed as an argument
     # (Flask-Babel >= 3.0 dropped the @babel.localeselector decorator); it is
