@@ -1298,13 +1298,13 @@ as a bonus alignment source.</p>
 <h3 id="an-alignment-is-rejected-or-opens-at-the-wrong-place">An alignment is rejected, or opens at the wrong place</h3>
 <ul>
 <li>Confirm that the selected ebook and audiobook are the same edition. The
-  <strong>Content-Match Guard</strong> deliberately refuses maps with too little shared wording;
+  <strong>Refuse alignments that look like a different book</strong> deliberately refuses maps with too little shared wording;
   leave it enabled unless you know the pairing is a rough but intended match.</li>
-<li>Open <strong>Settings -&gt; Sync -&gt; Alignment Health</strong>. A low-quality map can be rebuilt with
+<li>Open <strong>Settings -&gt; Alignment -&gt; Alignment Health</strong>. A low-quality map can be rebuilt with
   <strong>Remap alignment</strong>, and <strong>Restore previous</strong> returns to the last saved map if the
   replacement is worse.</li>
 <li>If a collection's audiobook narrates chapters in a different order from the EPUB,
-  enable experimental <strong>Segmented Alignment Maps</strong> in Settings, then remap that book.
+  enable experimental <strong>Handle chapters read aloud out of order</strong> in Settings, then remap that book.
   It is off by default and is not needed for normally ordered books.</li>
 <li>
 <p><strong>Forced alignment</strong> (on by default) matches each audiobook directly against its ebook
@@ -1323,10 +1323,10 @@ as a bonus alignment source.</p>
   See <a href="../TRANSCRIPTION_RECOVERY/">transcription recovery</a>.</p>
 </li>
 <li>If local Whisper detects the wrong language, set <strong>Whisper Language</strong> under
-  Transcription to a code such as <code>ru</code> or <code>en</code>. <strong>Filter Non-Speech Audio</strong> can
+  Transcription to a code such as <code>ru</code> or <code>en</code>. <strong>Skip music and silence</strong> can
   reduce transcription over music and silence; test quiet narration first.
   Both affect new local transcriptions, not saved transcripts. Keep the
-  Content-Match Guard enabled while checking the ebook and audio pairing.</li>
+  <strong>Refuse alignments that look like a different book</strong> check on while checking the ebook and audio pairing.</li>
 </ul>
 <h3 id="read-along-highlights-run-ahead-or-stop-partway-through-a-sentence">Read-along highlights run ahead or stop partway through a sentence</h3>
 <p>Regenerate the read-along after upgrading to get complete sentence highlights
@@ -1341,7 +1341,7 @@ the checksum. The plugin also uses KOReader's metadata handling when managed boo
 are renamed, replaced or removed.</p>
 <h3 id="a-deliberate-rewind-does-not-stick">A deliberate rewind does not stick</h3>
 <ul>
-<li>Confirm <strong>Honor a Deliberate Rewind</strong> is enabled under <strong>Settings -&gt; Sync</strong>.</li>
+<li>Confirm <strong>Honor a Deliberate Rewind</strong> is enabled under <strong>Settings -&gt; Reading &amp; Sync</strong>.</li>
 <li>After going back, make some forward progress in the same app. One isolated backward
   report is intentionally held so a stale or echoed position cannot pull every reader
   backward.</li>
@@ -1351,7 +1351,7 @@ are renamed, replaced or removed.</p>
 <ul>
 <li>Make sure your <code>/books</code> volume is mounted correctly in <code>docker-compose.yml</code>.</li>
 <li>Check file permissions for the user running the container.</li>
-<li>If the missing books should come from Grimmory, run <strong>Settings -&gt; System -&gt; Advanced -&gt; Refresh Grimmory Cache</strong>.</li>
+<li>If the missing books should come from Grimmory, run <strong>Settings -&gt; Maintenance -&gt; Refresh Grimmory Cache</strong>.</li>
 <li>If the missing books should come from BookOrbit, confirm BookOrbit is enabled, test the connection, and retry the matching flow.</li>
 <li>If the missing books should come from CWA, confirm CWA is enabled, test the connection, and make sure the book is visible in Calibre-Web Automated.</li>
 </ul>
@@ -1419,8 +1419,8 @@ move the audio position. You will see a line like:</p>
   same book will see the two servers hand back different positions.</li>
 </ul>
 <h3 id="hardcover-or-storygraph-gets-many-requests-or-a-book-never-updates-there">Hardcover or StoryGraph gets many requests, or a book never updates there</h3>
-<p>BookBridge posts a book's progress to a tracker once the book has been idle for that
-tracker's <strong>Update Cooldown</strong>. If the post fails — usually because the book has no match
+<p>BookBridge posts a book's progress to a tracker once the book has been idle for the
+<strong>Wait before posting progress</strong> time (Settings → Reading &amp; Sync → Posting to trackers). If the post fails — usually because the book has no match
 on Hardcover or StoryGraph — it retries after 15 minutes, then waits twice as long each
 time, up to every 6 hours, so an unmatched book costs only a few requests a day. Before
 7.9.0 it retried on every sync cycle, which could add up to hundreds of Hardcover
@@ -1435,7 +1435,7 @@ New progress posts after the usual cooldown once the book is matched.</p>
 <ul>
 <li>Update the <strong>Bridge Sync</strong> KOReader plugin to the current release or newer on every KOReader device that should sync annotations.</li>
 <li>Plain KOReader/KOSync progress sync does not sync annotations. In KOReader, use <strong>Tools -&gt; Bridge Sync -&gt; Sync Highlights</strong> or <strong>Sweep All Highlights</strong>.</li>
-<li>Make sure <strong>Highlight Sync</strong> is enabled on the <strong>Settings -&gt; Integrations -&gt; KOReader / KoSync</strong> card.</li>
+<li>Make sure <strong>Highlight Sync</strong> is enabled on the <strong>Settings -&gt; Services -&gt; KOReader / KoSync</strong> card.</li>
 <li>For Grimmory web-reader annotations, enable <strong>Highlight Sync</strong> in that reader's Grimmory integration.</li>
 <li>For BookOrbit web-reader highlights, fill in the BookOrbit KOReader sync username/password in that reader's Integrations and make sure the owner matches the BookOrbit user.</li>
 <li>For BookFusion, enable <strong>BookFusion -&gt; Highlight Sync</strong> in that reader's Integrations and confirm the book is linked to BookFusion.</li>
@@ -1542,7 +1542,7 @@ error is almost always the address, the port, or the network path, not the passw
 <li>These features need the <strong>BridgeSync 0.9.6</strong> plugin (or newer) on every device involved —
   older plugin versions do not send or receive the extra data.</li>
 <li>Status (reading / finished / abandoned) is shared through <strong>Sync reading status between
-  devices</strong> under <strong>Settings -&gt; Integrations -&gt; KOReader / KoSync</strong>. It is on by default.
+  devices</strong> under <strong>Settings -&gt; Services -&gt; KOReader / KoSync</strong>. It is on by default.
   When two devices disagree, the one whose status changed most recently wins, and
   "finished" breaks a same-day tie.</li>
 <li>Sharing History between devices is a separate, <strong>off by default</strong> switch — <strong>Share

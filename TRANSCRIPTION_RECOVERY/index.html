@@ -667,7 +667,7 @@ the dashboard override compose environment values on an existing install.</p>
 <ul>
 <li><strong>Whisper Language</strong> (<code>WHISPER_LANGUAGE</code>): blank detects each chunk's language;
   a code such as <code>ru</code> requests Russian. It does not enable translation.</li>
-<li><strong>Filter Non-Speech Audio</strong> (<code>WHISPER_VAD_FILTER</code>): off by default. Enable it to
+<li><strong>Skip music and silence</strong> (<code>WHISPER_VAD_FILTER</code>): off by default. Enable it to
   test whether voice activity detection reduces output over music or silence.
   Check quiet narration first. Word timestamps remain on the original audio
   timeline; trailing music is not mistaken for truncated audio.</li>

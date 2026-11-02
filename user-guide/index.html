@@ -2236,15 +2236,18 @@ a reader.</p>
 not offered for audiobook-only mappings.</p>
 <p>When you start actions like <strong>Create Mapping</strong>, <strong>Create Storyteller Edition &amp; Match All</strong>, <strong>Add to Queue</strong>, or <strong>Match All</strong>, the page now shows a working message right away so you know the action started.</p>
 <h3 id="alignment-and-rewinds">Alignment and rewinds</h3>
-<p>Open <strong>Settings → Sync → Alignment Health</strong> to see alignment quality scores, identify
+<p>Open <strong>Settings → Alignment → Alignment Health</strong> to see alignment quality scores, identify
 maps that can benefit from rebuilding, and restore the previous map if a remap is not
 an improvement. On a book card, use <strong>Remap alignment</strong> to rebuild the audio-to-ebook
 map without clearing reading progress; <strong>Clear position</strong> remains the action that
 resets progress. A CTC badge marks a book whose alignment came from forced alignment.</p>
-<p><strong>Honor a Deliberate Rewind</strong> is on by default in Settings → Sync. After you go back in
+<p><strong>Honor a Deliberate Rewind</strong> is on by default in Settings → Reading &amp; Sync. After you go back in
 one app, keep reading or listening from the new position so the bridge can distinguish
-your rewind from a stale report. The setting is independent of the normal protection
-against a different device pulling you backward.</p>
+your rewind from a stale report. For a linked KOReader book, waking the reader or sending
+one backward report leaves the newer saved position in place, even when the device ID
+matches. Reading forward from the lower position supplies the evidence for an intentional
+rewind. The setting is independent of the normal protection against a different device
+pulling you backward.</p>
 <hr />
 <h2 id="stats">Stats</h2>
 <p>The <strong>Listening</strong> section shows daily totals, a heatmap, recent sessions and the
@@ -2264,7 +2267,8 @@ listening sessions, and a book finished as both ebook and audiobook counts once.
 <h2 id="account-and-my-integrations">Account and My Integrations</h2>
 <p>The <strong>Account</strong> page is where you manage your own login and reader-specific setup.</p>
 <ul>
-<li><strong>My Integrations</strong> lets you save your own service usernames, passwords, tokens, API keys, and per-user sync toggles. The cards here use the same names and order as <strong>Settings -&gt; Integrations</strong>, so it is always clear which side holds what: Settings has the server connection, your Account has your login.</li>
+<li><strong>My Integrations</strong> lets you save your own service usernames, passwords, tokens, API keys, and per-user sync toggles. The cards here use the same names and order as <strong>Settings -&gt; Services</strong>, so it is always clear which side holds what: Settings has the server connection, your Account has your login.</li>
+<li><strong>Reading preferences</strong>, at the top of My Integrations, are how you want your own books handled: sharing highlights, reading status and History between your KOReader devices, protection from an out-of-date device, marking a finished book finished everywhere, Audiobookshelf reading checkpoints, counting Storyteller as listening time, and the series view on your Library. Each starts at <strong>Server default</strong>, which follows Settings; choose On or Off to decide for yourself.</li>
 <li><strong>Connect a KOReader device</strong> walks you through pointing KOReader at the bridge (an editable sync-server address that respects public HTTPS and warns when localhost must be replaced with the server's LAN hostname/IP) and installing the optional Bridge Sync plugin.</li>
 <li>Your own switch for a service applies only while that service is switched on in <strong>Settings</strong>. If it is switched off there, your switch is greyed out with the reason — and your saved settings come back untouched if it is switched on again.</li>
 <li>Admins can still manage the same fields for any reader from <strong>Settings -&gt; Users -&gt; (user) -&gt; Integrations</strong>.</li>
@@ -2325,13 +2329,13 @@ read-along generation.</p>
 <p>This is useful when you often read directly in Storyteller, Grimmory, BookOrbit, Kavita, or a CWA/Kobo client and want the bridge to notice sooner.</p>
 <hr />
 <h2 id="settings">Settings</h2>
-<p>The <strong>Settings</strong> page is where you connect your services and adjust how the bridge behaves. The sidebar groups it into <strong>Integrations</strong> (one card per service), <strong>Sync</strong>, <strong>Features</strong>, <strong>AI</strong>, <strong>System</strong>, <strong>Users</strong>, and <strong>Logs</strong>.</p>
+<p>The <strong>Settings</strong> page is where you connect your services and adjust how the bridge behaves. The sidebar groups it by what each setting is for: <strong>Services</strong> (one card per service), <strong>Reading &amp; Sync</strong>, <strong>Library &amp; Matching</strong>, <strong>Alignment</strong>, <strong>AI</strong>, <strong>Server</strong>, <strong>Maintenance</strong> (one-off actions) and <strong>Users</strong>. The search box looks across every tab at once.</p>
 <ul>
 <li>Everything in Settings is server-wide; your own logins live in <strong>Account -&gt; My Integrations</strong>, on cards with the same names in the same order.</li>
 <li><strong>My Integrations</strong> cards have <strong>Test</strong> buttons so you can check a login before saving; Audiobookshelf and Grimmory library ID fields include <strong>Find IDs</strong> helpers so you can pick from a dropdown instead of pasting blindly.</li>
 <li>Every integration card has an <strong>Enable</strong> switch, Audiobookshelf included, so an ebook-only or maintenance-focused setup is a matter of switching off what you are not using. Switching a service off here switches it off for everyone on the install.</li>
-<li><strong>Save Settings</strong> applies your changes and restarts the app.</li>
-<li>When the restart finishes, you are sent back to the dashboard.</li>
+<li><strong>Save Settings</strong> applies your changes straight away. Only a setting marked <strong>restart</strong> (server addresses, folders, the sync period and a few others read at startup) restarts the app; the Save bar tells you before you press it, and you are sent back to the dashboard when the restart finishes.</li>
+<li><strong>Different from defaults</strong> lists every setting that differs from its default, with a <strong>reset</strong> link on each.</li>
 </ul>
 <p>If you use Whisper.cpp with a custom model name, you can type that model directly into the <strong>Whisper Model</strong> field.</p>
 <p>Under the Grimmory integration, <strong>Add matched books to the shelf only once they
@@ -2352,7 +2356,7 @@ books: a manual removal is undone on the next cycle while the option is on.</p>
 <ul>
 <li>Install the <strong>Bridge Sync</strong> KOReader plugin from <strong>Account -&gt; Connect a KOReader device</strong>, or from the current release or newer, on each KOReader device that should sync annotations.</li>
 <li>Configure the plugin with that reader's bridge server URL and KOSync username/key.</li>
-<li>Leave <strong>Highlight Sync</strong> enabled on the <strong>Settings -&gt; Integrations -&gt; KOReader / KoSync</strong> card. It is enabled by default on the bridge side.</li>
+<li>Leave <strong>Highlight Sync</strong> enabled on the <strong>Settings -&gt; Services -&gt; KOReader / KoSync</strong> card. It is enabled by default on the bridge side.</li>
 <li>For Grimmory web-reader highlights and notes, enable <strong>Highlight Sync</strong> in that reader's Grimmory integration.</li>
 <li>For BookOrbit web-reader highlights, fill in that reader's BookOrbit KOReader sync username/password fields. The owner must match the BookOrbit user, or be explicitly set in <strong>KOReader sync owner</strong>.</li>
 <li>For BookFusion highlights, link that reader's BookFusion account and enable <strong>Highlight Sync</strong> in Account -&gt; My Integrations.</li>
@@ -2375,7 +2379,7 @@ updates reading status when there are no local status changes to upload.</p>
 <p>Two independent features, both needing the <strong>BridgeSync 0.9.6</strong> plugin (or newer) on every
 device involved, keep more than a book's reading <em>position</em> in sync across your devices.</p>
 <h3 id="reading-status">Reading status</h3>
-<p><strong>Sync reading status between devices</strong>, on the <strong>Settings -&gt; Integrations -&gt; KOReader /
+<p><strong>Sync reading status between devices</strong>, on the <strong>Settings -&gt; Services -&gt; KOReader /
 KoSync</strong> card, shares a book's KOReader status — reading, finished, or abandoned — across
 your devices. It is <strong>on by default</strong>. A book you start on one device shows as in progress on
 the others, including a book that was delivered to a device but never opened there. It also:</p>
@@ -2384,7 +2388,7 @@ the others, including a book that was delivered to a device but never opened the
   read past a 1% floor;</li>
 <li>marks a book <strong>finished</strong> on your devices whenever the bridge decides it is complete —
   in BookOrbit, ABS, Grimmory, CWA, or Storyteller — independently of the separate
-  <strong>Propagate Completion</strong> setting in Settings → Sync;</li>
+  <strong>Propagate Completion</strong> setting in Settings → Reading &amp; Sync;</li>
 <li>clears a book's KOReader status when you <strong>clear its progress</strong>, so a book you are about
   to re-read does not still show as finished.</li>
 </ul>
@@ -2393,7 +2397,8 @@ a book says less than a decision you made about it. When two devices genuinely d
 one whose status changed most recently wins, and "finished" breaks a same-day tie. Only the
 status shown in the file browser is shared; your reading position is never affected.</p>
 <h3 id="recently-read-history">Recently-read History</h3>
-<p><strong>Share recently-read books between devices</strong>, on the same card, is <strong>off by default</strong> — it
+<p><strong>KOReader: share recently-read books between devices</strong>, under <strong>Settings → Reading &amp; Sync →
+Reading history &amp; stats</strong>, is <strong>off by default</strong> — it
 changes what KOReader's History means. KOReader only ever writes History for a book you
 opened <em>on that device</em>, so a book you read on the Kobo never showed up in the Kindle's
 History, even after its progress and status had synced — and anything built from History,
@@ -2408,7 +2413,7 @@ or History on their own, without needing a restart.</p>
 <p>When one book is linked to reader files on more than one device, the furthest-along position
 has always won a sync — which means a device you have not opened in weeks can keep pulling
 you forward on the device you are actually reading, every time it syncs. <strong>When two KOReader
-devices disagree</strong>, under <strong>Settings -&gt; Integrations -&gt; KOReader / KoSync -&gt; Advanced —
+devices disagree</strong>, under <strong>Settings -&gt; Services -&gt; KOReader / KoSync -&gt; Advanced —
 cross-device progress</strong>, can let the device you are reading on win instead — but only once it
 has proved itself with several page turns in a row, moving forward, on that same device. A
 single reading is never enough, so merely opening a stale device still cannot move you.</p>
@@ -2531,7 +2536,7 @@ itself while books are processing.</p>
 <li><strong>Scan Library</strong> reuses cached results so repeat scans are faster.</li>
 <li><strong>Full Refresh</strong> ignores the previous cache and rescans the whole unmatched library.</li>
 </ul>
-<p>Under <strong>Settings → Features</strong>, <strong>Scheduled Scan Interval</strong> runs normal scans in
+<p>Under <strong>Settings → Library &amp; Matching</strong>, <strong>Scheduled Scan Interval</strong> runs normal scans in
 the background (<code>0</code> is off; enabled intervals are at least five minutes). Enable
 <strong>Scheduled Full Refresh</strong> to rescan on a five-field cron schedule in your <code>TZ</code>
 timezone, for example <code>20 4 * * sun</code> for Sunday at 04:20. An existing weekly
@@ -2590,7 +2595,7 @@ listed in <code>EXTRA_EBOOK_DIRS</code>.</p>
 <h2 id="storyteller-transcript-tools">Storyteller Transcript Tools</h2>
 <p>When Storyteller transcript assets are available, the bridge can use them directly for better timing and locator quality.</p>
 <h3 id="storyteller-backfill">Storyteller Backfill</h3>
-<p>Use <strong>Settings -&gt; System -&gt; Advanced -&gt; Storyteller Backfill</strong> to:</p>
+<p>Use <strong>Settings -&gt; Maintenance -&gt; Storyteller Backfill</strong> to:</p>
 <ul>
 <li>Re-scan all Storyteller-linked books</li>
 <li>Ingest any newly available transcript assets</li>
@@ -2627,7 +2632,7 @@ Whisper/lexical), so no separate Storyteller server is required.</p>
 </ol>
 <p>Books matched automatically can get one too: turn on <strong>Also generate a read-along EPUB
 for auto-matched books</strong> for BookOrbit's watched collection (BookOrbit card in
-<strong>Settings -&gt; Integrations</strong>) or <strong>Also generate a read-along EPUB for books
+<strong>Settings -&gt; Services</strong>) or <strong>Also generate a read-along EPUB for books
 auto-matched to a BookOrbit audiobook</strong> for Suggestions auto-match (<strong>Settings -&gt;
 Features</strong>). Both are off by default.</p>
 <p>Generation preserves the book's original chapter markup and non-breaking whitespace, keeps
@@ -2725,10 +2730,10 @@ mapping. These are the complete lists.</p>
 the standard ebook, and adds read-along support.</p>
 <p>If <strong>Record Reading Sessions</strong> is enabled in Settings, Grimmory and BookOrbit receive
 completed continuous sessions rather than one entry for every progress update. The
-<strong>Reading Session Merge Gap</strong> in Settings → Sync controls how long a pause separates
+<strong>Reading Session Merge Gap</strong> in Settings → Reading &amp; Sync controls how long a pause separates
 sessions; progress itself continues to sync immediately.</p>
 <p>If Grimmory imports change and results look stale, run
-<strong>Settings -&gt; System -&gt; Advanced -&gt; Refresh Grimmory Cache</strong>. If BookOrbit, Kavita, or
+<strong>Settings -&gt; Maintenance -&gt; Refresh Grimmory Cache</strong>. If BookOrbit, Kavita, or
 CWA results look stale, confirm the service is enabled and reachable, then run the
 normal sync or matching flow again.</p>
 <hr />
@@ -2766,7 +2771,7 @@ your audiobook sources for a partner, and takes one of three actions:</p>
 </ul>
 <p>Each book is only reconsidered once per rescan window (24 hours by default), so a book
 that stays in the collection is not reworked on every poll. Turn this on per service in
-<strong>Settings -&gt; Integrations</strong>.</p>
+<strong>Settings -&gt; Services</strong>.</p>
 <h3 id="books-you-start-reading-in-bookorbit">Books you start reading in BookOrbit</h3>
 <p>With <strong>Auto-match books you start reading in BookOrbit</strong> on (BookOrbit card, <strong>Settings
 -&gt; Integrations</strong>), you don't need to drop a book into a collection first. Once you are
@@ -2799,6 +2804,13 @@ automatically:</p>
    audiobook source is found, it can create an <strong>ebook-only</strong> workflow instead.</li>
 </ol>
 <p>Suggestions always require your approval before a real mapping is created.</p>
+<p>A single push never creates work: the bridge waits until the device reports you reading forward,
+by at least <strong>Min Ebook Change</strong>, before it looks for a match. A book you removed from BookBridge
+therefore stays removed when a device sends a late or stale position for it, and comes back only
+if you start reading it again. Small page turns on the same device add up from its first new
+report, even when that starts below the old position. You do not have to read past your
+pre-removal position. Another reader's, book's or device's progress does not count toward
+that evidence.</p>
 <h3 id="books-delivered-by-the-bridge-sync-plugin">Books delivered by the Bridge Sync plugin</h3>
 <p>Books sent to a device through the Bridge Sync plugin's <strong>Sync books</strong> action arrive
 byte-identical to the library copy, so their KOSync hash matches and they link
@@ -2819,9 +2831,9 @@ audiobook and ebook pairings for review. See <a href="#suggestions">Suggestions<
 <p><strong>Clear position</strong> clears the stored sync state for a mapping. <strong>Remap alignment</strong> is a
 separate action that keeps the current position and rebuilds only its audio-to-ebook
 map.</p>
-<p>If <strong>Regenerate Missing Data on Reset</strong> is enabled, the bridge can also rebuild missing alignment data when needed.</p>
+<p>If <strong>Rebuild missing sync data when you reset a book</strong> is enabled, the bridge can also rebuild missing alignment data when needed.</p>
 <h3 id="library-maintenance">Library maintenance</h3>
-<p><strong>Settings -&gt; System -&gt; Advanced Options</strong> holds a few whole-library actions. All of them
+<p><strong>Settings -&gt; Maintenance</strong> holds a few whole-library actions. All of them
 are safe to run again, and each one reports what it changed when it finishes.</p>
 <ul>
 <li><strong>Backfill Series Metadata</strong> looks up every book with no series recorded and groups it
