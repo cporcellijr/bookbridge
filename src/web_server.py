@@ -6008,8 +6008,77 @@ def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
             continue
         if pending and getattr(pending, 'origin', None) == 'shelf_watch':
             metadata = pending.origin_metadata or {}
-            return dict(metadata) if isinstance(metadata, dict) else None
+            if not isinstance(metadata, dict):
+                return None
+            if _is_other_book_in_watched_library(item, metadata):
+                logger.info(
+                    "Shelf-watch approval: queued ebook %s:%s is not the watched book %s; leaving '%s' on the shelf",
+                    item.get('ebook_source'), item.get('ebook_source_id'),
+                    metadata.get('grimmory_id'), sanitize_log_data(metadata.get('grimmory_filename') or ''),
+                )
+                return None
+            return dict(metadata)
     return None
+
+
+def _watch_library_key(source: str) -> str:
+    """Grimmory's ebook cards say 'Grimmory'/'Booklore'; its watch metadata says 'BookLore'."""
+    key = str(source or '').strip().lower()
+    return 'booklore' if key == 'grimmory' else key
+
+
+def _is_other_book_in_watched_library(item: dict, metadata: dict) -> bool:
+    """True when the queued ebook is a different book from the watched book's own library.
+
+    A copy from another library (a BookFusion edition, say) still completes the
+    watch, but a second book from the same library is a different pairing.
+    """
+    watched_id = str(metadata.get('grimmory_id') or '').strip()
+    queued_id = str(item.get('ebook_source_id') or '').strip()
+    if not watched_id or not queued_id:
+        return False
+    same_library = (_watch_library_key(item.get('ebook_source'))
+                    == _watch_library_key(metadata.get('source_name') or 'BookLore'))
+    return same_library and queued_id != watched_id
+
+
+def _watch_suggestion_review(source_id: str) -> "tuple[list, list, str] | None":
+    """The recorded audiobook and ebook for Review on a shelf/reading-watch suggestion.
+
+    Searching the suggested audiobook's title can miss it (blank metadata) or turn up
+    another book's ebook, so Review offers exactly the pair the watcher scanned. The
+    page pre-selects a lone result. Admin-only, like the dashboard suggestions.
+    """
+    user = current_user()
+    if not (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False))):
+        return None
+    pending = database_service.get_pending_suggestion(source_id)
+    if not pending or getattr(pending, 'origin', None) not in ('shelf_watch', 'reading_watch'):
+        return None
+    metadata = pending.origin_metadata or {}
+    match = next((m for m in pending.matches if m.get('bridge_key') == source_id), None)
+    audiobooks = []
+    if match:
+        title = match.get('audio_title') or pending.title or ''
+        audiobooks = [AudioResult(
+            source=match.get('audio_source') or '',
+            source_id=str(match.get('audio_source_id') or ''),
+            title=title,
+            authors=match.get('audio_author') or '',
+            cover_url=match.get('audio_cover_url') or '',
+            duration=match.get('audio_duration'),
+            display_name=title,
+            provider_book_id=match.get('audio_provider_book_id') or None,
+            provider_file_id=match.get('audio_provider_file_id') or None,
+        )]
+    ebook_title = metadata.get('grimmory_title') or Path(metadata.get('grimmory_filename') or '').stem
+    watched = (_watch_library_key(metadata.get('source_name') or 'BookLore'),
+               str(metadata.get('grimmory_id') or ''))
+    ebooks = [
+        ebook for ebook in (_search_ebooks_with_fallback(ebook_title) if ebook_title else [])
+        if (_watch_library_key(ebook.source), str(ebook.source_id or '')) == watched
+    ]
+    return audiobooks, ebooks, ebook_title.lower()
 
 
 def _complete_shelf_watch_approval(meta: dict, *, remove_only: bool = False, book=None) -> bool:
@@ -8971,7 +9040,11 @@ def _add_book_view():
     search = request.args.get('search', '').strip().lower()
     audiobooks, ebooks, storyteller_books = [], [], []
     storyteller_search_failed = False
-    if search:
+    review = request.args.get('review', '').strip()
+    review_pair = _watch_suggestion_review(review) if review else None
+    if review_pair:
+        audiobooks, ebooks, search = review_pair
+    elif search:
         audiobooks = _search_audiobooks_with_fallback(search)
 
         # Use new search method

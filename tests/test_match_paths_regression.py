@@ -2823,5 +2823,66 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(saved_book.storyteller_uuid, "story-uuid-suggestions-nocache")
 
 
+    def _little_eyes_watch_suggestion(self, origin="shelf_watch"):
+        """Reported: the shelf watch suggested 'Little Eve' for the shelved 'Little Eyes'."""
+        pending = Mock(
+            origin=origin,
+            title="Little Eve",
+            matches=[{
+                "bridge_key": "bookorbit:5512", "audio_source": "BookOrbit",
+                "audio_source_id": "5512", "audio_title": "Little Eve",
+                "audio_author": "Catriona Ward", "audio_cover_url": "/api/bookorbit/audiobook-cover/5512",
+                "audio_duration": 40148.0, "audio_provider_book_id": "5512", "score": 60.0,
+            }],
+            origin_metadata={
+                "grimmory_id": "6367", "grimmory_filename": "Little Eyes (2020).epub",
+                "grimmory_title": "Little Eyes", "source_name": "BookOrbit",
+            },
+        )
+        self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
+            lambda key: pending if key == "bookorbit:5512" else None
+        )
+        return [
+            web_server.EbookResult("Little Eyes (2020).epub", title="Little Eyes",
+                                   source="BookOrbit", source_id=6367),
+            web_server.EbookResult("Little Eve - Catriona Ward (2022).epub", title="Little Eve",
+                                   source="BookOrbit", source_id=1577),
+        ]
+
+    def test_review_preselects_the_watched_ebook_and_suggested_audiobook(self):
+        self.app.config["LOGIN_DISABLED"] = True
+        for origin in ("shelf_watch", "reading_watch"):
+            ebooks = self._little_eyes_watch_suggestion(origin)
+            with patch("src.web_server._search_ebooks_with_fallback", return_value=ebooks) as search,                     patch("src.web_server._search_audiobooks_with_fallback") as audio_search:
+                html = self.client.get(
+                    "/add-book?search=Little+Eve&review=bookorbit:5512").get_data(as_text=True)
+
+            search.assert_called_once_with("Little Eyes")
+            audio_search.assert_not_called()
+            self.assertRegex(html, r'class="resource-card eb-card selected"\s+data-value="Little Eyes \(2020\)\.epub"')
+            self.assertNotIn("Little Eve - Catriona Ward (2022).epub", html)
+            self.assertRegex(html, r'class="book-card selected"\s+data-value="5512"')
+
+    def test_review_of_a_non_watch_suggestion_keeps_the_title_search(self):
+        self.app.config["LOGIN_DISABLED"] = True
+        ebooks = self._little_eyes_watch_suggestion(origin=None)
+        with patch("src.web_server._search_ebooks_with_fallback", return_value=ebooks) as search,                 patch("src.web_server._search_audiobooks_with_fallback", return_value=[]):
+            self.client.get("/add-book?search=Little+Eve&review=bookorbit:5512")
+        search.assert_called_once_with("little eve")
+
+    def test_approving_another_book_from_the_watched_library_leaves_the_shelf_alone(self):
+        self._little_eyes_watch_suggestion()
+        item = {"bridge_key": "bookorbit:5512", "abs_id": "bookorbit:5512",
+                "ebook_source": "BookOrbit", "ebook_source_id": "1577"}
+        self.assertIsNone(web_server._queue_item_shelf_watch_metadata(item))
+
+        item["ebook_source_id"] = "6367"
+        self.assertEqual(web_server._queue_item_shelf_watch_metadata(item)["grimmory_id"], "6367")
+        # A copy from another library still completes the watch.
+        item.update(ebook_source="BookFusion", ebook_source_id="bf-77")
+        self.assertEqual(web_server._queue_item_shelf_watch_metadata(item)["grimmory_id"], "6367")
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

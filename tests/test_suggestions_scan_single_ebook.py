@@ -210,3 +210,64 @@ def test_ebook_anchor_fields_normalises_authors_list():
     assert anchor["author"] == "Alice, Bob"
     assert anchor["filename"] == "test.epub"
     assert anchor["grimmory_id"] == "123"
+
+
+def _bookorbit_audio(audio_source_id, title, author):
+    return {"audio_source": "BookOrbit", "audio_source_id": audio_source_id,
+            "bridge_key": f"bookorbit:{audio_source_id}", "audio_title": title,
+            "audio_author": author, "audio_duration": 0, "audio_cover_url": ""}
+
+
+def _top(ebook_title, ebook_author, pool):
+    result = _build_service()._scan_single_ebook(
+        {"title": ebook_title, "authors": ebook_author, "filename": "x.epub", "id": "1"}, pool)
+    return result["matches"][0] if result else None
+
+
+def test_unabridged_suffix_does_not_lower_the_score():
+    """Reported: Reading-watch scan: 'Little Eyes (2020).epub' top match =
+    BookOrbit:6375 'Little Eyes (Unabridged)' score=74.0"""
+    top = _top("Little Eyes", "Samanta Schweblin",
+               [_bookorbit_audio("6375", "Little Eyes (Unabridged)", "Samanta Schweblin")])
+    assert top["score"] == 100.0
+
+
+def test_different_author_rules_out_a_similar_title():
+    """Reported: Shelf-watch scan: 'Little Eyes (2020).epub' top match =
+    BookOrbit:5512 'Little Eve' score=60.0 -- a different book that got approved."""
+    assert _top("Little Eyes", "Samanta Schweblin",
+                [_bookorbit_audio("5512", "Little Eve", "Catriona Ward")]) is None
+
+
+def test_missing_audio_author_is_not_a_mismatch():
+    """Reported: Shelf-watch scan: 'Dear Edward (2020).epub' top match =
+    BookOrbit:6373 'Dear Edward' score=70.0 (the audiobook had no author)."""
+    top = _top("Dear Edward", "Ann Napolitano", [_bookorbit_audio("6373", "Dear Edward ", "")])
+    assert top["score"] == 100.0
+
+
+def test_missing_author_with_inexact_title_stays_below_auto_match():
+    top = _top("Lord of the Rings", "", [_bookorbit_audio("1", "Lord of the Rings Saga", "Tolkien")])
+    assert 60 <= top["score"] <= 94.0
+
+
+def test_identical_title_with_conflicting_author_stays_reviewable():
+    # Real mapped pair: the audiobook credits its narrator.
+    top = _top("Esperance", "Adam Oyebanji", [_bookorbit_audio("5390", "Esperance", "Heather Frost")])
+    assert top["score"] == 70.0
+
+
+def test_surname_only_credit_is_not_an_author_conflict():
+    top = _top("Lord of the Rings", "Tolkien", [_bookorbit_audio("1", "The Lord of the Rings", "J.R.R. Tolkien")])
+    assert top is not None and top["score"] < 95
+
+
+def test_volume_numbers_must_agree():
+    pool = [_bookorbit_audio("2", "Mistborn, Book 3", "Brandon Sanderson")]
+    assert _top("Mistborn, Book 2", "Brandon Sanderson", pool) is None
+    sequel = _top("The Great Fairy Rescue 3", "Jane Doe",
+                  [_bookorbit_audio("3", "The Great Fairy Rescue", "Jane Doe")])
+    assert sequel["score"] <= 89.0
+    same = _top("Demi-Beast Husbandry for Fun and Profit 4", "Peter North",
+                [_bookorbit_audio("4", "Demi-Beast Husbandry for Fun and Profit, 4 (Unabridged)", "Peter North")])
+    assert same["score"] >= 95

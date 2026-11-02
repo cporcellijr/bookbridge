@@ -2369,7 +2369,7 @@
                                 </div>
 
                                 <div class="suggestion-actions" style="display: flex; gap: 8px;">
-                                    <a href="{{ url_for('add_book', search=suggestion.title) }}"
+                                    <a href="{{ url_for('add_book', search=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('add_book', search=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
                                         style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">{{ _('Review') }}</a>
                                     <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"

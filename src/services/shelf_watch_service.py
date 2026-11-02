@@ -516,7 +516,7 @@ class ShelfWatchService:
         top = matches[0]
         top_score = float(top.get('score') or 0.0)
 
-        if top_score >= threshold:
+        if top_score >= threshold and self._unique_top(matches, filename, 'Shelf-watch'):
             outcome_status = 'auto_matched'
             self._create_audio_mapping_and_move(
                 grimmory_book, filename, grimmory_id, top, watch_shelf, kobo_shelf,
@@ -597,8 +597,22 @@ class ShelfWatchService:
             f"(score={top_match.get('score')})"
         )
         self._request_readalong_for_audio_match(saved)
-        self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client,
-                         book=saved, user_id=user_id)
+        if watch_shelf:
+            self._move_shelf(filename, watch_shelf, kobo_shelf, client=active_client,
+                             book=saved, user_id=user_id)
+
+    @staticmethod
+    def _unique_top(matches: list, filename: str, log_prefix: str) -> bool:
+        """False when a second candidate ties the top score, so a person picks."""
+        top_score = float(matches[0].get('score') or 0.0)
+        if len(matches) > 1 and float(matches[1].get('score') or 0.0) >= top_score:
+            logger.info(
+                "%s: '%s' has two audiobooks tied at score=%s (%s, %s); suggesting instead of auto-matching",
+                log_prefix, filename, top_score,
+                matches[0].get('bridge_key'), matches[1].get('bridge_key'),
+            )
+            return False
+        return True
 
     def _request_readalong_for_audio_match(self, saved) -> None:
         """Record intent only for BookOrbit-audio auto-matches when opted in.
@@ -670,14 +684,15 @@ class ShelfWatchService:
     def _process_reading_watch(self, user_id: int = None, active_client=None) -> dict:
         """Scan BookOrbit's Continue Reading list and route each unmapped book.
 
-        Runs after the shelf-watch pass, in the same user binding. Any
-        audiobook match found ALWAYS becomes a PendingSuggestion — never an
-        auto-mapping, regardless of score — and a book with no candidates
-        gets an ebook-only mapping instead. No shelf moves happen here.
+        Runs after the shelf-watch pass, in the same user binding. A unique
+        audiobook match at the shelf-watch threshold is auto-mapped, a weaker one
+        becomes a PendingSuggestion, and a book with no candidates gets an
+        ebook-only mapping instead. No shelf moves happen here.
         """
         stats = {
             'enabled': False,
             'scanned': 0,
+            'auto_matched': 0,
             'suggested': 0,
             'ebook_only': 0,
             'skipped_existing': 0,
@@ -759,14 +774,14 @@ class ShelfWatchService:
 
         # This pass runs every ~60s alongside the poller — stay quiet when nothing
         # happened, and only speak up at INFO when it actually did something.
-        total_actioned = stats['suggested'] + stats['ebook_only'] + stats['errors']
+        total_actioned = stats['auto_matched'] + stats['suggested'] + stats['ebook_only'] + stats['errors']
         logger.log(
             logging.INFO if total_actioned > 0 else logging.DEBUG,
             "Reading-watch: scanned=%d suggested=%d ebook_only=%d skipped_existing=%d "
-            "skipped_throttled=%d skipped_dismissed=%d errors=%d",
+            "skipped_throttled=%d skipped_dismissed=%d errors=%d auto_matched=%d",
             stats['scanned'], stats['suggested'], stats['ebook_only'],
             stats['skipped_existing'], stats['skipped_throttled'],
-            stats['skipped_dismissed'], stats['errors'],
+            stats['skipped_dismissed'], stats['errors'], stats['auto_matched'],
         )
         return stats
 
@@ -774,8 +789,8 @@ class ShelfWatchService:
                                   candidate_pool: list, user_id: int = None) -> str:
         """Scan one Continue Reading book and route it.
 
-        Mirrors `_process_one_book`'s scan + routing, except a match is
-        ALWAYS a suggestion (never auto-mapped) and there is no shelf move.
+        Mirrors `_process_one_book`'s scan + routing (auto-map at the shelf-watch
+        threshold, else a suggestion), except there is no shelf move.
         """
         ebook_anchor = {
             'filename': filename,
@@ -808,10 +823,17 @@ class ShelfWatchService:
 
         top = matches[0]
         top_score = float(top.get('score') or 0.0)
-        saved = self._create_pending_suggestion(
-            book, filename, source_id, matches, origin='reading_watch',
-        )
-        outcome_status = 'suggested' if saved else 'skipped_dismissed'
+        if top_score >= self._threshold() and self._unique_top(matches, filename, 'Reading-watch'):
+            # No watch shelf: the book is being read, so it stays where it is.
+            self._create_audio_mapping_and_move(
+                book, filename, source_id, top, None, None, user_id=user_id,
+            )
+            outcome_status = 'auto_matched'
+        else:
+            saved = self._create_pending_suggestion(
+                book, filename, source_id, matches, origin='reading_watch',
+            )
+            outcome_status = 'suggested' if saved else 'skipped_dismissed'
 
         self.database_service.upsert_shelf_watch_scan(
             self._scan_key(source_id), filename, top_score=top_score, status=outcome_status,
