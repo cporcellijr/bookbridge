@@ -76,6 +76,9 @@ All notable changes to BookBridge will be documented in this file.
   scan results yet" while the scan was still running. It now finds your running scan and shows the progress bar,
   and pressing a scan button again joins the scan instead of starting a second one. With the local LLM on, the bar
   keeps filling while it checks matches and counts them as it goes, instead of sitting at 100%.
+- **AI re-ranking no longer pulls exact matches below 100.** With **Use AI to rank suggestions by meaning** on and
+  the embedding model installed, a perfect match was blended down to about 98, which kept it out of **Add all
+  exact** and sent it to the AI for a second check. A match whose title and author agree exactly now keeps its 100.
 - **"Add all exact" only adds matches that nobody needs to check.** It skips a match tied with another ebook, a file
   on disk that isn't a library entry, a different edition or adaptation, an ebook whose author couldn't be
   confirmed, and a book with another volume of the same title. BookBridge checks this again when you press the

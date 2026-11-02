@@ -191,6 +191,21 @@ class TestSuggestionRerank(_OllamaEnvGuard):
         result = svc._ollama_rerank_band("Beta book", "Y", matches)
         self.assertEqual(result[0]["display_name"], "Beta")
 
+    def test_rerank_leaves_an_exact_match_at_100(self):
+        # Reported: with the embed model installed, "Add all exact" fell from 538 to 110
+        # because blending turned every 100 into ~98.
+        os.environ["OLLAMA_RERANK_SUGGESTIONS"] = "true"
+        vectors = {"Wounds: Stories Nathan Ballingrud": [1.0, 0.0], "Wounds Nathan Ballingrud": [0.8, 0.6],
+                   "Wounded Someone": [0.6, 0.8]}
+        svc = _make_service(_StubOllama(vectors=vectors))
+        matches = [
+            {"display_name": "Wounds", "author": "Nathan Ballingrud", "score": 100.0, "ebook_filename": "w.epub"},
+            {"display_name": "Wounded", "author": "Someone", "score": 70.0, "ebook_filename": "x.epub"},
+        ]
+        result = svc._ollama_rerank_band("Wounds: Stories", "Nathan Ballingrud", matches)
+        self.assertEqual([(m["display_name"], m["score"]) for m in result],
+                         [("Wounds", 100.0), ("Wounded", 66.0)])
+
 
 class TestSuggestionBatch(_OllamaEnvGuard):
     def test_embeds_all_before_judging_any(self):
