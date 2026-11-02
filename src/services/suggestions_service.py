@@ -1203,7 +1203,7 @@ class SuggestionsService:
             return matches
         return [exact] + [m for m in matches if m is not exact]
 
-    def _apply_ollama_reranking_batch(self, suggestions: List[dict]) -> Set[str]:
+    def _apply_ollama_reranking_batch(self, suggestions: List[dict], progress: Optional[Callable[[int, int], None]] = None) -> Set[str]:
         """Re-rank (embeddings) then judge-gate (chat) all fresh suggestions, batched by
         model so each Ollama model loads once.
 
@@ -1248,22 +1248,38 @@ class SuggestionsService:
         gate_on = self._env_true("OLLAMA_SUGGEST_JUDGE_GATE")
         autokeep = self._env_float("OLLAMA_SUGGEST_AUTOKEEP_SCORE", 90.0)
         conf_min = self._env_float("OLLAMA_JUDGE_CONFIDENCE_MIN", 85.0)
-        gated = 0
+
+        # Build list of suggestions that will actually be judged (same skip rules)
+        to_judge = []
         for s in suggestions:
             matches = s.get("matches") or []
             if not matches:
                 continue
             if self._has_exact_same_folder_match(matches):
                 continue
-            # A strong fuzzy+semantic top match is almost certainly correct — trust it
-            # and spend no chat call.
             if matches[0].get("score", 0) >= autokeep:
                 continue
+            to_judge.append(s)
 
+        total_to_judge = len(to_judge)
+        if progress:
+            try:
+                progress(0, total_to_judge)
+            except Exception:
+                pass
+
+        gated = 0
+        for idx, s in enumerate(to_judge):
+            matches = s.get("matches") or []
             gated += 1
             choice, confidence = self._run_judge(
                 s.get("audio_title", ""), s.get("audio_author", ""), matches[:3]
             )
+            if progress:
+                try:
+                    progress(gated, total_to_judge)
+                except Exception:
+                    pass
             if choice is not None and confidence >= conf_min:
                 chosen = matches[:3][choice]
                 self.logger.info(
@@ -2057,6 +2073,13 @@ class SuggestionsService:
         scanned_new_total = len(new_scan_candidates)
         scanned_new_done = 0
 
+        # With the local-LLM pass on, scanning fills the first half of the bar and the LLM the rest.
+        llm_pass_enabled = (
+            self._ollama_ready()
+            and (self._env_true("OLLAMA_RERANK_SUGGESTIONS") or self._env_true("OLLAMA_JUDGE_SUGGESTIONS"))
+        )
+        scan_scale = 0.5 if llm_pass_enabled else 1.0
+
         if total_unmatched == 0:
             emit_progress(
                 phase="finalizing",
@@ -2068,7 +2091,8 @@ class SuggestionsService:
                 total_unmatched=0,
             )
         else:
-            initial_percent = (reused_cached_count / total_unmatched) * 100
+            base_initial_percent = (reused_cached_count / total_unmatched) * 100
+            initial_percent = base_initial_percent * scan_scale
             if scanned_new_total > 0:
                 msg = f"Scanning 0/{scanned_new_total} new audiobooks..."
             else:
@@ -2085,9 +2109,11 @@ class SuggestionsService:
 
         candidate_pool = []
         if scanned_new_total > 0:
+            base_percent = (reused_cached_count / total_unmatched) * 100 if total_unmatched else 0
+            percent = base_percent * scan_scale
             emit_progress(
                 phase="loading_candidates",
-                percent=(reused_cached_count / total_unmatched) * 100 if total_unmatched else 0,
+                percent=percent,
                 message="Loading ebook candidates...",
                 scanned_new_done=0,
                 scanned_new_total=scanned_new_total,
@@ -2110,7 +2136,8 @@ class SuggestionsService:
             # produced no fuzzy candidate) and the judge gate.
             scanned_new_done = idx
             processed_total = reused_cached_count + scanned_new_done
-            percent = (processed_total / total_unmatched) * 100 if total_unmatched else 100
+            base_percent = (processed_total / total_unmatched) * 100 if total_unmatched else 100
+            percent = base_percent * scan_scale
             emit_progress(
                 phase="scanning",
                 percent=percent,
@@ -2124,10 +2151,11 @@ class SuggestionsService:
         # Embedding nearest-neighbour retrieval: pull semantically-matching ebooks that
         # fuzzy scoring missed (and rescue books with no fuzzy candidate at all).
         if new_scan_candidates and self._ollama_ready():
+            base_percent = (reused_cached_count + scanned_new_done) / total_unmatched * 100 if total_unmatched else 100
+            percent = base_percent * scan_scale
             emit_progress(
                 phase="reranking",
-                percent=(reused_cached_count + scanned_new_done) / total_unmatched * 100
-                if total_unmatched else 100,
+                percent=percent,
                 message="Finding matches with embeddings...",
                 scanned_new_done=scanned_new_done,
                 scanned_new_total=scanned_new_total,
@@ -2142,17 +2170,29 @@ class SuggestionsService:
             cache_by_abs[bk] for bk, _ab in new_scan_candidates if bk in cache_by_abs
         ]
         if fresh_suggestions and self._ollama_ready():
+            base_percent = (reused_cached_count + scanned_new_done) / total_unmatched * 100 if total_unmatched else 100
+            percent = base_percent * scan_scale
             emit_progress(
                 phase="reranking",
-                percent=(reused_cached_count + scanned_new_done) / total_unmatched * 100
-                if total_unmatched else 100,
+                percent=percent,
                 message="Refining matches with local LLM...",
                 scanned_new_done=scanned_new_done,
                 scanned_new_total=scanned_new_total,
                 reused_cached=reused_cached_count,
                 total_unmatched=total_unmatched,
             )
-            suppressed = self._apply_ollama_reranking_batch(fresh_suggestions)
+            def progress_cb(done, total):
+                pct = 50 + 50 * (done / total) if total else 50
+                emit_progress(
+                    phase="reranking",
+                    percent=pct,
+                    message=f"Checking matches with local LLM {done}/{total}...",
+                    scanned_new_done=scanned_new_done,
+                    scanned_new_total=scanned_new_total,
+                    reused_cached=reused_cached_count,
+                    total_unmatched=total_unmatched,
+                )
+            suppressed = self._apply_ollama_reranking_batch(fresh_suggestions, progress=progress_cb)
             for bridge_key in suppressed:
                 if bridge_key:
                     cache_by_abs.pop(bridge_key, None)

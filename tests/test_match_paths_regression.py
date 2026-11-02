@@ -1899,6 +1899,37 @@ class TestMatchPathsRegression(unittest.TestCase):
         cached = mock_start_job.call_args.kwargs["cached_suggestions_by_abs"]
         self.assertEqual(list(cached), ["ab-scheduled"])
 
+    def _running_scan_as_user(self, owner_id, viewer_id, request):
+        """Seed a running scan owned by owner_id, then make one request as viewer_id."""
+        with web_server.SUGGESTIONS_SCAN_JOBS_LOCK:
+            web_server.SUGGESTIONS_SCAN_JOBS["job-running"] = {
+                "status": "running", "user_id": owner_id, "results": {}, "error": None,
+                "progress": {"phase": "reranking", "percent": 60, "message": "Checking matches with local LLM 3/10..."},
+                "started_at": time.time(), "updated_at": time.time(),
+            }
+        token = web_server.set_current_user_id(viewer_id)
+        try:
+            return request()
+        finally:
+            web_server.reset_current_user_id(token)
+
+    def test_suggestions_page_shows_a_running_scan_the_session_lost(self):
+        # Reported: after Full Refresh the page showed "No scan results yet" while the scan ran.
+        html = self._running_scan_as_user(7, 7, lambda: self.client.get("/suggestions")).get_data(as_text=True)
+        self.assertIn('class="scan-overlay show"', html)
+        status = self._running_scan_as_user(7, 7, lambda: self.client.get("/api/suggestions/scan-status"))
+        self.assertEqual(status.get_json()["status"], "running")
+
+    def test_suggestions_page_ignores_another_users_running_scan(self):
+        html = self._running_scan_as_user(8, 7, lambda: self.client.get("/suggestions")).get_data(as_text=True)
+        self.assertNotIn('class="scan-overlay show"', html)
+
+    def test_suggestions_scan_request_reuses_the_running_scan(self):
+        response = self._running_scan_as_user(7, 7, lambda: self.client.post(
+            "/suggestions", data={"action": "scan_full"}, headers={"X-Requested-With": "XMLHttpRequest"}))
+        self.assertEqual(response.get_json()["job_id"], "job-running")
+        self.assertEqual(list(web_server.SUGGESTIONS_SCAN_JOBS), ["job-running"])
+
     def test_suggestions_finished_session_scan_does_not_overwrite_newer_scan(self):
         live = self._open_session_behind_a_newer_scan()
         with self.client.session_transaction() as session_data:
