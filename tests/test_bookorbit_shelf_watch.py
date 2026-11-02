@@ -244,9 +244,8 @@ def test_reading_watch_matches_audiobook_added_after_cached_listing():
     client.list_continue_reading_books.return_value = [
         {"id": "1575", "title": "Dear Edward", "fileName": "Dear Edward (2020).epub"}]
     svc._reading_watch_enabled = MagicMock(return_value=True)
-    svc._create_pending_suggestion = MagicMock(return_value=True)
     stats = svc._process_reading_watch(active_client=client)
-    assert stats['suggested'] == 1 and stats['ebook_only'] == 0
+    assert stats['auto_matched'] == 1 and stats['ebook_only'] == 0
     bms.create_ebook_only_mapping.assert_not_called()
 
 

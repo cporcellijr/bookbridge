@@ -1538,6 +1538,25 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         self.assertIn('loading="lazy"', html)
         self.assertIn('decoding="async"', html)
 
+    def test_index_review_link_carries_watch_suggestion_identity(self):
+        from src.db.models import PendingSuggestion
+
+        match = json.dumps([{"bridge_key": "bookorbit:5512", "audio_title": "Little Eve", "score": 60.0}])
+        self.mock_database_service.get_all_books.return_value = []
+        self.mock_database_service.get_all_states.return_value = []
+        self.mock_database_service.get_all_hardcover_details.return_value = []
+        self.mock_database_service.get_all_pending_suggestions.return_value = [
+            PendingSuggestion(source_id="bookorbit:5512", title="Little Eve", matches_json=match,
+                              origin="shelf_watch"),
+            PendingSuggestion(source_id="ab-9", title="Plain Suggestion", matches_json=match),
+        ]
+        self.mock_booklore_client.is_configured.return_value = False
+        self._set_dashboard_integrations(storyteller=False)
+
+        html = self._render_index_template_source()
+        self.assertIn("/add-book?search=Little+Eve&amp;review=bookorbit:5512", html)
+        self.assertIn('/add-book?search=Plain+Suggestion"', html)
+
     def test_index_endpoint_uses_cached_storygraph_and_goodreads_ratings(self):
         from src.db.models import Book, BookloreBook, StorygraphDetails
 

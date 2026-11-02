@@ -28,6 +28,11 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Changed
 
+- **A book you start reading in BookOrbit is matched to its audiobook on its own when the match is certain.**
+  With **Auto-match books you start reading in BookOrbit** on, a book in Continue Reading whose audiobook scores
+  95 or higher (the same bar as Up Next) is now linked straight away instead of waiting in Suggestions. Weaker
+  matches still wait for you to confirm, and nothing moves between shelves.
+
 - **Saving settings no longer restarts BookBridge unless it has to.** Most changes now take effect the moment you
   save. A setting marked **restart** is read once at startup: a server address, a folder, the sync period and a few
   others. Saving a change to one of those still restarts the app, and the Save bar tells you so before you press it.
@@ -58,6 +63,16 @@ All notable changes to BookBridge will be documented in this file.
   now say what they do, and descriptions say what changes for you and when you would touch them.
 
 ### Fixed
+
+- **Up Next and Continue Reading match audiobooks more reliably and suggest fewer wrong ones.** "(Unabridged)"
+  in an audiobook's title, letter case, or an audiobook with no author listed no longer drags a correct match
+  below the auto-match bar. An audiobook by a different author whose title is only close to your book's
+  is no longer suggested, and a different volume of a series is never matched on its own. When two audiobooks
+  tie for the best match, BookBridge asks you instead of picking one.
+- **Review on an Up Next or Continue Reading suggestion opens with the right books selected.** The Add Book page
+  now shows the ebook you shelved and the audiobook that was suggested, ready to add. Before, it searched by the
+  audiobook's title, which could miss the audiobook entirely or select a different book's ebook. Approving a
+  different book from the same library no longer takes the shelved book off Up Next.
 
 - **A book you put on BookOrbit's Up Next finds an audiobook you just added.** BookBridge reused a list of your
   BookOrbit library that could be up to an hour old. An audiobook added shortly before you shelved its ebook was

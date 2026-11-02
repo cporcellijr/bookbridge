@@ -458,6 +458,12 @@ class SuggestionsService:
     # with the audiobook's ("My Struggle, Book 3" and "Boyhood Island"). It stays below
     # the auto-match threshold so a person still confirms it.
     _SERIES_MATCH_SCORE = 90.0
+    # Shelf-watch: an identical title under different credited authors (often a
+    # narrator credit) is shown for review, never auto-matched.
+    _AUTHOR_CONFLICT_SCORE = 70.0
+    # Shelf-watch: without an author to compare, only an exact title is auto-trusted.
+    _NO_AUTHOR_INEXACT_SCORE_CAP = 94.0
+    _TRAILING_NUMBER_RE = re.compile(r"\s(\d{1,3})$")
 
     # A same-folder pair is auto-trusted (exact 100, pinned ahead of and skipping the
     # Ollama judge) only when the titles ALSO loosely agree. Without this, a lone
@@ -1573,12 +1579,66 @@ class SuggestionsService:
             "path": path,
         }
 
+    @classmethod
+    def _title_number(cls, title: str, normalized: str) -> Optional[float]:
+        """The volume a title names: a "Book 3" credit, else a bare trailing number ("Rescue 3")."""
+        volume = cls._volume_number(title)
+        if volume is not None:
+            return volume
+        match = cls._TRAILING_NUMBER_RE.search(normalized)
+        return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _bare_surname_overlap(names: List[str], other_names: List[str]) -> bool:
+        """A surname-only credit ("Tolkien") may be the same person as a full name ending in it."""
+        def bare(ns): return {n.casefold() for n in ns if len(n.split()) == 1}
+        def last(ns): return {n.split()[-1].casefold() for n in ns if n.split()}
+        return bool(bare(names) & last(other_names) or bare(other_names) & last(names))
+
+    @classmethod
+    def _ebook_audio_pair_score(cls, ebook_title: str, ebook_names: List[str],
+                                audio_title: str, audio_author: str) -> Optional[float]:
+        """Score a shelf-watch ebook against one audiobook; None rules the pair out.
+
+        Titles compare normalized, so "(Unabridged)" and letter case don't count. A
+        missing author on either side scores the title alone, and only an exact title
+        reaches auto-match confidence. Credited authors who are different people rule
+        out a different title ("Little Eyes" vs "Little Eve"); an identical title stays
+        reviewable. Different volume numbers rule the pair out, and a number on one
+        side only stays reviewable.
+        """
+        norm_ebook = cls._normalize_title_for_match(ebook_title).casefold() or ebook_title.casefold()
+        norm_audio = cls._normalize_title_for_match(audio_title).casefold() or audio_title.casefold()
+        ebook_number = cls._title_number(ebook_title, norm_ebook)
+        audio_number = cls._title_number(audio_title, norm_audio)
+        if None not in (ebook_number, audio_number) and ebook_number != audio_number:
+            return None
+        title_score, subtitle_stripped = cls._title_score(norm_ebook, "", norm_audio)
+        exact_title = norm_ebook == norm_audio
+
+        audio_names = cls._author_names(audio_author)
+        author_score = cls._score_author_names(ebook_names, audio_names)
+        if author_score:
+            score = (title_score * 0.7) + (author_score * 0.3)
+        elif ebook_names and audio_names and not cls._bare_surname_overlap(ebook_names, audio_names):
+            if not exact_title:
+                return None
+            return cls._AUTHOR_CONFLICT_SCORE
+        elif exact_title:
+            score = title_score
+        else:
+            score = min(title_score, cls._NO_AUTHOR_INEXACT_SCORE_CAP)
+
+        if subtitle_stripped or (ebook_number is None) != (audio_number is None):
+            score = min(score, cls._SUBTITLE_STRIPPED_SCORE_CAP)
+        return score
+
     def _scan_single_ebook(self, ebook: dict, candidate_pool: List[dict]) -> Optional[dict]:
         """Reverse counterpart of `_scan_single_audiobook` for the shelf-watch flow.
 
-        Takes a Grimmory ebook as the anchor and scans audiobook candidates,
-        applying the same `rapidfuzz.fuzz.token_sort_ratio` scoring formula and
-        60-point floor. Returns None when no candidate clears the floor.
+        Takes a Grimmory ebook as the anchor and scores audiobook candidates with
+        `_ebook_audio_pair_score` against a 60-point floor. Returns None when no
+        candidate clears the floor.
         """
         from rapidfuzz import fuzz
 
@@ -1597,6 +1657,7 @@ class SuggestionsService:
 
         ebook_title = anchor["title"]
         ebook_author = anchor["author"]
+        ebook_names = self._author_names(ebook_author)
 
         matches = []
         best_overall = None  # Track the highest-scoring candidate even if below the floor.
@@ -1636,12 +1697,9 @@ class SuggestionsService:
                     best_overall = (score, cand_title, cand_author)
                 continue
 
-            title_score = float(fuzz.token_sort_ratio(ebook_title, cand_title))
-            if ebook_author:
-                author_score = self._author_score(ebook_author, cand_author)
-                score = (title_score * 0.7) + (author_score * 0.3)
-            else:
-                score = title_score
+            score = self._ebook_audio_pair_score(ebook_title, ebook_names, cand_title, cand_author)
+            if score is None:
+                continue
 
             if best_overall is None or score > best_overall[0]:
                 best_overall = (score, cand_title, cand_author)
