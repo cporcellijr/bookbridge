@@ -69,6 +69,7 @@ def _app_and_patches():
     db = MagicMock()
     db.get_all_books.return_value = []
     db.get_book.return_value = None
+    db.get_kosync_document.return_value = None
     patches = [
         patch.object(web, "get_current_user_id", return_value=7),
         patch.object(web, "database_service", db),
