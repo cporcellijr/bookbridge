@@ -21,15 +21,27 @@ _ADMIN_ENDPOINTS = (
 )
 
 
+_WEB_MODULE = None
+
+
 def _web_server():
-    """Import the live web module at call time to avoid import cycles."""
+    """Return the web module that registered these routes.
+
+    In production web_server runs as ``__main__``; importing ``src.web_server``
+    would load a second, uninitialized copy (no DATA_DIR, its own admin list).
+    """
+    if _WEB_MODULE is not None:
+        return _WEB_MODULE
     from importlib import import_module
 
     return import_module("src.web_server")
 
 
-def init_suggestions_redesign_routes(app: Any) -> None:
-    """Register the user-scoped persisted Suggestions API routes."""
+def init_suggestions_redesign_routes(app: Any, web_module: Any = None) -> None:
+    """Register the user-scoped persisted Suggestions API routes on ``web_module``."""
+    global _WEB_MODULE
+    if web_module is not None:
+        _WEB_MODULE = web_module
     web = _web_server()
     web._ADMIN_ONLY_ENDPOINTS.update(_ADMIN_ENDPOINTS)
     app.add_url_rule(

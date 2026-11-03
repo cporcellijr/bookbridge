@@ -397,3 +397,44 @@ def test_queue_persistence_failure_is_not_reported_as_added():
         assert response.get_json()["error"] == "persistence_failed"
     finally:
         _close(patches)
+
+
+def test_routes_use_the_module_that_registered_them_not_a_fresh_import():
+    """Production runs web_server as __main__: importing src.web_server there gave an
+    uninitialized copy, so discovery failed with "NameError: name 'DATA_DIR' is not
+    defined" and the admin-only list was updated on the wrong module."""
+    from types import SimpleNamespace
+
+    from src import web_server
+    import src.api.suggestions_redesign as redesign
+
+    saved = redesign._WEB_MODULE
+    admin_before = set(web_server._ADMIN_ONLY_ENDPOINTS)
+    running = SimpleNamespace(
+        _ADMIN_ONLY_ENDPOINTS=set(),
+        get_current_user_id=lambda: 7,
+        current_user=lambda: None,
+        _load_persisted_suggestions_cache=_pair_payload,
+        database_service=SimpleNamespace(get_all_books=lambda user_id=None: []),
+        _dashboard_visible_books_for_user=lambda books, _user: books,
+        _load_match_queue=lambda: [],
+        _get_ignored_suggestion_source_ids=lambda: [],
+        _suggestion_bulk_block=lambda _s: None,
+        _sanitize_cover_urls=lambda entries: entries,
+        _running_suggestions_scan_job_id=lambda _uid: None,
+        _get_suggestions_scan_job=lambda _job: None,
+        logger=web_server.logger,
+    )
+    app = Flask(__name__)
+    app.secret_key = "test"
+    try:
+        init_suggestions_redesign_routes(app, running)
+        response = app.test_client().get("/api/suggestions/discovery?tab=pairs")
+        assert response.status_code == 200, response.get_json()
+        assert [e["suggestion_key"] for e in response.get_json()["entries"]] == ["pair:abs-1"]
+        assert "suggestions_redesign_discovery" in running._ADMIN_ONLY_ENDPOINTS
+        assert web_server._ADMIN_ONLY_ENDPOINTS == admin_before
+    finally:
+        redesign._WEB_MODULE = saved
+        web_server._ADMIN_ONLY_ENDPOINTS.clear()
+        web_server._ADMIN_ONLY_ENDPOINTS.update(admin_before)
