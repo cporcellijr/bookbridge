@@ -378,6 +378,10 @@ class BookOrbitClient:
             "title": (book.get("title") or "").strip(),
             "authors": self._format_authors(book.get("authors")),
             "language": str(book.get("language") or "").strip(),
+            "seriesName": book.get("seriesName"),
+            "seriesIndex": book.get("seriesIndex"),
+            "seriesId": book.get("seriesId"),
+            "seriesMemberships": book.get("seriesMemberships"),
             "ebookFileId": (ebook_file or {}).get("id"),
             "ebookFormat": ((ebook_file or {}).get("format") or "").lower(),
             "audioFileId": (audio_file or {}).get("id"),
@@ -391,6 +395,11 @@ class BookOrbitClient:
     # ------------------------------------------------------------------
     # Book cache (paginated POST /books/query)
     # ------------------------------------------------------------------
+
+    @property
+    def catalog_complete(self) -> bool:
+        """Whether a complete provider listing has been cached successfully."""
+        return self._cache_timestamp > 0 and not self._last_refresh_failed
 
     def _is_refresh_on_cooldown(self) -> bool:
         return self._last_refresh_failed and (
@@ -411,7 +420,7 @@ class BookOrbitClient:
             # ignored and always returns page 0). offset = page*size.
             size = 200
             max_pages = 2000  # safety against a bad/zero total
-            total = 0
+            total = None
             while page < max_pages:
                 resp = self._make_request(
                     "POST", "/api/v1/books/query", {"pagination": {"page": page, "size": size}}
@@ -424,17 +433,43 @@ class BookOrbitClient:
                 if not isinstance(data, dict):
                     self._last_refresh_failed = True
                     return False
+                page_total = data.get("total")
                 items = data.get("items") or []
+                if (
+                    isinstance(page_total, bool)
+                    or not isinstance(page_total, int)
+                    or page_total < 0
+                    or not isinstance(items, list)
+                    or (page_total == 0 and items)
+                    or (total is not None and page_total != total)
+                ):
+                    self._last_refresh_failed = True
+                    logger.warning("BookOrbit: book listing returned inconsistent pagination metadata")
+                    return False
+                total = page_total
                 for raw in items:
                     if not isinstance(raw, dict):
                         continue
                     info = self._build_light_info(raw)
                     if info:
                         new_cache[info["id"]] = info
-                total = data.get("total") or 0
+                if len(new_cache) > total:
+                    self._last_refresh_failed = True
+                    logger.warning("BookOrbit: book listing contained more books than its reported total")
+                    return False
                 page += 1
-                if not items or len(new_cache) >= total:
+                if len(new_cache) >= total:
                     break
+                if not items or len(items) < size:
+                    if len(new_cache) < total:
+                        self._last_refresh_failed = True
+                        logger.warning("BookOrbit: book listing ended before all %d books were loaded", total)
+                        return False
+                    break
+            else:
+                self._last_refresh_failed = True
+                logger.warning("BookOrbit: book listing reached page cap (%d) before completion", max_pages)
+                return False
 
             with self._cache_lock:
                 self._book_cache = new_cache
@@ -456,8 +491,11 @@ class BookOrbitClient:
         ):
             self._refresh_book_cache()
 
-    def get_all_books(self) -> list:
-        self._ensure_cache()
+    def get_all_books(self, force_refresh: bool = False) -> list:
+        if force_refresh:
+            self._refresh_book_cache()
+        else:
+            self._ensure_cache()
         with self._cache_lock:
             return list(self._book_cache.values())
 
@@ -570,6 +608,12 @@ class BookOrbitClient:
                 {"id": info.get("id"), "title": info.get("title") or "",
                  "authors": info.get("authors") or "",
                  "language": info.get("language") or "",
+                 "seriesName": info.get("seriesName"),
+                 "seriesIndex": info.get("seriesIndex"),
+                 "seriesId": info.get("seriesId"),
+                 "seriesMemberships": info.get("seriesMemberships"),
+                 "audioFileId": info.get("audioFileId"),
+                 "sourceFileId": info.get("audioFileId"),
                  "duration_seconds": None, "num_files": None}
                 for info in self.get_all_books()
                 if self._info_offers_kind(info, "audiobook")
@@ -625,6 +669,13 @@ class BookOrbitClient:
                 "title": info.get("title") or "",
                 "authors": info.get("authors") or "",
                 "language": info.get("language") or "",
+                "seriesName": info.get("seriesName"),
+                "seriesIndex": info.get("seriesIndex"),
+                "seriesId": info.get("seriesId"),
+                "seriesMemberships": info.get("seriesMemberships"),
+                "ebookFileId": info.get("ebookFileId"),
+                "ebookFormat": info.get("ebookFormat"),
+                "sourceFileId": info.get("ebookFileId"),
                 "fileName": None,
             })
         return out

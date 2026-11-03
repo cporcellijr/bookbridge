@@ -459,13 +459,14 @@ class TestScheduledRun(ScheduledScanTestCase):
     def run_scheduled(self, full=False):
         captured = {}
 
-        def fake_start(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None):
+        def fake_start(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None, full_refresh=False):
             captured.update(
                 user_id=get_current_user_id(),
                 credentials=dict(get_current_user_credentials()),
                 bundle=web_server.uc(),
                 cached_by_abs=cached_suggestions_by_abs,
                 cached_no_match=cached_no_match_abs_ids,
+                full_refresh=full_refresh,
             )
             return "job-1"
 
@@ -511,7 +512,7 @@ class TestScheduledRun(ScheduledScanTestCase):
         self.assertEqual({"ab-1": suggestion("ab-1")}, captured["cached_by_abs"])
         self.assertEqual(["ab-2"], captured["cached_no_match"])
 
-    def test_full_refresh_clears_the_cache_as_a_newer_scan(self):
+    def test_full_refresh_rebuilds_without_erasing_the_last_reliable_cache(self):
         with as_user(7):
             web_server._save_persisted_suggestions_cache({"scan_cache_by_abs": {"ab-1": suggestion("ab-1")}})
 
@@ -521,8 +522,8 @@ class TestScheduledRun(ScheduledScanTestCase):
         self.assertEqual([], captured["cached_no_match"])
         with as_user(7):
             persisted = web_server._load_persisted_suggestions_cache()
-        self.assertEqual({}, persisted["scan_cache_by_abs"])
-        self.assertGreater(persisted["scanned_at"], 0)
+        self.assertEqual({"ab-1": suggestion("ab-1")}, persisted["scan_cache_by_abs"])
+        self.assertTrue(captured["full_refresh"])
 
 
 class TestOpenSession(ScheduledScanTestCase):
@@ -584,7 +585,7 @@ class TestOpenSession(ScheduledScanTestCase):
         self.assertEqual({"ab-new": suggestion("ab-new")}, persisted["scan_cache_by_abs"])
         self.assertEqual(state["scanned_at"], persisted["scanned_at"])
 
-    def test_open_session_is_emptied_while_a_full_refresh_is_running(self):
+    def test_open_session_retains_last_results_while_a_full_refresh_is_running(self):
         state = self.open_session_with({"ab-old": suggestion("ab-old")})
 
         with patch.object(web_server, "_start_suggestions_scan_job", return_value="job-1"):
@@ -592,9 +593,9 @@ class TestOpenSession(ScheduledScanTestCase):
         with as_user(7):
             state = web_server._rehydrate_suggestions_state_from_cache(state)
 
-        self.assertEqual({}, state["scan_cache_by_abs"])
-        self.assertEqual([], state["scan_results"])
-        self.assertFalse(state["scan_has_run"])
+        self.assertEqual({"ab-old": suggestion("ab-old")}, state["scan_cache_by_abs"])
+        self.assertEqual([suggestion("ab-old")], state["scan_results"])
+        self.assertTrue(state["scan_has_run"])
 
     def test_live_state_wins_over_a_cache_that_is_not_from_a_newer_scan(self):
         state = self.open_session_with({"ab-live": suggestion("ab-live")})

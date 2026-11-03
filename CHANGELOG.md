@@ -4,6 +4,17 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Suggestions redesign backend foundation.** Persisted, per-reader Ebook Only discovery now shares
+  the existing Suggestions scan, with stable source/file identities, series metadata, persistent
+  ignore/reset, conservative unknown/source-failure handling and indexed reverse matching. New API
+  projections expose grouping, filtering, counts and server-validated series selection for the
+  existing Batch Match Queue. Single ebook actions reuse Add Book and ebook-only mapping validation.
+  Existing Suggestions pages remain available; the redesigned frontend is a separate next step.
+
 ## [7.12.0] - 2026-11-02
 
 ### Added

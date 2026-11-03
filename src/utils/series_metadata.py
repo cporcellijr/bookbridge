@@ -5,7 +5,9 @@ mapping creation, so every writer of ``books.series_name`` /
 ``books.series_sequence`` derives them the same way.
 """
 
+from fractions import Fraction
 import logging
+import math
 import os
 import re
 import zipfile
@@ -33,14 +35,45 @@ class SeriesResolution(NamedTuple):
 _LIBRARY_SEQUENCE_KEYS = ("seriesIndex", "seriesNumber", "seriesSequence")
 
 
-def _coerce_sequence(raw_seq: Any) -> Optional[float]:
-    """Return *raw_seq* as a float, or None when it is missing or unparseable."""
-    if raw_seq is None:
+def normalize_series_key(name: Optional[str]) -> str:
+    """Case- and whitespace-insensitive key for grouping series.
+
+    Matches the dashboard's existing normalization and is shared by the suggestions
+    series projection.
+    """
+    return re.sub(r"\s+", " ", (name or "").strip()).casefold()
+
+
+def _parse_series_sequence(raw_seq: Any) -> Optional[float]:
+    """Parse finite numeric, decimal, fraction, or mixed-fraction sequence values."""
+    if raw_seq is None or isinstance(raw_seq, bool):
         return None
     try:
-        return float(raw_seq)
-    except (TypeError, ValueError):
-        return None
+        value = float(raw_seq)
+    except (TypeError, ValueError, OverflowError):
+        if not isinstance(raw_seq, str):
+            return None
+        text = raw_seq.strip()
+        mixed = re.fullmatch(r"([+-]?)(\d+)\s+(\d+/\d+)", text)
+        try:
+            if mixed:
+                sign, whole, fraction = mixed.groups()
+                value = float(Fraction(whole) + Fraction(fraction))
+                if sign == "-":
+                    value = -value
+            else:
+                value = float(Fraction(text))
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return None
+    return value if math.isfinite(value) else None
+
+
+def _coerce_sequence(raw_seq: Any) -> Optional[float]:
+    """Return *raw_seq* as a float, or None when it is missing or unparseable.
+
+    Delegates to the safe parser used throughout the codebase.
+    """
+    return _parse_series_sequence(raw_seq)
 
 
 def extract_series_from_abs_metadata(metadata: Any) -> SeriesTuple:
@@ -98,15 +131,21 @@ def extract_series_from_library_detail(detail: Any) -> SeriesTuple:
     nested = detail.get("metadata")
     metadata = nested if isinstance(nested, dict) else detail
 
-    name = (metadata.get("seriesName") or "").strip() or None
+    series = metadata.get("series")
+    name = (metadata.get("seriesName") or metadata.get("series_name") or "").strip() or None
+    if not name and isinstance(series, dict):
+        name = (series.get("name") or "").strip() or None
+    if not name and isinstance(series, str):
+        name = series.strip() or None
 
     # Explicit presence checks, not truthiness: book 0 is a legitimate index.
     raw_seq = None
-    for key in _LIBRARY_SEQUENCE_KEYS:
+    for key in (*_LIBRARY_SEQUENCE_KEYS, "series_number", "series_index"):
         if metadata.get(key) is not None:
             raw_seq = metadata[key]
             break
-
+    if raw_seq is None and isinstance(series, dict):
+        raw_seq = series.get("sequence")
     return name, _coerce_sequence(raw_seq)
 
 
