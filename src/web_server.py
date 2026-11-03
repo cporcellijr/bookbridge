@@ -54,7 +54,7 @@ from src.utils.ebook_utils import (
     is_linkable_ebook_filename,
 )
 from src.utils.ebook_sources import is_grimmory_source, local_ebook_filename, normalize_ebook_source
-from src.utils.local_ebook_metadata import read_local_ebook_metadata
+from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.logging_utils import memory_log_handler, LOG_PATH
 from src.utils.logging_utils import sanitize_log_data
 from src.utils.logging_utils import get_persistent_condition_logger
@@ -88,6 +88,7 @@ from src.utils.series_metadata import (
     extract_series_from_abs_metadata as _series_from_abs_metadata,
     extract_series_from_library_detail as _series_from_library_detail,
     extract_series_from_title as _series_from_title,
+    normalize_series_key,
     resolve_series_details,
     resolve_series_for_book,
 )
@@ -778,6 +779,17 @@ def uc():
         except Exception as e:
             logger.debug("uc(): falling back to global clients: %s", e)
     return _global_clients
+
+
+def _scan_user_clients():
+    """uc() for Suggestions scans: a user who may not use the admin's clients gets an error, not them."""
+    clients = uc()
+    if isinstance(clients, _GlobalClients):
+        user_id = get_current_user_id()
+        user = database_service.get_user(user_id) if user_id is not None and database_service is not None else None
+        if user is not None and not _global_fallback_allowed(database_service, user):
+            raise PermissionError("user client bundle unavailable")
+    return clients
 
 
 def _client_bundle_kwargs(clients):
@@ -3360,6 +3372,9 @@ def _run_storyteller_library_hourly():
                 _active_bundle.reset(bundle_token)
 
 
+EBOOK_ALREADY_MAPPED = "This ebook is already in BookBridge"
+
+
 def _upsert_storyteller_mapping(
     *,
     mode_hint,
@@ -3372,6 +3387,9 @@ def _upsert_storyteller_mapping(
     existing_book=None,
     duration=None,
     preserve_primary_kosync=False,
+    precomputed_kosync_doc_id=None,
+    ebook_source_path=None,
+    create_only=False,
 ):
     """
     Shared Storyteller/ebook mapping upsert for:
@@ -3384,7 +3402,7 @@ def _upsert_storyteller_mapping(
     selected_storyteller_uuid = (storyteller_uuid or "").strip() or None
     selected_ebook_filename = (ebook_filename or "").strip() or None
     selected_ebook_source = _normalize_text_source_type(ebook_source)
-    selected_ebook_source_id = str(ebook_source_id or "").strip() or None
+    selected_ebook_source_id = str(ebook_source_id).strip() if ebook_source_id is not None else None
     requested_abs_id = str(abs_id or "").strip() or None
     if selected_ebook_source == "BookFusion":
         return None, "BookFusion links require an audiobook mapping", 400
@@ -3424,7 +3442,7 @@ def _upsert_storyteller_mapping(
     if not resolved_ebook_filename:
         return None, "Please select a text source (Storyteller or Standard Ebook)", 400
 
-    kosync_doc_id = None
+    kosync_doc_id = precomputed_kosync_doc_id
     if preserve_primary_kosync:
         kosync_doc_id = target_book.kosync_doc_id
         resolved_ebook_filename = target_book.ebook_filename
@@ -3442,7 +3460,7 @@ def _upsert_storyteller_mapping(
                 target_book.kosync_doc_id,
             )
             kosync_doc_id = target_book.kosync_doc_id
-    else:
+    elif not kosync_doc_id:
         booklore_id = None
         if uc().booklore_client.is_configured():
             bl_book = uc().booklore_client.find_book_by_filename(resolved_ebook_filename)
@@ -3453,6 +3471,7 @@ def _upsert_storyteller_mapping(
             booklore_id,
             bookorbit_id=selected_ebook_source_id if selected_ebook_source == "BookOrbit" else None,
             kavita_id=selected_ebook_source_id if selected_ebook_source == "Kavita" else None,
+            source_path=ebook_source_path,
         )
         if not kosync_doc_id and target_book and target_book.kosync_doc_id:
             kosync_doc_id = target_book.kosync_doc_id
@@ -3477,6 +3496,11 @@ def _upsert_storyteller_mapping(
         preferred_abs_id = requested_abs_id
         if not preferred_abs_id and selected_ebook_source == "ABS" and selected_ebook_source_id:
             preferred_abs_id = selected_ebook_source_id
+        if create_only and (
+            existing_by_hash
+            or database_service.get_book(preferred_abs_id or f"ebook-{kosync_doc_id[:16]}")
+        ):
+            return None, EBOOK_ALREADY_MAPPED, 409
 
         if existing_by_hash:
             if preferred_abs_id and existing_by_hash.abs_id != preferred_abs_id:
@@ -3619,7 +3643,13 @@ def _upsert_storyteller_mapping(
             storyteller_manifest,
         )
 
-    saved_book = database_service.save_book(target_book)
+    if create_only:
+        # Insert-only: a row another match created after the checks above is left alone.
+        saved_book = database_service.save_book(target_book, create_only=True)
+        if saved_book is None:
+            return None, EBOOK_ALREADY_MAPPED, 409
+    else:
+        saved_book = database_service.save_book(target_book)
     if not isinstance(getattr(saved_book, "abs_id", None), str):
         saved_book = target_book
 
@@ -3674,20 +3704,30 @@ def _upsert_storyteller_mapping(
 
 
 class EbookResult:
-    """Wrapper to provide consistent interface for ebooks from Grimmory, CWA, ABS, or filesystem."""
+    """Provider or local ebook metadata shared by search and suggestions scans."""
 
-    def __init__(self, name, title=None, subtitle=None, authors=None, booklore_id=None, path=None, source=None, source_id=None, abs_identifier=None, language=None):
+    def __init__(
+        self, name, title=None, subtitle=None, authors=None, booklore_id=None,
+        path=None, source=None, source_id=None, abs_identifier=None, language=None,
+        series_name=None, series_sequence=None, source_file_id=None,
+        ebook_file_id=None, file_mtime_ns=None, file_size=None,
+    ):
         self.name = name
         self.title = title or Path(name).stem
         self.subtitle = subtitle or ''
         self.authors = authors or ''
         self.language = str(language or '').strip()
         self.booklore_id = booklore_id
-        self.path = path # Public path
-        self.source = source  # 'booklore', 'cwa', 'abs', 'filesystem'
-        self.source_id = source_id or booklore_id # Generic ID for any source
-        self.abs_identifier = abs_identifier  # audiobookshelf_id from Calibre identifiers, if known
-        # Has metadata if we have a real title (not just filename) or booklore_id
+        self.path = path
+        self.source = source
+        self.source_id = source_id if source_id is not None else booklore_id
+        self.abs_identifier = abs_identifier
+        self.series_name = series_name
+        self.series_sequence = series_sequence
+        self.source_file_id = source_file_id
+        self.ebook_file_id = ebook_file_id
+        self.file_mtime_ns = file_mtime_ns
+        self.file_size = file_size
         self.has_metadata = booklore_id is not None or (title is not None and title != name)
 
     @property
@@ -3769,19 +3809,51 @@ def _ebook_edition_label(book: dict) -> str:
     return series_name
 
 
-def get_searchable_audiobooks(search_term):
-    """Get audiobook results from all configured audio providers."""
+def _record_suggestions_source_state(source_states, source, role, configured, supported=True, complete=None, count=None, error_type=None):
+    source = "Grimmory" if source == "BookLore" else source
+    state = source_states.setdefault(source, {"roles": {}})
+    state["roles"][role] = {
+        "configured": bool(configured),
+        "supported": bool(supported),
+        "complete": complete,
+        "count": count,
+        "error_type": error_type,
+    }
+
+
+def get_searchable_audiobooks(search_term, source_states=None, abs_catalog=None, full_refresh=False):
+    """Get audiobook results from configured providers, optionally tracking scan health."""
+    discovery = source_states is not None
     adapters = {}
     try:
         clients = uc()
         if clients.abs_client and clients.abs_client.is_configured():
-            adapters["ABS"] = ABSAudioSourceAdapter(clients.abs_client, container.data_dir())
+            if discovery and abs_catalog is None:
+                _record_suggestions_source_state(
+                    source_states, "ABS", "audio", True, complete=False, error_type="CatalogUnavailable",
+                )
+            else:
+                adapters["ABS"] = ABSAudioSourceAdapter(
+                    clients.abs_client, container.data_dir(),
+                    catalog_items=abs_catalog if discovery else None,
+                )
         if clients.booklore_client and clients.booklore_client.is_configured():
-            adapters["BookLore"] = BookLoreAudioSourceAdapter(clients.booklore_client, container.data_dir())
+            catalog = clients.booklore_client.get_all_books(include_all_ids=True, force_refresh=full_refresh) if discovery else None
+            adapters["BookLore"] = BookLoreAudioSourceAdapter(
+                clients.booklore_client, container.data_dir(), catalog_items=catalog,
+            )
         _bo_client = getattr(clients, "bookorbit_client", None)
         if _bo_client and _bo_client.is_configured():
+            if full_refresh:
+                _bo_client.get_all_books(force_refresh=True)
             adapters["BookOrbit"] = BookOrbitAudioSourceAdapter(_bo_client, container.data_dir())
     except Exception as e:
+        if discovery:
+            _record_suggestions_source_state(
+                source_states, "_client_registry", "audio", True, complete=False, error_type=type(e).__name__,
+            )
+            logger.warning("Could not build user-scoped audio adapters (%s)", type(e).__name__)
+            return []
         logger.debug("Could not build user-scoped audio adapters, falling back to globals: %s", e)
         adapters = container.audio_source_adapters() if hasattr(container, "audio_source_adapters") else {}
     results = []
@@ -3792,10 +3864,29 @@ def get_searchable_audiobooks(search_term):
         try:
             provider_results = adapter.search(search_term)
         except Exception as e:
-            logger.warning(f"⚠️ Audiobook search failed for {source_name}: {e}", exc_info=True)
+            logger.warning(
+                "⚠️ Audiobook search failed for %s (%s)", source_name, type(e).__name__,
+                exc_info=not discovery,
+            )
             per_adapter_counts[source_name] = f"error:{type(e).__name__}"
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, source_name, "audio", True, complete=False, error_type=type(e).__name__,
+                )
             continue
         per_adapter_counts[source_name] = len(provider_results) if provider_results else 0
+        if discovery:
+            if source_name == "ABS":
+                complete = abs_catalog is not None
+            elif source_name == "BookLore":
+                complete = bool(getattr(clients.booklore_client, "catalog_complete", False))
+            else:
+                complete = bool(getattr(clients.bookorbit_client, "catalog_complete", False))
+            _record_suggestions_source_state(
+                source_states, source_name, "audio", True, complete=complete,
+                count=len(provider_results or []),
+                error_type=None if complete else "CatalogIncomplete",
+            )
 
         for result in provider_results or []:
             if not isinstance(result, AudioResult):
@@ -3811,6 +3902,43 @@ def get_searchable_audiobooks(search_term):
         "get_searchable_audiobooks(query=%r): adapters=%s, deduped_total=%d",
         search_term, per_adapter_counts, len(results),
     )
+    if discovery:
+        for source_name, client in (
+            ("BookLore", clients.booklore_client),
+            ("BookOrbit", getattr(clients, "bookorbit_client", None)),
+        ):
+            state = source_states.get("Grimmory" if source_name == "BookLore" else source_name, {}).get("roles", {}).get("audio", {})
+            if not state.get("configured") or state.get("complete") is not True:
+                continue
+            try:
+                if source_name == "BookLore":
+                    books = client.get_all_books(include_all_ids=True)
+                    state["unknown_companion_count"] = sum(
+                        bool(book.get("_needs_detail") and not client._book_supports_audiobook(book)
+                             and not client._has_audio_shape_fields(book))
+                        for book in books
+                    )
+                    missing_title = any(
+                        (client._book_supports_audiobook(book) or (
+                            book.get("_needs_detail") and not client._has_audio_shape_fields(book)
+                        )) and not (book.get("title") or book.get("fileName"))
+                        for book in books
+                    )
+                else:
+                    books = client.get_all_books()
+                    missing_title = any(
+                        client._info_offers_kind(book, "audiobook") and not book.get("title")
+                        for book in books
+                    )
+                if missing_title:
+                    _record_suggestions_source_state(
+                        source_states, source_name, "audio", True, complete=False,
+                        error_type="MissingAudioTitle",
+                    )
+            except Exception as e:
+                _record_suggestions_source_state(
+                    source_states, source_name, "audio", True, complete=False, error_type=type(e).__name__,
+                )
     return results
 
 
@@ -3942,10 +4070,12 @@ def _search_ebooks_with_fallback(term):
     return [by_name[key] for key in order]
 
 
-def get_suggestion_audiobooks():
+def get_suggestion_audiobooks(source_states=None, abs_catalog=None, full_refresh=False):
     """Return provider-normalized audiobook records for suggestions scan."""
     records = []
-    for item in get_searchable_audiobooks(""):
+    for item in get_searchable_audiobooks(
+        "", source_states=source_states, abs_catalog=abs_catalog, full_refresh=full_refresh,
+    ):
         if not isinstance(item, AudioResult):
             continue
 
@@ -3973,6 +4103,9 @@ def get_suggestion_audiobooks():
                 "audio_title": title,
                 "audio_subtitle": (item.subtitle or "").strip(),
                 "audio_series": (item.series_label or "").strip(),
+                "audio_series_name": item.series_name,
+                "audio_series_sequence": item.series_sequence,
+                "audio_series_source": item.series_source,
                 "audio_author": author,
                 "audio_language": item.language or "",
                 "audio_duration": item.duration,
@@ -3992,12 +4125,16 @@ def get_suggestion_audiobooks():
     return records
 
 
+def _first_not_none(*values):
+    return next((value for value in values if value is not None), None)
+
+
 def _ebook_title_key(value):
     """Normalize a title/filename-stem to an alphanumeric key for joining."""
     return re.sub(r'[\W_]+', '', (value or '').lower())
 
 
-def _build_local_ebook_title_index():
+def _build_local_ebook_title_index(scan_metadata=None):
     """Map normalized title -> filename for every epub on the local /books disk.
 
     BookBridge and BookOrbit share the same files, so this lets us pair
@@ -4016,39 +4153,122 @@ def _build_local_ebook_title_index():
                     continue
                 stem = eb.stem
                 title_part = stem.split(" - ", 1)[0]
-                metadata_title = read_local_ebook_metadata(eb)[0]
+                metadata, series = read_local_ebook_metadata(eb), read_local_ebook_series(eb)
+                metadata_title, metadata_authors = metadata
+                if scan_metadata is not None:
+                    stat = eb.stat()
+                    scan_metadata[str(eb)] = {
+                        "path": eb,
+                        "metadata": metadata,
+                        "series": series,
+                        "mtime_ns": stat.st_mtime_ns,
+                        "size": stat.st_size,
+                    }
                 for key in (_ebook_title_key(title_part), _ebook_title_key(stem), _ebook_title_key(metadata_title)):
                     if key:
                         index.setdefault(key, eb.name)
     except Exception as e:
+        if scan_metadata is not None:
+            scan_metadata["_error_type"] = type(e).__name__
         logger.warning(f"⚠️ Failed to build local ebook title index: {e}", exc_info=True)
     return index
 
 
-def get_searchable_ebooks(search_term):
-    """Get ebooks from Grimmory API, BookOrbit, filesystem, ABS, and CWA.
-    Returns list of EbookResult objects for consistent interface."""
-
+def get_searchable_ebooks(
+    search_term, inventory_candidates=None, source_states=None,
+    full_refresh=False, local_metadata=None, abs_catalog=None,
+):
+    """Get ebook candidates, optionally collecting undeduped scan inventory."""
+    discovery = source_states is not None
+    exclude_local_files = discovery and env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    inventory_candidates = inventory_candidates if inventory_candidates is not None else []
+    scan_local_metadata = local_metadata if local_metadata is not None else ({} if discovery else None)
     results = []
     found_filenames = set()
     found_stems = set()  # To dedupe by title stem
-    clients = uc()
+    try:
+        clients = uc()
+    except Exception as exc:
+        if discovery:
+            _record_suggestions_source_state(
+                source_states, "_client_registry", "ebook", True,
+                complete=False, error_type=type(exc).__name__,
+            )
+            logger.warning("Could not load user-scoped ebook clients (%s)", type(exc).__name__)
+            return results
+        raise
+
+    local_index = None
+    if discovery:
+        if EBOOK_DIR.exists():
+            local_index = _build_local_ebook_title_index(scan_local_metadata)
+            error_type = scan_local_metadata.get("_error_type") if isinstance(scan_local_metadata, dict) else None
+            _record_suggestions_source_state(
+                source_states, "Local File", "ebook", not exclude_local_files,
+                complete=None if exclude_local_files else error_type is None,
+                count=None if exclude_local_files or error_type else len(scan_local_metadata),
+                error_type=None if exclude_local_files else error_type,
+            )
+        else:
+            _record_suggestions_source_state(
+                source_states, "Local File", "ebook", False, complete=None,
+            )
 
     # 1. Grimmory
-    if clients.booklore_client.is_configured():
+    booklore_client = getattr(clients, "booklore_client", None)
+    booklore_configured = bool(booklore_client and booklore_client.is_configured())
+    if discovery:
+        _record_suggestions_source_state(
+            source_states, "Grimmory", "ebook", booklore_configured,
+            complete=None if not booklore_configured else False,
+        )
+    if booklore_configured:
         try:
             if search_term:
-                books = clients.booklore_client.search_books(search_term)
+                books = booklore_client.search_books(search_term)
             else:
-                # For scan workloads, use the broader cache-oriented API to avoid
-                # repeated aggressive refresh behavior from per-query search calls.
-                books = clients.booklore_client.get_all_books()
+                # The ID view supplies every provider book to inverse discovery; the
+                # default filename view below remains the legacy pair-candidate pool.
+                if discovery:
+                    all_id_books = booklore_client.get_all_books(
+                        include_all_ids=True, force_refresh=full_refresh and "audio" not in source_states.get("Grimmory", {}).get("roles", {}),
+                    )
+                    _record_suggestions_source_state(
+                        source_states, "Grimmory", "ebook", True,
+                        complete=bool(getattr(booklore_client, "catalog_complete", False)),
+                        count=len(all_id_books),
+                        error_type=None if booklore_client.catalog_complete else "CatalogIncomplete",
+                    )
+                    for book in all_id_books or []:
+                        primary = book.get('primaryFile') or {}
+                        fname = book.get('fileName') or primary.get('fileName') or ''
+                        file_type = str(book.get('bookType') or primary.get('bookType') or '').upper()
+                        if not is_linkable_ebook_filename(fname) and file_type != 'EPUB':
+                            continue
+                        series_name, series_sequence = _series_from_library_detail(book)
+                        inventory_candidates.append(EbookResult(
+                            name=fname,
+                            title=book.get('title'),
+                            authors=book.get('authors'),
+                            language=book.get('language'),
+                            booklore_id=book.get('id'),
+                            source='Grimmory',
+                            path=book.get('filePath') or primary.get('filePath') or book.get('path'),
+                            series_name=series_name,
+                            series_sequence=series_sequence,
+                            source_file_id=_first_not_none(book.get('sourceFileId'), primary.get('id')),
+                            ebook_file_id=book.get('ebookFileId'),
+                        ))
+                    books = booklore_client.get_all_books()
+                else:
+                    books = booklore_client.get_all_books()
             if books:
                 for b in books:
                     fname = b.get('fileName', '')
                     if is_linkable_ebook_filename(fname):
                         found_filenames.add(fname.lower())
                         found_stems.add(Path(fname).stem.lower())
+                        series_name, series_sequence = _series_from_library_detail(b)
                         results.append(EbookResult(
                             name=fname,
                             title=b.get('title'),
@@ -4057,24 +4277,66 @@ def get_searchable_ebooks(search_term):
                             language=b.get('language'),
                             booklore_id=b.get('id'),
                             path=b.get('filePath') or b.get('filepath') or b.get('path'),
-                            source='Grimmory'
+                            source='Grimmory',
+                            series_name=series_name,
+                            series_sequence=series_sequence,
+                            source_file_id=b.get('sourceFileId'),
+                            ebook_file_id=b.get('ebookFileId'),
                         ))
         except Exception as e:
-            logger.warning(f"⚠️ Grimmory search failed: {e}", exc_info=True)
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, "Grimmory", "ebook", True,
+                    complete=False, error_type=type(e).__name__,
+                )
+                logger.warning("⚠️ Grimmory scan failed (%s)", type(e).__name__)
+            else:
+                logger.warning(f"⚠️ Grimmory search failed: {e}", exc_info=True)
 
     # 1b. BookOrbit
-    if clients.bookorbit_client.is_configured():
+    bookorbit_client = getattr(clients, "bookorbit_client", None)
+    bookorbit_configured = bool(bookorbit_client and bookorbit_client.is_configured())
+    if discovery:
+        _record_suggestions_source_state(
+            source_states, "BookOrbit", "ebook", bookorbit_configured,
+            complete=None if not bookorbit_configured else False,
+        )
+    if bookorbit_configured:
         try:
             if search_term:
-                # Targeted search returns real filenames (bounded result set).
-                bo_books = clients.bookorbit_client.search_ebooks(search_term)
+                bo_books = bookorbit_client.search_ebooks(search_term)
                 local_index = None
             else:
-                # Full scan: light candidates (clean title/author, no filename).
-                # Pair each with a real filename from the shared /books disk so we
-                # avoid a throttled detail call per book.
-                bo_books = clients.bookorbit_client.get_all_ebooks()
-                local_index = _build_local_ebook_title_index()
+                if discovery and full_refresh and "audio" not in source_states.get("BookOrbit", {}).get("roles", {}):
+                    bookorbit_client.get_all_books(force_refresh=True)
+                bo_books = bookorbit_client.get_all_ebooks()
+                local_index = local_index if discovery else _build_local_ebook_title_index()
+                if discovery:
+                    complete = bool(getattr(bookorbit_client, "catalog_complete", False))
+                    _record_suggestions_source_state(
+                        source_states, "BookOrbit", "ebook", True,
+                        complete=complete, count=len(bo_books or []),
+                        error_type=None if complete else "CatalogIncomplete",
+                    )
+                    for book in bo_books or []:
+                        ebook_format = str(book.get("ebookFormat") or "").lower().lstrip(".")
+                        fname = book.get("fileName") or ""
+                        if not is_linkable_ebook_filename(fname) and ebook_format not in {"epub", "cbz"}:
+                            continue
+                        series_name, series_sequence = _series_from_library_detail(book)
+                        inventory_candidates.append(EbookResult(
+                            name=fname,
+                            title=book.get("title"),
+                            authors=book.get("authors"),
+                            language=book.get("language"),
+                            source="BookOrbit",
+                            source_id=book.get("id"),
+                            path=book.get("filePath") or book.get("filepath") or book.get("path"),
+                            series_name=series_name,
+                            series_sequence=series_sequence,
+                            source_file_id=book.get("sourceFileId"),
+                            ebook_file_id=book.get("ebookFileId"),
+                        ))
             for b in bo_books or []:
                 fname = b.get('fileName') or ''
                 if not fname and local_index is not None:
@@ -4085,6 +4347,7 @@ def get_searchable_ebooks(search_term):
                     continue
                 found_filenames.add(fname.lower())
                 found_stems.add(Path(fname).stem.lower())
+                series_name, series_sequence = _series_from_library_detail(b)
                 results.append(EbookResult(
                     name=fname,
                     title=b.get('title'),
@@ -4094,9 +4357,29 @@ def get_searchable_ebooks(search_term):
                     source='BookOrbit',
                     source_id=b.get('id'),
                     subtitle=_ebook_edition_label(b),
+                    series_name=series_name,
+                    series_sequence=series_sequence,
+                    source_file_id=b.get('sourceFileId'),
+                    ebook_file_id=b.get('ebookFileId'),
                 ))
         except Exception as e:
-            logger.warning(f"⚠️ BookOrbit search failed: {e}", exc_info=True)
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, "BookOrbit", "ebook", True,
+                    complete=False, error_type=type(e).__name__,
+                )
+                logger.warning("⚠️ BookOrbit scan failed (%s)", type(e).__name__)
+            else:
+                logger.warning(f"⚠️ BookOrbit search failed: {e}", exc_info=True)
+
+    # BookFusion is searchable but does not expose a supported full catalog.
+    bookfusion_client = getattr(clients, "bookfusion_client", None)
+    if discovery:
+        _record_suggestions_source_state(
+            source_states, "BookFusion", "ebook",
+            bool(bookfusion_client and bookfusion_client.is_configured()),
+            supported=False, complete=None,
+        )
 
     # 1c. BookFusion existing user library links. Search-only because BookFusion
     # does not provide a bridge-side EPUB download in Phase 1/3.
@@ -4128,21 +4411,53 @@ def get_searchable_ebooks(search_term):
 
     # 1d. Kavita
     kavita_client = getattr(clients, "kavita_client", None)
-    if kavita_client and kavita_client.is_configured():
+    kavita_configured = bool(kavita_client and kavita_client.is_configured())
+    if discovery:
+        _record_suggestions_source_state(
+            source_states, "Kavita", "ebook", kavita_configured,
+            complete=None if not kavita_configured else False,
+        )
+    if kavita_configured:
         try:
-            kavita_books = (
-                kavita_client.search_ebooks(search_term)
-                if search_term
-                else kavita_client.get_all_books()
-            )
+            if search_term:
+                kavita_books = kavita_client.search_ebooks(search_term)
+            elif discovery:
+                kavita_books = kavita_client.get_all_books(
+                    force_refresh=full_refresh, require_complete=True,
+                )
+                complete = bool(getattr(kavita_client, "catalog_complete", False))
+                _record_suggestions_source_state(
+                    source_states, "Kavita", "ebook", True,
+                    complete=complete, count=len(kavita_books or []),
+                    error_type=None if complete else "CatalogIncomplete",
+                )
+            else:
+                kavita_books = kavita_client.get_all_books()
             for book in kavita_books or []:
                 filename = book.get('fileName') or book.get('filename') or ''
+                if discovery and not search_term:
+                    if is_linkable_ebook_filename(filename):
+                        series_name, series_sequence = _series_from_library_detail(book)
+                        inventory_candidates.append(EbookResult(
+                            name=filename,
+                            title=book.get('title'),
+                            authors=book.get('authors') or book.get('author'),
+                            language=book.get('language'),
+                            source='Kavita',
+                            source_id=book.get('id'),
+                            path=book.get('filePath') or book.get('path'),
+                            series_name=series_name,
+                            series_sequence=series_sequence,
+                            source_file_id=book.get('sourceFileId'),
+                            ebook_file_id=book.get('ebookFileId'),
+                        ))
                 if not is_linkable_ebook_filename(filename):
                     continue
                 if filename.lower() in found_filenames:
                     continue
                 found_filenames.add(filename.lower())
                 found_stems.add(Path(filename).stem.lower())
+                series_name, series_sequence = _series_from_library_detail(book)
                 results.append(EbookResult(
                     name=filename,
                     title=book.get('title'),
@@ -4152,14 +4467,31 @@ def get_searchable_ebooks(search_term):
                     path=book.get('filePath') or book.get('path'),
                     source='Kavita',
                     source_id=book.get('id'),
+                    series_name=series_name,
+                    series_sequence=series_sequence,
+                    source_file_id=book.get('sourceFileId'),
+                    ebook_file_id=book.get('ebookFileId'),
                 ))
         except Exception as e:
-            logger.warning("Kavita search failed: %s", e, exc_info=True)
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, "Kavita", "ebook", True,
+                    complete=False, error_type=type(e).__name__,
+                )
+                logger.warning("Kavita scan failed (%s)", type(e).__name__)
+            else:
+                logger.warning("Kavita search failed: %s", e, exc_info=True)
 
     # 2. ABS ebook libraries
+    abs_client = getattr(clients, "abs_client", None)
+    abs_configured = bool(abs_client and abs_client.is_configured())
+    if discovery:
+        _record_suggestions_source_state(
+            source_states, "ABS", "ebook", abs_configured,
+            complete=None if not abs_configured else False,
+        )
     if search_term:
         try:
-            abs_client = clients.abs_client
             if abs_client:
                 abs_ebooks = abs_client.search_ebooks(search_term)
                 if abs_ebooks:
@@ -4182,71 +4514,239 @@ def get_searchable_ebooks(search_term):
                                 if ab.get('title'):
                                     found_stems.add(ab['title'].lower().strip())
         except Exception as e:
-            logger.warning(f"⚠️ ABS ebook search failed: {e}", exc_info=True)
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, "ABS", "ebook", True,
+                    complete=False, error_type=type(e).__name__,
+                )
+                logger.warning("⚠️ ABS ebook search failed (%s)", type(e).__name__)
+            else:
+                logger.warning(f"⚠️ ABS ebook search failed: {e}", exc_info=True)
+
+    if discovery and abs_configured:
+        try:
+            if abs_catalog is None:
+                abs_catalog = abs_client.get_library_catalog(force_refresh=full_refresh)
+            complete = isinstance(abs_catalog, list)
+            _record_suggestions_source_state(
+                source_states, "ABS", "ebook", True, complete=complete,
+                count=len(abs_catalog) if complete else None,
+                error_type=None if complete else "CatalogUnavailable",
+            )
+            for item in abs_catalog or []:
+                media = item.get("media") or {}
+                file_info = media.get("ebookFile")
+                file_data = file_info if isinstance(file_info, dict) else {}
+                file_text = file_info if isinstance(file_info, str) else ""
+                ext = str(
+                    file_data.get("ext") or media.get("ebookFormat")
+                    or Path(file_text).suffix.lstrip(".")
+                ).lower().lstrip(".")
+                if not is_linkable_ebook_filename("file." + ext):
+                    continue
+                source_id = item.get("id")
+                if source_id is None or str(source_id).strip() == "":
+                    continue
+                metadata = media.get("metadata") or item.get("metadata") or {}
+                fname = file_data.get("fileName") or file_data.get("filename") or f"{source_id}_abs.{ext}"
+                series_name, series_sequence = _series_from_abs_metadata(metadata)
+                inventory_candidates.append(EbookResult(
+                    name=fname,
+                    title=metadata.get("title") or item.get("name"),
+                    authors=metadata.get("authorName") or "",
+                    language=metadata.get("language") or "",
+                    source="ABS",
+                    source_id=source_id,
+                    series_name=series_name,
+                    series_sequence=series_sequence,
+                    source_file_id=(
+                        _first_not_none(file_data.get("ino"), file_data.get("id"), file_data.get("fileId"))
+                    ),
+                    ebook_file_id=(
+                        _first_not_none(file_data.get("ino"), file_data.get("id"), file_data.get("fileId"))
+                    ),
+                    path=file_data.get("path") or file_data.get("filePath"),
+                ))
+        except Exception as e:
+            _record_suggestions_source_state(
+                source_states, "ABS", "ebook", True,
+                complete=False, error_type=type(e).__name__,
+            )
+            logger.warning("⚠️ ABS catalog capture failed (%s)", type(e).__name__)
 
     # 3. CWA (Calibre-Web Automated)
+    library_service = getattr(clients, "library_service", None)
+    cwa_client = getattr(library_service, "cwa_client", None) if library_service else None
+    cwa_configured = bool(cwa_client and cwa_client.is_configured())
+    if discovery:
+        _record_suggestions_source_state(
+            source_states, "CWA", "ebook", cwa_configured,
+            complete=None if not cwa_configured else False,
+        )
     if search_term:
         try:
-            library_service = clients.library_service
-            if library_service and library_service.cwa_client and library_service.cwa_client.is_configured():
-                cwa_results = library_service.cwa_client.search_ebooks(search_term)
-                if cwa_results:
+            if cwa_configured:
+                cwa_results = cwa_client.search_ebooks(search_term)
+                for cr in cwa_results or []:
+                    fname = f"cwa_{cr.get('id', 'unknown')}.{cr.get('ext', 'epub')}"
+                    if fname.lower() in found_filenames:
+                        continue
+                    cwa_id = cr.get('id')
+                    abs_identifier = None
                     try:
                         calibre_resolver = container.calibre_identifier_resolver()
                     except Exception:
                         calibre_resolver = None
                     resolver_enabled = bool(calibre_resolver and calibre_resolver.is_enabled())
-
-                    for cr in cwa_results:
-                        fname = f"cwa_{cr.get('id', 'unknown')}.{cr.get('ext', 'epub')}"
-                        if fname.lower() not in found_filenames:
-                            cwa_id = cr.get('id')
-                            abs_identifier = None
-                            if resolver_enabled and cwa_id:
-                                try:
-                                    abs_identifier = calibre_resolver.get_abs_id(cwa_id)
-                                except Exception as e:
-                                    logger.debug(f"Calibre identifier lookup failed for {cwa_id}: {e}")
-                            results.append(EbookResult(
-                                name=fname,
-                                title=cr.get('title'),
-                                authors=cr.get('author'),
-                                language=cr.get('language'),
-                                path=cr.get('download_url'),
-                                source='CWA',
-                                source_id=cwa_id,
-                                abs_identifier=abs_identifier,
-                            ))
-                            found_filenames.add(fname.lower())
-                            if cr.get('title'):
-                                found_stems.add(cr['title'].lower().strip())
+                    if resolver_enabled and cwa_id is not None:
+                        try:
+                            abs_identifier = calibre_resolver.get_abs_id(cwa_id)
+                        except Exception as e:
+                            logger.debug("Calibre identifier lookup failed for %s (%s)", cwa_id, type(e).__name__)
+                    results.append(EbookResult(
+                        name=fname,
+                        title=cr.get('title'),
+                        authors=cr.get('author'),
+                        language=cr.get('language'),
+                        path=cr.get('download_url'),
+                        source='CWA',
+                        source_id=cwa_id,
+                        abs_identifier=abs_identifier,
+                    ))
+                    found_filenames.add(fname.lower())
+                    if cr.get('title'):
+                        found_stems.add(cr['title'].lower().strip())
         except Exception as e:
-            logger.warning(f"⚠️ CWA search failed: {e}", exc_info=True)
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, "CWA", "ebook", True,
+                    complete=False, error_type=type(e).__name__,
+                )
+                logger.warning("⚠️ CWA search failed (%s)", type(e).__name__)
+            else:
+                logger.warning(f"⚠️ CWA search failed: {e}", exc_info=True)
+
+    if discovery and cwa_configured:
+        try:
+            cwa_results = cwa_client.get_all_ebooks(force_refresh=full_refresh)
+            complete = bool(getattr(cwa_client, "catalog_complete", False))
+            _record_suggestions_source_state(
+                source_states, "CWA", "ebook", True, complete=complete,
+                count=len(cwa_results or []),
+                error_type=None if complete else "CatalogIncomplete",
+            )
+            try:
+                calibre_resolver = container.calibre_identifier_resolver()
+            except Exception:
+                calibre_resolver = None
+            resolver_enabled = bool(calibre_resolver and calibre_resolver.is_enabled())
+            abs_ids = None
+            if resolver_enabled:
+                try:
+                    abs_ids = calibre_resolver.get_abs_ids([
+                        record.get("id") for record in cwa_results or []
+                        if record.get("id") is not None
+                    ])
+                    if abs_ids is None:
+                        _record_suggestions_source_state(
+                            source_states, "CWA", "ebook", True,
+                            complete=False, error_type="CalibreIdentifierUnavailable",
+                        )
+                except Exception as e:
+                    _record_suggestions_source_state(
+                        source_states, "CWA", "ebook", True,
+                        complete=False, error_type=type(e).__name__,
+                    )
+                    abs_ids = None
+            for record in cwa_results or []:
+                cwa_id = record.get("id")
+                if cwa_id is None or str(cwa_id).strip() == "":
+                    continue
+                ext = str(record.get("ext") or "epub").lower().lstrip(".")
+                fname = f"cwa_{cwa_id}.{ext}"
+                if not is_linkable_ebook_filename(fname):
+                    continue
+                series_name, series_sequence = _series_from_library_detail(record)
+                inventory_candidates.append(EbookResult(
+                    name=fname,
+                    title=record.get("title"),
+                    authors=record.get("author") or "",
+                    language=record.get("language") or "",
+                    source="CWA",
+                    source_id=cwa_id,
+                    abs_identifier=(abs_ids or {}).get(str(cwa_id)) if resolver_enabled else None,
+                    series_name=series_name,
+                    series_sequence=series_sequence,
+                ))
+        except Exception as e:
+            _record_suggestions_source_state(
+                source_states, "CWA", "ebook", True,
+                complete=False, error_type=type(e).__name__,
+            )
+            logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
-    if EBOOK_DIR.exists():
+    if EBOOK_DIR.exists() and not exclude_local_files:
         try:
-            all_ebooks = [
-                eb for eb in EBOOK_DIR.rglob('*')
-                if eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS and eb.is_file()
-                and not is_generated_readalong_epub(eb.name)
-                and not is_in_hidden_folder(eb, EBOOK_DIR)
-            ]
-            for eb in all_ebooks:
+            if discovery and scan_local_metadata is not None:
+                local_files = [
+                    details for key, details in scan_local_metadata.items()
+                    if not str(key).startswith("_")
+                ]
+            else:
+                local_files = [
+                    {"path": eb, "metadata": None, "series": None,
+                     "mtime_ns": eb.stat().st_mtime_ns, "size": eb.stat().st_size}
+                    for eb in EBOOK_DIR.rglob('*')
+                    if eb.suffix.lower() in LINKABLE_EBOOK_EXTENSIONS and eb.is_file()
+                    and not is_generated_readalong_epub(eb.name)
+                    and not is_in_hidden_folder(eb, EBOOK_DIR)
+                ]
+            for details in local_files:
+                eb = details["path"]
+                if eb.suffix.lower() not in LINKABLE_EBOOK_EXTENSIONS or not eb.is_file():
+                    continue
                 fname_lower = eb.name.lower()
                 stem_lower = eb.stem.lower()
+                metadata = details.get("metadata")
+                series = details.get("series")
+                if discovery:
+                    meta_title, meta_authors = metadata or ("", "")
+                    series_name, series_sequence = series or (None, None)
+                    inventory_candidates.append(EbookResult(
+                        name=eb.name,
+                        title=meta_title or eb.stem,
+                        authors=meta_authors,
+                        path=eb,
+                        source="Local File",
+                        series_name=series_name,
+                        series_sequence=series_sequence,
+                        file_mtime_ns=details.get("mtime_ns"),
+                        file_size=details.get("size"),
+                    ))
 
                 # Dedupe: if already found in rich source, skip
                 if fname_lower in found_filenames or stem_lower in found_stems:
                     continue
 
                 if not search_term or search_term.lower() in fname_lower:
-                    results.append(EbookResult(name=eb.name, path=eb, source='Local File'))
+                    result = EbookResult(name=eb.name, path=eb, source='Local File')
+                    if discovery:
+                        result._local_metadata = metadata or ("", "")
+                        result._local_series = series or (None, None)
+                    results.append(result)
                     found_filenames.add(fname_lower)
                     found_stems.add(stem_lower)
 
         except Exception as e:
-            logger.warning(f"⚠️ Filesystem search failed: {e}", exc_info=True)
+            if discovery:
+                _record_suggestions_source_state(
+                    source_states, "Local File", "ebook", True,
+                    complete=False, error_type=type(e).__name__,
+                )
+                logger.warning("⚠️ Filesystem scan failed (%s)", type(e).__name__)
+            else:
+                logger.warning(f"⚠️ Filesystem search failed: {e}", exc_info=True)
 
     # Check if we have no sources at all
     if (not results and not EBOOK_DIR.exists()
@@ -5102,6 +5602,7 @@ def settings():
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_READALONG',
+            'SUGGESTIONS_EXCLUDE_LOCAL_FILES',
             'SUGGESTIONS_FULL_REFRESH_ENABLED',
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'ABS_COLLECTION_RECONCILE',
@@ -5351,7 +5852,7 @@ def _extract_series_from_booklore_metadata(raw: dict) -> tuple:
 
 def _normalize_series_key(name: str) -> str:
     """Case- and whitespace-insensitive key for grouping series."""
-    return re.sub(r"\s+", " ", (name or "").strip()).casefold()
+    return normalize_series_key(name)
 
 
 SERIES_PREVIEW_LIMIT = 5
@@ -9013,7 +9514,31 @@ def _add_book_view():
     storyteller_search_failed = False
     review = request.args.get('review', '').strip()
     review_pair = _watch_suggestion_review(review) if review else None
-    if review_pair:
+    ebook_key = request.args.get('ebook_key', '').strip()
+    if ebook_key:
+        user = current_user()
+        if not user or not user.is_admin:
+            abort(403)
+        from src.services.suggestions_view import project_suggestions
+        persisted = _load_persisted_suggestions_cache()
+        snapshot = persisted.get("ebook_discovery") or {}
+        if request.args.get("generation") != snapshot.get("generation"):
+            abort(409)
+        projected = project_suggestions(
+            tab="ebook_only", ebook_snapshot=snapshot,
+            ebook_ignored=persisted.get("ebook_ignored"),
+            mapped_books=database_service.get_all_books(user_id=get_current_user_id()),
+        )
+        entry = next((row for row in projected["entries"] if row["ebook_key"] == ebook_key), None)
+        if entry is None:
+            abort(409)
+        selected = _suggestions_ebook_result(entry)
+        if selected is None:
+            abort(409)
+        ebooks = [selected]
+        search = search or entry.get("title") or ""
+        audiobooks = _search_audiobooks_with_fallback(search) if search else []
+    elif review_pair:
         audiobooks, ebooks, search = review_pair
     elif search:
         audiobooks = _search_audiobooks_with_fallback(search)
@@ -9054,6 +9579,101 @@ def add_book():
     return _add_book_view()
 
 
+def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
+    """Resolve one saved ebook identity for the existing Add Book workflow."""
+    source = normalize_ebook_source(entry.get("source"))
+    source_id = entry.get("source_id")
+    filename = entry.get("filename") or ""
+    path = entry.get("path")
+    if source == "Local File":
+        path = _safe_local_source_path(path)
+        if not path or not Path(path).is_file():
+            return None
+        filename = path
+    elif source == "BookOrbit":
+        client = uc().bookorbit_client
+        detail = client.get_book_detail(source_id, force=True, fresh_only=True)
+        if not detail:
+            return None
+        primary = client._primary_file(detail, kind="ebook") or {}
+        expected = _first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
+        if expected is not None and str(primary.get("id")) != str(expected):
+            return None
+        filename = primary.get("filename") or ""
+    elif source == "CWA":
+        filename = f"cwa_{source_id}.epub"
+    elif source == "ABS":
+        filename = f"{source_id}_abs.epub"
+    elif source not in {"Booklore", "Kavita"}:
+        return None
+    if not is_linkable_ebook_filename(filename):
+        return None
+    return EbookResult(
+        name=filename, path=path, title=entry.get("title"),
+        authors=entry.get("author"), language=entry.get("language"),
+        source=source, source_id=source_id,
+        series_name=entry.get("series_name"), series_sequence=entry.get("series_sequence"),
+        source_file_id=entry.get("source_file_id"),
+    )
+
+
+def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
+    """Hash the selected provider document without a basename or provider fallback."""
+    import tempfile
+
+    selected = _suggestions_ebook_result(entry)
+    if selected is None:
+        return None
+    source, source_id = selected.source, selected.source_id
+    parser = container.ebook_parser()
+    clients = uc() if source != "Local File" else None
+    kosync_id = None
+    if source == "Local File":
+        kosync_id = parser.get_kosync_id(Path(selected.path))
+    elif source in {"Booklore", "Kavita"}:
+        client = clients.booklore_client if source == "Booklore" else clients.kavita_client
+        content = client.download_book(source_id)
+        if content:
+            kosync_id = parser.get_kosync_id_from_bytes(selected.name, content)
+    else:
+        with tempfile.TemporaryDirectory(prefix="suggestions-ebook-") as directory:
+            target = Path(directory) / ("selected" + Path(selected.name).suffix)
+            if source == "BookOrbit":
+                client = clients.bookorbit_client
+                detail = client.get_book_detail(source_id, force=True, fresh_only=True)
+                primary = client._primary_file(detail or {}, kind="ebook") or {}
+                expected = _first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
+                if expected is not None and str(primary.get("id")) != str(expected):
+                    return None
+                ok = primary.get("id") is not None and client.download_file_to_path(primary["id"], target)
+            elif source == "CWA":
+                client = clients.library_service.cwa_client
+                detail = client.get_book_by_id(source_id)
+                ok = (
+                    detail and str(detail.get("id")) == str(source_id)
+                    and detail.get("download_url")
+                    and client.download_ebook(detail["download_url"], target)
+                )
+            else:
+                client = clients.abs_client
+                files = [file for file in client.get_ebook_files(source_id) if file.get("ext") == "epub"]
+                expected = _first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
+                if expected is not None:
+                    files = [file for file in files if str(file.get("ino")) == str(expected)]
+                if len(files) != 1:
+                    return None
+                ok = client.download_file(files[0]["stream_url"], target)
+            if ok and target.is_file():
+                kosync_id = parser.get_kosync_id(target)
+    if not isinstance(kosync_id, str) or not kosync_id.strip():
+        return None
+    return {
+        "ebook_filename": selected.name, "ebook_source": source,
+        "ebook_source_id": source_id, "ebook_source_path": str(selected.path or ""),
+        "precomputed_kosync_doc_id": kosync_id,
+    }
+
+
 def _get_suggestions_service():
     from src.services.suggestions_service import SuggestionsService
 
@@ -9086,13 +9706,271 @@ def _get_ignored_suggestion_source_ids():
     return _get_suggestions_service().get_ignored_suggestion_source_ids()
 
 
-def scan_library_suggestions(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None, progress_callback=None):
-    """Scan for unmatched audiobooks and find candidate ebook matches."""
-    return _get_suggestions_service().scan_library_suggestions(
-        cached_suggestions_by_abs=cached_suggestions_by_abs,
-        cached_no_match_abs_ids=cached_no_match_abs_ids,
+def _suggestions_discovery_sources_complete(source_states):
+    return all(
+        role.get("complete") is True
+        for state in source_states.values()
+        for role in (state.get("roles") or {}).values()
+        if role.get("configured") and role.get("supported", True)
+    )
+
+
+def _invalidate_suggestions_pair_cache(cached_suggestions, cached_no_match, previous, current):
+    previous = previous if isinstance(previous, dict) else {}
+    old_audio = previous.get("audio_fingerprints_by_key") or {}
+    new_audio = current.get("audio_fingerprints_by_key") or {}
+    invalid = {
+        key for key in set(old_audio) | set(new_audio)
+        if old_audio.get(key) != new_audio.get(key)
+    }
+    old_entries = previous.get("entries") or {}
+    new_entries = current.get("entries") or {}
+    for key in set(old_entries) | set(new_entries):
+        old = old_entries.get(key) or {}
+        new = new_entries.get(key) or {}
+        if old.get("fingerprint") != new.get("fingerprint"):
+            invalid.update(old.get("audio_keys") or [])
+            invalid.update(new.get("audio_keys") or [])
+            invalid.update(old.get("candidate_audio_keys") or [])
+            invalid.update(new.get("candidate_audio_keys") or [])
+            if new.get("unknown_reason") == "candidate_search_incomplete":
+                invalid.update(cached_no_match or [])
+    if not invalid:
+        return cached_suggestions, cached_no_match, 0
+    filtered = {
+        key: value for key, value in (cached_suggestions or {}).items()
+        if key not in invalid
+    }
+    no_match = [key for key in cached_no_match or [] if key not in invalid]
+    return filtered, no_match, len(invalid)
+
+
+def _reconcile_discovery_with_pair_matches(snapshot, cache_by_abs):
+    from src.services.ebook_discovery import ebook_identity_keys
+
+    identity_to_audio = {}
+    for bridge_key, suggestion in (cache_by_abs or {}).items():
+        for match in suggestion.get("matches") or []:
+            match_record = dict(match)
+            match_record["path"] = match.get("source_path")
+            for identity in ebook_identity_keys(match_record):
+                identity_to_audio.setdefault(identity, set()).add(str(bridge_key))
+    for entry in (snapshot.get("entries") or {}).values():
+        if entry.get("classification") != "no_audio":
+            continue
+        bridge_keys = set()
+        for identity in ebook_identity_keys(entry):
+            bridge_keys.update(identity_to_audio.get(identity, ()))
+        if bridge_keys:
+            entry["classification"] = "has_audio"
+            entry["audio_keys"] = sorted(set(entry.get("audio_keys") or []) | bridge_keys)
+            entry["search_complete"] = True
+    stats = snapshot.get("stats") or {}
+    stats["no_audio"] = sum(
+        1 for entry in (snapshot.get("entries") or {}).values()
+        if entry.get("classification") == "no_audio"
+    )
+    stats["has_audio"] = sum(
+        1 for entry in (snapshot.get("entries") or {}).values()
+        if entry.get("classification") == "has_audio"
+    )
+
+
+def scan_library_suggestions(
+    cached_suggestions_by_abs=None, cached_no_match_abs_ids=None,
+    progress_callback=None, full_refresh=False,
+):
+    """Run one provider scan, retaining inverse discovery and legacy pair results."""
+    from copy import deepcopy
+    from src.services.ebook_discovery import build_discovery_snapshot, build_ebook_inventory
+
+    attempted_at = time.time()
+    persisted = _load_persisted_suggestions_cache()
+    previous = persisted.get("ebook_discovery") or {}
+    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    exclude_setting_changed = bool(previous.get("exclude_local_files", False)) != exclude_local_files
+    if exclude_setting_changed:
+        cached_suggestions_by_abs = {}
+        cached_no_match_abs_ids = []
+        previous = {}
+    ignored = persisted.get("ebook_ignored") or {}
+    source_states = {}
+    inventory_candidates = []
+    local_metadata = {}
+    service = _get_suggestions_service()
+    try:
+        clients = _scan_user_clients()
+        abs_client = getattr(clients, "abs_client", None)
+        abs_catalog = None
+        if abs_client and abs_client.is_configured():
+            try:
+                abs_catalog = abs_client.get_library_catalog(force_refresh=full_refresh)
+                _record_suggestions_source_state(
+                    source_states, "ABS", "audio", True,
+                    complete=isinstance(abs_catalog, list),
+                    count=len(abs_catalog) if isinstance(abs_catalog, list) else None,
+                    error_type=None if isinstance(abs_catalog, list) else "CatalogUnavailable",
+                )
+            except Exception as exc:
+                _record_suggestions_source_state(
+                    source_states, "ABS", "audio", True,
+                    complete=False, error_type=type(exc).__name__,
+                )
+        audio_candidates = get_suggestion_audiobooks(
+            source_states=source_states, abs_catalog=abs_catalog, full_refresh=full_refresh,
+        )
+        ebook_candidates = get_searchable_ebooks(
+            "", inventory_candidates=inventory_candidates, source_states=source_states,
+            full_refresh=full_refresh, local_metadata=local_metadata, abs_catalog=abs_catalog,
+        )
+    except Exception as exc:
+        _record_suggestions_source_state(
+            source_states, "_catalog_capture", "ebook", True,
+            complete=False, error_type=type(exc).__name__,
+        )
+        audio_candidates = []
+        ebook_candidates = []
+        logger.warning("Suggestions catalog capture failed (%s)", type(exc).__name__)
+
+    if not _suggestions_discovery_sources_complete(source_states):
+        snapshot = dict(previous) if isinstance(previous, dict) else {}
+        snapshot.setdefault("schema_version", 1)
+        snapshot.setdefault("generation", None)
+        snapshot.setdefault("completed_at", None)
+        snapshot.setdefault("entries", {})
+        snapshot["state"] = "incomplete"
+        snapshot["exclude_local_files"] = exclude_local_files
+        snapshot["error"] = "source_incomplete"
+        snapshot["attempted_at"] = attempted_at
+        snapshot["source_states"] = source_states
+        cached = {} if exclude_setting_changed else persisted.get("scan_cache_by_abs", {}) or {}
+        no_match = [] if exclude_setting_changed else persisted.get("scan_cache_no_match_abs_ids", []) or []
+        return {
+            "suggestions": list(cached.values()),
+            "cache_by_abs": cached,
+            "no_match_abs_ids": no_match,
+            "stats": persisted.get("scan_last_stats", {}) or {},
+            "ebook_discovery": snapshot,
+            "source_states": source_states,
+            "discovery_complete": False,
+            "_exclude_setting_changed": exclude_setting_changed,
+            "scan_generation": persisted.get("scan_generation"),
+            "scanned_at": persisted.get("scanned_at", 0.0),
+        }
+
+    mapped_books = list(service.database_service.get_all_books(user_id=get_current_user_id()) or [])
+    service.get_audiobooks_conditionally = lambda: audio_candidates
+    original_ebook_loader = service.get_searchable_ebooks
+    service.get_searchable_ebooks = lambda term: ebook_candidates if not term else original_ebook_loader(term)
+
+    inventory = build_ebook_inventory(
+        inventory_candidates, previous_entries=(previous.get("entries") or {}),
+    )
+    audio_pool = service._build_audiobook_candidate_pool(audio_candidates)
+    # Some Grimmory summary rows omit companion formats. A plausible match to
+    # such a row is unknown, never evidence that the ebook has no audio.
+    booklore = getattr(clients, "booklore_client", None)
+    if booklore and source_states.get("Grimmory", {}).get("roles", {}).get("audio", {}).get("configured"):
+        uncertain = []
+        for book in booklore.get_all_books(include_all_ids=True):
+            if (
+                book.get("_needs_detail") and not booklore._book_supports_audiobook(book)
+                and not booklore._has_audio_shape_fields(book)
+            ):
+                uncertain.append({
+                    "audio_source": "BookLore", "audio_source_id": book.get("id"),
+                    "audio_title": book.get("title") or book.get("fileName") or "",
+                    "audio_author": book.get("authors") or "",
+                    "audio_path": book.get("filePath") or "",
+                })
+        for candidate in service._build_audiobook_candidate_pool(uncertain):
+            candidate["audio_inventory_unknown"] = True
+            audio_pool.append(candidate)
+    snapshot = build_discovery_snapshot(
+        service, inventory, audio_pool, previous=previous,
+        mapped_books=mapped_books, ignored=ignored, force_refresh=full_refresh,
+        now=attempted_at,
+    )
+    snapshot["source_states"] = source_states
+    cached_suggestions = deepcopy(cached_suggestions_by_abs or {})
+    cached_no_match = list(cached_no_match_abs_ids or [])
+    cached_suggestions, cached_no_match, invalidated = _invalidate_suggestions_pair_cache(
+        cached_suggestions, cached_no_match, previous, snapshot,
+    )
+    logger.info(
+        "Suggestions discovery inventory=%d audio=%d invalidated_pair_anchors=%d",
+        len(inventory), len(audio_candidates), invalidated,
+    )
+    results = service.scan_library_suggestions(
+        cached_suggestions_by_abs=cached_suggestions,
+        cached_no_match_abs_ids=cached_no_match,
         progress_callback=progress_callback,
     )
+    try:
+        clients = uc()
+        for source, client in (
+            ("Grimmory", getattr(clients, "booklore_client", None)),
+            ("BookOrbit", getattr(clients, "bookorbit_client", None)),
+            ("Kavita", getattr(clients, "kavita_client", None)),
+        ):
+            roles = source_states.get(source, {}).get("roles", {})
+            if client and any(
+                state.get("configured") and state.get("supported", True)
+                and state.get("complete") is True for state in roles.values()
+            ) and not bool(getattr(client, "catalog_complete", False)):
+                for role, state in roles.items():
+                    if state.get("configured") and state.get("supported", True):
+                        state["complete"] = False
+                        state["error_type"] = "CatalogIncompleteAfterPairScan"
+        library_service = getattr(clients, "library_service", None)
+        cwa = getattr(library_service, "cwa_client", None) if library_service else None
+        cwa_roles = source_states.get("CWA", {}).get("roles", {})
+        if cwa and any(
+            state.get("configured") and state.get("complete") is True
+            for state in cwa_roles.values()
+        ) and not bool(getattr(cwa, "catalog_complete", False)):
+            for state in cwa_roles.values():
+                if state.get("configured") and state.get("supported", True):
+                    state["complete"] = False
+                    state["error_type"] = "CatalogIncompleteAfterPairScan"
+    except Exception as exc:
+        _record_suggestions_source_state(
+            source_states, "_post_scan_health", "ebook", True,
+            complete=False, error_type=type(exc).__name__,
+        )
+    if not _suggestions_discovery_sources_complete(source_states):
+        stale_snapshot = dict(previous) if isinstance(previous, dict) else {}
+        stale_snapshot.setdefault("schema_version", 1)
+        stale_snapshot.setdefault("generation", None)
+        stale_snapshot.setdefault("completed_at", None)
+        stale_snapshot.setdefault("entries", {})
+        stale_snapshot["state"] = "incomplete"
+        stale_snapshot["exclude_local_files"] = exclude_local_files
+        stale_snapshot["error"] = "source_incomplete"
+        snapshot["error"] = "source_incomplete"
+        stale_snapshot["attempted_at"] = attempted_at
+        stale_snapshot["source_states"] = source_states
+        cached = {} if exclude_setting_changed else persisted.get("scan_cache_by_abs", {}) or {}
+        no_match = [] if exclude_setting_changed else persisted.get("scan_cache_no_match_abs_ids", []) or []
+        return {
+            "suggestions": list(cached.values()),
+            "cache_by_abs": cached,
+            "no_match_abs_ids": no_match,
+            "stats": persisted.get("scan_last_stats", {}) or {},
+            "ebook_discovery": stale_snapshot,
+            "source_states": source_states,
+            "discovery_complete": False,
+            "_exclude_setting_changed": exclude_setting_changed,
+            "scan_generation": persisted.get("scan_generation"),
+            "scanned_at": persisted.get("scanned_at", 0.0),
+        }
+    _reconcile_discovery_with_pair_matches(snapshot, results.get("cache_by_abs", {}))
+    results["scan_generation"] = uuid.uuid4().hex
+    results["ebook_discovery"] = snapshot
+    results["source_states"] = source_states
+    results["discovery_complete"] = True
+    results["scanned_at"] = attempted_at
+    return results
 
 
 def _prune_suggestions_scan_jobs():
@@ -9273,7 +10151,6 @@ def _run_scheduled_suggestions_scan(full: bool):
     tok_creds = set_current_user_credentials(creds)
     try:
         if full:
-            _save_persisted_suggestions_cache(_empty_suggestions_cache_payload(scanned_at=time.time()))
             cached_by_abs, cached_no_match = {}, []
         else:
             persisted = _load_persisted_suggestions_cache()
@@ -9282,6 +10159,7 @@ def _run_scheduled_suggestions_scan(full: bool):
         return _start_suggestions_scan_job(
             cached_suggestions_by_abs=cached_by_abs,
             cached_no_match_abs_ids=cached_no_match,
+            full_refresh=full,
         )
     finally:
         reset_current_user_credentials(tok_creds)
@@ -9331,7 +10209,7 @@ def _suggestions_auto_scan_tick():
         )
 
 
-def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None):
+def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None, full_refresh=False):
     _prune_suggestions_scan_jobs()
     bundle = uc()
     try:
@@ -9382,6 +10260,7 @@ def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_
                 job_id,
                 cached_suggestions_by_abs or {},
                 cached_no_match_abs_ids or [],
+                full_refresh,
             )
         finally:
             reset_current_user_credentials(tok_creds)
@@ -9590,7 +10469,7 @@ def _auto_match_suggestions(results: object, user_id: int | None) -> object:
     return results
 
 
-def _run_suggestions_scan_job(job_id, cached_suggestions_by_abs=None, cached_no_match_abs_ids=None):
+def _run_suggestions_scan_job(job_id, cached_suggestions_by_abs=None, cached_no_match_abs_ids=None, full_refresh=False):
     def update_progress(progress_payload):
         with SUGGESTIONS_SCAN_JOBS_LOCK:
             if job_id in SUGGESTIONS_SCAN_JOBS:
@@ -9602,15 +10481,36 @@ def _run_suggestions_scan_job(job_id, cached_suggestions_by_abs=None, cached_no_
             cached_suggestions_by_abs=cached_suggestions_by_abs,
             cached_no_match_abs_ids=cached_no_match_abs_ids,
             progress_callback=update_progress,
+            full_refresh=full_refresh,
         )
-        results = _auto_match_suggestions(results, get_current_user_id())
-        scanned_at = time.time()
-        _save_persisted_suggestions_cache({
-            "scan_cache_by_abs": results.get('cache_by_abs', {}) if isinstance(results, dict) else {},
-            "scan_cache_no_match_abs_ids": results.get('no_match_abs_ids', []) if isinstance(results, dict) else [],
-            "scan_last_stats": results.get('stats', {}) if isinstance(results, dict) else {},
-            "scanned_at": scanned_at,
-        })
+        results = results if isinstance(results, dict) else {}
+        complete = results.get("discovery_complete", True)
+        if complete:
+            results = _auto_match_suggestions(results, get_current_user_id())
+            scanned_at = time.time()
+            save_payload = {
+                "scan_cache_by_abs": results.get('cache_by_abs', {}),
+                "scan_cache_no_match_abs_ids": results.get('no_match_abs_ids', []),
+                "scan_last_stats": results.get('stats', {}),
+                "scan_generation": results.get('scan_generation'),
+                "scanned_at": scanned_at,
+            }
+        else:
+            scanned_at = results.get("scanned_at", _load_persisted_suggestions_cache().get("scanned_at", 0.0))
+            save_payload = {"scanned_at": scanned_at}
+            if results.pop("_exclude_setting_changed", False):
+                save_payload.update({
+                    "scan_cache_by_abs": results.get("cache_by_abs", {}),
+                    "scan_cache_no_match_abs_ids": results.get("no_match_abs_ids", []),
+                })
+        if isinstance(results.get("ebook_discovery"), dict):
+            save_payload["ebook_discovery"] = results["ebook_discovery"]
+        snapshot = results.get("ebook_discovery") or {}
+        save_payload["scan_last_attempt"] = {
+            key: snapshot.get(key) for key in ("state", "attempted_at", "source_states", "error")
+        }
+        if _save_persisted_suggestions_cache(save_payload) is False:
+            raise OSError("could not persist suggestions scan cache")
         status = "done"
         error = None
     except Exception as e:
@@ -9697,6 +10597,9 @@ def _default_suggestions_state():
         "scan_cache_no_match_abs_ids": [],
         "scan_last_stats": {},
         "scanned_at": 0.0,
+        "scan_generation": None,
+        "ebook_discovery": {},
+        "ebook_ignored": {},
         "scan_has_run": False,
         "created_at": now,
         "updated_at": now,
@@ -9748,6 +10651,14 @@ def _empty_suggestions_cache_payload(scanned_at=0.0):
         "scan_cache_by_abs": {},
         "scan_cache_no_match_abs_ids": [],
         "scan_last_stats": {},
+        "scan_generation": None,
+        "ebook_discovery": {
+            "schema_version": 1, "state": "never_scanned", "generation": None,
+            "completed_at": None, "attempted_at": 0.0, "entries": {},
+            "audio_fingerprints_by_key": {}, "stats": {}, "source_states": {},
+        },
+        "ebook_ignored": {},
+        "scan_last_attempt": {},
         "scanned_at": scanned_at,
         "updated_at": time.time(),
     }
@@ -9771,39 +10682,124 @@ def _load_persisted_suggestions_cache():
         no_match = raw.get('scan_cache_no_match_abs_ids', [])
         stats = raw.get('scan_last_stats', {})
         scanned_at = raw.get('scanned_at', 0.0)
+        scan_generation = raw.get('scan_generation')
+        discovery = raw.get('ebook_discovery', {})
+        ignored = raw.get('ebook_ignored', {})
 
         payload['scan_cache_by_abs'] = cache_by_abs if isinstance(cache_by_abs, dict) else {}
         payload['scan_cache_no_match_abs_ids'] = no_match if isinstance(no_match, list) else []
         payload['scan_last_stats'] = stats if isinstance(stats, dict) else {}
+        payload['scan_generation'] = scan_generation if isinstance(scan_generation, str) else None
+        if isinstance(discovery, dict) and isinstance(discovery.get('entries', {}), dict):
+            discovery = dict(discovery)
+            discovery['audio_fingerprints_by_key'] = (
+                discovery.get('audio_fingerprints_by_key')
+                if isinstance(discovery.get('audio_fingerprints_by_key'), dict) else {}
+            )
+            discovery['source_states'] = (
+                discovery.get('source_states')
+                if isinstance(discovery.get('source_states'), dict) else {}
+            )
+            discovery['stats'] = discovery.get('stats') if isinstance(discovery.get('stats'), dict) else {}
+            payload['ebook_discovery'] = discovery
+        payload['ebook_ignored'] = ignored if isinstance(ignored, dict) else {}
+        payload['scan_last_attempt'] = raw.get('scan_last_attempt') if isinstance(raw.get('scan_last_attempt'), dict) else {}
         payload['scanned_at'] = scanned_at if isinstance(scanned_at, (int, float)) else 0.0
 
     return payload
 
 
-def _save_persisted_suggestions_cache(payload):
+def _save_persisted_suggestions_cache(payload, *, replace_ignored=False):
     cache_file = _suggestions_cache_file_path()
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-
-    safe_payload = {
-        "scan_cache_by_abs": payload.get('scan_cache_by_abs', {}) if isinstance(payload.get('scan_cache_by_abs', {}), dict) else {},
-        "scan_cache_no_match_abs_ids": payload.get('scan_cache_no_match_abs_ids', []) if isinstance(payload.get('scan_cache_no_match_abs_ids', []), list) else [],
-        "scan_last_stats": payload.get('scan_last_stats', {}) if isinstance(payload.get('scan_last_stats', {}), dict) else {},
-        "scanned_at": payload.get('scanned_at') or 0.0,
-        "updated_at": time.time(),
-    }
-
+    payload = payload if isinstance(payload, dict) else {}
     temp_file = cache_file.with_suffix('.tmp')
+
     with SUGGESTIONS_CACHE_LOCK:
         try:
+            current = {}
+            if cache_file.exists():
+                try:
+                    loaded = json.loads(cache_file.read_text(encoding='utf-8'))
+                    current = loaded if isinstance(loaded, dict) else {}
+                except Exception as exc:
+                    logger.warning("Could not read existing suggestions cache before saving (%s)", type(exc).__name__)
+
+            safe_payload = {
+                "scan_cache_by_abs": current.get("scan_cache_by_abs", {}) if isinstance(current.get("scan_cache_by_abs", {}), dict) else {},
+                "scan_cache_no_match_abs_ids": current.get("scan_cache_no_match_abs_ids", []) if isinstance(current.get("scan_cache_no_match_abs_ids", []), list) else [],
+                "scan_last_stats": current.get("scan_last_stats", {}) if isinstance(current.get("scan_last_stats", {}), dict) else {},
+                "scan_generation": current.get("scan_generation") if isinstance(current.get("scan_generation"), str) else None,
+                "ebook_discovery": current.get("ebook_discovery", {}) if isinstance(current.get("ebook_discovery", {}), dict) else {},
+                "ebook_ignored": current.get("ebook_ignored", {}) if isinstance(current.get("ebook_ignored", {}), dict) else {},
+                "scanned_at": current.get("scanned_at", 0.0) if isinstance(current.get("scanned_at", 0.0), (int, float)) else 0.0,
+                "scan_last_attempt": current.get("scan_last_attempt", {}),
+                "updated_at": time.time(),
+            }
+            for key, expected_type in (
+                ("scan_cache_by_abs", dict),
+                ("scan_cache_no_match_abs_ids", list),
+                ("scan_last_stats", dict),
+                ("scan_last_attempt", dict),
+            ):
+                if isinstance(payload.get(key), expected_type):
+                    safe_payload[key] = payload[key]
+            if isinstance(payload.get("scanned_at"), (int, float)):
+                safe_payload["scanned_at"] = payload["scanned_at"]
+            if isinstance(payload.get("scan_generation"), str):
+                safe_payload["scan_generation"] = payload["scan_generation"]
+
+            discovery = payload.get("ebook_discovery")
+            if (
+                isinstance(discovery, dict)
+                and isinstance(discovery.get("entries", {}), dict)
+                and discovery.get("state") in {"complete", "incomplete"}
+            ):
+                safe_payload["ebook_discovery"] = discovery
+
+            incoming_ignored = payload.get("ebook_ignored")
+            if replace_ignored and isinstance(incoming_ignored, dict):
+                safe_payload["ebook_ignored"] = incoming_ignored
+
+            discovery = safe_payload["ebook_discovery"]
+            if discovery.get("state") == "complete" and safe_payload["ebook_ignored"]:
+                from src.services.ebook_discovery import ebook_identity_keys
+
+                ignored = safe_payload["ebook_ignored"]
+                ignored_keys = set(ignored)
+                for record in ignored.values():
+                    if isinstance(record, dict):
+                        ignored_keys.update(ebook_identity_keys(record.get("entry") or record))
+                entries = discovery.get("entries") or {}
+                removed = []
+                removed_by_classification = {"no_audio": 0, "has_audio": 0, "unknown": 0}
+                for key, entry in entries.items():
+                    if key in ignored_keys or ebook_identity_keys(entry) & ignored_keys:
+                        removed.append(key)
+                        classification = entry.get("classification")
+                        if classification in removed_by_classification:
+                            removed_by_classification[classification] += 1
+                for key in removed:
+                    entries.pop(key, None)
+                stats = discovery.get("stats") or {}
+                discovery["stats"] = stats
+                if isinstance(stats.get("inventory_total"), int):
+                    stats["inventory_total"] = max(0, stats["inventory_total"] - len(removed))
+                for classification, count in removed_by_classification.items():
+                    if isinstance(stats.get(classification), int):
+                        stats[classification] = max(0, stats[classification] - count)
+
             temp_file.write_text(json.dumps(safe_payload, ensure_ascii=False), encoding='utf-8')
             temp_file.replace(cache_file)
+            return True
         except Exception as e:
-            logger.warning(f"Could not persist suggestions cache file '{cache_file}': {e}", exc_info=True)
+            logger.warning("Could not persist suggestions cache file (%s)", type(e).__name__, exc_info=True)
             try:
                 if temp_file.exists():
                     temp_file.unlink()
             except Exception:
                 pass
+            return False
 
 
 def _rehydrate_suggestions_state_from_cache(suggestions_state: dict) -> dict:
@@ -9820,6 +10816,9 @@ def _rehydrate_suggestions_state_from_cache(suggestions_state: dict) -> dict:
         return suggestions_state
 
     persisted = _load_persisted_suggestions_cache()
+    suggestions_state['ebook_discovery'] = persisted.get('ebook_discovery', {})
+    suggestions_state['ebook_ignored'] = persisted.get('ebook_ignored', {})
+    suggestions_state['scan_generation'] = persisted.get('scan_generation')
     newer_scan = persisted['scanned_at'] > suggestions_state.get('scanned_at', 0.0)
     if suggestions_state.get('scan_cache_by_abs') and not newer_scan:
         return suggestions_state
@@ -9854,6 +10853,7 @@ def _persist_suggestions_state(suggestions_state: dict) -> None:
             "scan_cache_by_abs": suggestions_state.get('scan_cache_by_abs', {}),
             "scan_cache_no_match_abs_ids": suggestions_state.get('scan_cache_no_match_abs_ids', []),
             "scan_last_stats": suggestions_state.get('scan_last_stats', {}),
+            "scan_generation": suggestions_state.get('scan_generation'),
             "scanned_at": suggestions_state.get('scanned_at', 0.0),
         })
 
@@ -9886,7 +10886,7 @@ def _read_match_queue_unlocked() -> list:
     return valid_items
 
 
-def _write_match_queue_unlocked(items: list) -> None:
+def _write_match_queue_unlocked(items: list) -> bool:
     queue_file = _match_queue_file_path()
     queue_file.parent.mkdir(parents=True, exist_ok=True)
     payload = {"items": items if isinstance(items, list) else [], "updated_at": time.time()}
@@ -9894,6 +10894,7 @@ def _write_match_queue_unlocked(items: list) -> None:
     try:
         temp_file.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         temp_file.replace(queue_file)
+        return True
     except Exception as e:
         logger.warning(f"Could not persist match queue file '{queue_file}': {e}", exc_info=True)
         try:
@@ -9901,6 +10902,7 @@ def _write_match_queue_unlocked(items: list) -> None:
                 temp_file.unlink()
         except Exception:
             pass
+        return False
 
 
 def _normalize_match_queue_user_id(value):
@@ -10189,16 +11191,6 @@ def suggestions_page():
             if full_refresh:
                 cached_suggestions_by_abs = {}
                 cached_no_match_abs_ids = []
-                suggestions_state['scan_cache_by_abs'] = {}
-                suggestions_state['scan_cache_no_match_abs_ids'] = []
-                suggestions_state['scan_last_stats'] = {}
-                suggestions_state['scan_results'] = []
-                suggestions_state['scan_has_run'] = False
-                suggestions_state['updated_at'] = time.time()
-                suggestions_state['scanned_at'] = suggestions_state['updated_at']
-                _save_persisted_suggestions_cache(
-                    _empty_suggestions_cache_payload(scanned_at=suggestions_state['scanned_at'])
-                )
             else:
                 suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
                 state_cache = suggestions_state.get('scan_cache_by_abs', {}) or {}
@@ -10214,6 +11206,7 @@ def suggestions_page():
             job_id = _start_suggestions_scan_job(
                 cached_suggestions_by_abs=cached_suggestions_by_abs,
                 cached_no_match_abs_ids=cached_no_match_abs_ids,
+                full_refresh=full_refresh,
             )
             session['suggestions_scan_job_id'] = job_id
             session.modified = True
@@ -10303,6 +11296,11 @@ def suggestions_page():
 
         elif action == 'add_many_to_queue':
             keys = request.form.getlist('bridge_keys')
+            seen_generation = request.form.get('generation')
+            if seen_generation is not None:
+                from src.services.suggestions_view import _pair_scan
+                if seen_generation != str(_pair_scan(_load_persisted_suggestions_cache()).get("generation")):
+                    return jsonify({"error": "stale_generation"}), 409
             suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
             cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
 
@@ -10394,7 +11392,11 @@ def suggestions_page():
             suggestions_state['scan_cache_by_abs'] = scan_payload.get('cache_by_abs', {})
             suggestions_state['scan_cache_no_match_abs_ids'] = scan_payload.get('no_match_abs_ids', [])
             suggestions_state['scan_last_stats'] = scan_payload.get('stats', {})
-            suggestions_state['scanned_at'] = scan_job.get('scanned_at') or time.time()
+            if scan_payload.get('scan_generation') is not None:
+                suggestions_state['scan_generation'] = scan_payload.get('scan_generation')
+            suggestions_state['ebook_discovery'] = scan_payload.get('ebook_discovery', {})
+            suggestions_state['ebook_ignored'] = _load_persisted_suggestions_cache().get('ebook_ignored', {})
+            suggestions_state['scanned_at'] = scan_job.get('scanned_at') or suggestions_state.get('scanned_at', 0.0)
             suggestions_state['scan_has_run'] = True
             suggestions_state['updated_at'] = time.time()
             _persist_suggestions_state(suggestions_state)
@@ -10524,6 +11526,8 @@ def suggestions_page():
         suggestions_state['updated_at'] = time.time()
         _persist_suggestions_state(suggestions_state)
 
+    from src.api.suggestions_redesign import suggestions_tab_counts
+
     return render_template(
         'suggestions.html',
         suggestions=_sanitize_cover_urls(scan_results),
@@ -10533,6 +11537,7 @@ def suggestions_page():
         scan_error=scan_error,
         scan_stats=suggestions_state.get('scan_last_stats', {}),
         storyteller_enabled=storyteller_enabled,
+        tab_counts=suggestions_tab_counts(),
     )
 
 
@@ -15314,6 +16319,8 @@ def create_app(test_container=None):
     # Suggestion routes
     app.add_url_rule('/api/suggestions', 'get_suggestions', get_suggestions, methods=['GET'])
     app.add_url_rule('/api/suggestions/scan-status', 'suggestions_scan_status', suggestions_scan_status, methods=['GET'])
+    from src.api.suggestions_redesign import init_suggestions_redesign_routes
+    init_suggestions_redesign_routes(app, sys.modules[__name__])
     app.add_url_rule('/api/suggestions/<source_id>/dismiss', 'dismiss_suggestion', dismiss_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/<source_id>/ignore', 'ignore_suggestion', ignore_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/clear_stale', 'clear_stale_suggestions', clear_stale_suggestions, methods=['POST'])

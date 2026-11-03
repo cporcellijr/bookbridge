@@ -2094,6 +2094,12 @@
                             value="{{ get_val('SUGGESTIONS_AUTO_SCAN_MINUTES') or '0' }}">
                         <small>{{ _('How often to look for new suggestions automatically. 0 means never (scan by hand on the Suggestions page); 1 to 4 runs every 5 minutes. Runs as the main admin account and uses cached results like the Scan button.') }}</small>
                     </div>
+                    <div class="checkbox-wrapper full-width">
+                        <input type="checkbox" id="suggestions_exclude_local_files" name="SUGGESTIONS_EXCLUDE_LOCAL_FILES"
+                            {% if get_bool('SUGGESTIONS_EXCLUDE_LOCAL_FILES') %}checked{% endif %}>
+                        <label for="suggestions_exclude_local_files">{{ _('Ignore local files in Suggestions') }}</label>
+                        <small>{{ _('Skip local files in Pair Suggestions and Ebook Only on the next scan. Connected library books stay included.') }}</small>
+                    </div>
                     {% set legacy_days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'] %}
                     {% set legacy_day = (get_val('SUGGESTIONS_FULL_REFRESH_DAY') or 'off')|lower %}
                     {% set legacy_time = (get_val('SUGGESTIONS_FULL_REFRESH_TIME') or '04:00').split(':') %}

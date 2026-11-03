@@ -3,7 +3,7 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,64 @@ class CalibreIdentifierResolver:
 
         with self._lock:
             self._cache[key] = result
+        return result
+
+    def get_abs_ids(
+        self, calibre_book_ids: Iterable[object]
+    ) -> Optional[dict[str, Optional[str]]]:
+        """Bulk-resolve Calibre IDs from one authoritative read of metadata.db.
+
+        Returns None when the local database is unavailable or unreadable, and
+        never falls back to one CWA request per book. Each call rereads SQLite so
+        identifier edits become visible immediately.
+        """
+        if isinstance(calibre_book_ids, (str, bytes)):
+            calibre_book_ids = [calibre_book_ids]
+        keys = list(dict.fromkeys(
+            str(book_id).strip()
+            for book_id in (calibre_book_ids or [])
+            if book_id is not None and str(book_id).strip()
+        ))
+        if not keys or not self.is_enabled():
+            return {}
+
+        db_path = self._metadata_db_path()
+        if db_path is None:
+            return None
+        try:
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5) as conn:
+                rows = conn.execute(
+                    "SELECT book, val FROM identifiers WHERE LOWER(type) = ?",
+                    (IDENTIFIER_TYPE,),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            if not self._sqlite_warned:
+                logger.warning(f"Calibre metadata.db read failed: {exc}", exc_info=True)
+                self._sqlite_warned = True
+            return None
+
+        requested_ids = set()
+        numeric_keys = {}
+        for key in keys:
+            try:
+                number = int(key)
+            except ValueError:
+                continue
+            requested_ids.add(number)
+            numeric_keys[key] = number
+
+        found = {}
+        for book_id, value in rows:
+            try:
+                number = int(book_id)
+            except (TypeError, ValueError):
+                continue
+            if number in requested_ids and number not in found:
+                found[number] = str(value).strip() or None if value else None
+
+        result = {key: found.get(numeric_keys.get(key)) for key in keys}
+        with self._lock:
+            self._cache.update(result)
         return result
 
     def _metadata_db_path(self) -> Optional[Path]:

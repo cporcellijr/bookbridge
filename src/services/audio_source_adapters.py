@@ -11,6 +11,7 @@ from src.api.booklore_client import BookloreClient
 from src.api.bookorbit_client import BookOrbitClient
 from src.utils.config_loader import env_truthy
 from src.utils.logging_utils import sanitize_log_data
+from src.utils.series_metadata import extract_series_from_abs_metadata, extract_series_from_library_detail
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,9 @@ class AudioResult:
     provider_book_id: Optional[str] = None
     provider_file_id: Optional[str] = None
     path: str = ""
+    series_name: Optional[str] = None
+    series_sequence: Optional[float] = None
+    series_source: Optional[str] = None
 
 
 def _series_label(series_name: str | None, series_index: str | int | float | None, title: str) -> str:
@@ -88,9 +92,15 @@ class AudioSourceAdapter:
 class ABSAudioSourceAdapter(AudioSourceAdapter):
     source_name = "ABS"
 
-    def __init__(self, abs_client: ABSClient, data_dir: Path | None = None):
+    def __init__(
+        self,
+        abs_client: ABSClient,
+        data_dir: Path | None = None,
+        catalog_items: list[dict] | None = None,
+    ):
         self.abs_client = abs_client
         self.data_dir = Path(data_dir) if data_dir is not None else None
+        self.catalog_items = catalog_items
 
     @staticmethod
     def _parse_library_scope() -> str | None:
@@ -113,6 +123,12 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
 
     def _get_search_pool(self) -> list[dict]:
         library_id = self._parse_library_scope()
+        if self.catalog_items is not None:
+            return [
+                item for item in self.catalog_items
+                if (not library_id or str(item.get("libraryId") or "") == library_id)
+                and self.abs_client._item_has_audio(item)
+            ]
         if library_id:
             return self.abs_client.get_audiobooks_for_lib(library_id)
         return self.abs_client.get_all_audiobooks()
@@ -188,20 +204,22 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
         library_scope = self._parse_library_scope()
         query_mode = bool(query)
         pool = (
-            self.abs_client.search_audiobooks(query, library_id=library_scope)
-            if query_mode
-            else self._get_search_pool()
+            self._get_search_pool()
+            if self.catalog_items is not None or not query_mode
+            else self.abs_client.search_audiobooks(query, library_id=library_scope)
         )
         results: list[AudioResult] = []
         for item in pool:
-            if not query_mode and not self._matches_query(item, query):
-                continue
             item_id = str(item.get("id") or "")
             if not item_id:
                 continue
             media = item.get("media", {}) or {}
             metadata = media.get("metadata", {}) or {}
             title = self._get_title(item)
+            if title == "Unknown" and self.catalog_items is not None:
+                raise ValueError(f"ABS catalog item '{item_id}' has no title")
+            if (self.catalog_items is not None or not query_mode) and not self._matches_query(item, query):
+                continue
             if title == "Unknown":
                 details = self.get_metadata(item_id) or {}
                 if details:
@@ -212,6 +230,7 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
             authors = self._get_authors(item)
             subtitle = metadata.get("subtitle") or ""
             series_label = (metadata.get("seriesName") or "").strip()
+            series_name, series_seq = extract_series_from_abs_metadata(metadata)
             cover_url = self.get_cover_url(item_id) or ""
             duration = media.get("duration")
             results.append(
@@ -221,6 +240,9 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
                     title=title,
                     subtitle=subtitle,
                     series_label=series_label,
+                    series_name=series_name,
+                    series_sequence=series_seq,
+                    series_source="abs" if series_name else None,
                     authors=authors,
                     language=str(metadata.get("language") or "").strip(),
                     cover_url=cover_url,
@@ -273,9 +295,10 @@ class ABSAudioSourceAdapter(AudioSourceAdapter):
 class BookLoreAudioSourceAdapter(AudioSourceAdapter):
     source_name = "BookLore"
 
-    def __init__(self, booklore_client: BookloreClient, data_dir: Path):
+    def __init__(self, booklore_client: BookloreClient, data_dir: Path, catalog_items: list[dict] | None = None):
         self.booklore_client = booklore_client
         self.data_dir = Path(data_dir)
+        self.catalog_items = catalog_items
 
     @staticmethod
     def _format_authors(book: dict) -> str:
@@ -392,7 +415,13 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
     def search(self, query: str) -> list[AudioResult]:
         results: list[AudioResult] = []
         include_info = bool(query and query.strip())
-        for book in self.booklore_client.search_audiobooks(query, include_info=include_info):
+        books = self.catalog_items if self.catalog_items is not None else self.booklore_client.search_audiobooks(query, include_info=include_info)
+        for book in books:
+            if self.catalog_items is not None:
+                if not self.booklore_client._book_supports_audiobook(book):
+                    continue
+                if query and query.casefold() not in str(book.get("title") or "").casefold():
+                    continue
             book_id = book.get("id")
             if book_id is None:
                 continue
@@ -401,21 +430,16 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             title = book.get("title") or book.get("fileName") or f"Grimmory {book_id}"
             provider_file_id = info.get("bookFileId") or book.get("bookFileId")
             subtitle = (book.get("subtitle") or "").strip()
-            series_name_raw = (
-                book.get("seriesName")
-                or book.get("series_name")
-                or book.get("series")
-            )
-            if isinstance(series_name_raw, dict):
-                series_name = series_name_raw.get("name")
-            else:
-                series_name = series_name_raw
-            series_index = (
+            series_name, series_seq = extract_series_from_library_detail(book)
+            legacy_series = book.get("seriesName") or book.get("series_name") or book.get("series")
+            if isinstance(legacy_series, dict):
+                legacy_series = legacy_series.get("name")
+            legacy_index = (
                 book.get("seriesNumber")
                 or book.get("seriesIndex")
                 or book.get("series_number")
             )
-            series_label = _series_label(series_name, series_index, title)
+            series_label = _series_label(legacy_series, legacy_index, title)
             results.append(
                 AudioResult(
                     source="BookLore",
@@ -423,6 +447,9 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                     title=title,
                     subtitle=subtitle,
                     series_label=series_label,
+                    series_name=series_name,
+                    series_sequence=series_seq,
+                    series_source="booklore" if series_name else None,
                     authors=self._format_authors(book),
                     language=str(book.get("language") or "").strip(),
                     cover_url=self.get_cover_url(str(book_id)) or "",
@@ -746,9 +773,8 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
             title = book.get("title") or f"BookOrbit {book_id}"
             duration = book.get("duration_seconds")
             subtitle = (book.get("subtitle") or "").strip()
-            series_name = book.get("seriesName")
-            series_index = book.get("seriesIndex")
-            series_label = _series_label(series_name, series_index, title)
+            series_name, series_seq = extract_series_from_library_detail(book)
+            series_label = _series_label(book.get("seriesName"), book.get("seriesIndex"), title)
             results.append(
                 AudioResult(
                     source="BookOrbit",
@@ -756,6 +782,9 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
                     title=title,
                     subtitle=subtitle,
                     series_label=series_label,
+                    series_name=series_name,
+                    series_sequence=series_seq,
+                    series_source="bookorbit" if series_name else None,
                     authors=book.get("authors") or "",
                     language=str(book.get("language") or "").strip(),
                     cover_url=self.get_cover_url(str(book_id)) or "",

@@ -3,9 +3,16 @@ import re
 import unicodedata
 from typing import Callable, List, Set, Any, Dict, Optional
 
+from src.services.ebook_discovery import AudioCandidateIndex, ebook_key
 from src.services.llm_matching import craft_search_terms
+from src.utils.ebook_sources import normalize_ebook_source
+from src.utils.config_loader import env_truthy
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
-from src.utils.series_metadata import extract_series_from_abs_metadata
+from src.utils.series_metadata import (
+    extract_series_from_abs_metadata,
+    extract_series_from_library_detail,
+    normalize_series_key,
+)
 
 # Provider preference for collapsing the same physical audiobook when more than one
 # provider indexes the same shared library tree (#383): lower index wins ties. A
@@ -194,15 +201,18 @@ class SuggestionsService:
         prepared = []
         resolver = self.calibre_identifier_resolver
         resolver_enabled = bool(resolver and resolver.is_enabled())
+        exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
 
         for candidate in candidates or []:
+            candidate_source = (getattr(candidate, 'source', None) or '').strip()
+            if exclude_local_files and candidate_source == "Local File":
+                continue
             candidate_title = self._candidate_title(candidate)
             if not candidate_title:
                 continue
 
             candidate_author = self._candidate_author(candidate)
             candidate_language = str(getattr(candidate, 'language', None) or '').strip()
-            candidate_source = (getattr(candidate, 'source', None) or '').strip()
             hypotheses = [(candidate_title, candidate_author)]
             # Author credits from metadata, not guessed from a filename.
             trusted_author = candidate_author
@@ -210,14 +220,20 @@ class SuggestionsService:
             # The library scan builds Local File candidates from the filename alone.
             if candidate_source == "Local File" and not candidate_author:
                 local_path = getattr(candidate, 'path', None)
+                local_metadata = getattr(candidate, "_local_metadata", None)
                 meta_title, meta_authors = (
-                    read_local_ebook_metadata(local_path) if local_path else ("", "")
+                    local_metadata if local_metadata is not None
+                    else read_local_ebook_metadata(local_path) if local_path else ("", "")
                 )
                 trusted_author = meta_authors
                 hypotheses = self._title_author_hypotheses(candidate_title, meta_title, meta_authors)
                 candidate_title, candidate_author = hypotheses[0]
                 if local_path:
-                    series = self._series_key(*read_local_ebook_series(local_path))
+                    local_series = getattr(candidate, "_local_series", None)
+                    series = self._series_key(*(
+                        local_series if local_series is not None
+                        else read_local_ebook_series(local_path)
+                    ))
             source_id = getattr(candidate, 'source_id', None) or getattr(candidate, 'booklore_id', None)
             raw_path = getattr(candidate, 'path', None)
             path = str(raw_path) if raw_path else None
@@ -881,6 +897,42 @@ class SuggestionsService:
             return "same_title"
         return None
 
+    def _audio_series_projection(self, ab: dict) -> dict:
+        """Project canonical series fields from the audio anchor only."""
+        name = ab.get("audio_series_name")
+        sequence = ab.get("audio_series_sequence")
+        source = ab.get("audio_series_source")
+        if name is None:
+            name = ab.get("series_name")
+            sequence = ab.get("series_sequence")
+            source = source or ab.get("series_source")
+        if name is None:
+            media = ab.get("media") or {}
+            metadata = media.get("metadata") if isinstance(media, dict) else None
+            audio_source = self._audio_source(ab).casefold()
+            if isinstance(metadata, dict):
+                if audio_source == "abs":
+                    name, sequence = extract_series_from_abs_metadata(metadata)
+                elif audio_source in {"booklore", "bookorbit"}:
+                    name, sequence = extract_series_from_library_detail(metadata)
+            if not name and audio_source == "abs" and ab.get("audio_series"):
+                name, sequence = extract_series_from_abs_metadata(
+                    {"seriesName": ab["audio_series"]}
+                )
+            if name:
+                source = source or audio_source.casefold()
+        key = normalize_series_key(name) if name else None
+        return {
+            "series_name": name,
+            "series_sequence": sequence,
+            "series_source": source,
+            "series_key": key,
+            "audio_series_name": name,
+            "audio_series_sequence": sequence,
+            "audio_series_source": source,
+            "audio_series_key": key,
+        }
+
     def _suggestion_shell(self, ab: dict, matches: List[dict]) -> dict:
         """Build the suggestion dict skeleton (audio metadata + matches)."""
         audio_source = self._audio_source(ab)
@@ -903,6 +955,7 @@ class SuggestionsService:
             "audio_path": self._audio_path(ab),
             "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
             "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
+            **self._audio_series_projection(ab),
             # Legacy aliases kept for template/session compatibility.
             "abs_id": bridge_key,
             "abs_title": audio_title,
@@ -1630,17 +1683,14 @@ class SuggestionsService:
         match = re.search(r"(\d+)\s*$", text)
         return match.group(1) if match else None
 
-    def _build_audiobook_candidate_pool(self) -> List[dict]:
-        """Build searchable audiobook candidates once per shelf-watch scan.
-
-        Mirrors `_build_ebook_candidate_pool` but inverted: callers anchor on a
-        known ebook and we score audiobook candidates against it.
-        """
-        try:
-            audiobooks = self.get_audiobooks_conditionally()
-        except Exception as e:
-            self.logger.warning(f"Shelf-watch scan failed to load audiobook candidate pool: {e}")
-            return []
+    def _build_audiobook_candidate_pool(self, audiobooks=None) -> List[dict]:
+        """Build searchable audiobook candidates once per shelf-watch scan."""
+        if audiobooks is None:
+            try:
+                audiobooks = self.get_audiobooks_conditionally()
+            except Exception as e:
+                self.logger.warning(f"Shelf-watch scan failed to load audiobook candidate pool: {e}")
+                return []
 
         raw_count = len(audiobooks) if audiobooks else 0
         prepared = []
@@ -1672,6 +1722,7 @@ class SuggestionsService:
                 "audio_path": self._audio_path(ab),
                 "audio_provider_book_id": str(ab.get("audio_provider_book_id") or audio_source_id or ""),
                 "audio_provider_file_id": str(ab.get("audio_provider_file_id") or ""),
+                **self._audio_series_projection(ab),
                 "search_text": f"{audio_title} {audio_author}".strip(),
             })
         self.logger.info(
@@ -1682,32 +1733,51 @@ class SuggestionsService:
 
     @staticmethod
     def _ebook_anchor_fields(ebook: dict) -> dict:
-        """Extract title/author/filename/id from a Grimmory ebook dict (lenient on key names)."""
+        """Extract provider-neutral identity and display fields from an ebook record."""
         title = (ebook.get("title") or ebook.get("name") or "").strip()
-        author = (
-            ebook.get("author")
-            or ebook.get("authors")
-            or ""
-        )
-        if isinstance(author, list):
+        author = ebook.get("author") or ebook.get("authors") or ""
+        if isinstance(author, (list, tuple)):
             author = ", ".join(str(a) for a in author if a)
         author = str(author or "").strip()
         filename = (ebook.get("filename") or ebook.get("fileName") or ebook.get("name") or "").strip()
-        grimmory_id = ebook.get("grimmory_id") or ebook.get("id") or ebook.get("book_id")
-        if grimmory_id is not None:
-            grimmory_id = str(grimmory_id).strip()
-        path = str(
-            ebook.get("path")
-            or ebook.get("filePath")
-            or ebook.get("filepath")
-            or ""
-        ).strip()
+        path = str(ebook.get("path") or ebook.get("filePath") or ebook.get("filepath") or "").strip()
+        source = normalize_ebook_source(ebook.get("source") or ebook.get("ebook_source"))
+        if not source and (ebook.get("booklore_id") is not None or ebook.get("grimmory_id") is not None):
+            source = "Booklore"
+        source_id = next((ebook.get(key) for key in (
+            "source_id", "ebook_source_id", "booklore_id", "grimmory_id", "id", "book_id"
+        ) if ebook.get(key) is not None), None)
+        source_id = str(source_id).strip() if source_id is not None else None
+        legacy_id = ebook.get("grimmory_id")
+        if legacy_id is None and source.casefold() == "booklore":
+            legacy_id = source_id
+        if legacy_id is None:
+            legacy_id = ebook.get("id") if ebook.get("id") is not None else ebook.get("book_id")
+        document_id = ebook.get("document_id") or ebook.get("documentId")
+        if document_id is None:
+            document_id = next((
+                prefix + str(ebook[field]).strip()
+                for field, prefix in (("isbn", "isbn:"), ("doi", "doi:"))
+                if ebook.get(field) is not None
+            ), ebook.get("urn"))
+        series_name, series_sequence = ebook.get("series_name"), ebook.get("series_sequence")
+        if series_name is None:
+            series_name, series_sequence = extract_series_from_library_detail(ebook)
         return {
             "title": title,
             "author": author,
             "filename": filename,
-            "grimmory_id": grimmory_id or "",
+            "source": source,
+            "source_id": source_id,
+            "ebook_key": ebook_key(
+                source, source_id, path, document_id,
+            ),
+            "grimmory_id": str(legacy_id).strip() if legacy_id is not None else "",
             "path": path,
+            "series_name": series_name,
+            "series_sequence": series_sequence,
+            "series_source": ebook.get("series_source"),
+            "series_key": normalize_series_key(series_name) if series_name else None,
         }
 
     @classmethod
@@ -1799,13 +1869,21 @@ class SuggestionsService:
             score = min(score, cls._SUBTITLE_STRIPPED_SCORE_CAP)
         return score
 
-    def _scan_single_ebook(self, ebook: dict, candidate_pool: List[dict]) -> Optional[dict]:
-        """Reverse counterpart of `_scan_single_audiobook` for the shelf-watch flow.
-
-        Takes a Grimmory ebook as the anchor and scores audiobook candidates with
-        `_ebook_audio_pair_score` against a 60-point floor. Returns None when no
-        candidate clears the floor.
-        """
+    def scan_ebook_candidates(self, ebook: dict, pool) -> Optional[dict]:
+        """Score a provider-neutral ebook against audio candidates, reporting incomplete discovery."""
+        discovery = None
+        if isinstance(pool, AudioCandidateIndex):
+            discovery = pool.shortlist(ebook)
+            candidate_pool = discovery["candidates"]
+        elif isinstance(pool, dict) and "candidates" in pool:
+            discovery = pool
+            candidate_pool = pool["candidates"]
+        else:
+            candidate_pool = list(pool or [])
+            discovery = {
+                "complete": True, "unknown": False,
+                "candidate_count": len(candidate_pool), "visited_count": 0,
+            }
         from rapidfuzz import fuzz
 
         anchor = self._ebook_anchor_fields(ebook)
@@ -1813,13 +1891,13 @@ class SuggestionsService:
             self.logger.debug(
                 f"Shelf-watch scan: skipping '{anchor.get('filename')}' — no anchor title"
             )
-            return None
+            return self._ebook_scan_status(anchor, [], discovery) if discovery["unknown"] else None
 
         if not candidate_pool:
             self.logger.debug(
                 f"Shelf-watch scan: '{anchor['title']}' — candidate pool empty"
             )
-            return None
+            return self._ebook_scan_status(anchor, [], discovery) if discovery["unknown"] else None
 
         ebook_title = anchor["title"]
         ebook_author = anchor["author"]
@@ -1898,13 +1976,25 @@ class SuggestionsService:
                 self.logger.info(
                     f"Shelf-watch scan: '{ebook_title}' — pool empty after candidate filtering"
                 )
-            return None
+            return self._ebook_scan_status(anchor, [], discovery) if discovery["unknown"] else None
 
         matches.sort(key=lambda m: m.get("score", 0), reverse=True)
+        return self._ebook_scan_status(anchor, matches, discovery)
+
+    @staticmethod
+    def _ebook_scan_status(anchor: dict, matches: list[dict], discovery: dict) -> dict:
         return {
             "ebook_anchor": anchor,
             "matches": matches,
+            "complete": discovery["complete"],
+            "unknown": discovery["unknown"],
+            "candidate_count": discovery["candidate_count"],
+            "visited_count": discovery["visited_count"],
         }
+
+    def _scan_single_ebook(self, ebook: dict, candidate_pool: List[dict]) -> Optional[dict]:
+        """Compatibility wrapper used by shelf-watch callers."""
+        return self.scan_ebook_candidates(ebook, candidate_pool)
 
     def _collapse_duplicate_physical_audio(
         self, unmatched_audiobooks: List[tuple[str, dict]],
@@ -2095,6 +2185,13 @@ class SuggestionsService:
             if abs_id in unmatched_abs_ids and abs_id not in ignored_source_ids
         }
         reused_cached_count = len(cache_by_abs) + len(no_match_abs_ids_set)
+
+        # Cached pairs retain their matches but follow the current audio anchor.
+        ab_by_bridge = {bk: ab for bk, ab in unmatched_audiobooks}
+        for bridge_key, suggestion in cache_by_abs.items():
+            ab = ab_by_bridge.get(bridge_key)
+            if ab:
+                suggestion.update(self._audio_series_projection(ab))
 
         new_scan_candidates = [
             (bridge_key, ab) for bridge_key, ab in unmatched_audiobooks

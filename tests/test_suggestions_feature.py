@@ -225,7 +225,7 @@ class TestSuggestionsFeature(unittest.TestCase):
         original_run = web_server._run_suggestions_scan_job
         original_sync = web_server._BACKGROUND_TASKS_SYNCHRONOUS
 
-        def fake_run(_job_id, _cached, _no_match):
+        def fake_run(_job_id, _cached, _no_match, _full_refresh=False):
             captured['bundle'] = web_server.uc()
             captured['user_id'] = get_current_user_id()
             captured['credentials'] = dict(get_current_user_credentials() or {})

@@ -36,6 +36,7 @@ class KavitaClient:
         self._book_cache: dict[str, dict] = {}
         self._filename_index: dict[str, str] = {}
         self._cache_timestamp = 0.0
+        self._catalog_complete = False
         self._config_fingerprint = None
 
     def _cfg(self, key: str, default=None):
@@ -117,6 +118,12 @@ class KavitaClient:
         data = self._json(self._request("GET", "/api/Library/libraries"), [])
         return data if isinstance(data, list) else []
 
+    @property
+    def catalog_complete(self) -> bool:
+        """Whether the most recent full catalog refresh was proven complete."""
+        with self._cache_lock:
+            return self._catalog_complete
+
     def _reset_cache_if_configuration_changed(self) -> None:
         fingerprint = (self.base_url, self.api_key, self.target_library_id)
         with self._cache_lock:
@@ -125,6 +132,7 @@ class KavitaClient:
             self._book_cache = {}
             self._filename_index = {}
             self._cache_timestamp = 0.0
+            self._catalog_complete = False
             self._config_fingerprint = fingerprint
 
     @staticmethod
@@ -176,7 +184,12 @@ class KavitaClient:
             "series_id": str(series_id) if series_id is not None else "",
             "seriesName": series_name,
             "series_title": series_name,
-            "seriesIndex": chapter.get("sortOrder") or chapter.get("number"),
+            "seriesIndex": (
+                chapter.get("sortOrder")
+                if chapter.get("sortOrder") is not None
+                else chapter.get("number")
+            ),
+            "filePath": raw_path,
             "library_id": str(library_id) if library_id is not None else "",
             "volume_id": chapter.get("volumeId"),
             "file_id": epub_file.get("id"),
@@ -184,29 +197,41 @@ class KavitaClient:
             "cover_url": f"/api/kavita/cover/{series_id}" if series_id is not None else "",
         }
 
-    def _expand_series(self, series: dict) -> list[dict]:
+    def _expand_series(
+        self, series: dict, require_complete: bool = False
+    ) -> Optional[list[dict]]:
         series_id = series.get("id") or series.get("seriesId")
         if series_id is None:
-            return []
+            return None if require_complete else []
         response = self._request(
             "GET", "/api/Series/volumes", params={"seriesId": series_id}
         )
-        volumes = self._json(response, [])
+        volumes = self._json(response, None if require_complete else [])
         if not isinstance(volumes, list):
-            return []
+            return None if require_complete else []
         books = []
         for volume in volumes:
-            if not isinstance(volume, dict):
+            if not isinstance(volume, dict) or not isinstance(volume.get("chapters"), list):
+                if require_complete:
+                    return None
                 continue
-            for chapter in volume.get("chapters") or []:
+            for chapter in volume["chapters"]:
                 if not isinstance(chapter, dict):
+                    if require_complete:
+                        return None
                     continue
                 item = self._normalise_book(series, chapter)
                 if item:
                     books.append(item)
+                elif require_complete and self._epub_file(chapter):
+                    chapter_id = chapter.get("id")
+                    if chapter_id is None or not str(chapter_id).strip():
+                        return None
         return books
 
-    def _series_for_query(self, query: str) -> list[dict]:
+    def _series_for_query(
+        self, query: str, require_complete: bool = False
+    ) -> Optional[list[dict]]:
         if query:
             response = self._request(
                 "GET",
@@ -221,20 +246,21 @@ class KavitaClient:
         page = 1
         page_size = 200
         while True:
+            if require_complete and page > 10000:
+                return None
             response = self._request(
                 "POST",
                 "/api/Series/all-v2",
                 params={"PageNumber": page, "PageSize": page_size},
                 json={},
             )
-            rows = self._json(response, [])
-            if not isinstance(rows, list):
-                break
+            rows = self._json(response, None if require_complete else [])
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                return None if require_complete else results
             results.extend(rows)
             if len(rows) < page_size:
-                break
+                return results
             page += 1
-        return results
 
     def _filtered_series(self, rows: list[dict]) -> list[dict]:
         target = self.target_library_id
@@ -251,11 +277,14 @@ class KavitaClient:
             output.append(row)
         return output
 
-    def _index_books(self, books: list[dict], *, replace: bool) -> None:
+    def _index_books(
+        self, books: list[dict], *, replace: bool, complete: bool = False
+    ) -> None:
         with self._cache_lock:
             if replace:
                 self._book_cache = {}
                 self._filename_index = {}
+                self._catalog_complete = complete
             for book in books:
                 book_id = str(book["id"])
                 self._book_cache[book_id] = book
@@ -264,25 +293,39 @@ class KavitaClient:
                     self._filename_index[filename] = book_id
             self._cache_timestamp = time.time()
 
-    def get_all_books(self, force_refresh: bool = False) -> list[dict]:
+    def get_all_books(
+        self, force_refresh: bool = False, require_complete: bool = False
+    ) -> list[dict]:
         self._reset_cache_if_configuration_changed()
         if not self.is_configured():
             return []
         with self._cache_lock:
             if (
                 not force_refresh
-                and self._book_cache
+                and (self._catalog_complete if require_complete else bool(self._book_cache))
                 and time.time() - self._cache_timestamp < _CACHE_TTL_SECONDS
             ):
                 return list(self._book_cache.values())
         if not self._refresh_lock.acquire(timeout=30):
             with self._cache_lock:
+                if require_complete:
+                    self._catalog_complete = False
                 return list(self._book_cache.values())
         try:
+            series_rows = self._series_for_query("", require_complete=require_complete)
+            if series_rows is None:
+                with self._cache_lock:
+                    self._catalog_complete = False
+                    return list(self._book_cache.values())
             books = []
-            for series in self._filtered_series(self._series_for_query("")):
-                books.extend(self._expand_series(series))
-            self._index_books(books, replace=True)
+            for series in self._filtered_series(series_rows):
+                expanded = self._expand_series(series, require_complete=require_complete)
+                if expanded is None:
+                    with self._cache_lock:
+                        self._catalog_complete = False
+                        return list(self._book_cache.values())
+                books.extend(expanded)
+            self._index_books(books, replace=True, complete=require_complete)
             logger.info("Kavita: Loaded %d EPUBs", len(books))
             return books
         finally:

@@ -5,7 +5,8 @@ import base64
 from typing import Sequence
 from xml.etree.ElementTree import Element
 from defusedxml import ElementTree as ET
-from urllib.parse import quote
+from urllib.parse import quote, urldefrag, urljoin, urlparse
+import time
 
 from src.utils.file_transfers import (
     IncompleteTransferError,
@@ -70,6 +71,9 @@ class CWAClient:
             
         self.timeout = 30
         self.search_template = None
+        self._catalog_cache: list[dict] = []
+        self._catalog_cache_expires = 0.0
+        self._catalog_complete = False
 
     def _make_request(self, url, **kwargs):
         """Helper to make requests with cookies cleared to force Basic Auth."""
@@ -97,6 +101,67 @@ class CWAClient:
     def is_configured(self):
         """Check if CWA is enabled and configured."""
         return self.enabled and bool(self.base_url)
+
+    @property
+    def catalog_complete(self) -> bool:
+        """Whether the most recent catalog snapshot is known to be complete."""
+        return self._catalog_complete
+
+    def get_all_ebooks(self, force_refresh: bool = False) -> list[dict]:
+        """Return CWA's full EPUB catalog, retaining the last reliable snapshot on failure.
+
+        Check ``catalog_complete`` after the call to distinguish a complete empty
+        catalog from a failed refresh. The per-client cache is valid for one hour.
+        """
+        if not self.is_configured():
+            self._catalog_complete = False
+            return list(self._catalog_cache)
+        if not force_refresh and self._catalog_complete and time.monotonic() < self._catalog_cache_expires:
+            return list(self._catalog_cache)
+
+        start_url = f"{self.base_url}/opds/new"
+        origin = urlparse(self.base_url)
+        url = start_url
+        seen: set[str] = set()
+        books = []
+        try:
+            for _ in range(10000):
+                url = urldefrag(url).url
+                parsed = urlparse(url)
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or (parsed.scheme.lower(), parsed.netloc.lower())
+                    != (origin.scheme.lower(), origin.netloc.lower())
+                    or url in seen
+                ):
+                    raise ValueError("unsafe or repeated CWA OPDS pagination URL")
+                seen.add(url)
+                response = self._make_request(url, allow_redirects=False)
+                if response.status_code != 200:
+                    raise ValueError(f"CWA OPDS page returned {response.status_code}")
+                root = self._parse_opds_xml(response.text)
+                if root.tag != "{http://www.w3.org/2005/Atom}feed":
+                    raise ValueError("CWA OPDS page was not an Atom feed")
+                books.extend(self._parse_opds(response.text, strict=True))
+                next_links = [
+                    link for link in root.findall("{http://www.w3.org/2005/Atom}link")
+                    if link.get("rel") == "next"
+                ]
+                if not next_links:
+                    self._catalog_cache = books
+                    self._catalog_cache_expires = time.monotonic() + 3600
+                    self._catalog_complete = True
+                    return list(books)
+                if len(next_links) != 1 or not next_links[0].get("href"):
+                    raise ValueError("invalid CWA OPDS next link")
+                url = urljoin(url, next_links[0].get("href"))
+            raise ValueError("CWA OPDS pagination exceeded 10000 pages")
+        except Exception as exc:
+            self._catalog_complete = False
+            logger.warning("CWA catalog refresh incomplete: %s", exc, exc_info=True)
+            return list(self._catalog_cache)
 
     def check_connection(self):
         """Check connection to CWA and validate response type."""
@@ -281,12 +346,14 @@ class CWAClient:
             logger.warning("⚠️ CWA OPDS: Repaired bare HTML breaks in XHTML content.")
             return root
 
-    def _parse_opds(self, xml_content):
-        """Parse Atom XML response from OPDS feed."""
+    def _parse_opds(self, xml_content: str, strict: bool = False) -> list[dict]:
+        """Parse Atom XML response, optionally raising on malformed feed content."""
         results = []
         try:
             # Check for HTML response (common if auth failed or 404 page returned as 200)
             if xml_content.lstrip().lower().startswith(('<!doctype html', '<html')):
+                if strict:
+                    raise ValueError("CWA returned HTML content instead of XML")
                 logger.warning("⚠️ CWA returned HTML content instead of XML. Check configuration/URL.")
                 logger.debug(f"HTML Snippet: {xml_content[:200]}")
                 return []
@@ -384,6 +451,8 @@ class CWAClient:
             return results
 
         except Exception as e:
+            if strict:
+                raise
             logger.error(f"❌ Error parsing CWA OPDS: {e}", exc_info=True)
             logger.debug(f"Failed XML content (first 500 chars): {xml_content[:500]}")
             return []

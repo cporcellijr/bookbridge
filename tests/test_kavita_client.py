@@ -84,6 +84,7 @@ def test_catalog_expands_epub_chapters_and_preserves_koreader_hash():
         "seriesName": "The Example",
         "series_title": "The Example",
         "seriesIndex": 1,
+        "filePath": "/library/Ada Writer/The Example.epub",
         "library_id": "9",
         "volume_id": 44,
         "file_id": 81,
