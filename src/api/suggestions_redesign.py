@@ -157,12 +157,31 @@ def suggestions_redesign_discovery() -> Any:
         return _api_error("discovery_unavailable", 500)
 
     response = dict(projection)
+    if tab == "pairs":
+        response["entries"] = web._sanitize_cover_urls(response["entries"])
     try:
         job_id = web._running_suggestions_scan_job_id(user_id)
         response["scan_job"] = web._get_suggestions_scan_job(job_id) if job_id else None
     except Exception:
         response["scan_job"] = None
     return jsonify(response)
+
+
+def suggestions_tab_counts() -> Optional[dict]:
+    """Return each tab's unfiltered active count for the page's tab labels; None on failure."""
+    web = _web_server()
+    user_id = _user_id(web)
+    if user_id is None:
+        return None
+    try:
+        inputs = _current_inputs(web, user_id)
+        return {
+            tab: _project(web, *inputs, tab=tab, filters={}, sort="series")["counts"]["active"]
+            for tab in ("pairs", "ebook_only")
+        }
+    except Exception:
+        web.logger.warning("Could not count Suggestions tabs for user %s", user_id, exc_info=True)
+        return None
 
 
 def _selection_payload(payload):

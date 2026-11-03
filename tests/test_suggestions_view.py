@@ -95,7 +95,7 @@ def test_pair_projection_preserves_evidence_and_uses_live_mapped_ignored_queue_s
     by_key["abs-eligible"]["matches"][0]["evidence"].append("consumer mutation")
     assert "consumer mutation" not in original_matches[0]["evidence"]
     assert result["counts"] == {
-        "total": 4, "filtered": 4, "eligible": 0, "queued": 1,
+        "total": 4, "active": 4, "filtered": 4, "eligible": 0, "queued": 1,
         "manual_review": 3, "ignored": 0,
     }
 

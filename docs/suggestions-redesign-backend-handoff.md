@@ -337,3 +337,22 @@ For the UI: keep Pair and Ebook actions distinct; use original series display na
 - Focused verification: 612 provider/Suggestions tests passed before final action additions; the final action/core subset passed 183 tests. Earlier baseline and negative-regression results are described above.
 - `git diff --check` passed; no new production `print()` calls, schema changes, runtime settings, dependencies or Lua changes.
 - `BRANCH_STATUS.md` was updated locally (it is an ignored operational file). Deployment requirement is restart, deliberately not performed. Frontend implementation is the only planned follow-up, outside this backend task.
+
+## 17. Frontend integration (branch `feature/suggestions-ui`)
+
+The two-tab page in `templates/suggestions.html` renders every row client-side from `GET /api/suggestions/discovery`; Jinja no longer renders suggestion cards. The scan forms, scan-status polling, review panel (candidate grid + Storyteller picker) and `_match_queue_panel.html` are unchanged.
+
+Backend corrections made during integration:
+
+- `suggestions_view.project_suggestions`: Pair entries carry `audio_source` inferred from a `booklore:`/`bookorbit:` bridge key when an older cached row has none. Without it the source filter skipped those rows and the badge fell back to Audiobookshelf (the #407 defect).
+- `counts.active`: Pair = `total`; Ebook Only = non-ignored records only (`total` includes saved ignores). Used for the tab badges.
+- The discovery route passes Pair entries through `_sanitize_cover_urls` (issue #353; the legacy page already did this).
+- `suggestions_tab_counts()` gives `/suggestions` both tabs' `active` counts for the first paint; each later fetch updates its own tab.
+
+Selection and queueing as built:
+
+- Selection is a `Set` of `suggestion_key`s held in page state. A series checkbox adds or removes that group's `bulk_eligible` children from the loaded filtered dataset (collapsed groups included); it is tri-state over eligible children only. Selections survive sort, filter, flat/grouped and tab changes, and are cleared when the Pair `generation` changes.
+- "Add selected" and "Add all exact" post to the existing `add_many_to_queue` form action, which rechecks each key on the server (ties always; any manual case when `bulk_intent=exact`) and returns the queue fragment. Individually ticked review rows (below 100 or another manual reason, but not ties) remain queueable through "Add selected", as before. The `/selection/resolve` and `/selection/queue` endpoints are not called: the projection is unpaginated, so the whole filtered dataset is already loaded, and the form action returns the queue panel the page re-renders.
+- Pair "Ignore" posts the legacy `action=never`; "Hide for now" is browser-session state only (sessionStorage) and calls nothing.
+
+Remaining limits: no Ebook Only "Open source" link (the contract has no trustworthy provider URL), no author sort (backend sorts are series/title/confidence), and no per-ebook refresh. Russian strings are in the `.po`; they appear only after a Docker rebuild compiles the catalog.

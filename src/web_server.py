@@ -11476,6 +11476,8 @@ def suggestions_page():
         suggestions_state['updated_at'] = time.time()
         _persist_suggestions_state(suggestions_state)
 
+    from src.api.suggestions_redesign import suggestions_tab_counts
+
     return render_template(
         'suggestions.html',
         suggestions=_sanitize_cover_urls(scan_results),
@@ -11485,6 +11487,7 @@ def suggestions_page():
         scan_error=scan_error,
         scan_stats=suggestions_state.get('scan_last_stats', {}),
         storyteller_enabled=storyteller_enabled,
+        tab_counts=suggestions_tab_counts(),
     )
 
 

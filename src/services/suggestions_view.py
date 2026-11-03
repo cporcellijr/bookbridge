@@ -32,6 +32,15 @@ def _bridge_key(source: Any, source_id: Any) -> str:
     return value
 
 
+def _audio_source(suggestion: dict, bridge_key: str) -> str:
+    """Return the audio provider, inferring it from a prefixed bridge key for older cached rows."""
+    source = str(suggestion.get("audio_source") or "").strip()
+    if source:
+        return source
+    prefix = bridge_key.split(":", 1)[0].casefold() if ":" in bridge_key else ""
+    return {"booklore": "BookLore", "bookorbit": "BookOrbit"}.get(prefix, "ABS")
+
+
 def _pair_mapped_keys(mapped_books: Iterable[Any]) -> set[str]:
     keys = set()
     for book in mapped_books or ():
@@ -263,6 +272,7 @@ def project_suggestions(
                 "series_key": _series_fields(suggestion)[0] or None,
                 "kind": "pair",
                 "bridge_key": bridge_key,
+                "audio_source": _audio_source(suggestion, bridge_key),
                 "mapped": False,
                 "ignored": False,
                 "queued": queued,
@@ -279,6 +289,7 @@ def project_suggestions(
             )
             entries.append(entry)
         total = len(entries)
+        active = total
         if normalized_filters["status"] == "eligible":
             entries = [entry for entry in entries if entry["bulk_eligible"]]
         elif normalized_filters["status"] == "manual_review":
@@ -361,6 +372,7 @@ def project_suggestions(
             if ignored_mode == "include":
                 entries.extend(ignored_by_key.values())
         total = len(records_by_key) + len(ignored_by_key)
+        active = len(records_by_key)
         entries = [
             entry for entry in entries
             if _matches_common(entry, normalized_filters, tab)
@@ -375,6 +387,7 @@ def project_suggestions(
     entries.sort(key=lambda entry: _entry_sort_key(entry, sort))
     counts = {
         "total": total,
+        "active": active,
         "filtered": len(entries),
         "eligible": sum(bool(entry.get("bulk_eligible")) for entry in entries),
         "queued": sum(bool(entry.get("queued")) for entry in entries),
