@@ -216,7 +216,7 @@ def test_failed_cache_write_is_visible_to_ignore_action(tmp_path):
         assert response.get_json()["error"] == "persistence_failed"
 
 
-def test_add_book_preselects_saved_identity_and_uses_only_targeted_audio_search(monkeypatch):
+def test_search_tab_preselects_saved_identity_and_uses_only_targeted_audio_search(monkeypatch):
     app = Flask(__name__)
     app.secret_key = "test"
     entry = next(iter(build_ebook_inventory([_ebook("selected")]).values()))
@@ -235,10 +235,12 @@ def test_add_book_preselects_saved_identity_and_uses_only_targeted_audio_search(
     monkeypatch.setattr(web, "_search_audiobooks_with_fallback", audio)
     monkeypatch.setattr(web, "_search_ebooks_with_fallback",
                         MagicMock(side_effect=AssertionError("full ebook search")))
-    monkeypatch.setattr(web, "render_template", lambda _name, **kwargs: kwargs)
-    with app.test_request_context("/add-book", query_string={"ebook_key": entry["key"], "generation": "g1"}):
-        result = web._add_book_view()
-    assert len(result["ebooks"]) == 1
-    selected = result["ebooks"][0]
+    with app.test_request_context("/api/suggestions/search"):
+        _audio, ebooks, _st, _failed, search, mode = web._suggestions_search_results(
+            "", "", entry["key"], "g1",
+        )
+    assert mode == "ebook_key" and search == "A Singular Title"
+    assert len(ebooks) == 1
+    selected = ebooks[0]
     assert (selected.source, selected.source_id) == ("Kavita", "selected")
     audio.assert_called_once_with("A Singular Title")

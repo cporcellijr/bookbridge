@@ -9,10 +9,15 @@ All notable changes to BookBridge will be documented in this file.
 ### Added
 
 - **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Pair Suggestions and Ebook Only on the next Scan Library while keeping ebooks from your library services.
-- **Suggestions has two tabs: Pair Suggestions and Ebook Only.** Pair Suggestions keeps the
+- **Add Book is now the Search tab of Suggestions.** Search any of your libraries by title, author or
+  file name, pick the audiobook (or none, for an ebook by itself), then the ebook, a Storyteller title or
+  Audio only, and add it to the Batch Match Queue, which now also offers Create Storyteller Edition Only
+  and a read-along EPUB for BookOrbit audiobooks. Reader Documents moved there too. Every user gets the
+  Suggestions page; regular users see only its Search tab, and old Add Book links open it.
+- **Suggestions has Pair Suggestions and Ebook Only tabs.** Pair Suggestions keeps the
   audiobook/ebook matching, candidate review and Batch Match Queue; Ebook Only lists ebooks the last
-  scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens Add Book
-  with the ebook already chosen), Create ebook-only, Hide for now and a saved Ignore you can undo.
+  scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens the Search
+  tab with the ebook already chosen), Create ebook-only, Hide for now and a saved Ignore you can undo.
   Both tabs group books by series (collapsed, numbered in series order, with an Other / No Series
   group; switch to a flat list any time), and have search, series, source, status and sort filters
   that each tab remembers separately. Ticking a series selects every exact match in it, even books

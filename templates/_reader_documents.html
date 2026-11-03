@@ -1,0 +1,676 @@
+{# Reader Documents (KoSync): documents a reader reported to the sync server, with link/unlink/delete.
+   Self-contained partial (styles, markup, script); uses the user-scoped /api/me/* endpoints. #}
+<style>
+    .btn-badge {
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: rgba(255, 152, 0, 0.18);
+        color: #ffb74d;
+        border: 1px solid rgba(255, 152, 0, 0.35);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        line-height: 1;
+    }
+
+    /* Reader Documents (KoSync) panel */
+    .kosync-section {
+        margin-top: 28px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+    }
+
+    .kosync-section summary {
+        cursor: pointer;
+        list-style: none;
+    }
+
+    .kosync-section summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .kosync-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        color: var(--text);
+    }
+
+    .kosync-summary-main {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+    }
+
+    .kosync-summary-title {
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    .kosync-summary-meta {
+        color: var(--muted-soft);
+        font-size: 13px;
+    }
+
+    .kosync-summary-chevron {
+        color: var(--muted-soft);
+        transition: transform 0.2s, color 0.2s;
+    }
+
+    .kosync-section[open] .kosync-summary-chevron {
+        transform: rotate(180deg);
+        color: var(--text);
+    }
+
+    .kosync-panel-body {
+        margin-top: 18px;
+    }
+
+    .kosync-toolbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
+    }
+
+    .kosync-search {
+        flex: 1;
+        min-width: 220px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+    }
+
+    .kosync-filter {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+    }
+
+    .kosync-filter button {
+        border: none;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        padding: 10px 12px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+    }
+
+    .kosync-filter button.active {
+        background: rgba(102, 126, 234, 0.25);
+        color: var(--text);
+    }
+
+    .kosync-note {
+        color: var(--muted-soft);
+        font-size: 13px;
+        line-height: 1.45;
+        margin-bottom: 14px;
+    }
+
+    .kosync-show-toggle {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+    }
+
+    .kosync-doc-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .kosync-doc-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        padding: 14px;
+        background: var(--panel-soft);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+    }
+
+    .kosync-doc-main {
+        min-width: 0;
+    }
+
+    .kosync-doc-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+    }
+
+    .kosync-hash {
+        font-family: 'SFMono-Regular', Consolas, monospace;
+        color: var(--text);
+    }
+
+    .kosync-status {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #81c784;
+    }
+
+    .kosync-status.unlinked {
+        color: #ffb74d;
+    }
+
+    .kosync-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        color: var(--muted-soft);
+        font-size: 12px;
+    }
+
+    .kosync-actions {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .kosync-actions button,
+    .kosync-link-panel button {
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        background: rgba(102, 126, 234, 0.14);
+        color: #93a5f6;
+        border-radius: 7px;
+        padding: 8px 10px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+    }
+
+    .kosync-actions button:hover,
+    .kosync-link-panel button:hover {
+        background: rgba(102, 126, 234, 0.24);
+    }
+
+    .kosync-link-panel {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+    }
+
+    .kosync-link-panel select {
+        flex: 1;
+        min-width: 220px;
+        padding: 10px 12px;
+        background: #1a1a1a;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+    }
+
+    .kosync-empty,
+    .kosync-error {
+        color: var(--muted-soft);
+        font-size: 13px;
+        padding: 12px 0;
+    }
+
+    .kosync-error {
+        color: #ff8a80;
+    }
+
+    .kosync-section .hidden {
+        display: none !important;
+    }
+
+    @media (max-width: 768px) {
+        .kosync-summary {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .kosync-summary-meta {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .kosync-doc-row {
+            grid-template-columns: 1fr;
+        }
+
+        .kosync-toolbar,
+        .kosync-actions {
+            align-items: stretch;
+        }
+
+        .kosync-filter,
+        .kosync-search,
+        .kosync-show-toggle {
+            width: 100%;
+        }
+
+        .kosync-filter button {
+            flex: 1;
+        }
+    }
+</style>
+<details class="kosync-section" id="kosync-documents">
+    <summary class="kosync-summary">
+        <span class="kosync-summary-main">
+            <span class="kosync-summary-title">{{ _('Reader Documents') }}</span>
+            <span id="kosync-docs-badge" class="btn-badge hidden">0</span>
+        </span>
+        <span class="kosync-summary-meta">
+            <span id="kosync-docs-summary">{{ _('Checking...') }}</span>
+            <span class="kosync-summary-chevron">⌄</span>
+        </span>
+    </summary>
+    <div class="kosync-panel-body">
+        <div class="kosync-toolbar">
+            <input id="kosync-doc-search" class="kosync-search" type="search"
+                placeholder="{{ _('Search hash, device, or book') }}">
+            <div class="kosync-filter" aria-label="{{ _('Reader document filter') }}">
+                <button type="button" data-filter="unlinked" class="active">{{ _('Needs Linking') }}</button>
+                <button type="button" data-filter="linked">{{ _('Linked') }}</button>
+                <button type="button" data-filter="all">{{ _('All') }}</button>
+            </div>
+            <button type="button" id="kosync-show-all" class="kosync-show-toggle hidden">{{ _('Show All') }}</button>
+        </div>
+        <div class="kosync-note">
+            {% trans trimmed %}Books your e-reader has reported to the sync server, identified by file hash. BookBridge
+            links them to your books automatically; if a device copy doesn't match any library file
+            (progress not syncing), link it to the right book here. Old unlinked documents are usually
+            just history — link one only when a current book is failing to sync.{% endtrans %}
+        </div>
+        <div id="kosync-doc-status" class="kosync-empty">{{ _('Loading...') }}</div>
+        <div id="kosync-doc-list" class="kosync-doc-list"></div>
+    </div>
+</details>
+<script>
+    const kosyncDocsState = {
+        documents: [],
+        books: [],
+        filter: 'unlinked',
+        search: '',
+        showAll: false,
+        loaded: false
+    };
+    const KOSYNC_DEFAULT_VISIBLE_LIMIT = 25;
+    const KOSYNC_DOCS_TO_REVIEW = {% call(n) plural_forms() %}{{ ngettext('{count} reader document to review', '{count} reader documents to review', n) }}{% endcall %};
+
+    function shortKosyncHash(hash) {
+        if (!hash) return '';
+        return hash.length > 16 ? `${hash.slice(0, 8)}...${hash.slice(-8)}` : hash;
+    }
+
+    function formatKosyncPercent(value) {
+        const n = Number(value || 0) * 100;
+        return `${n.toFixed(1)}%`;
+    }
+
+    function formatKosyncDate(value) {
+        if (!value) return '';
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleString();
+    }
+
+    function setKosyncStatus(message, isError) {
+        const status = document.getElementById('kosync-doc-status');
+        if (!status) return;
+        status.textContent = message || '';
+        status.className = isError ? 'kosync-error' : 'kosync-empty';
+        status.style.display = message ? 'block' : 'none';
+    }
+
+    function updateKosyncSummary() {
+        const badge = document.getElementById('kosync-docs-badge');
+        const summary = document.getElementById('kosync-docs-summary');
+        const unlinkedCount = kosyncDocsState.documents.filter(d => !d.linked_abs_id).length;
+        if (badge) {
+            badge.textContent = unlinkedCount > KOSYNC_DEFAULT_VISIBLE_LIMIT ? `${KOSYNC_DEFAULT_VISIBLE_LIMIT}+` : String(unlinkedCount);
+            badge.title = unlinkedCount ? bbPlural(KOSYNC_DOCS_TO_REVIEW, unlinkedCount) : '';
+            badge.classList.toggle('hidden', unlinkedCount === 0);
+        }
+        if (summary) {
+            summary.textContent = unlinkedCount
+                ? bbFormat({{ _('{count} to review')|tojson }}, { count: unlinkedCount })
+                : {{ _('No current review items')|tojson }};
+        }
+    }
+
+    async function fetchKosyncJson(url, options) {
+        const response = await fetch(url, options || {});
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.error || data.message || bbFormat({{ _('Request failed ({status})')|tojson }}, { status: response.status }));
+        }
+        return data;
+    }
+
+    async function loadKosyncDocuments(force) {
+        if (kosyncDocsState.loaded && !force) {
+            renderKosyncDocuments();
+            return;
+        }
+        setKosyncStatus({{ _('Loading...')|tojson }}, false);
+        const [docsData, booksData] = await Promise.all([
+            fetchKosyncJson('/api/me/kosync-documents'),
+            fetchKosyncJson('/api/me/books')
+        ]);
+        kosyncDocsState.documents = docsData.documents || [];
+        kosyncDocsState.books = booksData.books || [];
+        kosyncDocsState.loaded = true;
+        updateKosyncSummary();
+        renderKosyncDocuments();
+    }
+
+    function documentMatchesKosyncFilter(doc) {
+        if (kosyncDocsState.filter === 'linked' && !doc.linked_abs_id) return false;
+        if (kosyncDocsState.filter === 'unlinked' && doc.linked_abs_id) return false;
+        const query = kosyncDocsState.search.trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+            doc.document_hash,
+            doc.device,
+            doc.device_id,
+            doc.linked_book_title,
+            doc.filename,
+            doc.source
+        ].filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(query);
+    }
+
+    function replaceKosyncDocument(updatedDoc) {
+        const idx = kosyncDocsState.documents.findIndex(d => d.document_hash === updatedDoc.document_hash);
+        if (idx >= 0) {
+            kosyncDocsState.documents[idx] = updatedDoc;
+        }
+        updateKosyncSummary();
+        renderKosyncDocuments();
+    }
+
+    function removeKosyncDocument(hash) {
+        kosyncDocsState.documents = kosyncDocsState.documents.filter(d => d.document_hash !== hash);
+        updateKosyncSummary();
+        renderKosyncDocuments();
+    }
+
+    function renderKosyncDocuments() {
+        const list = document.getElementById('kosync-doc-list');
+        if (!list) return;
+        list.innerHTML = '';
+        const docs = kosyncDocsState.documents.filter(documentMatchesKosyncFilter);
+        const showAllBtn = document.getElementById('kosync-show-all');
+        const shouldLimit = (
+            kosyncDocsState.filter === 'unlinked'
+            && !kosyncDocsState.search.trim()
+            && docs.length > KOSYNC_DEFAULT_VISIBLE_LIMIT
+        );
+        if (showAllBtn) {
+            showAllBtn.classList.toggle('hidden', !shouldLimit);
+            showAllBtn.textContent = kosyncDocsState.showAll ? {{ _('Show Latest')|tojson }} : {{ _('Show All')|tojson }};
+        }
+        if (!docs.length) {
+            setKosyncStatus({{ _('No reader documents match this view.')|tojson }}, false);
+            return;
+        }
+        const visibleDocs = shouldLimit && !kosyncDocsState.showAll
+            ? docs.slice(0, KOSYNC_DEFAULT_VISIBLE_LIMIT)
+            : docs;
+        if (shouldLimit && !kosyncDocsState.showAll) {
+            setKosyncStatus(
+                bbFormat({{ _('Showing the newest {shown} of {total} reader documents.')|tojson }}, { shown: KOSYNC_DEFAULT_VISIBLE_LIMIT, total: docs.length }),
+                false
+            );
+        } else {
+            setKosyncStatus('', false);
+        }
+        visibleDocs.forEach(doc => list.appendChild(buildKosyncDocumentRow(doc)));
+    }
+
+    function buildKosyncDocumentRow(doc) {
+        const row = document.createElement('div');
+        row.className = 'kosync-doc-row';
+        row.dataset.hash = doc.document_hash;
+
+        const main = document.createElement('div');
+        main.className = 'kosync-doc-main';
+        const title = document.createElement('div');
+        title.className = 'kosync-doc-title';
+        const hash = document.createElement('span');
+        hash.className = 'kosync-hash';
+        hash.title = doc.document_hash;
+        hash.textContent = shortKosyncHash(doc.document_hash);
+        const status = document.createElement('span');
+        status.className = `kosync-status ${doc.linked_abs_id ? 'linked' : 'unlinked'}`;
+        status.textContent = doc.linked_abs_id ? {{ _('Linked')|tojson }} : {{ _('Needs linking')|tojson }};
+        title.append(hash, status);
+
+        const meta = document.createElement('div');
+        meta.className = 'kosync-meta';
+        [
+            doc.linked_book_title ? bbFormat({{ _('Book: {title}')|tojson }}, { title: doc.linked_book_title }) : null,
+            doc.filename ? bbFormat({{ _('File: {filename}')|tojson }}, { filename: doc.filename }) : null,
+            doc.device ? bbFormat({{ _('Device: {device}')|tojson }}, { device: doc.device }) : null,
+            doc.device_id ? bbFormat({{ _('Device ID: {device_id}')|tojson }}, { device_id: doc.device_id }) : null,
+            bbFormat({{ _('Progress: {percent}')|tojson }}, { percent: formatKosyncPercent(doc.percentage) }),
+            doc.last_updated ? bbFormat({{ _('Updated: {date}')|tojson }}, { date: formatKosyncDate(doc.last_updated) }) : null
+        ].filter(Boolean).forEach(text => {
+            const item = document.createElement('span');
+            item.textContent = text;
+            meta.appendChild(item);
+        });
+        main.append(title, meta);
+
+        const actions = document.createElement('div');
+        actions.className = 'kosync-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.textContent = {{ _('Copy')|tojson }};
+        copyBtn.onclick = () => copyKosyncHash(doc.document_hash);
+        actions.appendChild(copyBtn);
+
+        if (doc.linked_abs_id) {
+            const unlinkBtn = document.createElement('button');
+            unlinkBtn.type = 'button';
+            unlinkBtn.textContent = {{ _('Unlink')|tojson }};
+            unlinkBtn.onclick = () => unlinkKosyncDocument(doc.document_hash);
+            actions.appendChild(unlinkBtn);
+        } else {
+            const linkBtn = document.createElement('button');
+            linkBtn.type = 'button';
+            linkBtn.textContent = {{ _('Link')|tojson }};
+            linkBtn.onclick = () => showKosyncLinkPanel(row, doc);
+            actions.appendChild(linkBtn);
+            if (doc.owned_by_current_user) {
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.textContent = {{ _('Delete')|tojson }};
+                deleteBtn.onclick = () => deleteKosyncDocument(doc.document_hash);
+                actions.appendChild(deleteBtn);
+            }
+        }
+
+        row.append(main, actions);
+        return row;
+    }
+
+    const KOSYNC_EXTENSION_TOKENS = new Set(['epub', 'kepub', 'pdf', 'mobi', 'azw', 'azw3', 'fb2', 'cbz', 'txt']);
+    const KOSYNC_LIKELY_MATCH_THRESHOLD = 0.5;
+
+    function kosyncNameTokens(value) {
+        if (!value) return [];
+        return [...new Set(
+            String(value).toLowerCase().split(/[^a-z0-9]+/)
+                .filter(tok => tok && !KOSYNC_EXTENSION_TOKENS.has(tok))
+        )];
+    }
+
+    function kosyncDiceScore(tokensA, tokensB) {
+        if (!tokensA.length || !tokensB.length) return 0;
+        const setB = new Set(tokensB);
+        const shared = tokensA.filter(tok => setB.has(tok)).length;
+        return (2 * shared) / (tokensA.length + tokensB.length);
+    }
+
+    function kosyncMatchScore(doc, book) {
+        const docTokens = kosyncNameTokens(doc.filename);
+        if (!docTokens.length) return 0;
+        return Math.max(
+            kosyncDiceScore(docTokens, kosyncNameTokens(book.ebook_filename)),
+            kosyncDiceScore(docTokens, kosyncNameTokens(book.title))
+        );
+    }
+
+    function showKosyncLinkPanel(row, doc) {
+        const existing = row.querySelector('.kosync-link-panel');
+        if (existing) {
+            existing.remove();
+            return;
+        }
+        document.querySelectorAll('.kosync-link-panel').forEach(el => el.remove());
+        const panel = document.createElement('div');
+        panel.className = 'kosync-link-panel';
+        const select = document.createElement('select');
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = kosyncDocsState.books.length ? {{ _('Select a book')|tojson }} : {{ _('No books available')|tojson }};
+        select.appendChild(placeholder);
+        const scored = kosyncDocsState.books.map(book => ({ book, score: kosyncMatchScore(doc, book) }));
+        const likely = scored.filter(entry => entry.score >= KOSYNC_LIKELY_MATCH_THRESHOLD)
+            .sort((a, b) => b.score - a.score);
+        const rest = scored.filter(entry => entry.score < KOSYNC_LIKELY_MATCH_THRESHOLD);
+        likely.concat(rest).forEach(({ book, score }) => {
+            const option = document.createElement('option');
+            option.value = book.abs_id;
+            const label = book.title || book.ebook_filename || book.abs_id;
+            option.textContent = score >= KOSYNC_LIKELY_MATCH_THRESHOLD ? bbFormat({{ _('★ {title} — likely match')|tojson }}, { title: label }) : label;
+            select.appendChild(option);
+        });
+        if (likely.length && (likely.length === 1 || likely[0].score > likely[1].score)) {
+            select.value = likely[0].book.abs_id;
+        }
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.textContent = {{ _('Link')|tojson }};
+        confirmBtn.onclick = () => linkKosyncDocument(doc.document_hash, select.value);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = {{ _('Cancel')|tojson }};
+        cancelBtn.onclick = () => panel.remove();
+        panel.append(select, confirmBtn, cancelBtn);
+        row.appendChild(panel);
+    }
+
+    async function linkKosyncDocument(hash, absId) {
+        if (!absId) {
+            setKosyncStatus({{ _('Choose a book to link.')|tojson }}, true);
+            return;
+        }
+        try {
+            const data = await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}/link`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ abs_id: absId })
+            });
+            replaceKosyncDocument(data.document);
+        } catch (err) {
+            setKosyncStatus(err.message, true);
+        }
+    }
+
+    async function unlinkKosyncDocument(hash) {
+        try {
+            const data = await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}/unlink`, {
+                method: 'POST'
+            });
+            replaceKosyncDocument(data.document);
+        } catch (err) {
+            setKosyncStatus(err.message, true);
+        }
+    }
+
+    async function deleteKosyncDocument(hash) {
+        if (!confirm({{ _('Delete this unlinked reader document?')|tojson }})) return;
+        try {
+            await fetchKosyncJson(`/api/me/kosync-documents/${encodeURIComponent(hash)}`, {
+                method: 'DELETE'
+            });
+            removeKosyncDocument(hash);
+        } catch (err) {
+            setKosyncStatus(err.message, true);
+        }
+    }
+
+    function copyKosyncHash(hash) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(hash).catch(() => {});
+        }
+    }
+
+    function openKosyncSectionFromHash() {
+        const section = document.getElementById('kosync-documents');
+        if (!section || window.location.hash !== '#kosync-documents') return;
+        section.open = true;
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        loadKosyncDocuments(false).catch(err => setKosyncStatus(err.message, true));
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const section = document.getElementById('kosync-documents');
+        if (section) {
+            section.addEventListener('toggle', function () {
+                if (section.open) {
+                    loadKosyncDocuments(false).catch(err => setKosyncStatus(err.message, true));
+                }
+            });
+        }
+        const search = document.getElementById('kosync-doc-search');
+        if (search) {
+            search.addEventListener('input', function () {
+                kosyncDocsState.search = search.value || '';
+                renderKosyncDocuments();
+            });
+        }
+        document.querySelectorAll('.kosync-filter button').forEach(btn => {
+            btn.addEventListener('click', function () {
+                kosyncDocsState.filter = btn.dataset.filter || 'unlinked';
+                kosyncDocsState.showAll = false;
+                document.querySelectorAll('.kosync-filter button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                renderKosyncDocuments();
+            });
+        });
+        const showAll = document.getElementById('kosync-show-all');
+        if (showAll) {
+            showAll.addEventListener('click', function () {
+                kosyncDocsState.showAll = !kosyncDocsState.showAll;
+                renderKosyncDocuments();
+            });
+        }
+        loadKosyncDocuments(false)
+            .then(openKosyncSectionFromHash)
+            .catch(err => setKosyncStatus(err.message, true));
+    });
+    window.addEventListener('hashchange', openKosyncSectionFromHash);
+</script>

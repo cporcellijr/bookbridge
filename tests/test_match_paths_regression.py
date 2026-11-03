@@ -860,12 +860,10 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
 
-        for path in ("/add-book", "/suggestions"):
-            with self.subTest(path=path, configured=False):
-                html = self.client.get(path).get_data(as_text=True)
-                self.assertIn("Match All (1)", html)
-                self.assertNotIn("Create Storyteller Edition", html)
-                self.assertNotIn('id="forgeStageModal"', html)
+        html = self.client.get("/suggestions").get_data(as_text=True)
+        self.assertIn("Match All (1)", html)
+        self.assertNotIn("Create Storyteller Edition", html)
+        self.assertNotIn('id="forgeStageModal"', html)
 
         fragment = self.client.post(
             "/suggestions",
@@ -877,14 +875,10 @@ class TestMatchPathsRegression(unittest.TestCase):
 
         self.mock_container.mock_storyteller_client.is_configured.return_value = True
 
-        add_book_html = self.client.get("/add-book").get_data(as_text=True)
-        self.assertIn("Create Storyteller Edition &amp; Match All (1)", add_book_html)
-        self.assertIn("Create Storyteller Edition Only", add_book_html)
-        self.assertIn('id="forgeStageModal"', add_book_html)
-        self.assertNotIn("Forge &amp; Match All", add_book_html)
-
         suggestions_html = self.client.get("/suggestions").get_data(as_text=True)
         self.assertIn("Create Storyteller Edition &amp; Match All (1)", suggestions_html)
+        self.assertIn("Create Storyteller Edition Only", suggestions_html)
+        self.assertIn('id="forgeStageModal"', suggestions_html)
         self.assertNotIn("Forge &amp; Match All", suggestions_html)
 
         fragment = self.client.post(
@@ -896,9 +890,10 @@ class TestMatchPathsRegression(unittest.TestCase):
 
     def test_unconfigured_storyteller_preserves_queue_on_forge_posts(self):
         for path, action, redirect_suffix in (
-            ("/add-book", "forge_and_match_queue", "/add-book"),
-            ("/add-book", "forge_only_queue", "/add-book"),
+            ("/add-book", "forge_and_match_queue", "/suggestions"),
+            ("/add-book", "forge_only_queue", "/suggestions"),
             ("/suggestions", "forge_and_match_queue", "/suggestions"),
+            ("/suggestions", "forge_only_queue", "/suggestions"),
         ):
             with self.subTest(path=path, action=action):
                 web_server._match_queue_clear()
@@ -2962,20 +2957,20 @@ class TestMatchPathsRegression(unittest.TestCase):
         for origin in ("shelf_watch", "reading_watch"):
             ebooks = self._little_eyes_watch_suggestion(origin)
             with patch("src.web_server._search_ebooks_with_fallback", return_value=ebooks) as search,                     patch("src.web_server._search_audiobooks_with_fallback") as audio_search:
-                html = self.client.get(
-                    "/add-book?search=Little+Eve&review=bookorbit:5512").get_data(as_text=True)
+                data = self.client.get(
+                    "/api/suggestions/search?q=Little+Eve&review=bookorbit:5512").get_json()
 
             search.assert_called_once_with("Little Eyes")
             audio_search.assert_not_called()
-            self.assertRegex(html, r'class="resource-card eb-card selected"\s+data-value="Little Eyes \(2020\)\.epub"')
-            self.assertNotIn("Little Eve - Catriona Ward (2022).epub", html)
-            self.assertRegex(html, r'class="book-card selected"\s+data-value="5512"')
+            self.assertEqual(data["mode"], "review")
+            self.assertEqual([e["name"] for e in data["ebooks"]], ["Little Eyes (2020).epub"])
+            self.assertEqual([a["source_id"] for a in data["audiobooks"]], ["5512"])
 
     def test_review_of_a_non_watch_suggestion_keeps_the_title_search(self):
         self.app.config["LOGIN_DISABLED"] = True
         ebooks = self._little_eyes_watch_suggestion(origin=None)
         with patch("src.web_server._search_ebooks_with_fallback", return_value=ebooks) as search,                 patch("src.web_server._search_audiobooks_with_fallback", return_value=[]):
-            self.client.get("/add-book?search=Little+Eve&review=bookorbit:5512")
+            self.client.get("/api/suggestions/search?q=Little+Eve&review=bookorbit:5512")
         search.assert_called_once_with("little eve")
 
     def test_approving_another_book_from_the_watched_library_leaves_the_shelf_alone(self):
