@@ -16356,7 +16356,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/suggestions', 'get_suggestions', get_suggestions, methods=['GET'])
     app.add_url_rule('/api/suggestions/scan-status', 'suggestions_scan_status', suggestions_scan_status, methods=['GET'])
     from src.api.suggestions_redesign import init_suggestions_redesign_routes
-    init_suggestions_redesign_routes(app)
+    init_suggestions_redesign_routes(app, sys.modules[__name__])
     app.add_url_rule('/api/suggestions/<source_id>/dismiss', 'dismiss_suggestion', dismiss_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/<source_id>/ignore', 'ignore_suggestion', ignore_suggestion, methods=['POST'])
     app.add_url_rule('/api/suggestions/clear_stale', 'clear_stale_suggestions', clear_stale_suggestions, methods=['POST'])
