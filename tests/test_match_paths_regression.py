@@ -1608,6 +1608,15 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(exact_item["ebook_source_path"], "/books/x/exact.epub")
         self.assertEqual(exact_item["storyteller_uuid"], "")
 
+    def _as_user(self, user_id=7):
+        token = web_server.set_current_user_id(user_id)
+        self.addCleanup(web_server.reset_current_user_id, token)
+
+    def _discovery_entries(self, tab="pairs"):
+        response = self.client.get(f"/api/suggestions/discovery?tab={tab}")
+        self.assertEqual(response.status_code, 200)
+        return response.get_json()["entries"]
+
     def _bulk_guard_cache(self):
         evidence = {"author_agrees": True, "source": "BookOrbit", "score": 100.0}
 
@@ -1657,15 +1666,23 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual({item["bridge_key"] for item in web_server._load_match_queue()}, {"ok", "local"})
 
     def test_suggestion_cards_mark_what_add_all_exact_will_take(self):
+        self._as_user()
         self._bulk_guard_cache()
         with web_server.SUGGESTIONS_STATE_LOCK:
-            state = web_server.SUGGESTIONS_STATE_STORE["state-guard"]
-            state["scan_results"] = list(state["scan_cache_by_abs"].values())
+            cache = dict(web_server.SUGGESTIONS_STATE_STORE["state-guard"]["scan_cache_by_abs"])
+        web_server._save_persisted_suggestions_cache({
+            "scan_cache_by_abs": cache,
+            "scan_cache_no_match_abs_ids": [],
+            "scan_last_stats": {},
+            "updated_at": time.time(),
+        })
+        entries = {entry["bridge_key"]: entry for entry in self._discovery_entries()}
+        self.assertTrue(entries["ok"]["bulk_eligible"])
+        self.assertFalse(entries["tie"]["bulk_eligible"])
+        self.assertEqual(entries["tie"]["bulk_block_reason"], "tie")
         html = self.client.get("/suggestions").get_data(as_text=True)
-        self.assertRegex(html, r'data-abs-id="ok"[^>]*data-bulk-exact="1"')
-        self.assertRegex(html, r'data-abs-id="tie"[^>]*data-bulk-exact=""')
         self.assertIn("Manual choice", html)
-        self.assertIn('title="Two ebooks match equally"', html)
+        self.assertIn("Two ebooks match equally", html)
 
     def test_suggestions_add_many_to_queue_uses_persisted_cache_after_restart(self):
         # #351 regression: bulk add must rehydrate from the persisted per-user cache
@@ -1873,14 +1890,15 @@ class TestMatchPathsRegression(unittest.TestCase):
         return live
 
     def test_suggestions_get_shows_newer_scan_over_live_state_and_keeps_it_persisted(self):
+        self._as_user()
         self._open_session_behind_a_newer_scan()
 
         response = self.client.get("/suggestions")
         self.assertEqual(response.status_code, 200)
 
-        html = response.get_data(as_text=True)
-        self.assertIn("Scheduled Scan Audio", html)
-        self.assertNotIn("Live Scan Audio", html)
+        titles = [entry["title"] for entry in self._discovery_entries()]
+        self.assertIn("Scheduled Scan Audio", titles)
+        self.assertNotIn("Live Scan Audio", titles)
         persisted = web_server._load_persisted_suggestions_cache()
         self.assertEqual(list(persisted["scan_cache_by_abs"]), ["ab-scheduled"])
         self.assertEqual(persisted["scanned_at"], 200.0)
@@ -1931,6 +1949,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         self.assertEqual(list(web_server.SUGGESTIONS_SCAN_JOBS), ["job-running"])
 
     def test_suggestions_finished_session_scan_does_not_overwrite_newer_scan(self):
+        self._as_user()
         live = self._open_session_behind_a_newer_scan()
         with self.client.session_transaction() as session_data:
             session_data["suggestions_scan_job_id"] = "job-open"
@@ -1952,9 +1971,9 @@ class TestMatchPathsRegression(unittest.TestCase):
         response = self.client.get("/suggestions")
         self.assertEqual(response.status_code, 200)
 
-        html = response.get_data(as_text=True)
-        self.assertIn("Scheduled Scan Audio", html)
-        self.assertNotIn("Live Scan Audio", html)
+        titles = [entry["title"] for entry in self._discovery_entries()]
+        self.assertIn("Scheduled Scan Audio", titles)
+        self.assertNotIn("Live Scan Audio", titles)
         persisted = web_server._load_persisted_suggestions_cache()
         self.assertEqual(list(persisted["scan_cache_by_abs"]), ["ab-scheduled"])
 
@@ -1989,20 +2008,19 @@ class TestMatchPathsRegression(unittest.TestCase):
             "scan_last_stats": {"scanned_new": 1, "reused_cached": 0},
             "updated_at": time.time(),
         }
+        self._as_user()
         web_server._save_persisted_suggestions_cache(cache_payload)
 
         # GET /suggestions with no prior state_id in session
         response = self.client.get("/suggestions")
         self.assertEqual(response.status_code, 200)
 
-        html = response.get_data(as_text=True)
-        # The audio title from the cached suggestion should appear in the rendered cards
-        self.assertIn("Restored After Restart", html)
-        # The bridge key should appear as data-abs-id on the card
-        self.assertIn('data-abs-id="ab-restored"', html)
-        # The empty-state copy must be absent
-        self.assertNotIn("No scan results yet", html)
-        self.assertNotIn("No suggestions found", html)
+        # The restored suggestion is served by the discovery API, scan state is not "never scanned"
+        body = self.client.get("/api/suggestions/discovery?tab=pairs").get_json()
+        restored = [e for e in body["entries"] if e["suggestion_key"] == "pair:ab-restored"]
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(restored[0]["title"], "Restored After Restart")
+        self.assertNotEqual(body["scan"]["state"], "never_scanned")
 
     def test_suggestions_bulk_add_warns_when_scan_cache_is_empty(self):
         # #351 diagnosability: when BOTH the in-memory store AND the persisted

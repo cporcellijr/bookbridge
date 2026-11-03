@@ -4,6 +4,21 @@
 
 All notable changes to BookBridge will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Suggestions has two tabs: Pair Suggestions and Ebook Only.** Pair Suggestions keeps the
+  audiobook/ebook matching, candidate review and Batch Match Queue; Ebook Only lists ebooks the last
+  scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens Add Book
+  with the ebook already chosen), Create ebook-only, Hide for now and a saved Ignore you can undo.
+  Both tabs group books by series (collapsed, numbered in series order, with an Other / No Series
+  group; switch to a flat list any time), and have search, series, source, status and sort filters
+  that each tab remembers separately. Ticking a series selects every exact match in it, even books
+  in a collapsed group; review matches are never selected that way. A scan that could not read every
+  source says the results may be incomplete instead of presenting them as final. Opening a tab never
+  starts a scan.
+
 ## [7.12.0] - 2026-11-02
 
 ### Added

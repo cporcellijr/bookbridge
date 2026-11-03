@@ -8,6 +8,8 @@
     .suggestions-wrap { max-width: 1800px; margin: 0 auto; padding: 28px 24px 36px; }
     .page-header h2 { font-size: 32px; margin-bottom: 8px; }
     .subtitle { color: var(--muted); }
+    /* Class display rules below would otherwise override the hidden attribute */
+    .suggestions-wrap [hidden] { display: none !important; }
 
     /* Page-local button variants layered on the shared .btn base */
     .btn-muted { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.82); border-color: var(--border-strong); }
@@ -15,24 +17,42 @@
     .btn-small { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
     .btn-success { background: linear-gradient(135deg,#36d399,#2bb381); color: #fff; border: none; }
     .btn-success:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(54,211,153,0.3); }
+    .btn-link { background: none; border: none; padding: 0; color: #9fb2ff; font: inherit; cursor: pointer; text-decoration: underline; }
+    .btn:focus-visible, .btn-link:focus-visible, .tab:focus-visible, .sugg-group-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     /* The queue partial renders bare .btn buttons — give them the soft-indigo default here */
     .queue-actions .btn:not(.btn-success):not(.btn-danger) { background: rgba(102,126,234,0.16); border: 1px solid rgba(102,126,234,0.35); color: #9fb2ff; }
     .queue-actions .btn:not(.btn-success):not(.btn-danger):hover { background: rgba(102,126,234,0.28); }
 
-    .toolbar { margin-top: 18px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    /* Tabs reuse the shared .tabs/.tab strip */
+    .sugg-tabs { margin-top: 18px; }
+    .sugg-tabs .tab { display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; text-align: left; }
+    .tab-sub { font-size: 12px; font-weight: 500; color: var(--muted); }
+    .tab-count { display: inline-block; min-width: 22px; padding: 1px 8px; border-radius: 999px; font-size: 12px; text-align: center; background: rgba(255,255,255,0.1); color: var(--text); }
+    .tab.active .tab-count { background: rgba(102,126,234,0.3); }
+
+    .toolbar { margin-top: 16px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
     .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .toolbar-meta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
-    .sort-controls { display: inline-flex; gap: 8px; align-items: center; }
-    .sort-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-    .sort-select { padding: 7px 10px; border-radius: var(--radius-sm); color: var(--text); background: rgba(255,255,255,0.08); border: 1px solid var(--border-strong); font-family: inherit; font-size: 13px; }
-    .sort-select option { color: #111; background: #fff; }
+    .scan-status { font-size: 13px; color: var(--muted); display: grid; gap: 2px; }
+    .scan-status strong { color: var(--text); font-weight: 600; }
+    .scan-status.warn { color: #ffcc66; }
+    .scan-status.warn strong { color: #ffcc66; }
     .count { font-size: 14px; color: var(--muted); }
     .flash-error { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid rgba(255,107,107,0.35); background: rgba(255,107,107,0.14); color: #ffb3ad; font-size: 14px; }
-    .layout { margin-top: 20px; display: grid; grid-template-columns: minmax(0,1fr) 420px; gap: 20px; align-items: start; }
+
+    .filter-bar { margin-top: 14px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+    .filter-field { display: grid; gap: 4px; min-width: 140px; }
+    .filter-field.grow { flex: 1 1 260px; }
+    .filter-field .form-input, .filter-field .form-select { padding: 8px 10px; font-size: 13px; }
+    .filter-field .form-select option { color: #111; background: #fff; }
+    .sort-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+
+    .layout { margin-top: 16px; display: grid; grid-template-columns: minmax(0,1fr) 420px; gap: 20px; align-items: start; }
+    .layout.no-queue { grid-template-columns: minmax(0,1fr); }
     /* Shared .panel supplies surface/border/radius; this layout manages its own padding */
     .layout .panel { padding: 0; }
-    .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
     .panel-head h3 { font-size: 18px; }
+    .panel-head-meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .left-wrap { position: relative; min-height: 280px; }
     .scan-overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; background: rgba(10,10,10,0.72); border-radius: 0 0 var(--radius) var(--radius); z-index: 10; }
     .scan-overlay.show { display: flex; }
@@ -41,20 +61,61 @@
     .scan-progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#6ea8ff,#8bda9d); transition: width 0.4s ease; }
     .scan-progress-text { font-size: 13px; color: rgba(255,255,255,0.85); }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .suggestions-list { max-height: calc(100vh - 290px); overflow-y: auto; padding: 12px; display: grid; gap: 10px; }
-    .suggestion-card { border: 1px solid var(--border-strong); background: var(--panel-soft); border-radius: 10px; padding: 10px; cursor: pointer; }
-    .suggestion-card:hover { border-color: rgba(102,126,234,0.5); }
-    .suggestion-card.selected { border-color: rgba(102,126,234,0.85); background: rgba(102,126,234,0.14); }
-    .bulk-actions { display: flex; gap: 8px; margin: 8px 0 4px; padding: 0 12px; flex-wrap: wrap; }
-    .suggestion-select { font-size: 12px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; margin-right: auto; }
-    .suggestion-card.is-queued { opacity: 0.5; border-color: rgba(76,175,80,0.5); }
-    .suggestion-card.is-queued::before { content: '✓ Queued'; float: right; font-size: 11px; font-weight: 700; color: #81c784; }
-    .suggestion-main { display: grid; grid-template-columns: 54px minmax(0,1fr); gap: 10px; align-items: center; }
-    .cover { width: 54px; height: 54px; border-radius: 8px; object-fit: cover; background: rgba(255,255,255,0.1); border: 1px solid var(--border-strong); }
-    .title { font-size: 15px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; }
-    .author { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
-    .best-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    .best { flex: 1; min-width: 0; font-size: 12px; color: rgba(255,255,255,0.78); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .results-list { max-height: calc(100vh - 330px); overflow-y: auto; padding: 12px; display: grid; gap: 8px; align-content: start; }
+    .results-list[aria-busy="true"] { opacity: 0.6; }
+    .bulk-actions { display: flex; gap: 8px; align-items: center; margin: 10px 0 2px; padding: 0 12px; flex-wrap: wrap; }
+    .selection-summary { font-size: 12px; color: var(--muted); }
+    .selection-summary .warn { color: #ffcc66; }
+    .list-feedback { padding: 0 12px; font-size: 13px; color: #b9c6ff; min-height: 0; }
+    .list-feedback:not(:empty) { margin-top: 8px; }
+    .list-feedback.error { color: #ffb3ad; }
+
+    /* Series groups: same structure and look as the dashboard's .series-group */
+    .series-group { display: flex; flex-direction: column; }
+    .series-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel-soft); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--radius-sm); transition: all 0.3s ease; }
+    .series-header:hover { background: rgba(255,255,255,0.05); border-color: rgba(102,126,234,0.4); }
+    .series-group.expanded .series-header { border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-color: transparent; }
+    .sugg-group-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 0; background: none; border: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
+    .series-info { flex: 1; min-width: 0; display: block; }
+    .series-name { display: block; font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .series-name.is-other { color: rgba(255,255,255,0.7); font-style: italic; }
+    .series-meta-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11px; color: rgba(255,255,255,0.6); margin-top: 2px; }
+    .series-sep { color: rgba(255,255,255,0.2); }
+    .series-chevron { align-self: center; font-size: 12px; color: rgba(255,255,255,0.5); transition: transform 0.3s ease; flex-shrink: 0; }
+    .series-group.expanded .series-chevron { transform: rotate(90deg); }
+    .series-children { display: none; flex-direction: column; gap: 6px; padding: 8px 8px 8px 16px; background: rgba(255,255,255,0.015); border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; border: 1px solid rgba(255,255,255,0.08); border-top: none; }
+    .series-group.expanded .series-children { display: flex; }
+    .group-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+    .group-select input, .row-check { width: 16px; height: 16px; accent-color: #6ec1e4; cursor: pointer; flex-shrink: 0; }
+    .group-select input:disabled, .row-check:disabled { cursor: not-allowed; opacity: 0.4; }
+    .series-grouping-label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; color: rgba(255,255,255,0.85); font-size: 14px; padding-bottom: 8px; }
+    .series-grouping-label input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #6ec1e4; }
+
+    /* Compact suggestion rows */
+    .sugg-row { display: grid; grid-template-columns: auto auto 40px minmax(0,1fr) auto; grid-template-areas: "check seq cover main actions" "check seq cover evidence actions"; column-gap: 10px; row-gap: 2px; align-items: center; padding: 8px 10px; border: 1px solid var(--border-strong); background: var(--panel-soft); border-radius: 10px; }
+    .sugg-row.pair-row { cursor: pointer; }
+    .sugg-row.pair-row:hover { border-color: rgba(102,126,234,0.5); }
+    .sugg-row.reviewing { border-color: rgba(102,126,234,0.85); background: rgba(102,126,234,0.14); }
+    .sugg-row.is-queued { opacity: 0.6; border-color: rgba(76,175,80,0.5); }
+    .sugg-row.is-ignored { opacity: 0.7; border-style: dashed; }
+    .sugg-row .row-check { grid-area: check; }
+    .flat-list { display: flex; flex-direction: column; gap: 6px; }
+    .row-seq:empty { min-width: 0; }
+    .row-seq { grid-area: seq; min-width: 28px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: rgba(255,255,255,0.45); }
+    .row-cover { grid-area: cover; width: 40px; height: 40px; border-radius: 6px; object-fit: cover; background: rgba(255,255,255,0.1); border: 1px solid var(--border-strong); }
+    .row-icon { grid-area: cover; font-size: 22px; text-align: center; }
+    .row-main { grid-area: main; min-width: 0; }
+    .row-title { font-size: 14px; font-weight: 700; line-height: 1.3; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .row-title-text { min-width: 0; overflow-wrap: anywhere; }
+    .row-sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-evidence { grid-area: evidence; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .row-actions { grid-area: actions; display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+    .row-actions .btn { font-weight: 700; }
+    .btn-dismiss { background: rgba(255,255,255,0.2); color: #f3f5ff; border: 1px solid rgba(255,255,255,0.32); }
+    .btn-dismiss:hover { background: rgba(255,255,255,0.28); }
+    .btn-reject { background: rgba(255,107,107,0.24); color: #ffc8c4; border: 1px solid rgba(255,107,107,0.5); }
+    .btn-reject:hover { background: rgba(255,107,107,0.34); }
+
     .source-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
     .source-badge.language { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.82); }
     .source-badge.grimmory { background: rgba(76,175,80,0.2); color: #81c784; }
@@ -68,15 +129,15 @@
     .source-badge.sameseries { background: rgba(250,204,21,0.18); color: #fde68a; }
     .source-badge.reason { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.75); text-transform: none; }
     .source-badge.manual { background: rgba(255,180,0,0.16); color: #ffcc66; text-transform: none; }
-    .score { display: inline-block; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
-    .card-actions { margin-top: 8px; width: 100%; display: flex; gap: 8px; justify-content: flex-start; flex-wrap: wrap; }
-    .card-actions .btn { opacity: 1; border-width: 1px; font-weight: 700; }
-    .card-actions .btn-dismiss { background: rgba(255,255,255,0.2); color: #f3f5ff; border-color: rgba(255,255,255,0.32); }
-    .card-actions .btn-dismiss:hover { background: rgba(255,255,255,0.28); }
-    .card-actions .btn-reject { background: rgba(255,107,107,0.24); color: #ffc8c4; border-color: rgba(255,107,107,0.5); }
-    .card-actions .btn-reject:hover { background: rgba(255,107,107,0.34); }
+    .source-badge.exact { background: rgba(54,211,153,0.18); color: #6ee7b7; text-transform: none; }
+    .source-badge.queued { background: rgba(76,175,80,0.2); color: #81c784; text-transform: none; }
+    .source-badge.ignored { background: rgba(255,107,107,0.16); color: #ffb3ad; text-transform: none; }
+    .score { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: #7ec8ff; background: rgba(126,200,255,0.12); border: 1px solid rgba(126,200,255,0.32); }
     .empty { text-align: center; color: var(--muted); padding: 38px 16px; }
+    .empty .btn { margin-top: 10px; }
+
     .queue-panel { position: sticky; top: calc(var(--nav-height) + 24px); max-height: calc(100vh - var(--nav-height) - 48px); overflow: hidden; display: flex; flex-direction: column; }
+    .queue-panel[hidden] { display: none; }
     .selection { padding: 14px 16px; border-bottom: 1px solid var(--border); }
     .selection h4 { font-size: 16px; margin-bottom: 8px; }
     .selection-placeholder { color: var(--muted); font-size: 14px; }
@@ -127,9 +188,12 @@
     .submit-feedback.block.show { display: flex; }
     .submit-feedback-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #9fb2ff; border-radius: 50%; animation: submit-spin .8s linear infinite; flex-shrink: 0; }
     @keyframes submit-spin { to { transform: rotate(360deg); } }
-    @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .queue-panel { position: static; max-height: none; } .suggestions-list { max-height: 440px; } .selection-grid-scroll { max-height: none; overflow: visible; padding-right: 0; } }
+    @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .queue-panel { position: static; max-height: none; } .results-list { max-height: 560px; } .selection-grid-scroll { max-height: none; overflow: visible; padding-right: 0; } }
     @media (max-width: 920px) {
         .suggestions-wrap { padding: 20px 14px 28px; }
+        .sugg-row { grid-template-columns: auto auto 40px minmax(0,1fr); grid-template-areas: "check seq cover main" "check seq cover evidence" "actions actions actions actions"; }
+        .row-actions { justify-content: flex-start; margin-top: 4px; }
+        .filter-field { min-width: 0; flex: 1 1 140px; }
     }
 </style>
 {% endblock %}
@@ -140,6 +204,20 @@
         <h2>{{ _('Library Suggestions') }}</h2>
         <p class="subtitle">{{ _('Scan your library to find unmatched audiobook/ebook pairs') }}</p>
     </div>
+
+    <div class="tabs sugg-tabs" role="tablist" aria-label="{{ _('Suggestions') }}">
+        <button type="button" class="tab" role="tab" id="tab-pairs" data-tab="pairs" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">
+            {{ _('Pair Suggestions') }}
+            <span class="tab-sub">{{ _('Audiobook + Ebook') }}</span>
+            <span class="tab-count" id="tabCount-pairs">{% if tab_counts %}{{ tab_counts.pairs }}{% endif %}</span>
+        </button>
+        <button type="button" class="tab" role="tab" id="tab-ebook_only" data-tab="ebook_only" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">
+            {{ _('Ebook Only') }}
+            <span class="tab-sub">{{ _('No audio match found') }}</span>
+            <span class="tab-count" id="tabCount-ebook_only">{% if tab_counts %}{{ tab_counts.ebook_only }}{% endif %}</span>
+        </button>
+    </div>
+
     <div class="toolbar">
         <div class="toolbar-actions">
             <form method="POST" action="/suggestions" id="scanForm">
@@ -151,39 +229,72 @@
                 <button type="submit" class="btn btn-muted" {% if scan_in_progress %}disabled{% endif %}>{{ _('Full Refresh') }}</button>
             </form>
         </div>
-        <div class="toolbar-meta">
-            <div class="sort-controls">
-                <label class="sort-label" for="sortMode">{{ _('Sort') }}</label>
-                <select id="sortMode" class="sort-select">
-                    <option value="best">{{ _('Best Match') }}</option>
-                    <option value="az">A-Z</option>
-                </select>
-            </div>
-            <span class="count" id="topCount">{{ ngettext('Showing %(num)s suggestion', 'Showing %(num)s suggestions', suggestions|length) }}</span>
-        </div>
+        <div class="scan-status" id="scanStatus" role="status"></div>
     </div>
-    {% if scan_stats %}
-    <div class="count" style="margin-top: 8px;">
-        {{ _('Last scan: %(new)s new scanned, %(cached)s reused from cache', new=scan_stats.scanned_new or 0, cached=scan_stats.reused_cached or 0) }}
-    </div>
-    {% endif %}
     {% if scan_error %}
     <div class="flash-error">{{ _('Last scan failed: %(error)s', error=scan_error) }}</div>
     {% endif %}
 
-    <div class="layout">
-        <div class="panel">
+    <div class="filter-bar" id="filterBar">
+        <div class="filter-field grow">
+            <label class="sort-label" for="searchInput">{{ _('Search') }}</label>
+            <input type="search" id="searchInput" class="form-input" placeholder="{{ _('Title, author or series') }}" autocomplete="off">
+        </div>
+        <div class="filter-field">
+            <label class="sort-label" for="seriesFilter">{{ _('Series') }}</label>
+            <select id="seriesFilter" class="form-select"><option value="">{{ _('All series') }}</option></select>
+        </div>
+        <div class="filter-field">
+            <label class="sort-label" for="sourceFilter">{{ _('Source') }}</label>
+            <select id="sourceFilter" class="form-select"><option value="">{{ _('All sources') }}</option></select>
+        </div>
+        <div class="filter-field" data-only-tab="pairs">
+            <label class="sort-label" for="statusFilter">{{ _('Status') }}</label>
+            <select id="statusFilter" class="form-select">
+                <option value="all">{{ _('All suggestions') }}</option>
+                <option value="eligible">{{ _('Exact, ready to add') }}</option>
+                <option value="manual_review">{{ _('Needs review') }}</option>
+                <option value="queued">{{ _('Queued') }}</option>
+            </select>
+        </div>
+        <div class="filter-field" data-only-tab="ebook_only">
+            <label class="sort-label" for="ignoredFilter">{{ _('Show') }}</label>
+            <select id="ignoredFilter" class="form-select">
+                <option value="exclude">{{ _('Active') }}</option>
+                <option value="only">{{ _('Ignored') }}</option>
+                <option value="include">{{ _('Active and ignored') }}</option>
+            </select>
+        </div>
+        <div class="filter-field">
+            <label class="sort-label" for="sortMode">{{ _('Sort') }}</label>
+            <select id="sortMode" class="form-select">
+                <option value="series">{{ _('Series') }}</option>
+                <option value="title">{{ _('Title') }}</option>
+                <option value="confidence" data-only-tab="pairs">{{ _('Best Match') }}</option>
+            </select>
+        </div>
+        <label class="series-grouping-label" for="groupToggle">
+            <input type="checkbox" id="groupToggle" checked> {{ _('Group by series') }}
+        </label>
+    </div>
+
+    <div class="layout" id="layout">
+        <div class="panel" id="suggestionsPanel" role="tabpanel">
             <div class="panel-head">
-                <h3>{{ _('Audiobooks') }}</h3>
-                <span class="count" id="panelCount">{{ ngettext('%(num)s item', '%(num)s items', suggestions|length) }}</span>
+                <h3 id="panelTitle">{{ _('Audiobooks') }}</h3>
+                <div class="panel-head-meta">
+                    <span class="count" id="hiddenNotice" hidden></span>
+                    <span class="count" id="panelCount"></span>
+                </div>
             </div>
-            {% if suggestions %}
-            <div class="bulk-actions" id="bulkActions">
-                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" onclick="addAllExact()">➕ {{ _('Add all exact') }} (<span id="exactCount">0</span>)</button>
-                <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" onclick="addSelectedSuggestions()" disabled>➕ {{ _('Add selected') }} (<span id="selectedCount">0</span>)</button>
+            <div class="bulk-actions" id="bulkActions" data-only-tab="pairs">
+                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" title="{{ _('Queue every suggestion in this view whose best match is exact and needs no choice') }}" disabled>➕ {{ _('Add all exact') }} (<span id="exactCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" disabled>➕ {{ _('Add selected') }} (<span id="selectedCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-muted" id="clearSelectionBtn" disabled>{{ _('Clear selection') }}</button>
+                <span class="selection-summary" id="selectionSummary"></span>
                 <div id="bulkFeedback" class="submit-feedback block" aria-live="polite"></div>
             </div>
-            {% endif %}
+            <div class="list-feedback" id="listFeedback" role="status" aria-live="polite"></div>
             <div class="left-wrap">
                 <div class="scan-overlay {% if scan_in_progress %}show{% endif %}" id="scanOverlay">
                     <div class="spinner"></div>
@@ -192,94 +303,13 @@
                     </div>
                     <p class="scan-progress-text" id="scanProgressText">{{ _('Scanning library... 0%%') }}</p>
                 </div>
-                {% if suggestions %}
-                <div class="suggestions-list" id="suggestionsList">
-                    {% for s in suggestions %}
-                    {% set suggestion_source_label, suggestion_source_class = suggestion_source_badge(s.audio_source, s.bridge_key or s.abs_id) %}
-                    {% set bulk_block = suggestion_bulk_block(s) %}
-                    <div class="suggestion-card"
-                         id="suggestion-{{ s.bridge_key or s.abs_id }}"
-                         data-abs-id="{{ s.bridge_key or s.abs_id }}"
-                         data-best-score="{% if s.matches and s.matches|length > 0 %}{{ s.matches[0].score }}{% else %}0{% endif %}"
-                         data-bulk-exact="{{ '' if bulk_block else '1' }}"
-                         data-title="{{ s.audio_title or s.abs_title or '' }}"
-                         onclick="selectSuggestion('{{ s.bridge_key or s.abs_id }}')">
-                        <div class="suggestion-main">
-                            <img src="{{ s.audio_cover_url or s.cover_url }}" alt="{{ _('Cover') }}" class="cover" onerror="this.style.opacity='0.25';">
-                            <div>
-                                <div class="title">
-                                    {{ s.audio_title or s.abs_title }}
-                                    <span class="source-badge {{ suggestion_source_class }}" title="{{ _('Audiobook source') }}">{{ suggestion_source_label }}</span>
-                                    {% if s.audio_language %}<span class="source-badge language" title="{{ _('Language') }}">{{ s.audio_language }}</span>{% endif %}
-                                </div>
-                                {% if s.audio_author or s.abs_author %}<div class="author">{{ s.audio_author or s.abs_author }}</div>{% endif %}
-                                <div class="score">{% if s.matches and s.matches|length > 0 %}{{ _('Match %(score)s%%', score=s.matches[0].score|round|int) }}{% else %}{{ _('Match --') }}{% endif %}</div>
-                                {% if s.matches %}
-                                {% set top = s.matches[0] %}
-                                {% set reason_labels = {
-                                    'authoritative': _('Calibre identifier'),
-                                    'subtitle_only': _('Title only partly matches'),
-                                    'edition': _('Different edition'),
-                                    'author_missing': _('Author missing, title only'),
-                                    'author_conflict': _('Different credited author'),
-                                } %}
-                                {% set reason = top.match_reason if top.match_reason in reason_labels else (top.author_note or ('edition' if top.edition_credit else '')) %}
-                                {% set manual_labels = {
-                                    'tie': _('Two ebooks match equally'),
-                                    'local_file': _('A file on disk, not a library entry'),
-                                    'edition': _('The edition or adaptation may differ'),
-                                    'author_unconfirmed': _('The author could not be confirmed'),
-                                    'same_title': _('Another ebook by this author has the same title'),
-                                    'comic': _('A comic cannot pair with an audiobook'),
-                                    'needs_rescan': _('Found before this check existed: run a full scan'),
-                                } %}
-                                {% set manual = bulk_block in manual_labels and top.score >= 100 %}
-                                {% if reason or manual %}
-                                <div class="match-reasons">
-                                    {% if reason %}<span class="source-badge reason">{{ reason_labels[reason] }}</span>{% endif %}
-                                    {% if manual %}<span class="source-badge manual" title="{{ manual_labels[bulk_block] }}">{{ _('Manual choice') }}</span>{% endif %}
-                                </div>
-                                {% endif %}
-                                {% endif %}
-                                {% if s.matches and s.matches|length > 0 %}
-                                <div class="best" title="{{ s.matches[0].display_name }}">
-                                    {{ _('Best: %(name)s (%(score)s%%)', name=s.matches[0].display_name, score=s.matches[0].score|round|int) }}
-                                    {% if s.matches[0].language %}<span class="source-badge language" title="{{ _('Language') }}">{{ s.matches[0].language }}</span>{% endif %}
-                                </div>
-                                {% endif %}
-                            </div>
-                        </div>
-                        <div class="card-actions">
-                            <label class="suggestion-select" onclick="event.stopPropagation();">
-                                <input type="checkbox" class="suggestion-check" data-abs-id="{{ s.bridge_key or s.abs_id }}" onchange="updateBulkCounts()"> {{ _('Select') }}
-                            </label>
-                            <button type="button" class="btn btn-small btn-dismiss" onclick="dismissSuggestion(event, '{{ s.bridge_key or s.abs_id }}')">{{ _('Dismiss') }}</button>
-                            <form method="POST" action="/suggestions" class="inline-form" onsubmit="event.stopPropagation();">
-                                <input type="hidden" name="action" value="never">
-                                <input type="hidden" name="bridge_key" value="{{ s.bridge_key or s.abs_id }}">
-                                <input type="hidden" name="audio_source" value="{{ s.audio_source or '' }}">
-                                <input type="hidden" name="audio_title" value="{{ s.audio_title or s.abs_title }}">
-                                <input type="hidden" name="audio_author" value="{{ s.audio_author or s.abs_author }}">
-                                <input type="hidden" name="cover_url" value="{{ s.audio_cover_url or s.cover_url }}">
-                                <button type="submit" class="btn btn-small btn-reject" onclick="event.stopPropagation();">{{ _('Reject') }}</button>
-                            </form>
-                        </div>
-                    </div>
-                    {% endfor %}
+                <div class="results-list" id="resultsList" aria-busy="true">
+                    <div class="empty"><p>{{ _('Loading...') }}</p></div>
                 </div>
-                {% else %}
-                <div class="empty" id="emptyState">
-                    {% if scan_has_run %}
-                    <p>{{ _('No suggestions found above 60%% confidence.') }}<br>{{ _('Run another scan after your library changes.') }}</p>
-                    {% else %}
-                    <p>{{ _('No scan results yet.') }}<br>{{ _('Click "Scan Library" to begin.') }}</p>
-                    {% endif %}
-                </div>
-                {% endif %}
             </div>
         </div>
 
-        <div class="panel queue-panel">
+        <div class="panel queue-panel" id="queuePanel" data-only-tab="pairs">
             <div class="panel-head">
                 <h3>{{ _('Batch Match Queue') }}</h3>
                 <span class="count" id="queueCount">{{ ngettext('%(num)s item', '%(num)s items', queue|length) }}</span>
@@ -338,7 +368,6 @@
 </div>
 
 <script>
-    let suggestionsData = {{ suggestions|tojson }};
     let selectedSuggestionId = null;
     let selectedStorytellerUuid = '';
     let storytellerFetchToken = 0;
@@ -349,6 +378,114 @@
     let displayedScanProgress = 0;
     let reportedScanProgress = 0;
     let suggestionSubmitInFlight = false;
+
+    // Audio provider -> [chip label, css class], from the same helper the server uses.
+    const AUDIO_BADGES = {{ {'ABS': suggestion_source_badge('ABS'), 'BookLore': suggestion_source_badge('BookLore'), 'BookOrbit': suggestion_source_badge('BookOrbit')}|tojson }};
+
+    const T = {
+        audioSource: {{ _('Audiobook source')|tojson }},
+        language: {{ _('Language')|tojson }},
+        audiobooks: {{ _('Audiobooks')|tojson }},
+        ebooks: {{ _('Ebooks')|tojson }},
+        otherSeries: {{ _('Other / No Series')|tojson }},
+        selectEligibleIn: {{ _('Select eligible books in {series}')|tojson }},
+        selectEligible: {{ _('Select eligible')|tojson }},
+        selectBook: {{ _('Select {title}')|tojson }},
+        selectionCleared: {{ _('Selection cleared in {series}')|tojson }},
+        best: {{ _('Best: {name}')|tojson }},
+        scoreMatch: {{ _('{score}%% match')|tojson }},
+        exact: {{ _('Exact')|tojson }},
+        exactTitle: {{ _('Add all exact will queue this one')|tojson }},
+        review: {{ _('Review')|tojson }},
+        reviewTitle: {{ _('Open its ebook candidates in the review panel')|tojson }},
+        manualChoice: {{ _('Manual choice')|tojson }},
+        queued: {{ _('Queued')|tojson }},
+        ignored: {{ _('Ignored')|tojson }},
+        hide: {{ _('Hide for now')|tojson }},
+        hideTitle: {{ _('Hide it in this browser session only. Nothing is saved; it comes back in a new session.')|tojson }},
+        ignore: {{ _('Ignore')|tojson }},
+        ignorePairTitle: {{ _('Stop suggesting this audiobook. This is saved and survives new scans.')|tojson }},
+        ignoreEbookTitle: {{ _('Stop listing this ebook. This is saved and survives new scans; restore it from Show: Ignored.')|tojson }},
+        restore: {{ _('Restore')|tojson }},
+        restoreTitle: {{ _('List this ebook again after the next scan checks it.')|tojson }},
+        findAudio: {{ _('Find audiobook')|tojson }},
+        findAudioTitle: {{ _('Open Add Book with this ebook selected and search for its audiobook')|tojson }},
+        createEbookOnly: {{ _('Create ebook-only')|tojson }},
+        createEbookOnlyTitle: {{ _('Add this ebook to BookBridge on its own, without an audiobook')|tojson }},
+        confirmCreate: {{ _('Create an ebook-only book for "{title}"? It syncs reading progress without an audiobook.')|tojson }},
+        created: {{ _('Created an ebook-only book for "{title}".')|tojson }},
+        ignoredDone: {{ _('Ignored "{title}". It stays out of this list after new scans.')|tojson }},
+        restoredDone: {{ _('Restored "{title}". The next scan checks it again.')|tojson }},
+        hiddenDone: {{ _('Hid "{title}" for this session.')|tojson }},
+        showHidden: {{ _('Show hidden')|tojson }},
+        clearFilters: {{ _('Clear filters')|tojson }},
+        retry: {{ _('Retry')|tojson }},
+        loading: {{ _('Loading...')|tojson }},
+        loadFailed: {{ _('Could not load suggestions.')|tojson }},
+        noFilterMatch: {{ _('Nothing matches these filters.')|tojson }},
+        allHidden: {{ _('All current suggestions are hidden.')|tojson }},
+        noScanYet: {{ _('No scan results yet.')|tojson }},
+        clickScan: {{ _('Click "Scan Library" to begin.')|tojson }},
+        noPairs: {{ _('No suggestions found above 60%% confidence.')|tojson }},
+        rescanLater: {{ _('Run another scan after your library changes.')|tojson }},
+        noEbookOnly: {{ _('Every ebook from the last scan has an audiobook match or is already in BookBridge.')|tojson }},
+        ebookNeverScanned: {{ _('Ebook Only results appear after the next Scan Library.')|tojson }},
+        incompleteEmpty: {{ _('No reliable results yet: the last scan could not read every source.')|tojson }},
+        neverScanned: {{ _('No scan has finished yet.')|tojson }},
+        lastScanAt: {{ _('Last scan: {date}')|tojson }},
+        lastScanStats: {{ _('Last scan: %(new)s new scanned, %(cached)s reused from cache', new='{new}', cached='{cached}')|tojson }},
+        noAudioAsOf: {{ _('No audio match found as of {date}.')|tojson }},
+        ebookOnlyMeaning: {{ _('No qualifying audiobook was found in the last scan. That does not mean none exists.')|tojson }},
+        incompleteSince: {{ _('The latest scan ({date}) could not read every source, so these results may be incomplete.')|tojson }},
+        incompleteNoDate: {{ _('The latest scan could not read every source, so these results may be incomplete.')|tojson }},
+        sourcesIncomplete: {{ _('Not fully read: {sources}')|tojson }},
+        reviewWarning: {{ _('Some selected suggestions are not exact matches; check them in the queue before matching.')|tojson }},
+        tieBlocked: {{ _('Two ebooks match equally: pick one in the review panel')|tojson }},
+        noMatchBlocked: {{ _('No ebook match')|tojson }},
+        belowThreshold: {{ _('The best match is below 100%%')|tojson }},
+    };
+    const REASON_LABELS = {
+        authoritative: {{ _('Calibre identifier')|tojson }},
+        subtitle_only: {{ _('Title only partly matches')|tojson }},
+        edition: {{ _('Different edition')|tojson }},
+        author_missing: {{ _('Author missing, title only')|tojson }},
+        author_conflict: {{ _('Different credited author')|tojson }},
+    };
+    const MANUAL_LABELS = {
+        tie: {{ _('Two ebooks match equally')|tojson }},
+        local_file: {{ _('A file on disk, not a library entry')|tojson }},
+        edition: {{ _('The edition or adaptation may differ')|tojson }},
+        author_unconfirmed: {{ _('The author could not be confirmed')|tojson }},
+        same_title: {{ _('Another ebook by this author has the same title')|tojson }},
+        comic: {{ _('A comic cannot pair with an audiobook')|tojson }},
+        needs_rescan: {{ _('Found before this check existed: run a full scan')|tojson }},
+    };
+    const API_ERRORS = {
+        stale_generation: {{ _('A newer scan finished. The list was refreshed; try again.')|tojson }},
+        ebook_not_actionable: {{ _('This ebook changed since the scan. The list was refreshed.')|tojson }},
+        ebook_ignored: {{ _('This ebook is ignored. The list was refreshed.')|tojson }},
+        already_mapped: {{ _('This ebook is already in BookBridge.')|tojson }},
+        ebook_file_unavailable: {{ _('The ebook file could not be read from its source.')|tojson }},
+        ebook_hash_unavailable: {{ _('The ebook file could not be read from its source.')|tojson }},
+        unsupported_source: {{ _('This source cannot create an ebook-only book.')|tojson }},
+        persistence_failed: {{ _('Could not save the change. Try again.')|tojson }},
+        ignored_entry_not_found: {{ _('This ebook is no longer ignored. The list was refreshed.')|tojson }},
+        fallback: {{ _('The action failed ({code}).')|tojson }},
+    };
+    // Same msgids as the server-rendered counts; num='{count}' keeps the placeholder for bbPlural.
+    const ITEM_COUNT = {% call(n) plural_forms() %}{{ ngettext('%(num)s item', '%(num)s items', n, num='{count}') }}{% endcall %};
+    const P = {
+        suggestions: {% call(n) plural_forms() %}{{ ngettext('%(num)s suggestion', '%(num)s suggestions', n, num='{count}') }}{% endcall %},
+        eligible: {% call(n) plural_forms() %}{{ ngettext('%(num)s eligible', '%(num)s eligible', n, num='{count}') }}{% endcall %},
+        queued: {% call(n) plural_forms() %}{{ ngettext('%(num)s queued', '%(num)s queued', n, num='{count}') }}{% endcall %},
+        review: {% call(n) plural_forms() %}{{ ngettext('%(num)s needs review', '%(num)s need review', n, num='{count}') }}{% endcall %},
+        ebooks: {% call(n) plural_forms() %}{{ ngettext('%(num)s ebook', '%(num)s ebooks', n, num='{count}') }}{% endcall %},
+        ignored: {% call(n) plural_forms() %}{{ ngettext('%(num)s ignored', '%(num)s ignored', n, num='{count}') }}{% endcall %},
+        selected: {% call(n) plural_forms() %}{{ ngettext('%(num)s selected', '%(num)s selected', n, num='{count}') }}{% endcall %},
+        hidden: {% call(n) plural_forms() %}{{ ngettext('%(num)s hidden for now', '%(num)s hidden for now', n, num='{count}') }}{% endcall %},
+        seriesSelected: {% call(n) plural_forms() %}{{ ngettext('%(num)s eligible book selected in %(series)s', '%(num)s eligible books selected in %(series)s', n, num='{count}', series='{series}') }}{% endcall %},
+        unknown: {% call(n) plural_forms() %}{{ ngettext('%(num)s ebook could not be checked reliably and is not listed.', '%(num)s ebooks could not be checked reliably and are not listed.', n, num='{count}') }}{% endcall %},
+    };
 
     function showSuggestionSubmitFeedback(targetId, message) {
         const feedback = document.getElementById(targetId);
@@ -366,10 +503,6 @@
 
     function setSuggestionButtonHtml(button, html) {
         button.innerHTML = html;
-    }
-
-    function getSuggestionPrimarySubmitter(form) {
-        return form.querySelector('[data-primary-action]:not([disabled])');
     }
 
     function startSuggestionSubmitState(submitter) {
@@ -446,6 +579,10 @@
         setScanProgress(nextPercent, message);
     }
 
+    // The GET /suggestions render stores a finished scan, so a finished scan reloads
+    // the page (the URL keeps each tab's filters).
+    function reloadAfterScan() { window.location.replace(window.location.href); }
+
     function pollScanStatus() {
         fetch('/api/suggestions/scan-status')
             .then((response) => response.json())
@@ -456,16 +593,16 @@
                 }
                 if (status === 'done') {
                     stopFakeScanProgress({{ _('Finalizing results... 100%%')|tojson }});
-                    setTimeout(() => { window.location.href = '/suggestions'; }, 350);
+                    setTimeout(reloadAfterScan, 350);
                     return;
                 }
                 if (status === 'error') {
                     stopFakeScanProgress({{ _('Scan failed')|tojson }});
-                    setTimeout(() => { window.location.href = '/suggestions'; }, 350);
+                    setTimeout(reloadAfterScan, 350);
                     return;
                 }
                 if (status === 'idle') {
-                    window.location.href = '/suggestions';
+                    reloadAfterScan();
                     return;
                 }
                 setTimeout(pollScanStatus, 1500);
@@ -635,10 +772,16 @@
 
     function sourceBadgeClass(source) {
         const normalized = (source || '').toLowerCase().replace(/\s+/g, '');
-        if (normalized === 'grimmory' || normalized === 'abs' || normalized === 'cwa' || normalized === 'localfile') {
+        if (normalized === 'booklore') return 'grimmory';
+        if (normalized === 'grimmory' || normalized === 'abs' || normalized === 'cwa' || normalized === 'localfile' || normalized === 'bookorbit') {
             return normalized;
         }
         return 'unknown';
+    }
+
+    // Grimmory's internal key is BookLore/Booklore; only its displayed name changed.
+    function ebookSourceLabel(source) {
+        return ['booklore', 'grimmory'].includes(String(source || '').toLowerCase()) ? 'Grimmory' : String(source || '');
     }
 
     function inferSourceFromFilename(filename) {
@@ -649,33 +792,9 @@
         return '';
     }
 
-    function applySuggestionSort(mode) {
-        const list = document.getElementById('suggestionsList');
-        if (!list) return;
-
-        const cards = Array.from(list.querySelectorAll('.suggestion-card'));
-        if (cards.length < 2) return;
-
-        if (mode === 'az') {
-            cards.sort((a, b) => {
-                const titleA = (a.dataset.title || '').trim().toLowerCase();
-                const titleB = (b.dataset.title || '').trim().toLowerCase();
-                return titleA.localeCompare(titleB);
-            });
-        } else {
-            cards.sort((a, b) => {
-                const scoreA = Number.parseFloat(a.dataset.bestScore || '0');
-                const scoreB = Number.parseFloat(b.dataset.bestScore || '0');
-                return scoreB - scoreA;
-            });
-        }
-
-        cards.forEach((card) => list.appendChild(card));
-    }
-
     function clearSelection() {
         selectedSuggestionId = null;
-        document.querySelectorAll('.suggestion-card').forEach((card) => card.classList.remove('selected'));
+        document.querySelectorAll('.sugg-row.reviewing').forEach((row) => row.classList.remove('reviewing'));
         document.getElementById('selectionDetails').classList.add('hidden');
         document.getElementById('selectionPlaceholder').style.display = 'block';
         document.getElementById('selected_audiobook_id').value = '';
@@ -703,11 +822,11 @@
     }
 
     function selectSuggestion(suggestionKey) {
-        const suggestion = suggestionsData.find((item) => (item.bridge_key || item.abs_id) === suggestionKey);
+        const suggestion = entryIndex.get(suggestionKey);
         if (!suggestion || !suggestion.matches || suggestion.matches.length === 0) return;
 
         selectedSuggestionId = suggestionKey;
-        document.querySelectorAll('.suggestion-card').forEach((card) => card.classList.toggle('selected', card.dataset.absId === suggestionKey));
+        document.querySelectorAll('.sugg-row.pair-row').forEach((row) => row.classList.toggle('reviewing', row.dataset.key === suggestionKey));
 
         document.getElementById('selectionPlaceholder').style.display = 'none';
         document.getElementById('selectionDetails').classList.remove('hidden');
@@ -768,7 +887,7 @@
 
             const subtitle = document.createElement('div');
             subtitle.className = 'ebook-subtitle';
-            subtitle.textContent = author || bbFormat({{ _('{score}%% match')|tojson }}, { score: score });
+            subtitle.textContent = author || bbFormat(T.scoreMatch, { score: score });
 
             card.appendChild(icon);
             card.appendChild(title);
@@ -777,21 +896,21 @@
             if (author) {
                 const confidence = document.createElement('div');
                 confidence.className = 'ebook-subtitle';
-                confidence.textContent = bbFormat({{ _('{score}%% match')|tojson }}, { score: score });
+                confidence.textContent = bbFormat(T.scoreMatch, { score: score });
                 card.appendChild(confidence);
             }
 
             if (source) {
                 const badge = document.createElement('span');
                 badge.className = `source-badge ${sourceBadgeClass(source)}`;
-                badge.textContent = source;
+                badge.textContent = ebookSourceLabel(source);
                 card.appendChild(badge);
             }
 
             if (language) {
                 const languageBadge = document.createElement('span');
                 languageBadge.className = 'source-badge language';
-                languageBadge.title = {{ _('Language')|tojson }};
+                languageBadge.title = T.language;
                 languageBadge.textContent = language;
                 card.appendChild(languageBadge);
             }
@@ -833,38 +952,6 @@
         }
     }
 
-    // Same msgids as the server-rendered counts; num='{count}' keeps the placeholder for bbPlural.
-    const SHOWING_SUGGESTIONS = {% call(n) plural_forms() %}{{ ngettext('Showing %(num)s suggestion', 'Showing %(num)s suggestions', n, num='{count}') }}{% endcall %};
-    const ITEM_COUNT = {% call(n) plural_forms() %}{{ ngettext('%(num)s item', '%(num)s items', n, num='{count}') }}{% endcall %};
-
-    function updateVisibleCounts() {
-        const count = document.querySelectorAll('.suggestion-card').length;
-        document.getElementById('topCount').textContent = bbPlural(SHOWING_SUGGESTIONS, count);
-        document.getElementById('panelCount').textContent = bbPlural(ITEM_COUNT, count);
-        updateBulkCounts();
-        if (count === 0 && !document.getElementById('emptyState')) {
-            const wrap = document.querySelector('.left-wrap');
-            const empty = document.createElement('div');
-            empty.className = 'empty';
-            empty.id = 'emptyState';
-            empty.innerHTML = '<p></p>';
-            empty.firstChild.append({{ _('All current suggestions are hidden.')|tojson }}, document.createElement('br'), {{ _('Run Scan Library to refresh.')|tojson }});
-            wrap.appendChild(empty);
-            const list = document.getElementById('suggestionsList');
-            if (list) list.remove();
-        }
-    }
-
-    function dismissSuggestion(event, suggestionKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        const card = document.getElementById(`suggestion-${suggestionKey}`);
-        if (card) card.remove();
-        suggestionsData = suggestionsData.filter((item) => (item.bridge_key || item.abs_id) !== suggestionKey);
-        if (selectedSuggestionId === suggestionKey) clearSelection();
-        updateVisibleCounts();
-    }
-
     function handleScanSubmit() {
         document.getElementById('scanOverlay').classList.add('show');
         displayedScanProgress = 0;
@@ -885,9 +972,9 @@
         if (countEl) countEl.textContent = bbPlural(ITEM_COUNT, count);
     }
 
-    function markSuggestionQueued(suggestionKey) {
-        const card = suggestionKey ? document.getElementById(`suggestion-${suggestionKey}`) : null;
-        if (card) card.classList.add('is-queued');
+    function queuedBridgeKeys() {
+        return new Set(Array.from(document.querySelectorAll('#queueList .queue-item'))
+            .map((item) => item.dataset.bridgeKey).filter(Boolean));
     }
 
     async function submitQueueMutation(form, action, submitter) {
@@ -905,9 +992,10 @@
             if (queueList) queueList.innerHTML = html;
             renderQueueCount();
             if (action === 'add_to_queue') {
-                markSuggestionQueued(queuedKey);
+                if (queuedKey) selectedKeys.delete(queuedKey);
                 clearSelection();
             }
+            loadView('pairs');
         } catch (err) {
             console.error('Queue update failed; reloading to resync.', err);
             window.location.reload();
@@ -916,7 +1004,7 @@
         }
     }
 
-    const queuePanel = document.querySelector('.queue-panel');
+    const queuePanel = document.getElementById('queuePanel');
     if (queuePanel) {
         queuePanel.addEventListener('submit', (event) => {
             const form = event.target;
@@ -951,43 +1039,662 @@
         });
     }
 
-    // --- Bulk add: per-card checkboxes ("Add selected") + "Add all exact" (top
-    // match == 100%, i.e. authoritative / same-folder / exact fuzzy). Each posts the
-    // suggestion keys to add_many_to_queue; the server builds the queue items from its
-    // cached suggestions and returns the refreshed queue panel fragment. ---
-    function getExactKeys() {
-        return Array.from(document.querySelectorAll('.suggestion-card:not(.is-queued)'))
-            .filter((card) => card.dataset.bulkExact === '1')
-            .map((card) => card.dataset.absId)
-            .filter(Boolean);
+    // ===== Two-tab persisted Suggestions view =====
+    // Rows come from GET /api/suggestions/discovery (persisted scan, no provider calls).
+    // Selection is a set of suggestion_keys, independent of what is rendered: a series
+    // checkbox selects from the loaded filtered dataset, never from DOM checkboxes.
+    const TABS = ['pairs', 'ebook_only'];
+    const DEFAULTS = {
+        pairs: { q: '', source: '', series_key: '', status: 'all', sort: 'series', group: true },
+        ebook_only: { q: '', source: '', series_key: '', ignored: 'exclude', sort: 'series', group: true },
+    };
+    const VALID = {
+        status: ['all', 'eligible', 'manual_review', 'queued'],
+        ignored: ['exclude', 'include', 'only'],
+        sort: { pairs: ['series', 'title', 'confidence'], ebook_only: ['series', 'title'] },
+    };
+    const OTHER_GROUP = '';
+    const views = { pairs: null, ebook_only: null };
+    const loadErrors = { pairs: null, ebook_only: null };
+    const inflight = { pairs: null, ebook_only: null };
+    const tabCounts = {{ tab_counts|tojson }} || {};
+    const scrollPos = { pairs: 0, ebook_only: 0 };
+    const optionCache = { pairs: { series: [], sources: [] }, ebook_only: { series: [], sources: [] } };
+    const selectedKeys = new Set();
+    let entryIndex = new Map();
+    let pairsGeneration;
+    let currentGroups = new Map();
+    let activeTab = 'pairs';
+    let tabState = { pairs: { ...DEFAULTS.pairs }, ebook_only: { ...DEFAULTS.ebook_only } };
+    const hiddenKeys = { pairs: new Set(), ebook_only: new Set() };
+    const expandedGroups = { pairs: new Set(), ebook_only: new Set() };
+    const searchCollapsed = { pairs: new Set(), ebook_only: new Set() };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function readJson(storage, key) {
+        try { return JSON.parse(storage.getItem(key) || 'null'); } catch (e) { return null; }
+    }
+    function writeJson(storage, key, value) {
+        try { storage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
     }
 
-    function getCheckedKeys() {
-        return Array.from(document.querySelectorAll('.suggestion-check:checked'))
-            .map((cb) => cb.dataset.absId)
-            .filter(Boolean);
+    function cleanState(tab, raw) {
+        const st = { ...DEFAULTS[tab], ...(raw || {}) };
+        ['q', 'source', 'series_key'].forEach((key) => { st[key] = typeof st[key] === 'string' ? st[key] : ''; });
+        if (tab === 'pairs' && !VALID.status.includes(st.status)) st.status = 'all';
+        if (tab === 'ebook_only' && !VALID.ignored.includes(st.ignored)) st.ignored = 'exclude';
+        if (!VALID.sort[tab].includes(st.sort)) st.sort = 'series';
+        st.group = st.group !== false;
+        return st;
     }
 
-    function updateBulkCounts() {
-        const exactCount = getExactKeys().length;
-        const selectedCount = getCheckedKeys().length;
-        const exactCountEl = document.getElementById('exactCount');
-        const selectedCountEl = document.getElementById('selectedCount');
-        if (exactCountEl) exactCountEl.textContent = exactCount;
-        if (selectedCountEl) selectedCountEl.textContent = selectedCount;
-        const exactBtn = document.getElementById('addAllExactBtn');
-        const selectedBtn = document.getElementById('addSelectedBtn');
-        if (exactBtn) exactBtn.disabled = exactCount === 0;
-        if (selectedBtn) selectedBtn.disabled = selectedCount === 0;
+    function loadInitialState() {
+        const saved = readJson(sessionStorage, 'suggestions_tab_state') || {};
+        const params = new URLSearchParams(window.location.search);
+        const urlTab = params.get('tab');
+        activeTab = TABS.includes(urlTab) ? urlTab : (TABS.includes(saved.active) ? saved.active : 'pairs');
+        TABS.forEach((tab) => { tabState[tab] = cleanState(tab, (saved.tabs || {})[tab]); });
+        if ([...params.keys()].some((key) => key !== 'tab')) {
+            tabState[activeTab] = cleanState(activeTab, {
+                q: params.get('q') || '',
+                source: params.get('source') || '',
+                series_key: params.get('series') || '',
+                status: params.get('status') || 'all',
+                ignored: params.get('ignored') || 'exclude',
+                sort: params.get('sort') || 'series',
+                group: params.get('group') !== 'flat',
+            });
+        }
+        const hidden = readJson(sessionStorage, 'suggestions_hidden') || {};
+        const expanded = readJson(localStorage, 'suggestions_expanded') || {};
+        TABS.forEach((tab) => {
+            (Array.isArray(hidden[tab]) ? hidden[tab] : []).forEach((key) => hiddenKeys[tab].add(key));
+            (Array.isArray(expanded[tab]) ? expanded[tab] : []).forEach((key) => expandedGroups[tab].add(key));
+        });
     }
 
+    function saveState() {
+        writeJson(sessionStorage, 'suggestions_tab_state', { active: activeTab, tabs: tabState });
+        const st = tabState[activeTab];
+        const params = new URLSearchParams({ tab: activeTab });
+        if (st.q) params.set('q', st.q);
+        if (st.source) params.set('source', st.source);
+        if (st.series_key) params.set('series', st.series_key);
+        if (activeTab === 'pairs' && st.status !== 'all') params.set('status', st.status);
+        if (activeTab === 'ebook_only' && st.ignored !== 'exclude') params.set('ignored', st.ignored);
+        if (st.sort !== 'series') params.set('sort', st.sort);
+        params.set('group', st.group ? 'series' : 'flat');
+        history.replaceState(null, '', `${window.location.pathname}?${params}`);
+    }
+
+    function saveHidden() {
+        writeJson(sessionStorage, 'suggestions_hidden', { pairs: [...hiddenKeys.pairs], ebook_only: [...hiddenKeys.ebook_only] });
+    }
+
+    function saveExpanded() {
+        writeJson(localStorage, 'suggestions_expanded', { pairs: [...expandedGroups.pairs], ebook_only: [...expandedGroups.ebook_only] });
+    }
+
+    function filtersFor(tab) {
+        const st = tabState[tab];
+        const filters = { q: st.q, source: st.source, series_key: st.series_key };
+        if (tab === 'pairs') filters.status = st.status; else filters.ignored = st.ignored;
+        return filters;
+    }
+
+    function hasActiveFilters(tab) {
+        const st = tabState[tab];
+        return !!(st.q || st.source || st.series_key || (tab === 'pairs' ? st.status !== 'all' : st.ignored !== 'exclude'));
+    }
+
+    async function loadView(tab) {
+        if (inflight[tab]) inflight[tab].abort();
+        const controller = new AbortController();
+        inflight[tab] = controller;
+        const st = tabState[tab];
+        const params = new URLSearchParams({ tab, sort: st.sort, filters: JSON.stringify(filtersFor(tab)) });
+        if (tab === activeTab) $('resultsList').setAttribute('aria-busy', 'true');
+        try {
+            const response = await fetch(`/api/suggestions/discovery?${params}`, {
+                signal: controller.signal,
+                headers: { Accept: 'application/json' },
+            });
+            const body = await response.json().catch(() => null);
+            if (!response.ok || !body || !Array.isArray(body.entries)) {
+                throw new Error((body && body.error) || `HTTP ${response.status}`);
+            }
+            views[tab] = body;
+            loadErrors[tab] = null;
+            tabCounts[tab] = body.counts.active;
+            if (tab === 'pairs') syncSelection(body);
+            cacheOptions(tab, body);
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Suggestions view failed to load.', err);
+            loadErrors[tab] = err.message || 'error';
+        } finally {
+            if (inflight[tab] === controller) inflight[tab] = null;
+        }
+        renderTabCounts();
+        if (tab === activeTab) {
+            fillOptionSelects();
+            renderList();
+        }
+    }
+
+    // A new scan generation invalidates every selection; within one generation a
+    // selection survives filters and only drops rows that left the dataset or can't be queued.
+    function syncSelection(view) {
+        if (pairsGeneration !== undefined && view.generation !== pairsGeneration) {
+            selectedKeys.clear();
+            entryIndex = new Map();
+        }
+        pairsGeneration = view.generation;
+        const present = new Set();
+        view.entries.forEach((entry) => { entryIndex.set(entry.suggestion_key, entry); present.add(entry.suggestion_key); });
+        const complete = !hasActiveFilters('pairs');
+        if (complete) {
+            entryIndex.forEach((_entry, key) => { if (!present.has(key)) entryIndex.delete(key); });
+        }
+        [...selectedKeys].forEach((key) => {
+            const entry = entryIndex.get(key);
+            if (!entry || !rowSelectable(entry) || hiddenKeys.pairs.has(key)) selectedKeys.delete(key);
+        });
+    }
+
+    function cacheOptions(tab, view) {
+        const st = tabState[tab];
+        if (!st.series_key) {
+            optionCache[tab].series = view.series.map((group) => ({ key: group.series_key, name: group.series_name }));
+        }
+        if (!st.source) {
+            const sources = new Set(view.entries.map((entry) => (tab === 'pairs' ? entry.audio_source : entry.source)).filter(Boolean));
+            optionCache[tab].sources = [...sources].sort();
+        }
+    }
+
+    function sourceLabel(tab, source) {
+        if (tab === 'pairs') return (AUDIO_BADGES[source] || [source])[0];
+        return ebookSourceLabel(source);
+    }
+
+    function fillSelect(select, firstOption, options, value) {
+        const known = options.some((option) => option.value === value);
+        const all = value && !known ? [...options, { value, label: value }] : options;
+        select.innerHTML = `<option value="">${esc(firstOption)}</option>` + all
+            .map((option) => `<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('');
+        select.value = value || '';
+    }
+
+    function fillOptionSelects() {
+        const st = tabState[activeTab];
+        fillSelect($('seriesFilter'), {{ _('All series')|tojson }},
+            optionCache[activeTab].series.map((s) => ({ value: s.key, label: s.name })), st.series_key);
+        fillSelect($('sourceFilter'), {{ _('All sources')|tojson }},
+            optionCache[activeTab].sources.map((s) => ({ value: s, label: sourceLabel(activeTab, s) })), st.source);
+    }
+
+    function syncControls() {
+        const st = tabState[activeTab];
+        $('searchInput').value = st.q;
+        fillOptionSelects();
+        $('statusFilter').value = st.status || 'all';
+        $('ignoredFilter').value = st.ignored || 'exclude';
+        $('sortMode').value = st.sort;
+        $('groupToggle').checked = st.group;
+    }
+
+    function setTab(tab, focus) {
+        if (!TABS.includes(tab)) return;
+        scrollPos[activeTab] = $('resultsList').scrollTop;
+        activeTab = tab;
+        TABS.forEach((name) => {
+            const button = $(`tab-${name}`);
+            const on = name === tab;
+            button.classList.toggle('active', on);
+            button.setAttribute('aria-selected', on ? 'true' : 'false');
+            button.tabIndex = on ? 0 : -1;
+            if (on && focus) button.focus();
+        });
+        $('suggestionsPanel').setAttribute('aria-labelledby', `tab-${tab}`);
+        document.querySelectorAll('[data-only-tab]').forEach((el) => { el.hidden = el.dataset.onlyTab !== tab; });
+        $('layout').classList.toggle('no-queue', tab !== 'pairs');
+        $('panelTitle').textContent = tab === 'pairs' ? T.audiobooks : T.ebooks;
+        $('listFeedback').textContent = '';
+        syncControls();
+        saveState();
+        renderList();
+        if (!views[tab]) loadView(tab);
+    }
+
+    function renderTabCounts() {
+        TABS.forEach((tab) => {
+            const el = $(`tabCount-${tab}`);
+            if (el && Number.isFinite(tabCounts[tab])) el.textContent = String(tabCounts[tab]);
+        });
+    }
+
+    function fmtDate(ts) {
+        if (!ts) return '';
+        const date = new Date(ts * 1000);
+        try {
+            return date.toLocaleString(document.documentElement.lang || undefined, { dateStyle: 'medium', timeStyle: 'short' });
+        } catch (e) {
+            return date.toLocaleString();
+        }
+    }
+
+    function incompleteSources(scan) {
+        return Object.entries(scan.source_states || {})
+            .filter(([, state]) => Object.values((state && state.roles) || {})
+                .some((role) => role && role.configured && role.supported !== false && role.complete !== true))
+            .map(([name]) => ebookSourceLabel(name));
+    }
+
+    function renderScanStatus(view) {
+        const el = $('scanStatus');
+        if (!view) { el.innerHTML = ''; return; }
+        const scan = view.scan || {};
+        const lines = [];
+        const incomplete = scan.state === 'incomplete' || !!scan.error;
+        if (activeTab === 'ebook_only') {
+            if (scan.completed_at) {
+                lines.push(`<strong>${esc(bbFormat(T.noAudioAsOf, { date: fmtDate(scan.completed_at) }))}</strong>`);
+                lines.push(`<span>${esc(T.ebookOnlyMeaning)}</span>`);
+            } else if (!incomplete) {
+                lines.push(`<strong>${esc(T.ebookNeverScanned)}</strong>`);
+            }
+            const unknown = Number((scan.stats || {}).unknown) || 0;
+            if (unknown > 0) lines.push(`<span>${esc(bbPlural(P.unknown, unknown))}</span>`);
+        } else if (scan.completed_at) {
+            lines.push(`<strong>${esc(bbFormat(T.lastScanAt, { date: fmtDate(scan.completed_at) }))}</strong>`);
+            const stats = scan.stats || {};
+            if (stats.scanned_new !== undefined || stats.reused_cached !== undefined) {
+                lines.push(`<span>${esc(bbFormat(T.lastScanStats, { new: stats.scanned_new || 0, cached: stats.reused_cached || 0 }))}</span>`);
+            }
+        } else if (!incomplete) {
+            lines.push(`<strong>${esc(T.neverScanned)}</strong>`);
+        }
+        if (incomplete) {
+            lines.push(`<strong>${esc(scan.attempted_at ? bbFormat(T.incompleteSince, { date: fmtDate(scan.attempted_at) }) : T.incompleteNoDate)}</strong>`);
+            const failed = incompleteSources(scan);
+            if (failed.length) lines.push(`<span>${esc(bbFormat(T.sourcesIncomplete, { sources: failed.join(', ') }))}</span>`);
+        }
+        el.classList.toggle('warn', incomplete);
+        el.innerHTML = lines.join('');
+    }
+
+    function visibleEntries(tab) {
+        const view = views[tab];
+        if (!view) return [];
+        return view.entries.filter((entry) => !hiddenKeys[tab].has(entry.suggestion_key));
+    }
+
+    // Individually selectable = what "Add selected" can queue: not queued, has a match,
+    // not a tie (the server skips ties). Series checkboxes take bulk_eligible rows only.
+    function rowSelectable(entry) {
+        return !entry.queued && (entry.matches || []).length > 0
+            && !['tie', 'no_match', 'already_queued'].includes(entry.bulk_block_reason);
+    }
+
+    function fmtSeq(value) {
+        return value === null || value === undefined ? '' : `#${Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 })}`;
+    }
+
+    function groupEntries(entries) {
+        const groups = new Map();
+        entries.forEach((entry) => {
+            const key = entry.series_key || OTHER_GROUP;
+            if (!groups.has(key)) groups.set(key, { key, name: key ? (entry.series_name || key) : T.otherSeries, entries: [] });
+            groups.get(key).entries.push(entry);
+        });
+        const ordered = [...groups.values()].filter((group) => group.key !== OTHER_GROUP)
+            .sort((a, b) => a.key.localeCompare(b.key));
+        if (groups.has(OTHER_GROUP)) ordered.push(groups.get(OTHER_GROUP));
+        return ordered;
+    }
+
+    function isExpanded(tab, key) {
+        return tabState[tab].q ? !searchCollapsed[tab].has(key) : expandedGroups[tab].has(key);
+    }
+
+    function groupMeta(tab, group) {
+        const count = (flag) => group.entries.filter((entry) => entry[flag]).length;
+        const parts = [];
+        if (tab === 'pairs') {
+            parts.push(bbPlural(P.suggestions, group.entries.length));
+            [['bulk_eligible', P.eligible], ['queued', P.queued], ['manual_review', P.review]].forEach(([flag, forms]) => {
+                const n = count(flag);
+                if (n) parts.push(bbPlural(forms, n));
+            });
+        } else {
+            parts.push(bbPlural(P.ebooks, group.entries.length));
+            const n = count('ignored');
+            if (n) parts.push(bbPlural(P.ignored, n));
+        }
+        return parts.map((part) => `<span>${esc(part)}</span>`).join('<span class="series-sep">·</span>');
+    }
+
+    function groupHtml(tab, group, index) {
+        const expanded = isExpanded(tab, group.key);
+        const childrenId = `sugg-group-${index}`;
+        const eligible = group.entries.filter((entry) => entry.bulk_eligible).length;
+        const check = tab === 'pairs' ? `<label class="group-select">
+                <input type="checkbox" class="group-check" data-group="${esc(group.key)}" ${eligible ? '' : 'disabled'}
+                       aria-label="${esc(bbFormat(T.selectEligibleIn, { series: group.name }))}"> ${esc(T.selectEligible)}
+            </label>` : '';
+        return `<div class="series-group${expanded ? ' expanded' : ''}" data-group="${esc(group.key)}">
+            <div class="series-header">
+                ${check}
+                <button type="button" class="sugg-group-toggle" data-group="${esc(group.key)}" aria-expanded="${expanded}" aria-controls="${childrenId}">
+                    <span class="series-chevron" aria-hidden="true">&#9654;</span>
+                    <span class="series-info">
+                        <span class="series-name${group.key ? '' : ' is-other'}">${esc(group.name)}</span>
+                        <span class="series-meta-row">${groupMeta(tab, group)}</span>
+                    </span>
+                </button>
+            </div>
+            <div class="series-children" id="${childrenId}" role="list">${expanded ? group.entries.map((entry) => rowHtml(tab, entry)).join('') : ''}</div>
+        </div>`;
+    }
+
+    function pairChips(entry) {
+        const top = (entry.matches || [])[0];
+        const chips = [];
+        if (top) chips.push(`<span class="score">${esc(bbFormat(T.scoreMatch, { score: Math.round(top.score || 0) }))}</span>`);
+        const block = entry.bulk_block_reason;
+        if (entry.queued) {
+            chips.push(`<span class="source-badge queued">✓ ${esc(T.queued)}</span>`);
+        } else if (entry.bulk_eligible) {
+            chips.push(`<span class="source-badge exact" title="${esc(T.exactTitle)}">${esc(T.exact)}</span>`);
+        } else if (top && MANUAL_LABELS[block] && (top.score || 0) >= 100) {
+            chips.push(`<span class="source-badge manual" title="${esc(MANUAL_LABELS[block])}">${esc(T.manualChoice)}</span>`);
+        } else if (block === 'below_threshold') {
+            chips.push(`<span class="source-badge manual" title="${esc(T.belowThreshold)}">${esc(T.review)}</span>`);
+        }
+        if (top) {
+            const reason = REASON_LABELS[top.match_reason] ? top.match_reason : (top.author_note || (top.edition_credit ? 'edition' : ''));
+            if (REASON_LABELS[reason]) chips.push(`<span class="source-badge reason">${esc(REASON_LABELS[reason])}</span>`);
+            if (top.match_reason === 'same_folder') chips.push(`<span class="source-badge samefolder">${esc({{ _('Same folder')|tojson }})}</span>`);
+            if (top.match_reason === 'same_folder_ambiguous') chips.push(`<span class="source-badge samefolder">${esc({{ _('Same folder?')|tojson }})}</span>`);
+            if (top.match_reason === 'same_series') chips.push(`<span class="source-badge sameseries" title="${esc({{ _('Same series and number as the audiobook')|tojson }})}">${esc({{ _('Same series')|tojson }})}</span>`);
+        }
+        return chips.join('');
+    }
+
+    function pairRowHtml(entry) {
+        const key = entry.suggestion_key;
+        const top = (entry.matches || [])[0];
+        const [label, cls] = AUDIO_BADGES[entry.audio_source] || [entry.audio_source || '', 'unknown'];
+        const selectable = rowSelectable(entry);
+        const blockTitle = entry.queued ? T.queued
+            : entry.bulk_block_reason === 'tie' ? T.tieBlocked
+            : (entry.matches || []).length ? '' : T.noMatchBlocked;
+        const cover = entry.audio_cover_url || entry.cover_url || '';
+        const sub = [entry.author ? esc(entry.author) : ''];
+        if (top) {
+            sub.push(`${esc(bbFormat(T.best, { name: top.display_name || top.ebook_filename || '' }))}`
+                + (top.source ? ` <span class="source-badge ${sourceBadgeClass(top.source)}">${esc(ebookSourceLabel(top.source))}</span>` : ''));
+        }
+        return `<div class="sugg-row pair-row${entry.queued ? ' is-queued' : ''}${selectedSuggestionId === key ? ' reviewing' : ''}" role="listitem" data-key="${esc(key)}">
+            <input type="checkbox" class="row-check" data-key="${esc(key)}" ${selectedKeys.has(key) ? 'checked' : ''} ${selectable ? '' : 'disabled'}
+                   aria-label="${esc(bbFormat(T.selectBook, { title: entry.title }))}"${blockTitle ? ` title="${esc(blockTitle)}"` : ''}>
+            <span class="row-seq">${esc(fmtSeq(entry.series_sequence))}</span>
+            <img class="row-cover" src="${esc(cover)}" alt="" loading="lazy" onerror="this.style.opacity='0.25';">
+            <div class="row-main">
+                <div class="row-title"><span class="row-title-text">${esc(entry.title)}</span>
+                    <span class="source-badge ${esc(cls)}" title="${esc(T.audioSource)}">${esc(label)}</span>
+                    ${entry.audio_language ? `<span class="source-badge language" title="${esc(T.language)}">${esc(entry.audio_language)}</span>` : ''}
+                </div>
+                <div class="row-sub">${sub.filter(Boolean).join(' · ')}</div>
+            </div>
+            <div class="row-evidence">${pairChips(entry)}</div>
+            <div class="row-actions">
+                <button type="button" class="btn btn-small btn-muted" data-act="review" title="${esc(T.reviewTitle)}" ${top ? '' : 'disabled'}>${esc(T.review)}</button>
+                <button type="button" class="btn btn-small btn-dismiss" data-act="hide" title="${esc(T.hideTitle)}">${esc(T.hide)}</button>
+                <button type="button" class="btn btn-small btn-reject" data-act="ignore" title="${esc(T.ignorePairTitle)}">${esc(T.ignore)}</button>
+            </div>
+        </div>`;
+    }
+
+    function ebookRowHtml(entry) {
+        const key = entry.suggestion_key;
+        const generation = views.ebook_only ? views.ebook_only.generation : '';
+        const sources = [...new Set([entry.source, ...(entry.provenance || [])].filter(Boolean).map(ebookSourceLabel))];
+        const badges = sources.map((source) => `<span class="source-badge ${sourceBadgeClass(source)}">${esc(source)}</span>`).join(' ');
+        const sub = [entry.author, entry.filename].filter(Boolean).map(esc).join(' · ');
+        const addBookUrl = `/add-book?ebook_key=${encodeURIComponent(key)}&generation=${encodeURIComponent(generation || '')}`;
+        const actions = entry.ignored
+            ? `<button type="button" class="btn btn-small btn-muted" data-act="restore" title="${esc(T.restoreTitle)}">${esc(T.restore)}</button>`
+            : `<a class="btn btn-small btn-primary" href="${esc(addBookUrl)}" title="${esc(T.findAudioTitle)}">${esc(T.findAudio)}</a>
+               <button type="button" class="btn btn-small btn-muted" data-act="create" title="${esc(T.createEbookOnlyTitle)}">${esc(T.createEbookOnly)}</button>
+               <button type="button" class="btn btn-small btn-dismiss" data-act="hide" title="${esc(T.hideTitle)}">${esc(T.hide)}</button>
+               <button type="button" class="btn btn-small btn-reject" data-act="ignore" title="${esc(T.ignoreEbookTitle)}">${esc(T.ignore)}</button>`;
+        return `<div class="sugg-row ebook-row${entry.ignored ? ' is-ignored' : ''}" role="listitem" data-key="${esc(key)}">
+            <span class="row-seq">${esc(fmtSeq(entry.series_sequence))}</span>
+            <span class="row-icon" aria-hidden="true">📖</span>
+            <div class="row-main">
+                <div class="row-title"><span class="row-title-text">${esc(entry.title || entry.filename)}</span> ${badges}
+                    ${entry.language ? `<span class="source-badge language" title="${esc(T.language)}">${esc(entry.language)}</span>` : ''}
+                </div>
+                <div class="row-sub">${sub}</div>
+            </div>
+            <div class="row-evidence">${entry.ignored ? `<span class="source-badge ignored">${esc(T.ignored)}</span>` : ''}</div>
+            <div class="row-actions">${actions}</div>
+        </div>`;
+    }
+
+    function rowHtml(tab, entry) {
+        return tab === 'pairs' ? pairRowHtml(entry) : ebookRowHtml(entry);
+    }
+
+    function emptyHtml(tab, view) {
+        const lines = [];
+        let action = '';
+        const scan = view.scan || {};
+        if (view.entries.length && !visibleEntries(tab).length) {
+            lines.push(T.allHidden);
+            action = `<button type="button" class="btn btn-small btn-muted" data-act="show-hidden">${esc(T.showHidden)}</button>`;
+        } else if (view.counts.total > 0 && hasActiveFilters(tab)) {
+            lines.push(T.noFilterMatch);
+            action = `<button type="button" class="btn btn-small btn-muted" data-act="clear-filters">${esc(T.clearFilters)}</button>`;
+        } else if (scan.state === 'incomplete' && !scan.completed_at) {
+            lines.push(T.incompleteEmpty);
+        } else if (scan.state === 'never_scanned' || !scan.completed_at) {
+            lines.push(tab === 'pairs' ? T.noScanYet : T.ebookNeverScanned, T.clickScan);
+        } else if (tab === 'pairs') {
+            lines.push(T.noPairs, T.rescanLater);
+        } else {
+            lines.push(T.noEbookOnly, T.rescanLater);
+        }
+        return `<div class="empty"><p>${lines.map(esc).join('<br>')}</p>${action}</div>`;
+    }
+
+    function renderList() {
+        const list = $('resultsList');
+        const tab = activeTab;
+        const view = views[tab];
+        renderScanStatus(view);
+        renderHiddenNotice();
+        list.setAttribute('aria-busy', inflight[tab] ? 'true' : 'false');
+        if (!view) {
+            list.innerHTML = loadErrors[tab]
+                ? `<div class="empty"><p>${esc(T.loadFailed)}</p><button type="button" class="btn btn-small btn-muted" data-act="retry">${esc(T.retry)}</button></div>`
+                : `<div class="empty"><p>${esc(T.loading)}</p></div>`;
+            $('panelCount').textContent = '';
+            updateSelectionUi();
+            return;
+        }
+        const entries = visibleEntries(tab);
+        $('panelCount').textContent = bbPlural(ITEM_COUNT, entries.length);
+        currentGroups = new Map();
+        if (!entries.length) {
+            list.innerHTML = emptyHtml(tab, view);
+        } else if (tabState[tab].group) {
+            const groups = groupEntries(entries);
+            groups.forEach((group) => currentGroups.set(group.key, group));
+            list.innerHTML = groups.map((group, index) => groupHtml(tab, group, index)).join('');
+        } else {
+            list.innerHTML = `<div class="flat-list" role="list">${entries.map((entry) => rowHtml(tab, entry)).join('')}</div>`;
+        }
+        if (loadErrors[tab]) setFeedback(T.loadFailed, true);
+        list.scrollTop = scrollPos[tab] || 0;
+        scrollPos[tab] = 0;
+        updateSelectionUi();
+    }
+
+    function renderHiddenNotice() {
+        const el = $('hiddenNotice');
+        const count = views[activeTab] ? views[activeTab].entries.filter((entry) => hiddenKeys[activeTab].has(entry.suggestion_key)).length : 0;
+        el.hidden = count === 0;
+        el.innerHTML = count ? `${esc(bbPlural(P.hidden, count))} · <button type="button" class="btn-link" data-act="show-hidden">${esc(T.showHidden)}</button>` : '';
+    }
+
+    function setFeedback(message, isError) {
+        const el = $('listFeedback');
+        el.textContent = message || '';
+        el.classList.toggle('error', !!isError);
+    }
+
+    function groupCheckState(group) {
+        const eligible = group.entries.filter((entry) => entry.bulk_eligible);
+        const chosen = eligible.filter((entry) => selectedKeys.has(entry.suggestion_key)).length;
+        return { eligible: eligible.length, chosen };
+    }
+
+    function updateSelectionUi() {
+        const list = $('resultsList');
+        list.querySelectorAll('.row-check').forEach((box) => { box.checked = selectedKeys.has(box.dataset.key); });
+        list.querySelectorAll('.group-check').forEach((box) => {
+            const group = currentGroups.get(box.dataset.group);
+            if (!group) return;
+            const { eligible, chosen } = groupCheckState(group);
+            box.checked = eligible > 0 && chosen === eligible;
+            box.indeterminate = chosen > 0 && chosen < eligible;
+        });
+        const exactCount = visibleEntries('pairs').filter((entry) => entry.bulk_eligible).length;
+        $('exactCount').textContent = exactCount;
+        $('addAllExactBtn').disabled = exactCount === 0;
+        $('selectedCount').textContent = selectedKeys.size;
+        $('addSelectedBtn').disabled = selectedKeys.size === 0;
+        $('clearSelectionBtn').disabled = selectedKeys.size === 0;
+        const needsReview = [...selectedKeys].some((key) => !(entryIndex.get(key) || {}).bulk_eligible);
+        $('selectionSummary').innerHTML = selectedKeys.size
+            ? `${esc(bbPlural(P.selected, selectedKeys.size))}${needsReview ? ` · <span class="warn">${esc(T.reviewWarning)}</span>` : ''}`
+            : '';
+    }
+
+    function toggleGroup(key) {
+        const tab = activeTab;
+        const group = currentGroups.get(key);
+        const el = [...$('resultsList').querySelectorAll('.series-group')].find((node) => node.dataset.group === key);
+        if (!group || !el) return;
+        const expand = !el.classList.contains('expanded');
+        if (tabState[tab].q) {
+            if (expand) searchCollapsed[tab].delete(key); else searchCollapsed[tab].add(key);
+        } else {
+            if (expand) expandedGroups[tab].add(key); else expandedGroups[tab].delete(key);
+            saveExpanded();
+        }
+        el.classList.toggle('expanded', expand);
+        el.querySelector('.sugg-group-toggle').setAttribute('aria-expanded', String(expand));
+        el.querySelector('.series-children').innerHTML = expand ? group.entries.map((entry) => rowHtml(tab, entry)).join('') : '';
+        updateSelectionUi();
+    }
+
+    function toggleGroupSelection(key, checked) {
+        const group = currentGroups.get(key);
+        if (!group) return;
+        const eligible = group.entries.filter((entry) => entry.bulk_eligible).map((entry) => entry.suggestion_key);
+        eligible.forEach((suggestionKey) => (checked ? selectedKeys.add(suggestionKey) : selectedKeys.delete(suggestionKey)));
+        setFeedback(checked
+            ? bbPlural(P.seriesSelected, eligible.length, { series: group.name })
+            : bbFormat(T.selectionCleared, { series: group.name }));
+        updateSelectionUi();
+    }
+
+    function hideEntry(tab, entry) {
+        hiddenKeys[tab].add(entry.suggestion_key);
+        selectedKeys.delete(entry.suggestion_key);
+        if (selectedSuggestionId === entry.suggestion_key) clearSelection();
+        saveHidden();
+        setFeedback(bbFormat(T.hiddenDone, { title: entry.title }));
+        renderList();
+    }
+
+    function showHidden() {
+        hiddenKeys[activeTab].clear();
+        saveHidden();
+        renderList();
+    }
+
+    function apiErrorText(code) {
+        return API_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code: code || 'error' });
+    }
+
+    async function ignorePair(entry) {
+        const form = new FormData();
+        form.append('action', 'never');
+        form.append('bridge_key', entry.bridge_key);
+        form.append('audio_source', entry.audio_source || '');
+        form.append('audio_title', entry.title || '');
+        form.append('audio_author', entry.author || '');
+        form.append('cover_url', entry.audio_cover_url || entry.cover_url || '');
+        try {
+            // The legacy handler answers with a redirect to the full page; it is not needed here.
+            const response = await fetch('/suggestions', { method: 'POST', body: form, redirect: 'manual', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!(response.ok || response.type === 'opaqueredirect')) throw new Error(`HTTP ${response.status}`);
+            selectedKeys.delete(entry.suggestion_key);
+            if (selectedSuggestionId === entry.suggestion_key) clearSelection();
+            setFeedback(bbFormat(T.ignoredDone, { title: entry.title }));
+        } catch (err) {
+            console.error('Ignore failed.', err);
+            setFeedback(apiErrorText('persistence_failed'), true);
+        }
+        loadView('pairs');
+    }
+
+    async function ebookAction(action, entry, button) {
+        const generation = views.ebook_only ? views.ebook_only.generation : null;
+        let url = '/api/suggestions/ebook-only/ignore';
+        let payload = { mode: 'ignore', ebook_key: entry.ebook_key, generation };
+        if (action === 'create') {
+            if (!window.confirm(bbFormat(T.confirmCreate, { title: entry.title }))) return;
+            url = '/api/suggestions/ebook-only/create';
+            payload = { ebook_key: entry.ebook_key, generation };
+        } else if (action === 'restore') {
+            payload.mode = 'reset';
+        }
+        if (button) button.disabled = true;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                body: JSON.stringify(payload),
+            });
+            const body = await response.json().catch(() => ({}));
+            if (response.ok && body.ok) {
+                const done = action === 'create' ? T.created : action === 'restore' ? T.restoredDone : T.ignoredDone;
+                setFeedback(bbFormat(done, { title: entry.title }));
+            } else {
+                setFeedback(apiErrorText(body.error || `http_${response.status}`), true);
+            }
+        } catch (err) {
+            console.error('Ebook Only action failed.', err);
+            setFeedback(apiErrorText('network'), true);
+        }
+        loadView('ebook_only');
+    }
+
+    // "Add selected" and "Add all exact" post to the existing add_many_to_queue handler,
+    // which rechecks every key on the server (ties always; any manual case for "exact").
     async function addManyToQueue(keys, intent) {
         if (!keys.length) return;
-        const bulkFeedback = document.getElementById('bulkFeedback');
-        if (bulkFeedback) {
-            bulkFeedback.classList.remove('show');
-            bulkFeedback.textContent = '';
-        }
+        const bulkFeedback = $('bulkFeedback');
+        bulkFeedback.classList.remove('show');
+        bulkFeedback.textContent = '';
         const formData = new FormData();
         formData.append('action', 'add_many_to_queue');
         if (intent) formData.append('bulk_intent', intent);
@@ -1000,68 +1707,133 @@
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const html = await response.text();
-            const queueList = document.getElementById('queueList');
+            const queueList = $('queueList');
             if (queueList) queueList.innerHTML = html;
             renderQueueCount();
 
-            const queuedKeys = new Set();
-            document.querySelectorAll('#queueList .queue-item').forEach((item) => {
-                const key = item.dataset.bridgeKey;
-                if (key) queuedKeys.add(key);
-            });
-
+            const queued = queuedBridgeKeys();
             let landed = 0;
-            keys.forEach((key) => {
-                if (queuedKeys.has(key)) {
-                    markSuggestionQueued(key);
-                    const cb = document.querySelector(`.suggestion-check[data-abs-id="${CSS.escape(key)}"]`);
-                    if (cb) cb.checked = false;
-                    landed++;
-                }
+            keys.forEach((key) => { if (queued.has(key)) landed++; });
+            [...selectedKeys].forEach((key) => {
+                const entry = entryIndex.get(key);
+                if (entry && queued.has(entry.bridge_key)) selectedKeys.delete(key);
             });
 
-            if (bulkFeedback) {
-                // Suggestions the server left for a person (see the card's "Manual choice").
-                const manual = Number.parseInt(response.headers.get('X-Skipped-Manual') || '0', 10) || 0;
-                const failed = keys.length - landed - manual;
-                const notes = [];
-                if (failed > 0 && landed > 0) {
-                    notes.push(bbFormat({{ _('Added {added} of {total}. {failed} could not be queued — re-run Scan Library.')|tojson }}, { added: landed, total: keys.length, failed: failed }));
-                } else if (failed > 0) {
-                    notes.push({{ _('Scan results are no longer available on the server. Click Scan Library again.')|tojson }});
-                }
-                if (manual > 0) {
-                    notes.push(bbFormat({{ _('{count} skipped: choose the ebook on the card.')|tojson }}, { count: manual }));
-                }
-                bulkFeedback.classList.toggle('show', notes.length > 0);
-                bulkFeedback.textContent = notes.join(' ');
+            // Suggestions the server left for a person (see the row's "Manual choice").
+            const manual = Number.parseInt(response.headers.get('X-Skipped-Manual') || '0', 10) || 0;
+            const failed = keys.length - landed - manual;
+            const notes = [];
+            if (failed > 0 && landed > 0) {
+                notes.push(bbFormat({{ _('Added {added} of {total}. {failed} could not be queued — re-run Scan Library.')|tojson }}, { added: landed, total: keys.length, failed: failed }));
+            } else if (failed > 0) {
+                notes.push({{ _('Scan results are no longer available on the server. Click Scan Library again.')|tojson }});
             }
-
-            updateBulkCounts();
+            if (manual > 0) {
+                notes.push(bbFormat({{ _('{count} skipped: choose the ebook on the card.')|tojson }}, { count: manual }));
+            }
+            bulkFeedback.classList.toggle('show', notes.length > 0);
+            bulkFeedback.textContent = notes.join(' ');
         } catch (err) {
             console.error('Bulk queue add failed; reloading to resync.', err);
             window.location.reload();
+            return;
         }
+        loadView('pairs');
     }
 
-    function addAllExact() { addManyToQueue(getExactKeys(), 'exact'); }
-    function addSelectedSuggestions() { addManyToQueue(getCheckedKeys()); }
-
-    updateBulkCounts();
-
-    const sortModeSelect = document.getElementById('sortMode');
-    if (sortModeSelect) {
-        const savedSortMode = localStorage.getItem('suggestionsSortMode');
-        if (savedSortMode === 'az' || savedSortMode === 'best') {
-            sortModeSelect.value = savedSortMode;
-        }
-        applySuggestionSort(sortModeSelect.value || 'best');
-        sortModeSelect.addEventListener('change', () => {
-            const sortMode = sortModeSelect.value || 'best';
-            localStorage.setItem('suggestionsSortMode', sortMode);
-            applySuggestionSort(sortMode);
-        });
+    function addAllExact() {
+        addManyToQueue(visibleEntries('pairs').filter((entry) => entry.bulk_eligible).map((entry) => entry.bridge_key), 'exact');
     }
+
+    function addSelectedSuggestions() {
+        addManyToQueue([...selectedKeys].map((key) => (entryIndex.get(key) || {}).bridge_key).filter(Boolean));
+    }
+
+    function updateFilter(changes) {
+        const st = tabState[activeTab];
+        if ('q' in changes && changes.q !== st.q) searchCollapsed[activeTab].clear();
+        Object.assign(st, changes);
+        saveState();
+        loadView(activeTab);
+    }
+
+    function entryFromRow(row) {
+        const key = row && row.dataset.key;
+        const view = views[activeTab];
+        return key && view ? view.entries.find((entry) => entry.suggestion_key === key) : null;
+    }
+
+    $('resultsList').addEventListener('click', (event) => {
+        const actButton = event.target.closest('[data-act]');
+        const toggle = event.target.closest('.sugg-group-toggle');
+        if (toggle) { toggleGroup(toggle.dataset.group); return; }
+        if (actButton) {
+            const act = actButton.dataset.act;
+            if (act === 'retry') { loadView(activeTab); return; }
+            if (act === 'show-hidden') { showHidden(); return; }
+            if (act === 'clear-filters') { tabState[activeTab] = { ...DEFAULTS[activeTab], sort: tabState[activeTab].sort, group: tabState[activeTab].group }; syncControls(); saveState(); loadView(activeTab); return; }
+            const entry = entryFromRow(actButton.closest('.sugg-row'));
+            if (!entry) return;
+            if (act === 'hide') hideEntry(activeTab, entry);
+            else if (act === 'review') selectSuggestion(entry.suggestion_key);
+            else if (act === 'ignore' && activeTab === 'pairs') ignorePair(entry);
+            else ebookAction(act, entry, actButton);
+            return;
+        }
+        if (event.target.closest('input, label, a, button')) return;
+        const row = event.target.closest('.sugg-row.pair-row');
+        if (row) selectSuggestion(row.dataset.key);
+    });
+
+    $('resultsList').addEventListener('change', (event) => {
+        const box = event.target;
+        if (box.classList.contains('row-check')) {
+            if (box.checked) selectedKeys.add(box.dataset.key); else selectedKeys.delete(box.dataset.key);
+            updateSelectionUi();
+        } else if (box.classList.contains('group-check')) {
+            toggleGroupSelection(box.dataset.group, box.checked);
+        }
+    });
+
+    $('hiddenNotice').addEventListener('click', (event) => { if (event.target.closest('[data-act="show-hidden"]')) showHidden(); });
+    $('addAllExactBtn').addEventListener('click', addAllExact);
+    $('addSelectedBtn').addEventListener('click', addSelectedSuggestions);
+    $('clearSelectionBtn').addEventListener('click', () => { selectedKeys.clear(); setFeedback(''); updateSelectionUi(); });
+
+    let searchTimer = null;
+    $('searchInput').addEventListener('input', (event) => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => updateFilter({ q: event.target.value.trim() }), 300);
+    });
+    $('seriesFilter').addEventListener('change', (event) => updateFilter({ series_key: event.target.value }));
+    $('sourceFilter').addEventListener('change', (event) => updateFilter({ source: event.target.value }));
+    $('statusFilter').addEventListener('change', (event) => updateFilter({ status: event.target.value }));
+    $('ignoredFilter').addEventListener('change', (event) => updateFilter({ ignored: event.target.value }));
+    $('sortMode').addEventListener('change', (event) => updateFilter({ sort: event.target.value }));
+    $('groupToggle').addEventListener('change', (event) => {
+        tabState[activeTab].group = event.target.checked;
+        saveState();
+        renderList();
+    });
+
+    const tabList = document.querySelector('.sugg-tabs');
+    tabList.addEventListener('click', (event) => {
+        const tab = event.target.closest('[role="tab"]');
+        if (tab) setTab(tab.dataset.tab);
+    });
+    tabList.addEventListener('keydown', (event) => {
+        const index = TABS.indexOf(activeTab);
+        let next = null;
+        if (event.key === 'ArrowRight') next = TABS[(index + 1) % TABS.length];
+        else if (event.key === 'ArrowLeft') next = TABS[(index + TABS.length - 1) % TABS.length];
+        else if (event.key === 'Home') next = TABS[0];
+        else if (event.key === 'End') next = TABS[TABS.length - 1];
+        if (next) { event.preventDefault(); setTab(next, true); }
+    });
+
+    loadInitialState();
+    renderTabCounts();
+    setTab(activeTab);
 
     if (scanInProgress) {
         document.getElementById('scanOverlay').classList.add('show');
