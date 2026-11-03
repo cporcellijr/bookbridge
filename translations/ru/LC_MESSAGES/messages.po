@@ -6298,3 +6298,11 @@ msgid_plural "%(num)s suggestions"
 msgstr[0] "%(num)s предложение"
 msgstr[1] "%(num)s предложения"
 msgstr[2] "%(num)s предложений"
+
+#: templates/settings.html
+msgid "Ignore local files in Suggestions"
+msgstr "Игнорировать локальные файлы в предложениях"
+
+#: templates/settings.html
+msgid "Skip local files in Pair Suggestions and Ebook Only on the next scan. Connected library books stay included."
+msgstr "Не учитывать локальные файлы в парных предложениях и разделе «Только электронная книга» при следующем сканировании. Книги из подключенных библиотек останутся в списке."

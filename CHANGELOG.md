@@ -8,6 +8,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Pair Suggestions and Ebook Only on the next Scan Library while keeping ebooks from your library services.
 - **Suggestions has two tabs: Pair Suggestions and Ebook Only.** Pair Suggestions keeps the
   audiobook/ebook matching, candidate review and Batch Match Queue; Ebook Only lists ebooks the last
   scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens Add Book

@@ -4154,6 +4154,7 @@ def get_searchable_ebooks(
 ):
     """Get ebook candidates, optionally collecting undeduped scan inventory."""
     discovery = source_states is not None
+    exclude_local_files = discovery and env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
     inventory_candidates = inventory_candidates if inventory_candidates is not None else []
     scan_local_metadata = local_metadata if local_metadata is not None else ({} if discovery else None)
     results = []
@@ -4177,10 +4178,10 @@ def get_searchable_ebooks(
             local_index = _build_local_ebook_title_index(scan_local_metadata)
             error_type = scan_local_metadata.get("_error_type") if isinstance(scan_local_metadata, dict) else None
             _record_suggestions_source_state(
-                source_states, "Local File", "ebook", True,
-                complete=error_type is None,
-                count=len(scan_local_metadata) if not error_type else None,
-                error_type=error_type,
+                source_states, "Local File", "ebook", not exclude_local_files,
+                complete=None if exclude_local_files else error_type is None,
+                count=None if exclude_local_files or error_type else len(scan_local_metadata),
+                error_type=None if exclude_local_files else error_type,
             )
         else:
             _record_suggestions_source_state(
@@ -4659,7 +4660,7 @@ def get_searchable_ebooks(
             logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
-    if EBOOK_DIR.exists():
+    if EBOOK_DIR.exists() and not exclude_local_files:
         try:
             if discovery and scan_local_metadata is not None:
                 local_files = [
@@ -5575,6 +5576,7 @@ def settings():
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_READALONG',
+            'SUGGESTIONS_EXCLUDE_LOCAL_FILES',
             'SUGGESTIONS_FULL_REFRESH_ENABLED',
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'ABS_COLLECTION_RECONCILE',
@@ -9757,6 +9759,12 @@ def scan_library_suggestions(
     attempted_at = time.time()
     persisted = _load_persisted_suggestions_cache()
     previous = persisted.get("ebook_discovery") or {}
+    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    exclude_setting_changed = bool(previous.get("exclude_local_files", False)) != exclude_local_files
+    if exclude_setting_changed:
+        cached_suggestions_by_abs = {}
+        cached_no_match_abs_ids = []
+        previous = {}
     ignored = persisted.get("ebook_ignored") or {}
     source_states = {}
     inventory_candidates = []
@@ -9803,11 +9811,12 @@ def scan_library_suggestions(
         snapshot.setdefault("completed_at", None)
         snapshot.setdefault("entries", {})
         snapshot["state"] = "incomplete"
+        snapshot["exclude_local_files"] = exclude_local_files
         snapshot["error"] = "source_incomplete"
         snapshot["attempted_at"] = attempted_at
         snapshot["source_states"] = source_states
-        cached = persisted.get("scan_cache_by_abs", {}) or {}
-        no_match = persisted.get("scan_cache_no_match_abs_ids", []) or []
+        cached = {} if exclude_setting_changed else persisted.get("scan_cache_by_abs", {}) or {}
+        no_match = [] if exclude_setting_changed else persisted.get("scan_cache_no_match_abs_ids", []) or []
         return {
             "suggestions": list(cached.values()),
             "cache_by_abs": cached,
@@ -9816,6 +9825,7 @@ def scan_library_suggestions(
             "ebook_discovery": snapshot,
             "source_states": source_states,
             "discovery_complete": False,
+            "_exclude_setting_changed": exclude_setting_changed,
             "scan_generation": persisted.get("scan_generation"),
             "scanned_at": persisted.get("scanned_at", 0.0),
         }
@@ -9907,12 +9917,13 @@ def scan_library_suggestions(
         stale_snapshot.setdefault("completed_at", None)
         stale_snapshot.setdefault("entries", {})
         stale_snapshot["state"] = "incomplete"
+        stale_snapshot["exclude_local_files"] = exclude_local_files
         stale_snapshot["error"] = "source_incomplete"
         snapshot["error"] = "source_incomplete"
         stale_snapshot["attempted_at"] = attempted_at
         stale_snapshot["source_states"] = source_states
-        cached = persisted.get("scan_cache_by_abs", {}) or {}
-        no_match = persisted.get("scan_cache_no_match_abs_ids", []) or []
+        cached = {} if exclude_setting_changed else persisted.get("scan_cache_by_abs", {}) or {}
+        no_match = [] if exclude_setting_changed else persisted.get("scan_cache_no_match_abs_ids", []) or []
         return {
             "suggestions": list(cached.values()),
             "cache_by_abs": cached,
@@ -9921,6 +9932,7 @@ def scan_library_suggestions(
             "ebook_discovery": stale_snapshot,
             "source_states": source_states,
             "discovery_complete": False,
+            "_exclude_setting_changed": exclude_setting_changed,
             "scan_generation": persisted.get("scan_generation"),
             "scanned_at": persisted.get("scanned_at", 0.0),
         }
@@ -10458,6 +10470,11 @@ def _run_suggestions_scan_job(job_id, cached_suggestions_by_abs=None, cached_no_
         else:
             scanned_at = results.get("scanned_at", _load_persisted_suggestions_cache().get("scanned_at", 0.0))
             save_payload = {"scanned_at": scanned_at}
+            if results.pop("_exclude_setting_changed", False):
+                save_payload.update({
+                    "scan_cache_by_abs": results.get("cache_by_abs", {}),
+                    "scan_cache_no_match_abs_ids": results.get("no_match_abs_ids", []),
+                })
         if isinstance(results.get("ebook_discovery"), dict):
             save_payload["ebook_discovery"] = results["ebook_discovery"]
         snapshot = results.get("ebook_discovery") or {}

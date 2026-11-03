@@ -18,6 +18,7 @@ from urllib.parse import quote
 from rapidfuzz.distance import Indel
 
 from src.utils.ebook_sources import normalize_ebook_source
+from src.utils.config_loader import env_truthy
 from src.utils.local_ebook_metadata import _EBOOK_SUFFIXES
 from src.utils.series_metadata import (
     _coerce_sequence,
@@ -148,6 +149,7 @@ def _candidate_record(candidate):
 
 def build_ebook_inventory(candidates: Iterable[Any], previous_entries: Optional[dict] = None) -> dict[str, dict]:
     """Build JSON-ready ebook records keyed by durable provider or physical identity."""
+    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
     previous_entries = previous_entries or {}
     previous_path_keys = {}
     reserved_previous_paths = {}
@@ -162,6 +164,8 @@ def build_ebook_inventory(candidates: Iterable[Any], previous_entries: Optional[
     path_to_key = {}
     for candidate in candidates or []:
         record = _candidate_record(candidate)
+        if exclude_local_files and record["source"] == "Local File":
+            continue
         if not record["key"]:
             continue
         path_key = record["path_key"]
@@ -319,7 +323,10 @@ def _entry_fingerprint(record):
         "aliases", "provenance", "source_file_id", "ebook_file_id", "abs_identifier",
         "abs_ebook_item_id", "kosync_doc_id", "document_id", "file_mtime_ns", "file_size",
     )
-    return _stable_fingerprint({field: record.get(field) for field in fields})
+    return _stable_fingerprint({
+        "exclude_local_files": env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES"),
+        **{field: record.get(field) for field in fields},
+    })
 
 
 def _stable_fingerprint(value):
@@ -550,6 +557,7 @@ def build_discovery_snapshot(
         "state": "complete",
         "completed_at": completed_at,
         "attempted_at": completed_at,
+        "exclude_local_files": env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES"),
         "audio_fingerprint": audio_fingerprint,
         "audio_fingerprints_by_key": audio_fingerprints_by_key,
         "entries": entries,
