@@ -15,6 +15,7 @@ from typing import Optional
 
 from src.db.models import Book
 from src.utils.ebook_utils import is_comic_ebook_filename
+from src.utils.logging_utils import sanitize_log_data
 from src.utils.series_metadata import resolve_series_for_book
 
 logger = logging.getLogger(__name__)
@@ -150,6 +151,16 @@ class BookMappingService:
             except Exception as e:
                 logger.warning(f"Shelf-watch: StoryGraph automatch failed for '{book.abs_id}': {e}", exc_info=True)
 
+    def _user_may_modify(self, user_id: Optional[int], abs_id: str) -> bool:
+        """Whether ``user_id`` may rewrite the mapping ``abs_id`` (system, admin, claimant or unclaimed)."""
+        if user_id is None:
+            return True
+        user = self.database_service.get_user(user_id)
+        if user is not None and getattr(user, "is_admin", False):
+            return True
+        claimants = self.database_service.get_book_user_ids(abs_id)
+        return not claimants or user_id in claimants
+
     def create_audio_mapping_from_match(
         self,
         *,
@@ -229,6 +240,39 @@ class BookMappingService:
             target_book.audio_provider_book_id = str(audio_provider_book_id or audio_source_id)
             target_book.audio_cover_url = audio_cover_url or target_book.audio_cover_url
 
+        if existing_book is not None and not self._user_may_modify(user_id, existing_book.abs_id):
+            same_pairing = bool(
+                (existing_book.kosync_doc_id and existing_book.kosync_doc_id == kosync_doc_id)
+                or (
+                    existing_book.ebook_filename == ebook_filename
+                    and (existing_book.ebook_source or None) == (ebook_source or None)
+                    and (existing_book.ebook_source_id or None) == (ebook_source_id or None)
+                )
+            )
+            if not same_pairing:
+                logger.info(
+                    "🔒 Refused to change mapping '%s': it belongs to another reader (%s would change)",
+                    sanitize_log_data(existing_book.abs_id), "the ebook pairing",
+                )
+                return None
+            logger.info(
+                "🔗 '%s' is already mapped by another reader with the same text — adding it to this reader's library unchanged",
+                sanitize_log_data(existing_book.abs_id),
+            )
+            self.database_service.link_user_book(user_id, existing_book.abs_id)
+            if audio_source.lower() == 'bookorbit' or str(ebook_source or '').lower() == 'bookorbit':
+                self.database_service.set_user_bookorbit_link(
+                    user_id=user_id,
+                    abs_id=existing_book.abs_id,
+                    audio_id=(
+                        str(audio_provider_book_id or audio_source_id)
+                        if audio_source.lower() == 'bookorbit' else None
+                    ),
+                    ebook_id=str(ebook_source_id) if ebook_source_id else None,
+                    title=audio_title,
+                )
+            return existing_book
+
         if existing_book and existing_book.kosync_doc_id:
             kosync_doc_id = existing_book.kosync_doc_id
 
@@ -275,6 +319,12 @@ class BookMappingService:
             if kosync_doc_id else None
         )
         if stale is not None and getattr(stale, "abs_id", None) != target_book.abs_id:
+            if not self._user_may_modify(user_id, stale.abs_id):
+                logger.info(
+                    "🔒 Refused to absorb mapping '%s': it belongs to another reader",
+                    sanitize_log_data(stale.abs_id),
+                )
+                return None
             for field in ("storyteller_uuid", "transcript_source", "transcript_file",
                           "abs_ebook_item_id"):
                 if not getattr(target_book, field, None):

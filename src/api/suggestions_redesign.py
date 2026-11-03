@@ -526,6 +526,14 @@ def suggestions_redesign_ebook_only_create() -> Any:
         else f"ebook-{kosync_id[:16]}"
     )
     document = database.get_kosync_document(kosync_id)
+    if (
+        existing is not None
+        and existing.sync_mode == "ebook_only"
+        and not existing.audio_source_id
+        and not database.is_user_linked(user_id, existing.abs_id)
+    ):
+        database.link_user_book(user_id, existing.abs_id)
+        return jsonify({"ok": True, "claimed": True, "ebook_key": ebook_key, "abs_id": existing.abs_id})
     if existing or database.get_book(target_id) or (document and document.linked_abs_id):
         return _api_error("already_mapped", 409)
     try:

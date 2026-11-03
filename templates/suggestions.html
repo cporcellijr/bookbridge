@@ -501,6 +501,7 @@
         createEbookOnlyTitle: {{ _('Add this ebook to BookBridge on its own, without an audiobook')|tojson }},
         confirmCreate: {{ _('Create an ebook-only book for "{title}"? It syncs reading progress without an audiobook.')|tojson }},
         created: {{ _('Created an ebook-only book for "{title}".')|tojson }},
+        claimed: {{ _('Added "{title}" to your library. It was already in BookBridge.')|tojson }},
         ignoredDone: {{ _('Ignored "{title}". It stays out of this list after new scans.')|tojson }},
         restoredDone: {{ _('Restored "{title}". The next scan checks it again.')|tojson }},
         hiddenDone: {{ _('Hid "{title}" for this session.')|tojson }},
@@ -2054,7 +2055,7 @@
             });
             const body = await response.json().catch(() => ({}));
             if (response.ok && body.ok) {
-                const done = action === 'create' ? T.created : action === 'restore' ? T.restoredDone : T.ignoredDone;
+                const done = action === 'create' ? (body.claimed ? T.claimed : T.created) : action === 'restore' ? T.restoredDone : T.ignoredDone;
                 setFeedback(bbFormat(done, { title: entry.title }));
             } else {
                 setFeedback(apiErrorText(body.error || `http_${response.status}`), true);

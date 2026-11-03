@@ -6103,6 +6103,10 @@ msgid "Open Search with this ebook selected and look for its audiobook"
 msgstr "Открыть «Поиск» с этой электронной книгой и найти для неё аудиокнигу"
 
 #: templates/suggestions.html
+msgid "Added \"{title}\" to your library. It was already in BookBridge."
+msgstr "Книга «{title}» добавлена в вашу библиотеку. Она уже была в BookBridge."
+
+#: templates/suggestions.html
 msgid "Find any book"
 msgstr "Найти любую книгу"
 
