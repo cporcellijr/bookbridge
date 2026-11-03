@@ -1272,13 +1272,15 @@ class DatabaseService:
         self._notify_catalog_change()
         return book
 
-    def save_book(self, book: Book) -> Book:
-        """Save or update a book model."""
+    def save_book(self, book: Book, create_only: bool = False) -> Optional[Book]:
+        """Save or update a book model; ``create_only`` returns None instead of touching an existing row."""
         from sqlalchemy.exc import IntegrityError
         from src.utils.config_loader import env_truthy
 
         with self.get_session() as session:
             existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
+            if existing is not None and create_only:
+                return None
 
             if existing is None:
                 # Keep the first creator, but claim the mapping for both requests
@@ -1292,6 +1294,8 @@ class DatabaseService:
                     session.rollback()
                     if "UNIQUE constraint failed: books.abs_id" not in str(exc.orig):
                         raise
+                    if create_only:
+                        return None
                     existing = session.query(Book).filter(Book.abs_id == book.abs_id).first()
                     if existing is None:
                         raise

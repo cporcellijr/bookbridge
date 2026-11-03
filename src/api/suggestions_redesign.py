@@ -446,7 +446,8 @@ def suggestions_redesign_ebook_only_create() -> Any:
         str(resolved["ebook_source_id"]) if resolved["ebook_source"] == "ABS"
         else f"ebook-{kosync_id[:16]}"
     )
-    if existing or database.get_book(target_id):
+    document = database.get_kosync_document(kosync_id)
+    if existing or database.get_book(target_id) or (document and document.linked_abs_id):
         return _api_error("already_mapped", 409)
     try:
         saved, message, status = web._upsert_storyteller_mapping(
@@ -457,10 +458,13 @@ def suggestions_redesign_ebook_only_create() -> Any:
             ebook_source_id=resolved["ebook_source_id"],
             precomputed_kosync_doc_id=kosync_id,
             ebook_source_path=resolved.get("ebook_source_path") or "",
+            create_only=True,
         )
     except TypeError:
         web.logger.exception("Suggestions ebook-only create mapping integration is not installed")
         return _api_error("ebook_create_integration_unavailable", 503)
+    if message == web.EBOOK_ALREADY_MAPPED:
+        return _api_error("already_mapped", 409)
     if message or not saved:
         return _api_error("mapping_failed", status or 409)
     web._claim_book_for_user_id(user_id, saved.abs_id)

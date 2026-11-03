@@ -356,3 +356,10 @@ Selection and queueing as built:
 - Pair "Ignore" posts the legacy `action=never`; "Hide for now" is browser-session state only (sessionStorage) and calls nothing.
 
 Remaining limits: no Ebook Only "Open source" link (the contract has no trustworthy provider URL), no author sort (backend sorts are series/title/confidence), and no per-ebook refresh. Russian strings are in the `.po`; they appear only after a Docker rebuild compiles the catalog.
+
+Review fixes (after a code review of `0e55338..e92517c`):
+
+- Ebook-only create is insert-only: `_upsert_storyteller_mapping(create_only=True)` refuses to reuse a hash or target row, and `save_book(create_only=True)` returns None instead of updating a row another match inserted concurrently. Both surface as 409 `already_mapped`. A hash already linked through `KosyncDocument.linked_abs_id` is refused too.
+- Suggestions scans use `_scan_user_clients()`: a user who may not inherit the admin's configuration gets an incomplete scan (prior results kept) instead of the global clients when their own bundle cannot load.
+- `add_many_to_queue` accepts an optional `generation`; a value that no longer matches the persisted Pair generation returns 409 `{"error":"stale_generation"}`. The page sends it.
+- BookOrbit `get_book_detail(..., fresh_only=True)` returns None rather than a cached copy when the forced read fails; Add Book preselect and ebook-only create use it.

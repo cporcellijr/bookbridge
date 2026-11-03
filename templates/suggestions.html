@@ -1161,11 +1161,13 @@
                 signal: controller.signal,
                 headers: { Accept: 'application/json' },
             });
-            const body = await response.json().catch(() => null);
+            // An abort can land while the body is read; keep it an AbortError.
+            const body = await response.json().catch((err) => { if (err.name === 'AbortError') throw err; return null; });
             if (!response.ok || !body || !Array.isArray(body.entries)) {
                 throw new Error((body && body.error) || `HTTP ${response.status}`);
             }
             views[tab] = body;
+            if (loadErrors[tab] && tab === activeTab) setFeedback('');
             loadErrors[tab] = null;
             tabCounts[tab] = body.counts.active;
             if (tab === 'pairs') syncSelection(body);
@@ -1698,6 +1700,8 @@
         const formData = new FormData();
         formData.append('action', 'add_many_to_queue');
         if (intent) formData.append('bulk_intent', intent);
+        // The server refuses keys picked from an older scan than the one it now holds.
+        if (views.pairs && views.pairs.generation != null) formData.append('generation', String(views.pairs.generation));
         keys.forEach((key) => formData.append('bridge_keys', key));
         try {
             const response = await fetch('/suggestions', {
@@ -1705,6 +1709,11 @@
                 body: formData,
                 headers: { 'X-Requested-With': 'XMLHttpRequest' },
             });
+            if (response.status === 409) {
+                setFeedback(API_ERRORS.stale_generation, true);
+                loadView('pairs');
+                return;
+            }
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const html = await response.text();
             const queueList = $('queueList');

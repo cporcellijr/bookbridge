@@ -784,6 +784,17 @@ def uc():
     return _global_clients
 
 
+def _scan_user_clients():
+    """uc() for Suggestions scans: a user who may not use the admin's clients gets an error, not them."""
+    clients = uc()
+    if isinstance(clients, _GlobalClients):
+        user_id = get_current_user_id()
+        user = database_service.get_user(user_id) if user_id is not None and database_service is not None else None
+        if user is not None and not _global_fallback_allowed(database_service, user):
+            raise PermissionError("user client bundle unavailable")
+    return clients
+
+
 def _client_bundle_kwargs(clients):
     """Thread a real per-user bundle into background work; omit global fallback."""
     if isinstance(clients, _GlobalClients):
@@ -3373,6 +3384,9 @@ def _run_storyteller_library_hourly():
                 _active_bundle.reset(bundle_token)
 
 
+EBOOK_ALREADY_MAPPED = "This ebook is already in BookBridge"
+
+
 def _upsert_storyteller_mapping(
     *,
     mode_hint,
@@ -3387,6 +3401,7 @@ def _upsert_storyteller_mapping(
     preserve_primary_kosync=False,
     precomputed_kosync_doc_id=None,
     ebook_source_path=None,
+    create_only=False,
 ):
     """
     Shared Storyteller/ebook mapping upsert for:
@@ -3493,6 +3508,11 @@ def _upsert_storyteller_mapping(
         preferred_abs_id = requested_abs_id
         if not preferred_abs_id and selected_ebook_source == "ABS" and selected_ebook_source_id:
             preferred_abs_id = selected_ebook_source_id
+        if create_only and (
+            existing_by_hash
+            or database_service.get_book(preferred_abs_id or f"ebook-{kosync_doc_id[:16]}")
+        ):
+            return None, EBOOK_ALREADY_MAPPED, 409
 
         if existing_by_hash:
             if preferred_abs_id and existing_by_hash.abs_id != preferred_abs_id:
@@ -3635,7 +3655,13 @@ def _upsert_storyteller_mapping(
             storyteller_manifest,
         )
 
-    saved_book = database_service.save_book(target_book)
+    if create_only:
+        # Insert-only: a row another match created after the checks above is left alone.
+        saved_book = database_service.save_book(target_book, create_only=True)
+        if saved_book is None:
+            return None, EBOOK_ALREADY_MAPPED, 409
+    else:
+        saved_book = database_service.save_book(target_book)
     if not isinstance(getattr(saved_book, "abs_id", None), str):
         saved_book = target_book
 
@@ -4166,6 +4192,7 @@ def get_searchable_ebooks(
 ):
     """Get ebook candidates, optionally collecting undeduped scan inventory."""
     discovery = source_states is not None
+    exclude_local_files = discovery and env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
     inventory_candidates = inventory_candidates if inventory_candidates is not None else []
     scan_local_metadata = local_metadata if local_metadata is not None else ({} if discovery else None)
     results = []
@@ -4189,10 +4216,10 @@ def get_searchable_ebooks(
             local_index = _build_local_ebook_title_index(scan_local_metadata)
             error_type = scan_local_metadata.get("_error_type") if isinstance(scan_local_metadata, dict) else None
             _record_suggestions_source_state(
-                source_states, "Local File", "ebook", True,
-                complete=error_type is None,
-                count=len(scan_local_metadata) if not error_type else None,
-                error_type=error_type,
+                source_states, "Local File", "ebook", not exclude_local_files,
+                complete=None if exclude_local_files else error_type is None,
+                count=None if exclude_local_files or error_type else len(scan_local_metadata),
+                error_type=None if exclude_local_files else error_type,
             )
         else:
             _record_suggestions_source_state(
@@ -4671,7 +4698,7 @@ def get_searchable_ebooks(
             logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
-    if EBOOK_DIR.exists():
+    if EBOOK_DIR.exists() and not exclude_local_files:
         try:
             if discovery and scan_local_metadata is not None:
                 local_files = [
@@ -5588,6 +5615,7 @@ def settings():
             'SUGGESTIONS_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_ENABLED',
             'SUGGESTIONS_AUTO_MATCH_READALONG',
+            'SUGGESTIONS_EXCLUDE_LOCAL_FILES',
             'SUGGESTIONS_FULL_REFRESH_ENABLED',
             'ABS_ONLY_SEARCH_IN_ABS_LIBRARY_ID',
             'ABS_COLLECTION_RECONCILE',
@@ -9593,8 +9621,10 @@ def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
         filename = path
     elif source == "BookOrbit":
         client = uc().bookorbit_client
-        detail = client.get_book_detail(source_id, force=True)
-        primary = client._primary_file(detail or {}, kind="ebook") or {}
+        detail = client.get_book_detail(source_id, force=True, fresh_only=True)
+        if not detail:
+            return None
+        primary = client._primary_file(detail, kind="ebook") or {}
         expected = _first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
         if expected is not None and str(primary.get("id")) != str(expected):
             return None
@@ -9639,7 +9669,7 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
             target = Path(directory) / ("selected" + Path(selected.name).suffix)
             if source == "BookOrbit":
                 client = clients.bookorbit_client
-                detail = client.get_book_detail(source_id)
+                detail = client.get_book_detail(source_id, force=True, fresh_only=True)
                 primary = client._primary_file(detail or {}, kind="ebook") or {}
                 expected = _first_not_none(entry.get("source_file_id"), entry.get("ebook_file_id"))
                 if expected is not None and str(primary.get("id")) != str(expected):
@@ -9786,13 +9816,19 @@ def scan_library_suggestions(
     attempted_at = time.time()
     persisted = _load_persisted_suggestions_cache()
     previous = persisted.get("ebook_discovery") or {}
+    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    exclude_setting_changed = bool(previous.get("exclude_local_files", False)) != exclude_local_files
+    if exclude_setting_changed:
+        cached_suggestions_by_abs = {}
+        cached_no_match_abs_ids = []
+        previous = {}
     ignored = persisted.get("ebook_ignored") or {}
     source_states = {}
     inventory_candidates = []
     local_metadata = {}
     service = _get_suggestions_service()
     try:
-        clients = uc()
+        clients = _scan_user_clients()
         abs_client = getattr(clients, "abs_client", None)
         abs_catalog = None
         if abs_client and abs_client.is_configured():
@@ -9832,11 +9868,12 @@ def scan_library_suggestions(
         snapshot.setdefault("completed_at", None)
         snapshot.setdefault("entries", {})
         snapshot["state"] = "incomplete"
+        snapshot["exclude_local_files"] = exclude_local_files
         snapshot["error"] = "source_incomplete"
         snapshot["attempted_at"] = attempted_at
         snapshot["source_states"] = source_states
-        cached = persisted.get("scan_cache_by_abs", {}) or {}
-        no_match = persisted.get("scan_cache_no_match_abs_ids", []) or []
+        cached = {} if exclude_setting_changed else persisted.get("scan_cache_by_abs", {}) or {}
+        no_match = [] if exclude_setting_changed else persisted.get("scan_cache_no_match_abs_ids", []) or []
         return {
             "suggestions": list(cached.values()),
             "cache_by_abs": cached,
@@ -9845,6 +9882,7 @@ def scan_library_suggestions(
             "ebook_discovery": snapshot,
             "source_states": source_states,
             "discovery_complete": False,
+            "_exclude_setting_changed": exclude_setting_changed,
             "scan_generation": persisted.get("scan_generation"),
             "scanned_at": persisted.get("scanned_at", 0.0),
         }
@@ -9936,12 +9974,13 @@ def scan_library_suggestions(
         stale_snapshot.setdefault("completed_at", None)
         stale_snapshot.setdefault("entries", {})
         stale_snapshot["state"] = "incomplete"
+        stale_snapshot["exclude_local_files"] = exclude_local_files
         stale_snapshot["error"] = "source_incomplete"
         snapshot["error"] = "source_incomplete"
         stale_snapshot["attempted_at"] = attempted_at
         stale_snapshot["source_states"] = source_states
-        cached = persisted.get("scan_cache_by_abs", {}) or {}
-        no_match = persisted.get("scan_cache_no_match_abs_ids", []) or []
+        cached = {} if exclude_setting_changed else persisted.get("scan_cache_by_abs", {}) or {}
+        no_match = [] if exclude_setting_changed else persisted.get("scan_cache_no_match_abs_ids", []) or []
         return {
             "suggestions": list(cached.values()),
             "cache_by_abs": cached,
@@ -9950,6 +9989,7 @@ def scan_library_suggestions(
             "ebook_discovery": stale_snapshot,
             "source_states": source_states,
             "discovery_complete": False,
+            "_exclude_setting_changed": exclude_setting_changed,
             "scan_generation": persisted.get("scan_generation"),
             "scanned_at": persisted.get("scanned_at", 0.0),
         }
@@ -10487,6 +10527,11 @@ def _run_suggestions_scan_job(job_id, cached_suggestions_by_abs=None, cached_no_
         else:
             scanned_at = results.get("scanned_at", _load_persisted_suggestions_cache().get("scanned_at", 0.0))
             save_payload = {"scanned_at": scanned_at}
+            if results.pop("_exclude_setting_changed", False):
+                save_payload.update({
+                    "scan_cache_by_abs": results.get("cache_by_abs", {}),
+                    "scan_cache_no_match_abs_ids": results.get("no_match_abs_ids", []),
+                })
         if isinstance(results.get("ebook_discovery"), dict):
             save_payload["ebook_discovery"] = results["ebook_discovery"]
         snapshot = results.get("ebook_discovery") or {}
@@ -11280,6 +11325,11 @@ def suggestions_page():
 
         elif action == 'add_many_to_queue':
             keys = request.form.getlist('bridge_keys')
+            seen_generation = request.form.get('generation')
+            if seen_generation is not None:
+                from src.services.suggestions_view import _pair_scan
+                if seen_generation != str(_pair_scan(_load_persisted_suggestions_cache()).get("generation")):
+                    return jsonify({"error": "stale_generation"}), 409
             suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
             cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
 

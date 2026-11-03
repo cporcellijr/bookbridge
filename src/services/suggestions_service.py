@@ -6,6 +6,7 @@ from typing import Callable, List, Set, Any, Dict, Optional
 from src.services.ebook_discovery import AudioCandidateIndex, ebook_key
 from src.services.llm_matching import craft_search_terms
 from src.utils.ebook_sources import normalize_ebook_source
+from src.utils.config_loader import env_truthy
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.series_metadata import (
     extract_series_from_abs_metadata,
@@ -200,15 +201,18 @@ class SuggestionsService:
         prepared = []
         resolver = self.calibre_identifier_resolver
         resolver_enabled = bool(resolver and resolver.is_enabled())
+        exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
 
         for candidate in candidates or []:
+            candidate_source = (getattr(candidate, 'source', None) or '').strip()
+            if exclude_local_files and candidate_source == "Local File":
+                continue
             candidate_title = self._candidate_title(candidate)
             if not candidate_title:
                 continue
 
             candidate_author = self._candidate_author(candidate)
             candidate_language = str(getattr(candidate, 'language', None) or '').strip()
-            candidate_source = (getattr(candidate, 'source', None) or '').strip()
             hypotheses = [(candidate_title, candidate_author)]
             # Author credits from metadata, not guessed from a filename.
             trusted_author = candidate_author
