@@ -160,9 +160,10 @@ class PageTests(AppTestCase):
                 self.assertEqual(self.client.get(f"/api/suggestions/discovery?tab={tab}").status_code, 200)
             start.assert_not_called()
         self.assertIn('role="tablist"', html)
-        self.assertEqual(len(re.findall(r'<button[^>]*role="tab"', html)), 2)
+        self.assertEqual(len(re.findall(r'<button[^>]*role="tab"', html)), 3)
         self.assertIn('id="tab-pairs"', html)
         self.assertIn('id="tab-ebook_only"', html)
+        self.assertIn('id="tab-search"', html)
 
 
 class TemplateGuardTests(unittest.TestCase):

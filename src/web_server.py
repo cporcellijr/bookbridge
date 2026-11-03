@@ -29,7 +29,7 @@ from zoneinfo import ZoneInfo
 import requests
 import schedule
 from dependency_injector import providers
-from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context
+from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context, abort
 from functools import wraps
 from src.utils.user_context import (
     set_current_user_id, reset_current_user_id,
@@ -567,7 +567,7 @@ _LOGIN_FAILURE_WINDOW = 60
 # suggestions are admin-only ("admin sets things up, users just use").
 _ADMIN_ONLY_ENDPOINTS = {
     'settings',
-    'suggestions', 'get_suggestions', 'suggestions_scan_status',
+    'get_suggestions', 'suggestions_scan_status',
     'dismiss_suggestion', 'ignore_suggestion', 'clear_stale_suggestions',
     'stats_view', 'api_stats', 'api_stats_reading_day', 'api_stats_reading_calendar',
     'api_stats_book_detail', 'api_stats_yearly_recap',
@@ -793,6 +793,15 @@ def _scan_user_clients():
         if user is not None and not _global_fallback_allowed(database_service, user):
             raise PermissionError("user client bundle unavailable")
     return clients
+
+
+def _acting_user_may_use_global_config() -> bool:
+    """True when no user is acting or the acting user may use the admin's global clients."""
+    user_id = get_current_user_id()
+    if user_id is None or database_service is None:
+        return True
+    user = database_service.get_user(user_id)
+    return user is None or _global_fallback_allowed(database_service, user)
 
 
 def _client_bundle_kwargs(clients):
@@ -3838,7 +3847,7 @@ def get_searchable_audiobooks(search_term, source_states=None, abs_catalog=None,
     discovery = source_states is not None
     adapters = {}
     try:
-        clients = uc()
+        clients = _scan_user_clients()
         if clients.abs_client and clients.abs_client.is_configured():
             if discovery and abs_catalog is None:
                 _record_suggestions_source_state(
@@ -3865,6 +3874,12 @@ def get_searchable_audiobooks(search_term, source_states=None, abs_catalog=None,
                 source_states, "_client_registry", "audio", True, complete=False, error_type=type(e).__name__,
             )
             logger.warning("Could not build user-scoped audio adapters (%s)", type(e).__name__)
+            return []
+        if not _acting_user_may_use_global_config():
+            logger.warning(
+                "Could not build user-scoped audio adapters; global adapters withheld (%s)",
+                type(e).__name__, exc_info=True,
+            )
             return []
         logger.debug("Could not build user-scoped audio adapters, falling back to globals: %s", e)
         adapters = container.audio_source_adapters() if hasattr(container, "audio_source_adapters") else {}
@@ -4199,7 +4214,7 @@ def get_searchable_ebooks(
     found_filenames = set()
     found_stems = set()  # To dedupe by title stem
     try:
-        clients = uc()
+        clients = _scan_user_clients()
     except Exception as exc:
         if discovery:
             _record_suggestions_source_state(
@@ -7589,8 +7604,8 @@ def shelfmark():
 
 
 def forge():
-    """Legacy Forge page entry point; the unified Add Book flow owns this UI."""
-    return redirect(url_for('add_book'), code=302)
+    """Legacy Forge page entry point; the Suggestions Search tab owns this UI."""
+    return _legacy_search_redirect()
 
 
 def forge_search_audio():
@@ -8077,8 +8092,7 @@ def alignments_restore():
 
 def match():
     if request.method == 'GET':
-        search = request.args.get('search', '')
-        return redirect(url_for('add_book', search=search), code=302)
+        return _legacy_search_redirect()
 
     if request.method == 'POST':
         abs_id = (request.form.get('audiobook_id') or '').strip()
@@ -9498,52 +9512,23 @@ def _queue_item_from_match_form(clients) -> "dict | None":
 
 
 
-def _add_book_view():
-    """Render and handle the unified queue-based Add Book view."""
-    clients = uc()
-    storyteller_enabled = bool(clients.storyteller_client.is_configured())
-    if request.method == 'POST':
-        action = request.form.get('action')
-        if action in ('forge_and_match_queue', 'forge_only_queue') and not storyteller_enabled:
-            flash("Configure Storyteller before creating a Storyteller edition.", "warning")
-            return redirect(url_for('add_book'))
-        if action == 'add_to_queue':
-            queue_item = _queue_item_from_match_form(clients)
-            if queue_item:
-                _match_queue_add(queue_item)
-            # Clear the search box + results after queueing so the user starts the
-            # next book from a clean search (drop the preserved `search` term).
-            return redirect(url_for('add_book'))
-        elif action == 'remove_from_queue':
-            abs_id = request.form.get('abs_id')
-            _match_queue_remove(abs_id)
-            return redirect(url_for('add_book'))
-        elif action == 'clear_queue':
-            _match_queue_clear()
-            return redirect(url_for('add_book'))
-        elif action == 'forge_and_match_queue':
-            _queue_items = _match_queue_drain()
-            _spawn_user_background(_process_forge_match_queue, _queue_items, label="batch-forge-match")
-            flash(f"Forging + matching {len(_queue_items)} book(s) in the background…", "info")
-            return redirect(url_for('index'))
-        elif action == 'forge_only_queue':
-            _queue_items = _match_queue_drain()
-            forge_stage_mode = (request.form.get('forge_stage_mode') or '').strip() or None
-            _spawn_user_background(_process_forge_only_queue, _queue_items, forge_stage_mode, label="add-book-forge-only")
-            flash(f"Forging {len(_queue_items)} edition(s) in the background…", "info")
-            return redirect(url_for('index'))
-        elif action == 'process_queue':
-            _queue_items = _match_queue_drain()
-            _spawn_user_background(_process_batch_queue, _queue_items, label="batch-match-process")
-            flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
-            return redirect(url_for('index'))
+def _suggestions_search_results(
+    search: str, review: str, ebook_key: str, generation: str,
+) -> tuple[list, list, list, bool, str, str]:
+    """Run the Suggestions Search tab lookup.
 
-    search = request.args.get('search', '').strip().lower()
+    Returns (audiobooks, ebooks, storyteller_books, storyteller_search_failed,
+    effective_search_term, mode) where mode is "review", "ebook_key" or "search".
+    """
+    clients = _scan_user_clients()
+    storyteller_enabled = bool(clients.storyteller_client.is_configured())
+    search = (search or '').strip().lower()
+    review = (review or '').strip()
+    ebook_key = (ebook_key or '').strip()
     audiobooks, ebooks, storyteller_books = [], [], []
     storyteller_search_failed = False
-    review = request.args.get('review', '').strip()
+    mode = "search"
     review_pair = _watch_suggestion_review(review) if review else None
-    ebook_key = request.args.get('ebook_key', '').strip()
     if ebook_key:
         user = current_user()
         if not user or not user.is_admin:
@@ -9551,7 +9536,7 @@ def _add_book_view():
         from src.services.suggestions_view import project_suggestions
         persisted = _load_persisted_suggestions_cache()
         snapshot = persisted.get("ebook_discovery") or {}
-        if request.args.get("generation") != snapshot.get("generation"):
+        if generation != snapshot.get("generation"):
             abort(409)
         projected = project_suggestions(
             tab="ebook_only", ebook_snapshot=snapshot,
@@ -9567,45 +9552,53 @@ def _add_book_view():
         ebooks = [selected]
         search = search or entry.get("title") or ""
         audiobooks = _search_audiobooks_with_fallback(search) if search else []
+        mode = "ebook_key"
     elif review_pair:
         audiobooks, ebooks, search = review_pair
+        mode = "review"
     elif search:
         audiobooks = _search_audiobooks_with_fallback(search)
-
-        # Use new search method
         ebooks = _search_ebooks_with_fallback(search)
         ebooks.sort(key=lambda x: x.name.lower())
         ebooks = _promote_authoritative_ebook_matches(audiobooks, ebooks)
 
-        # Search Storyteller
-        if storyteller_enabled:
-            try:
-                storyteller_books = clients.storyteller_client.search_books(search)
-                if storyteller_books is None:
-                    storyteller_books = []
-                    storyteller_search_failed = True
-            except Exception as e:
-                logger.warning(f"⚠️ Storyteller search failed in add_book route: {e}", exc_info=True)
+    if search and storyteller_enabled:
+        try:
+            storyteller_books = clients.storyteller_client.search_books(search)
+            if storyteller_books is None:
+                storyteller_books = []
                 storyteller_search_failed = True
+        except Exception as e:
+            logger.warning(f"⚠️ Storyteller search failed in suggestions search: {e}", exc_info=True)
+            storyteller_search_failed = True
+    return audiobooks, ebooks, storyteller_books, storyteller_search_failed, search, mode
 
-    return render_template('add_book.html', audiobooks=audiobooks, ebooks=ebooks,
-                           storyteller_books=storyteller_books,
-                           storyteller_search_failed=storyteller_search_failed,
-                           queue=_load_match_queue(), search=search,
-                           storyteller_enabled=storyteller_enabled)
+
+def _legacy_search_redirect(code: int = 302):
+    """Redirect a legacy Add Book/Match/Forge URL to the Suggestions Search tab."""
+    args = request.args
+    params = {
+        'q': args.get('search') or args.get('q') or '',
+        'review': args.get('review') or '',
+        'ebook_key': args.get('ebook_key') or '',
+        'generation': args.get('generation') or '',
+    }
+    params = {key: value for key, value in params.items() if value}
+    return redirect(url_for('suggestions', tab='search', **params), code=code)
 
 
 def batch_match():
-    """Preserve legacy `/batch-match` requests through the unified Add Book flow."""
+    """Preserve legacy `/batch-match` requests through the Suggestions Search tab."""
     if request.method == 'GET':
-        search = request.args.get('search', '')
-        return redirect(url_for('add_book', search=search), code=302)
-    return _add_book_view()
+        return _legacy_search_redirect()
+    return suggestions_page()
 
 
 def add_book():
-    """Unified `/add-book` page — single, batch, forge, and match in one queue-based flow."""
-    return _add_book_view()
+    """Preserve legacy `/add-book` requests through the Suggestions Search tab."""
+    if request.method == 'GET':
+        return _legacy_search_redirect()
+    return suggestions_page()
 
 
 def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
@@ -11201,6 +11194,12 @@ def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     }
 
 
+_NON_ADMIN_QUEUE_ACTIONS = frozenset({
+    'add_to_queue', 'remove_from_queue', 'clear_queue',
+    'process_queue', 'forge_and_match_queue', 'forge_only_queue',
+})
+
+
 def suggestions_page():
     _clear_legacy_suggestions_session_payload()
     clients = uc()
@@ -11209,9 +11208,16 @@ def suggestions_page():
     if suggestions_state is None:
         suggestions_state = _default_suggestions_state()
 
+    is_admin = bool(
+        current_app.config.get('LOGIN_DISABLED')
+        or (current_user() and current_user().is_admin)
+    )
+
     if request.method == 'POST':
         action = request.form.get('action')
-        if action == 'forge_and_match_queue' and not storyteller_enabled:
+        if not is_admin and action not in _NON_ADMIN_QUEUE_ACTIONS:
+            abort(403)
+        if action in ('forge_and_match_queue', 'forge_only_queue') and not storyteller_enabled:
             flash("Configure Storyteller before creating a Storyteller edition.", "warning")
             return redirect(url_for('suggestions'))
 
@@ -11383,12 +11389,34 @@ def suggestions_page():
             flash(f"Forging + matching {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
+        elif action == 'forge_only_queue':
+            _queue_items = _match_queue_drain()
+            forge_stage_mode = (request.form.get('forge_stage_mode') or '').strip() or None
+            _spawn_user_background(_process_forge_only_queue, _queue_items, forge_stage_mode, label="add-book-forge-only")
+            flash(f"Forging {len(_queue_items)} edition(s) in the background…", "info")
+            return redirect(url_for('index'))
+
         elif action == 'process_queue':
             _queue_items = _match_queue_drain()
             _apply_queue_readalong_request(_queue_items)
             _spawn_user_background(_process_batch_queue, _queue_items, label="batch-match-process")
             flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
+
+    if not is_admin:
+        return render_template(
+            'suggestions.html',
+            suggestions=[],
+            queue=_sanitize_cover_urls(_load_match_queue()),
+            scan_has_run=False,
+            scan_in_progress=False,
+            scan_error=None,
+            scan_stats={},
+            storyteller_enabled=storyteller_enabled,
+            tab_counts=None,
+            is_admin=False,
+            available_tabs=['search'],
+        )
 
     scan_in_progress = False
     scan_error = None
@@ -11567,6 +11595,8 @@ def suggestions_page():
         scan_stats=suggestions_state.get('scan_last_stats', {}),
         storyteller_enabled=storyteller_enabled,
         tab_counts=suggestions_tab_counts(),
+        is_admin=True,
+        available_tabs=['pairs', 'ebook_only', 'search'],
     )
 
 
@@ -16338,7 +16368,7 @@ def create_app(test_container=None):
     app.jinja_env.filters['format_time_ago'] = format_time_ago
 
     def _legacy_book_linker_redirect(dummy=None):
-        return redirect(url_for('add_book'), code=301)
+        return redirect(url_for('suggestions', tab='search'), code=301)
 
     # Register all routes here
     app.add_url_rule('/setup', 'setup', setup, methods=['GET', 'POST'])

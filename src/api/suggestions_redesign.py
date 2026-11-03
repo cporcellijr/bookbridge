@@ -7,6 +7,7 @@ import time
 from typing import Any, Optional
 
 from flask import jsonify, request
+from werkzeug.exceptions import HTTPException
 
 from src.services.ebook_discovery import _legacy_basename, _mapped_identity_index, ebook_identity_keys
 from src.utils.ebook_sources import normalize_ebook_source
@@ -74,6 +75,84 @@ def init_suggestions_redesign_routes(app: Any, web_module: Any = None) -> None:
         suggestions_redesign_ebook_only_create,
         methods=["POST"],
     )
+    app.add_url_rule(
+        "/api/suggestions/search",
+        "suggestions_redesign_search",
+        suggestions_search,
+        methods=["GET"],
+    )
+
+
+def suggestions_search():
+    """Search audiobooks, ebooks and Storyteller for the Suggestions Search tab."""
+    web = _web_server()
+    query = request.args.get("q", "").strip()
+    review = request.args.get("review", "").strip()
+    ebook_key = request.args.get("ebook_key", "").strip()
+    if not (query or review or ebook_key):
+        return _api_error("query_required", 400)
+    try:
+        audiobooks, ebooks, storyteller, st_failed, effective, mode = web._suggestions_search_results(
+            query, review, ebook_key, request.args.get("generation"),
+        )
+        storyteller_enabled = bool(web._scan_user_clients().storyteller_client.is_configured())
+    except PermissionError:
+        return _api_error("clients_unavailable", 503)
+    except HTTPException as exc:
+        if exc.code == 403:
+            return _api_error("admin_required", 403)
+        if exc.code == 409:
+            return _api_error("stale_generation", 409)
+        raise
+    return jsonify({
+        "query": effective,
+        "mode": mode,
+        "audiobooks": [
+            {
+                "source": ab.source or "",
+                "source_id": ab.source_id or "",
+                "title": ab.title or "",
+                "subtitle": ab.subtitle or "",
+                "series_label": ab.series_label or "",
+                "authors": ab.authors or "",
+                "language": ab.language or "",
+                "cover_url": web._browser_cover_url(
+                    ab.cover_url, audio_source=ab.source, audio_source_id=ab.source_id,
+                ) or "",
+                "duration": ab.duration,
+                "provider_book_id": ab.provider_book_id or ab.source_id or "",
+                "provider_file_id": ab.provider_file_id or "",
+            }
+            for ab in audiobooks
+        ],
+        "ebooks": [
+            {
+                "name": eb.name or "",
+                "display_name": getattr(eb, "display_name", None) or eb.name or "",
+                "title": eb.title or "",
+                "subtitle": eb.subtitle or "",
+                "authors": eb.authors or "",
+                "source": eb.source or "",
+                "source_id": "" if eb.source_id is None else str(eb.source_id),
+                "path": str(eb.path) if eb.path else "",
+                "abs_identifier": eb.abs_identifier or "",
+                "language": eb.language or "",
+            }
+            for eb in ebooks
+        ],
+        "storyteller": [
+            {
+                "uuid": st.get("uuid") or "",
+                "title": st.get("title") or "",
+                "subtitle": st.get("subtitle") or "",
+                "authors": [a for a in (st.get("authors") or []) if a],
+                "has_transcript": bool(st.get("has_transcript")),
+            }
+            for st in storyteller
+        ],
+        "storyteller_enabled": storyteller_enabled,
+        "storyteller_failed": bool(st_failed),
+    })
 
 
 def _user_id(web) -> Optional[int]:

@@ -732,7 +732,7 @@
         }
 
         /* Search hand-off: bridges the dashboard filter (books you already sync)
-           to Add Book's library search (books you don't). */
+           to the Suggestions Search tab (books you don't). */
         .search-handoff {
             display: flex;
             align-items: center;
@@ -2369,7 +2369,7 @@
                                 </div>
 
                                 <div class="suggestion-actions" style="display: flex; gap: 8px;">
-                                    <a href="{{ url_for('add_book', search=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('add_book', search=suggestion.title) }}"
+                                    <a href="{{ url_for('suggestions', tab='search', q=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('suggestions', tab='search', q=suggestion.title) }}"
                                         class="btn btn-sm btn-primary"
                                         style="padding: 4px 10px; font-size: 0.8rem; text-decoration: none;">{{ _('Review') }}</a>
                                     <button onclick="dismissSuggestion(event, '{{ suggestion.source_id }}')"
@@ -2563,7 +2563,7 @@
 
         <div class="search-handoff hidden" id="search-handoff">
             <span class="search-handoff-msg" id="search-handoff-msg"></span>
-            <a class="btn btn-secondary" id="search-handoff-link" href="{{ url_for('add_book') }}"></a>
+            <a class="btn btn-secondary" id="search-handoff-link" href="{{ url_for('suggestions', tab='search') }}"></a>
         </div>
 
         {% if section_flags.has_in_progress %}
@@ -2634,7 +2634,7 @@
                     <div class="empty-state-icon">📚</div>
                     <h2>{{ _('No books syncing yet') }}</h2>
                     <p>{{ _('Start by adding your first audiobook mapping') }}</p>
-                    <a href="{{ url_for('add_book') }}" class="btn btn-primary">{{ _('Add Your First Book') }}</a>
+                    <a href="{{ url_for('suggestions', tab='search') }}" class="btn btn-primary">{{ _('Add Your First Book') }}</a>
                 </div>
                 {% endif %}
         </div>
@@ -2652,7 +2652,7 @@
             const searchHandoff = document.getElementById('search-handoff');
             const searchHandoffMsg = document.getElementById('search-handoff-msg');
             const searchHandoffLink = document.getElementById('search-handoff-link');
-            const addBookSearchUrl = '{{ url_for('add_book') }}?search=';
+            const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';
             const notStartedSection = document.getElementById('not-started-section');
             const notStartedHeader = document.getElementById('not-started-header');
             const notStartedGrid = document.getElementById('not-started-grid');
@@ -2777,7 +2777,7 @@
                 );
             }
 
-            // Offers a route into Add Book's library search for a title the dashboard
+            // Offers a route into the Search tab's library search for a title the dashboard
             // filter can't show, because it isn't synced yet.
             function updateSearchHandoff(rawQuery) {
                 if (!searchHandoff || !searchHandoffMsg || !searchHandoffLink) return;

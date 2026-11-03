@@ -6099,8 +6099,44 @@ msgid "Nothing matches these filters."
 msgstr "Нет совпадений с этими фильтрами."
 
 #: templates/suggestions.html
-msgid "Open Add Book with this ebook selected and search for its audiobook"
-msgstr "Открыть «Добавить книгу» с этой электронной книгой и найти для неё аудиокнигу"
+msgid "Open Search with this ebook selected and look for its audiobook"
+msgstr "Открыть «Поиск» с этой электронной книгой и найти для неё аудиокнигу"
+
+#: templates/suggestions.html
+msgid "Find any book"
+msgstr "Найти любую книгу"
+
+#: templates/suggestions.html
+msgid "Search your library by title, author, or filename."
+msgstr "Ищите в библиотеке по названию, автору или имени файла."
+
+#: templates/suggestions.html
+msgid "No audiobooks found. You can still add an ebook by itself."
+msgstr "Аудиокниги не найдены. Электронную книгу можно добавить и без аудио."
+
+#: templates/suggestions.html
+msgid "Nothing found for this search."
+msgstr "По этому запросу ничего не найдено."
+
+#: templates/suggestions.html
+msgid "No audiobook (ebook only)"
+msgstr "Без аудиокниги (только электронная книга)"
+
+#: templates/suggestions.html
+msgid "Add an ebook by itself, without audio"
+msgstr "Добавить электронную книгу отдельно, без аудио"
+
+#: templates/suggestions.html
+msgid "Added to the queue."
+msgstr "Добавлено в очередь."
+
+#: templates/suggestions.html
+msgid "Your library services could not be reached. Check your integrations and try again."
+msgstr "Не удалось связаться с сервисами вашей библиотеки. Проверьте интеграции и повторите попытку."
+
+#: templates/suggestions.html
+msgid "The Ebook Only list changed since you opened it. Search for the book instead."
+msgstr "Список «Только электронные книги» изменился с момента открытия. Найдите книгу через поиск."
 
 #: templates/suggestions.html
 msgid "Open its ebook candidates in the review panel"
