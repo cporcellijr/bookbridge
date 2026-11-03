@@ -684,19 +684,21 @@ class BookOrbitClient:
     # Book detail (resolves primary file id, filename, duration, chapters)
     # ------------------------------------------------------------------
 
-    def get_book_detail(self, book_id, force: bool = False) -> Optional[dict]:
+    def get_book_detail(self, book_id, force: bool = False, fresh_only: bool = False) -> Optional[dict]:
+        """Book detail, TTL-cached. ``fresh_only`` returns None instead of a cached copy when the fetch fails."""
         if book_id is None:
             return None
         with self._cache_lock:
             cached = self._detail_cache.get(book_id)
         if cached and not force and (time.time() - cached[0]) < _DETAIL_TTL:
             return cached[1]
+        fallback = None if fresh_only else (cached[1] if cached else None)
         resp = self._make_request("GET", f"/api/v1/books/{book_id}")
         if not resp or resp.status_code != 200:
-            return cached[1] if cached else None
+            return fallback
         detail = self._parse_json(resp)
         if not isinstance(detail, dict):
-            return cached[1] if cached else None
+            return fallback
         with self._cache_lock:
             self._detail_cache[book_id] = (time.time(), detail)
             # Opportunistically index filenames we now know about.
