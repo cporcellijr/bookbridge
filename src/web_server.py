@@ -583,6 +583,9 @@ _ADMIN_ONLY_ENDPOINTS = {
     'kosync_admin.api_delete_kosync_document',
     'my_reports',
     'api_diagnostics_submissions',
+    # Legacy Forge page APIs: no UI calls them since Search replaced the page, and they
+    # search and stage the server's local ebook folder.
+    'forge_search_audio', 'forge_search_text', 'forge_process',
 }
 
 
@@ -2370,7 +2373,13 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
     # Fall back to filesystem. When a queue item carries the selected local source path,
     # prefer it over filename-only globbing so duplicate basenames do not hash the wrong book.
     ebook_path = None
-    source_path_text = _safe_local_source_path(source_path) if "://" not in str(source_path or "") else ""
+    # A regular user's selection hashes through their own provider, never the server's
+    # ebook folder: a submitted path, filename or provider label is not proof of access.
+    local_folder_allowed = not acting_user_is_regular(database_service)
+    source_path_text = (
+        _safe_local_source_path(source_path)
+        if local_folder_allowed and "://" not in str(source_path or "") else ""
+    )
     if source_path_text:
         try:
             selected_path = Path(source_path_text)
@@ -2380,9 +2389,9 @@ def get_kosync_id_for_ebook(ebook_filename, booklore_id=None, original_filename=
                 logger.debug(f"Selected ebook source path not found, falling back to filename search: '{source_path_text}'")
         except Exception as e:
             logger.debug(f"Selected ebook source path could not be used, falling back to filename search: {e}")
-    if not ebook_path:
+    if not ebook_path and local_folder_allowed:
         ebook_path = find_ebook_file(ebook_filename)
-    if not ebook_path and original_filename:
+    if not ebook_path and original_filename and local_folder_allowed:
         # [Tri-Link] Fallback to original filename if Storyteller file not found/relevant
         logger.debug(f"Primary file '{ebook_filename}' not found, checking original '{original_filename}'")
         ebook_path = find_ebook_file(original_filename)
@@ -4155,6 +4164,19 @@ def _ebook_title_key(value):
 def _scan_excludes_local_files() -> bool:
     """Scans omit the server's local folder when the admin setting is on or a regular user is acting."""
     return suggestions_exclude_local_files(database_service)
+
+
+def _submitted_ebook_path(raw_path) -> Optional[str]:
+    """A request's ebook path, dropped when it is a regular user's server path.
+
+    Their selections resolve through their own provider, so a submitted server path
+    (which a forged provider label could point at the local folder) is never trusted.
+    A provider download URL is kept.
+    """
+    path = str(raw_path or "").strip() or None
+    if path and "://" not in path and acting_user_is_regular(database_service):
+        return None
+    return path
 
 
 def _refuse_regular_user_local_selection(
@@ -8124,6 +8146,7 @@ def match():
             ebook_source, source_path, ebook_source_id, selected_filename,
         ):
             return "Server-local ebooks are only available to administrators", 403
+        source_path = _submitted_ebook_path(source_path)
         clients = uc()
         if request.form.get('action') == 'forge_match' and not clients.storyteller_client.is_configured():
             return "Storyteller is not configured", 409
@@ -8282,7 +8305,7 @@ def match():
                 return "Original ebook filename required for forge match", 400
 
             source_type = request.form.get('source_type')
-            source_path = request.form.get('source_path') or source_path
+            source_path = _submitted_ebook_path(request.form.get('source_path')) or source_path
             source_id = request.form.get('source_id')
             text_item = _build_forge_text_item(source_type, source_id, source_path, original_filename)
             normalized_source_type = text_item.get("source")
@@ -8430,6 +8453,9 @@ def match():
                 source_path=source_path,
             )
 
+        if not kosync_doc_id and joins_existing:
+            # Joining needs no file: the existing mapping already has its hash.
+            kosync_doc_id = existing_pair.kosync_doc_id
         if not kosync_doc_id:
             logger.warning(f"⚠️ Cannot compute KOSync ID for '{sanitize_log_data(ebook_filename)}': File not found in Grimmory or filesystem")
             return "Could not compute KOSync ID for ebook", 404
@@ -9515,7 +9541,7 @@ def _queue_item_from_match_form(clients) -> "dict | None":
         'ebook_display_name': ebook_display_name,
         'ebook_source': ebook_source,
         'ebook_source_id': ebook_source_id,
-        'ebook_source_path': ebook_source_path,
+        'ebook_source_path': _submitted_ebook_path(ebook_source_path),
         'storyteller_uuid': storyteller_uuid,
         'audio_only': audio_only and not (ebook_filename or storyteller_uuid),
         'readalong_epub_requested': readalong_epub_requested and audio_source == 'BookOrbit',
