@@ -6107,6 +6107,10 @@ msgid "Added \"{title}\" to your library. It was already in BookBridge."
 msgstr "Книга «{title}» добавлена в вашу библиотеку. Она уже была в BookBridge."
 
 #: templates/suggestions.html
+msgid "Waiting for another library scan to finish..."
+msgstr "Ожидание завершения другого сканирования библиотеки..."
+
+#: templates/suggestions.html
 msgid "Find any book"
 msgstr "Найти любую книгу"
 

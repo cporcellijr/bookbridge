@@ -309,6 +309,16 @@ class TestTick(ScheduledScanTestCase):
     def finish_job(self, job_id, finished_at, status="done"):
         web_server.SUGGESTIONS_SCAN_JOBS[job_id].update(status=status, updated_at=finished_at)
 
+    def test_a_queued_scan_holds_off_the_schedule(self):
+        """A reader's scan waiting for the slot counts as running; the schedule must not pile on."""
+        os.environ["SUGGESTIONS_AUTO_SCAN_MINUTES"] = "15"
+        self.use_clock(datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc))
+        web_server.SUGGESTIONS_SCAN_JOBS["reader-job"] = {"status": "queued", "user_id": 2, "updated_at": time.time()}
+
+        web_server._suggestions_auto_scan_tick()
+
+        self.run_scan.assert_not_called()
+
     def test_slow_scan_is_timed_from_its_end_and_never_runs_back_to_back(self):
         os.environ["SUGGESTIONS_AUTO_SCAN_MINUTES"] = "15"
         clock = self.use_clock(datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc))

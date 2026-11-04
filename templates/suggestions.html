@@ -680,6 +680,11 @@
             .then((response) => response.json())
             .then((data) => {
                 const status = data.status || 'idle';
+                if (status === 'queued') {
+                    // Another reader's scan holds the slot; nothing of this scan has run yet.
+                    stopFakeScanProgress();
+                    setScanProgress(0, {{ _('Waiting for another library scan to finish...')|tojson }});
+                }
                 if (status === 'running') {
                     applyBackendProgress(data.progress || {});
                 }
