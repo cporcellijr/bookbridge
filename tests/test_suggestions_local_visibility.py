@@ -118,6 +118,41 @@ class TestLocalVisibility(SearchTabBase):
             "", "/books/Author/Title.epub", None, "Title.epub",
         ))
 
+    def test_forged_provider_label_cannot_reach_the_local_folder(self):
+        """A made-up provider id is no proof: the server path is dropped and nothing local is hashed."""
+        local = str(self.books / "Local Title.epub")
+        form = {
+            "action": "add_to_queue", "audio_source": "BookOrbit", "audio_source_id": "7",
+            "audio_title": "T", "ebook_filename": "Local Title.epub", "ebook_source": "BookOrbit",
+            "ebook_source_id": "made-up-provider-id", "ebook_source_path": local,
+        }
+        self._as(self.reg)
+        with self.app.test_request_context("/suggestions", method="POST", data=form):
+            item = self.web._queue_item_from_match_form(None)
+        self.assertIsNone(item["ebook_source_path"])
+
+        clients = _no_clients()
+        clients.cwa_client = clients.booklore_client
+        container = MagicMock()
+        container.ebook_parser.return_value.get_kosync_id.return_value = "local-hash"
+        container.epub_cache_dir.return_value = Path(self.tmp) / "epub-cache"
+        with patch.object(self.web, "uc", return_value=clients), \
+                patch.object(self.web, "container", container), \
+                patch.dict(os.environ, {"BOOKS_DIR": str(self.books)}):
+            for source_path in (local, None):
+                self.assertIsNone(self.web.get_kosync_id_for_ebook(
+                    "Local Title.epub", bookorbit_id="made-up-provider-id", source_path=source_path,
+                ))
+            self._as(self._admin())
+            self.assertEqual(self.web.get_kosync_id_for_ebook("Local Title.epub", source_path=local), "local-hash")
+
+    def test_legacy_forge_apis_are_admin_only(self):
+        self.login()
+        with patch.object(self.web, "_scan_user_clients", side_effect=AssertionError("must not run")):
+            self.assertEqual(self.client.get("/api/forge/search_text?q=Local").status_code, 403)
+            self.assertEqual(self.client.get("/api/forge/search_audio?q=Local").status_code, 403)
+            self.assertEqual(self.client.post("/api/forge/process", json={}).status_code, 403)
+
     def test_regular_user_cannot_resolve_or_create_a_local_ebook_key(self):
         entry = {"source": "Local File", "path": str(self.books / "Local Title.epub"), "filename": "Local Title.epub"}
         with patch.dict(os.environ, {"BOOKS_DIR": str(self.books)}):

@@ -32,9 +32,8 @@ class MappingGuardBase(unittest.TestCase):
         self.db.save_book(Book(
             abs_id="audio-1", abs_title="Shared", audio_source="ABS", audio_source_id="audio-1",
             ebook_filename="a.epub", original_ebook_filename="a.epub",
-            kosync_doc_id=HASH_A, status="active", sync_mode="audiobook",
+            kosync_doc_id=HASH_A, status="active", sync_mode="audiobook", user_id=self.alice.id,
         ))
-        self.db.link_user_book(self.alice.id, "audio-1")
         self.svc = BookMappingService(
             database_service=self.db, booklore_client=MagicMock(), ebook_parser=MagicMock(),
             abs_client=MagicMock(), sync_clients={},
@@ -107,6 +106,17 @@ class TestAutoMatchOwnership(MappingGuardBase):
         self.assertIsNotNone(self.db.get_book("ebook-x"))
         self.assertTrue(self.db.is_user_linked(self.alice.id, "ebook-x"))
         self.assertIsNone(self.db.get_book("audio-2").kosync_doc_id)
+
+    def test_co_claimant_auto_match_cannot_repoint_a_shared_book(self):
+        """Alice and Bob both claim audio-1: Bob's automatic match must not change Alice's edition."""
+        self.db.link_user_book(self.bob.id, "audio-1")
+        self.assertIsNone(self.match(self.bob.id, filename="bobs.epub", doc="e" * 32))
+        book = self.db.get_book("audio-1")
+        self.assertEqual((book.ebook_filename, book.kosync_doc_id, book.status), ("a.epub", HASH_A, "active"))
+        joined = self.match(self.bob.id, filename="a.epub", doc=HASH_A)
+        self.assertEqual(joined.abs_id, "audio-1")
+        self.assertEqual(self.db.get_book("audio-1").status, "active")
+        self.assertIsNotNone(self.match(self.admin.id, filename="c.epub", doc="c" * 32))
 
     def test_owner_and_admin_auto_match_still_remap(self):
         self.assertIsNotNone(self.match(self.alice.id))

@@ -158,14 +158,18 @@ class BookMappingService:
                 logger.warning("Shelf-watch: Goodreads automatch failed for '%s': %s", book.abs_id, e, exc_info=True)
 
     def _user_may_modify(self, user_id: Optional[int], abs_id: str) -> bool:
-        """Whether ``user_id`` may rewrite the mapping ``abs_id`` (system, admin, claimant or unclaimed)."""
+        """Whether ``user_id`` may rewrite the mapping ``abs_id`` (system, admin, sole claimant or unclaimed).
+
+        A book another reader also claims is theirs too, so an automatic match never
+        rewrites it on one reader's behalf.
+        """
         if user_id is None:
             return True
         user = self.database_service.get_user(user_id)
         if user is not None and getattr(user, "is_admin", False):
             return True
         claimants = self.database_service.get_book_user_ids(abs_id)
-        return not claimants or user_id in claimants
+        return set(claimants or ()) <= {user_id}
 
     def create_audio_mapping_from_match(
         self,
