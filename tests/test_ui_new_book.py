@@ -185,6 +185,11 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         page = (root / 'templates/next/index.html').read_text(encoding='utf-8')
         library = (root / 'templates/next/_library_scripts.html').read_text(encoding='utf-8')
         classic = '\n'.join(self._lines('templates/base.html') + self._lines('templates/index.html'))
+        # Goodreads build only: Classic's bulk-delete selection; New has its own selection bar and Remove.
+        bulk_start = classic.index('function filteredBookIds() {')
+        bulk_end = classic.index('return true;\n}', classic.index('function confirmBulkDelete(form) {')) + len('return true;\n}')
+        classic = classic[:bulk_start] + classic[bulk_end + 1:]
+        classic = classic.replace('updateBookSelection();\n', '')
         self.assertIn("{% include 'next/_book_scripts.html' %}", page)
         self.assertIn('openBookDrawer(this.href,this)', page)
         # Views and bulk actions are new, and exercised by test_ui_new_library.js.
