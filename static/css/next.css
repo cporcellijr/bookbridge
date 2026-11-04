@@ -315,6 +315,6 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="spines"] .book-card:nth-child(4n) { height: 204px; width: 38px; }
 .library-page[data-view="spines"] .book-open { flex: 1; min-height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 18px 0 6px; color: #f3eee4; }
 .library-page[data-view="spines"] .book-copy { min-width: 0; max-height: 100%; padding: 0; }
-.library-page[data-view="spines"] .book-copy h3 { max-height: 136px; margin: 0; overflow: hidden; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; text-overflow: ellipsis; font: 600 13px/1.1 var(--font-book); color: inherit; }
+.library-page[data-view="spines"] .book-copy h3 { display: block; min-height: 0; -webkit-line-clamp: none; -webkit-box-orient: initial; max-height: 136px; margin: 0; overflow: hidden; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; text-overflow: ellipsis; font: 600 13px/1.1 var(--font-book); color: inherit; }
 .library-page[data-view="spines"] .book-copy h3 small { display: none; }
 .library-page[data-view="spines"] .spine-progress { display: block; padding: 0 0 8px; text-align: center; font: 600 10px/1 var(--font-mono); color: #F7C766; }
