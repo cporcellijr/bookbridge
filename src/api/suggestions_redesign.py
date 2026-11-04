@@ -13,7 +13,7 @@ from src.services.ebook_discovery import _legacy_basename, _mapped_identity_inde
 from src.utils.ebook_sources import normalize_ebook_source
 
 
-_ADMIN_ENDPOINTS = (
+_ENDPOINT_NAMES = (
     "suggestions_redesign_discovery",
     "suggestions_redesign_selection_resolve",
     "suggestions_redesign_selection_queue",
@@ -44,34 +44,33 @@ def init_suggestions_redesign_routes(app: Any, web_module: Any = None) -> None:
     if web_module is not None:
         _WEB_MODULE = web_module
     web = _web_server()
-    web._ADMIN_ONLY_ENDPOINTS.update(_ADMIN_ENDPOINTS)
     app.add_url_rule(
         "/api/suggestions/discovery",
-        _ADMIN_ENDPOINTS[0],
+        _ENDPOINT_NAMES[0],
         suggestions_redesign_discovery,
         methods=["GET"],
     )
     app.add_url_rule(
         "/api/suggestions/selection/resolve",
-        _ADMIN_ENDPOINTS[1],
+        _ENDPOINT_NAMES[1],
         suggestions_redesign_selection_resolve,
         methods=["POST"],
     )
     app.add_url_rule(
         "/api/suggestions/selection/queue",
-        _ADMIN_ENDPOINTS[2],
+        _ENDPOINT_NAMES[2],
         suggestions_redesign_selection_queue,
         methods=["POST"],
     )
     app.add_url_rule(
         "/api/suggestions/ebook-only/ignore",
-        _ADMIN_ENDPOINTS[3],
+        _ENDPOINT_NAMES[3],
         suggestions_redesign_ebook_only_ignore,
         methods=["POST"],
     )
     app.add_url_rule(
         "/api/suggestions/ebook-only/create",
-        _ADMIN_ENDPOINTS[4],
+        _ENDPOINT_NAMES[4],
         suggestions_redesign_ebook_only_create,
         methods=["POST"],
     )
@@ -196,7 +195,7 @@ def _current_inputs(web, user_id):
     if callable(visible):
         mapped_books = visible(mapped_books, current_user)
     queue = web._load_match_queue()
-    ignored_pair_keys = web._get_ignored_suggestion_source_ids()
+    ignored_pair_keys = web._get_ignored_suggestion_source_ids(user_id=user_id)
     return persisted, list(mapped_books), list(queue), list(ignored_pair_keys or [])
 
 
@@ -465,6 +464,8 @@ def _resolve_ebook_create_input(web, entry):
         return None, "ebook_create_resolver_unavailable", 503
     try:
         resolved = resolver(entry)
+    except PermissionError:
+        return None, "clients_unavailable", 503
     except Exception:
         web.logger.exception("Could not resolve selected ebook for creation")
         return None, "ebook_file_unavailable", 409
@@ -526,6 +527,14 @@ def suggestions_redesign_ebook_only_create() -> Any:
         else f"ebook-{kosync_id[:16]}"
     )
     document = database.get_kosync_document(kosync_id)
+    if (
+        existing is not None
+        and existing.sync_mode == "ebook_only"
+        and not existing.audio_source_id
+        and not database.is_user_linked(user_id, existing.abs_id)
+    ):
+        database.link_user_book(user_id, existing.abs_id)
+        return jsonify({"ok": True, "claimed": True, "ebook_key": ebook_key, "abs_id": existing.abs_id})
     if existing or database.get_book(target_id) or (document and document.linked_abs_id):
         return _api_error("already_mapped", 409)
     try:

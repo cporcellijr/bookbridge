@@ -123,7 +123,9 @@ class TestCrossUserMappingGuard(unittest.TestCase):
         self.assertIsNotNone(self.svc.get_book("ab-bob"))
 
     @patch("src.web_server.get_kosync_id_for_ebook", return_value="f" * 32)
-    def test_owner_may_still_rematch_own_mapping(self, _hash):
+    @patch("src.web_server._refuse_regular_user_local_selection", return_value=False)
+    def test_owner_may_still_rematch_own_mapping(self, _local_policy, _hash):
+        # The ownership guard only; the local-folder policy has its own tests.
         self._login("alice")
 
         r = self.client.post("/match", data={"audiobook_id": "ab-alice", "ebook_filename": "other.epub"})

@@ -722,13 +722,14 @@ class TestMultiUserAuth(unittest.TestCase):
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
-        for path in ('/settings', '/stats', '/logs', '/api/suggestions/discovery'):
+        for path in ('/settings', '/stats', '/logs'):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403,
                              f"{path} should be admin-only")
-        # but the home + Suggestions Search tab are reachable
+        # but the home + Discover (pairs/ebook-only/search) are reachable
         self.assertNotEqual(self.client.get('/', follow_redirects=False).status_code, 403)
         self.assertNotEqual(self.client.get('/suggestions', follow_redirects=False).status_code, 403)
         self.assertNotEqual(self.client.get('/add-book', follow_redirects=False).status_code, 403)
+        self.assertNotEqual(self.client.get('/api/suggestions/discovery', follow_redirects=False).status_code, 403)
 
     def test_regular_user_forbidden_from_global_maintenance_apis(self):
         self.svc.create_user("reg", "pw", role="user")
@@ -1198,7 +1199,7 @@ class TestMultiUserAuth(unittest.TestCase):
         self.assertEqual(delete_other.status_code, 403)
         self.assertIsNotNone(self.svc.get_kosync_document("9" * 32))
 
-    def test_regular_user_dashboard_hides_pending_suggestions(self):
+    def test_regular_user_dashboard_hides_other_users_pending_suggestions(self):
         admin = self.svc.get_user_by_username("admin")
         reg = self.svc.create_user("reg", "pw", role="user")
         self.svc.save_book(Book(

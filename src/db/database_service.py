@@ -3712,29 +3712,42 @@ class DatabaseService:
 
 
     # PendingSuggestion operations
-    def get_pending_suggestion(self, source_id: str) -> Optional[PendingSuggestion]:
-        """Get a pending suggestion by source ID (e.g. ABS ID). Only returns pending, not dismissed."""
+    def _suggestion_owner_clause(self, uid: Optional[int]):
+        """Owner filter for pending suggestions; NULL-owner rows belong to the default user."""
+        from sqlalchemy import or_
+        if uid is not None and uid == self._default_user_id():
+            return or_(PendingSuggestion.user_id == uid, PendingSuggestion.user_id.is_(None))
+        return PendingSuggestion.user_id == uid
+
+    def get_pending_suggestion(self, source_id: str, user_id: Optional[int] = None) -> Optional[PendingSuggestion]:
+        """Get a user's pending suggestion by source ID (e.g. ABS ID). Only returns pending, not dismissed."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             suggestion = session.query(PendingSuggestion).filter(
                 PendingSuggestion.source_id == source_id,
-                PendingSuggestion.status == 'pending'
+                PendingSuggestion.status == 'pending',
+                self._suggestion_owner_clause(uid),
             ).first()
             if suggestion:
                 session.expunge(suggestion)
             return suggestion
 
-    def suggestion_exists(self, source_id: str) -> bool:
-        """Check if any suggestion exists for source_id (pending or dismissed)."""
+    def suggestion_exists(self, source_id: str, user_id: Optional[int] = None) -> bool:
+        """Check if any suggestion exists for source_id and user (pending or dismissed)."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             return session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == source_id
+                PendingSuggestion.source_id == source_id,
+                self._suggestion_owner_clause(uid),
             ).first() is not None
 
-    def save_pending_suggestion(self, suggestion: PendingSuggestion) -> PendingSuggestion:
-        """Save or update a pending suggestion."""
+    def save_pending_suggestion(self, suggestion: PendingSuggestion, user_id: Optional[int] = None) -> PendingSuggestion:
+        """Save or update a pending suggestion, upserting by (owner, source_id)."""
+        uid = self._resolve_uid(user_id if user_id is not None else suggestion.user_id)
         with self.get_session() as session:
             existing = session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == suggestion.source_id
+                PendingSuggestion.source_id == suggestion.source_id,
+                self._suggestion_owner_clause(uid),
             ).first()
 
             if existing:
@@ -3742,11 +3755,14 @@ class DatabaseService:
                              'status', 'origin', 'origin_metadata_json']:
                     if hasattr(suggestion, attr):
                         setattr(existing, attr, getattr(suggestion, attr))
+                if existing.user_id is None:
+                    existing.user_id = uid
                 session.flush()
                 session.refresh(existing)
                 session.expunge(existing)
                 return existing
             else:
+                suggestion.user_id = uid
                 session.add(suggestion)
                 session.flush()
                 session.refresh(suggestion)
@@ -3763,29 +3779,36 @@ class DatabaseService:
                 KosyncDocument.document_hash == doc_hash
             ).count() > 0
 
-    def get_all_pending_suggestions(self) -> List[PendingSuggestion]:
-        """Get all pending suggestions."""
+    def get_all_pending_suggestions(self, user_id: Optional[int] = None,
+                                    all_users: bool = False) -> List[PendingSuggestion]:
+        """Get a user's pending suggestions (every user's when ``all_users``, e.g. cache cleanup)."""
+        uid = None if all_users else self._resolve_uid(user_id)
         with self.get_session() as session:
-            suggestions = session.query(PendingSuggestion).filter(
-                PendingSuggestion.status == 'pending'
-            ).order_by(PendingSuggestion.created_at.desc()).all()
+            query = session.query(PendingSuggestion).filter(PendingSuggestion.status == 'pending')
+            if not all_users:
+                query = query.filter(self._suggestion_owner_clause(uid))
+            suggestions = query.order_by(PendingSuggestion.created_at.desc()).all()
             for s in suggestions:
                 session.expunge(s)
             return suggestions
 
-    def get_ignored_suggestion_source_ids(self) -> List[str]:
-        """Get source IDs that should never be suggested again."""
+    def get_ignored_suggestion_source_ids(self, user_id: Optional[int] = None) -> List[str]:
+        """Get source IDs the user never wants suggested again."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             rows = session.query(PendingSuggestion.source_id).filter(
-                PendingSuggestion.status == 'ignored'
+                PendingSuggestion.status == 'ignored',
+                self._suggestion_owner_clause(uid),
             ).all()
             return [row[0] for row in rows if row and row[0]]
 
-    def dismiss_suggestion(self, source_id: str) -> bool:
-        """Mark a suggestion as dismissed."""
+    def dismiss_suggestion(self, source_id: str, user_id: Optional[int] = None) -> bool:
+        """Mark a user's suggestion as dismissed."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             suggestion = session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == source_id
+                PendingSuggestion.source_id == source_id,
+                self._suggestion_owner_clause(uid),
             ).first()
             if suggestion:
                 suggestion.status = 'dismissed'
@@ -3793,11 +3816,13 @@ class DatabaseService:
                 return True
             return False
 
-    def ignore_suggestion(self, source_id: str) -> bool:
-        """Mark a suggestion as never ask."""
+    def ignore_suggestion(self, source_id: str, user_id: Optional[int] = None) -> bool:
+        """Mark a user's suggestion as never ask."""
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             suggestion = session.query(PendingSuggestion).filter(
-                PendingSuggestion.source_id == source_id
+                PendingSuggestion.source_id == source_id,
+                self._suggestion_owner_clause(uid),
             ).first()
             if suggestion:
                 suggestion.status = 'ignored'
@@ -3861,11 +3886,12 @@ class DatabaseService:
             ).delete(synchronize_session=False)
             return rows > 0
 
-    def clear_stale_suggestions(self) -> int:
+    def clear_stale_suggestions(self, user_id: Optional[int] = None) -> int:
         """
-        Delete suggestions that are not for active books in our bridge.
+        Delete a user's suggestions that are not for active books in our bridge.
         A suggestion is 'stale' if its source_id (ABS ID) is not in our books table.
         """
+        uid = self._resolve_uid(user_id)
         with self.get_session() as session:
             # Subquery to get all IDs in books table
             # We preserve ANY suggestion that corresponds to a book we tracking,
@@ -3880,6 +3906,7 @@ class DatabaseService:
             
             # Find all suggestions not in the books table
             stale_query = session.query(PendingSuggestion).filter(
+                self._suggestion_owner_clause(uid),
                 not_(PendingSuggestion.source_id.in_(
                     session.query(Book.abs_id)
                 ))

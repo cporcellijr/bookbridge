@@ -69,14 +69,11 @@ class TestSearchTabAccess(SearchTabBase):
         self.assertEqual(resp.status_code, 200)
         return render.call_args.kwargs
 
-    def test_regular_user_gets_only_search_tab(self):
+    def test_regular_user_gets_all_tabs(self):
         self.login()
         ctx = self._page_context()
-        self.assertEqual(ctx['available_tabs'], ['search'])
+        self.assertEqual(ctx['available_tabs'], ['pairs', 'ebook_only', 'search'])
         self.assertIs(ctx['is_admin'], False)
-        self.assertIsNone(ctx['tab_counts'])
-        self.assertEqual(ctx['suggestions'], [])
-        self.assertFalse(ctx['scan_has_run'])
 
     def test_admin_gets_all_tabs(self):
         self.login("admin", "secret")
@@ -84,20 +81,20 @@ class TestSearchTabAccess(SearchTabBase):
         self.assertEqual(ctx['available_tabs'], ['pairs', 'ebook_only', 'search'])
         self.assertIs(ctx['is_admin'], True)
 
-    def test_regular_user_cannot_post_admin_actions(self):
+    def test_regular_user_can_post_scan_actions(self):
         self.login()
-        with patch("src.web_server._start_suggestions_scan_job") as scan, \
+        with patch("src.web_server._start_suggestions_scan_job", return_value="job") as scan, \
                 patch("src.web_server.uc", return_value=self.clients()):
-            for action in ('scan', 'scan_full', 'never', 'add_many_to_queue'):
+            for action in ('scan', 'scan_full'):
                 resp = self.client.post('/suggestions', data={'action': action})
-                self.assertEqual(resp.status_code, 403, action)
-        scan.assert_not_called()
+                self.assertEqual(resp.status_code, 302, action)
+        self.assertEqual(scan.call_count, 2)
 
     def test_regular_user_queue_flow_is_user_scoped(self):
         self.login()
         form = {
             'action': 'add_to_queue', 'audiobook_id': 'abs-1', 'audio_source': 'ABS',
-            'audio_title': 'T', 'audio_duration': '10', 'ebook_filename': 'b.epub', 'ebook_source': 'Local File',
+            'audio_title': 'T', 'audio_duration': '10', 'ebook_filename': 'b.epub', 'ebook_source': 'BookOrbit', 'ebook_source_id': '9',
         }
         with patch("src.web_server.uc", return_value=self.clients()), \
                 patch("src.web_server._spawn_user_background") as spawn:
@@ -187,12 +184,13 @@ class TestSearchApi(SearchTabBase):
         self.assertTrue(data["storyteller_failed"])
         self.assertEqual(data["storyteller"], [])
 
-    def test_ebook_key_is_admin_only(self):
+    def test_ebook_key_hand_off_is_open_to_regular_users(self):
         self.login()
-        with patch("src.web_server.uc", return_value=self.clients()):
+        with patch("src.web_server.uc", return_value=self.clients()), \
+                patch("src.web_server._load_persisted_suggestions_cache", return_value={}):
             resp = self.client.get('/api/suggestions/search?ebook_key=k&generation=g')
-        self.assertEqual(resp.status_code, 403)
-        self.assertEqual(resp.get_json(), {"error": "admin_required"})
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.get_json(), {"error": "stale_generation"})
 
     def test_unknown_ebook_key_is_stale_generation_for_admin(self):
         self.login("admin", "secret")
@@ -220,9 +218,9 @@ class TestSearchApi(SearchTabBase):
         self.assertEqual(resp.status_code, 503)
         self.assertEqual(resp.get_json(), {"error": "clients_unavailable"})
 
-    def test_discovery_stays_admin_only(self):
+    def test_discovery_is_open_to_regular_users(self):
         self.login()
-        self.assertEqual(self.client.get('/api/suggestions/discovery').status_code, 403)
+        self.assertNotEqual(self.client.get('/api/suggestions/discovery').status_code, 403)
 
 
 class TestLegacyRedirects(SearchTabBase):
@@ -254,7 +252,8 @@ class TestLegacyRedirects(SearchTabBase):
                 self.assertEqual(resp.status_code, 302, path)
                 spawn.assert_called_once()
                 self.assertEqual(spawn.call_args.kwargs['label'], 'batch-match-process')
-                self.assertEqual(self.client.post(path, data={'action': 'scan'}).status_code, 403)
+                with patch("src.web_server._start_suggestions_scan_job", return_value="job"):
+                    self.assertEqual(self.client.post(path, data={'action': 'scan'}).status_code, 302)
 
 
 class TestSearchCredentialScoping(SearchTabBase):

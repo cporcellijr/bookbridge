@@ -7,6 +7,7 @@ from src.services.ebook_discovery import AudioCandidateIndex, ebook_key
 from src.services.llm_matching import craft_search_terms
 from src.utils.ebook_sources import normalize_ebook_source
 from src.utils.config_loader import env_truthy
+from src.utils.local_file_scope import suggestions_exclude_local_files
 from src.utils.local_ebook_metadata import read_local_ebook_metadata, read_local_ebook_series
 from src.utils.series_metadata import (
     extract_series_from_abs_metadata,
@@ -201,7 +202,7 @@ class SuggestionsService:
         prepared = []
         resolver = self.calibre_identifier_resolver
         resolver_enabled = bool(resolver and resolver.is_enabled())
-        exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+        exclude_local_files = suggestions_exclude_local_files(self.database_service)
 
         for candidate in candidates or []:
             candidate_source = (getattr(candidate, 'source', None) or '').strip()
@@ -412,11 +413,11 @@ class SuggestionsService:
             return False
         return candidate_text in audio_text or audio_text in candidate_text
 
-    def get_ignored_suggestion_source_ids(self) -> Set[str]:
-        """Return source IDs (bridge keys) that are marked as ignored."""
+    def get_ignored_suggestion_source_ids(self, user_id: Optional[int] = None) -> Set[str]:
+        """Return source IDs (bridge keys) the user marked as ignored (ambient user when omitted)."""
         if hasattr(self.database_service, 'get_ignored_suggestion_source_ids'):
             try:
-                return set(self.database_service.get_ignored_suggestion_source_ids() or [])
+                return set(self.database_service.get_ignored_suggestion_source_ids(user_id=user_id) or [])
             except Exception as e:
                 self.logger.warning(f"Could not load ignored suggestions via service method: {e}")
 
@@ -2125,8 +2126,10 @@ class SuggestionsService:
                 "stats": {"scanned_new": 0, "reused_cached": 0, "total_unmatched": 0}
             }
 
+        from src.utils.user_context import get_current_user_id
+        scan_user_id = get_current_user_id()
         matched_bridge_keys = set()
-        for book in self.database_service.get_all_books():
+        for book in self.database_service.get_all_books(user_id=scan_user_id):
             abs_id = getattr(book, "abs_id", None)
             if abs_id:
                 matched_bridge_keys.add(str(abs_id))
@@ -2137,7 +2140,7 @@ class SuggestionsService:
                 if mapped_key:
                     matched_bridge_keys.add(mapped_key)
 
-        ignored_source_ids = self.get_ignored_suggestion_source_ids()
+        ignored_source_ids = self.get_ignored_suggestion_source_ids(user_id=scan_user_id)
 
         # Physical-file identity of already-matched books (#383): when the same physical
         # audiobook is indexed by more than one provider (e.g. ABS + Grimmory pointed at

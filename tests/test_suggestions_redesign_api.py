@@ -91,7 +91,7 @@ def _close(patches):
         item.stop()
 
 
-def test_discovery_reads_persisted_data_without_provider_calls_and_is_admin_only():
+def test_discovery_reads_persisted_data_without_provider_calls():
     app, web, _db, patches = _app_and_patches()
     try:
         with patch.object(web, "_get_suggestions_service", side_effect=AssertionError("provider/service read")):
@@ -100,7 +100,7 @@ def test_discovery_reads_persisted_data_without_provider_calls_and_is_admin_only
         payload = response.get_json()
         assert payload["generation"] == "scan-1"
         assert payload["entries"][0]["bridge_key"] == "abs-1"
-        assert "suggestions_redesign_discovery" in web._ADMIN_ONLY_ENDPOINTS
+        assert "suggestions_redesign_discovery" not in web._ADMIN_ONLY_ENDPOINTS
     finally:
         _close(patches)
 
@@ -403,7 +403,7 @@ def test_queue_persistence_failure_is_not_reported_as_added():
 def test_routes_use_the_module_that_registered_them_not_a_fresh_import():
     """Production runs web_server as __main__: importing src.web_server there gave an
     uninitialized copy, so discovery failed with "NameError: name 'DATA_DIR' is not
-    defined" and the admin-only list was updated on the wrong module."""
+    defined"; the routes must use the module that registered them."""
     from types import SimpleNamespace
 
     from src import web_server
@@ -419,7 +419,7 @@ def test_routes_use_the_module_that_registered_them_not_a_fresh_import():
         database_service=SimpleNamespace(get_all_books=lambda user_id=None: []),
         _dashboard_visible_books_for_user=lambda books, _user: books,
         _load_match_queue=lambda: [],
-        _get_ignored_suggestion_source_ids=lambda: [],
+        _get_ignored_suggestion_source_ids=lambda **_kw: [],
         _suggestion_bulk_block=lambda _s: None,
         _sanitize_cover_urls=lambda entries: entries,
         _running_suggestions_scan_job_id=lambda _uid: None,
@@ -433,7 +433,7 @@ def test_routes_use_the_module_that_registered_them_not_a_fresh_import():
         response = app.test_client().get("/api/suggestions/discovery?tab=pairs")
         assert response.status_code == 200, response.get_json()
         assert [e["suggestion_key"] for e in response.get_json()["entries"]] == ["pair:abs-1"]
-        assert "suggestions_redesign_discovery" in running._ADMIN_ONLY_ENDPOINTS
+        assert running._ADMIN_ONLY_ENDPOINTS == set()
         assert web_server._ADMIN_ONLY_ENDPOINTS == admin_before
     finally:
         redesign._WEB_MODULE = saved

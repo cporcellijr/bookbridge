@@ -13,7 +13,7 @@ row at the top of the card so the source is in the same place on every candidate
 - which is what the reporter asked for - and the selection tick sits in the
 bottom corner so it cannot cover them.
 
-The Suggestions page (Pair Suggestions review and the Search tab, which replaced
+The Discover page (Pairs review and the Search tab, which replaced
 Add Book) builds the same cards in JS, so these guard its CSS and card builders.
 CSS cannot be executed here, so these are structural assertions.
 """

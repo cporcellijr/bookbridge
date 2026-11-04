@@ -521,10 +521,15 @@ class PendingSuggestion(Base):
     created_at = Column(DateTime, default=utcnow)
     origin = Column(String(50), nullable=True, index=True)
     origin_metadata_json = Column(Text, nullable=True)
+    user_id = Column(Integer, nullable=True)
+
+    __table_args__ = (Index('ix_pending_suggestions_user_source', 'user_id', 'source_id'),)
 
     def __init__(self, source_id: str, title: str, author: str = None,
                  cover_url: str = None, matches_json: str = "[]", status: str = 'pending',
-                 source: str = None, origin: str = None, origin_metadata_json: str = None):
+                 source: str = None, origin: str = None, origin_metadata_json: str = None,
+                 user_id: Optional[int] = None):
+        self.user_id = user_id
         self.source = source or 'abs'
         self.source_id = source_id
         self.title = title

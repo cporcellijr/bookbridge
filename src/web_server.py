@@ -31,6 +31,7 @@ import schedule
 from dependency_injector import providers
 from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context, abort
 from functools import wraps
+from src.utils.local_file_scope import acting_user_is_regular, suggestions_exclude_local_files
 from src.utils.user_context import (
     set_current_user_id, reset_current_user_id,
     set_current_user_credentials, reset_current_user_credentials,
@@ -116,6 +117,10 @@ database_service = None
 abs_socket_manager = None
 SUGGESTIONS_SCAN_JOBS = {}
 SUGGESTIONS_SCAN_JOBS_LOCK = threading.Lock()
+# One Suggestions scan runs at a time across all readers (CPU, the Ollama judge and
+# provider logins are shared); the others wait as 'queued'.
+SUGGESTIONS_SCAN_SLOT = threading.Lock()
+_SCAN_JOB_ACTIVE = ("queued", "running")
 SUGGESTIONS_SCAN_JOB_TTL_SECONDS = 3600
 SUGGESTIONS_STATE_STORE = {}
 SUGGESTIONS_STATE_LOCK = threading.Lock()
@@ -567,8 +572,6 @@ _LOGIN_FAILURE_WINDOW = 60
 # suggestions are admin-only ("admin sets things up, users just use").
 _ADMIN_ONLY_ENDPOINTS = {
     'settings',
-    'get_suggestions', 'suggestions_scan_status',
-    'dismiss_suggestion', 'ignore_suggestion', 'clear_stale_suggestions',
     'stats_view', 'api_stats', 'api_stats_reading_day', 'api_stats_reading_calendar',
     'api_stats_book_detail', 'api_stats_yearly_recap',
     'logs_view', 'api_logs', 'api_logs_live', 'view_log',
@@ -4161,6 +4164,32 @@ def _ebook_title_key(value):
     return re.sub(r'[\W_]+', '', (value or '').lower())
 
 
+def _scan_excludes_local_files() -> bool:
+    """Scans omit the server's local folder when the admin setting is on or a regular user is acting."""
+    return suggestions_exclude_local_files(database_service)
+
+
+def _refuse_regular_user_local_selection(
+    ebook_source, ebook_source_path=None, ebook_source_id=None, ebook_filename=None,
+) -> bool:
+    """True (and logged) when a regular user submits a server-local ebook selection."""
+    if not acting_user_is_regular(database_service):
+        return False
+    source = _normalize_text_source_type(ebook_source)
+    path = str(ebook_source_path or "").strip()
+    # A provider entry (BookOrbit, Grimmory...) carries its own server path; only a
+    # selection with no provider behind it is the server's local folder.
+    local = source == "Local File" or (
+        not source and not ebook_source_id and (bool(ebook_filename) or (bool(path) and "://" not in path))
+    )
+    if local:
+        logger.info(
+            "🔒 Refused a server-local ebook selection from a non-admin user (%s)",
+            sanitize_log_data(ebook_filename or path or "no filename"),
+        )
+    return local
+
+
 def _build_local_ebook_title_index(scan_metadata=None):
     """Map normalized title -> filename for every epub on the local /books disk.
 
@@ -4207,7 +4236,9 @@ def get_searchable_ebooks(
 ):
     """Get ebook candidates, optionally collecting undeduped scan inventory."""
     discovery = source_states is not None
-    exclude_local_files = discovery and env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    regular_user = acting_user_is_regular(database_service)
+    exclude_local_files = discovery and _scan_excludes_local_files()
+    skip_local = exclude_local_files or regular_user
     inventory_candidates = inventory_candidates if inventory_candidates is not None else []
     scan_local_metadata = local_metadata if local_metadata is not None else ({} if discovery else None)
     results = []
@@ -4227,7 +4258,7 @@ def get_searchable_ebooks(
 
     local_index = None
     if discovery:
-        if EBOOK_DIR.exists():
+        if EBOOK_DIR.exists() and not regular_user:
             local_index = _build_local_ebook_title_index(scan_local_metadata)
             error_type = scan_local_metadata.get("_error_type") if isinstance(scan_local_metadata, dict) else None
             _record_suggestions_source_state(
@@ -4337,7 +4368,8 @@ def get_searchable_ebooks(
                 if discovery and full_refresh and "audio" not in source_states.get("BookOrbit", {}).get("roles", {}):
                     bookorbit_client.get_all_books(force_refresh=True)
                 bo_books = bookorbit_client.get_all_ebooks()
-                local_index = local_index if discovery else _build_local_ebook_title_index()
+                if not discovery and not regular_user:
+                    local_index = _build_local_ebook_title_index()
                 if discovery:
                     complete = bool(getattr(bookorbit_client, "catalog_complete", False))
                     _record_suggestions_source_state(
@@ -4713,7 +4745,7 @@ def get_searchable_ebooks(
             logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
-    if EBOOK_DIR.exists() and not exclude_local_files:
+    if EBOOK_DIR.exists() and not skip_local:
         try:
             if discovery and scan_local_metadata is not None:
                 local_files = [
@@ -6518,7 +6550,7 @@ def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
 
     for key in keys:
         try:
-            pending = database_service.get_pending_suggestion(key)
+            pending = database_service.get_pending_suggestion(key, user_id=get_current_user_id())
         except Exception as exc:
             logger.warning("Shelf-watch approval lookup failed for '%s': %s", key, exc, exc_info=True)
             continue
@@ -6563,12 +6595,9 @@ def _watch_suggestion_review(source_id: str) -> "tuple[list, list, str] | None":
 
     Searching the suggested audiobook's title can miss it (blank metadata) or turn up
     another book's ebook, so Review offers exactly the pair the watcher scanned. The
-    page pre-selects a lone result. Admin-only, like the dashboard suggestions.
+    page pre-selects a lone result. Reads only the acting user's own suggestions.
     """
-    user = current_user()
-    if not (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False))):
-        return None
-    pending = database_service.get_pending_suggestion(source_id)
+    pending = database_service.get_pending_suggestion(source_id, user_id=get_current_user_id())
     if not pending or getattr(pending, 'origin', None) not in ('shelf_watch', 'reading_watch'):
         return None
     metadata = pending.origin_metadata or {}
@@ -7507,9 +7536,7 @@ def index():
         claim_times_by_book=claim_times_by_book,
     )
 
-    suggestions = []
-    if current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, "is_admin", False)):
-        suggestions = [s for s in database_service.get_all_pending_suggestions() if len(s.matches) > 0]
+    suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
 
     latest_version, update_available = get_update_status()
@@ -8117,6 +8144,15 @@ def match():
                 "would see empty ebook text. Link the comic as an ebook-only mapping instead.",
                 400,
             )
+        # Naming the ebook an existing mapping for this audiobook already has only joins
+        # that catalog book (no file is read), so it is not a local-folder selection.
+        pair_key = _build_bridge_key(audio_source, audio_source_id) or abs_id
+        existing_pair = database_service.get_book(pair_key) if pair_key and selected_filename else None
+        joins_existing = bool(existing_pair and existing_pair.ebook_filename == selected_filename)
+        if selected_filename and not joins_existing and _refuse_regular_user_local_selection(
+            ebook_source, source_path, ebook_source_id, selected_filename,
+        ):
+            return "Server-local ebooks are only available to administrators", 403
         clients = uc()
         if request.form.get('action') == 'forge_match' and not clients.storyteller_client.is_configured():
             return "Storyteller is not configured", 409
@@ -9480,6 +9516,10 @@ def _queue_item_from_match_form(clients) -> "dict | None":
 
     if not bridge_key or not (ebook_filename or storyteller_uuid or audio_only):
         return None
+    if ebook_filename and _refuse_regular_user_local_selection(
+        ebook_source, ebook_source_path, ebook_source_id, ebook_filename,
+    ):
+        return None
     # A submitted form field can still carry a legacy absolute cover URL.
     safe_cover_url = _browser_cover_url(
         audio_cover_url,
@@ -9530,9 +9570,6 @@ def _suggestions_search_results(
     mode = "search"
     review_pair = _watch_suggestion_review(review) if review else None
     if ebook_key:
-        user = current_user()
-        if not user or not user.is_admin:
-            abort(403)
         from src.services.suggestions_view import project_suggestions
         persisted = _load_persisted_suggestions_cache()
         snapshot = persisted.get("ebook_discovery") or {}
@@ -9608,12 +9645,14 @@ def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
     filename = entry.get("filename") or ""
     path = entry.get("path")
     if source == "Local File":
+        if _refuse_regular_user_local_selection(source, path, ebook_filename=filename):
+            return None
         path = _safe_local_source_path(path)
         if not path or not Path(path).is_file():
             return None
         filename = path
     elif source == "BookOrbit":
-        client = uc().bookorbit_client
+        client = _scan_user_clients().bookorbit_client
         detail = client.get_book_detail(source_id, force=True, fresh_only=True)
         if not detail:
             return None
@@ -9648,7 +9687,7 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
         return None
     source, source_id = selected.source, selected.source_id
     parser = container.ebook_parser()
-    clients = uc() if source != "Local File" else None
+    clients = _scan_user_clients() if source != "Local File" else None
     kosync_id = None
     if source == "Local File":
         kosync_id = parser.get_kosync_id(Path(selected.path))
@@ -9723,9 +9762,9 @@ def _get_suggestions_service():
     )
 
 
-def _get_ignored_suggestion_source_ids():
-    """Return suggestion source IDs (bridge keys) that are marked as ignored."""
-    return _get_suggestions_service().get_ignored_suggestion_source_ids()
+def _get_ignored_suggestion_source_ids(user_id: Optional[int] = None):
+    """Return suggestion source IDs (bridge keys) the user marked as ignored."""
+    return _get_suggestions_service().get_ignored_suggestion_source_ids(user_id=user_id)
 
 
 def _suggestions_discovery_sources_complete(source_states):
@@ -9809,7 +9848,7 @@ def scan_library_suggestions(
     attempted_at = time.time()
     persisted = _load_persisted_suggestions_cache()
     previous = persisted.get("ebook_discovery") or {}
-    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    exclude_local_files = _scan_excludes_local_files()
     exclude_setting_changed = bool(previous.get("exclude_local_files", False)) != exclude_local_files
     if exclude_setting_changed:
         cached_suggestions_by_abs = {}
@@ -9887,6 +9926,7 @@ def scan_library_suggestions(
 
     inventory = build_ebook_inventory(
         inventory_candidates, previous_entries=(previous.get("entries") or {}),
+        exclude_local_files=exclude_local_files,
     )
     audio_pool = service._build_audiobook_candidate_pool(audio_candidates)
     # Some Grimmory summary rows omit companion formats. A plausible match to
@@ -10000,7 +10040,8 @@ def _prune_suggestions_scan_jobs():
     with SUGGESTIONS_SCAN_JOBS_LOCK:
         stale_ids = [
             job_id for job_id, job in SUGGESTIONS_SCAN_JOBS.items()
-            if job.get('updated_at', job.get('started_at', 0)) < cutoff
+            if job.get('status') != 'queued'
+            and job.get('updated_at', job.get('started_at', 0)) < cutoff
         ]
         for job_id in stale_ids:
             SUGGESTIONS_SCAN_JOBS.pop(job_id, None)
@@ -10199,7 +10240,7 @@ def _suggestions_auto_scan_tick():
 
         if _SUGGESTIONS_AUTO_SCAN_JOB:
             job = _get_suggestions_scan_job(_SUGGESTIONS_AUTO_SCAN_JOB["job_id"])
-            if job and job["status"] == "running":
+            if job and job["status"] in _SCAN_JOB_ACTIVE:
                 return
             state["last_finished"] = job["updated_at"] if job else time.time()
             if _SUGGESTIONS_AUTO_SCAN_JOB["full_fire"]:
@@ -10213,7 +10254,7 @@ def _suggestions_auto_scan_tick():
         now = datetime.now(_get_stats_timezone())
         due = _suggestions_auto_scan_due(now, state)
         with SUGGESTIONS_SCAN_JOBS_LOCK:
-            scan_running = any(job.get("status") == "running" for job in SUGGESTIONS_SCAN_JOBS.values())
+            scan_running = any(job.get("status") in _SCAN_JOB_ACTIVE for job in SUGGESTIONS_SCAN_JOBS.values())
         if due and not scan_running:
             job_id = _run_scheduled_suggestions_scan(full=(due == 'full'))
             if job_id:
@@ -10233,7 +10274,7 @@ def _suggestions_auto_scan_tick():
 
 def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None, full_refresh=False):
     _prune_suggestions_scan_jobs()
-    bundle = uc()
+    bundle = _scan_user_clients()
     try:
         user = current_user()
         user_id = user.id if user is not None else None
@@ -10246,24 +10287,24 @@ def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_
             user_id = None
     creds = get_current_user_credentials()
 
-    # Reuse an existing running scan for this user to avoid duplicate concurrent scans.
-    if user_id:
-        existing_id = _running_suggestions_scan_job_id(user_id)
-        if existing_id:
-            logger.info(f"Suggestions scan already running; reusing job {existing_id}")
-            return existing_id
-
     job_id = uuid.uuid4().hex
     with SUGGESTIONS_SCAN_JOBS_LOCK:
+        # Reuse this reader's queued or running scan; checked under the same lock
+        # as the insert so two clicks can never start two scans.
+        if user_id:
+            for existing_id, existing in SUGGESTIONS_SCAN_JOBS.items():
+                if existing.get('user_id') == user_id and existing.get('status') in _SCAN_JOB_ACTIVE:
+                    logger.info(f"Suggestions scan already running; reusing job {existing_id}")
+                    return existing_id
         SUGGESTIONS_SCAN_JOBS[job_id] = {
-            "status": "running",
+            "status": "queued",
             "user_id": user_id,
             "results": {},
             "error": None,
             "progress": {
-                "phase": "initializing",
+                "phase": "queued",
                 "percent": 0,
-                "message": "Preparing scan...",
+                "message": "Waiting for another library scan to finish...",
                 "scanned_new_done": 0,
                 "scanned_new_total": 0,
                 "reused_cached": 0,
@@ -10278,12 +10319,20 @@ def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_
         tok_uid = set_current_user_id(user_id)
         tok_creds = set_current_user_credentials(creds)
         try:
-            _run_suggestions_scan_job(
-                job_id,
-                cached_suggestions_by_abs or {},
-                cached_no_match_abs_ids or [],
-                full_refresh,
-            )
+            with SUGGESTIONS_SCAN_SLOT:
+                with SUGGESTIONS_SCAN_JOBS_LOCK:
+                    job = SUGGESTIONS_SCAN_JOBS.get(job_id)
+                    if job is None:
+                        return
+                    job["status"] = "running"
+                    job["progress"] = {**job["progress"], "phase": "initializing", "message": "Preparing scan..."}
+                    job["updated_at"] = time.time()
+                _run_suggestions_scan_job(
+                    job_id,
+                    cached_suggestions_by_abs or {},
+                    cached_no_match_abs_ids or [],
+                    full_refresh,
+                )
         finally:
             reset_current_user_credentials(tok_creds)
             reset_current_user_id(tok_uid)
@@ -10573,14 +10622,26 @@ def _get_suggestions_scan_job(job_id):
 
 
 def _running_suggestions_scan_job_id(user_id: Optional[str]) -> Optional[str]:
-    """Return the job_id of a 'running' suggestions scan for the given user, if any."""
+    """Return the job_id of a queued or running suggestions scan for the given user, if any."""
     if not user_id:
         return None
     with SUGGESTIONS_SCAN_JOBS_LOCK:
         for job_id, job in SUGGESTIONS_SCAN_JOBS.items():
-            if job.get('user_id') == user_id and job.get('status') == 'running':
+            if job.get('user_id') == user_id and job.get('status') in _SCAN_JOB_ACTIVE:
                 return job_id
     return None
+
+
+def _owned_suggestions_scan_job(job_id):
+    """The scan job ``job_id`` if it belongs to the acting reader, else None.
+
+    A job id comes from the session, and a finished job's results are written into
+    the reader's saved state, so a job started for someone else must never be read.
+    """
+    job = _get_suggestions_scan_job(job_id)
+    if job is None or job.get('user_id') != get_current_user_id():
+        return None
+    return job
 
 
 def _clear_legacy_suggestions_session_payload():
@@ -11126,7 +11187,7 @@ def _match_queue_response():
         return render_template(
             '_match_queue_panel.html',
             queue=_load_match_queue(),
-            storyteller_enabled=bool(uc().storyteller_client.is_configured()),
+            storyteller_enabled=bool(_scan_user_clients().storyteller_client.is_configured()),
         )
     return redirect(url_for('suggestions'))
 
@@ -11167,6 +11228,10 @@ def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     ebook_filename = top.get('ebook_filename') or ''
     if not ebook_filename:
         return None
+    if _refuse_regular_user_local_selection(
+        top.get('source'), top.get('source_path'), top.get('source_id'), ebook_filename,
+    ):
+        return None
     audio_title = suggestion.get('audio_title') or suggestion.get('abs_title') or ''
     audio_duration = suggestion.get('audio_duration')
     if audio_duration is None:
@@ -11194,16 +11259,13 @@ def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     }
 
 
-_NON_ADMIN_QUEUE_ACTIONS = frozenset({
-    'add_to_queue', 'remove_from_queue', 'clear_queue',
-    'process_queue', 'forge_and_match_queue', 'forge_only_queue',
-})
-
-
 def suggestions_page():
     _clear_legacy_suggestions_session_payload()
-    clients = uc()
-    storyteller_enabled = bool(clients.storyteller_client.is_configured())
+    try:
+        clients = _scan_user_clients()
+    except PermissionError:
+        clients = None
+    storyteller_enabled = bool(clients is not None and clients.storyteller_client.is_configured())
     state_id, suggestions_state = _get_suggestions_state(create=True)
     if suggestions_state is None:
         suggestions_state = _default_suggestions_state()
@@ -11215,8 +11277,9 @@ def suggestions_page():
 
     if request.method == 'POST':
         action = request.form.get('action')
-        if not is_admin and action not in _NON_ADMIN_QUEUE_ACTIONS:
-            abort(403)
+        if clients is None:
+            flash("Your own library connections are unavailable, so this can't run right now.", "warning")
+            return redirect(url_for('suggestions'))
         if action in ('forge_and_match_queue', 'forge_only_queue') and not storyteller_enabled:
             flash("Configure Storyteller before creating a Storyteller edition.", "warning")
             return redirect(url_for('suggestions'))
@@ -11284,7 +11347,8 @@ def suggestions_page():
                 )
                 cover_url = request.form.get('cover_url') or (current_entry.get('cover_url') if current_entry else '') or ''
 
-                if not database_service.ignore_suggestion(bridge_key):
+                reader_id = get_current_user_id()
+                if not database_service.ignore_suggestion(bridge_key, user_id=reader_id):
                     suggestion = PendingSuggestion(
                         source_id=bridge_key,
                         title=abs_title,
@@ -11294,7 +11358,7 @@ def suggestions_page():
                         status='ignored'
                     )
                     suggestion.source = audio_source
-                    database_service.save_pending_suggestion(suggestion)
+                    database_service.save_pending_suggestion(suggestion, user_id=reader_id)
 
                 suggestions_state['scan_results'] = [
                     item
@@ -11403,27 +11467,12 @@ def suggestions_page():
             flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
-    if not is_admin:
-        return render_template(
-            'suggestions.html',
-            suggestions=[],
-            queue=_sanitize_cover_urls(_load_match_queue()),
-            scan_has_run=False,
-            scan_in_progress=False,
-            scan_error=None,
-            scan_stats={},
-            storyteller_enabled=storyteller_enabled,
-            tab_counts=None,
-            is_admin=False,
-            available_tabs=['search'],
-        )
-
     scan_in_progress = False
     scan_error = None
     job_id = session.get('suggestions_scan_job_id')
     scan_job = None
     if job_id:
-        scan_job = _get_suggestions_scan_job(job_id)
+        scan_job = _owned_suggestions_scan_job(job_id)
         if not scan_job:
             session.pop('suggestions_scan_job_id', None)
             session.modified = True
@@ -11473,7 +11522,7 @@ def suggestions_page():
     if not scan_in_progress:
         suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
 
-    ignored_source_ids = _get_ignored_suggestion_source_ids()
+    ignored_source_ids = _get_ignored_suggestion_source_ids(user_id=get_current_user_id())
     scan_results = suggestions_state.get('scan_results', [])
     cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
     no_match_abs_ids = suggestions_state.get('scan_cache_no_match_abs_ids', []) or []
@@ -11502,7 +11551,7 @@ def suggestions_page():
         _persist_suggestions_state(suggestions_state)
 
     active_suggestion_keys = set()
-    for book in database_service.get_all_books():
+    for book in database_service.get_all_books(user_id=get_current_user_id()):
         abs_id = str(getattr(book, 'abs_id', '') or '').strip()
         if abs_id:
             active_suggestion_keys.add(abs_id)
@@ -11595,7 +11644,7 @@ def suggestions_page():
         scan_stats=suggestions_state.get('scan_last_stats', {}),
         storyteller_enabled=storyteller_enabled,
         tab_counts=suggestions_tab_counts(),
-        is_admin=True,
+        is_admin=is_admin,
         available_tabs=['pairs', 'ebook_only', 'search'],
     )
 
@@ -11605,7 +11654,7 @@ def suggestions_scan_status():
     job_id = session.get('suggestions_scan_job_id')
     scan_job = None
     if job_id:
-        scan_job = _get_suggestions_scan_job(job_id)
+        scan_job = _owned_suggestions_scan_job(job_id)
         if not scan_job:
             session.pop('suggestions_scan_job_id', None)
             session.modified = True
@@ -14252,7 +14301,7 @@ def view_log():
 
 # ---------------- SUGGESTION API ROUTES ----------------
 def get_suggestions():
-    suggestions = database_service.get_all_pending_suggestions()
+    suggestions = database_service.get_all_pending_suggestions(user_id=get_current_user_id())
     result = []
     for s in suggestions:
         try:
@@ -14273,19 +14322,19 @@ def get_suggestions():
 
 
 def dismiss_suggestion(source_id):
-    if database_service.dismiss_suggestion(source_id):
+    if database_service.dismiss_suggestion(source_id, user_id=get_current_user_id()):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Not found"}), 404
 
 
 def ignore_suggestion(source_id):
-    if database_service.ignore_suggestion(source_id):
+    if database_service.ignore_suggestion(source_id, user_id=get_current_user_id()):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Not found"}), 404
 
 
 def clear_stale_suggestions():
-    count = database_service.clear_stale_suggestions()
+    count = database_service.clear_stale_suggestions(user_id=get_current_user_id())
     logger.info(f"🧹 Cleared {count} stale suggestions from database")
     return jsonify({"success": True, "count": count})
 

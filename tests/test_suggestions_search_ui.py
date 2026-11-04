@@ -84,7 +84,7 @@ class SearchTabPageTests(SearchPageTestCase):
             self.assertNotIn(marker, html)
         self.assertIn('const TABS = ["search"];', html)
         self.assertIn('id="searchTabForm"', html)
-        self.assertIn("<h2>Add Book</h2>", html)
+        self.assertIn("<h2>Discover</h2>", html)
 
     def test_reader_documents_move_to_the_search_tab(self):
         html = self._render(is_admin=False, available_tabs=["search"])
@@ -109,6 +109,8 @@ class SearchTabPageTests(SearchPageTestCase):
         nav = html[html.index('<nav class="top-nav">'):html.index("</nav>")]
         self.assertEqual(nav.count('href="/suggestions"'), 1)
         self.assertNotIn("/add-book", nav)
+        self.assertIn(">Discover<", nav)
+        self.assertNotIn("Suggestions", nav)
 
 
 class QueuePanelTests(SearchPageTestCase):

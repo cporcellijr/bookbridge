@@ -1906,7 +1906,7 @@ def _auto_map_ebook_to_audiobook(doc_hash_val, epub_filename, candidate, reason,
     except Exception as e:
         logger.debug(f"Auto-map: link_kosync_document failed: {e}")
     try:
-        _database_service.dismiss_suggestion(doc_hash_val)
+        _database_service.dismiss_suggestion(doc_hash_val, user_id=user_id)
     except Exception:
         pass
 
@@ -4451,7 +4451,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None, *, epub_filen
         _register_hash_for_book(doc_hash_val, existing_book, user_id=user_id)
         if user_id is not None:
             _database_service.link_user_book(user_id, existing_book.abs_id)
-        _database_service.dismiss_suggestion(doc_hash_val)
+        _database_service.dismiss_suggestion(doc_hash_val, user_id=user_id)
         return
 
     title = Path(epub_filename).stem
@@ -4475,7 +4475,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None, *, epub_filen
         for c in candidates if (c.get("progress_pct") or 0) <= 75
     ]
     if matches:
-        if not _database_service.suggestion_exists(doc_hash_val):
+        if not _database_service.suggestion_exists(doc_hash_val, user_id=user_id):
             matches.append({"source": "ebook", "filename": epub_filename, "confidence": "high"})
             _database_service.save_pending_suggestion(PendingSuggestion(
                 source_id=doc_hash_val,
@@ -4483,7 +4483,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None, *, epub_filen
                 author=ebook_meta.get("author"),
                 cover_url=f"/api/cover-proxy/{matches[0]['abs_id']}",
                 matches_json=json.dumps(matches),
-            ))
+            ), user_id=user_id)
         return
     book_id = f"ebook-{doc_hash_val[:16]}"
     ebook_source, ebook_source_id = _resolve_library_ebook_source(epub_filename)
@@ -4495,7 +4495,7 @@ def _run_put_auto_discovery_inner(doc_hash_val: str, user_id=None, *, epub_filen
         kosync_doc_id=doc_hash_val, status='active', sync_mode='ebook_only',
     ))
     _database_service.link_kosync_document(doc_hash_val, book_id)
-    _database_service.dismiss_suggestion(doc_hash_val)
+    _database_service.dismiss_suggestion(doc_hash_val, user_id=user_id)
     if user_id is not None:
         _database_service.link_user_book(user_id, book_id)
         if ebook_source == "BookOrbit":

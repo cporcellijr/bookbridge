@@ -8,22 +8,31 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Pair Suggestions and Ebook Only on the next Scan Library while keeping ebooks from your library services.
-- **Add Book is now the Search tab of Suggestions.** Search any of your libraries by title, author or
-  file name, pick the audiobook (or none, for an ebook by itself), then the ebook, a Storyteller title or
-  Audio only, and add it to the Batch Match Queue, which now also offers Create Storyteller Edition Only
-  and a read-along EPUB for BookOrbit audiobooks. Reader Documents moved there too. Every user gets the
-  Suggestions page; regular users see only its Search tab, and old Add Book links open it.
-- **Suggestions has Pair Suggestions and Ebook Only tabs.** Pair Suggestions keeps the
+- **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Discover's Pairs and Ebook Only on the next Scan Library while keeping ebooks from your library services.
+- **Suggestions is now Discover, with three tabs: Pairs, Ebook Only and Search.** Every reader can use
+  all of it, and each reader sees only their own scans, suggestions, ignores and queue. Pairs keeps the
   audiobook/ebook matching, candidate review and Batch Match Queue; Ebook Only lists ebooks the last
-  scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens the Search
-  tab with the ebook already chosen), Create ebook-only, Hide for now and a saved Ignore you can undo.
-  Both tabs group books by series (collapsed, numbered in series order, with an Other / No Series
-  group; switch to a flat list any time), and have search, series, source, status and sort filters
-  that each tab remembers separately. Ticking a series selects every exact match in it, even books
-  in a collapsed group; review matches are never selected that way. A scan that could not read every
-  source says the results may be incomplete instead of presenting them as final. Opening a tab never
-  starts a scan.
+  scan found no qualifying audiobook for, dated "as of" that scan, with Find audiobook (opens Search with
+  the ebook already chosen), Create ebook-only (or Add to your library, when another reader already
+  added the same ebook), Hide for now and a saved Ignore you can undo. Both tabs group books by series
+  (collapsed, numbered in series order, with an Other / No Series group; switch to a flat list any
+  time), and have search, series, source, status and sort filters that each tab remembers separately.
+  Ticking a series selects every exact match in it, even books in a collapsed group; review matches are
+  never selected that way. A scan that could not read every source says the results may be incomplete
+  instead of presenting them as final. Opening a tab never starts a scan, and when several readers
+  scan, the scans run one at a time.
+- **Add Book is now Discover's Search tab.** Search your libraries by title, author or file name, pick
+  the audiobook (or none, for an ebook by itself), then the ebook, a Storyteller title or Audio only,
+  and add it to the Batch Match Queue, which now also offers Create Storyteller Edition Only and a
+  read-along EPUB for BookOrbit audiobooks. Reader Documents moved there too, and old Add Book links
+  open it. The server's own ebook folder is listed for admins only.
+
+### Fixed
+
+- **One reader's automatic matching no longer changes another reader's book.** A shelf watch or a
+  KoSync device opening a new ebook could re-point an audiobook someone else had already matched, and
+  reset it for re-alignment. Now a different pairing is left alone, and the same pairing just adds the
+  book to the second reader's library.
 
 ## [7.12.0] - 2026-11-02
 

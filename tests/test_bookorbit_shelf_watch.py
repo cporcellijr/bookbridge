@@ -90,7 +90,7 @@ def test_missing_shelf_warning_names_bookorbit(caplog):
 def test_pending_suggestion_carries_source_name():
     svc = _svc()
     captured = {}
-    svc.database_service.save_pending_suggestion.side_effect = lambda s: captured.update(s=s)
+    svc.database_service.save_pending_suggestion.side_effect = lambda s, **_kw: captured.update(s=s)
     matches = [{
         "bridge_key": "abs-1", "audio_source": "ABS", "audio_source_id": "abs-1",
         "audio_title": "T", "audio_author": "A", "audio_cover_url": "", "score": 70,

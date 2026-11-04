@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_i18n.html" import plural_forms %}
 {% set active_page = 'suggestions' %}
-{% block title %}{{ _('Suggestions') }} · BookBridge{% endblock %}
+{% block title %}{{ _('Discover') }} · BookBridge{% endblock %}
 
 {% block head %}
 <style>
@@ -221,18 +221,18 @@
     {% set tabs_shown = available_tabs|default(['pairs', 'ebook_only', 'search']) %}
     <div class="page-header">
         {% if 'pairs' in tabs_shown %}
-        <h2>{{ _('Library Suggestions') }}</h2>
+        <h2>{{ _('Discover') }}</h2>
         <p class="subtitle">{{ _('Scan your library to find unmatched audiobook/ebook pairs') }}</p>
         {% else %}
-        <h2>{{ _('Add Book') }}</h2>
+        <h2>{{ _('Discover') }}</h2>
         <p class="subtitle">{{ _('Pick text by itself, or pair audio with text and choose how the list should be processed') }}</p>
         {% endif %}
     </div>
 
-    <div class="tabs sugg-tabs" role="tablist" aria-label="{{ _('Suggestions') }}">
+    <div class="tabs sugg-tabs" role="tablist" aria-label="{{ _('Discover') }}">
         {% if 'pairs' in tabs_shown %}
         <button type="button" class="tab" role="tab" id="tab-pairs" data-tab="pairs" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">
-            {{ _('Pair Suggestions') }}
+            {{ _('Pairs') }}
             <span class="tab-sub">{{ _('Audiobook + Ebook') }}</span>
             <span class="tab-count" id="tabCount-pairs">{% if tab_counts %}{{ tab_counts.pairs }}{% endif %}</span>
         </button>
@@ -282,7 +282,7 @@
         <div class="filter-field" data-only-tab="pairs">
             <label class="sort-label" for="statusFilter">{{ _('Status') }}</label>
             <select id="statusFilter" class="form-select">
-                <option value="all">{{ _('All suggestions') }}</option>
+                <option value="all">{{ _('All pairs') }}</option>
                 <option value="eligible">{{ _('Exact, ready to add') }}</option>
                 <option value="manual_review">{{ _('Needs review') }}</option>
                 <option value="queued">{{ _('Queued') }}</option>
@@ -328,7 +328,7 @@
                 </div>
             </div>
             <div class="bulk-actions" id="bulkActions" data-only-tab="pairs">
-                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" title="{{ _('Queue every suggestion in this view whose best match is exact and needs no choice') }}" disabled>➕ {{ _('Add all exact') }} (<span id="exactCount">0</span>)</button>
+                <button type="button" class="btn btn-small btn-success" id="addAllExactBtn" title="{{ _('Queue every pair in this view whose best match is exact and needs no choice') }}" disabled>➕ {{ _('Add all exact') }} (<span id="exactCount">0</span>)</button>
                 <button type="button" class="btn btn-small btn-muted" id="addSelectedBtn" disabled>➕ {{ _('Add selected') }} (<span id="selectedCount">0</span>)</button>
                 <button type="button" class="btn btn-small btn-muted" id="clearSelectionBtn" disabled>{{ _('Clear selection') }}</button>
                 <span class="selection-summary" id="selectionSummary"></span>
@@ -356,8 +356,8 @@
             </div>
 
             <div class="selection">
-                <h4>{{ _('Selected Suggestion') }}</h4>
-                <p class="selection-placeholder" id="selectionPlaceholder">{{ _('Click a suggestion to review and add to queue.') }}</p>
+                <h4>{{ _('Selected Book') }}</h4>
+                <p class="selection-placeholder" id="selectionPlaceholder">{{ _('Click a book to review it and add it to the queue.') }}</p>
                 <div class="selection-details hidden" id="selectionDetails">
                     <div class="selected-book">
                         <img id="selectedCover" src="" alt="{{ _('Selected') }}">
@@ -477,7 +477,7 @@
         hide: {{ _('Hide for now')|tojson }},
         hideTitle: {{ _('Hide it in this browser session only. Nothing is saved; it comes back in a new session.')|tojson }},
         ignore: {{ _('Ignore')|tojson }},
-        ignorePairTitle: {{ _('Stop suggesting this audiobook. This is saved and survives new scans.')|tojson }},
+        ignorePairTitle: {{ _('Stop listing this audiobook. This is saved and survives new scans.')|tojson }},
         ignoreEbookTitle: {{ _('Stop listing this ebook. This is saved and survives new scans; restore it from Show: Ignored.')|tojson }},
         restore: {{ _('Restore')|tojson }},
         restoreTitle: {{ _('List this ebook again after the next scan checks it.')|tojson }},
@@ -490,7 +490,7 @@
         ebookOnlyRow: {{ _('No audiobook (ebook only)')|tojson }},
         ebookOnlyRowSub: {{ _('Add an ebook by itself, without audio')|tojson }},
         noSearchEbooks: {{ _('No ebooks found for this search.')|tojson }},
-        noPairEbooks: {{ _('No ebook matches available for this suggestion. Storyteller-only queue is allowed.')|tojson }},
+        noPairEbooks: {{ _('No ebook matches available for this audiobook. Storyteller-only queue is allowed.')|tojson }},
         audioOnly: {{ _('Audio only')|tojson }},
         audioOnlyCard: {{ _('Audio only (no ebook)')|tojson }},
         linked: {{ _('Linked')|tojson }},
@@ -501,6 +501,7 @@
         createEbookOnlyTitle: {{ _('Add this ebook to BookBridge on its own, without an audiobook')|tojson }},
         confirmCreate: {{ _('Create an ebook-only book for "{title}"? It syncs reading progress without an audiobook.')|tojson }},
         created: {{ _('Created an ebook-only book for "{title}".')|tojson }},
+        claimed: {{ _('Added "{title}" to your library. It was already in BookBridge.')|tojson }},
         ignoredDone: {{ _('Ignored "{title}". It stays out of this list after new scans.')|tojson }},
         restoredDone: {{ _('Restored "{title}". The next scan checks it again.')|tojson }},
         hiddenDone: {{ _('Hid "{title}" for this session.')|tojson }},
@@ -508,12 +509,12 @@
         clearFilters: {{ _('Clear filters')|tojson }},
         retry: {{ _('Retry')|tojson }},
         loading: {{ _('Loading...')|tojson }},
-        loadFailed: {{ _('Could not load suggestions.')|tojson }},
+        loadFailed: {{ _('Could not load this list.')|tojson }},
         noFilterMatch: {{ _('Nothing matches these filters.')|tojson }},
-        allHidden: {{ _('All current suggestions are hidden.')|tojson }},
+        allHidden: {{ _('Everything in this list is hidden for now.')|tojson }},
         noScanYet: {{ _('No scan results yet.')|tojson }},
         clickScan: {{ _('Click "Scan Library" to begin.')|tojson }},
-        noPairs: {{ _('No suggestions found above 60%% confidence.')|tojson }},
+        noPairs: {{ _('No pairs found above 60%% confidence.')|tojson }},
         rescanLater: {{ _('Run another scan after your library changes.')|tojson }},
         noEbookOnly: {{ _('Every ebook from the last scan has an audiobook match or is already in BookBridge.')|tojson }},
         ebookNeverScanned: {{ _('Ebook Only results appear after the next Scan Library.')|tojson }},
@@ -526,7 +527,7 @@
         incompleteSince: {{ _('The latest scan ({date}) could not read every source, so these results may be incomplete.')|tojson }},
         incompleteNoDate: {{ _('The latest scan could not read every source, so these results may be incomplete.')|tojson }},
         sourcesIncomplete: {{ _('Not fully read: {sources}')|tojson }},
-        reviewWarning: {{ _('Some selected suggestions are not exact matches; check them in the queue before matching.')|tojson }},
+        reviewWarning: {{ _('Some selected pairs are not exact matches; check them in the queue before matching.')|tojson }},
         tieBlocked: {{ _('Two ebooks match equally: pick one in the review panel')|tojson }},
         noMatchBlocked: {{ _('No ebook match')|tojson }},
         belowThreshold: {{ _('The best match is below 100%%')|tojson }},
@@ -566,7 +567,7 @@
     // Same msgids as the server-rendered counts; num='{count}' keeps the placeholder for bbPlural.
     const ITEM_COUNT = {% call(n) plural_forms() %}{{ ngettext('%(num)s item', '%(num)s items', n, num='{count}') }}{% endcall %};
     const P = {
-        suggestions: {% call(n) plural_forms() %}{{ ngettext('%(num)s suggestion', '%(num)s suggestions', n, num='{count}') }}{% endcall %},
+        suggestions: {% call(n) plural_forms() %}{{ ngettext('%(num)s pair', '%(num)s pairs', n, num='{count}') }}{% endcall %},
         eligible: {% call(n) plural_forms() %}{{ ngettext('%(num)s eligible', '%(num)s eligible', n, num='{count}') }}{% endcall %},
         queued: {% call(n) plural_forms() %}{{ ngettext('%(num)s queued', '%(num)s queued', n, num='{count}') }}{% endcall %},
         review: {% call(n) plural_forms() %}{{ ngettext('%(num)s needs review', '%(num)s need review', n, num='{count}') }}{% endcall %},
@@ -679,6 +680,11 @@
             .then((response) => response.json())
             .then((data) => {
                 const status = data.status || 'idle';
+                if (status === 'queued') {
+                    // Another reader's scan holds the slot; nothing of this scan has run yet.
+                    stopFakeScanProgress();
+                    setScanProgress(0, {{ _('Waiting for another library scan to finish...')|tojson }});
+                }
                 if (status === 'running') {
                     applyBackendProgress(data.progress || {});
                 }
@@ -2054,7 +2060,7 @@
             });
             const body = await response.json().catch(() => ({}));
             if (response.ok && body.ok) {
-                const done = action === 'create' ? T.created : action === 'restore' ? T.restoredDone : T.ignoredDone;
+                const done = action === 'create' ? (body.claimed ? T.claimed : T.created) : action === 'restore' ? T.restoredDone : T.ignoredDone;
                 setFeedback(bbFormat(done, { title: entry.title }));
             } else {
                 setFeedback(apiErrorText(body.error || `http_${response.status}`), true);

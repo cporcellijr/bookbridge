@@ -20,6 +20,7 @@ from rapidfuzz.distance import Indel
 from src.utils.ebook_sources import normalize_ebook_source
 from src.utils.config_loader import env_truthy
 from src.utils.local_ebook_metadata import _EBOOK_SUFFIXES
+from src.utils.local_file_scope import suggestions_exclude_local_files
 from src.utils.series_metadata import (
     _coerce_sequence,
     extract_series_from_library_detail,
@@ -147,9 +148,13 @@ def _candidate_record(candidate):
     }
 
 
-def build_ebook_inventory(candidates: Iterable[Any], previous_entries: Optional[dict] = None) -> dict[str, dict]:
+def build_ebook_inventory(
+    candidates: Iterable[Any], previous_entries: Optional[dict] = None,
+    exclude_local_files: Optional[bool] = None,
+) -> dict[str, dict]:
     """Build JSON-ready ebook records keyed by durable provider or physical identity."""
-    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    if exclude_local_files is None:
+        exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
     previous_entries = previous_entries or {}
     previous_path_keys = {}
     reserved_previous_paths = {}
@@ -316,7 +321,7 @@ def _legacy_basename(value):
     return basename or None
 
 
-def _entry_fingerprint(record):
+def _entry_fingerprint(record, exclude_local_files):
     fields = (
         "key", "title", "author", "filename", "source", "source_id", "path",
         "language", "series_name", "series_sequence", "series_source", "series_key",
@@ -324,7 +329,7 @@ def _entry_fingerprint(record):
         "abs_ebook_item_id", "kosync_doc_id", "document_id", "file_mtime_ns", "file_size",
     )
     return _stable_fingerprint({
-        "exclude_local_files": env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES"),
+        "exclude_local_files": exclude_local_files,
         **{field: record.get(field) for field in fields},
     })
 
@@ -413,6 +418,7 @@ def build_discovery_snapshot(
 ) -> dict:
     """Classify a normalized inventory from already-loaded metadata, without provider I/O."""
     started = time.perf_counter()
+    exclude_local_files = suggestions_exclude_local_files(getattr(service, "database_service", None))
     completed_at = _epoch(now)
     audio_candidates = list(audio_candidates or [])
     audio_fingerprint = _audio_pool_fingerprint(audio_candidates)
@@ -457,7 +463,7 @@ def build_discovery_snapshot(
             entry = dict(record)
             entry.update({
                 "classification": "unknown",
-                "fingerprint": _entry_fingerprint(record),
+                "fingerprint": _entry_fingerprint(record, exclude_local_files),
                 "checked_at": completed_at,
                 "audio_keys": [],
                 "search_complete": False,
@@ -467,7 +473,7 @@ def build_discovery_snapshot(
             stats["unknown"] += 1
             continue
 
-        fingerprint = _entry_fingerprint(record)
+        fingerprint = _entry_fingerprint(record, exclude_local_files)
         authoritative_id = record.get("abs_identifier")
         authoritative_keys = (
             authoritative_audio_by_id.get(str(authoritative_id).strip(), [])
@@ -557,7 +563,7 @@ def build_discovery_snapshot(
         "state": "complete",
         "completed_at": completed_at,
         "attempted_at": completed_at,
-        "exclude_local_files": env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES"),
+        "exclude_local_files": exclude_local_files,
         "audio_fingerprint": audio_fingerprint,
         "audio_fingerprints_by_key": audio_fingerprints_by_key,
         "entries": entries,

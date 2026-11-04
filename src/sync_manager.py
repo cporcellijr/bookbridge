@@ -1900,7 +1900,7 @@ class SyncManager:
                     valid_filenames.add(book.ebook_filename)
             
             # From Pending Suggestions (covers auto-discovery matches)
-            suggestions = self.database_service.get_all_pending_suggestions()
+            suggestions = self.database_service.get_all_pending_suggestions(all_users=True)
             for suggestion in suggestions:
                 # matches property automatically parses the JSON
                 for match in suggestion.matches:
@@ -2725,7 +2725,7 @@ class SyncManager:
             with self._suggestion_lock:
                 if abs_id in self._suggestion_in_flight:
                     return
-                if self.database_service.suggestion_exists(abs_id):
+                if self.database_service.suggestion_exists(abs_id, user_id=user_id):
                     return
                 all_books = self.database_service.get_all_books()
                 if any(b.abs_id == abs_id for b in all_books):
@@ -2746,7 +2746,7 @@ class SyncManager:
                 logger.info(
                     f"ABS Socket.IO: Queuing suggestion discovery for unknown book '{abs_id[:12]}...'"
                 )
-                self._create_suggestion(abs_id, None)
+                self._create_suggestion(abs_id, None, user_id=user_id)
             finally:
                 with self._suggestion_lock:
                     self._suggestion_in_flight.discard(abs_id)
@@ -2765,12 +2765,13 @@ class SyncManager:
             return
 
         try:
+            owner_id = get_current_user_id()
             # optimization: get all mapped IDs to avoid suggesting existing books (even if inactive)
             all_books = self.database_service.get_all_books()
             mapped_ids = {b.abs_id for b in all_books}
 
             # Dismiss existing pending suggestions for books now >70% complete
-            existing_suggestions = self.database_service.get_all_pending_suggestions()
+            existing_suggestions = self.database_service.get_all_pending_suggestions(user_id=owner_id)
             for suggestion in existing_suggestions:
                 item_data = abs_progress_map.get(suggestion.source_id)
                 if not item_data:
@@ -2785,7 +2786,7 @@ class SyncManager:
                 pct = (current_time / duration) if duration > 0 else 0
                 if is_finished or pct > 0.70:
                     logger.info(f"🧹 Dismissing suggestion for '{suggestion.title}': progress {pct:.1%} (finished={is_finished})")
-                    self.database_service.dismiss_suggestion(suggestion.source_id)
+                    self.database_service.dismiss_suggestion(suggestion.source_id, user_id=owner_id)
 
             logger.debug(f"Checking for suggestions: {len(abs_progress_map)} books with progress, {len(mapped_ids)} already mapped")
 
@@ -2802,7 +2803,7 @@ class SyncManager:
                     pct = current_time / duration
                     if pct > 0.01:
                         # Check if a suggestion already exists (pending, dismissed, or ignored)
-                        if self.database_service.suggestion_exists(abs_id):
+                        if self.database_service.suggestion_exists(abs_id, user_id=owner_id):
                             logger.debug(f"Skipping {abs_id}: suggestion already exists/dismissed")
                             continue
 
@@ -2813,7 +2814,7 @@ class SyncManager:
                              continue
 
                         logger.debug(f"Creating suggestion for {abs_id} (progress: {pct:.1%})")
-                        self._create_suggestion(abs_id, item_data)
+                        self._create_suggestion(abs_id, item_data, user_id=owner_id)
                     else:
                         logger.debug(f"Skipping {abs_id}: progress {pct:.1%} below 1% threshold")
                 else:
@@ -2852,7 +2853,7 @@ class SyncManager:
             logger.debug(f"Suggestion for '{title}': dropped {len(matches) - len(kept)} hit(s) by another author or volume")
         return kept
 
-    def _create_suggestion(self, abs_id, progress_data):
+    def _create_suggestion(self, abs_id, progress_data, user_id=None):
         """Create a new suggestion for an unmapped book."""
         logger.info(f"🔍 Found potential new book for suggestion: '{abs_id}'")
         
@@ -3015,7 +3016,7 @@ class SyncManager:
                 cover_url=cover,
                 matches_json=json.dumps(matches)
             )
-            self.database_service.save_pending_suggestion(suggestion)
+            self.database_service.save_pending_suggestion(suggestion, user_id=user_id)
             match_count = len(matches)
             logger.info(f"✅ Created suggestion for '{title}' with {match_count} matches")
 

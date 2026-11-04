@@ -1654,8 +1654,8 @@ msgstr[1] "Создаются {count} издания Storyteller..."
 msgstr[2] "Создаются {count} изданий Storyteller..."
 
 #: templates/index.html:2319
-msgid "Pending Suggestions"
-msgstr "Ожидающие предложения"
+msgid "Matches to review"
+msgstr "Совпадения для проверки"
 
 #: templates/index.html:2323
 msgid "Click to Review"
@@ -5660,8 +5660,8 @@ msgid "Failed to load book detail."
 msgstr "Не удалось загрузить сведения о книге."
 
 #: templates/suggestions.html:138
-msgid "Library Suggestions"
-msgstr "Предложения по библиотеке"
+msgid "Discover"
+msgstr "Обзор"
 
 #: templates/suggestions.html:139
 msgid "Scan your library to find unmatched audiobook/ebook pairs"
@@ -5746,8 +5746,8 @@ msgstr "Отклонить"
 
 #: templates/suggestions.html:242
 #, python-format
-msgid "No suggestions found above 60%% confidence."
-msgstr "Предложений с уверенностью выше 60%% не найдено."
+msgid "No pairs found above 60%% confidence."
+msgstr "Не найдено пар с уверенностью выше 60%%."
 
 #: templates/suggestions.html:242
 msgid "Run another scan after your library changes."
@@ -5766,12 +5766,12 @@ msgid "Batch Match Queue"
 msgstr "Очередь пакетного сопоставления"
 
 #: templates/suggestions.html:258
-msgid "Selected Suggestion"
-msgstr "Выбранное предложение"
+msgid "Selected Book"
+msgstr "Выбранная книга"
 
 #: templates/suggestions.html:259
-msgid "Click a suggestion to review and add to queue."
-msgstr "Нажмите на предложение, чтобы проверить его и добавить в очередь."
+msgid "Click a book to review it and add it to the queue."
+msgstr "Нажмите на книгу, чтобы проверить её и добавить в очередь."
 
 #: templates/suggestions.html:262
 msgid "Selected"
@@ -5786,8 +5786,8 @@ msgid "Ebook Match"
 msgstr "Электронная книга"
 
 #: templates/suggestions.html:295
-msgid "No ebook matches available for this suggestion. Storyteller-only queue is allowed."
-msgstr "Для этого предложения нет подходящих электронных книг. Можно поставить в очередь только с Storyteller."
+msgid "No ebook matches available for this audiobook. Storyteller-only queue is allowed."
+msgstr "Для этой аудиокниги нет подходящих электронных книг. Можно поставить в очередь только Storyteller."
 
 #: templates/suggestions.html:376
 #, python-brace-format, python-format
@@ -5845,8 +5845,8 @@ msgid "Same series"
 msgstr "Та же серия"
 
 #: templates/suggestions.html:820
-msgid "All current suggestions are hidden."
-msgstr "Все текущие предложения скрыты."
+msgid "Everything in this list is hidden for now."
+msgstr "Всё в этом списке пока скрыто."
 
 #: templates/suggestions.html:820
 msgid "Run Scan Library to refresh."
@@ -5963,8 +5963,8 @@ msgid "All sources"
 msgstr "Все источники"
 
 #: templates/suggestions.html
-msgid "All suggestions"
-msgstr "Все предложения"
+msgid "All pairs"
+msgstr "Все пары"
 
 #: templates/suggestions.html
 msgid "Audiobook + Ebook"
@@ -5983,8 +5983,8 @@ msgid "Clear selection"
 msgstr "Снять выделение"
 
 #: templates/suggestions.html
-msgid "Could not load suggestions."
-msgstr "Не удалось загрузить предложения."
+msgid "Could not load this list."
+msgstr "Не удалось загрузить этот список."
 
 #: templates/suggestions.html
 msgid "Could not save the change. Try again."
@@ -6103,6 +6103,14 @@ msgid "Open Search with this ebook selected and look for its audiobook"
 msgstr "Открыть «Поиск» с этой электронной книгой и найти для неё аудиокнигу"
 
 #: templates/suggestions.html
+msgid "Added \"{title}\" to your library. It was already in BookBridge."
+msgstr "Книга «{title}» добавлена в вашу библиотеку. Она уже была в BookBridge."
+
+#: templates/suggestions.html
+msgid "Waiting for another library scan to finish..."
+msgstr "Ожидание завершения другого сканирования библиотеки..."
+
+#: templates/suggestions.html
 msgid "Find any book"
 msgstr "Найти любую книгу"
 
@@ -6147,12 +6155,12 @@ msgid "Other / No Series"
 msgstr "Прочие / без серии"
 
 #: templates/suggestions.html
-msgid "Pair Suggestions"
-msgstr "Предложения пар"
+msgid "Pairs"
+msgstr "Пары"
 
 #: templates/suggestions.html
-msgid "Queue every suggestion in this view whose best match is exact and needs no choice"
-msgstr "Поставить в очередь все предложения в этом списке, у которых лучшее совпадение точное и выбора не требуется"
+msgid "Queue every pair in this view whose best match is exact and needs no choice"
+msgstr "Поставить в очередь все пары в этом списке, лучшее совпадение которых точное и не требует выбора"
 
 #: templates/suggestions.html
 msgid "Restore"
@@ -6191,8 +6199,8 @@ msgid "Show hidden"
 msgstr "Показать скрытые"
 
 #: templates/suggestions.html
-msgid "Some selected suggestions are not exact matches; check them in the queue before matching."
-msgstr "Некоторые выбранные предложения не являются точными совпадениями; проверьте их в очереди перед сопоставлением."
+msgid "Some selected pairs are not exact matches; check them in the queue before matching."
+msgstr "Некоторые выбранные пары не являются точными совпадениями; проверьте их в очереди перед сопоставлением."
 
 #: templates/suggestions.html
 msgid "Source"
@@ -6203,8 +6211,8 @@ msgid "Stop listing this ebook. This is saved and survives new scans; restore it
 msgstr "Больше не показывать эту электронную книгу. Это сохраняется и переживает новые сканирования; восстановить можно через «Показать: Игнорируемые»."
 
 #: templates/suggestions.html
-msgid "Stop suggesting this audiobook. This is saved and survives new scans."
-msgstr "Больше не предлагать эту аудиокнигу. Это сохраняется и переживает новые сканирования."
+msgid "Stop listing this audiobook. This is saved and survives new scans."
+msgstr "Больше не показывать эту аудиокнигу. Это сохраняется и переживает новые сканирования."
 
 #: templates/suggestions.html
 msgid "The action failed ({code})."
@@ -6329,11 +6337,11 @@ msgstr[2] "%(num)s выбрано"
 
 #: templates/suggestions.html
 #, python-format
-msgid "%(num)s suggestion"
-msgid_plural "%(num)s suggestions"
-msgstr[0] "%(num)s предложение"
-msgstr[1] "%(num)s предложения"
-msgstr[2] "%(num)s предложений"
+msgid "%(num)s pair"
+msgid_plural "%(num)s pairs"
+msgstr[0] "%(num)s пара"
+msgstr[1] "%(num)s пары"
+msgstr[2] "%(num)s пар"
 
 #: templates/settings.html
 msgid "Ignore local files in Suggestions"
