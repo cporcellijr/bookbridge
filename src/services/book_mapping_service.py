@@ -314,17 +314,20 @@ class BookMappingService:
         # this leaves two rows claiming one KOSync hash, and since
         # KosyncDocument.linked_abs_id holds a single book, the loser is served but
         # can never receive progress while the device downloads the bytes twice.
+        # Guard whatever absorb_duplicate_mapping would fold in: the hash holder or,
+        # failing that, an ebook-only row for the same provider ebook.
+        duplicate_id = self.database_service.find_duplicate_mapping(target_book)
+        if duplicate_id and not self._user_may_modify(user_id, duplicate_id):
+            logger.info(
+                "🔒 Refused to absorb mapping '%s': it belongs to another reader",
+                sanitize_log_data(duplicate_id),
+            )
+            return None
         stale = (
             self.database_service.get_book_by_kosync_id(kosync_doc_id)
             if kosync_doc_id else None
         )
         if stale is not None and getattr(stale, "abs_id", None) != target_book.abs_id:
-            if not self._user_may_modify(user_id, stale.abs_id):
-                logger.info(
-                    "🔒 Refused to absorb mapping '%s': it belongs to another reader",
-                    sanitize_log_data(stale.abs_id),
-                )
-                return None
             for field in ("storyteller_uuid", "transcript_source", "transcript_file",
                           "abs_ebook_item_id"):
                 if not getattr(target_book, field, None):

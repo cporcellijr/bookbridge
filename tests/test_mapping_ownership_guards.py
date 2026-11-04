@@ -85,6 +85,29 @@ class TestAutoMatchOwnership(MappingGuardBase):
         self.assertEqual(self.db.get_book("audio-2").status, "active")
         self.assertIsNone(self.db.get_book("audio-2").kosync_doc_id)
 
+    def test_second_user_auto_match_cannot_absorb_another_readers_ebook_by_source_id(self):
+        """Same provider ebook, different hash: the source-id duplicate path is guarded too."""
+        self.db.save_book(Book(
+            abs_id="audio-2", abs_title="Other", audio_source="ABS", audio_source_id="audio-2",
+            sync_mode="audiobook", status="active",
+        ))
+        self.db.link_user_book(self.bob.id, "audio-2")
+        self.db.save_book(Book(
+            abs_id="ebook-x", abs_title="Eb", ebook_filename="x.epub", kosync_doc_id="d" * 32,
+            ebook_source="BookLore", ebook_source_id="ebook-34",
+            sync_mode="ebook_only", status="active",
+        ))
+        self.db.link_user_book(self.alice.id, "ebook-x")
+        result = self.svc.create_audio_mapping_from_match(
+            audio_source="ABS", audio_source_id="audio-2", audio_title="Other",
+            ebook_filename="x.epub", ebook_source="BookLore", ebook_source_id="ebook-34",
+            kosync_doc_id=HASH_B, user_id=self.bob.id,
+        )
+        self.assertIsNone(result)
+        self.assertIsNotNone(self.db.get_book("ebook-x"))
+        self.assertTrue(self.db.is_user_linked(self.alice.id, "ebook-x"))
+        self.assertIsNone(self.db.get_book("audio-2").kosync_doc_id)
+
     def test_owner_and_admin_auto_match_still_remap(self):
         self.assertIsNotNone(self.match(self.alice.id))
         book = self.db.get_book("audio-1")
