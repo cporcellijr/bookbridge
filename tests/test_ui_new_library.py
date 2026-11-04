@@ -127,6 +127,10 @@ class TestNewLibrary(unittest.TestCase):
         gr_only = re.search(r'<article[^>]*data-abs-id="library-finished"[^>]*>.*?</article>', text, re.S).group()
         self.assertIn('data-rating="3.5"', both)
         self.assertIn("SG 4.0 · GR 3.0", both)
+        # Ratings sit under the title; CTC and read-along badges live in the book drawer, not on the card.
+        self.assertRegex(both, r'class="book-heading"><h3>.*?</h3><span class="book-ratings"[^>]*>SG 4.0 · GR 3.0')
+        self.assertNotIn("cover-badge", both)
+        self.assertNotIn("ctc-alignment-badge", both)
         self.assertIn('data-rating="4.4"', gr_only)
         self.assertIn("GR 4.4", gr_only)
         self.assertNotIn("SG ", gr_only)
