@@ -222,7 +222,11 @@ summary::-webkit-details-marker { display: none; }
 .ctc-badge { left: 8px; right: auto; bottom: 8px; }
 .book-copy { padding: 13px 14px 14px; }
 .book-author { color: var(--text-3); font-size: 12px; }
-.book-copy h3 { display: -webkit-box; min-height: 2.7em; margin: 4px 0 12px; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font: 500 16px/1.35 var(--font-book); }
+.book-heading { min-height: 64px; margin: 4px 0 12px; }
+.book-ratings { display: block; margin-top: 3px; color: var(--text-3); font: 11px/1.4 var(--font-mono); }
+.library-page[data-view="list"] .book-heading { min-height: 0; }
+.library-page[data-view="spines"] .book-ratings { display: none; }
+.book-copy h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font: 500 16px/1.35 var(--font-book); }
 .book-copy h3 small { display: block; color: var(--text-2); font-size: .8em; }
 .progress-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .progress-percent { font: 12px var(--font-mono); }
