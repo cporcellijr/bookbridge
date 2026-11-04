@@ -1,0 +1,1133 @@
+<script>
+            function dismissWhatsNewBanner() {
+                fetch('/whats-new/dismiss', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }).catch(function (e) { console.debug('whats-new dismiss failed', e); });
+                var el = document.getElementById('whats-new-banner');
+                if (el) el.remove();
+            }
+        </script>
+<script>
+            function checkForgeStatus() {
+                fetch('/api/forge/active')
+                    .then(r => r.json())
+                    .then(tasks => {
+                        const banner = document.getElementById('forge-status-banner');
+                        const list = document.getElementById('forge-task-list');
+                        if (tasks && tasks.length > 0) {
+                            banner.style.display = 'flex';
+                            const text = tasks.length === 1
+                                ? bbFormat({{ _('Creating Storyteller edition: {title}')|tojson }}, { title: tasks[0] })
+                                : bbPlural({% call(n) plural_forms() %}{{ ngettext('Creating {count} Storyteller edition...', 'Creating {count} Storyteller editions...', n) }}{% endcall %}, tasks.length);
+                            list.textContent = text;
+                        } else {
+                            banner.style.display = 'none';
+                        }
+                    })
+                    .catch(e => console.debug("Forge status check failed", e));
+            }
+            // Poll every 5s
+            setInterval(checkForgeStatus, 5000);
+            // Initial check
+            document.addEventListener('DOMContentLoaded', checkForgeStatus);
+        </script>
+<script>
+                // Make function globally available
+                window.toggleSuggestions = function () {
+                    const content = document.getElementById('suggestions-content');
+                    const banner = document.getElementById('suggestions-banner');
+
+                    if (!content || !banner) return;
+
+                    const isShowing = content.classList.toggle('show');
+                    banner.classList.toggle('active');
+
+                    // Persist state in localStorage safely
+                    try {
+                        localStorage.setItem('suggestions_expanded', isShowing);
+                    } catch (e) {
+                        console.debug('LocalStorage error:', e);
+                    }
+                };
+
+                // Initialize on load
+                document.addEventListener('DOMContentLoaded', () => {
+                    // Attach click handler
+                    const banner = document.getElementById('suggestions-banner');
+                    if (banner) {
+                        banner.addEventListener('click', window.toggleSuggestions);
+                    }
+
+                    // Restore state
+                    try {
+                        const shouldExpand = localStorage.getItem('suggestions_expanded') === 'true';
+                        if (shouldExpand) {
+                            const content = document.getElementById('suggestions-content');
+                            if (content && banner) {
+                                content.classList.add('show');
+                                banner.classList.add('active');
+                            }
+                        }
+                    } catch (e) {
+                        console.debug('LocalStorage error:', e);
+                    }
+                });
+
+                function dismissSuggestion(e, id) {
+                    e.preventDefault();
+                    console.log('Dismissing suggestion:', id);
+                    fetch(`/api/suggestions/${id}/dismiss`, { method: 'POST' })
+                        .then(r => {
+                            console.log('Response status:', r.status);
+                            return r.json();
+                        })
+                        .then(data => {
+                            console.log('Response data:', data);
+                            if (data.success) {
+                                const card = document.getElementById(`suggestion-${id}`);
+                                if (card) {
+                                    card.style.transition = 'opacity 0.3s';
+                                    card.style.opacity = '0';
+                                    setTimeout(() => { card.remove(); }, 300);
+                                }
+                            } else {
+                                console.error('Dismiss failed:', data.error);
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Fetch error:', err);
+                        });
+                }
+            </script>
+{% if mappings %}
+<script>
+            const dashboardSections = Array.from(document.querySelectorAll('.dashboard-section'));
+            const dashboardGrids = Array.from(document.querySelectorAll('.dashboard-section .book-grid'));
+            const sortSelect = document.getElementById('sort-select');
+            const filterSelect = document.getElementById('filter-select');
+            const seriesFilter = document.getElementById('series-filter');
+            const authorFilter = document.getElementById('author-filter');
+            const filterCount = document.getElementById('filter-count');
+            const directionBtn = document.getElementById('sort-direction');
+            const dashboardSearch = document.getElementById('dashboard-search');
+            const searchHandoff = document.getElementById('search-handoff');
+            const searchHandoffMsg = document.getElementById('search-handoff-msg');
+            const searchHandoffLink = document.getElementById('search-handoff-link');
+            const addBookSearchUrl = '{{ url_for('suggestions', tab='search') }}&q=';
+            const notStartedSection = document.getElementById('not-started-section');
+            const notStartedHeader = document.getElementById('not-started-header');
+            const notStartedGrid = document.getElementById('not-started-grid');
+            const notStartedChevron = document.getElementById('not-started-chevron');
+            const seriesGroupingToggle = document.getElementById('series-grouping-toggle');
+
+            function updateNotStartedChevron(isExpanded) {
+                if (notStartedChevron) {
+                    notStartedChevron.textContent = isExpanded ? '▼' : '▶';
+                }
+                if (notStartedHeader) {
+                    notStartedHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+                }
+            }
+
+            function updateDashboardSectionVisibility() {
+                dashboardSections.forEach(section => {
+                    const grid = section.querySelector('.book-grid');
+                    if (!grid) return;
+
+                    const visibleCards = grid.querySelectorAll('.book-card:not(.hidden)');
+                    const visibleGroups = grid.querySelectorAll('.series-group:not(.hidden)');
+                    if (visibleCards.length > 0 || visibleGroups.length > 0) {
+                        section.classList.remove('hidden');
+                    } else {
+                        section.classList.add('hidden');
+                    }
+                });
+            }
+            // Finished volumes can appear in their series and under Finished.
+            // Count each book once, regardless of grouping or duplicate cards.
+            function distinctBookCards() {
+                const seen = new Map();
+                document.querySelectorAll('.book-card').forEach(card => {
+                    const absId = card.dataset.absId;
+                    if (absId && !seen.has(absId)) seen.set(absId, card);
+                });
+                return Array.from(seen.values());
+            }
+
+            function updateFilteredCount() {
+                if (!filterCount) return;
+
+                const cards = distinctBookCards();
+                const total = cards.length;
+                const shown = cards.reduce(
+                    (n, card) => n + (card.classList.contains('hidden') ? 0 : 1), 0);
+                filterCount.textContent = shown === total
+                    ? bbPlural({% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% endcall %}, total)
+                    : bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total});
+            }
+
+            // Narrow the Series and Author lists to what the OTHER filters leave
+            // reachable, with a count of distinct books per option.
+            //
+            // Three deliberate rules:
+            //  * A list is never computed from its own selection. Otherwise choosing an
+            //    author would leave that author as the only option and you could never
+            //    switch without resetting.
+            //  * The search box is excluded. It is logically another filter, but feeding
+            //    it in would make both lists churn on every keystroke.
+            //  * Format is an input to the other two but is never itself narrowed --
+            //    it has a handful of fixed options and hiding them reads as breakage.
+            function facetOptionBaseLabel(option) {
+                if (option.dataset.facetLabel === undefined) {
+                    option.dataset.facetLabel = option.textContent.trim();
+                }
+                return option.dataset.facetLabel;
+            }
+
+            function applyFacetCounts(select, cards, matches) {
+                if (!select) return;
+                const selected = select.value;
+
+                Array.from(select.querySelectorAll('option')).forEach(option => {
+                    const label = facetOptionBaseLabel(option);
+                    if (option.value === 'all') {
+                        option.textContent = label;
+                        option.hidden = false;
+                        option.disabled = false;
+                        return;
+                    }
+                    let count = 0;
+                    cards.forEach(card => {
+                        if (matches(card, option.value)) count += 1;
+                    });
+                    option.textContent = label + ' (' + count + ')';
+                    // Never hide the current selection: the reader has to be able to
+                    // see what they picked and undo it, even once it matches nothing.
+                    const keep = count > 0 || option.value === selected;
+                    option.hidden = !keep;
+                    option.disabled = !keep;
+                });
+
+                // An optgroup whose every option is hidden would still render its label.
+                Array.from(select.querySelectorAll('optgroup')).forEach(group => {
+                    const usable = Array.from(group.querySelectorAll('option'))
+                        .some(option => !option.hidden);
+                    group.hidden = !usable;
+                });
+            }
+
+            function updateFacetOptions() {
+                if (!seriesFilter && !authorFilter) return;
+                const cards = distinctBookCards();
+                const formatValue = filterSelect ? filterSelect.value : 'all';
+                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
+                const authorValue = authorFilter ? authorFilter.value : 'all';
+
+                applyFacetCounts(
+                    seriesFilter,
+                    cards.filter(card => matchesFormatFilter(card, formatValue)
+                        && matchesAuthorFilter(card, authorValue)),
+                    matchesSeriesFilter,
+                );
+                applyFacetCounts(
+                    authorFilter,
+                    cards.filter(card => matchesFormatFilter(card, formatValue)
+                        && matchesSeriesFilter(card, seriesValue)),
+                    matchesAuthorFilter,
+                );
+            }
+
+            // Offers a route into the Search tab's library search for a title the dashboard
+            // filter can't show, because it isn't synced yet.
+            function updateSearchHandoff(rawQuery) {
+                if (!searchHandoff || !searchHandoffMsg || !searchHandoffLink) return;
+
+                if (!rawQuery) {
+                    searchHandoff.classList.add('hidden');
+                    return;
+                }
+
+                const noResults = document.querySelectorAll('.dashboard-section:not(.hidden)').length === 0;
+                searchHandoffMsg.textContent = noResults
+                    ? bbFormat({{ _('No synced book matches “{query}”.')|tojson }}, { query: rawQuery })
+                    : '';
+                searchHandoffLink.textContent = bbFormat({{ _('Look for “{query}” in your libraries →')|tojson }}, { query: rawQuery });
+                searchHandoffLink.href = addBookSearchUrl + encodeURIComponent(rawQuery);
+                searchHandoff.classList.toggle('no-results', noResults);
+                searchHandoff.classList.remove('hidden');
+            }
+
+            window.toggleNotStarted = function () {
+                if (!notStartedGrid || !notStartedSection || !notStartedHeader) return;
+
+                const isShowing = notStartedGrid.classList.toggle('show');
+                notStartedSection.classList.toggle('active');
+                notStartedHeader.classList.toggle('active');
+                updateNotStartedChevron(isShowing);
+
+                try {
+                    localStorage.setItem('not_started_expanded', isShowing);
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
+            };
+
+            // Format and series are orthogonal axes, so each is its own predicate over
+            // one card rather than a branch in a single mutually-exclusive filter.
+            function matchesFormatFilter(card, formatValue) {
+                if (formatValue === 'all') return true;
+                if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';
+                if (formatValue === 'needs_attention') return card.classList.contains('out-of-sync') || ['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', 'pending'].includes(card.dataset.status);
+                const syncMode = card.dataset.syncMode || 'audiobook';
+                if (formatValue === 'has_audio') {
+                    return syncMode === 'audiobook' || syncMode === 'audiobook_only';
+                }
+                return syncMode === formatValue;
+            }
+
+            // 'all', 'none' (no series at all), or 'series:<name>' for one named series.
+            // The prefix keeps a series actually called "all" or "none" addressable.
+            // A book counts as being in a series whenever the server gave it a name --
+            // including the sole owned volume of one, which is rendered as a flat card
+            // because single-child groups are demoted server-side.
+            const SERIES_FILTER_PREFIX = 'series:';
+
+            function matchesSeriesFilter(card, seriesValue) {
+                if (!seriesValue || seriesValue === 'all') return true;
+                const seriesName = card.dataset.seriesName || '';
+                if (seriesValue === 'none') return !seriesName;
+                if (seriesValue.indexOf(SERIES_FILTER_PREFIX) === 0) {
+                    return seriesName === seriesValue.slice(SERIES_FILTER_PREFIX.length);
+                }
+                return true;
+            }
+
+            // 'all', 'none' (no author recorded), or 'author:<name>'. Prefixed for the
+            // same reason as the series filter: an author actually called "all" stays
+            // addressable. A series group card carries its most common author, so
+            // selecting an author keeps that author's series intact.
+            const AUTHOR_FILTER_PREFIX = 'author:';
+
+            function matchesAuthorFilter(card, authorValue) {
+                if (!authorValue || authorValue === 'all') return true;
+                const author = card.dataset.author || '';
+                if (authorValue === 'none') return !author;
+                if (authorValue.indexOf(AUTHOR_FILTER_PREFIX) === 0) {
+                    return author === authorValue.slice(AUTHOR_FILTER_PREFIX.length);
+                }
+                return true;
+            }
+
+            function filterBooks() {
+                const filterValue = filterSelect.value;
+                const seriesValue = seriesFilter ? seriesFilter.value : 'all';
+                const authorValue = authorFilter ? authorFilter.value : 'all';
+                const searchString = dashboardSearch ? dashboardSearch.value.toLowerCase() : '';
+
+                // Cards clearing every non-search predicate. A series-name search may stand
+                // in for the search term on a group's children, but never for the filters.
+                const passesFilters = new Set();
+
+                // Filter flat book cards
+                const cards = document.querySelectorAll('.book-card');
+                cards.forEach(card => {
+                    const title = (card.dataset.title || '').toLowerCase();
+                    const author = (card.dataset.author || '').toLowerCase();
+                    const filename = (card.dataset.filename || '').toLowerCase();
+
+                    let isVisible = matchesFormatFilter(card, filterValue)
+                        && matchesSeriesFilter(card, seriesValue)
+                        && matchesAuthorFilter(card, authorValue);
+                    if (isVisible) {
+                        passesFilters.add(card);
+                    }
+                    if (isVisible && searchString) {
+                        if (!title.includes(searchString) && !author.includes(searchString) && !filename.includes(searchString)) {
+                            isVisible = false;
+                        }
+                    }
+                    if (isVisible) {
+                        card.classList.remove('hidden');
+                        card.style.display = '';
+                    } else {
+                        card.classList.add('hidden');
+                        card.style.display = 'none';
+                    }
+                });
+
+                // Handle series groups: show if any child matches, or series name matches search
+                document.querySelectorAll('.series-group').forEach(group => {
+                    const seriesName = (group.dataset.seriesName || '').toLowerCase();
+                    const seriesAuthor = (group.dataset.author || '').toLowerCase();
+                    const seriesNameMatchesSearch = searchString && (seriesName.includes(searchString) || seriesAuthor.includes(searchString));
+
+                    const childCards = group.querySelectorAll('.book-card');
+                    let anyChildVisible = false;
+                    childCards.forEach(child => {
+                        if (seriesNameMatchesSearch && passesFilters.has(child)) {
+                            child.classList.remove('hidden');
+                            child.style.display = '';
+                            anyChildVisible = true;
+                        } else if (!child.classList.contains('hidden')) {
+                            anyChildVisible = true;
+                        }
+                    });
+
+                    if (anyChildVisible) {
+                        group.classList.remove('hidden');
+                        group.style.display = '';
+                    } else {
+                        group.classList.add('hidden');
+                        group.style.display = 'none';
+                    }
+                });
+
+                updateDashboardSectionVisibility();
+                updateFacetOptions();
+                updateFilteredCount();
+                updateSearchHandoff(dashboardSearch ? dashboardSearch.value.trim() : '');
+
+                // Persist choice
+                try {
+                    localStorage.setItem('abs_kosync_filters', JSON.stringify({
+                        format: filterValue,
+                        series: seriesValue,
+                        author: authorValue
+                    }));
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
+            }
+
+            window.toggleSeries = function (domId) {
+                const group = document.getElementById(domId);
+                if (!group) return;
+                const expanded = group.classList.toggle('expanded');
+                const header = group.querySelector('.series-header');
+                if (header) header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                try {
+                    if (expanded) {
+                        localStorage.setItem('series_expanded_' + domId, '1');
+                    } else {
+                        localStorage.removeItem('series_expanded_' + domId);
+                    }
+                } catch (e) { /* ignore */ }
+            };
+
+            // Initial Sort Defaults
+            let sortState = {
+                title: 'asc',      // A-Z default
+                author: 'asc',     // A-Z default
+                series: 'asc',     // Series A-Z, then reading order
+                progress: 'desc',  // Highest progress first
+                status: 'asc',
+                last_sync: 'desc', // Newest sync first
+                added: 'desc',     // Newest addition first
+                rating: 'desc'     // Highest rating first
+            };
+
+            // Track last sort to detect toggles.
+            // Important: Start as null to prevent auto-toggling on page load
+            let lastSort = null;
+
+            // Load saved preferences
+            let savedSort = 'title';
+            try { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage unavailable */ }
+            let savedSortState;
+            try { savedSortState = localStorage.getItem('abs_kosync_sort_state'); } catch (e) { /* storage unavailable */ }
+
+            if (savedSort && sortSelect) {
+                sortSelect.value = savedSort;
+            }
+
+            if (savedSortState) {
+                try {
+                    // Merge saved state with defaults
+                    sortState = { ...sortState, ...JSON.parse(savedSortState) };
+                } catch (e) {
+                    console.error("Error parsing saved sort state", e);
+                }
+            }
+
+            // Parse "Time Ago" or unix timestamp for sorting (smaller = more recent)
+            function parseLastSync(syncText) {
+                if (!syncText || syncText === 'Never' || syncText === 'Error') return Infinity;
+                // Handle raw unix timestamps from series groups
+                const asNum = parseFloat(syncText);
+                if (!isNaN(asNum) && asNum > 1e9) {
+                    return Math.max(0, Date.now() / 1000 - asNum);
+                }
+                const match = syncText.match(/(\d+)([smhd])/);
+                if (!match) return Infinity;
+                const value = parseInt(match[1]);
+                const unit = match[2];
+                if (unit === 's') return value;
+                if (unit === 'm') return value * 60;
+                if (unit === 'h') return value * 3600;
+                if (unit === 'd') return value * 86400;
+                return Infinity;
+            }
+
+            // Returns age in seconds for sorting (smaller = more recent).
+            // Prefers data-last-sync-unix; falls back to parseLastSync on data-last-sync.
+            function getLastSyncAge(el) {
+                const unixStr = el.dataset.lastSyncUnix;
+                if (unixStr !== undefined && unixStr !== '') {
+                    const unixVal = parseFloat(unixStr);
+                    if (!isNaN(unixVal) && unixVal > 0) {
+                        return Math.max(0, Date.now() / 1000 - unixVal);
+                    }
+                }
+                // Fallback: never-synced (0 or missing) or unparseable -> parse humanized string
+                return parseLastSync(el.dataset.lastSync || '');
+            }
+
+            // Title value used by the tie-breaks. A series group card carries its series
+            // name rather than a title, so it still compares against book cards.
+            function sortTitleOf(el) {
+                return (el.dataset.title || el.dataset.seriesName || '').toLowerCase();
+            }
+
+            // Returns the comparator for one sort key so both sortCards and the author
+            // view order entries identically.
+            function makeSortComparator(sortBy, direction) {
+                return (a, b) => {
+                    let comparison = 0;
+                    const isSeries = (el) => el.classList.contains('series-group');
+
+                    let valA, valB;
+                    if (sortBy === 'last_sync') {
+                        comparison = getLastSyncAge(a) - getLastSyncAge(b);
+                    } else if (sortBy === 'title') {
+                        valA = (a.dataset.title || a.dataset.seriesName || '').toLowerCase();
+                        valB = (b.dataset.title || b.dataset.seriesName || '').toLowerCase();
+                        comparison = valA.localeCompare(valB);
+                    } else if (sortBy === 'author') {
+                        const authorA = (a.dataset.author || '').toLowerCase();
+                        const authorB = (b.dataset.author || '').toLowerCase();
+                        // Unattributed books trail the named ones either way, like the
+                        // unrated branch below.
+                        if (!authorA && authorB) return 1;
+                        if (authorA && !authorB) return -1;
+                        comparison = authorA.localeCompare(authorB);
+                        if (comparison === 0) {
+                            // Returned directly, like the added branch: one author's books
+                            // read A-Z whichever way the author column is pointing.
+                            return sortTitleOf(a).localeCompare(sortTitleOf(b));
+                        }
+                    } else if (sortBy === 'series') {
+                        const seriesA = (a.dataset.seriesName || '').toLowerCase();
+                        const seriesB = (b.dataset.seriesName || '').toLowerCase();
+                        // Standalone books trail every series either way.
+                        if (!seriesA && seriesB) return 1;
+                        if (seriesA && !seriesB) return -1;
+                        comparison = seriesA.localeCompare(seriesB);
+                        if (comparison === 0) {
+                            // Within one series, reading order stays ascending whichever way
+                            // the series column points. Sequence 0 is valid, so test for a
+                            // finite number rather than truthiness; a series group card has
+                            // no sequence and trails its own volumes.
+                            const seqA = parseFloat(a.dataset.seriesSequence);
+                            const seqB = parseFloat(b.dataset.seriesSequence);
+                            const hasSeqA = Number.isFinite(seqA);
+                            const hasSeqB = Number.isFinite(seqB);
+                            if (hasSeqA && hasSeqB && seqA !== seqB) return seqA - seqB;
+                            if (hasSeqA && !hasSeqB) return -1;
+                            if (!hasSeqA && hasSeqB) return 1;
+                            return sortTitleOf(a).localeCompare(sortTitleOf(b));
+                        }
+                    } else if (sortBy === 'progress') {
+                        valA = parseFloat(a.dataset.progress || '0') || 0;
+                        valB = parseFloat(b.dataset.progress || '0') || 0;
+                        comparison = valA - valB;
+                    } else if (sortBy === 'added') {
+                        // Books claimed before the multi-user migration share its
+                        // backfill stamp, so they tie; localeCompare on title breaks
+                        // the tie into a stable order instead of a random one.
+                        valA = parseFloat(a.dataset.added || '0') || 0;
+                        valB = parseFloat(b.dataset.added || '0') || 0;
+                        comparison = valA - valB;
+                        if (comparison === 0) {
+                            const titleA = (a.dataset.title || a.dataset.seriesName || '').toLowerCase();
+                            const titleB = (b.dataset.title || b.dataset.seriesName || '').toLowerCase();
+                            // Returned directly, like the rating branch below: the tie
+                            // block reads A-Z whichever way the date is pointing.
+                            return titleA.localeCompare(titleB);
+                        }
+                    } else if (sortBy === 'status') {
+                        valA = a.dataset.status || '';
+                        valB = b.dataset.status || '';
+                        comparison = valA.localeCompare(valB);
+                    } else if (sortBy === 'rating') {
+                        const rawA = a.dataset.rating;
+                        const rawB = b.dataset.rating;
+                        const hasA = rawA !== undefined && rawA !== '';
+                        const hasB = rawB !== undefined && rawB !== '';
+                        if (!hasA && !hasB) return 0;
+                        if (!hasA) return 1;   // unrated always last
+                        if (!hasB) return -1;  // unrated always last
+                        valA = parseFloat(rawA);
+                        valB = parseFloat(rawB);
+                        comparison = valA - valB;
+                    }
+
+                    return direction === 'asc' ? comparison : -comparison;
+                };
+            }
+
+            function sortCards(grid, sortBy, direction) {
+                if (!grid) return;
+                const items = Array.from(grid.children);
+                const sorted = items.sort(makeSortComparator(sortBy, direction));
+
+                sorted.forEach(el => grid.appendChild(el));
+            }
+
+            function sortBooks(sortBy, direction) {
+                dashboardGrids.forEach(grid => sortCards(grid, sortBy, direction));
+            }
+
+            function applySorting(sortBy) {
+                let direction;
+
+                // Check if we are selecting the same sort type to toggle direction
+                if (lastSort === sortBy) {
+                    const currentDirection = sortState[sortBy];
+                    direction = currentDirection === 'asc' ? 'desc' : 'asc';
+                    sortState[sortBy] = direction;
+                } else {
+                    // Different selection (or first load) -> Use stored direction
+                    direction = sortState[sortBy];
+                }
+
+                // Update tracker
+                lastSort = sortBy;
+
+                // Update UI Arrow
+                updateSortIndicator(direction);
+
+                // Sort Grids
+                sortBooks(sortBy, direction);
+
+                // Save preferences
+                try {
+                    localStorage.setItem('abs_kosync_sort', sortBy);
+                    localStorage.setItem('abs_kosync_sort_state', JSON.stringify(sortState));
+                } catch (e) { /* storage unavailable */ }
+            }
+
+            function updateSortIndicator(direction) {
+                if (directionBtn) {
+                    directionBtn.textContent = direction === 'asc' ? '↑' : '↓';
+                }
+            }
+
+            // --- Series Grouping Toggle ---
+
+            // Tag every book card that lives inside a series-children container so we can
+            // restore it to its original position when grouping is turned back on.
+            document.querySelectorAll('.series-children').forEach(container => {
+                if (!container.id) return;
+                Array.from(container.children).forEach((card, idx) => {
+                    if (!card.classList || !card.classList.contains('book-card')) return;
+                    card.dataset.seriesContainerId = container.id;
+                    card.dataset.seriesOrder = String(idx);
+                });
+            });
+
+            // The single-card series design (issue #449) renders the lead book as a
+            // full .book-card directly inside .series-group, a sibling of
+            // .series-children rather than a child of it -- it is a duplicate of a
+            // flat card just like the others, so it needs the same tag-and-restore
+            // treatment. Its "container" is the series-group itself, and restore
+            // must put it back in front of .series-children rather than appending.
+            document.querySelectorAll('.series-group').forEach(group => {
+                if (!group.id) return;
+                const leadCard = group.querySelector(':scope > .book-card');
+                if (!leadCard) return;
+                leadCard.dataset.seriesContainerId = group.id;
+                leadCard.dataset.seriesLead = '1';
+            });
+
+            function flattenSeriesGroups() {
+                const inProgressGrid = document.getElementById('in-progress-grid');
+                const notStartedGridEl = document.getElementById('not-started-grid');
+                const finishedGrid = document.getElementById('finished-grid');
+
+                // Track abs-ids already rendered flat so series children don't duplicate.
+                const flatAbsIds = new Set();
+                document.querySelectorAll('.book-grid > .book-card').forEach(c => {
+                    if (c.dataset.absId) flatAbsIds.add(c.dataset.absId);
+                });
+
+                document.querySelectorAll('.series-group .book-card').forEach(card => {
+                    const absId = card.dataset.absId || '';
+                    if (absId && flatAbsIds.has(absId)) {
+                        card.classList.add('flatten-duplicate');
+                        return;
+                    }
+                    const progress = parseFloat(card.dataset.progress || '0') || 0;
+                    let target;
+                    if (progress > 0 && progress < 100) target = inProgressGrid;
+                    else if (progress >= 100) target = finishedGrid;
+                    else target = notStartedGridEl;
+                    if (target) {
+                        target.appendChild(card);
+                        if (absId) flatAbsIds.add(absId);
+                    }
+                });
+            }
+
+            function restoreSeriesGroups() {
+                // Clear duplicate flags first.
+                document.querySelectorAll('.book-card.flatten-duplicate').forEach(card => {
+                    card.classList.remove('flatten-duplicate');
+                });
+                // Reparent any card that was moved out of its series-children -- or,
+                // for a lead card, out of its series-group. A lead card must land
+                // back in front of .series-children, not after it.
+                document.querySelectorAll('.book-card[data-series-container-id]').forEach(card => {
+                    const container = document.getElementById(card.dataset.seriesContainerId);
+                    if (!container || card.parentNode === container) return;
+                    if (card.dataset.seriesLead === '1') {
+                        container.insertBefore(card, container.firstChild);
+                    } else {
+                        container.appendChild(card);
+                    }
+                });
+                // Restore original sibling order within each series-children container.
+                document.querySelectorAll('.series-children').forEach(container => {
+                    const items = Array.from(container.children).filter(el => el.classList && el.classList.contains('book-card'));
+                    items.sort((a, b) => (parseInt(a.dataset.seriesOrder || '0', 10) - parseInt(b.dataset.seriesOrder || '0', 10)));
+                    items.forEach(el => container.appendChild(el));
+                });
+            }
+
+            function applySeriesGrouping(enabled) {
+                document.body.classList.toggle('series-grouping-off', !enabled);
+                if (enabled) restoreSeriesGroups();
+                else flattenSeriesGroups();
+
+                if (sortSelect) sortBooks(sortSelect.value, sortState[sortSelect.value]);
+                if (typeof filterBooks === 'function') filterBooks();
+                updateDashboardSectionVisibility();
+                if (typeof window.bookbridgeSyncPreviewLayout === 'function') {
+                    window.bookbridgeSyncPreviewLayout();
+                }
+            }
+
+            // --- Event Listeners ---
+
+            if (sortSelect) {
+                sortSelect.addEventListener('change', (e) => {
+                    applySorting(e.target.value);
+                });
+            }
+
+            if (seriesGroupingToggle) {
+                seriesGroupingToggle.addEventListener('change', (e) => {
+                    const enabled = e.target.checked;
+                    try { localStorage.setItem('abs_kosync_series_grouping', enabled ? '1' : '0'); } catch (err) { /* ignore */ }
+                    applySeriesGrouping(enabled);
+                });
+            }
+
+            // Clickable arrow behavior
+            if (directionBtn) {
+                directionBtn.addEventListener('click', () => {
+                    // Clicking the arrow re-applies the CURRENT sort value.
+                    // Since 'lastSort' will match, this triggers the toggle logic in applySorting.
+                    applySorting(sortSelect.value);
+                });
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                if (notStartedHeader) {
+                    notStartedHeader.addEventListener('click', window.toggleNotStarted);
+                    notStartedHeader.addEventListener('keydown', (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            window.toggleNotStarted();
+                        }
+                    });
+                }
+
+                try {
+                    const shouldExpand = localStorage.getItem('not_started_expanded') === 'true';
+                    if (shouldExpand && notStartedGrid && notStartedSection && notStartedHeader) {
+                        notStartedGrid.classList.add('show');
+                        notStartedSection.classList.add('active');
+                        notStartedHeader.classList.add('active');
+                        updateNotStartedChevron(true);
+                    } else {
+                        updateNotStartedChevron(false);
+                    }
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                    updateNotStartedChevron(false);
+                }
+
+                // Restore per-series expansion state
+                document.querySelectorAll('.series-group').forEach(function (group) {
+                    try {
+                        if (localStorage.getItem('series_expanded_' + group.id) === '1') {
+                            group.classList.add('expanded');
+                            const header = group.querySelector('.series-header');
+                            if (header) header.setAttribute('aria-expanded', 'true');
+                        }
+                    } catch (e) { /* ignore */ }
+                });
+            });
+
+            // --- Initialization ---
+
+            // Apply initial sort on load (if content exists)
+            if (dashboardGrids.length > 0) {
+                applySorting(savedSort);
+            }
+
+            // Restore series-grouping preference (default ON).
+            if (seriesGroupingToggle) {
+                let savedGrouping = '1';
+                try {
+                    const v = localStorage.getItem('abs_kosync_series_grouping');
+                    if (v === '0' || v === '1') savedGrouping = v;
+                } catch (e) { /* ignore */ }
+                const enabled = savedGrouping === '1';
+                seriesGroupingToggle.checked = enabled;
+                if (!enabled) applySeriesGrouping(false);
+            }
+
+            // Filter Logic initialization
+            if (filterSelect) {
+                filterSelect.addEventListener('change', filterBooks);
+                if (seriesFilter) seriesFilter.addEventListener('change', filterBooks);
+                if (authorFilter) authorFilter.addEventListener('change', filterBooks);
+
+                let savedFormat = 'all';
+                let savedSeries = 'all';
+                let savedAuthor = 'all';
+                try {
+                    const savedFilters = localStorage.getItem('abs_kosync_filters');
+                    if (savedFilters) {
+                        const parsed = JSON.parse(savedFilters);
+                        savedFormat = parsed.format || 'all';
+                        savedSeries = parsed.series || 'all';
+                        // An earlier iteration of this control was a yes/no pair, and
+                        // those values can still be sitting in a reader's localStorage.
+                        // 'standalone' has a direct equivalent; 'in a series' no longer
+                        // does, so widen to all rather than silently hiding books.
+                        if (savedSeries === 'standalone') savedSeries = 'none';
+                        else if (savedSeries === 'in_series') savedSeries = 'all';
+                        savedAuthor = parsed.author || 'all';
+                    } else {
+                        // Migrate the pre-multi-filter scalar key. Its "audiobook" meant
+                        // sync_mode 'audiobook' alone, which silently hid audiobook-only
+                        // books; "Has Audio" is the option that now covers both.
+                        const legacy = localStorage.getItem('abs_kosync_filter');
+                        if (legacy) savedFormat = legacy === 'audiobook' ? 'has_audio' : legacy;
+                    }
+                } catch (e) {
+                    console.debug('LocalStorage error:', e);
+                }
+
+                filterSelect.value = savedFormat;
+                if (seriesFilter) {
+                    seriesFilter.value = savedSeries;
+                    // A remembered series that is no longer in the library matches no
+                    // option, which leaves the select with no selection at all. Show
+                    // everything rather than stranding the reader on a blank filter.
+                    if (!seriesFilter.value) seriesFilter.value = 'all';
+                }
+                if (authorFilter) {
+                    authorFilter.value = savedAuthor;
+                    if (!authorFilter.value) authorFilter.value = 'all';
+                }
+                // Apply filter initially
+                filterBooks();
+            }
+
+            if (dashboardSearch) {
+                dashboardSearch.addEventListener('input', filterBooks);
+            }
+
+            let refreshPaused = false;
+
+            function refreshDashboard() {
+                // A hidden tab redraws nothing, so skip the round trip entirely.
+                if (refreshPaused || document.hidden) {
+                    setTimeout(refreshDashboard, 30000);
+                    return;
+                }
+
+                // Compact position feed, not the full dashboard payload: this
+                // handler redraws progress, the synced line and CTC status.
+                fetch('/api/status/progress')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (!data || !data.mappings) return;
+                        data.mappings.forEach(book => {
+                            const cards = document.querySelectorAll(`.book-card[data-abs-id="${book.abs_id}"]`);
+                            if (!cards.length) return;
+                            cards.forEach(card => {
+                                updateCtcAlignmentStatus(card, book.ctc_aligned === true);
+                                updateReadalongStatus(card, book.readalong_ready === true);
+
+                            // Update progress percentage text
+                            const progressPercent = card.querySelector('.progress-percent');
+                            if (progressPercent) {
+                                progressPercent.textContent = `${book.unified_progress.toFixed(1)}%`;
+                            }
+
+                            // Update progress bar
+                            const barFill = card.querySelector('.progress-bar-fill');
+                            if (barFill) {
+                                barFill.style.width = `${book.unified_progress}%`;
+                            }
+
+                            // Update individual service values
+                            const absItem = card.querySelector('.service-item[data-service="abs"] .service-value');
+                            if (absItem && book.states && book.states.abs) {
+                                const ts = book.states.abs.timestamp || 0;
+                                const h = Math.floor(ts / 3600);
+                                const m = Math.floor((ts % 3600) / 60);
+                                const s = Math.floor(ts % 60);
+                                absItem.textContent = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                            }
+
+                            const kosyncItem = card.querySelector('.service-item[data-service="kosync"] .service-value');
+                            if (kosyncItem && book.states && book.states.kosync) {
+                                kosyncItem.textContent = `${book.states.kosync.percentage.toFixed(1)}%`;
+                            }
+
+                            const stItem = card.querySelector('.service-item[data-service="storyteller"] .service-value');
+                            if (stItem && book.states && book.states.storyteller) {
+                                stItem.textContent = `${book.states.storyteller.percentage.toFixed(1)}%`;
+                            }
+
+                            // Update last sync text
+                            const lastSync = card.querySelector('.last-sync-age');
+                            if (lastSync && book.last_sync) {
+                                lastSync.textContent = bbFormat({{ _('Synced %(when)s', when='{when}')|tojson }}, { when: book.last_sync });
+                            }
+                            card.dataset.progress = book.unified_progress;
+                            const spine = card.querySelector('.spine-progress');
+                            if (spine) spine.textContent = book.unified_progress.toFixed(0) + '%';
+                            if (book.states && Object.keys(book.states).length) {
+                                card.querySelectorAll('.progress-percent, .progress-track, .spine-progress').forEach(node => { node.hidden = false; });
+                            }
+                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = book.last_sync_unix;
+                            });
+                        });
+                    })
+                    .catch(() => { })
+                    .finally(() => setTimeout(refreshDashboard, 30000));
+            }
+
+            // Pause on modal open
+            document.addEventListener('click', e => {
+                if (e.target.closest('[data-modal], .modal-trigger, button[onclick*="modal"]')) {
+                    refreshPaused = true;
+                }
+            });
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape') refreshPaused = false;
+            });
+            document.body.addEventListener('click', e => {
+                if (e.target.classList.contains('modal-overlay')) refreshPaused = false;
+            });
+            window.resumeDashboardRefresh = function () {
+                refreshPaused = false;
+            };
+
+            setTimeout(refreshDashboard, 30000);
+        </script>
+
+<script>
+            function updateCtcAlignmentStatus(card, isCtc) {
+                const badge = card.querySelector('.ctc-alignment-badge');
+                if (badge) badge.hidden = !isCtc;
+                const owner = card.querySelector('.reset-menu > button');
+                const menu = owner?._menu || card.querySelector('.reset-menu-dropdown');
+                const btn = menu?.querySelector('.remap-alignment-btn');
+                if (!btn || btn.dataset.ctcAligned === String(isCtc)) return;
+                btn.dataset.ctcAligned = String(isCtc);
+                btn.disabled = isCtc;
+                btn.textContent = isCtc ? '✓ ' + {{ _('Already using CTC')|tojson }} : '🎯 ' + {{ _('Remap alignment')|tojson }};
+                btn.title = isCtc ? {{ _('This book already has a CTC alignment map')|tojson }} : '';
+            }
+
+
+    /* P3 additions: views, format chips, selection and sequential existing-endpoint actions. */
+    document.querySelectorAll('[data-format]').forEach(button => button.addEventListener('click', () => {
+        filterSelect.value = button.dataset.format;
+        document.querySelectorAll('[data-format]').forEach(chip => { chip.classList.toggle('is-active', chip === button); chip.setAttribute('aria-pressed', String(chip === button)); if (chip.hasAttribute('data-legacy-format')) chip.hidden = chip !== button; });
+        filterBooks();
+    }));
+    document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+        const view = button.dataset.view;
+        document.getElementById('library-page').dataset.view = view;
+        applySeriesGrouping(view === 'covers' && seriesGroupingToggle.checked);
+        seriesGroupingToggle.disabled = view !== 'covers';
+        document.querySelectorAll('[data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        try { localStorage.setItem('abs_kosync_view', view); } catch (e) { console.debug('LocalStorage error:', e); }
+    }));
+    try {
+        const savedView = localStorage.getItem('abs_kosync_view');
+        if (savedView && document.querySelector('[data-view="' + savedView + '"]')) document.querySelector('[data-view="' + savedView + '"]').click();
+    } catch (e) { console.debug('LocalStorage error:', e); }
+    document.querySelectorAll('[data-format]').forEach(chip => {
+        const active = chip.dataset.format === filterSelect.value;
+        chip.classList.toggle('is-active', active);
+        chip.setAttribute('aria-pressed', String(active));
+        if (chip.hasAttribute('data-legacy-format')) chip.hidden = !active;
+    });
+    document.getElementById('suggestions-banner')?.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
+    });
+    document.getElementById('suggestions-banner')?.addEventListener('click', event => {
+        event.currentTarget.setAttribute('aria-expanded', String(document.getElementById('suggestions-content').classList.contains('show')));
+    });
+    function selectedBookIds() {
+        return Array.from(new Set(Array.from(document.querySelectorAll('[data-select-book]:checked'), input => input.value)));
+    }
+    function updateSelectionBar() {
+        const ids = selectedBookIds(), bar = document.getElementById('selection-bar');
+        bar.hidden = ids.length === 0;
+        document.getElementById('selection-count').textContent = bbFormat({{ _('{count} selected')|tojson }}, {count: ids.length});
+    }
+    document.addEventListener('change', event => {
+        if (!event.target.matches('[data-select-book]')) return;
+        document.querySelectorAll('[data-select-book]').forEach(input => {
+            if (input.value === event.target.value) input.checked = event.target.checked;
+        });
+        updateSelectionBar();
+    });
+    window.selectAllFilteredBooks = function () {
+        const visible = new Set(Array.from(document.querySelectorAll('.book-card:not(.hidden)'), card => card.dataset.absId));
+        document.querySelectorAll('[data-select-book]').forEach(input => { if (visible.has(input.value)) input.checked = true; });
+        updateSelectionBar();
+    };
+    window.clearBookSelection = function () { document.querySelectorAll('[data-select-book]').forEach(input => { input.checked = false; }); updateSelectionBar(); };
+    let libraryBatchRunning = false;
+    async function runSelectedBooks(label, action) {
+        if (libraryBatchRunning) return;
+        const ids = selectedBookIds();
+        if (!ids.length) return;
+        libraryBatchRunning = true;
+        const count = document.getElementById('selection-count');
+        const controls = Array.from(document.querySelectorAll('#selection-bar button, [data-select-book], .library-toolbar button'));
+        controls.forEach(button => { button.disabled = true; });
+        document.getElementById('selection-bar').setAttribute('aria-busy', 'true');
+        const failed = [];
+        for (let i = 0; i < ids.length; i++) {
+            count.textContent = bbFormat({{ _('{label} {current} of {total}')|tojson }}, {label, current: i + 1, total: ids.length});
+            try { await action(ids[i]); } catch (error) { failed.push(ids[i]); console.error('Library action failed', error); }
+        }
+        controls.forEach(button => { button.disabled = false; });
+        libraryBatchRunning = false;
+        document.getElementById('selection-bar').removeAttribute('aria-busy');
+        document.querySelectorAll('[data-select-book]').forEach(input => { if (!failed.includes(input.value)) input.checked = false; });
+        updateSelectionBar();
+        if (!failed.length) {
+            document.getElementById('selection-bar').hidden = false;
+            count.textContent = bbFormat({{ _('{count} completed')|tojson }}, {count: ids.length});
+        }
+        if (failed.length) count.textContent = bbFormat({{ _('{success} completed; {failed} failed. Failed books remain selected.')|tojson }}, {success: ids.length - failed.length, failed: failed.length});
+        return {failed, total: ids.length};
+    }
+    window.bulkSyncNow = function () { return runSelectedBooks({{ _('Syncing')|tojson }}, async id => {
+        const response = await fetch('/api/sync-now/' + encodeURIComponent(id), {method:'POST', headers:{'Content-Type':'application/json'}});
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || {{ _('Sync request failed')|tojson }});
+    }); };
+    window.bulkMarkFinished = function () {
+        if (libraryBatchRunning) return;
+        const ids = selectedBookIds();
+        if (!ids.length || !confirm(bbFormat({{ _('Mark {count} selected books finished on all synced platforms?')|tojson }}, {count: ids.length}))) return;
+        return runSelectedBooks({{ _('Finishing')|tojson }}, async id => {
+            const response = await fetch('/api/mark-complete/' + encodeURIComponent(id), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:false})});
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || {{ _('Could not mark finished')|tojson }});
+        }).then(result => { if (!result.failed.length) location.reload(); });
+    };
+    window.bulkGenerateReadalong = function () { return runSelectedBooks({{ _('Creating')|tojson }}, async id => {
+        const response = await fetch('/api/readalong-epub/' + encodeURIComponent(id), {method:'POST', headers:{'Content-Type':'application/json'}});
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || {{ _('Could not create read-along EPUB')|tojson }});
+        const card = Array.from(document.querySelectorAll('.book-card')).find(card => card.dataset.absId === id);
+        const status = card?.querySelector('.readalong-status');
+        if (status) { status.hidden = false; setTimeout(() => _pollReadalongEpubStatus(id, status, ''), 5000); }
+    }); };
+    window.bulkDeleteBooks = function () {
+        if (libraryBatchRunning) return;
+        const ids = selectedBookIds();
+        if (!ids.length || !confirm(bbFormat({{ _('Remove {count} selected books from your library?')|tojson }}, {count: ids.length}))) return;
+        return runSelectedBooks({{ _('Removing')|tojson }}, async id => {
+            const response = await fetch('/delete/' + encodeURIComponent(id), {method:'POST', redirect:'follow'});
+            if (!response.ok || /\/login(?:\?|$)/.test(response.url)) throw new Error({{ _('Could not remove this book')|tojson }});
+        }).then(result => { if (!result.failed.length) location.reload(); });
+    };
+</script>
+
+{% endif %}
+{% if show_diagnostics_modal %}
+        <div id="diagnostics-optin-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'"></div>
+            <div class="hc-modal-content" style="max-width:480px;">
+                <div class="hc-modal-header">
+                    <h3>{{ _('Help improve BookBridge') }}</h3>
+                    <button class="hc-modal-close" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'" aria-label="{{ _('Close') }}">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <p style="color:rgba(255,255,255,0.75); margin:0 0 12px; line-height:1.6;">
+                        {% trans %}Opt in to send a small daily diagnostic report so we can find and fix bugs faster.
+                        Reports contain warning messages from your sync logs with book titles, file paths and
+                        URLs replaced by anonymous tokens &mdash; never your library contents or credentials.{% endtrans %}
+                    </p>
+                    <details style="margin-bottom:12px;">
+                        <summary style="color:rgba(255,255,255,0.65); font-size:0.85rem; cursor:pointer;">{{ _('What exactly is sent?') }}</summary>
+                        <ul style="color:rgba(255,255,255,0.6); font-size:0.82rem; line-height:1.6; margin:8px 0 0 18px; padding:0;">
+                            <li>{{ _('Deduplicated warning log lines (scrubbed)') }}</li>
+                            <li>{{ _('Recent scrubbed log context around each warning') }}</li>
+                            <li>{{ _('BookBridge version') }}</li>
+                            <li>{{ _('Which integrations are enabled (on/off flags only)') }}</li>
+                            <li>{{ _('Total number of synced books (count only)') }}</li>
+                            <li>{{ _('A random instance ID') }}</li>
+                        </ul>
+                        <p style="color:rgba(255,255,255,0.5); font-size:0.78rem; margin:6px 0 0;">
+                            {{ _('This can be changed anytime in Settings.') }}
+                        </p>
+                    </details>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="document.getElementById('diagnostics-optin-modal').style.display='none'">{{ _('Ask me later') }}</button>
+                    <button class="hc-btn-cancel" onclick="_diagnosticsOptIn(false)">{{ _('No thanks') }}</button>
+                    <button onclick="_diagnosticsOptIn(true)"
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">{{ _('Enable diagnostics') }}</button>
+                </div>
+            </div>
+        </div>
+        <script>
+            function _diagnosticsOptIn(optIn) {
+                fetch('/api/diagnostics/opt-in', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({opt_in: optIn})
+                }).then(function() {
+                    document.getElementById('diagnostics-optin-modal').style.display = 'none';
+                }).catch(function() {
+                    document.getElementById('diagnostics-optin-modal').style.display = 'none';
+                });
+            }
+            document.addEventListener('DOMContentLoaded', function() {
+                var m = document.getElementById('diagnostics-optin-modal');
+                if (m) m.style.display = 'flex';
+            });
+        </script>
+        {% endif %}
