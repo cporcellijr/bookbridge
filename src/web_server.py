@@ -31,6 +31,7 @@ import schedule
 from dependency_injector import providers
 from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context, abort
 from functools import wraps
+from src.utils.local_file_scope import acting_user_is_regular, suggestions_exclude_local_files
 from src.utils.user_context import (
     set_current_user_id, reset_current_user_id,
     set_current_user_credentials, reset_current_user_credentials,
@@ -4153,6 +4154,32 @@ def _ebook_title_key(value):
     return re.sub(r'[\W_]+', '', (value or '').lower())
 
 
+def _scan_excludes_local_files() -> bool:
+    """Scans omit the server's local folder when the admin setting is on or a regular user is acting."""
+    return suggestions_exclude_local_files(database_service)
+
+
+def _refuse_regular_user_local_selection(
+    ebook_source, ebook_source_path=None, ebook_source_id=None, ebook_filename=None,
+) -> bool:
+    """True (and logged) when a regular user submits a server-local ebook selection."""
+    if not acting_user_is_regular(database_service):
+        return False
+    source = _normalize_text_source_type(ebook_source)
+    path = str(ebook_source_path or "").strip()
+    # A provider entry (BookOrbit, Grimmory...) carries its own server path; only a
+    # selection with no provider behind it is the server's local folder.
+    local = source == "Local File" or (
+        not source and not ebook_source_id and (bool(ebook_filename) or (bool(path) and "://" not in path))
+    )
+    if local:
+        logger.info(
+            "🔒 Refused a server-local ebook selection from a non-admin user (%s)",
+            sanitize_log_data(ebook_filename or path or "no filename"),
+        )
+    return local
+
+
 def _build_local_ebook_title_index(scan_metadata=None):
     """Map normalized title -> filename for every epub on the local /books disk.
 
@@ -4199,7 +4226,9 @@ def get_searchable_ebooks(
 ):
     """Get ebook candidates, optionally collecting undeduped scan inventory."""
     discovery = source_states is not None
-    exclude_local_files = discovery and env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    regular_user = acting_user_is_regular(database_service)
+    exclude_local_files = discovery and _scan_excludes_local_files()
+    skip_local = exclude_local_files or regular_user
     inventory_candidates = inventory_candidates if inventory_candidates is not None else []
     scan_local_metadata = local_metadata if local_metadata is not None else ({} if discovery else None)
     results = []
@@ -4219,7 +4248,7 @@ def get_searchable_ebooks(
 
     local_index = None
     if discovery:
-        if EBOOK_DIR.exists():
+        if EBOOK_DIR.exists() and not regular_user:
             local_index = _build_local_ebook_title_index(scan_local_metadata)
             error_type = scan_local_metadata.get("_error_type") if isinstance(scan_local_metadata, dict) else None
             _record_suggestions_source_state(
@@ -4329,7 +4358,8 @@ def get_searchable_ebooks(
                 if discovery and full_refresh and "audio" not in source_states.get("BookOrbit", {}).get("roles", {}):
                     bookorbit_client.get_all_books(force_refresh=True)
                 bo_books = bookorbit_client.get_all_ebooks()
-                local_index = local_index if discovery else _build_local_ebook_title_index()
+                if not discovery and not regular_user:
+                    local_index = _build_local_ebook_title_index()
                 if discovery:
                     complete = bool(getattr(bookorbit_client, "catalog_complete", False))
                     _record_suggestions_source_state(
@@ -4705,7 +4735,7 @@ def get_searchable_ebooks(
             logger.warning("⚠️ CWA catalog capture failed (%s)", type(e).__name__)
 
     # 4. Search filesystem (Local) - LOW PRIORITY
-    if EBOOK_DIR.exists() and not exclude_local_files:
+    if EBOOK_DIR.exists() and not skip_local:
         try:
             if discovery and scan_local_metadata is not None:
                 local_files = [
@@ -8092,6 +8122,10 @@ def match():
                 "would see empty ebook text. Link the comic as an ebook-only mapping instead.",
                 400,
             )
+        if selected_filename and _refuse_regular_user_local_selection(
+            ebook_source, source_path, ebook_source_id, selected_filename,
+        ):
+            return "Server-local ebooks are only available to administrators", 403
         clients = uc()
         if request.form.get('action') == 'forge_match' and not clients.storyteller_client.is_configured():
             return "Storyteller is not configured", 409
@@ -9455,6 +9489,10 @@ def _queue_item_from_match_form(clients) -> "dict | None":
 
     if not bridge_key or not (ebook_filename or storyteller_uuid or audio_only):
         return None
+    if ebook_filename and _refuse_regular_user_local_selection(
+        ebook_source, ebook_source_path, ebook_source_id, ebook_filename,
+    ):
+        return None
     # A submitted form field can still carry a legacy absolute cover URL.
     safe_cover_url = _browser_cover_url(
         audio_cover_url,
@@ -9583,6 +9621,8 @@ def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
     filename = entry.get("filename") or ""
     path = entry.get("path")
     if source == "Local File":
+        if _refuse_regular_user_local_selection(source, path, ebook_filename=filename):
+            return None
         path = _safe_local_source_path(path)
         if not path or not Path(path).is_file():
             return None
@@ -9784,7 +9824,7 @@ def scan_library_suggestions(
     attempted_at = time.time()
     persisted = _load_persisted_suggestions_cache()
     previous = persisted.get("ebook_discovery") or {}
-    exclude_local_files = env_truthy("SUGGESTIONS_EXCLUDE_LOCAL_FILES")
+    exclude_local_files = _scan_excludes_local_files()
     exclude_setting_changed = bool(previous.get("exclude_local_files", False)) != exclude_local_files
     if exclude_setting_changed:
         cached_suggestions_by_abs = {}
@@ -9862,6 +9902,7 @@ def scan_library_suggestions(
 
     inventory = build_ebook_inventory(
         inventory_candidates, previous_entries=(previous.get("entries") or {}),
+        exclude_local_files=exclude_local_files,
     )
     audio_pool = service._build_audiobook_candidate_pool(audio_candidates)
     # Some Grimmory summary rows omit companion formats. A plausible match to
@@ -11162,6 +11203,10 @@ def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
         return None
     ebook_filename = top.get('ebook_filename') or ''
     if not ebook_filename:
+        return None
+    if _refuse_regular_user_local_selection(
+        top.get('source'), top.get('source_path'), top.get('source_id'), ebook_filename,
+    ):
         return None
     audio_title = suggestion.get('audio_title') or suggestion.get('abs_title') or ''
     audio_duration = suggestion.get('audio_duration')

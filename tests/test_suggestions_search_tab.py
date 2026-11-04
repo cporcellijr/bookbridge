@@ -97,7 +97,7 @@ class TestSearchTabAccess(SearchTabBase):
         self.login()
         form = {
             'action': 'add_to_queue', 'audiobook_id': 'abs-1', 'audio_source': 'ABS',
-            'audio_title': 'T', 'audio_duration': '10', 'ebook_filename': 'b.epub', 'ebook_source': 'Local File',
+            'audio_title': 'T', 'audio_duration': '10', 'ebook_filename': 'b.epub', 'ebook_source': 'BookOrbit', 'ebook_source_id': '9',
         }
         with patch("src.web_server.uc", return_value=self.clients()), \
                 patch("src.web_server._spawn_user_background") as spawn:
