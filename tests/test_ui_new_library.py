@@ -106,6 +106,31 @@ class TestNewLibrary(unittest.TestCase):
         finally:
             template_rendered.disconnect(capture, self.app)
 
+    def test_ratings_show_both_sources_and_sort_on_their_average_like_classic(self):
+        from src import web_server
+        original = web_server._build_dashboard_mappings
+
+        def mappings(*args, **kwargs):
+            result, progress = original(*args, **kwargs)
+            for mapping in result:
+                if mapping["abs_id"] == "library-book":
+                    mapping.update(storygraph_rating=4.0, goodreads_rating=3.0)
+                else:
+                    mapping.update(storygraph_rating=None, goodreads_rating=4.4)
+            return result, progress
+
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        self._login("ui-reader")
+        with patch.object(web_server, "_build_dashboard_mappings", side_effect=mappings):
+            text = self.client.get("/").get_data(as_text=True)
+        both = re.search(r'<article[^>]*data-abs-id="library-book"[^>]*>.*?</article>', text, re.S).group()
+        gr_only = re.search(r'<article[^>]*data-abs-id="library-finished"[^>]*>.*?</article>', text, re.S).group()
+        self.assertIn('data-rating="3.5"', both)
+        self.assertIn("SG 4.0 · GR 3.0", both)
+        self.assertIn('data-rating="4.4"', gr_only)
+        self.assertIn("GR 4.4", gr_only)
+        self.assertNotIn("SG ", gr_only)
+
     def test_out_of_sync_line_uses_only_that_books_app_positions(self):
         from src import web_server
         original = web_server._build_dashboard_mappings
