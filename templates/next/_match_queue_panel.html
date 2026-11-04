@@ -1,0 +1,69 @@
+{% if queue %}
+<div class="queue-items">
+{% for item in queue %}
+<div class="queue-item" data-bridge-key="{{ item.bridge_key or item.abs_id }}">
+    {% if item.cover_url %}
+    <img src="{{ item.cover_url }}" alt="{{ _('Cover') }}" class="queue-item-cover" onerror="this.style.opacity='0.25';">
+    {% else %}
+    <div class="queue-item-cover" aria-hidden="true" style="display:flex; align-items:center; justify-content:center; font-size:18px;">📖</div>
+    {% endif %}
+    <div class="queue-item-info">
+        {% if item.audio_only %}<span class="queue-kind">{{ _('Audio only') }}</span>
+        {% elif not item.audio_source %}<span class="queue-kind">{{ _('Ebook only') }}</span>
+        {% else %}<span class="queue-kind">{{ _('Match') }}</span>{% endif %}
+        <p class="queue-item-title" title="{{ item.abs_title }}">{{ item.abs_title }}</p>
+        {% if item.audio_only %}
+        <p class="queue-item-ebook"><span style="color:#fbbf24;">🎧 {{ _('Audio only') }}</span>{% if item.audio_source %} <span class="source-badge">{{ item.audio_source }}</span>{% endif %}</p>
+        {% elif item.storyteller_uuid %}
+        <p class="queue-item-ebook"><span style="color:#a78bfa;">⚡ Storyteller</span>{% if item.ebook_display_name %} + {{ item.ebook_display_name }}{% endif %}</p>
+        {% else %}
+        <p class="queue-item-ebook" title="{{ item.ebook_filename }}">📖 {{ item.ebook_display_name or item.ebook_filename }}{% if item.readalong_epub_requested %} <span class="source-badge" title="{{ _('A read-along EPUB will be generated for BookOrbit once this book finishes forging') }}">🔊 {{ _('Read-along') }}</span>{% endif %}</p>
+        {% endif %}
+    </div>
+    <form method="POST" action="/suggestions" class="inline-form">
+        <input type="hidden" name="action" value="remove_from_queue">
+        <input type="hidden" name="abs_id" value="{{ item.abs_id }}">
+        <button type="submit" class="queue-remove">×</button>
+    </form>
+</div>
+{% endfor %}
+</div>
+<div class="queue-actions">
+    {% if queue|selectattr('audio_source', 'equalto', 'BookOrbit')|list %}
+    <label for="queueReadalongCheckbox" style="display:flex; align-items:center; gap:8px; margin:0 0 10px; font-size:13px; color:rgba(255,255,255,0.75); cursor:pointer;">
+        <input type="checkbox" id="queueReadalongCheckbox" value="true">
+        {{ _('Also generate read-along EPUBs for the BookOrbit audiobooks in this queue') }}
+    </label>
+    {% endif %}
+    <form method="POST" action="/suggestions">
+        <input type="hidden" name="action" value="process_queue">
+        <button type="submit" class="btn btn-success w-100">✅ {{ _('Match All (%(count)s)', count=queue|length) }}</button>
+    </form>
+    {% if storyteller_enabled %}
+    {# Forge-eligible: audio plus a standard ebook, not already a Storyteller title. #}
+    {% set queue_ns = namespace(forge_eligible=0) %}
+    {% for item in queue %}{% if item.audio_source and item.ebook_filename and not item.storyteller_uuid %}{% set queue_ns.forge_eligible = queue_ns.forge_eligible + 1 %}{% endif %}{% endfor %}
+    <form method="POST" action="/suggestions">
+        <input type="hidden" name="action" value="forge_and_match_queue">
+        <button type="submit" class="btn w-100">{{ _('Create Storyteller Edition &amp; Match All (%(count)s)', count=queue|length) }}</button>
+    </form>
+    {% if queue|length == 1 and queue_ns.forge_eligible == 1 %}
+    <form method="POST" action="/suggestions" id="forgeOnlyQueueForm">
+        <input type="hidden" name="action" value="forge_only_queue">
+        <input type="hidden" name="forge_stage_mode" id="forgeOnlyStageMode" value="">
+        <button type="submit" class="btn w-100" id="forgeOnlyQueueBtn">{{ _('Create Storyteller Edition Only') }}</button>
+    </form>
+    {% elif queue|length > 1 and queue_ns.forge_eligible > 0 %}
+    <button type="button" class="btn w-100" disabled title="{{ _('Storyteller edition creation is available for one queued book at a time.') }}">{{ _('Create Storyteller Edition Only') }}</button>
+    <div class="queue-action-note">{{ _('Storyteller edition-only creation is disabled when more than one item is queued.') }}</div>
+    {% endif %}
+    {% endif %}
+    <div id="queueFeedback" class="submit-feedback block" aria-live="polite"></div>
+    <form method="POST" action="/suggestions">
+        <input type="hidden" name="action" value="clear_queue">
+        <button type="submit" class="btn btn-danger w-100" onclick='return confirm({{ _('Clear entire queue?') | tojson }})'>🗑️ {{ _('Clear Queue') }}</button>
+    </form>
+</div>
+{% else %}
+<div class="empty"><p>{{ _('Queue is empty') }}<br>{{ _('Add items to get started') }}</p></div>
+{% endif %}

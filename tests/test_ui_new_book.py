@@ -265,3 +265,85 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   'book.last_sync_unix;\n'
   '                            });',
   ''))
+
+
+# P4 Discover: every deviation from the copied Classic script is intentional.
+# (Original anchor, New anchor, fingerprint of the complete New hunk, rationale.)
+DISCOVER_ALLOWED_CHANGES = (
+    ('', 'const ebookSelectedKeys = new Set();', '9311ccb1db68b3ca',
+     'Separate ebook-only checkbox state and generation'),
+    ('', "if (tab === 'ebook_only') {", 'adf84095df1bdf79',
+     'Reset ebook-only selection when its scan changes'),
+    ("$('layout').classList.toggle('no-queue', tab === 'ebook_only');",
+     '// P4: The same queue stays alongside all three Discover tabs.', 'dc8dd9832b3bf8aa',
+     'Keep the shared queue visible on all tabs'),
+    ('', 'if (top && !entry.bulk_eligible', '68d497d7f62024e6',
+     'Display Classic 60+ Good match and server-derived Needs review'),
+    ('chips.push(`<span class="source-badge exact"',
+     'chips.push(`<span class="source-badge exact"', 'dbdf2a56df70c316',
+     'Use Exact match instead of Exact'),
+    ('<button type="button" class="btn btn-small btn-muted" data-act="review"',
+     '<button type="button" class="btn btn-small btn-muted" data-act="review"',
+     'ec0194e4eeb91021', 'Label the existing review-panel action Compare'),
+    ('', '<input type="checkbox" class="ebook-row-check"', '926585e90630e26e',
+     'Show ebook-only checkboxes'),
+    ('', 'updateEbookSelectionUi();', '931e7fe32e137cb2',
+     'Update ebook selection state after every render'),
+    ("addManyToQueue(visibleEntries('pairs').filter",
+     '// P4: Select exact, server-eligible pairs;', 'b7449253c1dd7fb7',
+     'Select all exact matches without queuing or selecting review pairs'),
+    ("if (box.classList.contains('row-check')) {",
+     "if (box.classList.contains('ebook-row-check')) {", '46a6e59e4ff26f59',
+     'Delegate ebook checkbox events without touching pair handling'),
+)
+
+
+class TestDiscoverScriptDrift(unittest.TestCase):
+    def test_copied_classic_discover_scripts_have_only_listed_p4_changes(self):
+        """No silent Classic drift, including translated strings and queue handlers."""
+        import difflib
+        import hashlib
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        original = (root / 'templates/suggestions.html').read_text(encoding='utf-8')
+        classic_base = (root / 'templates/base.html').read_text(encoding='utf-8')
+        current = (root / 'templates/next/_discover_scripts.html').read_text(encoding='utf-8')
+        classic_helper = classic_base.split('<script>', 1)[1].split('</script>', 1)[0]
+        new_helper = current.split('<script>', 1)[1].split('</script>', 1)[0]
+        self.assertEqual(new_helper, classic_helper)
+
+        classic_script = original.split('<script>', 1)[1].split('</script>', 1)[0]
+        new_script = current.split('<script>', 2)[2].split('</script>', 1)[0]
+        self.assertIn('// P4-only additions.', new_script)
+        copied = new_script.split('    // P4-only additions.', 1)[0]
+        normalize = lambda source: [line.strip() for line in source.splitlines() if line.strip()]
+        before, after = normalize(classic_script), normalize(copied)
+        observed = []
+        for tag, a, b, c, d in difflib.SequenceMatcher(
+                a=before, b=after, autojunk=False).get_opcodes():
+            if tag == 'equal':
+                continue
+            old_anchor = before[a] if a < b else ''
+            new_anchor = after[c] if c < d else ''
+            fingerprint = hashlib.sha256('\n'.join(after[c:d]).encode()).hexdigest()[:16]
+            observed.append((old_anchor, new_anchor, fingerprint))
+        self.assertEqual(len(observed), len(DISCOVER_ALLOWED_CHANGES))
+        for changed, allowed in zip(observed, DISCOVER_ALLOWED_CHANGES):
+            old_anchor, new_anchor, fingerprint, rationale = allowed
+            with self.subTest(change=rationale):
+                self.assertTrue(changed[0].startswith(old_anchor))
+                self.assertTrue(changed[1].startswith(new_anchor))
+                self.assertEqual(changed[2], fingerprint)
+
+    def test_next_queue_copy_only_adds_format_tags(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / 'templates'
+        original = (root / '_match_queue_panel.html').read_text(encoding='utf-8')
+        next_queue = (root / 'next/_match_queue_panel.html').read_text(encoding='utf-8')
+        added = '''    <div class="queue-item-info">
+        {% if item.audio_only %}<span class="queue-kind">{{ _('Audio only') }}</span>
+        {% elif not item.audio_source %}<span class="queue-kind">{{ _('Ebook only') }}</span>
+        {% else %}<span class="queue-kind">{{ _('Match') }}</span>{% endif %}'''
+        self.assertIn(added, next_queue)
+        self.assertEqual(next_queue.replace(added, '    <div class="queue-item-info">', 1), original)

@@ -11255,7 +11255,7 @@ def _match_queue_response():
     isn't reloaded and scroll position is preserved); otherwise redirect to /suggestions."""
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return render_template(
-            '_match_queue_panel.html',
+            ui_template('_match_queue_panel.html'),
             queue=_load_match_queue(),
             storyteller_enabled=bool(_scan_user_clients().storyteller_client.is_configured()),
         )
@@ -11464,6 +11464,50 @@ def suggestions_page():
             return _match_queue_response()
 
         elif action == 'add_many_to_queue':
+            if request.form.get('bulk_kind') == 'ebook_only':
+                from src.api.suggestions_redesign import _current_inputs, _project
+
+                user_id = get_current_user_id()
+                persisted, mapped, queue, ignored = _current_inputs(sys.modules[__name__], user_id)
+                projection = _project(
+                    sys.modules[__name__], persisted, mapped, queue, ignored,
+                    tab='ebook_only', filters={}, sort='series',
+                )
+                if request.form.get('generation') != str(projection.get('generation')):
+                    return jsonify({'error': 'stale_generation'}), 409
+                candidates = {entry['ebook_key']: entry for entry in projection['entries']
+                              if not entry.get('ignored')}
+                for key in dict.fromkeys(request.form.getlist('ebook_keys')):
+                    entry = candidates.get(key)
+                    if not entry or not entry.get('filename'):
+                        continue
+                    if _refuse_regular_user_local_selection(
+                        entry.get('source'), entry.get('path'),
+                        entry.get('source_id'), entry['filename'],
+                    ):
+                        continue
+                    # Same shape and bridge key as a single ebook-only add (_queue_item_from_match_form),
+                    # so adding a book both ways queues it once.
+                    bridge_key = f"ebook:{entry['filename']}"
+                    title = entry.get('title') or Path(entry['filename']).stem
+                    item = {
+                        'bridge_key': bridge_key, 'abs_id': bridge_key,
+                        'audio_source': None, 'audio_source_id': None,
+                        'audio_title': title, 'abs_title': title,
+                        'audio_duration': None, 'duration': None,
+                        'audio_cover_url': None, 'cover_url': None,
+                        'audio_provider_book_id': None, 'audio_provider_file_id': None,
+                        'ebook_filename': entry['filename'],
+                        'ebook_display_name': title,
+                        'ebook_source': entry.get('source'),
+                        'ebook_source_id': entry.get('source_id'),
+                        'ebook_source_path': _submitted_ebook_path(entry.get('path')),
+                        'storyteller_uuid': '', 'audio_only': False,
+                        'readalong_epub_requested': False,
+                    }
+                    _match_queue_add(item)
+                return _match_queue_response()
+
             keys = request.form.getlist('bridge_keys')
             seen_generation = request.form.get('generation')
             if seen_generation is not None:
@@ -11534,6 +11578,11 @@ def suggestions_page():
             _queue_items = _match_queue_drain()
             _apply_queue_readalong_request(_queue_items)
             _spawn_user_background(_process_batch_queue, _queue_items, label="batch-match-process")
+            if ui_template('suggestions.html') == 'next/suggestions.html':
+                # Ebook-only and audio-only items become Library books directly; the rest go through Processing.
+                added = sum(1 for item in _queue_items if not item.get('audio_source') or item.get('audio_only'))
+                session['discover_process_summary'] = {'added': added, 'sent': len(_queue_items) - added}
+                return redirect(url_for('suggestions'))
             flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
@@ -11704,8 +11753,11 @@ def suggestions_page():
 
     from src.api.suggestions_redesign import suggestions_tab_counts
 
+    template_name = ui_template('suggestions.html')
     return render_template(
-        'suggestions.html',
+        template_name,
+        discover_process_summary=(session.pop('discover_process_summary', None)
+                                  if template_name == 'next/suggestions.html' else None),
         suggestions=_sanitize_cover_urls(scan_results),
         queue=_sanitize_cover_urls(_load_match_queue()),
         scan_has_run=bool(suggestions_state.get('scan_has_run', False)),
