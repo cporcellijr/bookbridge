@@ -375,9 +375,9 @@ class BookMappingService:
                 pass
 
         try:
-            self.database_service.dismiss_suggestion(saved_book.abs_id)
+            self.database_service.dismiss_suggestion(saved_book.abs_id, user_id=user_id)
             if saved_book.kosync_doc_id:
-                self.database_service.dismiss_suggestion(saved_book.kosync_doc_id)
+                self.database_service.dismiss_suggestion(saved_book.kosync_doc_id, user_id=user_id)
         except Exception:
             pass
 
@@ -498,9 +498,9 @@ class BookMappingService:
                 pass
 
         try:
-            self.database_service.dismiss_suggestion(saved_book.abs_id)
+            self.database_service.dismiss_suggestion(saved_book.abs_id, user_id=user_id)
             if saved_book.kosync_doc_id:
-                self.database_service.dismiss_suggestion(saved_book.kosync_doc_id)
+                self.database_service.dismiss_suggestion(saved_book.kosync_doc_id, user_id=user_id)
         except Exception:
             pass
 

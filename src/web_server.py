@@ -6505,7 +6505,7 @@ def _queue_item_shelf_watch_metadata(item: dict) -> "dict | None":
 
     for key in keys:
         try:
-            pending = database_service.get_pending_suggestion(key)
+            pending = database_service.get_pending_suggestion(key, user_id=get_current_user_id())
         except Exception as exc:
             logger.warning("Shelf-watch approval lookup failed for '%s': %s", key, exc, exc_info=True)
             continue
@@ -6555,7 +6555,7 @@ def _watch_suggestion_review(source_id: str) -> "tuple[list, list, str] | None":
     user = current_user()
     if not (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False))):
         return None
-    pending = database_service.get_pending_suggestion(source_id)
+    pending = database_service.get_pending_suggestion(source_id, user_id=get_current_user_id())
     if not pending or getattr(pending, 'origin', None) not in ('shelf_watch', 'reading_watch'):
         return None
     metadata = pending.origin_metadata or {}
@@ -7480,7 +7480,7 @@ def index():
 
     suggestions = []
     if current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, "is_admin", False)):
-        suggestions = [s for s in database_service.get_all_pending_suggestions() if len(s.matches) > 0]
+        suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
 
     latest_version, update_available = get_update_status()
@@ -9694,9 +9694,9 @@ def _get_suggestions_service():
     )
 
 
-def _get_ignored_suggestion_source_ids():
-    """Return suggestion source IDs (bridge keys) that are marked as ignored."""
-    return _get_suggestions_service().get_ignored_suggestion_source_ids()
+def _get_ignored_suggestion_source_ids(user_id: Optional[int] = None):
+    """Return suggestion source IDs (bridge keys) the user marked as ignored."""
+    return _get_suggestions_service().get_ignored_suggestion_source_ids(user_id=user_id)
 
 
 def _suggestions_discovery_sources_complete(source_states):
@@ -11255,7 +11255,8 @@ def suggestions_page():
                 )
                 cover_url = request.form.get('cover_url') or (current_entry.get('cover_url') if current_entry else '') or ''
 
-                if not database_service.ignore_suggestion(bridge_key):
+                reader_id = get_current_user_id()
+                if not database_service.ignore_suggestion(bridge_key, user_id=reader_id):
                     suggestion = PendingSuggestion(
                         source_id=bridge_key,
                         title=abs_title,
@@ -11265,7 +11266,7 @@ def suggestions_page():
                         status='ignored'
                     )
                     suggestion.source = audio_source
-                    database_service.save_pending_suggestion(suggestion)
+                    database_service.save_pending_suggestion(suggestion, user_id=reader_id)
 
                 suggestions_state['scan_results'] = [
                     item
@@ -11444,7 +11445,7 @@ def suggestions_page():
     if not scan_in_progress:
         suggestions_state = _rehydrate_suggestions_state_from_cache(suggestions_state)
 
-    ignored_source_ids = _get_ignored_suggestion_source_ids()
+    ignored_source_ids = _get_ignored_suggestion_source_ids(user_id=get_current_user_id())
     scan_results = suggestions_state.get('scan_results', [])
     cache_by_abs = suggestions_state.get('scan_cache_by_abs', {}) or {}
     no_match_abs_ids = suggestions_state.get('scan_cache_no_match_abs_ids', []) or []
@@ -14193,7 +14194,7 @@ def view_log():
 
 # ---------------- SUGGESTION API ROUTES ----------------
 def get_suggestions():
-    suggestions = database_service.get_all_pending_suggestions()
+    suggestions = database_service.get_all_pending_suggestions(user_id=get_current_user_id())
     result = []
     for s in suggestions:
         try:
@@ -14214,19 +14215,19 @@ def get_suggestions():
 
 
 def dismiss_suggestion(source_id):
-    if database_service.dismiss_suggestion(source_id):
+    if database_service.dismiss_suggestion(source_id, user_id=get_current_user_id()):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Not found"}), 404
 
 
 def ignore_suggestion(source_id):
-    if database_service.ignore_suggestion(source_id):
+    if database_service.ignore_suggestion(source_id, user_id=get_current_user_id()):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Not found"}), 404
 
 
 def clear_stale_suggestions():
-    count = database_service.clear_stale_suggestions()
+    count = database_service.clear_stale_suggestions(user_id=get_current_user_id())
     logger.info(f"🧹 Cleared {count} stale suggestions from database")
     return jsonify({"success": True, "count": count})
 

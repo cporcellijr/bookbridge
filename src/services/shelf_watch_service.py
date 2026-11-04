@@ -524,7 +524,7 @@ class ShelfWatchService:
             )
         else:
             outcome_status = 'suggested'
-            self._create_pending_suggestion(grimmory_book, filename, grimmory_id, matches)
+            self._create_pending_suggestion(grimmory_book, filename, grimmory_id, matches, user_id=user_id)
             # No shelf move — book stays on Up Next.
 
         self.database_service.upsert_shelf_watch_scan(
@@ -831,7 +831,7 @@ class ShelfWatchService:
             outcome_status = 'auto_matched'
         else:
             saved = self._create_pending_suggestion(
-                book, filename, source_id, matches, origin='reading_watch',
+                book, filename, source_id, matches, origin='reading_watch', user_id=user_id,
             )
             outcome_status = 'suggested' if saved else 'skipped_dismissed'
 
@@ -865,7 +865,8 @@ class ShelfWatchService:
 
     def _create_pending_suggestion(self, grimmory_book: dict, filename: str,
                                   grimmory_id: str, matches: list,
-                                  origin: str = 'shelf_watch') -> bool:
+                                  origin: str = 'shelf_watch',
+                                  user_id: Optional[int] = None) -> bool:
         """Save a PendingSuggestion for the top match.
 
         Returns True if saved, False if there was no bridge key or an
@@ -885,8 +886,8 @@ class ShelfWatchService:
         # re-scan. A dismissed/ignored row still exists (suggestion_exists) but no
         # longer comes back from get_pending_suggestion (pending-only) — that
         # combination is the dismissal signal.
-        if (self.database_service.suggestion_exists(bridge_key)
-                and self.database_service.get_pending_suggestion(bridge_key) is None):
+        if (self.database_service.suggestion_exists(bridge_key, user_id=user_id)
+                and self.database_service.get_pending_suggestion(bridge_key, user_id=user_id) is None):
             logger.info(
                 "%s: suggestion for '%s' was dismissed earlier; not re-suggesting (bridge_key=%s)",
                 log_prefix, filename, bridge_key,
@@ -910,7 +911,7 @@ class ShelfWatchService:
             origin=origin,
             origin_metadata_json=json.dumps(origin_payload),
         )
-        self.database_service.save_pending_suggestion(suggestion)
+        self.database_service.save_pending_suggestion(suggestion, user_id=user_id)
         logger.info(
             f"{log_prefix}: created suggestion for '{filename}' "
             f"(top_score={top.get('score')}, bridge_key={bridge_key})"

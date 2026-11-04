@@ -1238,7 +1238,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
         self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
-            lambda key: pending if key == "ab-1" else None
+            lambda key, **_kw: pending if key == "ab-1" else None
         )
 
         with patch.dict(
@@ -2320,7 +2320,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         events = []
 
-        def lookup_pending(key):
+        def lookup_pending(key, **_kw):
             events.append(f"lookup:{key}")
             return pending if key == "booklore:42" else None
 
@@ -2369,7 +2369,7 @@ class TestMatchPathsRegression(unittest.TestCase):
         )
         events = []
 
-        def lookup_pending(key):
+        def lookup_pending(key, **_kw):
             events.append(f"lookup:{key}")
             return pending if key == "ab-1" and pending.origin == "shelf_watch" else None
 
@@ -2417,7 +2417,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
         self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
-            lambda key: pending if key == "booklore:42" else None
+            lambda key, **_kw: pending if key == "booklore:42" else None
         )
 
         with patch.dict(
@@ -2668,7 +2668,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
         self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
-            lambda key: pending if key == "ab-1" else None
+            lambda key, **_kw: pending if key == "ab-1" else None
         )
         self.mock_container.mock_bookorbit_client.move_between_shelves.return_value = False
         item = {
@@ -2943,7 +2943,7 @@ class TestMatchPathsRegression(unittest.TestCase):
             },
         )
         self.mock_container.mock_database_service.get_pending_suggestion.side_effect = (
-            lambda key: pending if key == "bookorbit:5512" else None
+            lambda key, **_kw: pending if key == "bookorbit:5512" else None
         )
         return [
             web_server.EbookResult("Little Eyes (2020).epub", title="Little Eyes",

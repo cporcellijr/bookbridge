@@ -524,13 +524,13 @@ class TestSyncCycleUserScoping(unittest.TestCase):
             def __init__(self):
                 self.saved = []
 
-            def suggestion_exists(self, abs_id):
+            def suggestion_exists(self, abs_id, user_id=None):
                 return False
 
             def get_all_books(self):
                 return []
 
-            def save_pending_suggestion(self, suggestion):
+            def save_pending_suggestion(self, suggestion, user_id=None):
                 self.saved.append(suggestion)
 
         class _AbsSuggestionClient:

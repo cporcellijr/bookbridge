@@ -419,7 +419,7 @@ def test_routes_use_the_module_that_registered_them_not_a_fresh_import():
         database_service=SimpleNamespace(get_all_books=lambda user_id=None: []),
         _dashboard_visible_books_for_user=lambda books, _user: books,
         _load_match_queue=lambda: [],
-        _get_ignored_suggestion_source_ids=lambda: [],
+        _get_ignored_suggestion_source_ids=lambda **_kw: [],
         _suggestion_bulk_block=lambda _s: None,
         _sanitize_cover_urls=lambda entries: entries,
         _running_suggestions_scan_job_id=lambda _uid: None,
