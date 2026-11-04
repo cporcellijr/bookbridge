@@ -7614,6 +7614,7 @@ def book_page(abs_id: str) -> object:
         [book], states, integrations,
         all_hardcover=database_service.get_all_hardcover_details(),
         all_storygraph=database_service.get_all_storygraph_details(),
+        all_goodreads=database_service.get_all_goodreads_details(),
         reading_stats_by_book={abs_id: database_service.get_reading_stats(abs_id, user_id=user_id) or {}},
         cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
         claim_times_by_book=database_service.get_book_claim_times(user_id=user_id),

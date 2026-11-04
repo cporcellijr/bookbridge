@@ -117,6 +117,21 @@ class TestBookPage(unittest.TestCase):
         assert 'Not reported' not in text
         assert 'Last:' not in text  # no app is known to have moved the place last
 
+    def test_goodreads_row_links_and_changes_the_link(self):
+        from src.db.models import GoodreadsDetails
+        self._login('ui-reader')
+        with patch('src.web_server._build_dashboard_integrations', return_value={'goodreads': True}):
+            unlinked = self.client.get('/book/book-1').get_data(as_text=True)
+            self.service.save_goodreads_details(GoodreadsDetails(
+                abs_id='book-1', goodreads_book_id='42', goodreads_url='https://www.goodreads.com/book/show/42'))
+            linked = self.client.get('/book/book-1').get_data(as_text=True)
+        for text in (unlinked, linked):
+            assert 'data-service="goodreads"' in text
+            assert 'linkGoodreads(event)' in text
+            assert 'id="goodreads-modal"' in text and '/static/js/goodreads-modal.js' in text
+        assert '>Link<' in unlinked and 'Not linked' in unlinked
+        assert '>Change link<' in linked and 'https://www.goodreads.com/book/show/42' in linked
+
     def test_no_integration_actions_when_apps_unconfigured(self):
         self._login('ui-reader')
         with patch('src.web_server._build_dashboard_integrations', return_value={}):
