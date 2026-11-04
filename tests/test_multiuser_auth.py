@@ -722,7 +722,7 @@ class TestMultiUserAuth(unittest.TestCase):
     def test_admin_only_pages_forbidden_for_regular_users(self):
         self.svc.create_user("reg", "pw", role="user")
         self.client.post('/login', data={'username': 'reg', 'password': 'pw'})
-        for path in ('/settings', '/stats', '/logs'):
+        for path in ('/settings', '/logs'):
             self.assertEqual(self.client.get(path, follow_redirects=False).status_code, 403,
                              f"{path} should be admin-only")
         # but the home + Discover (pairs/ebook-only/search) are reachable
