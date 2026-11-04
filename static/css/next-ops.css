@@ -1,0 +1,139 @@
+/* P5: Classic operations data and handlers, presented in the New shell.
+   All surfaces inherit New light/dark tokens. */
+:root {
+    --panel: var(--surface);
+    --panel-soft: var(--surface-2);
+    --border: var(--line);
+    --border-strong: var(--line-2);
+    --muted: var(--text-2);
+    --muted-soft: var(--text-3);
+    --accent: var(--info);
+    --success: var(--ok);
+    --warning: var(--warn);
+    --reading: #64b6e8;
+    --listening: #a696ed;
+    --radius: 14px;
+    --radius-sm: 10px;
+    --radius-lg: 18px;
+    --gradient: linear-gradient(120deg, var(--surface-2), var(--surface));
+    --focus-ring: 0 0 0 2px var(--info-bg);
+}
+:root[data-theme="light"] {
+    --reading: #236fa2;
+    --listening: #7055a9;
+}
+.view { min-width: 0; }
+.view .stats-wrap, .view .logs-wrap, .view .job-queue-page, .view .whats-new-wrap {
+    max-width: 100%; padding: 6px 0 56px;
+}
+.view h1, .view .stats-wrap .hero h1, .view .logs-wrap .page-header h1,
+.view .job-queue-header h1, .view .whats-new-header h1 {
+    margin: 0 0 8px; color: var(--text);
+    font: 600 clamp(1.75rem, 3vw, 2.15rem)/1.2 var(--font-book);
+    letter-spacing: -.015em;
+}
+.view p { overflow-wrap: anywhere; }
+.view .stats-wrap .hero, .view .stats-wrap .dashboard-header, .view .stats-wrap .panel,
+.view .stats-wrap .stat-card, .view .stats-wrap .summary-card,
+.view .stats-wrap .recent-item, .view .stats-wrap .empty-state,
+.view .job-queue-section, .view .whats-new-notes, .view .logs-wrap .controls,
+.view .logs-wrap .log-container {
+    background: var(--surface); color: var(--text); border: 1px solid var(--line);
+    border-radius: 16px; box-shadow: none;
+}
+.view .stats-wrap .hero { padding: 24px; }
+.view .stats-wrap .hero-chip, .view .stats-wrap .status-pill {
+    border: 1px solid var(--line-2); background: var(--surface-2);
+    color: var(--text-2); border-radius: 999px;
+}
+.view .stats-wrap .hero-chip strong { color: var(--text); }
+.view .stats-wrap .stat-card, .view .stats-wrap .summary-card,
+.view .stats-wrap .recent-item { background: var(--surface-2); }
+.view .stats-wrap .stat-card-value, .view .stats-wrap .summary-card-value {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.view .stats-wrap .tab-strip { gap: 6px; }
+.view .stats-wrap .tab-btn { min-height: 44px; min-width: 100px; }
+.view .stats-wrap .tab-btn.is-active {
+    background: var(--surface-2); border-color: var(--info);
+    box-shadow: inset 0 -2px 0 var(--info);
+}
+.view .stats-wrap .btn-secondary.is-active { color: var(--text); }
+.view .stats-wrap .calendar-day-number { color: var(--text); }
+.view .stats-wrap .calendar-span { color: var(--text); }
+.view .stats-wrap .day-detail-modal {
+    background: var(--surface); color: var(--text); border-color: var(--line-2);
+}
+.view .stats-wrap .day-detail-close { color: var(--text); background: var(--surface-2); border-color: var(--line-2); }
+.view .day-detail-backdrop .day-detail-modal { background: var(--surface); color: var(--text); }
+.view .day-detail-backdrop .day-detail-close { color: var(--text); background: var(--surface-2); }
+.view .day-detail-backdrop .day-book-item { background: var(--surface-2); border-color: var(--line); }
+.view .job-queue-header { margin-bottom: 24px; align-items: flex-start; }
+.view .job-queue-header p { color: var(--text-2); max-width: 66ch; }
+.view .job-queue-refresh {
+    display: inline-flex; min-height: 44px; align-items: center;
+    background: var(--surface); border: 1px solid var(--line-2);
+    color: var(--text); font-weight: 600;
+}
+.view .job-queue-refresh:hover { background: var(--surface-2); }
+.view .job-queue-section-title { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.view .job-queue-section-title h2 { font: 600 1.3rem var(--font-book); }
+.view .job-queue-count, .view .job-queue-sequence,
+.view .job-queue-progress + small, .view .job-queue-table td:nth-child(5) {
+    font-family: var(--font-mono);
+}
+.view .job-queue-table { min-width: 680px; }
+.view .job-queue-table th { color: var(--text-2); }
+.view .job-queue-table td { overflow-wrap: anywhere; }
+.view .job-queue-move-actions button { min-width: 36px; min-height: 44px; color: var(--text); }
+.view .job-queue-failed { background: var(--bad-bg); }
+.view .job-queue-failed .job-queue-status { color: var(--bad); }
+.view .job-queue-failed .job-queue-detail { color: var(--text); }
+.view .job-queue-auto-refresh-note, .view .job-queue-empty { color: var(--text-2); }
+.view .logs-wrap .page-header { margin-bottom: 24px; text-align: left; }
+.view .logs-wrap .page-header h1 {
+    background: none; -webkit-background-clip: border-box;
+    -webkit-text-fill-color: currentColor;
+}
+.view .logs-wrap .page-header p { color: var(--text-2); }
+.view .logs-wrap .controls { padding: 20px; gap: 16px; margin-bottom: 20px; }
+.view .logs-wrap .control-group label { color: var(--text-2); }
+.view .logs-wrap .control-group input, .view .logs-wrap .control-group select {
+    background: var(--surface-2); color: var(--text); border-color: var(--line-2);
+    min-height: 44px; max-width: 100%;
+}
+.view .logs-wrap .control-group select option { background: var(--surface); color: var(--text); }
+.view .logs-wrap .log-stats { color: var(--text-2); flex-wrap: wrap; }
+.view .logs-wrap .log-header { background: var(--surface-2); }
+.view .logs-wrap .log-content { font-family: var(--font-mono); }
+.view .whats-new-notes { color: var(--text-2); }
+.view .whats-new-notes strong, .view .whats-new-notes h1, .view .whats-new-notes h2, .view .whats-new-notes h3 { color: var(--text); }
+.view .whats-new-notes code { background: var(--surface-2); color: var(--text); }
+.view .whats-new-all-releases { color: var(--info); }
+@media (max-width: 900px) {
+    .view .stats-wrap .insights-grid { grid-template-columns: minmax(0, 1fr); }
+    .view .stats-wrap .hero { padding: 20px; }
+    .view .stats-wrap .hero-top { gap: 12px; }
+}
+@media (max-width: 760px) {
+    .view .stats-wrap, .view .logs-wrap, .view .job-queue-page, .view .whats-new-wrap {
+        padding: 0 0 28px;
+    }
+    .view .stats-wrap .toolbar { align-items: flex-start; }
+    .view .stats-wrap .tab-strip { width: 100%; }
+    .view .stats-wrap .tab-btn { flex: 1 1 0; min-width: 0; padding-inline: 6px; }
+    .view .stats-wrap .status-row { width: 100%; }
+    .view .stats-wrap .calendar-month-title { font-size: 1.1rem; }
+    .view .stats-wrap .calendar-week { min-width: 0; }
+    .view .stats-wrap .calendar-cell { padding: 4px 2px; }
+    .view .stats-wrap .calendar-day-total { font-size: 9px; }
+    .view .stats-wrap .calendar-span { padding: 0 3px; font-size: 10px; }
+    .view .logs-wrap .controls { gap: 12px; }
+    .view .logs-wrap .control-group { flex: 1 1 180px; min-width: 0; }
+    .view .logs-wrap .search-input { min-width: 0; width: 100%; }
+    .view .whats-new-notes { padding: 18px; }
+    .view .job-queue-table-scroll { -webkit-overflow-scrolling: touch; }
+}
+/* Embed retains the Classic Settings iframe's internal log scrolling. */
+body:has(.ops-logs.embed) .view { padding: 0; max-width: none; min-height: 0; }
+body:has(.ops-logs.embed) .logs-wrap { padding: 16px; }

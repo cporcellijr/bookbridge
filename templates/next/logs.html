@@ -1,0 +1,373 @@
+{% extends "next/base.html" %}
+{% from "_i18n.html" import plural_forms %}
+{% set active_page = 'logs' %}
+{% set hide_chrome = embed %}
+{% block title %}{{ _('Logs') }} · BookBridge{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/next-ops.css">
+<style>
+    .logs-wrap {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 40px 20px;
+    }
+
+    .page-header {
+        text-align: center;
+        margin-bottom: 40px;
+    }
+
+    .page-header h1 {
+        font-size: 36px;
+        font-weight: 700;
+        margin-bottom: 16px;
+        background: var(--gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .page-header p {
+        font-size: 18px;
+        color: var(--muted);
+    }
+
+    /* Controls */
+    .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-bottom: 30px;
+        padding: 25px;
+        background: var(--panel);
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+    }
+
+    .control-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .control-group label {
+        font-weight: 600;
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 14px;
+    }
+
+    .control-group input,
+    .control-group select {
+        padding: 10px 14px;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        background: rgba(255, 255, 255, 0.1);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 14px;
+        min-width: 120px;
+    }
+
+    .control-group select option {
+        background: #1a1a1a;
+        color: var(--text);
+    }
+
+    .control-group input:focus,
+    .control-group select:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: var(--focus-ring);
+    }
+
+    .search-input {
+        min-width: 250px;
+    }
+
+    /* Log Stats */
+    .log-stats {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 20px;
+        font-size: 14px;
+        color: var(--muted);
+    }
+
+    /* Log Container */
+    .log-container {
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        height: 600px;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .log-header {
+        padding: 15px 20px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .log-content {
+        flex: 1;
+        overflow-y: auto;
+        font-family: 'SF Mono', Consolas, 'Monaco', 'Liberation Mono', 'Lucida Console', monospace;
+        font-size: 13px;
+        line-height: 1.4;
+    }
+
+    .log-line {
+        padding: 6px 20px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+        display: flex;
+        align-items: flex-start;
+        gap: 15px;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+
+    .log-line:hover {
+        background: rgba(255, 255, 255, 0.02);
+    }
+
+    .log-timestamp {
+        color: var(--muted-soft);
+        font-size: 12px;
+        min-width: 140px;
+        font-weight: 500;
+    }
+
+    .log-level {
+        min-width: 60px;
+        font-weight: 700;
+        font-size: 12px;
+        text-align: center;
+        padding: 2px 8px;
+        border-radius: 4px;
+    }
+
+    .log-level.DEBUG {
+        background: rgba(108, 117, 125, 0.3);
+        color: #adb5bd;
+    }
+
+    .log-level.INFO {
+        background: rgba(23, 162, 184, 0.3);
+        color: #17a2b8;
+    }
+
+    .log-level.WARNING {
+        background: rgba(255, 193, 7, 0.3);
+        color: #ffc107;
+    }
+
+    .log-level.ERROR {
+        background: rgba(220, 53, 69, 0.3);
+        color: #dc3545;
+    }
+
+    .log-level.CRITICAL {
+        background: rgba(220, 53, 69, 0.5);
+        color: #fff;
+    }
+
+    .log-message {
+        flex: 1;
+        color: var(--text);
+    }
+
+    .log-module {
+        color: var(--muted);
+        font-size: 11px;
+        min-width: 80px;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.05);
+        padding: 2px 6px;
+        border-radius: 3px;
+        margin-right: 10px;
+    }
+
+    /* Loading states */
+    .loading {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100px;
+        color: var(--muted);
+    }
+
+    .spinner {
+        width: 20px;
+        height: 20px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-top: 2px solid var(--accent);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin-right: 10px;
+    }
+
+    @keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+
+        100% {
+            transform: rotate(360deg);
+        }
+    }
+
+    /* Auto refresh */
+    .auto-refresh {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .auto-refresh input[type="checkbox"] {
+        transform: scale(1.2);
+    }
+
+    /* Load More Button */
+    .load-more {
+        text-align: center;
+        padding: 20px;
+        border-top: 1px solid var(--border);
+    }
+
+    .hidden {
+        display: none !important;
+    }
+
+    /* Mobile responsiveness */
+    @media (max-width: 768px) {
+        .logs-wrap {
+            padding: 20px 10px;
+        }
+
+        .controls {
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .log-line {
+            flex-direction: column;
+            gap: 5px;
+            align-items: flex-start;
+        }
+
+        .log-timestamp,
+        .log-level {
+            min-width: auto;
+        }
+    }
+
+    /* Embedded mode (Settings → Logs tab): drop page chrome (hide_chrome skips the
+       nav) and blend with the host page. The log box keeps its fixed height so the
+       list scrolls *inside* it — that internal scroll is what the Top/Bottom
+       buttons and the live-tail auto-scroll-to-bottom depend on. */
+    .logs-wrap.embed {
+        max-width: 100%;
+        padding: 16px;
+    }
+</style>
+{% if embed %}
+<style>
+    body {
+        background: transparent;
+    }
+</style>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="logs-wrap ops-logs{% if embed %} embed{% endif %}">
+    {% if not embed %}
+    <div class="page-header">
+        <h1>{{ _('Application Logs') }}</h1>
+        <p>{{ _('View, filter, and monitor system logs in real-time') }}</p>
+    </div>
+    {% endif %}
+
+    <!-- Log Controls -->
+    <div class="controls">
+        <div class="control-group">
+            <label for="logLevel">{{ _('Min Log Level:') }}</label>
+            <select id="logLevel">
+                <option value="DEBUG">DEBUG</option>
+                <option value="INFO" selected>INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+                <option value="CRITICAL">CRITICAL</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="searchInput">{{ _('Filter by text:') }}</label>
+            <input type="text" id="searchInput" class="search-input" placeholder="{{ _('Search logs...') }}">
+        </div>
+
+        <div class="control-group">
+            <label for="linesCount">{{ _('Lines to show:') }}</label>
+            <select id="linesCount">
+                <option value="100">100</option>
+                <option value="500">500</option>
+                <option value="1000" selected>1000</option>
+                <option value="2500">2500</option>
+                <option value="5000">5000</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>&nbsp;</label>
+            <button id="refreshBtn" class="btn btn-primary">{{ _('Refresh Logs') }}</button>
+        </div>
+
+        <div class="control-group auto-refresh">
+            <label for="autoRefresh">{{ _('Auto-refresh (30s):') }}</label>
+            <input type="checkbox" id="autoRefresh">
+        </div>
+
+        <div class="control-group auto-refresh">
+            <label for="liveMode">{{ _('Live mode (real-time):') }}</label>
+            <input type="checkbox" id="liveMode">
+        </div>
+    </div>
+
+    <!-- Log Stats -->
+    <div class="log-stats">
+        <span id="totalLinesStats">{{ _('Total: 0 lines') }}</span>
+        <span id="displayedLinesStats">{{ _('Showing: 0 lines') }}</span>
+        <span id="lastUpdated">{{ _('Last updated: Never') }}</span>
+    </div>
+
+    <!-- Log Container -->
+    <div class="log-container">
+        <div class="log-header">
+            <h3><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg> {{ _('Log Entries') }}</h3>
+            <div>
+                <button id="scrollToTop" class="btn btn-secondary btn-sm">
+                    {{ _('Top') }}</button>
+                <button id="scrollToBottom" class="btn btn-secondary btn-sm">
+                    {{ _('Bottom') }}</button>
+            </div>
+        </div>
+        <div id="logContent" class="log-content">
+            <div class="loading">
+                <div class="spinner"></div>
+                {{ _('Loading logs...') }}
+            </div>
+        </div>
+        <div id="loadMore" class="load-more hidden">
+            <button class="btn btn-secondary">{{ _('Load More Logs') }}</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+{% block scripts %}{% include 'next/_logs_scripts.html' %}{% endblock %}

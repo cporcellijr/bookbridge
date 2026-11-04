@@ -1,0 +1,118 @@
+{% extends "next/base.html" %}
+{% set active_page = 'job_queue' %}
+{% block title %}{{ _('Processing') }} — BookBridge{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/css/next-ops.css">
+<link rel="stylesheet" href="/static/css/job-queue.css">
+{% endblock %}
+{% block content %}
+<div class="job-queue-page ops-queue"{% if queue_view['running'] %} data-auto-refresh="20"{% endif %}>
+    <header class="job-queue-header">
+        <div>
+            <h1 class="h1">{{ _('Processing') }}</h1>
+            <p>{{ _('See books waiting, processing, or recently finished. Move staged books or pending alignments before they start.') }}</p>
+        </div>
+        <a class="job-queue-refresh" href="{{ url_for('job_queue_page') }}">{{ _('Refresh status') }}</a>
+    </header>
+    {% if queue_view['running'] %}
+    <p class="job-queue-auto-refresh-note">{{ _('Updates every 20 seconds while books are processing.') }}</p>
+    {% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="flash-messages mb-16">
+        {% for category, msg in messages %}
+        <div class="flash flash-{{ category }} flash-msg-container">
+            {{ msg }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    {% set sections = [
+        ('running', _('Processing now')),
+        ('pending', _('Waiting')),
+        ('recent', _('Finished (7 days)'))
+    ] %}
+    {% for key, heading in sections %}
+    <section class="job-queue-section" aria-labelledby="job-queue-{{ key }}">
+        <div class="job-queue-section-title">
+            <div>
+                <h2 id="job-queue-{{ key }}">{{ heading }}</h2>
+            </div>
+            <span class="job-queue-count">{{ queue_view[key]|length }}</span>
+        </div>
+        {% set rows = queue_view[key] %}
+        {% if key == 'recent' %}
+            {% set failures = rows|selectattr('status', 'equalto', 'failed')|list %}
+            {% set successes = rows|rejectattr('status', 'equalto', 'failed')|list %}
+            {% set rows = failures + successes %}
+        {% endif %}
+        {% if rows %}
+        <div class="job-queue-table-scroll">
+            <table class="job-queue-table">
+                <thead>
+                    <tr>
+                        <th scope="col">{{ _('Book') }}</th>
+                        <th scope="col">{{ _('Operation') }}</th>
+                        <th scope="col">{{ _('Status / stage') }}</th>
+                        <th scope="col">{{ _('Progress') }}</th>
+                        <th scope="col">{{ _('Requested') }}</th>
+                        <th scope="col">{{ _('Order') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for job in rows %}
+                    <tr{% if job.status == "failed" %} class="job-queue-failed"{% endif %}>
+                        <td>
+                            <strong>{{ job.title }}</strong>
+                            {% if job.order is not none %}
+                            <span class="job-queue-sequence">{{ _('#%(position)s in its list', position=job.order) }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ job.operation }}</td>
+                        <td>
+                            <span class="job-queue-status job-queue-status-{{ job.status|replace(' ', '-') }}">{{ job.status|replace('_', ' ')|title }}</span>
+                            {% if job.detail %}<small class="job-queue-detail">{{ job.detail }}</small>{% endif %}
+                            {% if job.timestamp %}<small class="job-queue-detail">{{ _('Last attempt %(ago)s ago', ago=job.timestamp|format_time_ago) }}</small>{% endif %}
+                        </td>
+                        <td>
+                            {% if job.percent is not none %}
+                            <div class="job-queue-progress" role="progressbar" aria-valuenow="{{ job.percent }}" aria-valuemin="0" aria-valuemax="100" aria-label="{{ _('%(title)s progress', title=job.title) }}">
+                                <span style="width: {{ job.percent }}%"></span>
+                            </div>
+                            <small>{{ job.percent }}%</small>
+                            {% else %}&mdash;{% endif %}
+                        </td>
+                        <td>{% if job.epub3 %}<span class="job-queue-epub">EPUB3</span>{% else %}&mdash;{% endif %}</td>
+                        <td>
+                        {% if job.queue_key %}
+                            <div class="job-queue-move-actions">
+                            {% for direction, text, available, label, hint in [
+                                ('up', '↑', job.can_move_up, _('Move %(title)s up', title=job.title), _('Move up')),
+                                ('down', '↓', job.can_move_down, _('Move %(title)s down', title=job.title), _('Move down')),
+                                ('top', '⇈', job.can_move_up, _('Move %(title)s to top', title=job.title), _('Move to top'))] %}
+                                <form method="POST" action="{{ url_for('job_queue_reorder') }}">
+                                    <input type="hidden" name="queue_key" value="{{ job.queue_key }}">
+                                    <input type="hidden" name="queue" value="{{ job.queue }}">
+                                    <input type="hidden" name="direction" value="{{ direction }}">
+                                    <button type="submit" aria-label="{{ label }}" title="{{ hint }}" {% if not available %}disabled{% endif %}>{{ text }}</button>
+                                </form>
+                            {% endfor %}
+                            </div>
+                        {% else %}&mdash;{% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="job-queue-empty">{{ _('Nothing to show here.') }}</p>
+        {% endif %}
+    </section>
+    {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}{% include 'next/_job_queue_scripts.html' %}{% endblock %}
