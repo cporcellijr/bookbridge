@@ -1052,6 +1052,21 @@ class TestRingBuffer(unittest.TestCase):
 class TestSetupAndGetters(unittest.TestCase):
     """Tests for the module-level singleton functions."""
 
+    def setUp(self):
+        # Start from no singleton so a handler another test left attached can't skew the counts.
+        import src.services.diagnostics as _mod
+        self._saved_handler = _mod._diagnostics_handler
+        _mod._diagnostics_handler = None
+        atexit_patch = patch('src.services.diagnostics.atexit.register')
+        atexit_patch.start()
+        self.addCleanup(atexit_patch.stop)
+
+    def tearDown(self):
+        import src.services.diagnostics as _mod
+        if _mod._diagnostics_handler is not None and _mod._diagnostics_handler is not self._saved_handler:
+            logging.getLogger().removeHandler(_mod._diagnostics_handler)
+        _mod._diagnostics_handler = self._saved_handler
+
     def test_setup_and_get(self):
         handler = setup_diagnostics_logging()
         self.assertIsNotNone(handler)

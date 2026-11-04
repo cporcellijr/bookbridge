@@ -1,0 +1,5 @@
+{% extends 'next/base.html' %}
+{% set active_page = 'library' %}
+{% block title %}{{ mapping.display_title }} · BookBridge{% endblock %}
+{% block content %}{% include 'next/_book_detail.html' %}{% endblock %}
+{% block scripts %}{% include 'next/_book_scripts.html' %}{% endblock %}

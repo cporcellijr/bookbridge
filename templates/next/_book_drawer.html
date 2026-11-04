@@ -1,0 +1,10 @@
+{% extends 'next/base.html' %}
+{% set hide_chrome = true %}
+{% block title %}{{ mapping.display_title }} · BookBridge{% endblock %}
+{% block content %}
+<section class="book-drawer" aria-label="{{ mapping.display_title }}" tabindex="-1">
+<a class="drawer-close" href="/" data-book-close>{{ _('Close') }}</a>
+{% include 'next/_book_detail.html' %}
+</section>
+{% endblock %}
+{% block scripts %}{% include 'next/_book_scripts.html' %}{% endblock %}
