@@ -569,8 +569,6 @@ _LOGIN_FAILURE_WINDOW = 60
 # suggestions are admin-only ("admin sets things up, users just use").
 _ADMIN_ONLY_ENDPOINTS = {
     'settings',
-    'get_suggestions', 'suggestions_scan_status',
-    'dismiss_suggestion', 'ignore_suggestion', 'clear_stale_suggestions',
     'stats_view', 'api_stats', 'api_stats_reading_day', 'api_stats_reading_calendar',
     'api_stats_book_detail', 'api_stats_yearly_recap',
     'logs_view', 'api_logs', 'api_logs_live', 'view_log',
@@ -6584,11 +6582,8 @@ def _watch_suggestion_review(source_id: str) -> "tuple[list, list, str] | None":
 
     Searching the suggested audiobook's title can miss it (blank metadata) or turn up
     another book's ebook, so Review offers exactly the pair the watcher scanned. The
-    page pre-selects a lone result. Admin-only, like the dashboard suggestions.
+    page pre-selects a lone result. Reads only the acting user's own suggestions.
     """
-    user = current_user()
-    if not (current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, 'is_admin', False))):
-        return None
     pending = database_service.get_pending_suggestion(source_id, user_id=get_current_user_id())
     if not pending or getattr(pending, 'origin', None) not in ('shelf_watch', 'reading_watch'):
         return None
@@ -7512,9 +7507,7 @@ def index():
         claim_times_by_book=claim_times_by_book,
     )
 
-    suggestions = []
-    if current_app.config.get('LOGIN_DISABLED') or (user and getattr(user, "is_admin", False)):
-        suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
+    suggestions = [s for s in database_service.get_all_pending_suggestions(user_id=get_current_user_id()) if len(s.matches) > 0]
     grouped_mappings = _group_dashboard_mappings_by_series(mappings)
 
     latest_version, update_available = get_update_status()
@@ -9548,9 +9541,6 @@ def _suggestions_search_results(
     mode = "search"
     review_pair = _watch_suggestion_review(review) if review else None
     if ebook_key:
-        user = current_user()
-        if not user or not user.is_admin:
-            abort(403)
         from src.services.suggestions_view import project_suggestions
         persisted = _load_persisted_suggestions_cache()
         snapshot = persisted.get("ebook_discovery") or {}
@@ -9633,7 +9623,7 @@ def _suggestions_ebook_result(entry: dict) -> Optional[EbookResult]:
             return None
         filename = path
     elif source == "BookOrbit":
-        client = uc().bookorbit_client
+        client = _scan_user_clients().bookorbit_client
         detail = client.get_book_detail(source_id, force=True, fresh_only=True)
         if not detail:
             return None
@@ -9668,7 +9658,7 @@ def _resolve_suggestions_redesign_ebook_create(entry: dict) -> Optional[dict]:
         return None
     source, source_id = selected.source, selected.source_id
     parser = container.ebook_parser()
-    clients = uc() if source != "Local File" else None
+    clients = _scan_user_clients() if source != "Local File" else None
     kosync_id = None
     if source == "Local File":
         kosync_id = parser.get_kosync_id(Path(selected.path))
@@ -10255,7 +10245,7 @@ def _suggestions_auto_scan_tick():
 
 def _start_suggestions_scan_job(cached_suggestions_by_abs=None, cached_no_match_abs_ids=None, full_refresh=False):
     _prune_suggestions_scan_jobs()
-    bundle = uc()
+    bundle = _scan_user_clients()
     try:
         user = current_user()
         user_id = user.id if user is not None else None
@@ -11168,7 +11158,7 @@ def _match_queue_response():
         return render_template(
             '_match_queue_panel.html',
             queue=_load_match_queue(),
-            storyteller_enabled=bool(uc().storyteller_client.is_configured()),
+            storyteller_enabled=bool(_scan_user_clients().storyteller_client.is_configured()),
         )
     return redirect(url_for('suggestions'))
 
@@ -11240,16 +11230,13 @@ def _queue_item_from_suggestion(suggestion: dict) -> "dict | None":
     }
 
 
-_NON_ADMIN_QUEUE_ACTIONS = frozenset({
-    'add_to_queue', 'remove_from_queue', 'clear_queue',
-    'process_queue', 'forge_and_match_queue', 'forge_only_queue',
-})
-
-
 def suggestions_page():
     _clear_legacy_suggestions_session_payload()
-    clients = uc()
-    storyteller_enabled = bool(clients.storyteller_client.is_configured())
+    try:
+        clients = _scan_user_clients()
+    except PermissionError:
+        clients = None
+    storyteller_enabled = bool(clients is not None and clients.storyteller_client.is_configured())
     state_id, suggestions_state = _get_suggestions_state(create=True)
     if suggestions_state is None:
         suggestions_state = _default_suggestions_state()
@@ -11261,8 +11248,9 @@ def suggestions_page():
 
     if request.method == 'POST':
         action = request.form.get('action')
-        if not is_admin and action not in _NON_ADMIN_QUEUE_ACTIONS:
-            abort(403)
+        if clients is None:
+            flash("Your own library connections are unavailable, so this can't run right now.", "warning")
+            return redirect(url_for('suggestions'))
         if action in ('forge_and_match_queue', 'forge_only_queue') and not storyteller_enabled:
             flash("Configure Storyteller before creating a Storyteller edition.", "warning")
             return redirect(url_for('suggestions'))
@@ -11450,21 +11438,6 @@ def suggestions_page():
             flash(f"Processing {len(_queue_items)} book(s) in the background…", "info")
             return redirect(url_for('index'))
 
-    if not is_admin:
-        return render_template(
-            'suggestions.html',
-            suggestions=[],
-            queue=_sanitize_cover_urls(_load_match_queue()),
-            scan_has_run=False,
-            scan_in_progress=False,
-            scan_error=None,
-            scan_stats={},
-            storyteller_enabled=storyteller_enabled,
-            tab_counts=None,
-            is_admin=False,
-            available_tabs=['search'],
-        )
-
     scan_in_progress = False
     scan_error = None
     job_id = session.get('suggestions_scan_job_id')
@@ -11549,7 +11522,7 @@ def suggestions_page():
         _persist_suggestions_state(suggestions_state)
 
     active_suggestion_keys = set()
-    for book in database_service.get_all_books():
+    for book in database_service.get_all_books(user_id=get_current_user_id()):
         abs_id = str(getattr(book, 'abs_id', '') or '').strip()
         if abs_id:
             active_suggestion_keys.add(abs_id)
@@ -11642,7 +11615,7 @@ def suggestions_page():
         scan_stats=suggestions_state.get('scan_last_stats', {}),
         storyteller_enabled=storyteller_enabled,
         tab_counts=suggestions_tab_counts(),
-        is_admin=True,
+        is_admin=is_admin,
         available_tabs=['pairs', 'ebook_only', 'search'],
     )
 

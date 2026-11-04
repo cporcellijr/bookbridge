@@ -13,7 +13,7 @@ from src.services.ebook_discovery import _legacy_basename, _mapped_identity_inde
 from src.utils.ebook_sources import normalize_ebook_source
 
 
-_ADMIN_ENDPOINTS = (
+_ENDPOINT_NAMES = (
     "suggestions_redesign_discovery",
     "suggestions_redesign_selection_resolve",
     "suggestions_redesign_selection_queue",
@@ -44,34 +44,33 @@ def init_suggestions_redesign_routes(app: Any, web_module: Any = None) -> None:
     if web_module is not None:
         _WEB_MODULE = web_module
     web = _web_server()
-    web._ADMIN_ONLY_ENDPOINTS.update(_ADMIN_ENDPOINTS)
     app.add_url_rule(
         "/api/suggestions/discovery",
-        _ADMIN_ENDPOINTS[0],
+        _ENDPOINT_NAMES[0],
         suggestions_redesign_discovery,
         methods=["GET"],
     )
     app.add_url_rule(
         "/api/suggestions/selection/resolve",
-        _ADMIN_ENDPOINTS[1],
+        _ENDPOINT_NAMES[1],
         suggestions_redesign_selection_resolve,
         methods=["POST"],
     )
     app.add_url_rule(
         "/api/suggestions/selection/queue",
-        _ADMIN_ENDPOINTS[2],
+        _ENDPOINT_NAMES[2],
         suggestions_redesign_selection_queue,
         methods=["POST"],
     )
     app.add_url_rule(
         "/api/suggestions/ebook-only/ignore",
-        _ADMIN_ENDPOINTS[3],
+        _ENDPOINT_NAMES[3],
         suggestions_redesign_ebook_only_ignore,
         methods=["POST"],
     )
     app.add_url_rule(
         "/api/suggestions/ebook-only/create",
-        _ADMIN_ENDPOINTS[4],
+        _ENDPOINT_NAMES[4],
         suggestions_redesign_ebook_only_create,
         methods=["POST"],
     )
@@ -465,6 +464,8 @@ def _resolve_ebook_create_input(web, entry):
         return None, "ebook_create_resolver_unavailable", 503
     try:
         resolved = resolver(entry)
+    except PermissionError:
+        return None, "clients_unavailable", 503
     except Exception:
         web.logger.exception("Could not resolve selected ebook for creation")
         return None, "ebook_file_unavailable", 409
