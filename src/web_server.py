@@ -30,6 +30,7 @@ import requests
 import schedule
 from dependency_injector import providers
 from flask import Flask, Response, render_template, render_template_string, request, redirect, url_for, jsonify, session, send_from_directory, make_response, g, current_app, flash, has_request_context, abort
+from jinja2 import TemplateNotFound
 from functools import wraps
 from src.utils.local_file_scope import acting_user_is_regular, suggestions_exclude_local_files
 from src.utils.user_context import (
@@ -567,13 +568,10 @@ _LOGIN_FAILURES_LOCK = threading.Lock()
 _LOGIN_FAILURE_LIMIT = 5
 _LOGIN_FAILURE_WINDOW = 60
 
-# Endpoints only admins may reach. Regular users get a simple home + match /
-# forge / sync; global engine config, library-wide tools, logs, stats and
-# suggestions are admin-only ("admin sets things up, users just use").
+# Global engine configuration, library-wide maintenance and logs are admin-only.
+# Reader pages, including Stats, resolve the acting user's data and credentials.
 _ADMIN_ONLY_ENDPOINTS = {
     'settings',
-    'stats_view', 'api_stats', 'api_stats_reading_day', 'api_stats_reading_calendar',
-    'api_stats_book_detail', 'api_stats_yearly_recap',
     'logs_view', 'api_logs', 'api_logs_live', 'view_log',
     'clean_cache', 'api_series_backfill', 'api_debug_abs_series', 'api_storyteller_backfill',
     'admin_users', 'admin_user_integrations',
@@ -1490,7 +1488,7 @@ def account_integrations():
         for _g, fields in PER_USER_FIELD_GROUPS for key, _l, _t in fields
     }
     return render_template(
-        'account_integrations.html',
+        ui_template('account_integrations.html'),
         groups=PER_USER_FIELD_GROUPS,
         creds=creds,
         master=master,
@@ -1518,6 +1516,8 @@ def _apply_user_integrations(user_id):
     libraries.
     """
     from src.utils.user_config import PER_USER_FIELD_GROUPS
+    if 'UI_MODE' in request.form and request.form['UI_MODE'] not in ('classic', 'new'):
+        abort(400)
     values = {}
     for _group, fields in PER_USER_FIELD_GROUPS:
         for key, _label, ftype in fields:
@@ -1590,7 +1590,7 @@ def admin_user_integrations(user_id):
         for _g, fields in PER_USER_FIELD_GROUPS for key, _l, _t in fields
     }
     return render_template(
-        'admin_user_integrations.html',
+        ui_template('admin_user_integrations.html'),
         groups=PER_USER_FIELD_GROUPS,
         creds=creds,
         master=master,
@@ -1972,6 +1972,19 @@ def admin_users():
         current_user_id=current_user().id,
         primary_admin_id=primary_admin_id,
     )
+
+
+def ui_template(name: str) -> str:
+    """Use a matching New-interface template for this request's reader, if present."""
+    if user_setting("UI_MODE", DEFAULT_CONFIG["UI_MODE"]) == "new":
+        candidate = f"next/{name}"
+        try:
+            current_app.jinja_env.get_template(candidate)
+        except TemplateNotFound:
+            pass
+        else:
+            return candidate
+    return name
 
 
 # ---------------- CONTEXT PROCESSORS ----------------
@@ -7571,7 +7584,7 @@ def index():
     )
 
     return render_template(
-        'index.html',
+        ui_template('index.html'),
         mappings=mappings,
         grouped_mappings=grouped_mappings,
         integrations=integrations,

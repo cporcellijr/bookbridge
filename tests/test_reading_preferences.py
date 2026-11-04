@@ -93,6 +93,7 @@ class TestPreferenceRegistry(unittest.TestCase):
     def test_every_preference_is_on_the_reading_preferences_card(self):
         groups = dict(PER_USER_FIELD_GROUPS)
         fields = {key: ftype for key, _label, ftype in groups['Reading preferences']}
+        fields.pop('UI_MODE')
         self.assertEqual(set(fields), set(PER_USER_PREFERENCE_KEYS))
         self.assertEqual(set(fields.values()), {'pref'})
 
