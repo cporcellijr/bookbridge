@@ -1,0 +1,120 @@
+{% extends 'next/base.html' %}
+{% from "_i18n.html" import plural_forms %}
+{% set active_page = 'library' %}
+{% block title %}{{ _('Library') }} · BookBridge{% endblock %}
+{% block content %}
+<div id="library-page" class="library-page">
+    <header class="page-head"><div><p class="eyebrow">{{ _('YOUR LIBRARY') }}</p><h1 class="h1">{{ _('Library') }}</h1></div>
+        <a class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Discover books') }}</a></header>
+
+    {% if whats_new %}<section id="whats-new-banner" class="library-banner whats-new-banner">
+        <div><strong>{{ _('BookBridge updated to %(version)s', version=whats_new.version) }}</strong>
+            <a href="/whats-new">{{ _("What's new") }}</a>
+            {% if whats_new.action_items %}<span> · <strong>{{ _('Action required:') }}</strong> {{ whats_new.action_items|join(' · ') }}</span>{% endif %}</div>
+        <button type="button" aria-label="{{ _('Dismiss') }}" onclick="dismissWhatsNewBanner()">×</button>
+    </section>{% endif %}
+    <section id="forge-status-banner" class="library-banner forge-banner" style="display:none" aria-live="polite">
+        <span class="spinner-sm" aria-hidden="true"></span><span id="forge-task-list">{{ _('Creating Storyteller edition...') }}</span>
+        <small>{{ _('Processing in background') }}</small>
+    </section>
+    {% if suggestions %}<section id="suggestions-section" class="matches-banner">
+        <div id="suggestions-banner" class="matches-heading" role="button" tabindex="0" aria-controls="suggestions-content" aria-expanded="false">
+            <span><strong>{{ _('Matches to review') }}</strong><span class="count">{{ suggestions|length }}</span></span><span>{{ _('Review') }} ↓</span>
+        </div>
+        <div id="suggestions-content" class="suggestions-content"><div class="matches-list">
+            {% for suggestion in suggestions %}<article class="match-item" id="suggestion-{{ suggestion.source_id }}">
+                <div><strong>{{ suggestion.title }}</strong><small>{{ suggestion.author }}</small></div>
+                <span>{{ ngettext('Found %(num)s potential match', 'Found %(num)s potential matches', suggestion.audiobook_count) }}</span>
+                <a class="btn" href="{{ url_for('suggestions', tab='search', q=suggestion.title, review=suggestion.source_id) if suggestion.origin in ('shelf_watch', 'reading_watch') else url_for('suggestions', tab='search', q=suggestion.title) }}">{{ _('Review') }}</a>
+                <button class="btn" type="button" onclick="dismissSuggestion(event, {{ suggestion.source_id|tojson|forceescape }})">{{ _('Dismiss') }}</button>
+            </article>{% endfor %}
+        </div></div>
+    </section>{% endif %}
+
+    {% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}
+    <div class="flash-messages">{% for category, msg in messages %}<div class="flash flash-{{ category }}">{{ msg }}</div>{% endfor %}</div>
+    {% endif %}{% endwith %}
+
+    {% set series_options = mappings|map(attribute='series_name')|reject('none')|unique|sort(case_sensitive=false) %}
+    {% set author_options = mappings|map(attribute='display_author')|reject('none')|reject('equalto','')|unique|sort(case_sensitive=false) %}
+    {% if mappings %}
+    <section class="attention-wrap">
+        {% set attention = namespace(items=[]) %}{% for book in mappings %}{% if book.is_out_of_sync or book.status in ['failed_retry_later','failed_permanent','error','processing','forging','pending'] %}{% set _ = attention.items.append(book) %}{% endif %}{% endfor %}
+        {% if attention.items %}<details id="needs-attention"><summary>{{ ngettext('%(num)s need attention', '%(num)s need attention', attention.items|length, num=attention.items|length) }} <span>▸</span></summary>
+            <div class="attention-list">{% for mapping in attention.items %}<a href="{{ url_for('book_page', abs_id=mapping.abs_id) }}" onclick="openBookDrawer(this.href,this);return false;">{{ mapping.display_title }} <span>{% if mapping.is_out_of_sync %}{{ _('Out of sync') }}{% elif mapping.status in ['failed_retry_later','failed_permanent','error'] %}{{ _('Alignment failed') }}{% else %}{{ _('Waiting to process') }}{% endif %}</span></a>{% endfor %}</div>
+        </details>{% endif %}
+    </section>
+    <section class="library-toolbar" aria-label="{{ _('Library controls') }}">
+        <label class="search-field"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><input id="dashboard-search" aria-label="{{ _('Search books') }}" type="search" class="field" placeholder="{{ _('Search books...') }}" autocomplete="off"></label>
+        <select id="filter-select" class="hidden" aria-label="{{ _('Format') }}"><option value="all">{{ _('All') }}</option><option value="paired">{{ _('Listening and reading') }}</option><option value="has_audio">{{ _('Has Audio') }}</option><option value="audiobook_only">{{ _('Audio only') }}</option><option value="ebook_only">{{ _('Ebook only') }}</option><option value="needs_attention">{{ _('Needs attention') }}</option></select>
+        <div class="format-chips" role="group" aria-label="{{ _('Format') }}">
+            <button type="button" data-format="all" class="chip is-active">{{ _('All') }}</button>
+            <button type="button" data-format="has_audio" class="chip" data-legacy-format hidden>{{ _('Has Audio') }}</button>
+            <button type="button" data-format="paired" class="chip">{{ _('Listening and reading') }}</button>
+            <button type="button" data-format="audiobook_only" class="chip">{{ _('Audio only') }}</button>
+            <button type="button" data-format="ebook_only" class="chip">{{ _('Ebook only') }}</button>
+            <button type="button" data-format="needs_attention" class="chip">{{ _('Needs attention') }}</button>
+        </div>
+        <label class="toolbar-select">{{ _('Series') }}<select id="series-filter" class="field"><option value="all">{{ _('All series') }}</option><option value="none">{{ _('No series') }}</option>{% for name in series_options %}<option value="series:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
+        <label class="toolbar-select">{{ _('Author') }}<select id="author-filter" class="field"><option value="all">{{ _('All authors') }}</option><option value="none">{{ _('No author') }}</option>{% for name in author_options %}<option value="author:{{ name }}">{{ name }}</option>{% endfor %}</select></label>
+        <label class="toolbar-select" for="sort-select">{{ _('Sort') }}<select id="sort-select" class="field">
+            <option value="title">{{ _('Title') }}</option><option value="author">{{ _('Author') }}</option><option value="series">{{ _('Series') }}</option><option value="progress">{{ _('Progress') }}</option><option value="status">{{ _('Status') }}</option><option value="last_sync">{{ _('Last Synced') }}</option><option value="added">{{ _('Date Added') }}</option><option value="rating">{{ _('Rating') }}</option>
+        </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button>
+        <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
+        <div class="view-switch" role="group" aria-label="{{ _('View') }}"><button type="button" id="view-covers" data-view="covers" aria-pressed="true">{{ _('Covers') }}</button><button type="button" id="view-spines" data-view="spines" aria-pressed="false">{{ _('Spines') }}</button><button type="button" id="view-list" data-view="list" aria-pressed="false">{{ _('List') }}</button></div>
+        <button type="button" class="btn" onclick="selectAllFilteredBooks()">{{ _('Select all filtered') }}</button>
+        <span id="filter-count" role="status" aria-live="polite"></span>
+    </section>
+    <div id="search-handoff" class="search-handoff hidden"><span id="search-handoff-msg"></span><a id="search-handoff-link" class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Search Discover') }}</a></div>
+    <div id="selection-bar" class="selection-bar" hidden><span id="selection-count" aria-live="polite"></span>
+        <button type="button" onclick="selectAllFilteredBooks()">{{ _('Select all filtered') }}</button><button type="button" onclick="clearBookSelection()">{{ _('Clear') }}</button>
+        <button type="button" onclick="bulkSyncNow()">{{ _('Sync now') }}</button><button type="button" onclick="bulkMarkFinished()">{{ _('Mark finished') }}</button><button type="button" onclick="bulkGenerateReadalong()">{{ _('Create read-along EPUB') }}</button><button type="button" onclick="bulkDeleteBooks()">{{ _('Remove') }}</button>
+    </div>
+
+    {% macro render_card(mapping) %}
+    {% set has_position = mapping.states|length > 0 %}
+    {% set title = mapping.display_title ~ ((': ' ~ mapping.display_subtitle) if mapping.display_subtitle else '') %}
+    <article class="book-card library-book-card{% if mapping.is_out_of_sync %} out-of-sync{% endif %}" data-progress="{{ mapping.unified_progress }}" data-last-sync="{{ mapping.last_sync }}" data-status="{{ mapping.status }}" data-title="{{ title }}" data-author="{{ mapping.display_author }}" data-filename="{{ mapping.display_filename }}" data-sync-mode="{{ mapping.sync_mode }}" data-abs-id="{{ mapping.abs_id }}" data-added="{{ mapping.added_at_unix|default(0) }}" data-last-sync-unix="{{ mapping.last_sync_unix|default(0) }}" data-rating="{% if mapping.storygraph_rating is not none %}{{ mapping.storygraph_rating }}{% endif %}" data-series-name="{{ mapping.series_name or '' }}" data-series-sequence="{{ mapping.series_sequence if mapping.series_sequence is not none else '' }}" data-out-of-sync="{{ 'true' if mapping.is_out_of_sync else 'false' }}">
+        <input class="book-select" type="checkbox" data-select-book value="{{ mapping.abs_id }}" aria-label="{{ _('Select %(title)s', title=title) }}">
+        <a class="book-open" href="{{ url_for('book_page', abs_id=mapping.abs_id) }}" onclick="openBookDrawer(this.href,this);return false;" aria-label="{{ _('Open %(title)s', title=title) }}">
+            <div class="cover-wrap">{% if mapping.kosync_doc_id %}<img class="cover-image" src="/covers/{{ mapping.kosync_doc_id }}.jpg" alt="" loading="lazy" decoding="async" onerror="{% if mapping.cover_url %}this.onerror=function(){this.hidden=true;};this.src={{ mapping.cover_url|tojson|forceescape }};{% else %}this.hidden=true{% endif %}">{% elif mapping.cover_url %}<img class="cover-image" src="{{ mapping.cover_url }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true">{% endif %}
+                <div class="typographic-cover"><span>{{ mapping.display_author or '' }}</span><strong>{{ mapping.display_title }}</strong></div>
+                {% if mapping.storygraph_rating is not none %}<span class="cover-badge" title="{{ _('StoryGraph rating') }}">SG {{ '%.1f'|format(mapping.storygraph_rating) }}</span>{% endif %}
+                <span class="cover-badge ctc-badge ctc-alignment-badge" {% if not mapping.ctc_aligned %}hidden{% endif %}>CTC</span><span class="cover-badge readalong-badge" data-readalong-badge {% if not mapping.readalong_ready %}hidden{% endif %}>{{ _('Read-along') }}</span>
+            </div>
+            <div class="book-copy"><span class="book-author">{{ mapping.display_author }}</span><h3>{{ mapping.display_title }}{% if mapping.display_subtitle %}<small>{{ mapping.display_subtitle }}</small>{% endif %}</h3>
+                <div class="progress-line"><span class="progress-percent" {% if not has_position %}hidden{% endif %}>{{ '%.1f'|format(mapping.unified_progress) }}%</span><span class="last-app">{% if mapping.last_leader_service %}{{ _('Last: %(app)s', app={'abs':'Audiobookshelf','kosync':'KOReader','booklore':'Grimmory','bookloreaudio':'Grimmory','bookorbit':'BookOrbit','bookorbitaudio':'BookOrbit','storyteller':'Storyteller','hardcover':'Hardcover','storygraph':'StoryGraph','bookfusion':'BookFusion','cwa':'Calibre-Web','kavita':'Kavita'}.get(mapping.last_leader_service, mapping.last_leader_service)) }}{% endif %}</span></div><div class="progress-track" {% if not has_position %}hidden{% endif %}><span class="progress-bar-fill" style="width:{{ mapping.unified_progress }}%"></span></div>
+                {% if mapping.is_out_of_sync %}<p class="out-of-sync-line">{{ _('Out of sync') }}{% for name, state in mapping.states.items() if state.percentage is defined %} · {{ {'abs':'Audiobookshelf','kosync':'KOReader','storyteller':'Storyteller','booklore':'Grimmory','bookorbit':'BookOrbit','kavita':'Kavita','hardcover':'Hardcover','bookfusion':'BookFusion','storygraph':'StoryGraph'}.get(name, name) }} {{ '%.1f'|format(state.percentage) }}%{% endfor %}</p>{% endif %}
+                {% if mapping.status in ['failed_retry_later','failed_permanent','error'] %}<span class="state-label">{{ _('Alignment failed') }}</span>{% elif mapping.status in ['processing','forging'] and mapping.job_progress is defined %}<span class="state-label">{{ _('Transcribing %(pct)s%%', pct=mapping.job_progress) }}</span>{% elif mapping.status in ['pending','manual_forge'] %}<span class="state-label">{{ _('Waiting to process') }}</span>{% elif mapping.unified_progress >= 100 %}<span class="state-label">{{ _('Finished') }}</span>{% endif %}
+            </div>
+        </a><span class="readalong-status" role="status" hidden></span><span class="spine-progress" {% if not has_position %}hidden{% endif %}>{{ '%.0f'|format(mapping.unified_progress) }}%</span>
+    </article>
+    {% endmacro %}
+    {% macro render_series(group) %}
+    <section class="series-group" id="{{ group.dom_id }}" data-series-name="{{ group.series_name }}" data-title="{{ group.series_name }}" data-author="{{ group.series_author or '' }}" data-progress="{{ group.avg_progress }}" data-last-sync="{{ group.last_sync_unix }}" data-last-sync-unix="{{ group.last_sync_unix|default(0) }}" data-added="{{ group.added_at_unix|default(0) }}" data-child-count="{{ group.child_count }}">
+        {% if get_user_bool('SERIES_SHOW_CURRENT_BOOK_DETAIL') and group.lead_book %}
+        {{ render_card(group.lead_book) }}
+        <button type="button" class="series-strip series-header" aria-controls="{{ group.dom_id }}-children" aria-expanded="false" onclick="toggleSeries('{{ group.dom_id }}')"><strong>{{ group.series_name }}</strong><span>{{ _('%(done)s/%(total)s finished', done=group.finished_count, total=group.child_count) }}</span><span aria-hidden="true">▸</span></button>
+        <div class="series-children" id="{{ group.dom_id }}-children">{% for child in group.other_children %}{{ render_card(child) }}{% endfor %}</div>
+        {% else %}
+        <button class="series-header" type="button" aria-controls="{{ group.dom_id }}-children" aria-expanded="false" onclick="toggleSeries('{{ group.dom_id }}')">
+            <span class="series-stack">{% for url in group.stack_cover_urls[:3] %}<img src="{{ url }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true;">{% endfor %}{% if not group.stack_cover_urls %}<span></span><span></span><span></span>{% endif %}</span>
+            <span class="series-info"><strong>{{ group.series_name }}</strong>{% if group.series_author %}<small>{{ group.series_author }}</small>{% endif %}<small>{{ _('%(done)s/%(total)s finished', done=group.finished_count, total=group.child_count) }} · {{ _('%(pct)s%% avg', pct='%.1f'|format(group.avg_progress)) }}</small>{% if group.next_book and group.next_book.unified_progress < 100 %}<small>{{ _('Next: %(title)s', title=group.next_book.display_title) }}</small>{% endif %}</span><span aria-hidden="true">▸</span>
+        </button>
+        {% if group.preview_books %}<div class="series-preview">{% for book in group.preview_books %}<span>{{ book.label }} · {{ book.title }} · {{ '%.0f'|format(book.progress) }}%</span>{% endfor %}{% if group.preview_hidden_count %}<span>{{ ngettext('+%(num)s more in series', '+%(num)s more in series', group.preview_hidden_count) }}</span>{% endif %}</div>{% endif %}
+        <div class="series-children" id="{{ group.dom_id }}-children">{% for child in group.children %}{{ render_card(child) }}{% endfor %}</div>
+        {% endif %}
+    </section>
+    {% endmacro %}
+
+    <div class="library-sections" id="library-sections">
+        {% for bucket, dom_bucket, label in [('in_progress', 'in-progress', _('In progress')), ('not_started', 'not-started', _('Not started')), ('finished', 'finished', _('Finished'))] %}
+        <section class="dashboard-section" id="{{ dom_bucket }}-section"><header class="section-header"><h2>{{ label }}</h2>{% if bucket == 'not_started' %}<button type="button" id="not-started-header" class="section-collapse" aria-controls="{{ dom_bucket }}-grid" aria-expanded="false">{{ _('Show') }} <span id="not-started-chevron" aria-hidden="true">▸</span></button>{% endif %}</header>
+            <div class="book-grid{% if bucket == 'not_started' %} collapsible-book-grid{% endif %}" id="{{ dom_bucket }}-grid">{% for entry in grouped_mappings %}{% if entry.is_series_group %}{% if entry.section_bucket == bucket %}{{ render_series(entry) }}{% elif bucket == 'finished' %}{% for child in entry.children %}{% if child.unified_progress >= 100 %}{{ render_card(child) }}{% endif %}{% endfor %}{% endif %}{% else %}{% if (bucket == 'in_progress' and entry.unified_progress > 0 and entry.unified_progress < 100) or (bucket == 'not_started' and entry.unified_progress == 0) or (bucket == 'finished' and entry.unified_progress >= 100) %}{{ render_card(entry) }}{% endif %}{% endif %}{% endfor %}</div>
+        </section>{% endfor %}
+    </div>
+    {% else %}<section class="empty-state"><div class="empty-state-icon">◇</div><h2>{{ _('No books syncing yet') }}</h2><p>{{ _('Start by adding your first audiobook mapping') }}</p><a class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Discover books') }}</a></section>{% endif %}
+    <footer class="library-footer"><span>{{ _('Build %(version)s', version=app_version) }}</span>{% if update_available %}<a href="https://github.com/cporcellijr/bookbridge/releases/latest" target="_blank" rel="noopener noreferrer">{{ _('v%(version)s Available', version=latest_version) }}</a>{% endif %}</footer>
+</div>
+{% endblock %}
+{% block scripts %}{% include 'next/_book_scripts.html' %}{% include 'next/_library_scripts.html' %}{% endblock %}

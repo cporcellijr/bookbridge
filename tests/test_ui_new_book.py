@@ -176,3 +176,87 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
             with self.subTest(block=block[0]):
                 self.assertIn('\n'.join(block), classic,
                               'Classic changed this code: update templates/next/_book_scripts.html to match')
+
+    def test_library_page_reuses_drawer_scripts_and_classic_filter_sort_polls(self):
+        """Every copied Library block stays Classic, except these deliberate edits."""
+        import re
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        page = (root / 'templates/next/index.html').read_text(encoding='utf-8')
+        library = (root / 'templates/next/_library_scripts.html').read_text(encoding='utf-8')
+        classic = '\n'.join(self._lines('templates/base.html') + self._lines('templates/index.html'))
+        self.assertIn("{% include 'next/_book_scripts.html' %}", page)
+        self.assertIn('openBookDrawer(this.href,this)', page)
+        # Views and bulk actions are new, and exercised by test_ui_new_library.js.
+        start = library.index('/* P3 additions:')
+        end = library.index('</script>', start)
+        library = library[:start] + library[end:]
+        normalize = lambda text: '\n'.join(' '.join(line.split()) for line in text.splitlines() if line.strip())
+        self.assertNotIn('function updateKoSyncHash(', library)
+        self.assertNotIn('function linkBookFusion(', library)
+        library = normalize(library)
+        library = library.replace('// Initial Sort Defaults', '</script><script>// Initial Sort Defaults')
+        # Exact allowed changes: new paired/attention predicates; localized counts;
+        # storage denial handling; duplicate-card/spine updates and live sort values.
+        changes = LIBRARY_ALLOWED_CHANGES
+        for new, original in changes:
+            new = normalize(new)
+            self.assertIn(new, library, 'Allowed change moved: review it explicitly')
+            library = library.replace(new, normalize(original), 1)
+        library = library.replace('{% if mappings %}', '').replace('{% endif %}', '')
+        # The shared book actions were intentionally omitted between these two blocks.
+        library = library.replace("const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';", "</script><script>const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';")
+        blocks = [normalize(block) for block in re.split(r'</?script>', library) if normalize(block)]
+        self.assertGreater(len(blocks), 6)
+        for block in blocks:
+            with self.subTest(block=block[:100]):
+                self.assertIn(block, classic, 'Classic changed: update the Library copy or document the exact deliberate change')
+
+
+# (New lines, original Classic lines): deliberate P3 compatibility changes only.
+LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.syncMode === 'audiobook';", ''),
+ ("if (formatValue === 'needs_attention') return card.classList.contains('out-of-sync') || "
+  "['error', 'failed', 'failed_retry_later', 'failed_permanent', 'processing', 'forging', "
+  "'pending'].includes(card.dataset.status);",
+  ''),
+ ('filterCount.textContent = shown === total\n'
+  "? bbPlural({% call(n) plural_forms() %}{{ ngettext('{count} book', '{count} books', n) }}{% "
+  'endcall %}, total)\n'
+  ": bbFormat({{ _('{shown} of {total} books')|tojson }}, {shown, total});",
+  "const noun = total === 1 ? 'book' : 'books';\n"
+  'filterCount.textContent = shown === total\n'
+  "? total + ' ' + noun\n"
+  ": shown + ' of ' + total + ' ' + noun;"),
+ ("let savedSort = 'title';\n"
+  "try { savedSort = localStorage.getItem('abs_kosync_sort') || 'title'; } catch (e) { /* storage "
+  'unavailable */ }',
+  "const savedSort = localStorage.getItem('abs_kosync_sort') || 'title';"),
+ ('let savedSortState;\n'
+  "try { savedSortState = localStorage.getItem('abs_kosync_sort_state'); } catch (e) { /* storage "
+  'unavailable */ }',
+  "const savedSortState = localStorage.getItem('abs_kosync_sort_state');"),
+ ('try {\n'
+  "localStorage.setItem('abs_kosync_sort', sortBy);\n"
+  "localStorage.setItem('abs_kosync_sort_state', JSON.stringify(sortState));\n"
+  '} catch (e) { /* storage unavailable */ }',
+  "localStorage.setItem('abs_kosync_sort', sortBy);\n"
+  "localStorage.setItem('abs_kosync_sort_state', JSON.stringify(sortState));"),
+ ('                            const cards = '
+  'document.querySelectorAll(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
+  '                            if (!cards.length) return;\n'
+  '                            cards.forEach(card => {\n'
+  '    ',
+  'const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
+  'if (!card) return;\n'),
+ ('                            card.dataset.progress = book.unified_progress;\n'
+  "                            const spine = card.querySelector('.spine-progress');\n"
+  '                            if (spine) spine.textContent = book.unified_progress.toFixed(0) + '
+  "'%';\n"
+  '                            if (book.states && Object.keys(book.states).length) {\n'
+  "                                card.querySelectorAll('.progress-percent, .progress-track, "
+  ".spine-progress').forEach(node => { node.hidden = false; });\n"
+  '                            }\n'
+  '                            if (book.last_sync_unix !== undefined) card.dataset.lastSyncUnix = '
+  'book.last_sync_unix;\n'
+  '                            });',
+  ''))
