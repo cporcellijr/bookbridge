@@ -8122,7 +8122,12 @@ def match():
                 "would see empty ebook text. Link the comic as an ebook-only mapping instead.",
                 400,
             )
-        if selected_filename and _refuse_regular_user_local_selection(
+        # Naming the ebook an existing mapping for this audiobook already has only joins
+        # that catalog book (no file is read), so it is not a local-folder selection.
+        pair_key = _build_bridge_key(audio_source, audio_source_id) or abs_id
+        existing_pair = database_service.get_book(pair_key) if pair_key and selected_filename else None
+        joins_existing = bool(existing_pair and existing_pair.ebook_filename == selected_filename)
+        if selected_filename and not joins_existing and _refuse_regular_user_local_selection(
             ebook_source, source_path, ebook_source_id, selected_filename,
         ):
             return "Server-local ebooks are only available to administrators", 403
