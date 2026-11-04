@@ -145,6 +145,14 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
         text = (Path(__file__).resolve().parent.parent / path).read_text(encoding='utf-8')
         return [' '.join(line.split()) for line in text.splitlines() if line.strip()]
 
+    def test_new_base_defines_classics_i18n_helpers(self):
+        """Every New page's scripts call bbFormat/bbPlural/bbT, which Classic defines in base.html."""
+        base = '\n'.join(self._lines('templates/next/base.html'))
+        classic = self._lines('templates/base.html')
+        start = classic.index('window.bbFormat = function (text, values) {')
+        end = classic.index('return values ? window.bbFormat(translated, values) : translated;') + 2
+        self.assertIn('\n'.join(classic[start:end]), base)
+
     def test_copied_blocks_still_match_classic(self):
         classic = '\n'.join(self._lines('templates/base.html') + self._lines('templates/index.html'))
         blocks = [[]]
@@ -327,3 +335,176 @@ class TestDiscoverScriptDrift(unittest.TestCase):
         {% else %}<span class="queue-kind">{{ _('Match') }}</span>{% endif %}'''
         self.assertIn(added, next_queue)
         self.assertEqual(next_queue.replace(added, '    <div class="queue-item-info">', 1), original)
+
+
+class TestOpsPages(unittest.TestCase):
+    """P5 page routing and authorization stay the same in Classic and New."""
+
+    setUp = foundation.TestUiModeRoutes.setUp
+    tearDown = foundation.TestUiModeRoutes.tearDown
+    _login = foundation.TestUiModeRoutes._login
+
+    def _capture(self, route):
+        observed = []
+
+        def capture(_sender, template, **_extra):
+            observed.append(template.name)
+
+        template_rendered.connect(capture, self.app)
+        try:
+            response = self.client.get(route)
+        finally:
+            template_rendered.disconnect(capture, self.app)
+        return response, observed
+
+    def test_default_classic_template_for_all_four_routes(self):
+        for username, route, template in (
+            ('ui-reader', '/job-queue', 'job_queue.html'),
+            ('ui-reader', '/stats', 'stats.html'),
+            ('ui-reader', '/whats-new', 'whats_new.html'),
+            ('ui-admin', '/logs', 'logs.html'),
+        ):
+            with self.subTest(route=route):
+                self._login(username)
+                response, observed = self._capture(route)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(template, observed)
+                self.assertNotIn(f'next/{template}', observed)
+                self.client.get('/logout')
+
+    def test_new_templates_keep_reader_stats_and_restrict_logs(self):
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        for route, template in (
+            ('/job-queue', 'job_queue.html'),
+            ('/stats', 'stats.html'),
+            ('/whats-new', 'whats_new.html'),
+        ):
+            with self.subTest(route=route):
+                response, observed = self._capture(route)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(f'next/{template}', observed)
+                self.assertIn('rail-nav', response.get_data(as_text=True))
+        self.assertEqual(self.client.get('/logs').status_code, 403)
+        self.assertEqual(self.client.get('/api/logs').status_code, 403)
+        self.assertEqual(self.client.get('/api/logs/live').status_code, 403)
+        self.assertEqual(self.client.get('/stats?unused=1').status_code, 200)
+        self.client.get('/logout')
+        self._login('ui-admin')
+        response, observed = self._capture('/logs')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('next/logs.html', observed)
+        response, observed = self._capture('/logs?embed=1')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('next/logs.html', observed)
+        self.assertNotIn('rail-nav', response.get_data(as_text=True))
+        self.assertIn('logContent', response.get_data(as_text=True))
+
+    def test_processing_failed_jobs_first_and_existing_reorder_forms(self):
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        def row(title, status, *, detail='', queue_key=None):
+            return dict(title=title, operation='Forge / Alignment', status=status,
+                        detail=detail, order=2, percent=27.5, epub3=False,
+                        timestamp=None, queue_key=queue_key, queue='alignment',
+                        can_move_up=True, can_move_down=True)
+        snapshot = {
+            'running': [row('Active title', 'running')],
+            'pending': [row('Waiting title', 'queued', queue_key='owned-book')],
+            'recent': [row('Completed title', 'completed'),
+                       row('Failed title', 'failed', detail='Transcription failed: bad file')],
+        }
+        with patch('src.web_server.build_job_queue_view', return_value=snapshot):
+            response = self.client.get('/job-queue')
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('Processing now', html)
+        self.assertIn('Finished (7 days)', html)
+        self.assertLess(html.index('Failed title'), html.index('Completed title'))
+        self.assertIn('Transcription failed: bad file', html)
+        self.assertIn('name="direction" value="up"', html)
+        self.assertIn('name="direction" value="down"', html)
+        self.assertIn('name="direction" value="top"', html)
+        self.assertIn('name="queue_key" value="owned-book"', html)
+        self.assertIn('action="/job-queue/reorder"', html)
+        self.assertIn('20000', html)
+        self.assertIn('reorderSubmitting', html)
+
+    def test_stats_dashboard_and_logs_live_controls_are_preserved(self):
+        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
+        self._login('ui-reader')
+        html = self.client.get('/stats').get_data(as_text=True)
+        for expected in (
+            '/static/vendor/chart.umd.min.js',
+            '/api/stats/reading-calendar', '/api/stats/reading-day',
+            '/api/stats/book-detail', '/api/stats/yearly-recap',
+            'data-tab="combined"', 'data-tab="reading"', 'data-tab="listening"',
+            'day-detail-backdrop', 'book-detail-backdrop', 'loadYearlyRecap(',
+        ):
+            with self.subTest(stat=expected):
+                self.assertIn(expected, html)
+        self.client.get('/logout')
+        self.service.set_user_credential(self.admin.id, 'UI_MODE', 'new')
+        self._login('ui-admin')
+        html = self.client.get('/logs').get_data(as_text=True)
+        for expected in (
+            '/api/logs', '/api/logs/live', 'id="logLevel"', 'id="searchInput"',
+            'id="linesCount"', 'id="autoRefresh"', 'id="liveMode"',
+            'id="loadMore"', 'toggleLiveMode();',
+        ):
+            with self.subTest(log=expected):
+                self.assertIn(expected, html)
+
+
+class TestOpsScriptDrift(unittest.TestCase):
+    """The four P5 copied scripts have zero behavioral changes from Classic.
+
+    Deliberate template-only differences:
+    * next/base.html and an operations stylesheet, never changes in Classic;
+    * Processing title and section labels, failed-first display for Finished;
+    * New shell CSS aliases, content wrapper, and preserved iframe embed mode;
+    * Logs uses text-only level options and a sprite icon instead of UI emoji;
+    * What’s New has no Classic script to copy.
+    """
+
+    def test_classic_scripts_match_p5_partials_exactly(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / 'templates'
+        for page, start, end in (
+            ('job_queue', "\n{% if queue_view['running'] %}\n<script>", "\n{% endblock %}\n{% endblock %}"),
+            ('stats', '<script src="/static/vendor/chart.umd.min.js"></script>', "\n{% endblock %}"),
+            ('logs', '\n<script>', "\n{% endblock %}"),
+        ):
+            with self.subTest(page=page):
+                original = (root / f'{page}.html').read_text(encoding='utf-8')
+                partial = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
+                if page == 'job_queue':
+                    expected = original[original.index(start) + 1:original.rindex('\n{% endblock %}')]
+                elif page == 'logs':
+                    expected = original[original.index(start) + 1:original.rindex(end)]
+                else:
+                    expected = original[original.index(start):original.rindex(end)]
+                self.assertEqual(partial.strip(), expected.strip(),
+                                 f'Classic {page} logic drifted; sync New partial verbatim')
+        news = (root / 'whats_new.html').read_text(encoding='utf-8')
+        self.assertNotIn('<script', news)
+        self.assertNotIn('<script', (root / 'next/_whats_new_scripts.html').read_text(encoding='utf-8'))
+        new_logs = (root / 'next/logs.html').read_text(encoding='utf-8')
+        self.assertIn('/static/icons.svg#logs', new_logs)
+        for old_emoji in ('🔍 DEBUG', 'ℹ️ INFO', '⚠️ WARNING', '❌ ERROR', '🚨 CRITICAL', '📜'):
+            self.assertNotIn(old_emoji, new_logs)
+
+    def test_all_classic_ops_targets_exist_in_new(self):
+        import re
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / 'templates'
+        for page in ('job_queue', 'stats', 'logs', 'whats_new'):
+            original = (root / f'{page}.html').read_text(encoding='utf-8')
+            next_page = (root / 'next' / f'{page}.html').read_text(encoding='utf-8')
+            scripts = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
+            source = next_page + '\n' + scripts
+            targets = re.findall(r'fetch\s*\(|href="/[^\"]*|action="/[^\"]*|url_for\s*\(', original)
+            for target in targets:
+                with self.subTest(page=page, target=target):
+                    self.assertIn(target, source)

@@ -1,0 +1,75 @@
+{% extends "next/base.html" %}
+{% set active_page = 'whats_new' %}
+{% block title %}{{ _("What's New") }} · BookBridge{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/next-ops.css">
+<style>
+    .whats-new-wrap {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 20px 56px;
+    }
+    .whats-new-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 24px;
+    }
+    .whats-new-header h1 {
+        margin: 0;
+        font-size: 1.8rem;
+    }
+    .whats-new-all-releases {
+        color: var(--accent);
+        font-size: 0.9rem;
+        text-decoration: none;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .whats-new-all-releases:hover { text-decoration: underline; }
+    .whats-new-notes {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 28px 32px;
+        line-height: 1.7;
+        color: var(--muted);
+    }
+    .whats-new-notes h1, .whats-new-notes h2, .whats-new-notes h3 {
+        color: var(--text);
+        margin-top: 1.6em;
+    }
+    .whats-new-notes h1:first-child, .whats-new-notes h2:first-child { margin-top: 0; }
+    .whats-new-notes ul { padding-left: 22px; }
+    .whats-new-notes li { margin-bottom: 0.5em; }
+    .whats-new-notes a { color: var(--accent); }
+    .whats-new-notes code {
+        background: rgba(255,255,255,0.08);
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-size: 0.9em;
+    }
+    .whats-new-notes strong { color: var(--text); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="whats-new-wrap ops-news">
+    <div class="whats-new-header">
+        <h1>{% if app_version %}{{ _("What's New in %(version)s", version=app_version) }}{% else %}{{ _("What's New") }}{% endif %}</h1>
+        <a class="whats-new-all-releases" href="https://github.com/cporcellijr/bookbridge/releases"
+            target="_blank" rel="noopener noreferrer">{{ _('All releases') }}</a>
+    </div>
+    <div class="whats-new-notes">
+        {% if notes_html %}
+        {{ notes_html | safe }}
+        {% else %}
+        <p>{{ _("Release notes aren't available right now.") }}</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}{% include 'next/_whats_new_scripts.html' %}{% endblock %}
