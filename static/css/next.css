@@ -115,7 +115,7 @@ summary::-webkit-details-marker { display: none; }
 .book-hero { display: grid; grid-template-columns: 150px 1fr; gap: 32px; align-items: center; padding-bottom: 32px; }
 .book-hero h1 { font-family: Literata, serif; font-size: clamp(1.7rem, 3vw, 2.7rem); line-height: 1.2; margin: 8px 0; }
 .book-hero h1 small { display: block; font-size: .55em; margin-top: .5em; }
-.book-cover { width: 150px; height: 220px; object-fit: cover; border-radius: 5px 12px 12px 5px; }
+.book-cover { width: 150px; height: 220px; object-fit: contain; border-radius: 5px 12px 12px 5px; }
 .typographic-cover { min-height: 220px; padding: 20px; border: 1px solid var(--line); border-radius: 5px 12px 12px 5px; background: var(--surface); font-family: Literata, serif; display: flex; flex-direction: column; justify-content: space-between; }
 [hidden], .hidden { display: none !important; }
 .book-section { padding: 24px 0; border-top: 1px solid var(--line); }
@@ -213,7 +213,7 @@ summary::-webkit-details-marker { display: none; }
 .book-select { position: absolute; z-index: 2; top: 10px; left: 10px; width: 20px; height: 20px; accent-color: var(--info); }
 .book-open { display: block; height: 100%; }
 .cover-wrap { position: relative; display: grid; height: 250px; place-items: center; overflow: hidden; background: var(--surface-2); }
-.cover-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cover-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .cover-image:not([hidden]) + .typographic-cover { display: none; }
 .library-page .typographic-cover { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; padding: 40px 18px 24px; color: var(--text-2); background: radial-gradient(ellipse at 25% 15%,var(--surface-2),var(--bg-2)); font: 13px var(--font-book); }
 .library-page .typographic-cover strong { color: var(--text); font-size: 21px; line-height: 1.18; }
