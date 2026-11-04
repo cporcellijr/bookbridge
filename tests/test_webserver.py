@@ -1887,7 +1887,7 @@ class CleanFlaskIntegrationTest(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('<title>Suggestions · BookBridge</title>', html)
+        self.assertIn('<title>Discover · BookBridge</title>', html)
         self.assertIn('id="searchTabForm"', html)
         self.assertIn('action="/suggestions" id="addToQueueForm"', html)
         self.assertNotIn('action="/batch-match"', html)

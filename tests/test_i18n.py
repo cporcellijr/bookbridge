@@ -279,7 +279,7 @@ class RenderedTranslationTests(I18nTestBase):
         _write_catalog(self.translations, 'ru', {
             'Application Logs': 'Журнал приложения',
             'Unified activity dashboard': 'Сводная панель активности',
-            'Library Suggestions': 'Предложения по библиотеке',
+            'Discover': 'Обзор',
             # Counts go through ngettext, so Russian gets all three plural forms.
             ('%(num)s item', '%(num)s items'):
                 ('%(num)s элемент', '%(num)s элемента', '%(num)s элементов'),
@@ -289,7 +289,7 @@ class RenderedTranslationTests(I18nTestBase):
         self.assertIn('Журнал приложения', self.client.get('/logs').get_data(as_text=True))
         self.assertIn('Сводная панель активности', self.client.get('/stats').get_data(as_text=True))
         body = self.client.get('/suggestions').get_data(as_text=True)
-        self.assertIn('Предложения по библиотеке', body)
+        self.assertIn('<h2>Обзор</h2>', body)
         self.assertIn('id="queueCount">0 элементов</span>', body)
 
     def test_confirm_survives_an_apostrophe_in_the_translation(self):
