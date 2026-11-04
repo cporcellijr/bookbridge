@@ -1,0 +1,451 @@
+<script>
+    let autoRefreshInterval = null;
+    let liveRefreshInterval = null;
+    let currentOffset = 0;
+    let shownLogs = new Set(); // Track shown logs by timestamp+message
+
+    // DOM elements
+    const logContent = document.getElementById('logContent');
+    const logLevel = document.getElementById('logLevel');
+    const searchInput = document.getElementById('searchInput');
+    const linesCount = document.getElementById('linesCount');
+    const autoRefresh = document.getElementById('autoRefresh');
+    const liveMode = document.getElementById('liveMode');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const totalLinesStats = document.getElementById('totalLinesStats');
+    const displayedLinesStats = document.getElementById('displayedLinesStats');
+    const lastUpdated = document.getElementById('lastUpdated');
+    const scrollToTop = document.getElementById('scrollToTop');
+    const scrollToBottom = document.getElementById('scrollToBottom');
+    const loadMore = document.getElementById('loadMore');
+
+    const LINES_TOTAL = {% call(n) plural_forms() %}{{ ngettext('Total: {count} line', 'Total: {count} lines', n) }}{% endcall %};
+    const LINES_SHOWN = {% call(n) plural_forms() %}{{ ngettext('Showing: {count} line', 'Showing: {count} lines', n) }}{% endcall %};
+    const LINES_SHOWN_LIVE = {% call(n) plural_forms() %}{{ ngettext('Showing: {count} line (live mode)', 'Showing: {count} lines (live mode)', n) }}{% endcall %};
+
+    // While a filter change is loading, the log box holds a .loading element
+    // marked data-pending="switch" (level) or "apply" (search). Checked by
+    // marker rather than by its text, which is translated.
+    function showFilterPending(kind, text) {
+        logContent.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+        const loading = logContent.firstChild;
+        loading.dataset.pending = kind;
+        loading.append(text);
+    }
+
+    function filterPending(kind) {
+        return !!logContent.querySelector(kind ? `.loading[data-pending="${kind}"]` : '.loading[data-pending]');
+    }
+
+    function showNoLogsFound() {
+        logContent.innerHTML = `
+            <div class="log-line">
+                <span class="log-level INFO">INFO</span>
+                <span class="log-message"></span>
+            </div>
+        `;
+        logContent.querySelector('.log-message').textContent = {{ _('No logs found matching current filters')|tojson }};
+    }
+
+    // Track if user is at bottom for auto-scroll
+    let isAtBottom = true;
+    let userScrolled = false;
+
+    // Monitor scroll position
+    logContent.addEventListener('scroll', () => {
+        const isCurrentlyAtBottom = logContent.scrollTop + logContent.clientHeight >= logContent.scrollHeight - 10;
+        if (!isCurrentlyAtBottom && !userScrolled) {
+            userScrolled = true;
+        }
+        isAtBottom = isCurrentlyAtBottom;
+    });
+
+    // Fetch logs from API
+    async function fetchLogs(offset = 0, append = false) {
+        try {
+            const params = new URLSearchParams({
+                level: logLevel.value,
+                search: searchInput.value,
+                lines: linesCount.value,
+                offset: offset
+            });
+
+            const response = await fetch(`/api/logs?${params}`);
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || {{ _('Failed to fetch logs')|tojson }});
+            }
+
+            displayLogs(data, append);
+            updateStats(data);
+            updateLastUpdated();
+
+            return data;
+        } catch (error) {
+            console.error('Error fetching logs:', error);
+            logContent.innerHTML = `
+                <div class="log-line">
+                    <span class="log-level ERROR">ERROR</span>
+                    <span class="log-message">${escapeHtml(bbFormat({{ _('Failed to fetch logs: {error}')|tojson }}, { error: error.message }))}</span>
+                </div>
+            `;
+        }
+    }
+
+    // Fetch live logs from memory
+    async function fetchLiveLogs() {
+        try {
+            const params = new URLSearchParams({
+                level: logLevel.value,
+                search: searchInput.value,
+                count: 50
+            });
+
+            const response = await fetch(`/api/logs/live?${params}`);
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || {{ _('Failed to fetch live logs')|tojson }});
+            }
+
+            if (data.logs && data.logs.length > 0) {
+                // For filter changes, force show all matching logs
+                const forceShow = filterPending();
+                appendNewLogs(data.logs, forceShow);
+                updateLastUpdated();
+            } else if (filterPending()) {
+                // No logs found with current filters
+                showNoLogsFound();
+            }
+
+            return data;
+        } catch (error) {
+            console.error('Error fetching live logs:', error);
+        }
+    }
+
+    // Append new logs to existing content
+    function appendNewLogs(logs, forceShow = false) {
+        if (!logs || logs.length === 0) {
+            // If no logs and we're in a loading state, show no logs message
+            if (filterPending()) {
+                showNoLogsFound();
+            }
+            return;
+        }
+
+        const scrollToBottomAfter = isAtBottom;
+
+        // Clear loading message and reset tracking if present
+        if (filterPending()) {
+            logContent.innerHTML = '';
+            shownLogs.clear(); // Clear tracking when filters change
+            forceShow = true; // Show all logs when clearing filter
+        }
+
+        logs.forEach(log => {
+            // Create unique identifier for this log
+            const logId = `${log.timestamp}|${log.message}`;
+
+            // Check if we've already shown this exact log, or if we're forcing show (filter change)
+            if (forceShow || !shownLogs.has(logId)) {
+                const logLine = document.createElement('div');
+                logLine.className = 'log-line';
+
+                logLine.innerHTML = `
+                    <span class="log-timestamp">${escapeHtml(log.timestamp)}</span>
+                    <span class="log-level ${log.level}">${log.level}</span>
+                    <span class="log-module">${escapeHtml(log.module || {{ _('unknown')|tojson }})}</span>
+                    <span class="log-message">${escapeHtml(log.message)}</span>
+                `;
+
+                // Add visual indicator for new logs (only if not forcing show)
+                if (!forceShow) {
+                    logLine.style.background = 'rgba(102, 126, 234, 0.1)';
+                    setTimeout(() => {
+                        logLine.style.background = '';
+                    }, 2000);
+                }
+
+                logContent.appendChild(logLine);
+
+                // Mark this log as shown
+                shownLogs.add(logId);
+            }
+        });
+
+        // Auto-scroll to bottom if user was already at bottom
+        if (scrollToBottomAfter) {
+            setTimeout(() => {
+                logContent.scrollTop = logContent.scrollHeight;
+            }, 10);
+        }
+
+        // Update stats
+        const currentLines = logContent.children.length;
+        displayedLinesStats.textContent = bbPlural(LINES_SHOWN_LIVE, currentLines);
+    }
+
+    // Display logs in the container
+    function displayLogs(data, append = false) {
+        const logs = data.logs || [];
+
+        if (!append) {
+            logContent.innerHTML = '';
+            currentOffset = 0;
+            shownLogs.clear(); // Clear shown logs tracking
+            userScrolled = false;
+            isAtBottom = true;
+        }
+
+        if (logs.length === 0) {
+            if (!append) {
+                showNoLogsFound();
+            }
+            return;
+        }
+
+        logs.forEach(log => {
+            const logLine = document.createElement('div');
+            logLine.className = 'log-line';
+
+            logLine.innerHTML = `
+                <span class="log-timestamp">${escapeHtml(log.timestamp)}</span>
+                <span class="log-level ${log.level}">${log.level}</span>
+                <span class="log-module" style="color: rgba(255,255,255,0.6); font-size: 11px; min-width: 80px;">${escapeHtml(log.module || {{ _('unknown')|tojson }})}</span>
+                <span class="log-message">${escapeHtml(log.message)}</span>
+            `;
+
+            logContent.appendChild(logLine);
+
+            // Track this log as shown
+            const logId = `${log.timestamp}|${log.message}`;
+            shownLogs.add(logId);
+        });
+
+        // Show/hide load more button (not available in live mode)
+        if (liveMode.checked) {
+            loadMore.style.display = 'none';
+        } else if (data.has_more) {
+            loadMore.style.display = 'block';
+            currentOffset = data.displayed_lines;
+        } else {
+            loadMore.style.display = 'none';
+        }
+
+        // Auto-scroll to bottom for initial load
+        if (!append) {
+            setTimeout(() => {
+                logContent.scrollTop = logContent.scrollHeight;
+            }, 10);
+        }
+    }
+
+    // Update statistics display
+    function updateStats(data) {
+        if (data.total_lines !== undefined) {
+            totalLinesStats.textContent = bbPlural(LINES_TOTAL, data.total_lines || 0);
+        }
+        if (data.displayed_lines !== undefined) {
+            displayedLinesStats.textContent = bbPlural(LINES_SHOWN, data.displayed_lines || 0);
+        }
+    }
+
+    // Update last updated timestamp
+    function updateLastUpdated() {
+        const now = new Date();
+        lastUpdated.textContent = bbFormat({{ _('Last updated: {time}')|tojson }}, { time: now.toLocaleTimeString() });
+    }
+
+    // Escape HTML to prevent XSS
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Debounce function for search input
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    // Toggle live mode
+    function toggleLiveMode() {
+        if (liveMode.checked) {
+            // Load full history first so the user sees all lines, not just the last 50
+            fetchLogs().then(() => {
+                displayedLinesStats.textContent = bbPlural(LINES_SHOWN_LIVE, logContent.children.length);
+            });
+            // Start polling for new entries
+            liveRefreshInterval = setInterval(fetchLiveLogs, 2000); // Poll every 2 seconds
+            loadMore.style.display = 'none';
+
+            // Disable auto-refresh when live mode is on
+            if (autoRefresh.checked) {
+                autoRefresh.checked = false;
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        } else {
+            // Stop live mode
+            if (liveRefreshInterval) {
+                clearInterval(liveRefreshInterval);
+                liveRefreshInterval = null;
+            }
+            // Reload full logs
+            fetchLogs();
+        }
+    }
+
+    // Event listeners
+    refreshBtn.addEventListener('click', () => {
+        if (liveMode.checked) {
+            fetchLiveLogs();
+        } else {
+            fetchLogs();
+        }
+    });
+
+    logLevel.addEventListener('change', () => {
+        if (liveMode.checked) {
+            // In live mode, clear content and reset timestamp tracking for filter changes
+            showFilterPending('switch', {{ _('Switching filter...')|tojson }});
+            lastLogTimestamp = null; // Reset timestamp so all matching logs will be shown
+            setTimeout(() => {
+                fetchLiveLogs().then(() => {
+                    // Ensure we show all matching logs by treating this as a forced refresh
+                    if (filterPending('switch')) {
+                        // If still showing loading, it means no logs matched
+                        showNoLogsFound();
+                    }
+                });
+            }, 500);
+        } else {
+            fetchLogs();
+        }
+    });
+
+    linesCount.addEventListener('change', () => {
+        if (!liveMode.checked) {
+            fetchLogs();
+        }
+    });
+
+    searchInput.addEventListener('input', debounce(() => {
+        if (liveMode.checked) {
+            // In live mode, clear content and reset timestamp tracking for filter changes
+            showFilterPending('apply', {{ _('Applying filter...')|tojson }});
+            lastLogTimestamp = null; // Reset timestamp so all matching logs will be shown
+            setTimeout(() => {
+                fetchLiveLogs().then(() => {
+                    // Ensure we show all matching logs by treating this as a forced refresh
+                    if (filterPending('apply')) {
+                        // If still showing loading, it means no logs matched
+                        showNoLogsFound();
+                    }
+                });
+            }, 500);
+        } else {
+            fetchLogs();
+        }
+    }, 500));
+
+    autoRefresh.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            // Disable live mode if auto-refresh is enabled
+            if (liveMode.checked) {
+                liveMode.checked = false;
+                toggleLiveMode();
+            }
+            autoRefreshInterval = setInterval(() => fetchLogs(), 30000);
+        } else {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+        }
+    });
+
+    liveMode.addEventListener('change', toggleLiveMode);
+
+    scrollToTop.addEventListener('click', () => {
+        logContent.scrollTop = 0;
+        userScrolled = true;
+        isAtBottom = false;
+    });
+
+    scrollToBottom.addEventListener('click', () => {
+        logContent.scrollTop = logContent.scrollHeight;
+        userScrolled = false;
+        isAtBottom = true;
+    });
+
+    loadMore.addEventListener('click', async () => {
+        if (!liveMode.checked) {
+            const data = await fetchLogs(currentOffset, true);
+            if (data) {
+                currentOffset += data.displayed_lines;
+            }
+        }
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey) {
+            switch (e.key) {
+                case 'r':
+                    e.preventDefault();
+                    if (liveMode.checked) {
+                        fetchLiveLogs();
+                    } else {
+                        fetchLogs();
+                    }
+                    break;
+                case 'f':
+                    e.preventDefault();
+                    searchInput.focus();
+                    break;
+                case 'l':
+                    e.preventDefault();
+                    liveMode.checked = !liveMode.checked;
+                    toggleLiveMode();
+                    break;
+            }
+        }
+    });
+
+    // Initial load
+    // Ensure form elements reflect correct initial state (prevent browser caching issues)
+    logLevel.value = 'INFO';
+    liveMode.checked = true;
+    autoRefresh.checked = false;
+    linesCount.value = '1000';
+    searchInput.value = '';
+
+    // Call toggleLiveMode() instead of fetchLiveLogs() directly so that:
+    //   1. The polling interval is actually started (programmatic .checked = true
+    //      does not fire the 'change' event, so the listener never ran)
+    //   2. fetchLogs() is called first to populate the full history, not just 50 lines
+    toggleLiveMode();
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+        }
+        if (liveRefreshInterval) {
+            clearInterval(liveRefreshInterval);
+        }
+    });
+</script>

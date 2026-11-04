@@ -1,0 +1,272 @@
+{% extends "next/base.html" %}
+{% from "_i18n.html" import plural_forms %}
+{% set active_page = 'stats' %}
+{% block title %}{{ _('Stats') }} · BookBridge{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/next-ops.css">
+<style>
+    .toolbar, .status-row, .tab-strip, .hero-meta, .panel-head {
+        display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .btn-secondary.is-active { background: rgba(255,255,255,.14); }
+    .stats-wrap { max-width: 1440px; margin: 0 auto; padding: 36px 20px 56px; }
+    .hero, .dashboard-header, .stat-card, .panel, .summary-card, .recent-item, .empty-state {
+        border-radius: 22px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 14px 35px rgba(0,0,0,.18);
+    }
+    .hero {
+        margin-bottom: 24px; padding: 32px;
+        background: linear-gradient(135deg, rgba(102,126,234,.18), rgba(118,75,162,.15)), rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08);
+    }
+    .hero-top, .dashboard-header, .recent-item { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    .hero h1 { font-size: clamp(2rem, 4vw, 3.2rem); line-height: 1.05; margin-bottom: 12px; letter-spacing: -.03em; }
+    .hero p, .dashboard-header p, .empty-state p { color: var(--muted); line-height: 1.6; }
+    .hero-meta { margin-top: 22px; gap: 10px; }
+    .hero-chip, .status-pill {
+        display: inline-flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 999px;
+        background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08); color: rgba(255,255,255,.92); font-size: 13px; font-weight: 600;
+    }
+    .hero-chip strong { color: #fff; }
+    .toolbar { justify-content: space-between; margin-bottom: 24px; }
+    .tab-btn { min-width: 132px; justify-content: center; }
+    .status-pill { color: var(--muted); background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.1); }
+    .status-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--muted-soft); box-shadow: 0 0 12px rgba(255,255,255,.16); }
+    .status-pill.available .status-dot { background: var(--success); box-shadow: 0 0 16px rgba(54,211,153,.4); }
+    .status-pill.unavailable .status-dot { background: var(--warning); box-shadow: 0 0 16px rgba(255,209,102,.32); }
+    .dashboard-shell, .recent-list, .heatmap-shell { display: grid; gap: 18px; }
+    .dashboard-header, .panel { padding: 22px 24px; }
+    .dashboard-header h2 { font-size: 30px; margin-bottom: 8px; }
+    .dashboard-note, .panel-head span, .summary-card-sub, .recent-time, .heatmap-days, .heatmap-legend, .heatmap-month-track { color: var(--muted-soft); font-size: 12px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 16px; }
+    .stat-card { padding: 20px 22px; background: linear-gradient(135deg, rgba(255,255,255,.08), transparent 55%), var(--panel); }
+    .stat-card-label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; margin-bottom: 10px; }
+    .stat-card-value { font-size: clamp(1.7rem, 3vw, 2.4rem); font-weight: 800; line-height: 1.05; }
+    .stat-card-hint { margin-top: 10px; color: var(--muted-soft); font-size: 13px; }
+    .insights-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; }
+    .panel-head { justify-content: space-between; margin-bottom: 18px; }
+    .panel-head h3 { font-size: 20px; font-weight: 700; }
+    .chart-wrap { position: relative; min-height: 320px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; }
+    .summary-card, .recent-item { padding: 18px 20px; background: var(--panel-soft); }
+    .summary-card-label { color: var(--muted); font-size: 13px; margin-bottom: 8px; font-weight: 600; }
+    .summary-card-value { font-size: 22px; font-weight: 800; }
+    .recent-main { display: flex; gap: 14px; align-items: center; min-width: 0; }
+    .recent-badge {
+        width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+        font-size: 20px; font-weight: 700; flex-shrink: 0; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.08);
+    }
+    .recent-badge.reading { color: var(--reading); background: rgba(79,195,247,.12); }
+    .recent-badge.listening { color: var(--listening); background: rgba(155,124,255,.12); }
+    .recent-text { min-width: 0; }
+    .recent-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .recent-meta { color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .recent-side { text-align: right; flex-shrink: 0; }
+    .recent-duration { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .heatmap-main { display: grid; gap: 10px; grid-template-columns: 28px minmax(0,1fr); align-items: start; }
+    /* Month labels share the grid's scroll container so they move with the weeks when swiped. */
+    .heatmap-scroll { overflow-x: auto; padding-bottom: 4px; }
+    .heatmap-canvas { display: grid; gap: 18px; width: max-content; }
+    .heatmap-month-track { position: relative; min-height: 14px; overflow: hidden; font-weight: 600; }
+    .heatmap-month-label { position: absolute; top: 0; transform: translateX(-4px); white-space: nowrap; }
+    .heatmap-days, .heatmap-week { display: grid; gap: 4px; }
+    .heatmap-days { padding-top: 32px; } /* month track (14px) + canvas gap (18px) */
+    .heatmap-days span { height: 12px; line-height: 12px; } /* matches .heatmap-cell */
+    .heatmap-grid { display: flex; gap: 4px; }
+    .heatmap-cell { width: 12px; height: 12px; border-radius: 4px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.05); }
+    button.heatmap-cell { padding: 0; appearance: none; cursor: default; }
+    .heatmap-cell.level-1 { background: rgba(102,126,234,.28); }
+    .heatmap-cell.level-2 { background: rgba(102,126,234,.5); }
+    .heatmap-cell.level-3 { background: rgba(118,75,162,.68); }
+    .heatmap-cell.level-4 { background: rgba(155,124,255,.88); box-shadow: 0 0 12px rgba(155,124,255,.28); }
+    .heatmap-cell.is-clickable { cursor: pointer; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+    .heatmap-cell.is-clickable:hover,
+    .heatmap-cell.is-clickable:focus-visible { transform: translateY(-1px) scale(1.08); border-color: rgba(255,255,255,.35); outline: none; }
+    .heatmap-legend { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+    .legend-swatches { display: inline-flex; gap: 4px; }
+    .empty-state { padding: 38px 28px; text-align: center; }
+    .empty-state h3 { font-size: 24px; margin-bottom: 10px; }
+    .loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 40px; color: var(--muted); }
+    .spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.2); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; }
+    .day-detail-backdrop {
+        position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(6, 8, 14, .72); padding: 20px; z-index: 220;
+    }
+    .day-detail-backdrop.is-open { display: flex; }
+    .day-detail-modal {
+        width: min(760px, 100%); max-height: min(82vh, 860px); overflow: hidden;
+        border-radius: 24px; background: #11131b; border: 1px solid rgba(255,255,255,.1);
+        box-shadow: 0 25px 70px rgba(0,0,0,.45); display: grid; grid-template-rows: auto auto 1fr;
+    }
+    .day-detail-head, .day-detail-summary { padding: 20px 22px; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .day-detail-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+    .day-detail-head h3 { font-size: 24px; margin-bottom: 6px; }
+    .day-detail-head p, .day-detail-summary { color: var(--muted); }
+    .day-detail-close {
+        width: 40px; height: 40px; border-radius: 999px; border: 1px solid rgba(255,255,255,.12);
+        background: rgba(255,255,255,.06); color: #fff; cursor: pointer; font-size: 20px;
+    }
+    .day-detail-body { overflow-y: auto; padding: 18px 22px 22px; }
+    .day-detail-list { display: grid; gap: 12px; }
+    .day-book-item {
+        padding: 16px 18px; border-radius: 18px; background: rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08); display: flex; justify-content: space-between; gap: 18px; align-items: center;
+    }
+    .day-book-main { min-width: 0; }
+    .day-book-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .day-book-meta { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .day-book-stats { text-align: right; flex-shrink: 0; }
+    .day-book-stat { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    .day-book-sub { font-size: 12px; color: var(--muted-soft); }
+    .calendar-panel { display: grid; gap: 16px; }
+    .calendar-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .calendar-month-title { font-size: 22px; font-weight: 800; }
+    .calendar-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .calendar-grid { display: grid; gap: 10px; }
+    .calendar-weekday {
+        padding: 8px 10px; color: var(--muted-soft); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; text-align: center;
+    }
+    .calendar-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0; }
+    .calendar-weeks { display: grid; gap: 10px; }
+    .calendar-week {
+        display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); column-gap: 0; row-gap: 4px;
+        align-items: start; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.08);
+        border-radius: 14px; overflow: hidden; padding-bottom: 8px;
+    }
+    .calendar-cell {
+        padding: 8px 10px; border-right: 1px solid rgba(255,255,255,.06);
+        border-bottom: 1px solid rgba(255,255,255,.06);
+        display: flex; align-items: center; grid-row: 1;
+    }
+    .calendar-week > .calendar-cell:nth-child(7) { border-right: none; }
+    .calendar-cell.is-outside { opacity: .33; }
+    .calendar-cell.is-active-day { background: rgba(79,195,247,.07); }
+    .calendar-cell-top { display: flex; justify-content: space-between; align-items: center; gap: 4px; width: 100%; }
+    .calendar-day-number { font-size: 13px; font-weight: 800; color: #fff; }
+    .calendar-day-total { font-size: 11px; color: var(--muted-soft); }
+    .calendar-day-open {
+        width: 100%; text-align: left; padding: 0; border: none; background: none; color: inherit; cursor: pointer;
+    }
+    .calendar-day-open:focus-visible { outline: 2px solid rgba(79,195,247,.45); outline-offset: 3px; border-radius: 4px; }
+    .calendar-span {
+        min-height: 24px; padding: 0 8px; border-radius: 6px; display: flex; align-items: center;
+        font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        border: 1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.94); cursor: pointer;
+        margin: 0 3px;
+    }
+    .calendar-span:hover, .calendar-span:focus-visible { filter: brightness(1.15); outline: none; }
+    .calendar-span-text { overflow: hidden; text-overflow: ellipsis; }
+    .calendar-lane-spacer { visibility: hidden; min-height: 24px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1100px) { .insights-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 768px) {
+        .stats-wrap { padding: 20px 12px 40px; }
+        .hero, .dashboard-header, .panel, .stat-card, .summary-card, .recent-item, .empty-state { border-radius: 18px; }
+        .hero { padding: 24px 20px; } .dashboard-header, .panel { padding: 20px 18px; }
+        .recent-item { flex-direction: column; align-items: flex-start; } .recent-side { text-align: left; } .chart-wrap { min-height: 280px; }
+        .day-detail-modal { border-radius: 18px; }
+        .day-book-item { flex-direction: column; align-items: flex-start; }
+        .day-book-stats { text-align: left; }
+        .calendar-weekdays { display: none; }
+        .calendar-week { column-gap: 0; row-gap: 4px; }
+        .calendar-cell { padding: 6px 8px; }
+        .calendar-span { min-height: 24px; font-size: 11px; padding: 0 8px; }
+    }
+
+    /* Time-of-day histogram + yearly recap bars */
+    .bar-row { display: flex; align-items: flex-end; gap: 4px; height: 160px; padding-top: 8px; }
+    .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+    .bar-fill { width: 100%; max-width: 26px; border-radius: 6px 6px 2px 2px;
+        background: linear-gradient(180deg, var(--reading) 0%, rgba(79,195,247,.35) 100%); min-height: 2px; transition: opacity .2s; }
+    .bar-fill.listening { background: linear-gradient(180deg, var(--listening) 0%, rgba(155,124,255,.35) 100%); }
+    .bar-fill.muted { background: rgba(255,255,255,.08); }
+    .bar-col:hover .bar-fill { opacity: .82; }
+    .bar-label { font-size: 10px; color: var(--muted-soft); white-space: nowrap; }
+    .recap-toolbar { display: flex; align-items: center; gap: 10px; }
+    .recap-year-btn { background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--text);
+        border-radius: 8px; width: 30px; height: 30px; cursor: pointer; font-size: 16px; line-height: 1; }
+    .recap-year-btn:hover:not(:disabled) { background: rgba(255,255,255,.14); }
+    .recap-year-btn:disabled { opacity: .35; cursor: default; }
+    .recap-year-label { font-weight: 700; font-size: 15px; min-width: 52px; text-align: center; }
+    .books-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px;
+        border-radius: 14px; border: 1px solid var(--border); background: var(--panel-soft); cursor: pointer; transition: all .15s; }
+    .books-row:hover { background: rgba(255,255,255,.07); transform: translateX(2px); }
+    .books-row + .books-row { margin-top: 8px; }
+    .books-meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .books-side { text-align: right; flex-shrink: 0; }
+    .books-side .v { font-weight: 700; }
+    .books-side .s { font-size: 11px; color: var(--muted-soft); }
+    .pct-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); margin-top: 6px; overflow: hidden; }
+    .pct-bar > span { display: block; height: 100%; background: var(--success); }
+    .scroll-list { max-height: 360px; overflow-y: auto; }
+    /* The books list fills the height its row gives it and scrolls inside, so it
+       never ends partway down the panel or stretches the panel beside it. */
+    .books-panel { display: flex; flex-direction: column; }
+    .books-panel .scroll-list { flex: 1 1 0; min-height: 360px; max-height: none; }
+    /* The heatmap keeps its own height beside the taller recent sessions list. */
+    #heatmap-panel { align-self: start; }
+    .finished-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+    .finished-row:last-child { border-bottom: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="stats-wrap ops-stats">
+    <section class="hero">
+        <div class="hero-top">
+            <div>
+                <h1>{{ _('Unified activity dashboard') }}</h1>
+                <p>{{ _('Live listening stats come from Audiobookshelf, reading stats come from KOReader uploads, and the combined view merges both into one BookBridge-native dashboard.') }}</p>
+                <div class="hero-meta">
+                    <div class="hero-chip"><strong>{{ _('Listening') }}</strong> {{ _('ABS live data') }}</div>
+                    <div class="hero-chip"><strong>{{ _('Reading') }}</strong> {{ _('KOReader sync uploads') }}</div>
+                    <div class="hero-chip"><strong>{{ _('Timezone') }}</strong> <span id="timezone-chip">{{ _('Loading…') }}</span></div>
+                </div>
+            </div>
+            <div class="dashboard-note" id="last-updated">{{ _('Waiting for stats…') }}</div>
+        </div>
+    </section>
+    <section class="toolbar">
+        <div class="tab-strip">
+            <button type="button" class="btn btn-secondary tab-btn is-active" data-tab="combined">{{ _('Combined') }}</button>
+            <button type="button" class="btn btn-secondary tab-btn" data-tab="reading">{{ _('Reading') }}</button>
+            <button type="button" class="btn btn-secondary tab-btn" data-tab="listening">{{ _('Listening') }}</button>
+        </div>
+        <div class="status-row">
+            <div class="status-pill unavailable" id="status-listening"><span class="status-dot"></span><span>{{ _('Listening') }}</span></div>
+            <div class="status-pill unavailable" id="status-reading"><span class="status-dot"></span><span>{{ _('Reading') }}</span></div>
+            <button type="button" class="btn btn-secondary" id="refresh-btn">↻ {{ _('Refresh') }}</button>
+        </div>
+    </section>
+    <section id="dashboard-root">
+        <div class="loading"><span class="spinner" aria-hidden="true"></span><span>{{ _('Loading dashboard data…') }}</span></div>
+    </section>
+</div>
+<div class="day-detail-backdrop" id="day-detail-backdrop" aria-hidden="true">
+    <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="day-detail-title">
+        <div class="day-detail-head">
+            <div>
+                <h3 id="day-detail-title">{{ _('Books read on this day') }}</h3>
+                <p id="day-detail-subtitle">{{ _('Select a day from the reading calendar to see which books were active.') }}</p>
+            </div>
+            <button type="button" class="day-detail-close" id="day-detail-close" aria-label="{{ _('Close') }}">×</button>
+        </div>
+        <div class="day-detail-summary" id="day-detail-summary">{{ _('No day selected.') }}</div>
+        <div class="day-detail-body" id="day-detail-body"></div>
+    </div>
+</div>
+<div class="day-detail-backdrop" id="book-detail-backdrop" aria-hidden="true">
+    <div class="day-detail-modal" role="dialog" aria-modal="true" aria-labelledby="book-detail-title">
+        <div class="day-detail-head">
+            <div>
+                <h3 id="book-detail-title">{{ _('Book detail') }}</h3>
+                <p id="book-detail-subtitle">{{ _('Per-book reading and listening statistics.') }}</p>
+            </div>
+            <button type="button" class="day-detail-close" id="book-detail-close" aria-label="{{ _('Close') }}">×</button>
+        </div>
+        <div class="day-detail-summary" id="book-detail-summary">{{ _('Loading…') }}</div>
+        <div class="day-detail-body" id="book-detail-body"></div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}{% include 'next/_stats_scripts.html' %}{% endblock %}

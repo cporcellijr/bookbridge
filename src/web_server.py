@@ -7523,7 +7523,7 @@ def whats_new_page():
         except Exception as e:
             logger.debug(f"Could not record whats-new seen version for user {user.id}: {e}", exc_info=True)
     return render_template(
-        'whats_new.html',
+        ui_template('whats_new.html'),
         app_version=APP_VERSION,
         notes_html=whats_new.get_release_notes_html(),
         action_items=whats_new.get_action_required_items(),
@@ -7657,7 +7657,7 @@ def job_queue_page():
         alignment_queue=alignment_queue,
         alignment_movable_ids=alignment_movable_ids,
     )
-    return render_template('job_queue.html', queue_view=snapshot)
+    return render_template(ui_template('job_queue.html'), queue_view=snapshot)
 
 
 def job_queue_reorder():
@@ -13928,7 +13928,7 @@ def _build_combined_stats_payload(listening, reading, tz):
 
 
 def stats_view():
-    return render_template('stats.html')
+    return render_template(ui_template('stats.html'))
 
 
 def api_stats():
@@ -14237,7 +14237,7 @@ def logs_view():
     `?embed=1` renders without the page chrome so the viewer can be hosted
     inside an iframe (the Settings → Logs tab)."""
     embed = request.args.get('embed') in ('1', 'true', 'yes')
-    return render_template('logs.html', embed=embed)
+    return render_template(ui_template('logs.html'), embed=embed)
 
 
 def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
