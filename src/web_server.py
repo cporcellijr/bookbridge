@@ -7569,6 +7569,36 @@ def index():
     )
 
 
+def book_page(abs_id: str) -> object:
+    """Show one reader-owned dashboard mapping, optionally as a drawer fragment."""
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"error": "authentication required"}), 401
+    book = database_service.get_book(abs_id)
+    if book is None:
+        return jsonify({"error": "book not found"}), 404
+    if not database_service.is_user_linked(user_id, abs_id):
+        return jsonify({"error": "book not available for this user"}), 403
+    states = database_service.get_states_for_book(abs_id, user_id=user_id)
+    integrations = _build_dashboard_integrations()
+    mappings, _progress = _build_dashboard_mappings(
+        [book], states, integrations,
+        all_hardcover=database_service.get_all_hardcover_details(),
+        all_storygraph=database_service.get_all_storygraph_details(),
+        reading_stats_by_book={abs_id: database_service.get_reading_stats(abs_id, user_id=user_id) or {}},
+        cached_booklore_by_filename=_index_cached_booklore_books(database_service.get_all_booklore_books()),
+        claim_times_by_book=database_service.get_book_claim_times(user_id=user_id),
+    )
+    return render_template(
+        'next/_book_drawer.html' if request.args.get('fragment') == '1' else 'next/book.html',
+        mapping=mappings[0], integrations=integrations,
+        book_states={state.client_name: state for state in states},
+        kosync_devices=database_service.get_user_kosync_progress_for_book(abs_id, user_id=user_id),
+        recent_syncs=sorted(states, key=lambda state: state.last_updated or 0, reverse=True),
+        show_diagnostics_modal=False,
+    )
+
+
 def job_queue_page():
     """Read-only overview of staged work, in-flight batches and recent jobs."""
     user = current_user()
@@ -16391,6 +16421,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/start', 'admin_user_bookfusion_device_start', admin_user_bookfusion_device_start, methods=['POST'])
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
+    app.add_url_rule('/book/<abs_id>', 'book_page', book_page, methods=['GET'])
     app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
     app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
     app.add_url_rule('/whats-new', 'whats_new_page', whats_new_page, methods=['GET'])

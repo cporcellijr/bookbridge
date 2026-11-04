@@ -64,8 +64,11 @@
                 <a href="/" {% if active_page == 'library' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg><span>{{ _('Library') }}</span></a>
                 <a href="{{ url_for('suggestions') }}" {% if active_page == 'suggestions' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#discover"></use></svg><span>{{ _('Discover') }}</span>{% if queued_count %}<span class="count">{{ queued_count }}</span>{% endif %}</a>
                 <a href="/stats" {% if active_page == 'stats' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#stats"></use></svg><span>{{ _('Stats') }}</span></a>
+                {% set yours = your_apps() %}
+                {% if yours|trim %}
                 <span class="nav-label">{{ _('Yours') }}</span>
-                <div class="app-links rail-app-links">{{ your_apps() }}</div>
+                <div class="app-links rail-app-links">{{ yours }}</div>
+                {% endif %}
                 {% if is_admin %}
                 <span class="nav-label">{{ _('Admin') }}</span>
                 <a href="{{ url_for('job_queue_page') }}" {% if active_page == 'job_queue' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span>{{ _('Processing') }}</span></a>
@@ -95,10 +98,12 @@
                 <div class="mobile-brand"><svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span></div>
                 <button class="search-placeholder" type="button" disabled aria-disabled="true"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span>{{ _('Search books, pages, settings') }}</span><kbd>{{ _('Ctrl K') }}</kbd></button>
                 <button class="theme-toggle" type="button" data-theme-toggle aria-pressed="false" aria-label="{{ _('Switch to day theme') }}" title="{{ _('Switch to day theme') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#theme"></use></svg><span class="theme-label">{{ _('Day theme') }}</span></button>
+                {% if yours|trim %}
                 <details class="mobile-app-menu">
                     <summary aria-label="{{ _('My apps') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#apps"></use></svg></summary>
-                    <div class="app-links">{{ your_apps() }}</div>
+                    <div class="app-links">{{ yours }}</div>
                 </details>
+                {% endif %}
                 {% if current_user %}
                 <details class="mobile-user-menu" id="bb-next-mobile-user-menu">
                     <summary aria-label="{{ _('Account menu') }}"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span></summary>

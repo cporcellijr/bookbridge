@@ -1,0 +1,616 @@
+{% from "_i18n.html" import plural_forms %}
+    <script>
+        // i18n helpers for strings the templates hand to JS (_('...') piped through tojson).
+        // bbFormat fills {name} placeholders. bbPlural picks the ngettext form for n
+        // with Intl.PluralRules; the forms come from plural_forms() in _i18n.html.
+        // These are formatting helpers only: every translation still comes from the
+        // .po catalog through _() / ngettext() in a template.
+        window.bbFormat = function (text, values) {
+            return String(text).replace(/\{(\w+)\}/g, function (match, key) {
+                return values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match;
+            });
+        };
+        window.bbPlural = function (forms, n, values) {
+            if (typeof forms === 'string') forms = { other: forms };
+            var category = 'other';
+            try { category = new Intl.PluralRules(document.documentElement.lang || 'en').select(n); } catch (e) { /* unknown locale */ }
+            var text = Object.prototype.hasOwnProperty.call(forms, category) ? forms[category] : forms.other;
+            return window.bbFormat(text, Object.assign({ count: n }, values || {}));
+        };
+        // Strings in static/js files: the including template puts their translations
+        // in window.BB_STRINGS, keyed by the English text (index.html does this for
+        // the files it loads). The English text is the fallback, so a missing key shows English.
+        window.bbT = function (text, values) {
+            var strings = window.BB_STRINGS || {};
+            var translated = Object.prototype.hasOwnProperty.call(strings, text) ? strings[text] : text;
+            return values ? window.bbFormat(translated, values) : translated;
+        };
+    </script>
+        <!-- Hardcover Edition Picker Modal -->
+        <div id="hardcover-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeHardcoverModal()"></div>
+            <div class="hc-modal-content">
+                <div class="hc-modal-header">
+                    <h3>{{ _('Link to Hardcover') }}</h3>
+                    <button class="hc-modal-close" onclick="closeHardcoverModal()" aria-label="{{ _('Close') }}">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <div id="hc-loading" class="hc-loading" style="display:none;">
+                        <div class="hc-loading-spinner"></div>
+                        <div class="hc-loading-text">{{ _('Searching Hardcover...') }}</div>
+                    </div>
+                    <div id="hc-found" style="display:none;">
+                        <div class="hc-book-info">
+                            <div class="hc-book-title" id="hc-title"></div>
+                            <div class="hc-book-author" id="hc-author"></div>
+                        </div>
+                        <div class="hc-editions-label">{{ _('Select Edition') }}</div>
+                        <div id="hc-editions"></div>
+                        <p class="hc-text-muted"><a href="#" onclick="showManualInput(); return false;">{{ _('Wrong book? Enter URL manually') }}</a></p>
+                    </div>
+                    <div id="hc-manual" style="display:none;">
+                        <p>{{ _('Enter Hardcover URL or book ID:') }}</p>
+                        <input type="text" id="hc-input" placeholder="https://hardcover.app/books/...">
+                        <button onclick="resolveManualInput()">{{ _('Search') }}</button>
+                    </div>
+                    <div id="hc-error" style="display:none;">
+                        <p id="hc-error-msg" class="hc-text-error"></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showManualInput(); return false;">{{ _('Try entering URL manually') }}</a></p>
+                    </div>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeHardcoverModal()">{{ _('Cancel') }}</button>
+                    <button id="hc-link-btn" class="hc-btn-link" onclick="linkSelectedEdition()" disabled>{{ _('Link Book') }}</button>
+                </div>
+            </div>
+        </div>
+        <script>
+            // Translations for the strings in static/js (Hardcover, StoryGraph and Storyteller
+            // modals, reading-position preview), keyed by their English text; bbT() in
+            // base.html looks them up. tests/test_i18n_js.py checks every bbT() key is here.
+            window.BB_STRINGS = Object.assign(window.BB_STRINGS || {}, {{ {
+            'Search failed': _('Search failed'),
+            'Book not found': _('Book not found'),
+            'Unknown Title': _('Unknown Title'),
+            'Unknown Author': _('Unknown Author'),
+            'Unknown': _('Unknown'),
+            'Linked': _('Linked'),
+            '{hours}h {minutes}m': _('{hours}h {minutes}m'),
+            '{count} pp': _('{count} pp'),
+            'No specific edition': _('No specific edition'),
+            'Track on Hardcover without progress sync': _('Track on Hardcover without progress sync'),
+            'Failed to link book': _('Failed to link book'),
+            '{hours}h': _('{hours}h'),
+            '{minutes}m': _('{minutes}m'),
+            'Open current StoryGraph link': _('Open current StoryGraph link'),
+            'Open in StoryGraph': _('Open in StoryGraph'),
+            'Audiobook': _('Audiobook'),
+            'Unknown format': _('Unknown format'),
+            'No details': _('No details'),
+            'Track on StoryGraph without progress sync': _('Track on StoryGraph without progress sync'),
+            'Linking...': _('Linking...'),
+            'Link failed': _('Link failed'),
+            'Link Book': _('Link Book'),
+            'Link Storyteller: {title}': _('Link Storyteller: {title}'),
+            'Searching...': _('Searching...'),
+            'Storyteller search failed.': _('Storyteller search failed.'),
+            'None - Do not link': _('None - Do not link'),
+            'Unlink current Storyteller book': _('Unlink current Storyteller book'),
+            'Unlink': _('Unlink'),
+            'No matching books found via search.': _('No matching books found via search.'),
+            'Link': _('Link'),
+            'Error: {error}': _('Error: {error}'),
+            'Linking and downloading...': _('Linking and downloading...'),
+            'Failed to link': _('Failed to link'),
+            'Link Failed: {error}': _('Link Failed: {error}'),
+            'Show position': _('Show position'),
+            'Current reading position': _('Current reading position'),
+            'Hide position': _('Hide position'),
+            'Resolving saved position…': _('Resolving saved position…'),
+            'Unavailable': _('Unavailable'),
+            'Approximate reading position': _('Approximate reading position'),
+            'Reading position unavailable': _('Reading position unavailable'),
+            'Could not load the preview': _('Could not load the preview'),
+            'Try again. Your saved progress was not changed.': _('Try again. Your saved progress was not changed.')
+            }|tojson }});
+            window.BB_STRINGS['Unlink BookFusion?'] = {{ _('Unlink BookFusion?')|tojson }};
+            window.BB_STRINGS['{count} pages'] = {% call(n) plural_forms() %}{{ ngettext('{count} page', '{count} pages', n) }}{% endcall %};
+        </script>
+        <script src="/static/js/hardcover-modal.js"></script>
+        <div id="storygraph-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeStorygraphModal()"></div>
+            <div class="hc-modal-content">
+                <div class="hc-modal-header">
+                    <h3>{{ _('Link to StoryGraph') }}</h3>
+                    <button class="hc-modal-close" onclick="closeStorygraphModal()" aria-label="{{ _('Close') }}">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <div id="sg-loading" class="hc-loading" style="display:none;">
+                        <div class="hc-loading-spinner"></div>
+                        <div class="hc-loading-text">{{ _('Searching StoryGraph...') }}</div>
+                    </div>
+                    <div id="sg-found" style="display:none;">
+                        <div class="hc-book-info">
+                            <div class="hc-book-title" id="sg-title"></div>
+                            <div class="hc-book-author" id="sg-author"></div>
+                        </div>
+                        <div class="sg-editions-label" id="sg-editions-label">{{ _('Select Edition') }}</div>
+                        <div id="sg-editions"></div>
+                        <p class="hc-text-muted">
+                            <a id="sg-found-url" href="#" target="_blank" rel="noopener noreferrer">{{ _('Open in StoryGraph') }}</a>
+                        </p>
+                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">{{ _('Wrong book? Enter URL, ID, or search text manually') }}</a></p>
+                    </div>
+                    <div id="sg-manual" style="display:none;">
+                        <p>{{ _('Enter StoryGraph URL, book ID, or search text:') }}</p>
+                        <input type="text" id="sg-input" placeholder="https://app.thestorygraph.com/books/...">
+                        <button onclick="resolveStorygraphManualInput()">{{ _('Resolve') }}</button>
+                    </div>
+                    <div id="sg-error" style="display:none;">
+                        <p id="sg-error-msg" class="hc-text-error"></p>
+                        <p class="hc-text-muted"><a href="#" onclick="showStorygraphManualInput(); return false;">{{ _('Try entering a URL or search text manually') }}</a></p>
+                    </div>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeStorygraphModal()">{{ _('Cancel') }}</button>
+                    <button id="sg-link-btn" class="hc-btn-link" onclick="linkSelectedStorygraphBook()" disabled>{{ _('Link Book') }}</button>
+                </div>
+            </div>
+        </div>
+        <script src="/static/js/storygraph-modal.js"></script>
+        <!-- Storyteller Link Modal -->
+        <div id="st-modal" class="hidden">
+            <div class="st-modal-content">
+                <div class="st-modal-header">
+                    <h3 id="st-modal-title">{{ _('Link Storyteller') }}</h3>
+                    <button class="action-btn" onclick="closeStorytellerModal()"
+                        style="background:none; border:none; color:white; font-size:1.2rem; cursor:pointer;">✕</button>
+                </div>
+                <div class="st-modal-body">
+                    <div class="st-search-bar">
+                        <input type="text" id="st-search-input" placeholder="{{ _('Search Storyteller...') }}" class="hc-input"
+                            style="flex:1; padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); color: white;">
+                        <button onclick="searchStoryteller()" class="btn btn-primary">{{ _('Search') }}</button>
+                    </div>
+                    <div id="st-results" class="st-results"></div>
+                </div>
+            </div>
+        </div>
+        <script src="/static/js/storyteller-modal.js"></script>
+<script>
+            function updateKoSyncHash(event) {
+                event.stopPropagation();
+                const item = event.currentTarget;
+                const absId = item.dataset.absId;
+                const title = item.dataset.title;
+                const currentHash = item.dataset.hash;
+
+                const msg = bbFormat({{ _("Enter new KoSync MD5 Hash for '{title}'\n\nCurrent: {hash}\n\n(Leave empty to automatically recalculate from the ebook file)")|tojson }}, { title: title, hash: currentHash });
+                const input = prompt(msg);
+
+                if (input !== null) {
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.target = '_top';
+                    form.action = `/update-hash/${absId}`;
+
+                    const inputField = document.createElement('input');
+                    inputField.type = 'hidden';
+                    inputField.name = 'new_hash';
+                    inputField.value = input.trim();
+
+                    form.appendChild(inputField);
+                    document.body.appendChild(form);
+                    form.submit();
+                }
+            }
+
+            async function linkBookFusion(event) {
+                event.stopPropagation();
+                const item = event.currentTarget;
+                const absId = item.dataset.absId;
+                const title = item.dataset.title || '';
+                const hasStoryteller = item.dataset.hasStoryteller === 'true';
+                const query = prompt({{ _('Search your BookFusion library:')|tojson }}, title);
+                if (query === null || !query.trim()) return;
+
+                let data;
+                try {
+                    const resp = await fetch('/api/bookfusion/search?q=' + encodeURIComponent(query.trim()));
+                    data = await resp.json();
+                    if (!resp.ok) throw new Error(data.error || {{ _('Search failed')|tojson }});
+                } catch (err) {
+                    alert(err.message || {{ _('BookFusion search failed')|tojson }});
+                    return;
+                }
+
+                const books = (data.books || []).slice(0, 8);
+                if (!books.length) {
+                    const hasLocal = item.dataset.hasLocalEpub === 'true';
+                    if (hasLocal) {
+                        openBookFusionUploadModal(absId, title, hasStoryteller);
+                    } else {
+                        alert({{ _('No BookFusion books found.')|tojson }});
+                    }
+                    return;
+                }
+
+                const choices = books.map((book, idx) => `${idx + 1}. ${book.title || book.id}${book.author ? ' - ' + book.author : ''}`).join('\n');
+                const selected = prompt(bbFormat({{ _('Choose a BookFusion book:\n\n{choices}')|tojson }}, { choices: choices }), '1');
+                if (selected === null) return;
+                const index = parseInt(selected, 10) - 1;
+                const book = books[index];
+                if (!book) {
+                    alert({{ _('Invalid selection.')|tojson }});
+                    return;
+                }
+
+                try {
+                    const resp = await fetch('/api/bookfusion/link/' + encodeURIComponent(absId), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            bookfusion_id: book.id,
+                            title: book.title || '',
+                            author: book.author || ''
+                        })
+                    });
+                    const payload = await resp.json().catch(() => ({}));
+                    if (!resp.ok) throw new Error(payload.error || {{ _('Link failed')|tojson }});
+                    location.reload();
+                } catch (err) {
+                    alert(err.message || {{ _('BookFusion link failed')|tojson }});
+                }
+            }
+
+</script>
+<script>
+            function syncNow(absId, btn) {
+                btn.disabled = true;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = "⏳";
+
+                fetch('/api/sync-now/' + absId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }).then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            btn.innerHTML = "✅";
+                            setTimeout(() => {
+                                btn.innerHTML = originalText;
+                                btn.disabled = false;
+                            }, 2000);
+                        } else {
+                            btn.innerHTML = "❌";
+                            setTimeout(() => {
+                                btn.innerHTML = originalText;
+                                btn.disabled = false;
+                            }, 2000);
+                        }
+                    }).catch(error => {
+                        console.error('Error:', error);
+                        btn.innerHTML = "❌";
+                        setTimeout(() => {
+                            btn.innerHTML = originalText;
+                            btn.disabled = false;
+                        }, 2000);
+                    });
+            }
+
+            function updateReadalongStatus(card, ready) {
+                const badge = card && card.querySelector('.readalong-badge');
+                if (badge) badge.hidden = !ready;
+            }
+
+            function _setReadalongBadge(absId, ready) {
+                updateReadalongStatus(document.querySelector(`.book-card[data-abs-id="${absId}"]`), ready);
+            }
+
+            function clearPosition(absId) {
+                if (!confirm({{ _('Clear all progress for this book?')|tojson }})) {
+                    return;
+                }
+                // Preserve the original redirect-to-home behaviour of the POST form.
+                const form = document.createElement('form');
+                form.method = 'POST';
+                    form.target = '_top';
+                form.action = '/clear-progress/' + absId;
+                document.body.appendChild(form);
+                form.submit();
+            }
+
+            function remapAlignment(absId, btn) {
+                btn.disabled = true;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ ' + {{ _('Remapping…')|tojson }};
+                fetch('/api/remap-alignment/' + absId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }).then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            btn.innerHTML = '✅ ' + (data.backend === 'ctc'
+                                ? {{ _('Queued (CTC forced alignment)')|tojson }}
+                                : {{ _('Queued (word-level alignment)')|tojson }});
+                        } else if (data.status === 'up_to_date') {
+                            btn.innerHTML = 'ℹ️ ' + {{ _('Already optimal')|tojson }};
+                        } else {
+                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                        }
+                        setTimeout(() => {
+                            if (btn.dataset.ctcAligned === 'true') return;
+                            btn.innerHTML = originalText; btn.disabled = false;
+                        }, 3000);
+                    }).catch(error => {
+                        console.error('Remap error:', error);
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
+                        setTimeout(() => {
+                            if (btn.dataset.ctcAligned === 'true') return;
+                            btn.innerHTML = originalText; btn.disabled = false;
+                        }, 3000);
+                    });
+            }
+
+            function _pollReadalongEpubStatus(absId, btn, originalText) {
+                fetch('/api/readalong-epub/' + absId + '/status')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.state === 'running') {
+                            // Show real stage/progress signal instead of a static
+                            // "generating" message -- a long book's ffmpeg transcode
+                            // alone can run several minutes with no other feedback.
+                            const label = data.stage_label || {{ _('Generating')|tojson }};
+                            const pct = (typeof data.percent === 'number') ? ' ' + data.percent + '%' : '';
+                            btn.innerHTML = '⏳ ' + label + '…' + pct;
+                            setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
+                            return;
+                        }
+                        if (data.state === 'done') {
+                            btn.innerHTML = data.warning ? '⚠️ ' + {{ _('Delivered (unconfirmed)')|tojson }} : '✅ ' + {{ _('Read-along ready')|tojson }};
+                            _setReadalongBadge(absId, true);
+                        } else if (data.state === 'failed') {
+                            const stagePrefix = data.stage_label ? data.stage_label + ': ' : '';
+                            btn.innerHTML = '❌ ' + stagePrefix + (data.error || {{ _('Failed')|tojson }});
+                        } else {
+                            btn.innerHTML = originalText;
+                        }
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 5000);
+                    }).catch(error => {
+                        console.debug('Read-along status check failed', error);
+                        setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 8000);
+                    });
+            }
+
+            function generateReadalongEpub(absId, btn) {
+                btn.disabled = true;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ ' + {{ _('Queuing…')|tojson }};
+                fetch('/api/readalong-epub/' + absId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }).then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            btn.innerHTML = '⏳ ' + {{ _('Generating… (this can take minutes)')|tojson }};
+                            setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
+                        } else {
+                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 4000);
+                        }
+                    }).catch(error => {
+                        console.error('Read-along generation error:', error);
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 4000);
+                    });
+            }
+
+            function removeReadalongEpub(absId, btn) {
+                if (!confirm({{ _('Remove the generated read-along EPUB for this book?')|tojson }})) {
+                    return;
+                }
+                btn.disabled = true;
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '⏳ ' + {{ _('Removing…')|tojson }};
+                fetch('/api/readalong-epub/' + absId + '/remove', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                }).then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.removed) {
+                            btn.innerHTML = '✅ ' + {{ _('Removed')|tojson }};
+                            _setReadalongBadge(absId, false);
+                        } else if (data.success) {
+                            btn.innerHTML = 'ℹ️ ' + {{ _('Nothing to remove')|tojson }};
+                        } else {
+                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                        }
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
+                    }).catch(error => {
+                        console.error('Read-along removal error:', error);
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
+                        setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
+                    });
+            }
+
+            function markComplete(absId, title) {
+                if (!confirm(bbFormat({{ _('Are you sure you want to mark "{title}" as complete? This will set progress to 100%% on all synced platforms.')|tojson }}, { title: title }))) {
+                    return;
+                }
+                window._mcAbsId = absId;
+                document.getElementById('delete-mapping-modal').style.display = 'flex';
+            }
+
+            function closeDeleteMappingModal() {
+                document.getElementById('delete-mapping-modal').style.display = 'none';
+                window._mcAbsId = null;
+            }
+
+            function _dmExecuteFetch(absId, shouldDelete) {
+                closeDeleteMappingModal();
+                fetch('/api/mark-complete/' + absId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delete: shouldDelete })
+                }).then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            if (shouldDelete) {
+                                const cardElement = document.querySelector('.book-card[data-abs-id="' + absId + '"]');
+                                if (cardElement) {
+                                    window.top.location.assign('/');
+                                } else {
+                                    window.location.reload();
+                                }
+                            } else {
+                                window.location.reload();
+                            }
+                        } else {
+                            alert(bbFormat({{ _('Error marking book as complete: {error}')|tojson }}, { error: (data.error || {{ _('Unknown error')|tojson }}) }));
+                        }
+                    }).catch(error => {
+                        console.error('Error:', error);
+                        alert({{ _('Connection error while marking book as complete')|tojson }});
+                    });
+            }
+
+            function _dmYesDelete() { _dmExecuteFetch(window._mcAbsId, true); }
+            function _dmNoKeepMapping() { _dmExecuteFetch(window._mcAbsId, false); }
+
+            function openBookFusionUploadModal(absId, title, hasStoryteller) {
+                window._bfUploadAbsId = absId;
+                document.getElementById('bf-upload-title').textContent = title || {{ _('this book')|tojson }};
+                const status = document.getElementById('bf-upload-status');
+                status.textContent = '';
+                const btn = document.getElementById('bf-upload-confirm-btn');
+                btn.disabled = false;
+                // Show/hide variant radio options
+                const radioGroup = document.getElementById('bf-upload-variant-group');
+                if (radioGroup) {
+                    radioGroup.style.display = hasStoryteller ? 'block' : 'none';
+                    // Reset to standard when opening
+                    const standardRadio = document.querySelector('input[name="bf-upload-variant"][value="standard"]');
+                    if (standardRadio) standardRadio.checked = true;
+                }
+                document.getElementById('bf-upload-modal').style.display = 'flex';
+            }
+
+            function closeBookFusionUploadModal() {
+                document.getElementById('bf-upload-modal').style.display = 'none';
+                window._bfUploadAbsId = null;
+            }
+
+            async function _bfConfirmUpload() {
+                const absId = window._bfUploadAbsId;
+                if (!absId) return;
+                const status = document.getElementById('bf-upload-status');
+                const btn = document.getElementById('bf-upload-confirm-btn');
+                btn.disabled = true;
+                const variantInput = document.querySelector('input[name="bf-upload-variant"]:checked');
+                const variant = variantInput ? variantInput.value : 'standard';
+                status.textContent = variant === 'readaloud'
+                    ? {{ _('Downloading and uploading ReadAloud EPUB — this can take a few minutes…')|tojson }}
+                    : {{ _('Uploading…')|tojson }};
+                try {
+                    const resp = await fetch('/api/bookfusion/upload/' + encodeURIComponent(absId), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ variant })
+                    });
+                    const payload = await resp.json().catch(() => ({}));
+                    if (payload.success) {
+                        status.textContent = {{ _('Uploaded. Reloading…')|tojson }};
+                        location.reload();
+                        return;
+                    }
+                    status.textContent = payload.duplicate
+                        ? {{ _('Already in your BookFusion library. Use Search to link it.')|tojson }}
+                        : (payload.error || {{ _('Upload failed')|tojson }});
+                    btn.disabled = false;
+                } catch (err) {
+                    status.textContent = err.message || {{ _('BookFusion upload failed')|tojson }};
+                    btn.disabled = false;
+                }
+            }
+        </script>
+
+        <!-- Delete Mapping Confirmation Modal -->
+        <div id="delete-mapping-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeDeleteMappingModal()"></div>
+            <div class="hc-modal-content" style="max-width:420px;">
+                <div class="hc-modal-header">
+                    <h3>{{ _('Delete Mapping?') }}</h3>
+                    <button class="hc-modal-close" onclick="closeDeleteMappingModal()" aria-label="{{ _('Close') }}">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <p style="color:rgba(255,255,255,0.75); margin:0; line-height:1.6;">
+                        {{ _('Do you also want to delete the mapping and all cached files for this book?') }}
+                    </p>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeDeleteMappingModal()">{{ _('Cancel') }}</button>
+                    <button class="hc-btn-link" onclick="_dmNoKeepMapping()">{{ _('No, Keep Mapping') }}</button>
+                    <button onclick="_dmYesDelete()"
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:linear-gradient(135deg,#e53e3e,#c53030); color:#fff;">{{ _('Yes, Delete') }}</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload to BookFusion Confirmation Modal -->
+        <div id="bf-upload-modal" class="hc-modal" style="display:none;">
+            <div class="hc-modal-backdrop" onclick="closeBookFusionUploadModal()"></div>
+            <div class="hc-modal-content" style="max-width:420px;">
+                <div class="hc-modal-header">
+                    <h3>{{ _('Upload to BookFusion?') }}</h3>
+                    <button class="hc-modal-close" onclick="closeBookFusionUploadModal()" aria-label="{{ _('Close') }}">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round">
+                            <path d="M1 1l12 12M13 1L1 13" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="hc-modal-body">
+                    <p style="color:rgba(255,255,255,0.75); margin:0; line-height:1.6;">
+                        {% trans %}No match found in your BookFusion library. Upload
+                        <strong id="bf-upload-title">this book</strong>'s linked EPUB to your BookFusion library?{% endtrans %}
+                    </p>
+                    <div id="bf-upload-variant-group" style="display:none;">
+                        <label style="display:block; margin:10px 0 6px; color:rgba(255,255,255,0.85); font-size:0.9rem;">
+                            <input type="radio" name="bf-upload-variant" value="standard" checked> {{ _('Standard EPUB') }}
+                        </label>
+                        <label style="display:block; margin:0 0 6px; color:rgba(255,255,255,0.85); font-size:0.9rem;">
+                            <input type="radio" name="bf-upload-variant" value="readaloud"> {{ _('Storyteller ReadAloud EPUB (with narration audio)') }}
+                        </label>
+                        <p style="color:rgba(255,255,255,0.5); font-size:0.78rem; margin:4px 0 0;">
+                            {{ _('The ReadAloud EPUB is large (~100MB) and may take a few minutes to upload.') }}
+                        </p>
+                    </div>
+                    <p id="bf-upload-status"
+                        style="color:rgba(255,255,255,0.55); margin:12px 0 0; min-height:18px; font-size:0.85rem;"></p>
+                </div>
+                <div class="hc-modal-footer">
+                    <button class="hc-btn-cancel" onclick="closeBookFusionUploadModal()">{{ _('No, Cancel') }}</button>
+                    <button id="bf-upload-confirm-btn" onclick="_bfConfirmUpload()"
+                        style="padding:10px 20px; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.9rem; background:var(--gradient); color:var(--text);">{{ _('Yes, Upload') }}</button>
+                </div>
+            </div>
+        </div>
+
+
+<script src="/static/js/reading-position-preview.js"></script>
+<script src="/static/js/next/book.js"></script>
