@@ -34,6 +34,9 @@ class TestABSSocketListenerDebounce(unittest.TestCase):
         )
         self.env.start()
         self.addCleanup(self.env.stop)
+        self.writes_patch = patch.dict("src.services.write_tracker._recent_writes", clear=True)
+        self.writes_patch.start()
+        self.addCleanup(self.writes_patch.stop)
         self.thread_patch = patch(
             "src.services.abs_socket_listener.threading.Thread",
             _ImmediateThread,

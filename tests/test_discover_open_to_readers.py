@@ -157,11 +157,11 @@ class TestDiscoverOpenToReaders(DiscoverBase):
 
 
 class TestAdminOnlyStaysAdminOnly(DiscoverBase):
-    def test_settings_stats_logs_stay_admin_only(self):
+    def test_settings_logs_stay_admin_only(self):
         self.login()
-        for path in ("/settings", "/stats", "/logs", "/admin/users"):
+        for path in ("/settings", "/logs", "/admin/users"):
             self.assertEqual(self.client.get(path).status_code, 403, path)
-        for name in ("settings", "stats_view", "logs_view", "admin_users"):
+        for name in ("settings", "logs_view", "admin_users"):
             self.assertIn(name, self.web._ADMIN_ONLY_ENDPOINTS)
         for name in ("get_suggestions", "suggestions_scan_status", "dismiss_suggestion",
                      "ignore_suggestion", "clear_stale_suggestions", "suggestions_redesign_discovery"):

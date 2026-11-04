@@ -1,8 +1,7 @@
 {# Canonical top navigation, included by base.html on every page that does
    not set hide_chrome. Mirrors the gating semantics of templates/index.html's
-   nav (is_admin = current_user and current_user.is_admin): Stats/Settings are
-   admin-only as before; Logs joins them (it was never advertised to regular
-   users on the dashboard). Discover (the Suggestions page) is visible to every
+   nav (is_admin = current_user and current_user.is_admin): Settings and Logs
+   are admin-only; Stats is shown to every reader (their own data). Discover (the Suggestions page) is visible to every
    logged-in user (regular users get only its Search tab, which replaced Add Book) and carries
    a count badge whenever the acting user's match queue is non-empty. #}
 {% set is_admin = current_user and current_user.is_admin %}
@@ -19,9 +18,7 @@
         <a href="/" class="nav-tab {% if active_page == 'library' %}active{% endif %}">{{ _('Library') }}</a>
         <a href="{{ url_for('suggestions') }}" class="nav-tab {% if active_page == 'suggestions' %}active{% endif %}">{{ _('Discover') }}{% if queued_count > 0 %} <span class="nav-tab-badge">{{ queued_count }}</span>{% endif %}</a>
         <a href="{{ url_for('job_queue_page') }}" class="nav-tab {% if active_page == 'job_queue' %}active{% endif %}">{{ _('Job Queue') }}</a>
-        {% if is_admin %}
         <a href="/stats" class="nav-tab {% if active_page == 'stats' %}active{% endif %}">{{ _('Stats') }}</a>
-        {% endif %}
         {% if is_admin %}
         <a href="/logs" class="nav-tab {% if active_page == 'logs' %}active{% endif %}">{{ _('Logs') }}</a>
         {% endif %}

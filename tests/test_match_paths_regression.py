@@ -131,6 +131,9 @@ class TestMatchPathsRegression(unittest.TestCase):
         os.environ["TEMPLATE_DIR"] = str(Path(__file__).parent.parent / "templates")
 
         self.mock_container = MockContainer()
+        self.mock_container.data_dir = lambda: Path(self.temp_dir)
+        self.mock_container.books_dir = lambda: Path(self.temp_dir)
+        self.mock_container.epub_cache_dir = lambda: Path(self.temp_dir)
 
         def _mock_initialize_database(_data_dir):
             return self.mock_container.mock_database_service
