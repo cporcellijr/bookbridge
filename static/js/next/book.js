@@ -23,6 +23,8 @@
         dialog.setAttribute('aria-label', trigger?.textContent?.trim() || document.title);
         const frame = document.createElement('iframe');
         frame.title = trigger?.textContent?.trim() || document.title;
+        // Safari paints a loading frame white; keep it hidden until the book page has drawn.
+        frame.style.visibility = 'hidden';
         dialog.append(frame);
         document.body.append(dialog);
         const restore = document.activeElement;
@@ -35,6 +37,8 @@
             const doc = frame.contentDocument;
             // A 403/404/error answer has no drawer markup: fall back to the full page.
             if (!doc || !doc.querySelector('[data-book-close]')) { close(); location.assign(url); return; }
+            frame.style.visibility = '';
+            frame.contentWindow.addEventListener('pagehide', function () { frame.style.visibility = 'hidden'; });
             doc.querySelector('[data-book-close]')?.addEventListener('click', function (event) {
                 event.preventDefault(); close();
             });
