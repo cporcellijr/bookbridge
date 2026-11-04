@@ -1,0 +1,1915 @@
+<script>
+        // i18n helpers for strings the templates hand to JS (_('...') piped through tojson).
+        // bbFormat fills {name} placeholders. bbPlural picks the ngettext form for n
+        // with Intl.PluralRules; the forms come from plural_forms() in _i18n.html.
+        // These are formatting helpers only: every translation still comes from the
+        // .po catalog through _() / ngettext() in a template.
+        window.bbFormat = function (text, values) {
+            return String(text).replace(/\{(\w+)\}/g, function (match, key) {
+                return values && Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match;
+            });
+        };
+        window.bbPlural = function (forms, n, values) {
+            if (typeof forms === 'string') forms = { other: forms };
+            var category = 'other';
+            try { category = new Intl.PluralRules(document.documentElement.lang || 'en').select(n); } catch (e) { /* unknown locale */ }
+            var text = Object.prototype.hasOwnProperty.call(forms, category) ? forms[category] : forms.other;
+            return window.bbFormat(text, Object.assign({ count: n }, values || {}));
+        };
+        // Strings in static/js files: the including template puts their translations
+        // in window.BB_STRINGS, keyed by the English text (index.html does this for
+        // the files it loads). The English text is the fallback, so a missing key shows English.
+        window.bbT = function (text, values) {
+            var strings = window.BB_STRINGS || {};
+            var translated = Object.prototype.hasOwnProperty.call(strings, text) ? strings[text] : text;
+            return values ? window.bbFormat(translated, values) : translated;
+        };
+    </script>
+<script>
+    let selectedSuggestionId = null;
+    let selectedSearchIndex = null;
+    let pendingForgeOnlySubmit = false;
+    let selectedStorytellerUuid = '';
+    let storytellerFetchToken = 0;
+    const storytellerEnabled = {{ storyteller_enabled|default(false)|tojson }};
+    const scanInProgress = {{ scan_in_progress|tojson }};
+    let fakeScanProgress = 0;
+    let fakeScanTimer = null;
+    let displayedScanProgress = 0;
+    let reportedScanProgress = 0;
+    let suggestionSubmitInFlight = false;
+
+    // Audio provider -> [chip label, css class], from the same helper the server uses.
+    const AUDIO_BADGES = {{ {'ABS': suggestion_source_badge('ABS'), 'BookLore': suggestion_source_badge('BookLore'), 'BookOrbit': suggestion_source_badge('BookOrbit')}|tojson }};
+
+    const T = {
+        audioSource: {{ _('Audiobook source')|tojson }},
+        language: {{ _('Language')|tojson }},
+        audiobooks: {{ _('Audiobooks')|tojson }},
+        ebooks: {{ _('Ebooks')|tojson }},
+        otherSeries: {{ _('Other / No Series')|tojson }},
+        selectEligibleIn: {{ _('Select eligible books in {series}')|tojson }},
+        selectEligible: {{ _('Select eligible')|tojson }},
+        selectBook: {{ _('Select {title}')|tojson }},
+        selectionCleared: {{ _('Selection cleared in {series}')|tojson }},
+        best: {{ _('Best: {name}')|tojson }},
+        scoreMatch: {{ _('{score}%% match')|tojson }},
+        exact: {{ _('Exact')|tojson }},
+        exactTitle: {{ _('Add all exact will queue this one')|tojson }},
+        review: {{ _('Review')|tojson }},
+        reviewTitle: {{ _('Open its ebook candidates in the review panel')|tojson }},
+        manualChoice: {{ _('Manual choice')|tojson }},
+        queued: {{ _('Queued')|tojson }},
+        ignored: {{ _('Ignored')|tojson }},
+        hide: {{ _('Hide for now')|tojson }},
+        hideTitle: {{ _('Hide it in this browser session only. Nothing is saved; it comes back in a new session.')|tojson }},
+        ignore: {{ _('Ignore')|tojson }},
+        ignorePairTitle: {{ _('Stop listing this audiobook. This is saved and survives new scans.')|tojson }},
+        ignoreEbookTitle: {{ _('Stop listing this ebook. This is saved and survives new scans; restore it from Show: Ignored.')|tojson }},
+        restore: {{ _('Restore')|tojson }},
+        restoreTitle: {{ _('List this ebook again after the next scan checks it.')|tojson }},
+        findAudio: {{ _('Find audiobook')|tojson }},
+        findAudioTitle: {{ _('Open Search with this ebook selected and look for its audiobook')|tojson }},
+        searchPrompt: {{ _('Search your library by title, author, or filename.')|tojson }},
+        searching: {{ _('Searching the library...')|tojson }},
+        noAudioFound: {{ _('No audiobooks found. You can still add an ebook by itself.')|tojson }},
+        noResults: {{ _('Nothing found for this search.')|tojson }},
+        ebookOnlyRow: {{ _('No audiobook (ebook only)')|tojson }},
+        ebookOnlyRowSub: {{ _('Add an ebook by itself, without audio')|tojson }},
+        noSearchEbooks: {{ _('No ebooks found for this search.')|tojson }},
+        noPairEbooks: {{ _('No ebook matches available for this audiobook. Storyteller-only queue is allowed.')|tojson }},
+        audioOnly: {{ _('Audio only')|tojson }},
+        audioOnlyCard: {{ _('Audio only (no ebook)')|tojson }},
+        linked: {{ _('Linked')|tojson }},
+        linkedTitle: {{ _('Authoritative match via Calibre audiobookshelf_id')|tojson }},
+        storytellerFailed: {{ _("Storyteller didn't respond in time or returned an error, so its results are missing. If your library is large, raise Settings → Storyteller → Library Timeout.")|tojson }},
+        addedToQueue: {{ _('Added to the queue.')|tojson }},
+        createEbookOnly: {{ _('Create ebook-only')|tojson }},
+        createEbookOnlyTitle: {{ _('Add this ebook to BookBridge on its own, without an audiobook')|tojson }},
+        confirmCreate: {{ _('Create an ebook-only book for "{title}"? It syncs reading progress without an audiobook.')|tojson }},
+        created: {{ _('Created an ebook-only book for "{title}".')|tojson }},
+        claimed: {{ _('Added "{title}" to your library. It was already in BookBridge.')|tojson }},
+        ignoredDone: {{ _('Ignored "{title}". It stays out of this list after new scans.')|tojson }},
+        restoredDone: {{ _('Restored "{title}". The next scan checks it again.')|tojson }},
+        hiddenDone: {{ _('Hid "{title}" for this session.')|tojson }},
+        showHidden: {{ _('Show hidden')|tojson }},
+        clearFilters: {{ _('Clear filters')|tojson }},
+        retry: {{ _('Retry')|tojson }},
+        loading: {{ _('Loading...')|tojson }},
+        loadFailed: {{ _('Could not load this list.')|tojson }},
+        noFilterMatch: {{ _('Nothing matches these filters.')|tojson }},
+        allHidden: {{ _('Everything in this list is hidden for now.')|tojson }},
+        noScanYet: {{ _('No scan results yet.')|tojson }},
+        clickScan: {{ _('Click "Scan Library" to begin.')|tojson }},
+        noPairs: {{ _('No pairs found above 60%% confidence.')|tojson }},
+        rescanLater: {{ _('Run another scan after your library changes.')|tojson }},
+        noEbookOnly: {{ _('Every ebook from the last scan has an audiobook match or is already in BookBridge.')|tojson }},
+        ebookNeverScanned: {{ _('Ebook Only results appear after the next Scan Library.')|tojson }},
+        incompleteEmpty: {{ _('No reliable results yet: the last scan could not read every source.')|tojson }},
+        neverScanned: {{ _('No scan has finished yet.')|tojson }},
+        lastScanAt: {{ _('Last scan: {date}')|tojson }},
+        lastScanStats: {{ _('Last scan: %(new)s new scanned, %(cached)s reused from cache', new='{new}', cached='{cached}')|tojson }},
+        noAudioAsOf: {{ _('No audio match found as of {date}.')|tojson }},
+        ebookOnlyMeaning: {{ _('No qualifying audiobook was found in the last scan. That does not mean none exists.')|tojson }},
+        incompleteSince: {{ _('The latest scan ({date}) could not read every source, so these results may be incomplete.')|tojson }},
+        incompleteNoDate: {{ _('The latest scan could not read every source, so these results may be incomplete.')|tojson }},
+        sourcesIncomplete: {{ _('Not fully read: {sources}')|tojson }},
+        reviewWarning: {{ _('Some selected pairs are not exact matches; check them in the queue before matching.')|tojson }},
+        tieBlocked: {{ _('Two ebooks match equally: pick one in the review panel')|tojson }},
+        noMatchBlocked: {{ _('No ebook match')|tojson }},
+        belowThreshold: {{ _('The best match is below 100%%')|tojson }},
+    };
+    const REASON_LABELS = {
+        authoritative: {{ _('Calibre identifier')|tojson }},
+        subtitle_only: {{ _('Title only partly matches')|tojson }},
+        edition: {{ _('Different edition')|tojson }},
+        author_missing: {{ _('Author missing, title only')|tojson }},
+        author_conflict: {{ _('Different credited author')|tojson }},
+    };
+    const MANUAL_LABELS = {
+        tie: {{ _('Two ebooks match equally')|tojson }},
+        local_file: {{ _('A file on disk, not a library entry')|tojson }},
+        edition: {{ _('The edition or adaptation may differ')|tojson }},
+        author_unconfirmed: {{ _('The author could not be confirmed')|tojson }},
+        same_title: {{ _('Another ebook by this author has the same title')|tojson }},
+        comic: {{ _('A comic cannot pair with an audiobook')|tojson }},
+        needs_rescan: {{ _('Found before this check existed: run a full scan')|tojson }},
+    };
+    const API_ERRORS = {
+        stale_generation: {{ _('A newer scan finished. The list was refreshed; try again.')|tojson }},
+        ebook_not_actionable: {{ _('This ebook changed since the scan. The list was refreshed.')|tojson }},
+        ebook_ignored: {{ _('This ebook is ignored. The list was refreshed.')|tojson }},
+        already_mapped: {{ _('This ebook is already in BookBridge.')|tojson }},
+        ebook_file_unavailable: {{ _('The ebook file could not be read from its source.')|tojson }},
+        ebook_hash_unavailable: {{ _('The ebook file could not be read from its source.')|tojson }},
+        unsupported_source: {{ _('This source cannot create an ebook-only book.')|tojson }},
+        persistence_failed: {{ _('Could not save the change. Try again.')|tojson }},
+        ignored_entry_not_found: {{ _('This ebook is no longer ignored. The list was refreshed.')|tojson }},
+        fallback: {{ _('The action failed ({code}).')|tojson }},
+    };
+    const SEARCH_ERRORS = {
+        clients_unavailable: {{ _('Your library services could not be reached. Check your integrations and try again.')|tojson }},
+        stale_generation: {{ _('The Ebook Only list changed since you opened it. Search for the book instead.')|tojson }},
+    };
+    // Same msgids as the server-rendered counts; num='{count}' keeps the placeholder for bbPlural.
+    const ITEM_COUNT = {% call(n) plural_forms() %}{{ ngettext('%(num)s item', '%(num)s items', n, num='{count}') }}{% endcall %};
+    const P = {
+        suggestions: {% call(n) plural_forms() %}{{ ngettext('%(num)s pair', '%(num)s pairs', n, num='{count}') }}{% endcall %},
+        eligible: {% call(n) plural_forms() %}{{ ngettext('%(num)s eligible', '%(num)s eligible', n, num='{count}') }}{% endcall %},
+        queued: {% call(n) plural_forms() %}{{ ngettext('%(num)s queued', '%(num)s queued', n, num='{count}') }}{% endcall %},
+        review: {% call(n) plural_forms() %}{{ ngettext('%(num)s needs review', '%(num)s need review', n, num='{count}') }}{% endcall %},
+        ebooks: {% call(n) plural_forms() %}{{ ngettext('%(num)s ebook', '%(num)s ebooks', n, num='{count}') }}{% endcall %},
+        ignored: {% call(n) plural_forms() %}{{ ngettext('%(num)s ignored', '%(num)s ignored', n, num='{count}') }}{% endcall %},
+        selected: {% call(n) plural_forms() %}{{ ngettext('%(num)s selected', '%(num)s selected', n, num='{count}') }}{% endcall %},
+        hidden: {% call(n) plural_forms() %}{{ ngettext('%(num)s hidden for now', '%(num)s hidden for now', n, num='{count}') }}{% endcall %},
+        seriesSelected: {% call(n) plural_forms() %}{{ ngettext('%(num)s eligible book selected in %(series)s', '%(num)s eligible books selected in %(series)s', n, num='{count}', series='{series}') }}{% endcall %},
+        unknown: {% call(n) plural_forms() %}{{ ngettext('%(num)s ebook could not be checked reliably and is not listed.', '%(num)s ebooks could not be checked reliably and are not listed.', n, num='{count}') }}{% endcall %},
+    };
+
+    function showSuggestionSubmitFeedback(targetId, message) {
+        const feedback = document.getElementById(targetId);
+        if (!feedback) return;
+
+        if (!message) {
+            feedback.classList.remove('show');
+            feedback.innerHTML = '';
+            return;
+        }
+
+        feedback.classList.add('show');
+        feedback.innerHTML = `<span class="submit-feedback-spinner" aria-hidden="true"></span><span>${message}</span>`;
+    }
+
+    function setSuggestionButtonHtml(button, html) {
+        button.innerHTML = html;
+    }
+
+    function startSuggestionSubmitState(submitter) {
+        if (!submitter || suggestionSubmitInFlight) {
+            return false;
+        }
+
+        suggestionSubmitInFlight = true;
+        const groupName = submitter.dataset.primaryAction || '';
+        if (groupName) {
+            document.querySelectorAll(`[data-primary-action="${groupName}"]`).forEach((button) => {
+                if (!button.dataset.originalHtml) {
+                    button.dataset.originalHtml = button.innerHTML;
+                }
+                button.disabled = true;
+            });
+        } else {
+            submitter.disabled = true;
+        }
+
+        setSuggestionButtonHtml(submitter, submitter.dataset.workingLabel || {{ _('Working...')|tojson }});
+        showSuggestionSubmitFeedback(
+            submitter.dataset.feedbackTarget || '',
+            submitter.dataset.workingMessage || {{ _('Working...')|tojson }}
+        );
+        return true;
+    }
+
+    function setScanProgress(percent, label) {
+        const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+        const progressBar = document.getElementById('scanProgressBar');
+        const progressText = document.getElementById('scanProgressText');
+        displayedScanProgress = clamped;
+        if (progressBar) progressBar.style.width = `${clamped}%`;
+        if (progressText) progressText.textContent = label || bbFormat({{ _('Scanning library... {percent}%%')|tojson }}, { percent: clamped });
+    }
+
+    function startFakeScanProgress() {
+        if (fakeScanTimer) return;
+        fakeScanProgress = 2;
+        setScanProgress(fakeScanProgress);
+        fakeScanTimer = setInterval(() => {
+            if (fakeScanProgress >= 35) return;
+            fakeScanProgress = Math.min(35, fakeScanProgress + 1);
+            setScanProgress(fakeScanProgress);
+        }, 900);
+    }
+
+    function stopFakeScanProgress(finalLabel) {
+        if (fakeScanTimer) {
+            clearInterval(fakeScanTimer);
+            fakeScanTimer = null;
+        }
+        if (finalLabel) {
+            setScanProgress(100, finalLabel);
+        }
+    }
+
+    function applyBackendProgress(progressData) {
+        if (!progressData || typeof progressData !== 'object') {
+            return;
+        }
+
+        const rawPercent = Number(progressData.percent);
+        if (!Number.isFinite(rawPercent)) {
+            return;
+        }
+
+        reportedScanProgress = Math.max(reportedScanProgress, Math.max(0, Math.min(100, rawPercent)));
+        const nextPercent = Math.max(displayedScanProgress, reportedScanProgress);
+        const message = progressData.message
+            ? `${progressData.message} (${Math.round(nextPercent)}%)`
+            : undefined;
+        setScanProgress(nextPercent, message);
+    }
+
+    // The GET /suggestions render stores a finished scan, so a finished scan reloads
+    // the page (the URL keeps each tab's filters).
+    function reloadAfterScan() { window.location.replace(window.location.href); }
+
+    function pollScanStatus() {
+        fetch('/api/suggestions/scan-status')
+            .then((response) => response.json())
+            .then((data) => {
+                const status = data.status || 'idle';
+                if (status === 'queued') {
+                    // Another reader's scan holds the slot; nothing of this scan has run yet.
+                    stopFakeScanProgress();
+                    setScanProgress(0, {{ _('Waiting for another library scan to finish...')|tojson }});
+                }
+                if (status === 'running') {
+                    applyBackendProgress(data.progress || {});
+                }
+                if (status === 'done') {
+                    stopFakeScanProgress({{ _('Finalizing results... 100%%')|tojson }});
+                    setTimeout(reloadAfterScan, 350);
+                    return;
+                }
+                if (status === 'error') {
+                    stopFakeScanProgress({{ _('Scan failed')|tojson }});
+                    setTimeout(reloadAfterScan, 350);
+                    return;
+                }
+                if (status === 'idle') {
+                    reloadAfterScan();
+                    return;
+                }
+                setTimeout(pollScanStatus, 1500);
+            })
+            .catch(() => {
+                setTimeout(pollScanStatus, 2000);
+            });
+    }
+
+    function setSelectedEbook(filename, displayName, source = '', sourceId = '', sourcePath = '') {
+        const hasSelection = !!filename;
+        if (hasSelection) setAudioOnly(false);
+        document.getElementById('selected_ebook_filename').value = hasSelection ? filename : '';
+        document.getElementById('selected_ebook_display_name').value = hasSelection ? (displayName || filename) : '';
+        document.getElementById('selected_ebook_source').value = hasSelection ? (source || '') : '';
+        document.getElementById('selected_ebook_source_id').value = hasSelection ? (sourceId || '') : '';
+        document.getElementById('selected_ebook_source_path').value = hasSelection ? (sourcePath || '') : '';
+        updateAddButton();
+    }
+
+    function clearSelectedEbookCards() {
+        document.querySelectorAll('#ebookCardGrid .ebook-card').forEach((card) => card.classList.remove('selected'));
+    }
+
+    function selectEbookCard(element, filename, displayName, source, sourceId, sourcePath) {
+        clearSelectedEbookCards();
+        if (element) element.classList.add('selected');
+        setSelectedEbook(filename, displayName, source, sourceId, sourcePath);
+    }
+
+    function setAudioOnly(on) {
+        document.getElementById('selected_audio_only').value = on ? 'true' : '';
+    }
+
+    // "Audio only" maps the audiobook with no ebook; picking it drops any ebook or Storyteller choice.
+    function selectAudioOnly(element) {
+        clearSelectedEbookCards();
+        setSelectedEbook('', '', '', '');
+        const noneCard = document.querySelector('#storytellerCardGrid .st-card.ghost-card');
+        selectStoryteller(noneCard, '');
+        if (element) element.classList.add('selected');
+        setAudioOnly(true);
+        updateAddButton();
+    }
+
+    // Queueable: an ebook or Storyteller title, or "Audio only" with an audiobook.
+    function updateAddButton() {
+        const hasAudio = !!(document.getElementById('selected_audiobook_id').value || document.getElementById('selected_audio_source').value);
+        const hasEbook = !!document.getElementById('selected_ebook_filename').value;
+        const hasStoryteller = !!document.getElementById('selected_storyteller_uuid').value;
+        const audioOnly = document.getElementById('selected_audio_only').value === 'true';
+        document.getElementById('addToQueueBtn').disabled = !(hasEbook || hasStoryteller || (audioOnly && hasAudio));
+    }
+
+    // The per-item read-along EPUB needs a BookOrbit audiobook to deliver into; a disabled
+    // box never submits, so an ineligible selection can't carry the flag.
+    function updateReadalongOption(audioSource) {
+        const option = document.getElementById('readalongEpubOption');
+        const checkbox = document.getElementById('readalongEpubCheckbox');
+        const on = audioSource === 'BookOrbit';
+        option.hidden = !on;
+        checkbox.disabled = !on;
+        if (!on) checkbox.checked = false;
+    }
+
+    function clearSelectedStorytellerCards() {
+        document.querySelectorAll('#storytellerCardGrid .st-card').forEach((card) => card.classList.remove('selected'));
+    }
+
+    function selectStoryteller(element, uuid) {
+        clearSelectedStorytellerCards();
+        if (element) element.classList.add('selected');
+        selectedStorytellerUuid = uuid || '';
+        if (selectedStorytellerUuid) {
+            setAudioOnly(false);
+            document.querySelectorAll('#ebookCardGrid .audio-only-card').forEach((card) => card.classList.remove('selected'));
+        }
+        document.getElementById('selected_storyteller_uuid').value = selectedStorytellerUuid;
+        updateAddButton();
+    }
+
+    function resetStorytellerGrid() {
+        const grid = document.getElementById('storytellerCardGrid');
+        const emptyLabel = document.getElementById('storytellerGridEmpty');
+        grid.innerHTML = '';
+        emptyLabel.classList.add('hidden');
+        emptyLabel.textContent = '';
+
+        const noneCard = document.createElement('div');
+        noneCard.className = 'resource-card st-card ghost-card selected';
+        noneCard.dataset.value = '';
+        noneCard.onclick = () => selectStoryteller(noneCard, '');
+        noneCard.innerHTML = '<div class="resource-icon" style="color: rgba(255,255,255,0.35);">⊘</div><div class="resource-title" style="color: rgba(255,255,255,0.5);"></div>';
+        noneCard.querySelector('.resource-title').textContent = {{ _('None / Skip')|tojson }};
+        grid.appendChild(noneCard);
+        selectStoryteller(noneCard, '');
+        return { grid, emptyLabel };
+    }
+
+    // Storyteller results: { uuid, title, subtitle, authors (list or string), has_transcript }.
+    function appendStorytellerCards(grid, results) {
+        const parsed = [];
+        results.forEach((item) => {
+            const uuid = item?.uuid || item?.id || '';
+            if (!uuid) return;
+            const title = (item?.title || {{ _('Untitled')|tojson }}).toString();
+            const subtitle = (item?.subtitle || '').toString();
+            let authors = '';
+            if (Array.isArray(item?.authors)) {
+                authors = item.authors.join(', ');
+            } else if (typeof item?.authors === 'string') {
+                authors = item.authors;
+            }
+            const has_transcript = !!item?.has_transcript;
+            parsed.push({ uuid, title, subtitle, authors, has_transcript });
+        });
+
+        parsed.forEach((st) => {
+            const card = document.createElement('div');
+            card.className = 'resource-card st-card';
+            card.dataset.value = st.uuid;
+            card.onclick = () => selectStoryteller(card, st.uuid);
+
+            const icon = document.createElement('div');
+            icon.className = 'resource-icon';
+            icon.textContent = '⚡';
+
+            const title = document.createElement('div');
+            title.className = 'resource-title';
+            const fullTitle = st.subtitle ? `${st.title}: ${st.subtitle}` : st.title;
+            title.title = fullTitle;
+            title.textContent = fullTitle;
+
+            card.appendChild(icon);
+            card.appendChild(title);
+
+            if (st.authors) {
+                const subtitle = document.createElement('div');
+                subtitle.className = 'resource-subtitle';
+                subtitle.textContent = st.authors;
+                card.appendChild(subtitle);
+            }
+
+            if (st.has_transcript) {
+                const badges = document.createElement('div');
+                badges.className = 'card-badges';
+                const badge = document.createElement('span');
+                badge.className = 'source-badge transcript';
+                badge.textContent = {{ _('Transcript')|tojson }};
+                badges.appendChild(badge);
+                card.prepend(badges);
+            }
+
+            grid.appendChild(card);
+        });
+
+        if (parsed.length === 1) {
+            const single = grid.querySelector('.st-card:not(.ghost-card)');
+            if (single) {
+                selectStoryteller(single, single.dataset.value || '');
+            }
+        }
+        return parsed.length;
+    }
+
+    function renderStorytellerOptions(suggestion) {
+        const { grid, emptyLabel } = resetStorytellerGrid();
+
+        if (!storytellerEnabled) {
+            emptyLabel.textContent = {{ _('Storyteller is not configured.')|tojson }};
+            emptyLabel.classList.remove('hidden');
+            return;
+        }
+
+        const queryParts = [suggestion.audio_title || suggestion.abs_title || '', suggestion.audio_author || suggestion.abs_author || '']
+            .map((s) => (s || '').trim())
+            .filter((s) => !!s);
+        if (!queryParts.length) {
+            emptyLabel.textContent = {{ _('No title/author available to search Storyteller.')|tojson }};
+            emptyLabel.classList.remove('hidden');
+            return;
+        }
+
+        const token = ++storytellerFetchToken;
+        emptyLabel.textContent = {{ _('Searching Storyteller...')|tojson }};
+        emptyLabel.classList.remove('hidden');
+
+        const query = queryParts.join(' ');
+        fetch(`/api/storyteller/search?q=${encodeURIComponent(query)}`)
+            .then((response) => response.json().catch(() => null).then((body) => ({ ok: response.ok, body })))
+            .then(({ ok, body }) => {
+                if (token !== storytellerFetchToken) return;
+                if (!ok) {
+                    emptyLabel.textContent = (body && body.error) || {{ _('Storyteller search failed.')|tojson }};
+                    emptyLabel.classList.remove('hidden');
+                    return;
+                }
+                const results = body;
+                if (!Array.isArray(results) || results.length === 0) {
+                    emptyLabel.textContent = {{ _('No Storyteller matches found.')|tojson }};
+                    emptyLabel.classList.remove('hidden');
+                    return;
+                }
+
+                emptyLabel.classList.add('hidden');
+                appendStorytellerCards(grid, results);
+            })
+            .catch(() => {
+                if (token !== storytellerFetchToken) return;
+                emptyLabel.textContent = {{ _('Storyteller search failed.')|tojson }};
+                emptyLabel.classList.remove('hidden');
+            });
+    }
+
+    function sourceBadgeClass(source) {
+        const normalized = (source || '').toLowerCase().replace(/\s+/g, '');
+        if (normalized === 'booklore') return 'grimmory';
+        if (normalized === 'grimmory' || normalized === 'abs' || normalized === 'cwa' || normalized === 'localfile' || normalized === 'bookorbit') {
+            return normalized;
+        }
+        return 'unknown';
+    }
+
+    // Grimmory's internal key is BookLore/Booklore; only its displayed name changed.
+    function ebookSourceLabel(source) {
+        return ['booklore', 'grimmory'].includes(String(source || '').toLowerCase()) ? 'Grimmory' : String(source || '');
+    }
+
+    function inferSourceFromFilename(filename) {
+        const name = (filename || '').toLowerCase();
+        if (!name) return '';
+        if (name.includes('_abs.')) return 'ABS';
+        if (name.startsWith('cwa_') || name.includes('_cwa.')) return 'CWA';
+        return '';
+    }
+
+    // One ebook choice card. match: { ebook_filename, display_name, source, source_id,
+    // source_path|path, match_reason, author, language, score (optional), linked }.
+    function buildEbookCard(match) {
+        const ebookFilename = match.ebook_filename || '';
+        const displayName = match.display_name || ebookFilename;
+        const source = match.source || inferSourceFromFilename(ebookFilename);
+        const sourceId = match.source_id || '';
+        const sourcePath = match.source_path || match.path || '';
+        const matchReason = match.match_reason || '';
+        const author = match.author || '';
+        const language = (match.language || '').toString().trim();
+        const hasScore = match.score !== undefined && match.score !== null;
+        const scoreText = hasScore ? bbFormat(T.scoreMatch, { score: Math.round(match.score || 0) }) : '';
+
+        const card = document.createElement('div');
+        card.className = 'ebook-card';
+        card.dataset.value = ebookFilename;
+        card.dataset.displayName = displayName;
+        card.dataset.source = source || '';
+        card.dataset.sourceId = sourceId || '';
+        card.dataset.sourcePath = sourcePath || '';
+        card.onclick = () => selectEbookCard(card, ebookFilename, displayName, source, sourceId, sourcePath);
+
+        const icon = document.createElement('div');
+        icon.className = 'ebook-icon';
+        icon.textContent = '📖';
+
+        const title = document.createElement('div');
+        title.className = 'ebook-title';
+        title.title = displayName;
+        title.textContent = displayName;
+
+        const subtitle = document.createElement('div');
+        subtitle.className = 'ebook-subtitle';
+        subtitle.textContent = author || scoreText;
+
+        const badges = document.createElement('div');
+        badges.className = 'card-badges';
+        const addBadge = (cls, label, tip) => {
+            const badge = document.createElement('span');
+            badge.className = `source-badge ${cls}`;
+            badge.textContent = label;
+            if (tip) badge.title = tip;
+            badges.appendChild(badge);
+        };
+        if (source) addBadge(sourceBadgeClass(source), ebookSourceLabel(source));
+        if (language) addBadge('language', language, T.language);
+        if (match.linked) addBadge('linked', `📌 ${T.linked}`, T.linkedTitle);
+        if (matchReason === 'same_folder') addBadge('samefolder', {{ _('Same folder')|tojson }});
+        if (matchReason === 'same_folder_ambiguous') addBadge('samefolder', {{ _('Same folder?')|tojson }});
+        if (matchReason === 'same_series') addBadge('sameseries', {{ _('Same series')|tojson }}, {{ _('Same series and number as the audiobook')|tojson }});
+
+        if (badges.childElementCount) card.appendChild(badges);
+        card.appendChild(icon);
+        card.appendChild(title);
+        card.appendChild(subtitle);
+
+        if (author && scoreText) {
+            const confidence = document.createElement('div');
+            confidence.className = 'ebook-subtitle';
+            confidence.textContent = scoreText;
+            card.appendChild(confidence);
+        }
+        return card;
+    }
+
+    function clearSelection() {
+        selectedSuggestionId = null;
+        selectedSearchIndex = null;
+        setAudioOnly(false);
+        updateReadalongOption('');
+        document.querySelectorAll('.sugg-row.reviewing').forEach((row) => row.classList.remove('reviewing'));
+        document.getElementById('selectionDetails').classList.add('hidden');
+        document.getElementById('selectionPlaceholder').style.display = 'block';
+        document.getElementById('selected_audiobook_id').value = '';
+        document.getElementById('selected_audio_source').value = '';
+        document.getElementById('selected_audio_source_id').value = '';
+        document.getElementById('selected_audio_title').value = '';
+        document.getElementById('selected_audio_author').value = '';
+        document.getElementById('selected_audio_cover_url').value = '';
+        document.getElementById('selected_audio_duration').value = '';
+        document.getElementById('selected_audio_provider_book_id').value = '';
+        document.getElementById('selected_audio_provider_file_id').value = '';
+        setSelectedEbook('', '', '', '');
+        selectedStorytellerUuid = '';
+        document.getElementById('selected_storyteller_uuid').value = '';
+        const grid = document.getElementById('ebookCardGrid');
+        if (grid) grid.innerHTML = '';
+        const emptyLabel = document.getElementById('ebookGridEmpty');
+        if (emptyLabel) emptyLabel.classList.add('hidden');
+        const stGrid = document.getElementById('storytellerCardGrid');
+        if (stGrid) stGrid.innerHTML = '';
+        const stEmptyLabel = document.getElementById('storytellerGridEmpty');
+        if (stEmptyLabel) stEmptyLabel.classList.add('hidden');
+        storytellerFetchToken += 1;
+        updateAddButton();
+    }
+
+    function selectSuggestion(suggestionKey) {
+        const suggestion = entryIndex.get(suggestionKey);
+        if (!suggestion || !suggestion.matches || suggestion.matches.length === 0) return;
+
+        selectedSuggestionId = suggestionKey;
+        document.querySelectorAll('.sugg-row.pair-row').forEach((row) => row.classList.toggle('reviewing', row.dataset.key === suggestionKey));
+
+        document.getElementById('selectionPlaceholder').style.display = 'none';
+        document.getElementById('selectionDetails').classList.remove('hidden');
+        document.getElementById('selected_audiobook_id').value = suggestion.bridge_key || suggestion.abs_id || '';
+        document.getElementById('selected_audio_source').value = suggestion.audio_source || '';
+        document.getElementById('selected_audio_source_id').value = suggestion.audio_source_id || '';
+        document.getElementById('selected_audio_title').value = suggestion.audio_title || suggestion.abs_title || '';
+        document.getElementById('selected_audio_author').value = suggestion.audio_author || suggestion.abs_author || '';
+        document.getElementById('selected_audio_cover_url').value = suggestion.audio_cover_url || suggestion.cover_url || '';
+        document.getElementById('selected_audio_duration').value = suggestion.audio_duration ?? suggestion.duration ?? '';
+        document.getElementById('selected_audio_provider_book_id').value = suggestion.audio_provider_book_id || suggestion.audio_source_id || '';
+        document.getElementById('selected_audio_provider_file_id').value = suggestion.audio_provider_file_id || '';
+        document.getElementById('selectedTitle').textContent = suggestion.audio_title || suggestion.abs_title || '';
+        document.getElementById('selectedAuthor').textContent = suggestion.audio_author || suggestion.abs_author || '';
+        document.getElementById('selectedCover').src = suggestion.audio_cover_url || suggestion.cover_url || '';
+        renderStorytellerOptions(suggestion);
+        updateReadalongOption(suggestion.audio_source || '');
+
+        const matches = [...suggestion.matches].sort((a, b) => (b.score || 0) - (a.score || 0));
+        const grid = document.getElementById('ebookCardGrid');
+        const emptyLabel = document.getElementById('ebookGridEmpty');
+        grid.innerHTML = '';
+        emptyLabel.textContent = T.noPairEbooks;
+        matches.forEach((match) => grid.appendChild(buildEbookCard({ ...match, score: match.score || 0 })));
+
+        if (matches.length > 0) {
+            emptyLabel.classList.add('hidden');
+            const firstCard = grid.querySelector('.ebook-card');
+            if (firstCard) {
+                selectEbookCard(
+                    firstCard,
+                    firstCard.dataset.value || '',
+                    firstCard.dataset.displayName || '',
+                    firstCard.dataset.source || '',
+                    firstCard.dataset.sourceId || '',
+                    firstCard.dataset.sourcePath || '',
+                );
+            }
+        } else {
+            setSelectedEbook('', '', '', '');
+            emptyLabel.classList.remove('hidden');
+        }
+    }
+
+    // Search tab review: index into views.search.audiobooks, or -1 for "No audiobook".
+    function selectSearchResult(index) {
+        const view = views.search;
+        if (!view) return;
+        const book = index >= 0 ? view.audiobooks[index] : null;
+        if (index >= 0 && !book) return;
+        clearSelection();
+        selectedSearchIndex = index;
+        document.querySelectorAll('.sugg-row.search-row').forEach((row) => row.classList.toggle('reviewing', Number(row.dataset.index) === index));
+
+        document.getElementById('selectionPlaceholder').style.display = 'none';
+        document.getElementById('selectionDetails').classList.remove('hidden');
+        const source = book ? book.source : '';
+        document.getElementById('selected_audiobook_id').value = book && source === 'ABS' ? book.source_id : '';
+        document.getElementById('selected_audio_source').value = source;
+        document.getElementById('selected_audio_source_id').value = book ? book.source_id : '';
+        document.getElementById('selected_audio_title').value = book ? book.title : '';
+        document.getElementById('selected_audio_author').value = book ? book.authors : '';
+        document.getElementById('selected_audio_cover_url').value = book ? book.cover_url : '';
+        document.getElementById('selected_audio_duration').value = book && book.duration != null ? book.duration : '';
+        document.getElementById('selected_audio_provider_book_id').value = book ? book.provider_book_id : '';
+        document.getElementById('selected_audio_provider_file_id').value = book ? book.provider_file_id : '';
+        document.getElementById('selectedTitle').textContent = book ? book.title : T.ebookOnlyRow;
+        document.getElementById('selectedAuthor').textContent = book ? book.authors : T.ebookOnlyRowSub;
+        document.getElementById('selectedCover').src = book ? book.cover_url : '';
+        updateReadalongOption(source);
+
+        const { grid: stGrid, emptyLabel: stEmpty } = resetStorytellerGrid();
+        if (!view.storyteller_enabled) {
+            stEmpty.textContent = {{ _('Storyteller is not configured.')|tojson }};
+            stEmpty.classList.remove('hidden');
+        } else if (view.storyteller_failed) {
+            stEmpty.textContent = T.storytellerFailed;
+            stEmpty.classList.remove('hidden');
+        } else if (!appendStorytellerCards(stGrid, view.storyteller || [])) {
+            stEmpty.textContent = {{ _('No Storyteller matches found.')|tojson }};
+            stEmpty.classList.remove('hidden');
+        }
+
+        const grid = document.getElementById('ebookCardGrid');
+        const emptyLabel = document.getElementById('ebookGridEmpty');
+        grid.innerHTML = '';
+        if (book) {
+            const card = document.createElement('div');
+            card.className = 'ebook-card audio-only-card';
+            card.innerHTML = '<div class="card-badges"><span class="source-badge unknown"></span></div><div class="ebook-icon">🎧</div><div class="ebook-title"></div>';
+            card.querySelector('.ebook-title').textContent = T.audioOnlyCard;
+            card.querySelector('.source-badge').textContent = T.audioOnly;
+            card.onclick = () => selectAudioOnly(card);
+            grid.appendChild(card);
+        }
+        view.ebooks.forEach((ebook) => grid.appendChild(buildEbookCard({
+            ebook_filename: ebook.name,
+            display_name: ebook.display_name,
+            source: ebook.source,
+            source_id: ebook.source_id,
+            source_path: ebook.path,
+            author: ebook.authors,
+            language: ebook.language,
+            linked: !!ebook.abs_identifier,
+        })));
+        emptyLabel.textContent = T.noSearchEbooks;
+        emptyLabel.classList.toggle('hidden', view.ebooks.length > 0);
+        if (view.ebooks.length === 1) {
+            const only = grid.querySelector('.ebook-card:not(.audio-only-card)');
+            if (only) only.click();
+        }
+        updateAddButton();
+    }
+
+    function handleScanSubmit() {
+        document.getElementById('scanOverlay').classList.add('show');
+        displayedScanProgress = 0;
+        reportedScanProgress = 0;
+        startFakeScanProgress();
+    }
+
+    if (document.getElementById('scanForm')) {
+        document.getElementById('scanForm').addEventListener('submit', handleScanSubmit);
+        document.getElementById('scanFullForm').addEventListener('submit', handleScanSubmit);
+    }
+
+    // --- Batch-match queue: async add/remove/clear so the page never reloads and the
+    // scroll position is preserved. process_queue / forge actions navigate away, so
+    // they submit natively but still show the working state. Delegated on .queue-panel
+    // so the handlers survive the queue panel being re-rendered after each mutation.
+    function renderQueueCount() {
+        const count = document.querySelectorAll('#queueList .queue-item').length;
+        const countEl = document.getElementById('queueCount');
+        if (countEl) countEl.textContent = bbPlural(ITEM_COUNT, count);
+    }
+
+    function queuedBridgeKeys() {
+        return new Set(Array.from(document.querySelectorAll('#queueList .queue-item'))
+            .map((item) => item.dataset.bridgeKey).filter(Boolean));
+    }
+
+    async function submitQueueMutation(form, action, submitter) {
+        const queuedKey = action === 'add_to_queue' ? selectedSuggestionId : null;
+        if (submitter) submitter.disabled = true;
+        try {
+            const response = await fetch(form.getAttribute('action'), {
+                method: 'POST',
+                body: new FormData(form),
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const html = await response.text();
+            const queueList = document.getElementById('queueList');
+            if (queueList) queueList.innerHTML = html;
+            renderQueueCount();
+            if (action === 'add_to_queue') {
+                if (queuedKey) selectedKeys.delete(queuedKey);
+                clearSelection();
+                if (activeTab === 'search') setFeedback(T.addedToQueue);
+            }
+            // Pair rows show their queued state; refresh them only where that tab exists and has loaded.
+            if (views.pairs) loadView('pairs');
+        } catch (err) {
+            console.error('Queue update failed; reloading to resync.', err);
+            window.location.reload();
+        } finally {
+            if (submitter) submitter.disabled = false;
+        }
+    }
+
+    const queuePanel = document.getElementById('queuePanel');
+    if (queuePanel) {
+        queuePanel.addEventListener('submit', (event) => {
+            const form = event.target;
+            const actionInput = form.querySelector('input[name="action"]');
+            const action = actionInput ? actionInput.value : '';
+            const submitter = event.submitter || form.querySelector('button[type="submit"]');
+
+            if (action === 'add_to_queue' || action === 'remove_from_queue' || action === 'clear_queue') {
+                event.preventDefault();
+                submitQueueMutation(form, action, submitter);
+            } else if (action === 'forge_only_queue' && !pendingForgeOnlySubmit) {
+                // Ask how to stage the source files first; chooseForgeStageMode resubmits.
+                event.preventDefault();
+                openForgeStageModal();
+            } else if (action === 'process_queue' || action === 'forge_and_match_queue' || action === 'forge_only_queue') {
+                form.querySelectorAll('input[name="readalong_epub_requested"]').forEach((el) => el.remove());
+                const readalong = document.getElementById('queueReadalongCheckbox');
+                if (readalong && readalong.checked) {
+                    const flag = document.createElement('input');
+                    flag.type = 'hidden';
+                    flag.name = 'readalong_epub_requested';
+                    flag.value = 'true';
+                    form.appendChild(flag);
+                }
+                // Navigates to the dashboard; show the working state, then submit natively.
+                if (submitter && !submitter.dataset.primaryAction) {
+                    submitter.dataset.primaryAction = 'queue-actions';
+                    submitter.dataset.workingLabel = {{ _('Processing queue...')|tojson }};
+                    submitter.dataset.workingMessage = {{ _('Processing queued matches and returning to the dashboard...')|tojson }};
+                    submitter.dataset.feedbackTarget = 'queueFeedback';
+                }
+                if (submitter && !startSuggestionSubmitState(submitter)) {
+                    event.preventDefault();
+                }
+            }
+        });
+    }
+
+    const forgeStageModal = document.getElementById('forgeStageModal');
+
+    function openForgeStageModal() {
+        if (forgeStageModal) forgeStageModal.classList.add('open');
+    }
+
+    function closeForgeStageModal() {
+        pendingForgeOnlySubmit = false;
+        if (forgeStageModal) forgeStageModal.classList.remove('open');
+    }
+
+    // The queue partial is re-rendered after every mutation, so look the form up when used.
+    function chooseForgeStageMode(mode) {
+        const form = document.getElementById('forgeOnlyQueueForm');
+        const stageInput = document.getElementById('forgeOnlyStageMode');
+        const button = document.getElementById('forgeOnlyQueueBtn');
+        if (!mode || !form || !stageInput || !button) {
+            closeForgeStageModal();
+            return;
+        }
+        stageInput.value = mode;
+        pendingForgeOnlySubmit = true;
+        forgeStageModal.classList.remove('open');
+        form.requestSubmit(button);
+    }
+
+    if (forgeStageModal) {
+        forgeStageModal.addEventListener('click', (event) => {
+            const option = event.target.closest('[data-stage-mode]');
+            if (option) chooseForgeStageMode(option.dataset.stageMode);
+            else if (event.target === forgeStageModal) closeForgeStageModal();
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && forgeStageModal.classList.contains('open')) closeForgeStageModal();
+        });
+    }
+
+    // ===== Tabbed Suggestions view =====
+    // Rows come from GET /api/suggestions/discovery (persisted scan, no provider calls).
+    // Selection is a set of suggestion_keys, independent of what is rendered: a series
+    // checkbox selects from the loaded filtered dataset, never from DOM checkboxes.
+    // Regular users get only the Search tab; the scan-based tabs and their APIs are admin-only.
+    const TABS = {{ tabs_shown|tojson }};
+    const DEFAULTS = {
+        pairs: { q: '', source: '', series_key: '', status: 'all', sort: 'series', group: true },
+        ebook_only: { q: '', source: '', series_key: '', ignored: 'exclude', sort: 'series', group: true },
+        search: { q: '' },
+    };
+    const VALID = {
+        status: ['all', 'eligible', 'manual_review', 'queued'],
+        ignored: ['exclude', 'include', 'only'],
+        sort: { pairs: ['series', 'title', 'confidence'], ebook_only: ['series', 'title'] },
+    };
+    const OTHER_GROUP = '';
+    const views = { pairs: null, ebook_only: null, search: null };
+    const loadErrors = { pairs: null, ebook_only: null, search: null };
+    const inflight = { pairs: null, ebook_only: null, search: null };
+    const tabCounts = {{ tab_counts|tojson }} || {};
+    const scrollPos = { pairs: 0, ebook_only: 0, search: 0 };
+    const optionCache = { pairs: { series: [], sources: [] }, ebook_only: { series: [], sources: [] } };
+    const selectedKeys = new Set();
+    const ebookSelectedKeys = new Set();
+    let ebookGeneration;
+    let entryIndex = new Map();
+    let pairsGeneration;
+    let currentGroups = new Map();
+    let activeTab = TABS[0];
+    let tabState = { pairs: { ...DEFAULTS.pairs }, ebook_only: { ...DEFAULTS.ebook_only }, search: { ...DEFAULTS.search } };
+    // A one-shot hand-off into Search (?review= or ?ebook_key=&generation=); dropped from the URL once used.
+    let searchHandoff = null;
+    const hiddenKeys = { pairs: new Set(), ebook_only: new Set(), search: new Set() };
+    const expandedGroups = { pairs: new Set(), ebook_only: new Set(), search: new Set() };
+    const searchCollapsed = { pairs: new Set(), ebook_only: new Set(), search: new Set() };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function readJson(storage, key) {
+        try { return JSON.parse(storage.getItem(key) || 'null'); } catch (e) { return null; }
+    }
+    function writeJson(storage, key, value) {
+        try { storage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable */ }
+    }
+
+    function cleanState(tab, raw) {
+        if (tab === 'search') return { q: typeof (raw || {}).q === 'string' ? raw.q : '' };
+        const st = { ...DEFAULTS[tab], ...(raw || {}) };
+        ['q', 'source', 'series_key'].forEach((key) => { st[key] = typeof st[key] === 'string' ? st[key] : ''; });
+        if (tab === 'pairs' && !VALID.status.includes(st.status)) st.status = 'all';
+        if (tab === 'ebook_only' && !VALID.ignored.includes(st.ignored)) st.ignored = 'exclude';
+        if (!VALID.sort[tab].includes(st.sort)) st.sort = 'series';
+        st.group = st.group !== false;
+        return st;
+    }
+
+    function loadInitialState() {
+        const saved = readJson(sessionStorage, 'suggestions_tab_state') || {};
+        const params = new URLSearchParams(window.location.search);
+        const urlTab = params.get('tab');
+        activeTab = TABS.includes(urlTab) ? urlTab : (TABS.includes(saved.active) ? saved.active : TABS[0]);
+        TABS.forEach((tab) => { tabState[tab] = cleanState(tab, (saved.tabs || {})[tab]); });
+        if (activeTab === 'search') {
+            if (params.has('q')) tabState.search.q = params.get('q') || '';
+            const handoff = {};
+            ['review', 'ebook_key', 'generation'].forEach((key) => { if (params.get(key)) handoff[key] = params.get(key); });
+            if (handoff.review || handoff.ebook_key) searchHandoff = handoff;
+        } else if ([...params.keys()].some((key) => key !== 'tab')) {
+            tabState[activeTab] = cleanState(activeTab, {
+                q: params.get('q') || '',
+                source: params.get('source') || '',
+                series_key: params.get('series') || '',
+                status: params.get('status') || 'all',
+                ignored: params.get('ignored') || 'exclude',
+                sort: params.get('sort') || 'series',
+                group: params.get('group') !== 'flat',
+            });
+        }
+        const hidden = readJson(sessionStorage, 'suggestions_hidden') || {};
+        const expanded = readJson(localStorage, 'suggestions_expanded') || {};
+        TABS.forEach((tab) => {
+            (Array.isArray(hidden[tab]) ? hidden[tab] : []).forEach((key) => hiddenKeys[tab].add(key));
+            (Array.isArray(expanded[tab]) ? expanded[tab] : []).forEach((key) => expandedGroups[tab].add(key));
+        });
+    }
+
+    function saveState() {
+        writeJson(sessionStorage, 'suggestions_tab_state', { active: activeTab, tabs: tabState });
+        const st = tabState[activeTab];
+        const params = new URLSearchParams({ tab: activeTab });
+        if (st.q) params.set('q', st.q);
+        if (activeTab === 'search') {
+            history.replaceState(null, '', `${window.location.pathname}?${params}${window.location.hash}`);
+            return;
+        }
+        if (st.source) params.set('source', st.source);
+        if (st.series_key) params.set('series', st.series_key);
+        if (activeTab === 'pairs' && st.status !== 'all') params.set('status', st.status);
+        if (activeTab === 'ebook_only' && st.ignored !== 'exclude') params.set('ignored', st.ignored);
+        if (st.sort !== 'series') params.set('sort', st.sort);
+        params.set('group', st.group ? 'series' : 'flat');
+        history.replaceState(null, '', `${window.location.pathname}?${params}`);
+    }
+
+    function saveHidden() {
+        writeJson(sessionStorage, 'suggestions_hidden', { pairs: [...hiddenKeys.pairs], ebook_only: [...hiddenKeys.ebook_only] });
+    }
+
+    function saveExpanded() {
+        writeJson(localStorage, 'suggestions_expanded', { pairs: [...expandedGroups.pairs], ebook_only: [...expandedGroups.ebook_only] });
+    }
+
+    function filtersFor(tab) {
+        const st = tabState[tab];
+        const filters = { q: st.q, source: st.source, series_key: st.series_key };
+        if (tab === 'pairs') filters.status = st.status; else filters.ignored = st.ignored;
+        return filters;
+    }
+
+    function hasActiveFilters(tab) {
+        const st = tabState[tab];
+        return !!(st.q || st.source || st.series_key || (tab === 'pairs' ? st.status !== 'all' : st.ignored !== 'exclude'));
+    }
+
+    function searchErrorText(code) {
+        return SEARCH_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code: code || 'error' });
+    }
+
+    // Live provider search for the Search tab (GET /api/suggestions/search). Runs on submit
+    // only, never per keystroke: each search hits every configured library.
+    async function runSearch() {
+        const st = tabState.search;
+        const handoff = searchHandoff;
+        searchHandoff = null;
+        if (inflight.search) inflight.search.abort();
+        if (!st.q && !handoff) {
+            views.search = null;
+            loadErrors.search = null;
+            if (activeTab === 'search') renderList();
+            return;
+        }
+        const controller = new AbortController();
+        inflight.search = controller;
+        const params = new URLSearchParams();
+        if (st.q) params.set('q', st.q);
+        Object.entries(handoff || {}).forEach(([key, value]) => params.set(key, value));
+        clearSelection();
+        setFeedback('');
+        if (activeTab === 'search') renderList();
+        try {
+            const response = await fetch(`/api/suggestions/search?${params}`, {
+                signal: controller.signal,
+                headers: { Accept: 'application/json' },
+            });
+            const body = await response.json().catch((err) => { if (err.name === 'AbortError') throw err; return null; });
+            if (!response.ok || !body || !Array.isArray(body.audiobooks)) {
+                throw new Error((body && body.error) || `http_${response.status}`);
+            }
+            views.search = body;
+            loadErrors.search = null;
+            // A hand-off searches for the book's own title; show it. A typed query stays as typed.
+            if (body.query && body.mode !== 'search') st.q = body.query;
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Search failed.', err);
+            views.search = null;
+            loadErrors.search = err.message || 'error';
+        } finally {
+            if (inflight.search === controller) inflight.search = null;
+        }
+        if (activeTab !== 'search') return;
+        saveState();
+        syncControls();
+        renderList();
+        const view = views.search;
+        // A lone audiobook (or none, with ebooks to add by themselves) opens straight in review.
+        if (view && view.audiobooks.length === 1) selectSearchResult(0);
+        else if (view && !view.audiobooks.length && view.ebooks.length) selectSearchResult(-1);
+    }
+
+    async function loadView(tab) {
+        if (tab === 'search') return runSearch();
+        if (inflight[tab]) inflight[tab].abort();
+        const controller = new AbortController();
+        inflight[tab] = controller;
+        const st = tabState[tab];
+        const params = new URLSearchParams({ tab, sort: st.sort, filters: JSON.stringify(filtersFor(tab)) });
+        if (tab === activeTab) $('resultsList').setAttribute('aria-busy', 'true');
+        try {
+            const response = await fetch(`/api/suggestions/discovery?${params}`, {
+                signal: controller.signal,
+                headers: { Accept: 'application/json' },
+            });
+            // An abort can land while the body is read; keep it an AbortError.
+            const body = await response.json().catch((err) => { if (err.name === 'AbortError') throw err; return null; });
+            if (!response.ok || !body || !Array.isArray(body.entries)) {
+                throw new Error((body && body.error) || `HTTP ${response.status}`);
+            }
+            views[tab] = body;
+            if (loadErrors[tab] && tab === activeTab) setFeedback('');
+            loadErrors[tab] = null;
+            tabCounts[tab] = body.counts.active;
+            if (tab === 'pairs') syncSelection(body);
+            if (tab === 'ebook_only') {
+                if (ebookGeneration !== undefined && ebookGeneration !== body.generation) ebookSelectedKeys.clear();
+                ebookGeneration = body.generation;
+            }
+            cacheOptions(tab, body);
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Suggestions view failed to load.', err);
+            loadErrors[tab] = err.message || 'error';
+        } finally {
+            if (inflight[tab] === controller) inflight[tab] = null;
+        }
+        renderTabCounts();
+        if (tab === activeTab) {
+            fillOptionSelects();
+            renderList();
+        }
+    }
+
+    // A new scan generation invalidates every selection; within one generation a
+    // selection survives filters and only drops rows that left the dataset or can't be queued.
+    function syncSelection(view) {
+        if (pairsGeneration !== undefined && view.generation !== pairsGeneration) {
+            selectedKeys.clear();
+            entryIndex = new Map();
+        }
+        pairsGeneration = view.generation;
+        const present = new Set();
+        view.entries.forEach((entry) => { entryIndex.set(entry.suggestion_key, entry); present.add(entry.suggestion_key); });
+        const complete = !hasActiveFilters('pairs');
+        if (complete) {
+            entryIndex.forEach((_entry, key) => { if (!present.has(key)) entryIndex.delete(key); });
+        }
+        [...selectedKeys].forEach((key) => {
+            const entry = entryIndex.get(key);
+            if (!entry || !rowSelectable(entry) || hiddenKeys.pairs.has(key)) selectedKeys.delete(key);
+        });
+    }
+
+    function cacheOptions(tab, view) {
+        const st = tabState[tab];
+        if (!st.series_key) {
+            optionCache[tab].series = view.series.map((group) => ({ key: group.series_key, name: group.series_name }));
+        }
+        if (!st.source) {
+            const sources = new Set(view.entries.map((entry) => (tab === 'pairs' ? entry.audio_source : entry.source)).filter(Boolean));
+            optionCache[tab].sources = [...sources].sort();
+        }
+    }
+
+    function sourceLabel(tab, source) {
+        if (tab === 'pairs') return (AUDIO_BADGES[source] || [source])[0];
+        return ebookSourceLabel(source);
+    }
+
+    function fillSelect(select, firstOption, options, value) {
+        const known = options.some((option) => option.value === value);
+        const all = value && !known ? [...options, { value, label: value }] : options;
+        select.innerHTML = `<option value="">${esc(firstOption)}</option>` + all
+            .map((option) => `<option value="${esc(option.value)}">${esc(option.label)}</option>`).join('');
+        select.value = value || '';
+    }
+
+    function fillOptionSelects() {
+        const st = tabState[activeTab];
+        fillSelect($('seriesFilter'), {{ _('All series')|tojson }},
+            optionCache[activeTab].series.map((s) => ({ value: s.key, label: s.name })), st.series_key);
+        fillSelect($('sourceFilter'), {{ _('All sources')|tojson }},
+            optionCache[activeTab].sources.map((s) => ({ value: s, label: sourceLabel(activeTab, s) })), st.source);
+    }
+
+    function syncControls() {
+        const st = tabState[activeTab];
+        if (activeTab === 'search') {
+            $('searchTabInput').value = st.q;
+            return;
+        }
+        $('searchInput').value = st.q;
+        fillOptionSelects();
+        $('statusFilter').value = st.status || 'all';
+        $('ignoredFilter').value = st.ignored || 'exclude';
+        $('sortMode').value = st.sort;
+        $('groupToggle').checked = st.group;
+    }
+
+    function setTab(tab, focus) {
+        if (!TABS.includes(tab)) return;
+        scrollPos[activeTab] = $('resultsList').scrollTop;
+        // The review panel is shared by Pair Suggestions and Search; a selection never crosses tabs.
+        if (tab !== activeTab) clearSelection();
+        activeTab = tab;
+        TABS.forEach((name) => {
+            const button = $(`tab-${name}`);
+            const on = name === tab;
+            button.classList.toggle('active', on);
+            button.setAttribute('aria-selected', on ? 'true' : 'false');
+            button.tabIndex = on ? 0 : -1;
+            if (on && focus) button.focus();
+        });
+        $('suggestionsPanel').setAttribute('aria-labelledby', `tab-${tab}`);
+        document.querySelectorAll('[data-only-tab]').forEach((el) => { el.hidden = !el.dataset.onlyTab.split(' ').includes(tab); });
+        // P4: The same queue stays alongside all three Discover tabs.
+        $('panelTitle').textContent = tab === 'ebook_only' ? T.ebooks : T.audiobooks;
+        $('listFeedback').textContent = '';
+        syncControls();
+        saveState();
+        renderList();
+        if (!views[tab] && (tab !== 'search' || searchHandoff || tabState.search.q)) loadView(tab);
+    }
+
+    function renderTabCounts() {
+        TABS.forEach((tab) => {
+            const el = $(`tabCount-${tab}`);
+            if (el && Number.isFinite(tabCounts[tab])) el.textContent = String(tabCounts[tab]);
+        });
+    }
+
+    function fmtDate(ts) {
+        if (!ts) return '';
+        const date = new Date(ts * 1000);
+        try {
+            return date.toLocaleString(document.documentElement.lang || undefined, { dateStyle: 'medium', timeStyle: 'short' });
+        } catch (e) {
+            return date.toLocaleString();
+        }
+    }
+
+    function incompleteSources(scan) {
+        return Object.entries(scan.source_states || {})
+            .filter(([, state]) => Object.values((state && state.roles) || {})
+                .some((role) => role && role.configured && role.supported !== false && role.complete !== true))
+            .map(([name]) => ebookSourceLabel(name));
+    }
+
+    function renderScanStatus(view) {
+        const el = $('scanStatus');
+        if (!el) return;
+        if (!view) { el.innerHTML = ''; return; }
+        const scan = view.scan || {};
+        const lines = [];
+        const incomplete = scan.state === 'incomplete' || !!scan.error;
+        if (activeTab === 'ebook_only') {
+            if (scan.completed_at) {
+                lines.push(`<strong>${esc(bbFormat(T.noAudioAsOf, { date: fmtDate(scan.completed_at) }))}</strong>`);
+                lines.push(`<span>${esc(T.ebookOnlyMeaning)}</span>`);
+            } else if (!incomplete) {
+                lines.push(`<strong>${esc(T.ebookNeverScanned)}</strong>`);
+            }
+            const unknown = Number((scan.stats || {}).unknown) || 0;
+            if (unknown > 0) lines.push(`<span>${esc(bbPlural(P.unknown, unknown))}</span>`);
+        } else if (scan.completed_at) {
+            lines.push(`<strong>${esc(bbFormat(T.lastScanAt, { date: fmtDate(scan.completed_at) }))}</strong>`);
+            const stats = scan.stats || {};
+            if (stats.scanned_new !== undefined || stats.reused_cached !== undefined) {
+                lines.push(`<span>${esc(bbFormat(T.lastScanStats, { new: stats.scanned_new || 0, cached: stats.reused_cached || 0 }))}</span>`);
+            }
+        } else if (!incomplete) {
+            lines.push(`<strong>${esc(T.neverScanned)}</strong>`);
+        }
+        if (incomplete) {
+            lines.push(`<strong>${esc(scan.attempted_at ? bbFormat(T.incompleteSince, { date: fmtDate(scan.attempted_at) }) : T.incompleteNoDate)}</strong>`);
+            const failed = incompleteSources(scan);
+            if (failed.length) lines.push(`<span>${esc(bbFormat(T.sourcesIncomplete, { sources: failed.join(', ') }))}</span>`);
+        }
+        el.classList.toggle('warn', incomplete);
+        el.innerHTML = lines.join('');
+    }
+
+    function visibleEntries(tab) {
+        const view = views[tab];
+        if (!view) return [];
+        return view.entries.filter((entry) => !hiddenKeys[tab].has(entry.suggestion_key));
+    }
+
+    // Individually selectable = what "Add selected" can queue: not queued, has a match,
+    // not a tie (the server skips ties). Series checkboxes take bulk_eligible rows only.
+    function rowSelectable(entry) {
+        return !entry.queued && (entry.matches || []).length > 0
+            && !['tie', 'no_match', 'already_queued'].includes(entry.bulk_block_reason);
+    }
+
+    function fmtSeq(value) {
+        return value === null || value === undefined ? '' : `#${Number(value).toLocaleString(undefined, { maximumFractionDigits: 3 })}`;
+    }
+
+    function groupEntries(entries) {
+        const groups = new Map();
+        entries.forEach((entry) => {
+            const key = entry.series_key || OTHER_GROUP;
+            if (!groups.has(key)) groups.set(key, { key, name: key ? (entry.series_name || key) : T.otherSeries, entries: [] });
+            groups.get(key).entries.push(entry);
+        });
+        const ordered = [...groups.values()].filter((group) => group.key !== OTHER_GROUP)
+            .sort((a, b) => a.key.localeCompare(b.key));
+        if (groups.has(OTHER_GROUP)) ordered.push(groups.get(OTHER_GROUP));
+        return ordered;
+    }
+
+    function isExpanded(tab, key) {
+        return tabState[tab].q ? !searchCollapsed[tab].has(key) : expandedGroups[tab].has(key);
+    }
+
+    function groupMeta(tab, group) {
+        const count = (flag) => group.entries.filter((entry) => entry[flag]).length;
+        const parts = [];
+        if (tab === 'pairs') {
+            parts.push(bbPlural(P.suggestions, group.entries.length));
+            [['bulk_eligible', P.eligible], ['queued', P.queued], ['manual_review', P.review]].forEach(([flag, forms]) => {
+                const n = count(flag);
+                if (n) parts.push(bbPlural(forms, n));
+            });
+        } else {
+            parts.push(bbPlural(P.ebooks, group.entries.length));
+            const n = count('ignored');
+            if (n) parts.push(bbPlural(P.ignored, n));
+        }
+        return parts.map((part) => `<span>${esc(part)}</span>`).join('<span class="series-sep">·</span>');
+    }
+
+    function groupHtml(tab, group, index) {
+        const expanded = isExpanded(tab, group.key);
+        const childrenId = `sugg-group-${index}`;
+        const eligible = group.entries.filter((entry) => entry.bulk_eligible).length;
+        const check = tab === 'pairs' ? `<label class="group-select">
+                <input type="checkbox" class="group-check" data-group="${esc(group.key)}" ${eligible ? '' : 'disabled'}
+                       aria-label="${esc(bbFormat(T.selectEligibleIn, { series: group.name }))}"> ${esc(T.selectEligible)}
+            </label>` : '';
+        return `<div class="series-group${expanded ? ' expanded' : ''}" data-group="${esc(group.key)}">
+            <div class="series-header">
+                ${check}
+                <button type="button" class="sugg-group-toggle" data-group="${esc(group.key)}" aria-expanded="${expanded}" aria-controls="${childrenId}">
+                    <span class="series-chevron" aria-hidden="true">&#9654;</span>
+                    <span class="series-info">
+                        <span class="series-name${group.key ? '' : ' is-other'}">${esc(group.name)}</span>
+                        <span class="series-meta-row">${groupMeta(tab, group)}</span>
+                    </span>
+                </button>
+            </div>
+            <div class="series-children" id="${childrenId}" role="list">${expanded ? group.entries.map((entry) => rowHtml(tab, entry)).join('') : ''}</div>
+        </div>`;
+    }
+
+    function pairChips(entry) {
+        const top = (entry.matches || [])[0];
+        const chips = [];
+        if (top) chips.push(`<span class="score">${esc(bbFormat(T.scoreMatch, { score: Math.round(top.score || 0) }))}</span>`);
+        if (top && !entry.bulk_eligible && (top.score || 0) >= 60 && (top.score || 0) < 100)
+            chips.push(`<span class="source-badge good">${esc({{ _('Good match')|tojson }})}</span>`);
+        if (entry.manual_review)
+            chips.push(`<span class="source-badge manual">${esc({{ _('Needs review')|tojson }})}</span>`);
+        const block = entry.bulk_block_reason;
+        if (entry.queued) {
+            chips.push(`<span class="source-badge queued">✓ ${esc(T.queued)}</span>`);
+        } else if (entry.bulk_eligible) {
+            chips.push(`<span class="source-badge exact" title="${esc(T.exactTitle)}">${esc({{ _('Exact match')|tojson }})}</span>`);
+        } else if (top && MANUAL_LABELS[block] && (top.score || 0) >= 100) {
+            chips.push(`<span class="source-badge manual" title="${esc(MANUAL_LABELS[block])}">${esc(T.manualChoice)}</span>`);
+        } else if (block === 'below_threshold') {
+            chips.push(`<span class="source-badge manual" title="${esc(T.belowThreshold)}">${esc(T.review)}</span>`);
+        }
+        if (top) {
+            const reason = REASON_LABELS[top.match_reason] ? top.match_reason : (top.author_note || (top.edition_credit ? 'edition' : ''));
+            if (REASON_LABELS[reason]) chips.push(`<span class="source-badge reason">${esc(REASON_LABELS[reason])}</span>`);
+            if (top.match_reason === 'same_folder') chips.push(`<span class="source-badge samefolder">${esc({{ _('Same folder')|tojson }})}</span>`);
+            if (top.match_reason === 'same_folder_ambiguous') chips.push(`<span class="source-badge samefolder">${esc({{ _('Same folder?')|tojson }})}</span>`);
+            if (top.match_reason === 'same_series') chips.push(`<span class="source-badge sameseries" title="${esc({{ _('Same series and number as the audiobook')|tojson }})}">${esc({{ _('Same series')|tojson }})}</span>`);
+        }
+        return chips.join('');
+    }
+
+    function pairRowHtml(entry) {
+        const key = entry.suggestion_key;
+        const top = (entry.matches || [])[0];
+        const [label, cls] = AUDIO_BADGES[entry.audio_source] || [entry.audio_source || '', 'unknown'];
+        const selectable = rowSelectable(entry);
+        const blockTitle = entry.queued ? T.queued
+            : entry.bulk_block_reason === 'tie' ? T.tieBlocked
+            : (entry.matches || []).length ? '' : T.noMatchBlocked;
+        const cover = entry.audio_cover_url || entry.cover_url || '';
+        const sub = [entry.author ? esc(entry.author) : ''];
+        if (top) {
+            sub.push(`${esc(bbFormat(T.best, { name: top.display_name || top.ebook_filename || '' }))}`
+                + (top.source ? ` <span class="source-badge ${sourceBadgeClass(top.source)}">${esc(ebookSourceLabel(top.source))}</span>` : ''));
+        }
+        return `<div class="sugg-row pair-row${entry.queued ? ' is-queued' : ''}${selectedSuggestionId === key ? ' reviewing' : ''}" role="listitem" data-key="${esc(key)}">
+            <input type="checkbox" class="row-check" data-key="${esc(key)}" ${selectedKeys.has(key) ? 'checked' : ''} ${selectable ? '' : 'disabled'}
+                   aria-label="${esc(bbFormat(T.selectBook, { title: entry.title }))}"${blockTitle ? ` title="${esc(blockTitle)}"` : ''}>
+            <span class="row-seq">${esc(fmtSeq(entry.series_sequence))}</span>
+            <img class="row-cover" src="${esc(cover)}" alt="" loading="lazy" onerror="this.style.opacity='0.25';">
+            <div class="row-main">
+                <div class="row-title"><span class="row-title-text">${esc(entry.title)}</span>
+                    <span class="source-badge ${esc(cls)}" title="${esc(T.audioSource)}">${esc(label)}</span>
+                    ${entry.audio_language ? `<span class="source-badge language" title="${esc(T.language)}">${esc(entry.audio_language)}</span>` : ''}
+                </div>
+                <div class="row-sub">${sub.filter(Boolean).join(' · ')}</div>
+            </div>
+            <div class="row-evidence">${pairChips(entry)}</div>
+            <div class="row-actions">
+                <button type="button" class="btn btn-small btn-muted" data-act="review" title="${esc(T.reviewTitle)}" ${top ? '' : 'disabled'}>${esc({{ _('Compare')|tojson }})}</button>
+                <button type="button" class="btn btn-small btn-dismiss" data-act="hide" title="${esc(T.hideTitle)}">${esc(T.hide)}</button>
+                <button type="button" class="btn btn-small btn-reject" data-act="ignore" title="${esc(T.ignorePairTitle)}">${esc(T.ignore)}</button>
+            </div>
+        </div>`;
+    }
+
+    function ebookRowHtml(entry) {
+        const key = entry.suggestion_key;
+        const generation = views.ebook_only ? views.ebook_only.generation : '';
+        const sources = [...new Set([entry.source, ...(entry.provenance || [])].filter(Boolean).map(ebookSourceLabel))];
+        const badges = sources.map((source) => `<span class="source-badge ${sourceBadgeClass(source)}">${esc(source)}</span>`).join(' ');
+        const sub = [entry.author, entry.filename].filter(Boolean).map(esc).join(' · ');
+        const findUrl = `/suggestions?tab=search&ebook_key=${encodeURIComponent(key)}&generation=${encodeURIComponent(generation || '')}`;
+        const actions = entry.ignored
+            ? `<button type="button" class="btn btn-small btn-muted" data-act="restore" title="${esc(T.restoreTitle)}">${esc(T.restore)}</button>`
+            : `<a class="btn btn-small btn-primary" href="${esc(findUrl)}" data-act="find-audio" title="${esc(T.findAudioTitle)}">${esc(T.findAudio)}</a>
+               <button type="button" class="btn btn-small btn-muted" data-act="create" title="${esc(T.createEbookOnlyTitle)}">${esc(T.createEbookOnly)}</button>
+               <button type="button" class="btn btn-small btn-dismiss" data-act="hide" title="${esc(T.hideTitle)}">${esc(T.hide)}</button>
+               <button type="button" class="btn btn-small btn-reject" data-act="ignore" title="${esc(T.ignoreEbookTitle)}">${esc(T.ignore)}</button>`;
+        return `<div class="sugg-row ebook-row${entry.ignored ? ' is-ignored' : ''}" role="listitem" data-key="${esc(key)}">
+            <input type="checkbox" class="ebook-row-check" data-key="${esc(key)}" ${ebookSelectedKeys.has(key) ? 'checked' : ''} ${entry.ignored ? 'disabled' : ''} aria-label="${esc(bbFormat(T.selectBook, { title: entry.title || entry.filename }))}">
+            <span class="row-seq">${esc(fmtSeq(entry.series_sequence))}</span>
+            <span class="row-icon" aria-hidden="true">📖</span>
+            <div class="row-main">
+                <div class="row-title"><span class="row-title-text">${esc(entry.title || entry.filename)}</span> ${badges}
+                    ${entry.language ? `<span class="source-badge language" title="${esc(T.language)}">${esc(entry.language)}</span>` : ''}
+                </div>
+                <div class="row-sub">${sub}</div>
+            </div>
+            <div class="row-evidence">${entry.ignored ? `<span class="source-badge ignored">${esc(T.ignored)}</span>` : ''}</div>
+            <div class="row-actions">${actions}</div>
+        </div>`;
+    }
+
+    function rowHtml(tab, entry) {
+        return tab === 'pairs' ? pairRowHtml(entry) : ebookRowHtml(entry);
+    }
+
+    function emptyHtml(tab, view) {
+        const lines = [];
+        let action = '';
+        const scan = view.scan || {};
+        if (view.entries.length && !visibleEntries(tab).length) {
+            lines.push(T.allHidden);
+            action = `<button type="button" class="btn btn-small btn-muted" data-act="show-hidden">${esc(T.showHidden)}</button>`;
+        } else if (view.counts.total > 0 && hasActiveFilters(tab)) {
+            lines.push(T.noFilterMatch);
+            action = `<button type="button" class="btn btn-small btn-muted" data-act="clear-filters">${esc(T.clearFilters)}</button>`;
+        } else if (scan.state === 'incomplete' && !scan.completed_at) {
+            lines.push(T.incompleteEmpty);
+        } else if (scan.state === 'never_scanned' || !scan.completed_at) {
+            lines.push(tab === 'pairs' ? T.noScanYet : T.ebookNeverScanned, T.clickScan);
+        } else if (tab === 'pairs') {
+            lines.push(T.noPairs, T.rescanLater);
+        } else {
+            lines.push(T.noEbookOnly, T.rescanLater);
+        }
+        return `<div class="empty"><p>${lines.map(esc).join('<br>')}</p>${action}</div>`;
+    }
+
+    function searchRowHtml(book, index) {
+        const [label, cls] = AUDIO_BADGES[book.source] || [book.source || '', 'unknown'];
+        const sub = [book.authors, book.subtitle || book.series_label].filter(Boolean).map(esc).join(' · ');
+        return `<div class="sugg-row pair-row search-row${selectedSearchIndex === index ? ' reviewing' : ''}" role="listitem" data-index="${index}">
+            <span class="row-seq"></span>
+            <img class="row-cover" src="${esc(book.cover_url)}" alt="" loading="lazy" onerror="this.style.opacity='0.25';">
+            <div class="row-main">
+                <div class="row-title"><span class="row-title-text">${esc(book.title)}</span>
+                    <span class="source-badge ${esc(cls)}" title="${esc(T.audioSource)}">${esc(label)}</span>
+                    ${book.language ? `<span class="source-badge language" title="${esc(T.language)}">${esc(book.language)}</span>` : ''}
+                </div>
+                <div class="row-sub">${sub}</div>
+            </div>
+            <div class="row-actions">
+                <button type="button" class="btn btn-small btn-muted" data-act="review-search" title="${esc(T.reviewTitle)}">${esc(T.review)}</button>
+            </div>
+        </div>`;
+    }
+
+    function searchGhostRowHtml() {
+        return `<div class="sugg-row pair-row search-row ghost-row${selectedSearchIndex === -1 ? ' reviewing' : ''}" role="listitem" data-index="-1">
+            <span class="row-seq"></span>
+            <span class="row-icon" aria-hidden="true">📖</span>
+            <div class="row-main">
+                <div class="row-title"><span class="row-title-text">${esc(T.ebookOnlyRow)}</span></div>
+                <div class="row-sub">${esc(T.ebookOnlyRowSub)}</div>
+            </div>
+            <div class="row-actions">
+                <button type="button" class="btn btn-small btn-muted" data-act="review-search" title="${esc(T.reviewTitle)}">${esc(T.review)}</button>
+            </div>
+        </div>`;
+    }
+
+    function renderSearchList() {
+        const list = $('resultsList');
+        const view = views.search;
+        $('hiddenNotice').hidden = true;
+        list.setAttribute('aria-busy', inflight.search ? 'true' : 'false');
+        $('panelCount').textContent = view ? bbPlural(ITEM_COUNT, view.audiobooks.length) : '';
+        if (inflight.search && !view) {
+            list.innerHTML = `<div class="empty"><p>${esc(T.searching)}</p></div>`;
+        } else if (loadErrors.search) {
+            list.innerHTML = `<div class="empty"><p>${esc(searchErrorText(loadErrors.search))}</p><button type="button" class="btn btn-small btn-muted" data-act="retry">${esc(T.retry)}</button></div>`;
+        } else if (!view) {
+            list.innerHTML = `<div class="empty"><p>${esc(T.searchPrompt)}</p></div>`;
+        } else {
+            const rows = view.audiobooks.map((book, index) => searchRowHtml(book, index));
+            if (view.ebooks.length) rows.unshift(searchGhostRowHtml());
+            const empty = view.audiobooks.length ? ''
+                : `<div class="empty"><p>${esc(view.ebooks.length ? T.noAudioFound : T.noResults)}</p></div>`;
+            list.innerHTML = (rows.length ? `<div class="flat-list" role="list">${rows.join('')}</div>` : '') + empty;
+        }
+        list.scrollTop = scrollPos.search || 0;
+        scrollPos.search = 0;
+    }
+
+    function renderList() {
+        if (activeTab === 'search') { renderSearchList(); return; }
+        const list = $('resultsList');
+        const tab = activeTab;
+        const view = views[tab];
+        renderScanStatus(view);
+        renderHiddenNotice();
+        list.setAttribute('aria-busy', inflight[tab] ? 'true' : 'false');
+        if (!view) {
+            list.innerHTML = loadErrors[tab]
+                ? `<div class="empty"><p>${esc(T.loadFailed)}</p><button type="button" class="btn btn-small btn-muted" data-act="retry">${esc(T.retry)}</button></div>`
+                : `<div class="empty"><p>${esc(T.loading)}</p></div>`;
+            $('panelCount').textContent = '';
+            updateSelectionUi();
+            return;
+        }
+        const entries = visibleEntries(tab);
+        $('panelCount').textContent = bbPlural(ITEM_COUNT, entries.length);
+        currentGroups = new Map();
+        if (!entries.length) {
+            list.innerHTML = emptyHtml(tab, view);
+        } else if (tabState[tab].group) {
+            const groups = groupEntries(entries);
+            groups.forEach((group) => currentGroups.set(group.key, group));
+            list.innerHTML = groups.map((group, index) => groupHtml(tab, group, index)).join('');
+        } else {
+            list.innerHTML = `<div class="flat-list" role="list">${entries.map((entry) => rowHtml(tab, entry)).join('')}</div>`;
+        }
+        if (loadErrors[tab]) setFeedback(T.loadFailed, true);
+        list.scrollTop = scrollPos[tab] || 0;
+        scrollPos[tab] = 0;
+        updateSelectionUi();
+    }
+
+    function renderHiddenNotice() {
+        const el = $('hiddenNotice');
+        const count = views[activeTab] ? views[activeTab].entries.filter((entry) => hiddenKeys[activeTab].has(entry.suggestion_key)).length : 0;
+        el.hidden = count === 0;
+        el.innerHTML = count ? `${esc(bbPlural(P.hidden, count))} · <button type="button" class="btn-link" data-act="show-hidden">${esc(T.showHidden)}</button>` : '';
+    }
+
+    function setFeedback(message, isError) {
+        const el = $('listFeedback');
+        el.textContent = message || '';
+        el.classList.toggle('error', !!isError);
+    }
+
+    function groupCheckState(group) {
+        const eligible = group.entries.filter((entry) => entry.bulk_eligible);
+        const chosen = eligible.filter((entry) => selectedKeys.has(entry.suggestion_key)).length;
+        return { eligible: eligible.length, chosen };
+    }
+
+    function updateSelectionUi() {
+        const list = $('resultsList');
+        list.querySelectorAll('.row-check').forEach((box) => { box.checked = selectedKeys.has(box.dataset.key); });
+        list.querySelectorAll('.group-check').forEach((box) => {
+            const group = currentGroups.get(box.dataset.group);
+            if (!group) return;
+            const { eligible, chosen } = groupCheckState(group);
+            box.checked = eligible > 0 && chosen === eligible;
+            box.indeterminate = chosen > 0 && chosen < eligible;
+        });
+        const exactCount = visibleEntries('pairs').filter((entry) => entry.bulk_eligible).length;
+        $('exactCount').textContent = exactCount;
+        $('addAllExactBtn').disabled = exactCount === 0;
+        $('selectedCount').textContent = selectedKeys.size;
+        $('addSelectedBtn').disabled = selectedKeys.size === 0;
+        $('clearSelectionBtn').disabled = selectedKeys.size === 0;
+        const needsReview = [...selectedKeys].some((key) => !(entryIndex.get(key) || {}).bulk_eligible);
+        $('selectionSummary').innerHTML = selectedKeys.size
+            ? `${esc(bbPlural(P.selected, selectedKeys.size))}${needsReview ? ` · <span class="warn">${esc(T.reviewWarning)}</span>` : ''}`
+            : '';
+        updateEbookSelectionUi();
+    }
+
+    function toggleGroup(key) {
+        const tab = activeTab;
+        const group = currentGroups.get(key);
+        const el = [...$('resultsList').querySelectorAll('.series-group')].find((node) => node.dataset.group === key);
+        if (!group || !el) return;
+        const expand = !el.classList.contains('expanded');
+        if (tabState[tab].q) {
+            if (expand) searchCollapsed[tab].delete(key); else searchCollapsed[tab].add(key);
+        } else {
+            if (expand) expandedGroups[tab].add(key); else expandedGroups[tab].delete(key);
+            saveExpanded();
+        }
+        el.classList.toggle('expanded', expand);
+        el.querySelector('.sugg-group-toggle').setAttribute('aria-expanded', String(expand));
+        el.querySelector('.series-children').innerHTML = expand ? group.entries.map((entry) => rowHtml(tab, entry)).join('') : '';
+        updateSelectionUi();
+    }
+
+    function toggleGroupSelection(key, checked) {
+        const group = currentGroups.get(key);
+        if (!group) return;
+        const eligible = group.entries.filter((entry) => entry.bulk_eligible).map((entry) => entry.suggestion_key);
+        eligible.forEach((suggestionKey) => (checked ? selectedKeys.add(suggestionKey) : selectedKeys.delete(suggestionKey)));
+        setFeedback(checked
+            ? bbPlural(P.seriesSelected, eligible.length, { series: group.name })
+            : bbFormat(T.selectionCleared, { series: group.name }));
+        updateSelectionUi();
+    }
+
+    function hideEntry(tab, entry) {
+        hiddenKeys[tab].add(entry.suggestion_key);
+        selectedKeys.delete(entry.suggestion_key);
+        if (selectedSuggestionId === entry.suggestion_key) clearSelection();
+        saveHidden();
+        setFeedback(bbFormat(T.hiddenDone, { title: entry.title }));
+        renderList();
+    }
+
+    function showHidden() {
+        hiddenKeys[activeTab].clear();
+        saveHidden();
+        renderList();
+    }
+
+    function apiErrorText(code) {
+        return API_ERRORS[code] || bbFormat(API_ERRORS.fallback, { code: code || 'error' });
+    }
+
+    async function ignorePair(entry) {
+        const form = new FormData();
+        form.append('action', 'never');
+        form.append('bridge_key', entry.bridge_key);
+        form.append('audio_source', entry.audio_source || '');
+        form.append('audio_title', entry.title || '');
+        form.append('audio_author', entry.author || '');
+        form.append('cover_url', entry.audio_cover_url || entry.cover_url || '');
+        try {
+            // The legacy handler answers with a redirect to the full page; it is not needed here.
+            const response = await fetch('/suggestions', { method: 'POST', body: form, redirect: 'manual', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!(response.ok || response.type === 'opaqueredirect')) throw new Error(`HTTP ${response.status}`);
+            selectedKeys.delete(entry.suggestion_key);
+            if (selectedSuggestionId === entry.suggestion_key) clearSelection();
+            setFeedback(bbFormat(T.ignoredDone, { title: entry.title }));
+        } catch (err) {
+            console.error('Ignore failed.', err);
+            setFeedback(apiErrorText('persistence_failed'), true);
+        }
+        loadView('pairs');
+    }
+
+    async function ebookAction(action, entry, button) {
+        const generation = views.ebook_only ? views.ebook_only.generation : null;
+        let url = '/api/suggestions/ebook-only/ignore';
+        let payload = { mode: 'ignore', ebook_key: entry.ebook_key, generation };
+        if (action === 'create') {
+            if (!window.confirm(bbFormat(T.confirmCreate, { title: entry.title }))) return;
+            url = '/api/suggestions/ebook-only/create';
+            payload = { ebook_key: entry.ebook_key, generation };
+        } else if (action === 'restore') {
+            payload.mode = 'reset';
+        }
+        if (button) button.disabled = true;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                body: JSON.stringify(payload),
+            });
+            const body = await response.json().catch(() => ({}));
+            if (response.ok && body.ok) {
+                const done = action === 'create' ? (body.claimed ? T.claimed : T.created) : action === 'restore' ? T.restoredDone : T.ignoredDone;
+                setFeedback(bbFormat(done, { title: entry.title }));
+            } else {
+                setFeedback(apiErrorText(body.error || `http_${response.status}`), true);
+            }
+        } catch (err) {
+            console.error('Ebook Only action failed.', err);
+            setFeedback(apiErrorText('network'), true);
+        }
+        loadView('ebook_only');
+    }
+
+    // "Add selected" and "Add all exact" post to the existing add_many_to_queue handler,
+    // which rechecks every key on the server (ties always; any manual case for "exact").
+    async function addManyToQueue(keys, intent) {
+        if (!keys.length) return;
+        const bulkFeedback = $('bulkFeedback');
+        bulkFeedback.classList.remove('show');
+        bulkFeedback.textContent = '';
+        const formData = new FormData();
+        formData.append('action', 'add_many_to_queue');
+        if (intent) formData.append('bulk_intent', intent);
+        // The server refuses keys picked from an older scan than the one it now holds.
+        if (views.pairs && views.pairs.generation != null) formData.append('generation', String(views.pairs.generation));
+        keys.forEach((key) => formData.append('bridge_keys', key));
+        try {
+            const response = await fetch('/suggestions', {
+                method: 'POST',
+                body: formData,
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (response.status === 409) {
+                setFeedback(API_ERRORS.stale_generation, true);
+                loadView('pairs');
+                return;
+            }
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const html = await response.text();
+            const queueList = $('queueList');
+            if (queueList) queueList.innerHTML = html;
+            renderQueueCount();
+
+            const queued = queuedBridgeKeys();
+            let landed = 0;
+            keys.forEach((key) => { if (queued.has(key)) landed++; });
+            [...selectedKeys].forEach((key) => {
+                const entry = entryIndex.get(key);
+                if (entry && queued.has(entry.bridge_key)) selectedKeys.delete(key);
+            });
+
+            // Suggestions the server left for a person (see the row's "Manual choice").
+            const manual = Number.parseInt(response.headers.get('X-Skipped-Manual') || '0', 10) || 0;
+            const failed = keys.length - landed - manual;
+            const notes = [];
+            if (failed > 0 && landed > 0) {
+                notes.push(bbFormat({{ _('Added {added} of {total}. {failed} could not be queued — re-run Scan Library.')|tojson }}, { added: landed, total: keys.length, failed: failed }));
+            } else if (failed > 0) {
+                notes.push({{ _('Scan results are no longer available on the server. Click Scan Library again.')|tojson }});
+            }
+            if (manual > 0) {
+                notes.push(bbFormat({{ _('{count} skipped: choose the ebook on the card.')|tojson }}, { count: manual }));
+            }
+            bulkFeedback.classList.toggle('show', notes.length > 0);
+            bulkFeedback.textContent = notes.join(' ');
+        } catch (err) {
+            console.error('Bulk queue add failed; reloading to resync.', err);
+            window.location.reload();
+            return;
+        }
+        loadView('pairs');
+    }
+
+    function addAllExact() {
+        // P4: Select exact, server-eligible pairs; do not queue them until Add selected.
+        visibleEntries('pairs').filter((entry) => entry.bulk_eligible)
+            .forEach((entry) => selectedKeys.add(entry.suggestion_key));
+        updateSelectionUi();
+    }
+
+    function addSelectedSuggestions() {
+        addManyToQueue([...selectedKeys].map((key) => (entryIndex.get(key) || {}).bridge_key).filter(Boolean));
+    }
+
+    function updateFilter(changes) {
+        const st = tabState[activeTab];
+        if ('q' in changes && changes.q !== st.q) searchCollapsed[activeTab].clear();
+        Object.assign(st, changes);
+        saveState();
+        loadView(activeTab);
+    }
+
+    function entryFromRow(row) {
+        const key = row && row.dataset.key;
+        const view = views[activeTab];
+        return key && view ? view.entries.find((entry) => entry.suggestion_key === key) : null;
+    }
+
+    $('resultsList').addEventListener('click', (event) => {
+        const actButton = event.target.closest('[data-act]');
+        const toggle = event.target.closest('.sugg-group-toggle');
+        if (toggle) { toggleGroup(toggle.dataset.group); return; }
+        if (actButton) {
+            const act = actButton.dataset.act;
+            if (act === 'retry') { loadView(activeTab); return; }
+            if (act === 'show-hidden') { showHidden(); return; }
+            if (act === 'clear-filters') { tabState[activeTab] = { ...DEFAULTS[activeTab], sort: tabState[activeTab].sort, group: tabState[activeTab].group }; syncControls(); saveState(); loadView(activeTab); return; }
+            if (act === 'review-search') { selectSearchResult(Number(actButton.closest('.sugg-row').dataset.index)); return; }
+            const entry = entryFromRow(actButton.closest('.sugg-row'));
+            if (!entry) return;
+            if (act === 'find-audio') {
+                if (event.ctrlKey || event.metaKey || event.shiftKey) return;
+                // Same page: hand the saved ebook identity to Search instead of navigating.
+                event.preventDefault();
+                searchHandoff = { ebook_key: entry.ebook_key, generation: views.ebook_only ? String(views.ebook_only.generation ?? '') : '' };
+                tabState.search.q = '';
+                views.search = null;
+                setTab('search', true);
+                return;
+            }
+            if (act === 'hide') hideEntry(activeTab, entry);
+            else if (act === 'review') selectSuggestion(entry.suggestion_key);
+            else if (act === 'ignore' && activeTab === 'pairs') ignorePair(entry);
+            else ebookAction(act, entry, actButton);
+            return;
+        }
+        if (event.target.closest('input, label, a, button')) return;
+        const row = event.target.closest('.sugg-row.pair-row');
+        if (row && row.classList.contains('search-row')) selectSearchResult(Number(row.dataset.index));
+        else if (row) selectSuggestion(row.dataset.key);
+    });
+
+    $('resultsList').addEventListener('change', (event) => {
+        const box = event.target;
+        if (box.classList.contains('ebook-row-check')) {
+            if (box.checked) ebookSelectedKeys.add(box.dataset.key); else ebookSelectedKeys.delete(box.dataset.key);
+            updateEbookSelectionUi();
+        } else if (box.classList.contains('row-check')) {
+            if (box.checked) selectedKeys.add(box.dataset.key); else selectedKeys.delete(box.dataset.key);
+            updateSelectionUi();
+        } else if (box.classList.contains('group-check')) {
+            toggleGroupSelection(box.dataset.group, box.checked);
+        }
+    });
+
+    $('hiddenNotice').addEventListener('click', (event) => { if (event.target.closest('[data-act="show-hidden"]')) showHidden(); });
+    $('addAllExactBtn').addEventListener('click', addAllExact);
+    $('addSelectedBtn').addEventListener('click', addSelectedSuggestions);
+    $('clearSelectionBtn').addEventListener('click', () => { selectedKeys.clear(); setFeedback(''); updateSelectionUi(); });
+
+    if ($('filterBar')) {
+        let searchTimer = null;
+        $('searchInput').addEventListener('input', (event) => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => updateFilter({ q: event.target.value.trim() }), 300);
+        });
+        $('seriesFilter').addEventListener('change', (event) => updateFilter({ series_key: event.target.value }));
+        $('sourceFilter').addEventListener('change', (event) => updateFilter({ source: event.target.value }));
+        $('statusFilter').addEventListener('change', (event) => updateFilter({ status: event.target.value }));
+        $('ignoredFilter').addEventListener('change', (event) => updateFilter({ ignored: event.target.value }));
+        $('sortMode').addEventListener('change', (event) => updateFilter({ sort: event.target.value }));
+        $('groupToggle').addEventListener('change', (event) => {
+            tabState[activeTab].group = event.target.checked;
+            saveState();
+            renderList();
+        });
+    }
+
+    $('searchTabForm').addEventListener('submit', (event) => {
+        event.preventDefault();
+        tabState.search.q = $('searchTabInput').value.trim();
+        saveState();
+        runSearch();
+    });
+
+    const tabList = document.querySelector('.sugg-tabs');
+    tabList.addEventListener('click', (event) => {
+        const tab = event.target.closest('[role="tab"]');
+        if (tab) setTab(tab.dataset.tab);
+    });
+    tabList.addEventListener('keydown', (event) => {
+        const index = TABS.indexOf(activeTab);
+        let next = null;
+        if (event.key === 'ArrowRight') next = TABS[(index + 1) % TABS.length];
+        else if (event.key === 'ArrowLeft') next = TABS[(index + TABS.length - 1) % TABS.length];
+        else if (event.key === 'Home') next = TABS[0];
+        else if (event.key === 'End') next = TABS[TABS.length - 1];
+        if (next) { event.preventDefault(); setTab(next, true); }
+    });
+
+    loadInitialState();
+    renderTabCounts();
+    setTab(activeTab);
+
+    if (scanInProgress) {
+        document.getElementById('scanOverlay').classList.add('show');
+        startFakeScanProgress();
+        pollScanStatus();
+    }
+
+    // P4-only additions. Bulk ebook selections are revalidated by the per-reader server projection.
+    function updateEbookSelectionUi() {
+        const view = views.ebook_only;
+        const visible = view ? visibleEntries('ebook_only').filter((entry) => !entry.ignored) : [];
+        const chosen = visible.filter((entry) => ebookSelectedKeys.has(entry.ebook_key)).length;
+        $('ebookSelectedCount').textContent = String(ebookSelectedKeys.size);
+        $('ebookSelectAllBtn').disabled = !visible.length || chosen === visible.length;
+        $('ebookAddSelectedBtn').disabled = !ebookSelectedKeys.size;
+        $('ebookClearSelectionBtn').disabled = !ebookSelectedKeys.size;
+        $('resultsList').querySelectorAll('.ebook-row-check').forEach((box) => {
+            box.checked = ebookSelectedKeys.has(box.dataset.key);
+        });
+    }
+
+    async function addSelectedEbooksToQueue() {
+        const view = views.ebook_only;
+        if (!view || !ebookSelectedKeys.size) return;
+        const keys = [...ebookSelectedKeys];
+        const body = new FormData();
+        body.append('action', 'add_many_to_queue');
+        body.append('bulk_kind', 'ebook_only');
+        body.append('generation', String(view.generation));
+        keys.forEach((key) => body.append('ebook_keys', key));
+        $('ebookAddSelectedBtn').disabled = true;
+        try {
+            const response = await fetch('/suggestions', {
+                method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' }, body,
+            });
+            if (response.status === 409) {
+                ebookSelectedKeys.clear();
+                setFeedback(API_ERRORS.stale_generation, true);
+                await loadView('ebook_only');
+                return;
+            }
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            $('queueList').innerHTML = await response.text();
+            renderQueueCount();
+            const queued = queuedBridgeKeys();
+            keys.forEach((key) => { if (queued.has('ebook:' + key)) ebookSelectedKeys.delete(key); });
+            updateEbookSelectionUi();
+            await loadView('ebook_only');
+        } catch (err) {
+            console.error('Ebook queue update failed.', err);
+            setFeedback(bbFormat(API_ERRORS.fallback, { code: 'network' }), true);
+            updateEbookSelectionUi();
+        }
+    }
+
+    $('ebookSelectAllBtn').addEventListener('click', () => {
+        visibleEntries('ebook_only').filter((entry) => !entry.ignored).forEach((entry) => ebookSelectedKeys.add(entry.ebook_key));
+        updateEbookSelectionUi();
+    });
+    $('ebookAddSelectedBtn').addEventListener('click', addSelectedEbooksToQueue);
+    $('ebookClearSelectionBtn').addEventListener('click', () => { ebookSelectedKeys.clear(); updateEbookSelectionUi(); });
+</script>
