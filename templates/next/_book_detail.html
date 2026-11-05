@@ -68,12 +68,11 @@
 <div class="book-tools">
 <button type="button" onclick='syncNow({{ mapping.abs_id|tojson }}, this)'>{{ _('Sync Now') }}</button>
 <button type="button" onclick='markComplete({{ mapping.abs_id|tojson }}, {{ mapping.display_title|tojson }})'>{{ _('Mark Complete') }}</button>
-<details class="reset-menu"><summary>{{ _('Reset / remap') }}</summary>
 <button type="button" onclick='clearPosition({{ mapping.abs_id|tojson }})'>{{ _('Clear position') }}</button>
 <button type="button" class="remap-alignment-btn" data-ctc-aligned="{{ 'true' if mapping.ctc_aligned else 'false' }}" {% if mapping.ctc_aligned %}disabled{% endif %} onclick='remapAlignment({{ mapping.abs_id|tojson }}, this)'>{{ _('Already using CTC') if mapping.ctc_aligned else _('Remap alignment') }}</button>
 <button type="button" class="readalong-generate-btn" title="{{ mapping.readalong_ineligible_reason or '' }}" onclick='generateReadalongEpub({{ mapping.abs_id|tojson }}, this)'>{{ _('Create read-along EPUB') }}</button>
 {% if mapping.readalong_audio_ok %}<button type="button" class="readalong-remove-btn" onclick='removeReadalongEpub({{ mapping.abs_id|tojson }}, this)'>{{ _('Remove read-along EPUB') }}</button>{% endif %}
-</details></div>{% if mapping.job_last_error %}<details><summary>{{ _('Alignment needs attention') }}</summary><p>{{ mapping.job_last_error }}</p></details>{% endif %}</section>
-{% if current_user and current_user.is_admin %}<details class="book-section"><summary>{{ _('Show technical details') }}</summary><dl><dt>{{ _('Book ID') }}</dt><dd>{{ mapping.abs_id }}</dd><dt>{{ _('KoSync hash') }}</dt><dd>{{ mapping.kosync_doc_id }}</dd><dt>{{ _('Transcript') }}</dt><dd>{{ mapping.transcript_file }}</dd>{% for key,state in mapping.states.items() %}<dt>{{ key }}</dt><dd>{{ state.xpath or state.get('cfi') or '' }}</dd>{% endfor %}</dl></details>{% endif %}
+</div>{% if mapping.job_last_error %}<div class="book-alert"><h3>{{ _('Alignment needs attention') }}</h3><p>{{ mapping.job_last_error }}</p></div>{% endif %}</section>
+{% if current_user and current_user.is_admin %}<section class="book-section"><h2>{{ _('Technical details') }}</h2><dl><dt>{{ _('Book ID') }}</dt><dd>{{ mapping.abs_id }}</dd><dt>{{ _('KoSync hash') }}</dt><dd>{{ mapping.kosync_doc_id }}</dd><dt>{{ _('Transcript') }}</dt><dd>{{ mapping.transcript_file }}</dd>{% for key,state in mapping.states.items() %}<dt>{{ key }}</dt><dd>{{ state.xpath or state.get('cfi') or '' }}</dd>{% endfor %}</dl></section>{% endif %}
 <details class="book-section book-remove"><summary>{{ _('Remove') }}</summary><p>{{ _('Delete this mapping?') }}</p><form method="POST" target="_top" action="/delete/{{ mapping.abs_id }}"><button type="submit">{{ _('Delete Mapping') }}</button></form></details>
 </article>

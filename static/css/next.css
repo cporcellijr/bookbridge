@@ -128,6 +128,9 @@ summary::-webkit-details-marker { display: none; }
 [hidden], .hidden { display: none !important; }
 .book-section { padding: 24px 0; border-top: 1px solid var(--line); }
 .book-section h2 { font-size: 1.1rem; margin: 0 0 16px; }
+.book-alert { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--warn); border-radius: 10px; }
+.book-alert h3 { margin: 0 0 6px; font-size: .95rem; color: var(--warn); }
+.book-alert p { margin: 0; overflow-wrap: anywhere; }
 .book-chips, .book-tools { display: flex; flex-wrap: wrap; gap: 10px; }
 .book-chips > span { border: 1px solid var(--line); padding: 4px 9px; border-radius: 20px; font-size: .8rem; }
 .book-app-row { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); padding: 16px 0; }

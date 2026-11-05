@@ -76,7 +76,9 @@ class TestBookPage(unittest.TestCase):
                            '/static/js/hardcover-modal.js', '/static/js/storygraph-modal.js',
                            '/static/js/storyteller-modal.js']:
                 assert action in text
-            assert ('Show technical details' in text) == technical
+            assert ('Technical details' in text) == technical
+            # Nothing in the book window hides behind a disclosure except Remove's confirmation.
+            assert 'class="reset-menu"' not in text and 'Show technical details' not in text
             self.client.get('/logout')
 
     def test_classic_home_stays_classic_by_default(self):
