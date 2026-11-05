@@ -2,6 +2,8 @@
 {% from "_i18n.html" import plural_forms %}
 {% set active_page = 'library' %}
 {% block title %}{{ _('Library') }} · BookBridge{% endblock %}
+{# Wide screens: the Library filter lives in the top bar and Ctrl K opens the full search. #}
+{% block topbar_search %}<div class="library-search" data-library-search-slot><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>{{ super() }}</div>{% endblock %}
 {% block content %}
 <div id="library-page" class="library-page" data-view="covers" data-select-mode="off">
     <header class="page-head"><div><p class="eyebrow">{{ _('YOUR LIBRARY') }}</p><h1 class="h1">{{ _('Library') }}</h1></div>
