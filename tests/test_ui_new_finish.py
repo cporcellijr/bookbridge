@@ -111,6 +111,19 @@ class TestP8Finish(unittest.TestCase):
         self.assertIn("flex: none", rule(".view .logs-wrap .log-timestamp, .view .logs-wrap .log-level, .view .logs-wrap .log-module"))
         self.assertRegex(rule(".view .logs-wrap .log-message"), r"flex: 1 1 \d+px")
 
+    def test_book_cover_column_matches_the_cover_at_every_breakpoint(self):
+        """iPad drawer (~710px): the 760px rule shrank the column to 90px while the cover stayed 150px."""
+        base, finish = source("static/css/next.css"), source("static/css/next-finish.css")
+
+        def block(css: str, width: int) -> str:
+            start = css.index(f"@media (max-width: {width}px) {{")
+            return css[start:css.index("\n}", start)]
+
+        self.assertIn(".book-cover { width: 150px;", base)
+        self.assertIn(".book-cover { width: 90px;", block(base, 640))
+        self.assertIn(".book-hero { grid-template-columns: minmax(0,150px) minmax(0,1fr); }", block(finish, 760))
+        self.assertIn(".book-hero { grid-template-columns: minmax(0,90px) minmax(0,1fr); }", block(finish, 640))
+
     def test_discover_chip_text_is_unchanged_and_visuals_use_new_tokens(self):
         scripts = source("templates/next/_discover_scripts.html")
         css = source("static/css/next-finish.css")
