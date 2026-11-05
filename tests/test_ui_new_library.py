@@ -84,7 +84,7 @@ class TestNewLibrary(unittest.TestCase):
         self.assertIn('onclick="exitBookSelection()"', bar)
         self.assertIn('bar.hidden = !librarySelectMode', scripts)
         self.assertIn('event.stopImmediatePropagation()', scripts)
-        self.assertIn("event.key === 'Escape'", scripts)
+        self.assertIn("event.key !== 'Escape'", scripts)
         self.assertIn("if (view === 'spines') setBookSelectMode(false)", scripts)
         self.assertIn("reloadAfterSelectionAction()", scripts)
 

@@ -1194,13 +1194,15 @@ def admin_required(f):
 def _safe_next_url(default=None):
     """Resolve the post-auth redirect target, allowing only same-site relative
     paths. Absolute (`http://…`) and protocol-relative (`//host`, `/\\host`)
-    values are rejected to prevent an open redirect."""
+    values are rejected to prevent an open redirect, as are control characters:
+    browsers drop a tab (`/\t/host` becomes `//host`) and CR/LF break headers."""
     fallback = default or url_for('index')
     next_url = request.args.get('next') or fallback
     if (
         not next_url.startswith('/')
         or next_url.startswith('//')
         or next_url.startswith('/\\')
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in next_url)
     ):
         return fallback
     return next_url
