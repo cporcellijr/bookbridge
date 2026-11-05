@@ -1427,7 +1427,7 @@ def account():
                 user = database_service.get_user(user.id)  # refresh for display
 
     return render_template(
-        'account.html',
+        ui_template('account.html'),
         error=error,
         message=message,
         account_user=user,
@@ -1954,7 +1954,7 @@ def admin_users():
     except Exception:
         primary_admin_id = None
     return render_template(
-        'admin_users.html',
+        ui_template('admin_users.html'),
         users=users,
         message=message,
         error=error,
@@ -5879,7 +5879,7 @@ def settings():
     except Exception:
         primary_admin_id = None
 
-    response = make_response(render_template('settings.html',
+    response = make_response(render_template(ui_template('settings.html'),
                          message=message,
                          is_error=is_error,
                          users=users,

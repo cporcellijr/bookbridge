@@ -1,0 +1,64 @@
+<script>
+    fetch('/api/kosync-plugin/version').then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+            if (d && d.version) {
+                document.getElementById('bridgesync_plugin_version').textContent = 'v' + d.version;
+            }
+        }).catch(function () { });
+
+    function isLoopbackUrl(value) {
+        try {
+            var host = new URL(value).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+            return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function updatePublicUrlWarning() {
+        var input = document.getElementById('kosync_public_url');
+        var warning = document.getElementById('kosync_url_warning');
+        warning.hidden = !isLoopbackUrl(input.value);
+    }
+
+    (function () {
+        var urlInput = document.getElementById('kosync_public_url');
+        if (!urlInput) return;
+        var syncPort = {{ get_val('KOSYNC_PORT', '')|trim|tojson }};
+        var splitPort = syncPort !== '' && syncPort !== '5757';
+        urlInput.value = (location.protocol === 'https:' || !splitPort)
+            ? location.origin
+            : location.protocol + '//' + location.hostname + ':' + syncPort;
+        urlInput.addEventListener('input', updatePublicUrlWarning);
+        updatePublicUrlWarning();
+    })();
+
+    function showCopyResult(btn, text) {
+        var original = btn.textContent;
+        btn.textContent = text;
+        window.setTimeout(function () { btn.textContent = original; }, 1500);
+    }
+
+    function copyPublicUrl(btn) {
+        var input = document.getElementById('kosync_public_url');
+        if (isLoopbackUrl(input.value)) {
+            showCopyResult(btn, {{ _('Replace host')|tojson }});
+            return;
+        }
+        input.select();
+        input.setSelectionRange(0, 99999);
+        var copied;
+        try {
+            copied = navigator.clipboard && navigator.clipboard.writeText
+                ? navigator.clipboard.writeText(input.value)
+                : Promise.resolve(document.execCommand('copy'));
+        } catch (err) {
+            copied = Promise.reject(err);
+        }
+        copied.then(function (ok) {
+            showCopyResult(btn, ok === false ? {{ _('Copy failed')|tojson }} : {{ _('Copied')|tojson }});
+        }).catch(function () {
+            showCopyResult(btn, {{ _('Copy failed')|tojson }});
+        });
+    }
+</script>
