@@ -16,12 +16,11 @@ All notable changes to BookBridge will be documented in this file.
   the final content-match guard. As the reporter's reference rates counted **transcript**
   words, not EPUB tokens, measurements are explicitly **uncalibrated** (or inconclusive
   when the input is unreliable), not automatic mismatch verdicts. No threshold is enabled.
-  Nineteen new regression cases cover both transcription paths, invalid duration,
-  user isolation, advisory acknowledgement, and unchanged final lexical refusal.
-  Focused verification: **161 passed**, with 31 additional cache/Storyteller/cancellation
-  checks passed; the full run reached **6,886 passed, 12 skipped, 3 unrelated
-  Shelfmark/navigation failures** before the last two regression additions.
-  **Deploy requires migration + restart** (not performed). EPUB TOC/chapter
+  Regression cases cover both transcription paths, invalid duration, user isolation,
+  duration changes, concurrent acknowledgement, deletion/unlink cleanup, and unchanged
+  final lexical refusal. Review verification on current dev: **6,900 passed,
+  12 skipped, 1,094 subtests passed**.
+  **Deploy requires migration + restart**. EPUB TOC/chapter
   comparisons, sample audio probes, and calibrated warning thresholds are deferred.
 
 - **The New book window shows your current audiobook chapter** (#428). For Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information, it shows the chapter's title, where it falls in the book (for example 18 of 32) and how far into it you are. Audiobooks without chapters show nothing extra.

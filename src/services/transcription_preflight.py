@@ -109,12 +109,16 @@ def evaluate_preflight(ebook_text: str, duration_seconds: Any) -> dict:
     }
 
 
-def evidence_identity(book: Any, ebook_text: str) -> str:
-    """Bind an acknowledgement to the exact selected pair AND EPUB contents."""
+def evidence_identity(book: Any, ebook_text: str, item_details: dict | None = None) -> str:
+    """Bind an acknowledgement to the exact selected pair, EPUB contents, and effective measured duration."""
     digest = hashlib.sha256()
     digest.update(pair_key(book).encode("ascii"))
     digest.update(b"\x00")
     digest.update((ebook_text or "").encode("utf-8"))
+    digest.update(b"\x00")
+    duration = metadata_duration(book, item_details)
+    if duration is not None:
+        digest.update(str(duration).encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -128,7 +132,7 @@ def record_preflight(database_service: Any, book: Any, ebook_text: str,
     for claimant_id in claimants:
         database_service.save_transcription_preflight(
             abs_id=book.abs_id, user_id=claimant_id,
-            identity=evidence_identity(book, ebook_text),
+            identity=evidence_identity(book, ebook_text, item_details),
             pairing_key=pair_key(book), evidence=evidence,
         )
     return evidence

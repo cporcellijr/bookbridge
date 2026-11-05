@@ -135,3 +135,194 @@ def test_advisory_ack_does_not_override_final_lexical_rejection(tmp_path, monkey
         assert alignment._get_alignment(book.abs_id) is None
     finally:
         db.db_manager.close()
+
+
+def test_duration_change_resets_ack_and_identity(tmp_path):
+    db = DatabaseService(str(tmp_path / "duration.db"))
+    try:
+        alice = db.create_user("alice528", "pw", role="user")
+        book = Book(abs_id="dur", abs_title="Duration change",
+                    audio_source="ABS", audio_source_id="dur",
+                    ebook_source="BookOrbit", ebook_source_id="1",
+                    original_ebook_filename="book.epub",
+                    user_id=alice.id)
+        db.save_book(book)
+        db.link_user_book(alice.id, "dur")
+        text = _synthetic_tokens(100)
+        # First measurement with 3600 seconds
+        record_preflight(db, book, text, {"media": {"duration": 3600}})
+        row = db.get_transcription_preflights(alice.id, ["dur"])["dur"]
+        identity_3600 = row["identity"]
+        assert row["duration_seconds"] == 3600
+        assert row["epub_tokens_per_audio_hour"] == 100.0 * 3600 / 3600
+        # Acknowledge
+        assert db.acknowledge_transcription_preflight(alice.id, "dur", identity_3600)
+        assert db.get_transcription_preflights(alice.id, ["dur"])["dur"]["acknowledged"]
+        # Same text, duration changed to 7200 via ABS media
+        record_preflight(db, book, text, {"media": {"duration": 7200}})
+        row2 = db.get_transcription_preflights(alice.id, ["dur"])["dur"]
+        identity_7200 = row2["identity"]
+        assert identity_7200 != identity_3600
+        assert row2["duration_seconds"] == 7200
+        assert not row2["acknowledged"]
+        # Old identity cannot be acknowledged
+        assert not db.acknowledge_transcription_preflight(alice.id, "dur", identity_3600)
+        # New identity can be acknowledged
+        assert db.acknowledge_transcription_preflight(alice.id, "dur", identity_7200)
+        # Unchanged evidence preserves acknowledgement
+        record_preflight(db, book, text, {"media": {"duration": 7200}})
+        row3 = db.get_transcription_preflights(alice.id, ["dur"])["dur"]
+        assert row3["identity"] == identity_7200
+        assert row3["acknowledged"]
+    finally:
+        db.db_manager.close()
+
+
+def test_delete_book_removes_preflight_rows(tmp_path):
+    db = DatabaseService(str(tmp_path / "delete.db"))
+    try:
+        alice = db.create_user("alice-del", "pw", role="user")
+        bob = db.create_user("bob-del", "pw", role="user")
+        book = Book(abs_id="delbook", abs_title="Delete",
+                    audio_source="ABS", audio_source_id="del",
+                    ebook_source="BookOrbit", ebook_source_id="1",
+                    original_ebook_filename="book.epub",
+                    user_id=alice.id)
+        db.save_book(book)
+        db.link_user_book(alice.id, "delbook")
+        db.link_user_book(bob.id, "delbook")
+        text = _synthetic_tokens(100)
+        record_preflight(db, book, text)
+        row_alice = db.get_transcription_preflights(alice.id, ["delbook"])["delbook"]
+        row_bob = db.get_transcription_preflights(bob.id, ["delbook"])["delbook"]
+        assert row_alice["token_count"] == 100
+        assert row_bob["token_count"] == 100
+        db.delete_book("delbook")
+        # Recreate book and claims without recording new evidence to expose orphan rows
+        book_recreated = Book(abs_id="delbook", abs_title="Delete",
+                              audio_source="ABS", audio_source_id="del",
+                              ebook_source="BookOrbit", ebook_source_id="1",
+                              original_ebook_filename="book.epub",
+                              user_id=alice.id)
+        db.save_book(book_recreated)
+        db.link_user_book(alice.id, "delbook")
+        db.link_user_book(bob.id, "delbook")
+        assert db.get_transcription_preflights(alice.id, ["delbook"]) == {}
+        assert db.get_transcription_preflights(bob.id, ["delbook"]) == {}
+        # Verify no raw rows remain
+        with db.get_session() as session:
+            from src.db.models import TranscriptionPreflight
+            count = session.query(TranscriptionPreflight).filter(TranscriptionPreflight.abs_id == "delbook").count()
+            assert count == 0
+    finally:
+        db.db_manager.close()
+
+
+def test_unlink_user_book_removes_preflight_and_preserves_others(tmp_path):
+    db = DatabaseService(str(tmp_path / "unlink.db"))
+    try:
+        alice = db.create_user("alice-unlink", "pw", role="user")
+        bob = db.create_user("bob-unlink", "pw", role="user")
+        book = Book(abs_id="unlink", abs_title="Unlink",
+                    audio_source="ABS", audio_source_id="unlink",
+                    ebook_source="BookOrbit", ebook_source_id="1",
+                    original_ebook_filename="book.epub",
+                    user_id=alice.id)
+        db.save_book(book)
+        db.link_user_book(alice.id, "unlink")
+        db.link_user_book(bob.id, "unlink")
+        text = _synthetic_tokens(100)
+        record_preflight(db, book, text)
+        id_alice = db.get_transcription_preflights(alice.id, ["unlink"])["unlink"]["identity"]
+        id_bob = db.get_transcription_preflights(bob.id, ["unlink"])["unlink"]["identity"]
+        db.acknowledge_transcription_preflight(alice.id, "unlink", id_alice)
+        db.acknowledge_transcription_preflight(bob.id, "unlink", id_bob)
+        # Unlink bob
+        db.unlink_user_book(bob.id, "unlink")
+        assert db.get_transcription_preflights(alice.id, ["unlink"])["unlink"]["acknowledged"]
+        assert db.get_transcription_preflights(bob.id, ["unlink"]) == {}
+        # Relink bob, evidence should be recreated and unacknowledged
+        db.link_user_book(bob.id, "unlink")
+        record_preflight(db, book, text)
+        row_bob = db.get_transcription_preflights(bob.id, ["unlink"])["unlink"]
+        assert row_bob["token_count"] == 100
+        assert not row_bob["acknowledged"]
+    finally:
+        db.db_manager.close()
+
+
+def test_acknowledge_transcription_preflight_identity_race(tmp_path):
+    import threading
+    from sqlalchemy.orm import Query
+    from src.db.models import TranscriptionPreflight
+
+    db = DatabaseService(str(tmp_path / "race.db"))
+    try:
+        user = db.create_user("race-user", "pw", role="user")
+        book = Book(abs_id="race", abs_title="Race",
+                    audio_source="ABS", audio_source_id="race",
+                    ebook_source="BookOrbit", ebook_source_id="1",
+                    original_ebook_filename="book.epub",
+                    user_id=user.id)
+        db.save_book(book)
+        db.link_user_book(user.id, "race")
+        text1 = _synthetic_tokens(100)
+        record_preflight(db, book, text1)
+        row = db.get_transcription_preflights(user.id, ["race"])["race"]
+        identity1 = row["identity"]
+
+        original_first = Query.first
+        pause_event = threading.Event()
+        resume_event = threading.Event()
+        paused = {"done": False}
+
+        def patched_first(self):
+            result = original_first(self)
+            try:
+                entity = self.column_descriptions[0].get("entity")
+            except Exception:
+                return result
+            if entity is TranscriptionPreflight and not paused["done"]:
+                paused["done"] = True
+                pause_event.set()
+                assert resume_event.wait(timeout=10), "Acknowledgement was not resumed"
+            return result
+
+        t = None
+        Query.first = patched_first
+        try:
+            result = {}
+            exc = {}
+
+            def ack_thread():
+                try:
+                    result["ok"] = db.acknowledge_transcription_preflight(user.id, "race", identity1)
+                except Exception as e:
+                    exc["e"] = e
+
+            t = threading.Thread(target=ack_thread, daemon=True)
+            t.start()
+            # Wait for acknowledgement to pause after reading row
+            assert pause_event.wait(timeout=5), "Acknowledgement did not pause after reading row"
+            # Concurrently replace evidence with different text
+            text2 = _synthetic_tokens(200)
+            record_preflight(db, book, text2)
+            # Resume acknowledgement
+            resume_event.set()
+            t.join(timeout=5)
+            assert not t.is_alive(), "Acknowledgement thread did not finish"
+            if exc:
+                raise exc["e"]
+            # The acknowledgement should have failed because identity changed
+            assert result.get("ok") is False
+            # New evidence should be present and unacknowledged
+            row2 = db.get_transcription_preflights(user.id, ["race"])["race"]
+            assert row2["identity"] != identity1
+            assert not row2["acknowledged"]
+        finally:
+            resume_event.set()
+            if t is not None and t.ident is not None:
+                t.join(timeout=5)
+            Query.first = original_first
+    finally:
+        db.db_manager.close()

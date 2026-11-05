@@ -1581,6 +1581,9 @@ class DatabaseService:
             session.query(ReadingSessionBuffer).filter(
                 ReadingSessionBuffer.abs_id == abs_id
             ).delete(synchronize_session=False)
+            session.query(TranscriptionPreflight).filter(
+                TranscriptionPreflight.abs_id == abs_id
+            ).delete(synchronize_session=False)
             
             book = session.query(Book).filter(Book.abs_id == abs_id).first()
             if book:
@@ -2157,6 +2160,11 @@ class DatabaseService:
             deleted = session.query(UserBook).filter(
                 UserBook.user_id == user_id, UserBook.abs_id == abs_id
             ).delete(synchronize_session=False)
+            if deleted:
+                session.query(TranscriptionPreflight).filter(
+                    TranscriptionPreflight.user_id == user_id,
+                    TranscriptionPreflight.abs_id == abs_id
+                ).delete(synchronize_session=False)
         if deleted:
             self._notify_catalog_change()
         return deleted
@@ -2736,8 +2744,19 @@ class DatabaseService:
             book = session.get(Book, abs_id)
             if book is None or row.pairing_key != pair_key(book):
                 return False
-            row.acknowledged_at = time.time()
-            return True
+            from sqlalchemy import update
+            stmt = (
+                update(TranscriptionPreflight)
+                .where(
+                    TranscriptionPreflight.user_id == user_id,
+                    TranscriptionPreflight.abs_id == abs_id,
+                    TranscriptionPreflight.identity == identity,
+                    TranscriptionPreflight.pairing_key == row.pairing_key,
+                )
+                .values(acknowledged_at=time.time())
+            )
+            result = session.execute(stmt)
+            return result.rowcount > 0
 
     # Job operations
     def get_latest_job(self, abs_id: str, kind: Optional[str] = None) -> Optional[Job]:

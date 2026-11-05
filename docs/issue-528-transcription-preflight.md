@@ -2,7 +2,7 @@
 
 **Branch:** `codex/528-transcription-preflight`, based on local `dev` at
 `9bbec982e6582266c577339984a1896e0e9cad72` (57 commits ahead of `origin/dev`
-after fetch, November 5, 2026). Not deployed.
+after fetch, November 5, 2026). The implementation handoff was not deployed.
 
 ## What is measured and when
 
@@ -27,14 +27,20 @@ diagnostics, audio-coverage validation and sync leader selection are untouched.
 
 `transcription_preflights` is an additive table keyed by user and book.
 The identity ties each acknowledgement to audio provider/source and file IDs,
-the ebook provider/ID and original filename, catalog duration, **and a digest
-of the extracted EPUB text**. A changed pairing hides stale evidence, and
-new measurements clear the old acknowledgement. Every read, write and
-acknowledgement requires the reader's `user_books` claim. When the same catalog pairing is shared,
-the worker publishes independent evidence to every current claimant; one
-reader's acknowledgement never acknowledges it for another. `Continue anyway`
-acknowledges only this advisory; no approval queue is added, transcription
-continues automatically and `ContentMatchRejected` still refuses mismatches.
+the ebook provider/ID and original filename, the effective measured audio duration,
+and a digest of the extracted EPUB text. A changed pairing, EPUB text, or effective
+duration/rate assessment changes the identity, which hides stale evidence and clears
+the old acknowledgement; unchanged evidence preserves an existing acknowledgement.
+Every read, write and acknowledgement requires the reader's `user_books` claim. When
+the same catalog pairing is shared, the worker publishes independent evidence to
+every current claimant; one reader's acknowledgement never acknowledges it for
+another. `Continue anyway` acknowledges only this advisory; no approval queue is
+added, transcription continues automatically and `ContentMatchRejected` still refuses
+mismatches. `delete_book` and `unlink_user_book` explicitly remove the related
+`TranscriptionPreflight` rows because SQLite foreign-key enforcement is not guaranteed
+on established installs.
+Acknowledgement updates are conditional on the submitted identity and pairing key,
+so a concurrent refresh cannot acknowledge evidence the reader has not seen.
 Evidence does not go into `Job.last_error`. Classic and New Processing pages
 show the advisory; Discover links to Processing. No dependencies or settings.
 
@@ -82,8 +88,9 @@ reader isolation, ack invalidation, both UI templates, and a final lexical
 refusal despite acknowledgement. Fresh SQLite Alembic base-to-head applied
 revision `b7e528a0c1d2` and created the seven expected columns.
 
-**Deploy: migration + restart** only after review/integration. No live
-verification, merges, pushes, container restart, or installations performed.
+**Deploy: migration + restart** after review/integration. Prebuilt-image installs
+receive this only with a subsequently published image. The implementation handoff
+did not merge, push, restart containers, or perform live verification.
 iPad Safari-specific rendering was not verified. The latest focused run passed **161 tests and 3 subtests**, plus **31**
 existing Whisper cache/Storyteller/cancellation tests and 5 subtests.
 The full project suite run (before two final additional regression cases and
@@ -99,3 +106,19 @@ failed in a disposable worktree based on `9bbec98` with the new production
 hooks absent; the identical tests pass on this implementation branch. The
 scratch worktree was removed. The final commit is recorded in the handoff
 and local `BRANCH_STATUS.md`.
+
+## Review verification — November 5, 2026
+
+Reconciled with `dev` at `f65fec7`. Fixed three independently reproduced defects:
+effective ABS duration changes retained acknowledgement; deleting/unlinking retained
+evidence rows with SQLite foreign keys off; a concurrent evidence refresh could be
+acknowledged by a stale request. Four additional regressions cover these cases,
+including a forced two-thread interleaving through the production DB methods.
+
+Final focused checks: **63 passed**. Full reconciled suite: **6,900 passed,
+12 skipped, 1,094 subtests passed**, 12 existing warnings (351.53 seconds).
+The earlier three navigation failures are resolved by the newer dev commits.
+Duration, race, deletion and unlink regressions were checked with the relevant
+fix reverted; fixed source was restored afterward. Fresh SQLite base-to-head
+reached `b7e528a0c1d2` with all seven expected columns. Later local deployment
+evidence belongs in `BRANCH_STATUS.md`; this is the portable review record.
