@@ -124,8 +124,12 @@
     .view .logs-wrap .controls, .view .whats-new-notes { min-width: 0; }
     .discover-page .row-actions .btn { min-height: 44px; }
     .discover-page .resource-card, .discover-page .ebook-card { min-width: 0; }
-    .book-hero { grid-template-columns: minmax(0,90px) minmax(0,1fr); }
+    /* Same width as the cover (next.css shrinks it to 90px only at 640px), so it never spills onto the title. */
+    .book-hero { grid-template-columns: minmax(0,150px) minmax(0,1fr); }
     .book-detail { min-width: 0; }
+}
+@media (max-width: 640px) {
+    .book-hero { grid-template-columns: minmax(0,90px) minmax(0,1fr); }
 }
 @media (max-width: 410px) {
     .topbar { gap: 6px; padding: 8px 9px; }
