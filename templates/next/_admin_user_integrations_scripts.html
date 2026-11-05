@@ -1,0 +1,157 @@
+<script>
+        const TEST_URL_BASE = {{ url_for('admin_user_test_connection', user_id=target_user.id, service='__service__')|tojson }};
+        const ABS_LIB_URL = {{ url_for('admin_user_abs_libraries', user_id=target_user.id)|tojson }};
+        const BOOKLORE_LIB_URL = {{ url_for('admin_user_booklore_libraries', user_id=target_user.id)|tojson }};
+        const BF_DEVICE_START_URL = {{ url_for('admin_user_bookfusion_device_start', user_id=target_user.id)|tojson }};
+        const BF_DEVICE_POLL_URL = {{ url_for('admin_user_bookfusion_device_poll', user_id=target_user.id)|tojson }};
+
+        function escapeBookFusionHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[ch]);
+        }
+
+        function startBookFusionLink() {
+            const status = document.getElementById('bookfusion_link_status');
+            if (!status) return;
+            status.textContent = {{ _('Starting BookFusion link…')|tojson }};
+            fetch(BF_DEVICE_START_URL, { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.ok) { status.textContent = data.message || {{ _('Could not start BookFusion link.')|tojson }}; return; }
+                    const interval = Math.max(5, Number(data.interval || 5));
+                    const expiresIn = Math.max(interval, Number(data.expires_in || 600));
+                    status.innerHTML = bbFormat({{ _('Go to <a href="{url}" target="_blank" style="color:#aab4f5;">{url}</a> and enter code <strong>{code}</strong> while signed in to this user\'s BookFusion account.')|tojson }}, { url: escapeBookFusionHtml(data.verification_uri), code: escapeBookFusionHtml(data.user_code) });
+                    pollBookFusionToken(data.device_code, interval, Date.now() + expiresIn * 1000, status);
+                })
+                .catch(err => { status.textContent = bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: err }); });
+        }
+
+        function pollBookFusionToken(deviceCode, intervalSeconds, deadlineMs, status) {
+            if (Date.now() > deadlineMs) {
+                status.textContent = {{ _('BookFusion link expired. Start a new link and try again.')|tojson }};
+                return;
+            }
+            window.setTimeout(function () {
+                fetch(BF_DEVICE_POLL_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_code: deviceCode })
+                })
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.ok) { status.textContent = {{ _('BookFusion linked to this user. Save or refresh to see the stored token.')|tojson }}; return; }
+                        if (data.error === 'authorization_pending' || data.error === 'slow_down') {
+                            const nextInterval = data.error === 'slow_down' ? intervalSeconds + 5 : intervalSeconds;
+                            pollBookFusionToken(deviceCode, nextInterval, deadlineMs, status);
+                            return;
+                        }
+                        status.textContent = data.message || bbFormat({{ _('BookFusion link failed: {error}')|tojson }}, { error: (data.error || {{ _('unknown error')|tojson }}) });
+                    })
+                    .catch(err => { status.textContent = bbFormat({{ _('BookFusion token poll failed: {error}')|tojson }}, { error: err }); });
+            }, intervalSeconds * 1000);
+        }
+
+        function toggleIntegrationGroup(toggle) {
+            const body = document.getElementById(toggle.dataset.bodyId || '');
+            if (body) body.classList.toggle('collapsed', !toggle.checked);
+            const sourceSelectId = toggle.dataset.sourceSelect;
+            if (sourceSelectId) {
+                const select = document.getElementById(sourceSelectId);
+                if (!select) return;
+                if (!toggle.checked) {
+                    select.value = 'off';
+                } else if (!select.value || select.value === 'off') {
+                    select.value = toggle.dataset.sourceDefault || 'grimmory';
+                }
+            }
+        }
+
+        function syncCollectionGateFromSource(select) {
+            const gate = document.getElementById(select.dataset.sourceGate || '');
+            if (!gate) return;
+            gate.checked = !!select.value && select.value !== 'off';
+            toggleIntegrationGroup(gate);
+        }
+
+        function findLibraries(btn, service, fieldKey) {
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '⌛';
+            const url = service === 'abs' ? ABS_LIB_URL : BOOKLORE_LIB_URL;
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then((r) => r.json())
+                .then((data) => {
+                    if (data && data.error) { alert(bbFormat({{ _('Error: {error}')|tojson }}, { error: data.error })); return; }
+                    const picker = document.getElementById(fieldKey + '_picker');
+                    picker.innerHTML = '<option value=""></option>';
+                    picker.options[0].textContent = {{ _('Select a library…')|tojson }};
+                    (data || []).forEach((lib) => {
+                        const opt = document.createElement('option');
+                        opt.value = lib.id;
+                        opt.textContent = (lib.name || lib.id) + ' (' + lib.id + ')'
+                            + (lib.mediaType ? ' — ' + lib.mediaType : '');
+                        picker.appendChild(opt);
+                    });
+                    if (!data || !data.length) {
+                        alert({{ _('No libraries found. Check the account fields above (no save needed).')|tojson }});
+                        return;
+                    }
+                    picker.style.display = 'block';
+                })
+                .catch((e) => alert(bbFormat({{ _('Lookup failed: {error}')|tojson }}, { error: e })))
+                .finally(() => { btn.disabled = false; btn.textContent = original; });
+        }
+
+        function collectIntegrationPayload() {
+            const payload = {};
+            document.querySelectorAll('input[name], select[name]').forEach((field) => {
+                if (field.type === 'checkbox') {
+                    payload[field.name] = field.checked;
+                } else {
+                    payload[field.name] = field.value;
+                }
+            });
+            return payload;
+        }
+
+        function testUserIntegration(btn) {
+            const original = btn.textContent;
+            const service = btn.dataset.service;
+            btn.disabled = true;
+            btn.classList.remove('ok', 'fail');
+            btn.textContent = {{ _('Testing...')|tojson }};
+
+            fetch(TEST_URL_BASE.replace('__service__', encodeURIComponent(service)), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectIntegrationPayload())
+            })
+                .then((response) => response.json())
+                .then((data) => {
+                    btn.classList.add(data.ok ? 'ok' : 'fail');
+                    btn.textContent = data.ok ? {{ _('Connected')|tojson }} : {{ _('Failed')|tojson }};
+                    alert(bbFormat(data.ok ? {{ _('Connected: {message}')|tojson }} : {{ _('Failed: {message}')|tojson }}, { message: data.message }));
+                    window.setTimeout(() => {
+                        btn.classList.remove('ok', 'fail');
+                        btn.textContent = original;
+                    }, 3000);
+                })
+                .catch((err) => {
+                    btn.classList.add('fail');
+                    btn.textContent = {{ _('Error')|tojson }};
+                    alert(bbFormat({{ _('Test failed: {error}')|tojson }}, { error: err }));
+                    window.setTimeout(() => {
+                        btn.classList.remove('fail');
+                        btn.textContent = original;
+                    }, 3000);
+                })
+                .finally(() => {
+                    btn.disabled = false;
+                });
+        }
+    </script>

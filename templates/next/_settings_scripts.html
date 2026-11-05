@@ -1,0 +1,1213 @@
+<script>
+        // Translated strings used further down. Kept out of the handler bodies so
+        // tests/test_settings_dirty_counter.js can run those as plain JavaScript.
+        const SHELF_BOOK_COUNT = {% call(n) plural_forms() %}{{ ngettext('{name} ({count} book)', '{name} ({count} books)', n) }}{% endcall %};
+        const UNSAVED_CHANGES = {% call(n) plural_forms() %}{{ ngettext('{count} unsaved change', '{count} unsaved changes', n) }}{% endcall %};
+        const UNSAVED_LEAVE_WARNING = {{ _('You have unsaved changes. Are you sure you want to leave?')|tojson }};
+
+        function resetLibrarySelect(select) {
+            select.innerHTML = '<option value=""></option>';
+            select.options[0].textContent = {{ _('Select a library ID...')|tojson }};
+        }
+
+        function populateLibraryPicker({ endpoint, button, inputName, selectId, statusId, emptyMessage, labelBuilder }) {
+            const originalText = button.innerHTML;
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            const status = document.getElementById(statusId);
+
+            button.innerHTML = '⌛ ' + {{ _('Scanning...')|tojson }};
+            button.disabled = true;
+
+            fetch(endpoint)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(bbFormat({{ _('Error: {error}')|tojson }}, { error: data.error }));
+                        return;
+                    }
+                    if (!Array.isArray(data) || data.length === 0) {
+                        if (select) {
+                            select.style.display = 'none';
+                            resetLibrarySelect(select);
+                        }
+                        if (status) {
+                            status.style.display = 'block';
+                            status.textContent = emptyMessage;
+                        }
+                        return;
+                    }
+
+                    const currentValue = input ? input.value.trim() : '';
+                    resetLibrarySelect(select);
+
+                    data.forEach(lib => {
+                        const option = document.createElement('option');
+                        option.value = lib.id || '';
+                        option.textContent = labelBuilder(lib);
+                        if (currentValue && currentValue === option.value) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+
+                    select.style.display = 'block';
+                    if (status) {
+                        status.style.display = 'block';
+                        status.textContent = {{ _('Select a library to fill the ID field.')|tojson }};
+                    }
+                })
+                .catch(err => {
+                    alert(bbFormat({{ _('Failed to fetch libraries: {error}')|tojson }}, { error: err }));
+                })
+                .finally(() => {
+                    button.innerHTML = originalText;
+                    button.disabled = false;
+                });
+        }
+
+        function applyShelfPickerSelection(inputName, selectId, singleSelect) {
+            const input = document.querySelector(`input[name="${inputName}"]`);
+            const select = document.getElementById(selectId);
+            if (!input || !select || !select.value) return;
+
+            if (singleSelect) {
+                // Watch shelf: a single shelf name, not a comma-separated list.
+                input.value = select.value;
+                if (typeof markDirty === 'function') markDirty(input);
+                select.value = "";
+                return;
+            }
+
+            let currentStr = input.value || '';
+            let current = currentStr.split(',').map(s => s.trim()).filter(Boolean);
+            if (!current.includes(select.value)) {
+                current.push(select.value);
+                input.value = current.join(', ');
+                if (typeof markDirty === 'function') markDirty(input);
+            }
+            select.value = ""; // Reset select
+        }
+
+        function checkBookloreShelves() {
+            populateLibraryPicker({
+                endpoint: '/api/booklore/shelves',
+                button: event.target,
+                inputName: 'DEVICE_SYNC_EXCLUDED_SHELVES', // Just used for reading current value optionally
+                selectId: 'booklore_shelf_picker',
+                statusId: 'booklore_shelf_picker_status',
+                emptyMessage: {{ _('No shelves found. Check connection or try syncing first.')|tojson }},
+                labelBuilder: (shelf) => bbPlural(SHELF_BOOK_COUNT, shelf.count, { name: shelf.name }),
+            });
+        }
+
+        function checkBookloreWatchShelf() {
+            populateLibraryPicker({
+                endpoint: '/api/watch-shelves',
+                button: event.target,
+                inputName: 'ALL_APPS_SHELF_WATCH_NAME',
+                selectId: 'booklore_watch_shelf_picker',
+                statusId: 'booklore_watch_shelf_picker_status',
+                emptyMessage: {{ _('No shelves or collections found. Create one in your library app first, then click Find again.')|tojson }},
+                labelBuilder: (shelf) => shelf.name,
+            });
+        }
+
+        const TEST_CONNECTION_FIELDS = {
+            abs: ['ABS_SERVER', 'ABS_KEY'],
+            kosync: [
+                'KOSYNC_ENABLED', 'KOSYNC_SERVER', 'KOSYNC_USER', 'KOSYNC_KEY',
+                'KOSYNC_AUTH_METHOD'
+            ],
+            storyteller: ['STORYTELLER_ENABLED', 'STORYTELLER_API_URL', 'STORYTELLER_USER', 'STORYTELLER_PASSWORD'],
+            booklore: ['BOOKLORE_ENABLED', 'BOOKLORE_SERVER', 'BOOKLORE_USER', 'BOOKLORE_PASSWORD'],
+            bookorbit: ['BOOKORBIT_ENABLED', 'BOOKORBIT_SERVER', 'BOOKORBIT_USER', 'BOOKORBIT_PASSWORD'],
+            kavita: ['KAVITA_ENABLED', 'KAVITA_SERVER', 'KAVITA_API_KEY'],
+            bookfusion: ['BOOKFUSION_ENABLED', 'BOOKFUSION_API_URL', 'BOOKFUSION_ACCESS_TOKEN'],
+            cwa: ['CWA_ENABLED', 'CWA_SERVER', 'CWA_USERNAME', 'CWA_PASSWORD', 'CWA_SYNC_TOKEN'],
+            hardcover: ['HARDCOVER_ENABLED', 'HARDCOVER_TOKEN'],
+            storygraph: ['STORYGRAPH_ENABLED', 'STORYGRAPH_SESSION_COOKIE', 'STORYGRAPH_REMEMBER_USER_TOKEN'],
+            telegram: ['TELEGRAM_ENABLED', 'TELEGRAM_BOT_TOKEN'],
+            ollama: [
+                'OLLAMA_ENABLED', 'LLM_PROVIDER', 'LLM_BASE_URL', 'LLM_API_KEY',
+                'LLM_EMBED_MODEL', 'LLM_CHAT_MODEL',
+                'OLLAMA_URL', 'OLLAMA_EMBED_MODEL', 'OLLAMA_CHAT_MODEL'
+            ],
+            whispercpp: ['WHISPER_CPP_URL'],
+        };
+
+        function getTestConnectionPayload(service) {
+            const payload = {};
+            const fieldNames = TEST_CONNECTION_FIELDS[service] || [];
+
+            fieldNames.forEach((fieldName) => {
+                const field = document.querySelector(`[name="${fieldName}"]`);
+                if (!field) {
+                    return;
+                }
+
+                if (field.type === 'checkbox') {
+                    payload[fieldName] = field.checked;
+                } else {
+                    payload[fieldName] = field.value;
+                }
+            });
+
+            return payload;
+        }
+
+        function testConnection(service, btn) {
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⌛ ' + {{ _('Testing...')|tojson }};
+            btn.disabled = true;
+            fetch('/api/test-connection/' + service, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(getTestConnectionPayload(service))
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.ok) {
+                        btn.innerHTML = '✅ ' + {{ _('Connected')|tojson }};
+                        alert('✅ ' + data.message);
+                    } else {
+                        btn.innerHTML = '❌ ' + {{ _('Failed')|tojson }};
+                        alert('❌ ' + data.message);
+                    }
+                    setTimeout(() => { btn.innerHTML = originalText; }, 3000);
+                })
+                .catch(err => {
+                    btn.innerHTML = '❌ ' + {{ _('Error')|tojson }};
+                    alert('❌ ' + bbFormat({{ _('Test failed: {error}')|tojson }}, { error: err }));
+                    setTimeout(() => { btn.innerHTML = originalText; }, 3000);
+                })
+                .finally(() => { btn.disabled = false; });
+        }
+
+        function toggleSection(bodyId, isChecked) {
+            const body = document.getElementById(bodyId);
+            if (isChecked) {
+                body.classList.remove('collapsed');
+            } else {
+                body.classList.add('collapsed');
+                // Optional: Clear inputs when disabling?
+                // For now, we prefer keeping values in UI so user doesn't lose config by accidental toggle
+            }
+        }
+
+        function _diagnosticsHistoryLine(className, text) {
+            const line = document.createElement('div');
+            line.className = className;
+            line.textContent = text;
+            return line;
+        }
+
+        function _renderDiagnosticsSubmissions(submissions) {
+            const history = document.getElementById('diag-submission-history');
+            if (!history) return;
+            history.textContent = '';
+            history.setAttribute('aria-busy', 'false');
+            if (!Array.isArray(submissions) || submissions.length === 0) {
+                history.appendChild(_diagnosticsHistoryLine('help-text', {{ _('No manual reports submitted yet.')|tojson }}));
+                return;
+            }
+
+            submissions.forEach(function(submission) {
+                const card = document.createElement('div');
+                card.className = 'diagnostics-submission';
+                const header = document.createElement('div');
+                header.className = 'diagnostics-submission-header';
+                let submittedAt = submission.submitted_at || '';
+                if (submittedAt) {
+                    const parsed = new Date(submittedAt);
+                    if (!Number.isNaN(parsed.getTime())) submittedAt = parsed.toLocaleString();
+                }
+                header.appendChild(_diagnosticsHistoryLine('', submittedAt || {{ _('Submitted report')|tojson }}));
+                header.appendChild(_diagnosticsHistoryLine(
+                    'diagnostics-submission-status',
+                    submission.status === 'replied' ? {{ _('Maintainer replied')|tojson }} : {{ _('Report received')|tojson }}
+                ));
+                card.appendChild(header);
+
+                if (submission.user_message) {
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', {{ _('Your note')|tojson }}));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.user_message));
+                }
+                if (submission.response_md) {
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-label', {{ _('Maintainer response')|tojson }}));
+                    card.appendChild(_diagnosticsHistoryLine('diagnostics-submission-text', submission.response_md));
+                }
+                history.appendChild(card);
+            });
+        }
+
+        function _loadDiagnosticsSubmissions() {
+            const history = document.getElementById('diag-submission-history');
+            if (!history) return;
+            history.setAttribute('aria-busy', 'true');
+            fetch('/api/diagnostics/submissions')
+                .then(function(response) {
+                    return response.json().catch(function() { return {}; }).then(function(data) {
+                        if (!response.ok) throw new Error('unavailable');
+                        return data;
+                    });
+                })
+                .then(function(data) { _renderDiagnosticsSubmissions(data.submissions); })
+                .catch(function() {
+                    history.textContent = {{ _('Submitted reports are unavailable right now.')|tojson }};
+                    history.setAttribute('aria-busy', 'false');
+                });
+        }
+
+        function _sendDiagnosticsNow(btn) {
+            const status = document.getElementById('diag-send-status');
+            const message = document.getElementById('diag-problem-message');
+            btn.textContent = {{ _('Sending...')|tojson }};
+            btn.disabled = true;
+            if (status) status.textContent = '';
+            fetch('/api/diagnostics/send-now', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: message ? message.value : ''})
+            })
+                .then(function(response) {
+                    return response.json().catch(function() { return {}; }).then(function(data) {
+                        return {ok: response.ok, status: response.status, data: data};
+                    });
+                })
+                .then(function(result) {
+                    if (result.ok && result.data.sent) {
+                        if (status) status.textContent = {{ _('Report received.')|tojson }};
+                        if (message) message.value = '';
+                        _loadDiagnosticsSubmissions();
+                    } else if (result.status === 429) {
+                        let text = {{ _('Please wait before sending another report.')|tojson }};
+                        if (result.data.retry_after_hours) {
+                            text = bbPlural({% call(n) plural_forms() %}{{ ngettext('Please wait before sending another report. Try again in about {count} hour.', 'Please wait before sending another report. Try again in about {count} hours.', n) }}{% endcall %}, result.data.retry_after_hours);
+                        }
+                        if (status) status.textContent = text;
+                    } else if (status) {
+                        status.textContent = {{ _('Report could not be sent.')|tojson }};
+                    }
+                })
+                .catch(function() {
+                    if (status) status.textContent = {{ _('Report could not be sent.')|tojson }};
+                })
+                .finally(function() {
+                    btn.textContent = {{ _('Send bug report')|tojson }};
+                    btn.disabled = false;
+                });
+        }
+
+        _loadDiagnosticsSubmissions();
+
+        function togglePollSeconds(rowId, mode) {
+            const row = document.getElementById(rowId);
+            if (!row) return;
+            if (mode === 'custom') {
+                row.style.opacity = '';
+                row.style.pointerEvents = '';
+            } else {
+                row.style.opacity = '0.45';
+                row.style.pointerEvents = 'none';
+            }
+        }
+
+        function toggleKosyncServerMode() {
+            const useBuiltin = document.getElementById('kosync_use_builtin');
+            const internalInput = document.getElementById('kosync_server_input');
+            if (!useBuiltin || !internalInput) return;
+
+            if (useBuiltin.checked) {
+                // Force internal value and make readonly
+                internalInput.value = "http://127.0.0.1:{{ get_val('KOSYNC_PORT', '5757') }}";
+                internalInput.setAttribute('readonly', 'readonly');
+                internalInput.style.opacity = "0.7";
+                internalInput.style.cursor = "not-allowed";
+            } else {
+                // Make internal editable so the user can set their external server.
+                internalInput.removeAttribute('readonly');
+                internalInput.style.opacity = "1";
+                internalInput.style.cursor = "text";
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatQualityScore(score) {
+            return (typeof score === 'number') ? score.toFixed(2) : '—';
+        }
+
+        function qualityScoreColor(score) {
+            if (typeof score !== 'number') return 'rgba(255,255,255,0.45)';
+            if (score < 0.5) return '#e57373';
+            if (score < 0.75) return '#ffb74d';
+            return '#81c784';
+        }
+
+        const MAP_QUALITY_TITLE = {{ _('Map quality score (0-1, higher is better)')|tojson }};
+
+        async function loadAlignmentHealth() {
+            const summaryEl = document.getElementById('alignHealthSummary');
+            const listEl = document.getElementById('alignHealthList');
+            if (!summaryEl || !listEl) return;
+
+            try {
+                const res = await fetch('/api/alignments/llm-status');
+                const data = await res.json();
+                const needs = data.needs_realign || 0;
+                summaryEl.textContent = bbFormat({{ _('{needs} of {total} maps could benefit from LLM re-alignment (pre-LLM, linear, or low-quality).')|tojson }}, { needs: needs, total: data.total || 0 });
+
+                const allBtn = document.getElementById('realignAllBtn');
+                if (allBtn) allBtn.disabled = needs === 0;
+
+                const recommended = (data.books || []).filter((book) => book.needs_realign);
+                if (recommended.length === 0) {
+                    listEl.innerHTML = '<div style="opacity:0.65;font-size:13px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;"></div>';
+                    listEl.firstChild.textContent = {{ _('No maps need re-alignment.')|tojson }};
+                    return;
+                }
+
+                listEl.innerHTML = '';
+                recommended.forEach((book) => {
+                    const method = book.align_method || 'pre_llm';
+                    const score = book.quality_score;
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;background:rgba(255,255,255,0.04);border-radius:8px;';
+                    row.innerHTML = `<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(book.title)}</span>`
+                        + `<span style="color:${qualityScoreColor(score)};font-size:12px;min-width:44px;text-align:right;" title="${escapeHtml(MAP_QUALITY_TITLE)}">${formatQualityScore(score)}</span>`
+                        + `<span style="color:#e57373;font-size:12px;min-width:120px;text-align:right;">${escapeHtml(method)}</span>`;
+                    const realignBtn = document.createElement('button');
+                    realignBtn.type = 'button';
+                    realignBtn.textContent = {{ _('Re-align')|tojson }};
+                    realignBtn.className = 'btn';
+                    realignBtn.onclick = () => realignBook(book.abs_id, realignBtn);
+                    row.appendChild(realignBtn);
+                    const restoreBtn = document.createElement('button');
+                    restoreBtn.type = 'button';
+                    restoreBtn.textContent = {{ _('Restore previous')|tojson }};
+                    restoreBtn.className = 'btn';
+                    restoreBtn.onclick = () => restoreAlignment(book.abs_id, restoreBtn);
+                    row.appendChild(restoreBtn);
+                    listEl.appendChild(row);
+                });
+            } catch (err) {
+                summaryEl.textContent = {{ _('Failed to load alignment health.')|tojson }};
+            }
+        }
+
+        async function realignBook(absId, btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = {{ _('Queued')|tojson }};
+            }
+            try {
+                await fetch('/api/alignments/realign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ abs_id: absId })
+                });
+            } catch (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = {{ _('Re-align')|tojson }};
+                }
+            }
+        }
+
+        async function restoreAlignment(absId, btn) {
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = {{ _('Restoring...')|tojson }};
+            }
+            try {
+                const res = await fetch('/api/alignments/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ abs_id: absId })
+                });
+                const data = await res.json();
+                if (btn) btn.textContent = data.restored ? {{ _('Restored')|tojson }} : {{ _('No backup')|tojson }};
+            } catch (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = {{ _('Restore previous')|tojson }};
+                }
+            }
+        }
+
+        async function realignAllNonLlm() {
+            const btn = document.getElementById('realignAllBtn');
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = {{ _('Queuing...')|tojson }};
+            }
+            try {
+                const res = await fetch('/api/alignments/realign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scope: 'all_non_llm' })
+                });
+                const data = await res.json();
+                if (btn) btn.textContent = bbFormat({{ _('Queued {count} - reprocessing in background')|tojson }}, { count: data.queued || 0 });
+            } catch (err) {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = {{ _('Re-align all pre-LLM / linear / low-quality maps')|tojson }};
+                }
+            }
+        }
+
+        async function clearStaleSuggestions() {
+            if (!confirm({{ _('Are you sure you want to clear stale suggestions?\n\nThis will permanently delete all suggestions for books that are not currently matched in your bridge. Books you are already syncing will be preserved.')|tojson }})) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/suggestions/clear_stale', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ ' + bbPlural({% call(n) plural_forms() %}{{ ngettext('Success! Cleared {count} stale suggestion.', 'Success! Cleared {count} stale suggestions.', n) }}{% endcall %}, data.count));
+                } else {
+                    alert('❌ ' + bbFormat({{ _('Failed to clear suggestions: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
+                }
+            } catch (err) {
+                console.error('Error clearing suggestions:', err);
+                alert('❌ ' + {{ _('An error occurred while clearing suggestions. Check console for details.')|tojson }});
+            }
+        }
+
+        async function cleanInactiveCache() {
+            if (!confirm({{ _('Clean all cached audio and transcript files for inactive books?\n\nActive books will not be affected.')|tojson }})) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/cache/clean', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    alert(bbFormat({{ _('Cleaned {audio} audio cache(s), {transcripts} transcript folder(s), and {epubs} cached epub(s).')|tojson }}, { audio: data.deleted_audio, transcripts: data.deleted_transcripts, epubs: data.deleted_epubs }));
+                } else {
+                    alert(bbFormat({{ _('Failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
+                }
+            } catch (err) {
+                console.error('Error cleaning cache:', err);
+                alert({{ _('An error occurred while cleaning cache. Check console for details.')|tojson }});
+            }
+        }
+
+        async function refreshBookloreCache(btn) {
+            const statusEl = document.getElementById('booklore_refresh_status');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = {{ _('Refreshing...')|tojson }};
+            if (statusEl) {
+                statusEl.textContent = ' ' + {{ _('Refresh in progress...')|tojson }};
+                statusEl.style.color = 'rgba(255, 255, 255, 0.55)';
+            }
+
+            try {
+                const response = await fetch('/api/booklore/refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    const message = data.error || {{ _('Unknown error')|tojson }};
+                    if (statusEl) {
+                        statusEl.textContent = ' ' + bbFormat({{ _('Refresh failed: {error}')|tojson }}, { error: message });
+                        statusEl.style.color = '#e57373';
+                    }
+                    return;
+                }
+
+                if (statusEl) {
+                    statusEl.textContent = ' ' + {{ _('Refresh complete.')|tojson }};
+                    statusEl.style.color = '#81c784';
+                }
+            } catch (err) {
+                console.error('Error refreshing Grimmory cache:', err);
+                if (statusEl) {
+                    statusEl.textContent = ' ' + bbFormat({{ _('Refresh failed: {error}')|tojson }}, { error: err });
+                    statusEl.style.color = '#e57373';
+                }
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+        }
+
+        async function backfillStorytellerTranscripts() {
+            if (!confirm({{ _('Run Storyteller backfill now?\n\nThis will scan all Storyteller-linked books, ingest available transcript files, and regenerate storyteller alignment maps.')|tojson }})) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/storyteller/backfill', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+                if (!response.ok || data.success === false) {
+                    alert(bbFormat({{ _('Storyteller backfill failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
+                    return;
+                }
+
+                alert([
+                    {{ _('Storyteller backfill complete.')|tojson }},
+                    bbFormat({{ _('Scanned: {count}')|tojson }}, { count: data.scanned }),
+                    bbFormat({{ _('Ingested: {count}')|tojson }}, { count: data.ingested }),
+                    bbFormat({{ _('Aligned: {count}')|tojson }}, { count: data.aligned }),
+                    bbFormat({{ _('Missing: {count}')|tojson }}, { count: data.missing }),
+                    bbFormat({{ _('Failed: {count}')|tojson }}, { count: data.failed }),
+                    bbFormat({{ _('Duration: {seconds}s')|tojson }}, { seconds: data.duration_seconds }),
+                ].join('\n'));
+            } catch (err) {
+                console.error('Error running storyteller backfill:', err);
+                alert({{ _('An error occurred while running storyteller backfill. Check console for details.')|tojson }});
+            }
+        }
+
+        async function runSeriesBackfill(refresh, button) {
+            const label = refresh ? 'Series re-check' : 'Series backfill';  // console only
+            const question = refresh
+                ? {{ _("Re-check every book's series?\n\nThis revisits books that already have a series and will remove one the source library no longer reports. Books whose library cannot be reached are left untouched.")|tojson }}
+                : {{ _('Run series backfill now?\n\nThis looks up the series name and number for every book that is missing them, then groups them on the dashboard. It may take a few minutes on a large library.')|tojson }};
+            if (!confirm(question)) {
+                return;
+            }
+
+            const originalText = button ? button.innerHTML : null;
+            if (button) {
+                button.innerHTML = '⌛ ' + (refresh ? {{ _('Re-checking...')|tojson }} : {{ _('Backfilling...')|tojson }});
+                button.disabled = true;
+            }
+
+            try {
+                const response = await fetch('/api/admin/backfill-series', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ refresh: !!refresh })
+                });
+
+                const data = await response.json();
+                if (!response.ok || data.success === false) {
+                    alert(bbFormat(refresh ? {{ _('Series re-check failed: {error}')|tojson }} : {{ _('Series backfill failed: {error}')|tojson }}, { error: data.error || {{ _('Unknown error')|tojson }} }));
+                    return;
+                }
+
+                const lines = [
+                    refresh ? {{ _('Series re-check complete.')|tojson }} : {{ _('Series backfill complete.')|tojson }},
+                    bbFormat({{ _('Scanned: {count}')|tojson }}, { count: data.scanned }),
+                    bbFormat({{ _('Updated: {count}')|tojson }}, { count: data.updated }),
+                ];
+                if (refresh) {
+                    lines.push(
+                        bbFormat({{ _('Series removed: {count}')|tojson }}, { count: data.cleared }),
+                        bbFormat({{ _('Already correct: {count}')|tojson }}, { count: data.unchanged }),
+                        bbFormat({{ _('Kept (library unreachable): {count}')|tojson }}, { count: data.kept_no_answer }),
+                    );
+                }
+                lines.push(
+                    bbFormat({{ _('No series found: {count}')|tojson }}, { count: data.unresolved }),
+                    bbFormat({{ _('Failed: {count}')|tojson }}, { count: data.failed }),
+                    bbFormat({{ _('Duration: {seconds}s')|tojson }}, { seconds: data.duration_seconds }),
+                );
+                alert(lines.join('\n'));
+
+                if (data.updated > 0 || data.cleared > 0) {
+                    location.reload();
+                }
+            } catch (err) {
+                console.error(`Error running ${label.toLowerCase()}:`, err);
+                alert(refresh ? {{ _('An error occurred while running the series re-check. Check console for details.')|tojson }} : {{ _('An error occurred while running the series backfill. Check console for details.')|tojson }});
+            } finally {
+                if (button) {
+                    button.innerHTML = originalText;
+                    button.disabled = false;
+                }
+            }
+        }
+
+        let audioRepointPlan = null;
+
+        function escapeRepointText(value) {
+            const div = document.createElement('div');
+            div.textContent = value == null ? '' : String(value);
+            return div.innerHTML;
+        }
+
+        function formatRunTime(seconds) {
+            if (!seconds) return {{ _('unknown')|tojson }};
+            const total = Math.round(Number(seconds));
+            const h = Math.floor(total / 3600);
+            const m = Math.round((total % 3600) / 60);
+            return bbFormat({{ _('{hours}h {minutes}m')|tojson }}, { hours: h, minutes: String(m).padStart(2, '0') });
+        }
+
+        async function planAudioRepoint(button) {
+            const box = document.getElementById('audio_repoint_results');
+            const original = button.textContent;
+            button.disabled = true;
+            button.textContent = {{ _('Checking your library...')|tojson }};
+            box.classList.remove('hidden');
+            box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            box.innerHTML = '<p class="help-text">' + escapeRepointText({{ _('Matching every Audiobookshelf mapping against BookOrbit and confirming run times. This takes a minute or two the first time.')|tojson }}) + '</p>';
+            try {
+                const res = await fetch('/api/admin/audio-repoint/plan', { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || {{ _('plan failed')|tojson }});
+                audioRepointPlan = data;
+                renderAudioRepointPlan(data);
+            } catch (err) {
+                box.innerHTML = '<p class="help-text">' + escapeRepointText(bbFormat({{ _('Could not build the plan: {error}')|tojson }}, { error: err.message })) + '</p>';
+            } finally {
+                button.disabled = false;
+                button.textContent = original;
+            }
+        }
+
+        function renderAudioRepointPlan(plan) {
+            const box = document.getElementById('audio_repoint_results');
+            const c = plan.counts || {};
+            // Counts are numbers and the text comes from the catalog, so it can carry <strong>.
+            let html = '<p class="help-text">' + bbFormat({{ _('<strong>{auto} of {total}</strong> can move automatically. <strong>{review}</strong> need a decision. <strong>{unmatched}</strong> are not in BookOrbit and will stay on Audiobookshelf.')|tojson }}, { auto: Number(c.auto) || 0, total: Number(c.total) || 0, review: Number(c.review) || 0, unmatched: Number(c.unmatched) || 0 }) + '</p>';
+
+            if ((plan.review || []).length) {
+                html += '<h4 style="margin: 18px 0 6px;">' + escapeRepointText(bbFormat({{ _('Needs your decision ({count})')|tojson }}, { count: plan.review.length })) + '</h4>';
+                html += '<p class="help-text">' + escapeRepointText({{ _('Pick the right copy, or leave a book on Audiobookshelf:')|tojson }}) + '</p>';
+                plan.review.forEach(function (item, idx) {
+                    html += '<div class="form-group" style="align-items: flex-start;">' +
+                        '<label style="max-width: 320px;">' + escapeRepointText(item.title) +
+                        '<br><span class="help-text">' + escapeRepointText(item.reason) +
+                        ' &middot; ' + escapeRepointText(bbFormat({{ _('yours runs {time}')|tojson }}, { time: formatRunTime(item.duration) })) + '</span></label><div>';
+                    // No name attribute: these controls live inside the settings form,
+                    // and a named field would be POSTed to /settings and silently dropped.
+                    html += '<select class="repoint-choice" data-repoint-idx="' + idx + '">';
+                    html += '<option value="">' + escapeRepointText({{ _('Leave on Audiobookshelf')|tojson }}) + '</option>';
+                    (item.candidates || []).forEach(function (cand) {
+                        html += '<option value="' + escapeRepointText(cand.id) + '">' +
+                            escapeRepointText(cand.title) + ' &middot; ' + formatRunTime(cand.duration) +
+                            ' &middot; ' + (cand.duration_agrees ? escapeRepointText({{ _('run time matches')|tojson }}) : escapeRepointText({{ _('run time differs')|tojson }})) +
+                            '</option>';
+                    });
+                    html += '</select></div></div>';
+                });
+            }
+
+            if ((plan.unmatched || []).length) {
+                html += '<h4 style="margin: 18px 0 6px;">' + escapeRepointText(bbFormat({{ _('Staying on Audiobookshelf ({count})')|tojson }}, { count: plan.unmatched.length })) + '</h4>';
+                html += '<p class="help-text">' + escapeRepointText({{ _('Not found in BookOrbit, so nothing changes for these.')|tojson }}) + '</p>';
+                html += '<ul class="repoint-list">';
+                plan.unmatched.forEach(function (item) {
+                    html += '<li>' + escapeRepointText(item.title) + '</li>';
+                });
+                html += '</ul>';
+            }
+
+            if ((plan.auto || []).length) {
+                html += '<h4 style="margin: 18px 0 6px;">' + escapeRepointText(bbFormat({{ _('Moving automatically ({count})')|tojson }}, { count: plan.auto.length })) + '</h4>';
+                html += '<p class="help-text">' + escapeRepointText({{ _('Title and run time both agree, so the existing alignment still fits. Untick anything you would rather leave alone.')|tojson }}) + '</p>';
+                html += '<div class="repoint-scroll">';
+                plan.auto.forEach(function (item, idx) {
+                    html += '<label class="repoint-row">' +
+                        '<input type="checkbox" class="repoint-auto" data-repoint-auto="' + idx + '" checked> ' +
+                        '<span>' + escapeRepointText(item.title) + ' &rarr; ' +
+                        escapeRepointText(item.target.title) + ' &middot; ' +
+                        formatRunTime(item.target.duration) + '</span></label>';
+                });
+                html += '</div>';
+            }
+
+            html += '<div class="cleanup-group" style="margin-top: 16px;">' +
+                '<button type="button" class="btn btn-primary" onclick="applyAudioRepoint(this)">' + escapeRepointText({{ _('Apply')|tojson }}) + '</button>' +
+                '<p class="help-text flex-1 m-0">' + escapeRepointText({{ _('Applies the ticked automatic matches plus anything you chose above. Reversible with Undo.')|tojson }}) + '</p></div>';
+            box.innerHTML = html;
+            box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        async function applyAudioRepoint(button) {
+            if (!audioRepointPlan) return;
+            const selections = [];
+            (audioRepointPlan.auto || []).forEach(function (item, idx) {
+                const box = document.querySelector('.repoint-auto[data-repoint-auto="' + idx + '"]');
+                if (box && !box.checked) return;
+                selections.push({ abs_id: item.abs_id, target_id: item.target && item.target.id });
+            });
+            (audioRepointPlan.review || []).forEach(function (item, idx) {
+                const picked = document.querySelector('.repoint-choice[data-repoint-idx="' + idx + '"]');
+                if (picked && picked.value) {
+                    selections.push({ abs_id: item.abs_id, target_id: picked.value });
+                }
+            });
+            if (!selections.length) {
+                alert({{ _('Nothing selected to move.')|tojson }});
+                return;
+            }
+            const original = textOf(button);
+            button.disabled = true;
+            button.textContent = bbFormat({{ _('Moving {count} book(s)...')|tojson }}, { count: selections.length });
+            try {
+                const res = await fetch('/api/admin/audio-repoint/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ selections: selections })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || {{ _('apply failed')|tojson }});
+                alert(bbFormat({{ _('Moved {count} book(s) to BookOrbit audio. Skipped: {skipped}')|tojson }}, { count: data.updated, skipped: (data.skipped || []).length }));
+                location.reload();
+            } catch (err) {
+                alert(bbFormat({{ _('Could not apply: {error}')|tojson }}, { error: err.message }));
+                button.disabled = false;
+                button.textContent = original;
+            }
+        }
+
+        function textOf(button) {
+            return button.textContent;
+        }
+
+        async function undoAudioRepoint(button) {
+            if (!confirm({{ _('Send every repointed book back to Audiobookshelf audio?')|tojson }})) return;
+            const original = button.textContent;
+            button.disabled = true;
+            button.textContent = {{ _('Undoing...')|tojson }};
+            try {
+                const res = await fetch('/api/admin/audio-repoint/undo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || {{ _('undo failed')|tojson }});
+                alert(bbFormat({{ _('Restored {count} book(s) to Audiobookshelf audio.')|tojson }}, { count: data.restored }));
+                location.reload();
+            } catch (err) {
+                alert(bbFormat({{ _('Could not undo: {error}')|tojson }}, { error: err.message }));
+            } finally {
+                button.disabled = false;
+                button.textContent = original;
+            }
+        }
+
+        async function refreshSeriesMetadata(button) {
+            return runSeriesBackfill(true, button);
+        }
+
+        async function backfillSeriesMetadata(button) {
+            return runSeriesBackfill(false, button);
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            // Initialize Dynamic Logic
+            initDynamicForms();
+
+            // Check initial state of KOSync: if the target matches the built-in
+            // localhost server (or is unset), keep the built-in box checked.
+            const kosyncInput = document.getElementById('kosync_server_input');
+            const builtinCheckbox = document.getElementById('kosync_use_builtin');
+            if (kosyncInput && builtinCheckbox) {
+                const kosyncServerVal = kosyncInput.value;
+                builtinCheckbox.checked =
+                    kosyncServerVal === "http://127.0.0.1:{{ get_val('KOSYNC_PORT', '5757') }}" || kosyncServerVal === "";
+                toggleKosyncServerMode();
+            }
+        });
+
+        function initDynamicForms() {
+            function updateAutoMatchFields() {
+                const toggle = document.getElementById('suggestions_auto_match');
+                const group = document.getElementById('auto_match_threshold_group');
+                const field = document.getElementById('suggestions_auto_match_threshold');
+                const warning = document.getElementById('auto_match_warning');
+                if (!toggle || !group || !field || !warning) return;
+                group.classList.toggle('hidden', !toggle.checked);
+                const value = parseFloat(field.value);
+                warning.style.display = (toggle.checked && !isNaN(value) && value < 95) ? 'block' : 'none';
+            }
+            window.updateAutoMatchFields = updateAutoMatchFields;
+            updateAutoMatchFields();
+
+            function updateFullRefreshFields() {
+                const toggle = document.getElementById('suggestions_full_refresh');
+                const group = document.getElementById('full_refresh_schedule_group');
+                if (!toggle || !group) return;
+                group.classList.toggle('hidden', !toggle.checked);
+            }
+            window.updateFullRefreshFields = updateFullRefreshFields;
+            updateFullRefreshFields();
+
+            // 1. ABS Library ID Toggle
+            const absCheckbox = document.getElementById('abs_only_lib');
+            const absServerInput = document.querySelector('input[name="ABS_SERVER"]');
+            const absKeyInput = document.querySelector('input[name="ABS_KEY"]');
+            if (absCheckbox) {
+                absCheckbox.addEventListener('change', toggleAbsLibraryId);
+                toggleAbsLibraryId(); // Initial state
+            }
+            if (absServerInput) {
+                absServerInput.addEventListener('input', toggleAbsLibraryId);
+            }
+            if (absKeyInput) {
+                absKeyInput.addEventListener('input', toggleAbsLibraryId);
+            }
+
+            // 2. Transcription Provider Toggle
+            const providerSelect = document.querySelector('select[name="TRANSCRIPTION_PROVIDER"]');
+            if (providerSelect) {
+                providerSelect.addEventListener('change', toggleProviderSettings);
+                toggleProviderSettings(); // Initial state
+            }
+
+            // 3. GPU Warning
+            const deviceSelect = document.querySelector('select[name="WHISPER_DEVICE"]');
+            if (deviceSelect) {
+                deviceSelect.addEventListener('change', function () {
+                    if (this.value === 'cuda') {
+                        alert({{ _("Forcing GPU requires all three, or transcription will fail:\n\n1. The CUDA image (ghcr.io/cporcellijr/bookbridge:latest-cuda) — the default image has no CUDA libraries.\n2. The NVIDIA Container Toolkit on your host.\n3. A 'deploy' block with 'capabilities: [gpu]' in docker-compose.yml.\n\nAuto detects all three and falls back to CPU instead of failing.")|tojson }});
+                    }
+                });
+            }
+        }
+
+        function toggleAbsLibraryId() {
+            const checkbox = document.getElementById('abs_only_lib');
+            const group = document.getElementById('abs_library_id_group');
+            const input = document.querySelector('input[name="ABS_LIBRARY_ID"]');
+            const absServer = document.querySelector('input[name="ABS_SERVER"]');
+            const absKey = document.querySelector('input[name="ABS_KEY"]');
+            const absDisabled = [absServer, absKey].some((field) =>
+                field && (field.value || '').trim().toLowerCase() === 'disabled'
+            );
+
+            if (checkbox && group && input) {
+                if (checkbox.checked && !absDisabled) {
+                    group.classList.remove('hidden');
+                    input.setAttribute('required', 'required');
+                } else {
+                    group.classList.add('hidden');
+                    input.removeAttribute('required');
+                }
+            }
+        }
+
+        function toggleProviderSettings() {
+            const provider = document.querySelector('select[name="TRANSCRIPTION_PROVIDER"]').value;
+
+            // Groups
+            const groupLocal = document.getElementById('group_local');
+            const groupDeepgram = document.getElementById('group_deepgram');
+            const groupWhisperCpp = document.getElementById('group_whispercpp');
+            const groupWhisperModel = document.getElementById('group_whisper_model');
+
+            // Hide all first
+            if (groupLocal) groupLocal.classList.add('hidden');
+            if (groupDeepgram) groupDeepgram.classList.add('hidden');
+            if (groupWhisperCpp) groupWhisperCpp.classList.add('hidden');
+            if (groupWhisperModel) groupWhisperModel.classList.add('hidden');
+
+            // Show selected
+            if (provider === 'local') {
+                if (groupLocal) groupLocal.classList.remove('hidden');
+                if (groupWhisperModel) groupWhisperModel.classList.remove('hidden');
+            } else if (provider === 'deepgram' && groupDeepgram) {
+                groupDeepgram.classList.remove('hidden');
+            } else if (provider === 'whispercpp') {
+                if (groupWhisperCpp) groupWhisperCpp.classList.remove('hidden');
+                if (groupWhisperModel) groupWhisperModel.classList.remove('hidden');
+            }
+        }
+    </script>
+    <script>
+        // --- Unsaved Changes Guard ---
+        let isFormDirty = false;
+        const dirtyFields = new Set();
+        const initialFieldValues = new Map();
+
+        function settingFieldValue(field) {
+            return field.type === 'checkbox' || field.type === 'radio' ? field.checked : field.value;
+        }
+
+        function markDirty(field) {
+            if (!initialFieldValues.has(field)) return;
+            if (settingFieldValue(field) === initialFieldValues.get(field)) dirtyFields.delete(field);
+            else dirtyFields.add(field);
+            isFormDirty = dirtyFields.size > 0;
+            const note = document.getElementById('dirty_note');
+            if (note) {
+                const n = dirtyFields.size;
+                note.style.display = n ? '' : 'none';
+                note.textContent = bbPlural(UNSAVED_CHANGES, n);
+            }
+        }
+
+        function clearDirty() {
+            isFormDirty = false;
+            dirtyFields.clear();
+            const note = document.getElementById('dirty_note');
+            if (note) note.style.display = 'none';
+        }
+
+        function setupDirtyCheck() {
+            // Only the application settings form is "dirty-tracked" — the Users tab
+            // has its own forms that navigate immediately on submit.
+            const inputs = document.querySelectorAll('#settingsForm input, #settingsForm select, #settingsForm textarea');
+            inputs.forEach(input => {
+                if (!input.name || input.type === 'hidden' || input.type === 'submit' || input.type === 'button') return;
+                initialFieldValues.set(input, settingFieldValue(input));
+                input.addEventListener('change', function () { markDirty(input); });
+                input.addEventListener('input', function () { markDirty(input); });
+            });
+
+            // Warn before leaving
+            window.addEventListener('beforeunload', function (e) {
+                if (isFormDirty) {
+                    // Standard message (though most modern browsers show their own generic message)
+                    const msg = UNSAVED_LEAVE_WARNING;
+                    e.returnValue = msg;
+                    return msg;
+                }
+            });
+
+            // Clear dirty flag on any form submit (settings save or user-admin action).
+            document.querySelectorAll('form').forEach(function (form) {
+                form.addEventListener('submit', clearDirty);
+            });
+        }
+
+        // Initialize dirty check after DOM is ready
+        document.addEventListener('DOMContentLoaded', setupDirtyCheck);
+    </script>
+    <script>
+        // --- Settings sidebar tabs ---
+        const SETTINGS_TABS = ['integrations', 'sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users'];
+        // Old tab names (bookmarks / external links) map onto the new grouping.
+        const LEGACY_TAB_ALIASES = { general: 'integrations', reading_apps: 'integrations', trackers: 'integrations', features: 'library', tools: 'maintenance' };
+        // Settings captured at startup: saving a change to one restarts the app.
+        const RESTART_KEYS = new Set({{ (restart_keys or [])|tojson }});
+        // Reading preferences: this value is the default; each reader can choose their own.
+        const READER_PREF_KEYS = new Set({{ (reader_pref_keys or [])|tojson }});
+        const SETTING_DEFAULTS = {{ (setting_defaults or {})|tojson }};
+        const TRUTHY = ['true', '1', 'yes', 'on'];
+        // Guard to ensure alignment health loads at most once per page load
+        let alignHealthLoaded = false;
+
+        function showSettingsTab(name) {
+            if (LEGACY_TAB_ALIASES[name]) name = LEGACY_TAB_ALIASES[name];
+            if (SETTINGS_TABS.indexOf(name) === -1) name = 'integrations';
+            document.querySelectorAll('.settings-tab').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.tab === name);
+            });
+            document.querySelectorAll('.tab-panel').forEach(function (p) {
+                p.classList.toggle('active', p.dataset.panel === name);
+            });
+            // The Users panel lives outside the application form; hide the
+            // form (and its Save bar) while it is showing. Maintenance has
+            // nothing to save, so it hides only the Save bar.
+            const form = document.getElementById('settingsForm');
+            if (form) form.style.display = (name === 'users') ? 'none' : '';
+            const bar = document.querySelector('.submit-bar');
+            if (bar) bar.style.display = (name === 'maintenance') ? 'none' : '';
+            const returnTab = document.getElementById('return_tab');
+            if (returnTab) returnTab.value = name;
+            if (history.replaceState) {
+                history.replaceState(null, '', '#' + name);
+            } else {
+                location.hash = name;
+            }
+            // Lazy-load alignment health when the alignment tab is activated
+            if (name === 'alignment' && !alignHealthLoaded) {
+                alignHealthLoaded = true;
+                if (typeof loadAlignmentHealth === 'function') {
+                    loadAlignmentHealth();
+                }
+            }
+        }
+
+        // --- Per-field markers: restart badge, "changed from default" + reset ---
+        function fieldContainer(field) {
+            return field.closest('.poll-row, .checkbox-wrapper, .form-group, .toggle-switch-wrapper, .section-header');
+        }
+
+        function fieldLabel(container) {
+            return container.querySelector('.poll-name, label:not(.toggle-switch):not(.poll-settle), .toggle-label, h3') || container;
+        }
+
+        function fieldValue(field) {
+            return field.type === 'checkbox' ? String(field.checked) : field.value.trim();
+        }
+
+        function defaultValue(field) {
+            const value = String(SETTING_DEFAULTS[field.name]);
+            return field.type === 'checkbox' ? String(TRUTHY.indexOf(value.toLowerCase()) !== -1) : value;
+        }
+
+        function isChanged(field) {
+            if (!(field.name in SETTING_DEFAULTS) || field.type === 'password') return false;
+            const value = fieldValue(field);
+            // A blank field means "use the default" for every non-checkbox setting.
+            return value !== defaultValue(field) && (field.type === 'checkbox' || value !== '');
+        }
+
+        function updateChangedMarker(field) {
+            const container = fieldContainer(field);
+            if (!container) return;
+            const changed = isChanged(field);
+            container.classList.toggle('is-changed', changed);
+            let reset = container.querySelector('.reset-default[data-for="' + field.name + '"]');
+            if (changed && !reset) {
+                reset = document.createElement('button');
+                reset.type = 'button';
+                reset.className = 'reset-default';
+                reset.dataset.for = field.name;
+                reset.title = bbFormat({{ _('Default: {value}')|tojson }}, { value: SETTING_DEFAULTS[field.name] || {{ _('(blank)')|tojson }} });
+                reset.textContent = {{ _('reset')|tojson }};
+                reset.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (field.type === 'checkbox') field.checked = defaultValue(field) === 'true';
+                    else field.value = SETTING_DEFAULTS[field.name];
+                    field.dispatchEvent(new Event('input', { bubbles: true }));
+                    field.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+                fieldLabel(container).appendChild(reset);
+            } else if (!changed && reset) {
+                reset.remove();
+            }
+            const section = container.closest('.settings-section');
+            if (section) section.classList.toggle('has-changed', !!section.querySelector('.is-changed'));
+        }
+
+        function updateSaveEffect() {
+            const note = document.getElementById('save_effect');
+            if (!note || typeof dirtyFields === 'undefined') return;
+            const restarts = Array.from(dirtyFields).some(function (f) { return RESTART_KEYS.has(f.name); });
+            note.classList.toggle('warn', restarts);
+            note.textContent = restarts
+                ? '⟳ ' + {{ _('Saving restarts BookBridge (about 10 seconds)')|tojson }}
+                : {{ _('Changes take effect as soon as you save')|tojson }};
+        }
+
+        function setupFieldMarkers() {
+            document.querySelectorAll('#settingsForm [name]').forEach(function (field) {
+                if (field.type === 'hidden' || !field.name) return;
+                const container = fieldContainer(field);
+                if (container && RESTART_KEYS.has(field.name) && !container.querySelector('.restart-badge[data-for="' + field.name + '"]')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'restart-badge';
+                    badge.dataset.for = field.name;
+                    badge.title = {{ _('Saving a change to this restarts BookBridge')|tojson }};
+                    badge.textContent = {{ _('restart')|tojson }};
+                    fieldLabel(container).appendChild(badge);
+                }
+                if (container && READER_PREF_KEYS.has(field.name) && !container.querySelector('.reader-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'restart-badge reader-badge';
+                    badge.title = {{ _('This is the default. Each reader can choose their own in My Integrations → Reading preferences.')|tojson }};
+                    badge.textContent = {{ _('default for readers')|tojson }};
+                    fieldLabel(container).appendChild(badge);
+                }
+                updateChangedMarker(field);
+            });
+            const form = document.getElementById('settingsForm');
+            ['input', 'change'].forEach(function (type) {
+                form.addEventListener(type, function (e) {
+                    if (e.target.name && e.target.name in SETTING_DEFAULTS) updateChangedMarker(e.target);
+                    updateSaveEffect();
+                });
+            });
+        }
+
+        // Search and the changed-only filter both look across every tab at once.
+        function applySettingsFilter() {
+            const main = document.querySelector('.settings-main');
+            const search = document.getElementById('settings_search');
+            const q = (search ? search.value : '').trim().toLowerCase();
+            const changedOnly = document.getElementById('changed_only').checked;
+            const filtering = !!q || changedOnly;
+            main.classList.toggle('filtering', filtering);
+            if (filtering) {
+                // Results come from every tab, so Save is needed even from Maintenance.
+                const form = document.getElementById('settingsForm');
+                if (form) form.style.display = '';
+                const bar = document.querySelector('.submit-bar');
+                if (bar) bar.style.display = '';
+            } else {
+                showSettingsTab((location.hash || '').replace('#', '') || 'integrations');
+            }
+            document.querySelectorAll('.settings-main .settings-section').forEach(function (card) {
+                const text = ((card.dataset.svc || '') + ' ' + card.textContent).toLowerCase();
+                const hit = (!q || text.indexOf(q) !== -1) && (!changedOnly || card.classList.contains('has-changed'));
+                card.style.display = hit ? '' : 'none';
+                if (hit && q) card.querySelectorAll('details').forEach(function (d) {
+                    if (d.textContent.toLowerCase().indexOf(q) !== -1) d.open = true;
+                });
+                const body = hit && q && card.querySelector(':scope > .section-body.collapsed');
+                if (body && body.textContent.toLowerCase().indexOf(q) !== -1) body.classList.remove('collapsed');
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const fromHash = (location.hash || '').replace('#', '');
+            showSettingsTab(fromHash || 'integrations');
+            setupFieldMarkers();
+
+            const sessionGap = document.querySelector('[name="READING_SESSION_MERGE_MINUTES"]');
+            const syncPeriod = document.querySelector('[name="SYNC_PERIOD_MINS"]');
+            const effectiveGap = document.getElementById('effective_session_gap');
+            if (sessionGap && syncPeriod && effectiveGap) {
+                const positiveMinutes = input => {
+                    const value = Number(input.value);
+                    return Number.isFinite(value) && value > 0 ? value : 5;
+                };
+                const updateSessionGap = () => {
+                    effectiveGap.textContent = Math.max(
+                        1, positiveMinutes(sessionGap),
+                        Math.min(2 * positiveMinutes(syncPeriod), 30));
+                };
+                sessionGap.addEventListener('input', updateSessionGap);
+                syncPeriod.addEventListener('input', updateSessionGap);
+                updateSessionGap();
+            }
+
+            // Integration card headers expand/collapse their body on click.
+            // Clicks inside the header tail (status pill, enable switch) are ignored.
+            document.querySelectorAll('.settings-section[data-svc] > .section-header').forEach(function (head) {
+                head.addEventListener('click', function (e) {
+                    if (e.target.closest('.header-tail')) return;
+                    const body = head.parentElement.querySelector('.section-body');
+                    if (body) body.classList.toggle('collapsed');
+                });
+            });
+
+            const search = document.getElementById('settings_search');
+            if (search) search.addEventListener('input', applySettingsFilter);
+            document.getElementById('changed_only').addEventListener('change', applySettingsFilter);
+        });
+    </script>

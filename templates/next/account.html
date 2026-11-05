@@ -1,0 +1,133 @@
+{% extends "next/base.html" %}
+{% block title %}{{ _('Account') }} · BookBridge{% endblock %}
+
+{% block head %}
+<style>
+    .account-wrap { padding: 40px 16px; }
+    .account-wrap .card { max-width: 520px; margin: 0 auto; }
+    .account-wrap .card + .card { margin-top: 16px; }
+    .account-wrap .card input[type="text"],
+    .account-wrap .card input[type="password"] { margin-bottom: 14px; }
+    .account-wrap h1 {
+        font-size: 20px; margin: 0 0 4px;
+        background: var(--gradient);
+        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .account-wrap .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+    .account-wrap .section-title { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; margin: 20px 0 10px; }
+    .account-wrap label { display: block; font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+    .account-wrap .help { color: var(--muted-soft); font-size: 12px; margin: -6px 0 14px; }
+    .account-wrap .warning { color: var(--warning); }
+    .account-wrap .plugin-card h2 { font-size: 17px; margin: 0 0 8px; }
+    .account-wrap .plugin-version { color: var(--muted-soft); font-size: 12px; font-weight: 500; }
+    .account-wrap .plugin-card p { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0 0 16px; }
+    .account-wrap .plugin-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .account-wrap .url-row { display: flex; gap: 8px; margin: 0 0 6px; }
+    .account-wrap .url-row input {
+        flex: 1; margin-bottom: 0 !important; cursor: text;
+        font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+        color: #aab4f5; font-weight: 600;
+    }
+    .account-wrap .btn-link {
+        display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        padding: 10px 14px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 13px;
+        background: rgba(102, 126, 234, .18); border: 1px solid rgba(102, 126, 234, .38); color: #aab4f5;
+    }
+    .account-wrap .btn-link:hover { background: rgba(102, 126, 234, .28); }
+    .account-wrap code { color: #d7dcff; background: rgba(255, 255, 255, .06); padding: 1px 4px; border-radius: 4px; }
+    .account-wrap .nav { max-width: 520px; margin: 0 auto 16px; }
+    .account-wrap .nav a { color: var(--accent); text-decoration: none; font-size: 13px; }
+</style>
+<link rel="stylesheet" href="/static/css/next-p6.css">
+{% endblock %}
+
+{% block content %}
+<div class="account-wrap">
+    <div class="nav">
+        <a href="{{ url_for('index') }}">← {{ _('Back to dashboard') }}</a>
+    </div>
+    <div class="card">
+        <h1>{{ _('Account') }}</h1>
+        <p class="sub">{% trans name=account_user.username %}Signed in as <strong>{{ name }}</strong>{% endtrans %}{% if account_user.role == 'admin' %} {{ _('(admin)') }}{% endif %}</p>
+
+        {% if error %}<div class="flash-message error">{{ error }}</div>{% endif %}
+        {% if message %}<div class="flash-message success">{{ message }}</div>{% endif %}
+
+        {% if available_languages and available_languages|length > 1 %}
+        <form method="POST" action="{{ url_for('account_language') }}">
+            <div class="section-title">{{ _('Language') }}</div>
+            <label for="language">{{ _('Interface language') }}</label>
+            <select id="language" name="language" class="form-input" onchange="this.form.submit()">
+                <option value="" {% if not current_language %}selected{% endif %}>{{ _('Automatic (browser)') }}</option>
+                {% for code, name in available_languages %}
+                <option value="{{ code }}" {% if code == current_language %}selected{% endif %}>{{ name }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('account') }}">
+            <div class="section-title">{{ _('Username') }}</div>
+            <label for="username">{{ _('Username') }}</label>
+            <input type="text" id="username" name="username" value="{{ account_user.username }}" autocomplete="username">
+
+            <div class="section-title">{{ _('Change password') }}</div>
+            <label for="new_password">{{ _('New password') }}</label>
+            <input type="password" id="new_password" name="new_password" autocomplete="new-password">
+            <label for="confirm_password">{{ _('Confirm new password') }}</label>
+            <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password">
+            <p class="help">{{ _('Leave password fields blank to keep your current password.') }}</p>
+
+            <div class="section-title">{{ _("Confirm it's you") }}</div>
+            <label for="current_password">{{ _('Current password') }}</label>
+            <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
+
+            <button type="submit" class="btn btn-primary" style="width:100%;">{{ _('Save changes') }}</button>
+        </form>
+    </div>
+    <div class="card plugin-card">
+        <h2>{{ _('My Integrations') }}</h2>
+        <p>
+            {{ _('Manage the accounts, tokens, and sync toggles BookBridge uses for your own reader profile.') }}
+        </p>
+        <div class="plugin-actions">
+            <a class="btn-link" href="{{ url_for('account_integrations') }}">{{ _('Open integrations') }}</a>
+        </div>
+    </div>
+    <div class="card plugin-card">
+        <h2>{{ _('Connect a KOReader device') }}</h2>
+        <p>
+            <strong>{{ _('1 · Point KOReader at the bridge.') }}</strong>
+            {% trans trimmed url=url_for('account_integrations') %}On the device, open
+            Tools → Progress sync → Custom sync server and enter this address, then sign in
+            with your KoSync username &amp; password from
+            <a href="{{ url }}" style="color:#aab4f5;">My Integrations</a>.{% endtrans %}
+        </p>
+        <div class="url-row">
+            <input type="text" id="kosync_public_url" value="" aria-label="{{ _('Sync server address') }}"
+                onclick="this.select()">
+            <button type="button" class="btn-link" onclick="copyPublicUrl(this)">{{ _('Copy') }}</button>
+        </div>
+        {% set kosync_split_port = get_val('KOSYNC_PORT', '')|trim %}
+        <p class="help">{% trans trimmed %}Suggested from this browser's address — adjust the host to one your devices
+            can reach. Enter the base address only, with no <code>/api</code> or <code>/koreader</code>
+            suffix.{% endtrans %}{% if kosync_split_port and kosync_split_port != '5757' %} {% trans trimmed port=kosync_split_port %}Split-port mode is on, so
+            KOSync listens on port {{ port }} — publish that port in Docker too.{% endtrans %}{% endif %}</p>
+        <p class="help warning" id="kosync_url_warning" hidden>
+            {% trans trimmed %}This address uses localhost/loopback, which points back to the KOReader device itself.
+            Replace the host above with this server's LAN hostname or IP address before copying it.{% endtrans %}
+        </p>
+        <p>
+            <strong>{{ _('2 · Install the BridgeSync plugin') }}</strong>
+            <span id="bridgesync_plugin_version" class="plugin-version"></span><br>
+            {% trans trimmed %}Delivers books from the bridge byte-for-byte (so progress auto-links with no manual
+            matching), syncs reading stats, and relays highlights and notes. Download the zip, unzip it
+            into <code>koreader/plugins/</code>, then restart KOReader.{% endtrans %}
+        </p>
+        <div class="plugin-actions">
+            <a class="btn-link" href="/api/kosync-plugin/download" download>{{ _('Download plugin (.zip)') }}</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}{% include "next/_account_scripts.html" %}{% endblock %}
