@@ -907,45 +907,44 @@
 
         <div class="settings-layout">
             <aside class="settings-sidebar">
-                <input type="search" id="settings_search" class="settings-search" placeholder="{{ _('Find a setting…') }}"
-                    aria-label="{{ _('Find a setting') }}" autocomplete="off">
-                <button type="button" class="settings-tab active" data-tab="integrations" onclick="showSettingsTab('integrations')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#apps"></use></svg>{{ _('🔌 Services')|replace('🔌', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="sync" onclick="showSettingsTab('sync')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg>{{ _('🔄 Reading &amp; Sync')|replace('🔄', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="library" onclick="showSettingsTab('library')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg>{{ _('📚 Library &amp; Matching')|replace('📚', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="alignment" onclick="showSettingsTab('alignment')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#alignment"></use></svg>{{ _('🎧 Alignment')|replace('🎧', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="ai" onclick="showSettingsTab('ai')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#ai"></use></svg>{{ _('🤖 AI')|replace('🤖', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="system" onclick="showSettingsTab('system')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#server"></use></svg>{{ _('🛠️ Server')|replace('🛠️', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="maintenance" onclick="showSettingsTab('maintenance')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#maintenance"></use></svg>{{ _('🧰 Maintenance')|replace('🧰', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="users" onclick="showSettingsTab('users')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#account"></use></svg>{{ _('👥 Users')|replace('👥', '')|trim }}</button>
-                <button type="button" class="settings-tab" data-tab="logs" onclick="showSettingsTab('logs')"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg>{{ _('Logs') }}</button>
-                <label class="changed-only">
-                    <input type="checkbox" id="changed_only"> {{ _('Different from defaults') }}
-                </label>
+                <input type="search" id="settings_search" class="settings-search" placeholder="{{ _('Find a setting…') }}" aria-label="{{ _('Find a setting') }}" autocomplete="off">
+                <label class="changed-only"><input type="checkbox" id="changed_only"> {{ _('Different from defaults') }}</label>
                 <p class="settings-legend"><span class="restart-badge">{{ _('restart') }}</span> {{ _('Saving a change to one of these restarts BookBridge. Everything else takes effect as soon as you save.') }}</p>
-                <p class="settings-legend"><span class="restart-badge reader-badge">{{ _('default for readers') }}</span>
-                    {{ _('Each reader can choose their own under My Integrations → Reading preferences.') }}</p>
+                <p class="settings-legend"><span class="restart-badge reader-badge">{{ _('default for readers') }}</span> {{ _('Each reader can choose their own under My Integrations → Reading preferences.') }}</p>
+                <nav class="settings-menu" aria-label="{{ _('Settings sections') }}" data-test-label="{{ _('Test') }}" data-enabled-label="{{ _('Enabled') }}" data-disabled-label="{{ _('Disabled') }}">
+                <div class="settings-nav-group" role="group" aria-label="{{ _('Connections') }}">
+                <h3 class="settings-nav-heading">{{ _('Connections') }}</h3>
+                <a href="#audiobookshelf" class="settings-tab settings-service-tab active" data-tab="audiobookshelf" data-svc="audiobookshelf" onclick="showSettingsTab('audiobookshelf'); return false;"><span class="settings-tab-label">{{ _('Audiobookshelf') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#koreader" class="settings-tab settings-service-tab" data-tab="koreader" data-svc="koreader" onclick="showSettingsTab('koreader'); return false;"><span class="settings-tab-label">{{ _('KOReader / KoSync') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#storyteller" class="settings-tab settings-service-tab" data-tab="storyteller" data-svc="storyteller" onclick="showSettingsTab('storyteller'); return false;"><span class="settings-tab-label">{{ _('Storyteller') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#grimmory" class="settings-tab settings-service-tab" data-tab="grimmory" data-svc="grimmory" onclick="showSettingsTab('grimmory'); return false;"><span class="settings-tab-label">{{ _('Grimmory') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#bookfusion" class="settings-tab settings-service-tab" data-tab="bookfusion" data-svc="bookfusion" onclick="showSettingsTab('bookfusion'); return false;"><span class="settings-tab-label">{{ _('BookFusion') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#bookorbit" class="settings-tab settings-service-tab" data-tab="bookorbit" data-svc="bookorbit" onclick="showSettingsTab('bookorbit'); return false;"><span class="settings-tab-label">{{ _('BookOrbit') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#kavita" class="settings-tab settings-service-tab" data-tab="kavita" data-svc="kavita" onclick="showSettingsTab('kavita'); return false;"><span class="settings-tab-label">{{ _('Kavita') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#readest" class="settings-tab settings-service-tab" data-tab="readest" data-svc="readest" onclick="showSettingsTab('readest'); return false;"><span class="settings-tab-label">{{ _('Readest') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#cwa" class="settings-tab settings-service-tab" data-tab="cwa" data-svc="cwa" onclick="showSettingsTab('cwa'); return false;"><span class="settings-tab-label">{{ _('Calibre-Web Automated') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#hardcover" class="settings-tab settings-service-tab" data-tab="hardcover" data-svc="hardcover" onclick="showSettingsTab('hardcover'); return false;"><span class="settings-tab-label">{{ _('Hardcover') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#storygraph" class="settings-tab settings-service-tab" data-tab="storygraph" data-svc="storygraph" onclick="showSettingsTab('storygraph'); return false;"><span class="settings-tab-label">{{ _('StoryGraph') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                </div>
+                <div class="settings-nav-group" role="group" aria-label="{{ _('Sync & library') }}"><h3 class="settings-nav-heading">{{ _('Sync & library') }}</h3>
+                <a href="#sync" class="settings-tab" data-tab="sync" onclick="showSettingsTab('sync'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span class="settings-tab-label">{{ _('🔄 Reading &amp; Sync')|replace('🔄', '')|trim }}</span></a>
+                <a href="#library" class="settings-tab" data-tab="library" onclick="showSettingsTab('library'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg><span class="settings-tab-label">{{ _('📚 Library &amp; Matching')|replace('📚', '')|trim }}</span></a>
+                <a href="#alignment" class="settings-tab" data-tab="alignment" onclick="showSettingsTab('alignment'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#alignment"></use></svg><span class="settings-tab-label">{{ _('🎧 Alignment')|replace('🎧', '')|trim }}</span></a>
+                <a href="#ai" class="settings-tab" data-tab="ai" onclick="showSettingsTab('ai'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#ai"></use></svg><span class="settings-tab-label">{{ _('🤖 AI')|replace('🤖', '')|trim }}</span></a>
+                </div>
+                <div class="settings-nav-group" role="group" aria-label="{{ _('Server') }}"><h3 class="settings-nav-heading">{{ _('Server') }}</h3>
+                <a href="#system" class="settings-tab" data-tab="system" onclick="showSettingsTab('system'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#server"></use></svg><span class="settings-tab-label">{{ _('🛠️ Server')|replace('🛠️', '')|trim }}</span></a>
+                <a href="#maintenance" class="settings-tab" data-tab="maintenance" onclick="showSettingsTab('maintenance'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#maintenance"></use></svg><span class="settings-tab-label">{{ _('🧰 Maintenance')|replace('🧰', '')|trim }}</span></a>
+                <a href="#users" class="settings-tab" data-tab="users" onclick="showSettingsTab('users'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#account"></use></svg><span class="settings-tab-label">{{ _('👥 Users')|replace('👥', '')|trim }}</span></a>
+                <a href="#logs" class="settings-tab" data-tab="logs" onclick="showSettingsTab('logs'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#logs"></use></svg><span class="settings-tab-label">{{ _('Logs') }}</span></a>
+                </div></nav>
             </aside>
             <div class="settings-main">
 
         <form method="POST" action="/settings" class="settings-form" id="settingsForm">
 
             <div class="tab-panel active" data-panel="integrations">
-            <div class="next-service-heading">
-                <div>
-                    <h3>{{ _('Connected services') }}</h3>
-                    <p>{{ _('Check a connection or open its settings below.') }}</p>
-                </div>
-            </div>
-            <div id="next-service-tiles" class="next-service-tiles" aria-label="{{ _('Services') }}" data-test-label="{{ _('Test') }}" data-configure-label="{{ _('Configure') }}" data-enabled-label="{{ _('Enabled') }}" data-disabled-label="{{ _('Disabled') }}"></div>
-
-            <div class="help-text" style="font-size:13px; color: rgba(255,255,255,0.55); padding: 0 4px;">
-                {% trans trimmed account_integrations_url=url_for('account_integrations'), settings_url=url_for('settings') %}Everything on this page is <strong>server-wide</strong> — connections and engine behavior shared by
-                all users. Personal logins and tokens live in
-                <a href="{{ account_integrations_url }}" style="color:#aab4f5;">My Account → My Integrations</a>
-                (or per user under <a href="{{ settings_url }}#users" style="color:#aab4f5;">Users</a>).{% endtrans %}
-            </div>
-
-            <div class="settings-section section-highlight" data-svc="audiobookshelf">
+            <div class="settings-section section-highlight" data-svc="audiobookshelf" data-service-page="audiobookshelf">
                 {% set abs_enabled = get_val('ABS_ENABLED', 'true')|lower in ['true','1','yes','on'] %}
                 <div class="section-header">
                     <div class="svc-left">
@@ -1029,7 +1028,7 @@
             </div>
 
             <!-- KOSync Server (Optional) -->
-            <div class="settings-section section-highlight" data-svc="koreader kosync" style="border-color: rgba(102, 126, 234, 0.3);">
+            <div class="settings-section section-highlight" data-svc="koreader kosync" data-service-page="koreader" style="border-color: rgba(102, 126, 234, 0.3);">
                 {% set kosync_configured = get_val('KOSYNC_SERVER') != '' %}
                 {% set kosync_enabled = get_bool('KOSYNC_ENABLED') or (kosync_configured and get_val('KOSYNC_ENABLED')
                 == '') %}
@@ -1168,7 +1167,7 @@
             </div>
 
             <!-- Storyteller (Optional) -->
-            <div class="settings-section" data-svc="storyteller">
+            <div class="settings-section" data-svc="storyteller" data-service-page="storyteller">
                 {% set storyteller_configured = get_val('STORYTELLER_API_URL') != '' %}
                 {% set storyteller_enabled = get_bool('STORYTELLER_ENABLED') or (storyteller_configured and
                 get_val('STORYTELLER_ENABLED') == '') %}
@@ -1233,7 +1232,7 @@
             </div>
 
             <!-- Grimmory (Optional) -->
-            <div class="settings-section" data-svc="grimmory booklore">
+            <div class="settings-section" data-svc="grimmory booklore" data-service-page="grimmory">
                 {% set booklore_configured = get_val('BOOKLORE_SERVER') != '' %}
                 {% set booklore_enabled = get_bool('BOOKLORE_ENABLED') or (booklore_configured and
                 get_val('BOOKLORE_ENABLED') == '') %}
@@ -1322,7 +1321,7 @@
 
 
             <!-- BookFusion (Optional) -->
-            <div class="settings-section" data-svc="bookfusion">
+            <div class="settings-section" data-svc="bookfusion" data-service-page="bookfusion">
                 {% set bookfusion_enabled = get_bool('BOOKFUSION_ENABLED') %}
                 <div class="section-header">
                     <div class="svc-left">
@@ -1365,7 +1364,7 @@
 
 
             <!-- BookOrbit (Optional) -->
-            <div class="settings-section" data-svc="bookorbit">
+            <div class="settings-section" data-svc="bookorbit" data-service-page="bookorbit">
                 {% set bookorbit_configured = get_val('BOOKORBIT_SERVER') != '' %}
                 {% set bookorbit_enabled = get_bool('BOOKORBIT_ENABLED') %}
                 <div class="section-header">
@@ -1444,7 +1443,7 @@
 
 
             <!-- Kavita (Optional) -->
-            <div class="settings-section" data-svc="kavita">
+            <div class="settings-section" data-svc="kavita" data-service-page="kavita">
                 {% set kavita_configured = get_val('KAVITA_SERVER') != '' %}
                 {% set kavita_enabled = get_bool('KAVITA_ENABLED') %}
                 <div class="section-header">
@@ -1493,7 +1492,7 @@
 
 
             <!-- Readest Highlight Sync (engine knobs; account is per-user) -->
-            <div class="settings-section" data-svc="readest">
+            <div class="settings-section" data-svc="readest" data-service-page="readest">
                 {% set readest_enabled = get_val('READEST_ENABLED', 'true')|lower in ['true','1','yes','on'] %}
                 <div class="section-header">
                     <div class="svc-left">
@@ -1552,7 +1551,7 @@
             </div>
 
             <!-- CWA (Optional) -->
-            <div class="settings-section" data-svc="cwa calibre-web">
+            <div class="settings-section" data-svc="cwa calibre-web" data-service-page="cwa">
                 {% set cwa_configured = get_val('CWA_SERVER') != '' %}
                 {% set cwa_enabled = get_bool('CWA_ENABLED') %}
                 <div class="section-header">
@@ -1639,7 +1638,7 @@
             </div>
 
             <!-- Hardcover (Optional) -->
-            <div class="settings-section" data-svc="hardcover">
+            <div class="settings-section" data-svc="hardcover" data-service-page="hardcover">
                 {% set hardcover_configured = get_val('HARDCOVER_TOKEN') != '' %}
                 {% set hardcover_enabled = get_bool('HARDCOVER_ENABLED') or (hardcover_configured and
                 get_val('HARDCOVER_ENABLED') == '') %}
@@ -1708,7 +1707,7 @@
             </div>
 
             <!-- StoryGraph (Optional) -->
-            <div class="settings-section" data-svc="storygraph">
+            <div class="settings-section" data-svc="storygraph" data-service-page="storygraph">
                 {% set storygraph_configured = get_val('STORYGRAPH_SESSION_COOKIE') != '' and get_val('STORYGRAPH_REMEMBER_USER_TOKEN') != '' %}
                 {% set storygraph_enabled = get_bool('STORYGRAPH_ENABLED') or (storygraph_configured and
                 get_val('STORYGRAPH_ENABLED') == '') %}
@@ -2787,6 +2786,14 @@
             <div class="tab-panel" data-panel="system">
 
             <p class="panel-intro">{{ _('Running BookBridge itself: time, logs, notifications, sign-in, folders and diagnostics.') }}</p>
+
+            <div class="help-text" style="font-size:13px; color: rgba(255,255,255,0.55); padding: 0 4px;">
+                {% trans trimmed account_integrations_url=url_for('account_integrations'), settings_url=url_for('settings') %}Everything on this page is <strong>server-wide</strong> — connections and engine behavior shared by
+                all users. Personal logins and tokens live in
+                <a href="{{ account_integrations_url }}" style="color:#aab4f5;">My Account → My Integrations</a>
+                (or per user under <a href="{{ settings_url }}#users" style="color:#aab4f5;">Users</a>).{% endtrans %}
+            </div>
+
 
             <div class="settings-section">
                 <div class="section-header">
