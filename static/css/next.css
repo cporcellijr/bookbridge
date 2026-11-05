@@ -142,6 +142,12 @@ summary::-webkit-details-marker { display: none; }
 .book-detail button:disabled { opacity: .5; cursor: default; }
 .book-detail progress { width: 100%; accent-color: var(--ribbon); }
 .your-place { color: var(--ribbon); }
+.book-current-chapter { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); min-width: 0; overflow-wrap: anywhere; }
+.book-current-chapter p { margin: 0; }
+.book-current-chapter .chapter-eyebrow { color: var(--text-2); font-size: .78rem; }
+.book-current-chapter .chapter-title { font-weight: 600; margin-top: 4px; }
+.book-current-chapter .chapter-position { color: var(--text-2); font-size: .88rem; margin-top: 4px; }
+.book-current-chapter .chapter-time { color: var(--text-2); font-family: var(--font-mono); font-size: .88rem; margin-top: 2px; }
 .book-thread { display: flex; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; font-size: .8rem; }
 .book-remove button { color: #e66e70; }
 .book-detail dd { margin-left: 0; font-family: 'IBM Plex Mono', monospace; }

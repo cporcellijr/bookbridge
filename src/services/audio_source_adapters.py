@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Optional
 
 from src.api.api_clients import ABSClient
+from src.services.current_audio_chapter import real_chapter_rows
 from src.api.booklore_client import BookloreClient
 from src.api.bookorbit_client import BookOrbitClient
 from src.utils.config_loader import env_truthy
@@ -541,8 +543,8 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             )
         return files
 
-    def get_chapters(self, source_id: str) -> list[dict]:
-        info = self.booklore_client.get_audiobook_info(source_id) or {}
+    def _parse_marker_chapters(self, info: dict, source_id: str) -> list[dict]:
+        """Existing Grimmory marker parsing moved unchanged for alignment."""
         chapters = info.get("chapters") or []
         if chapters:
             raw_total_duration = None
@@ -716,6 +718,46 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
                 )
                 return valid
 
+        return []
+
+    def get_real_chapters(self, source_id: str) -> list[dict]:
+        """Only true Grimmory chapter rows, without fabricated titles or tracks."""
+        info = self.booklore_client.get_audiobook_info(source_id) or {}
+        raw = info.get("chapters") or []
+        if not isinstance(raw, list):
+            return []
+        result = []
+        start_keys = (
+            "startTimeMs", "start_time_ms", "startTimeMillis", "startMillis",
+            "startMs", "start_ms", "startTime", "start_time", "start",
+            "offsetMs", "offset_ms", "offset",
+        )
+        for row in self._parse_marker_chapters(info, source_id):
+            index = row["id"]
+            if index >= len(raw) or not isinstance(raw[index], dict):
+                continue
+            marker = raw[index]
+            supplied = next((marker[key] for key in start_keys if key in marker), None)
+            if supplied is None:
+                continue
+            try:
+                value = float(supplied)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(value) or value < 0:
+                continue
+            result.append({
+                "title": marker.get("title"),
+                "start": row["start"], "end": row["end"],
+            })
+        return real_chapter_rows(result)
+
+    def get_chapters(self, source_id: str) -> list[dict]:
+        info = self.booklore_client.get_audiobook_info(source_id) or {}
+        markers = self._parse_marker_chapters(info, source_id)
+        if markers:
+            return markers
+
         tracks = info.get("tracks") or []
         if tracks:
             synthetic = []
@@ -864,16 +906,8 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
             )
         return files
 
-    def get_chapters(self, source_id: str) -> list[dict]:
-        """BookOrbit chapters are clean ``{title, startMs}`` markers (absolute,
-        cumulative across tracks); ends are the next chapter's start. Falls back
-        to per-track synthetic chapters, then a single whole-book chapter."""
-        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
-        try:
-            total_duration = float(info.get("duration_seconds") or 0.0)
-        except (TypeError, ValueError):
-            total_duration = 0.0
-
+    def _parse_marker_chapters(self, info: dict, source_id: str, total_duration: float) -> list[dict]:
+        """Existing BookOrbit marker parsing moved unchanged for alignment."""
         chapters = info.get("chapters") or []
         rows = []
         for chapter in chapters:
@@ -903,6 +937,46 @@ class BookOrbitAudioSourceAdapter(AudioSourceAdapter):
                     source_id, len(valid), valid[-1]["end"],
                 )
                 return valid
+
+        return []
+
+    def get_real_chapters(self, source_id: str) -> list[dict]:
+        """Only true BookOrbit startMs markers; never track-based fallbacks."""
+        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
+        try:
+            total = float(info.get("duration_seconds") or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            total = 0.0
+        markers = []
+        for marker in info.get("chapters") or []:
+            if not isinstance(marker, dict) or marker.get("startMs") is None:
+                continue
+            try:
+                start = float(marker["startMs"]) / 1000.0
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(start) and start >= 0:
+                markers.append({"title": marker.get("title"), "start": start})
+        markers.sort(key=lambda row: row["start"])
+        result = []
+        for index, marker in enumerate(markers):
+            end = markers[index + 1]["start"] if index + 1 < len(markers) else total
+            result.append({**marker, "end": end})
+        return real_chapter_rows(result)
+
+    def get_chapters(self, source_id: str) -> list[dict]:
+        """BookOrbit chapters are clean ``{title, startMs}`` markers (absolute,
+        cumulative across tracks); ends are the next chapter's start. Falls back
+        to per-track synthetic chapters, then a single whole-book chapter."""
+        info = self.bookorbit_client.get_audiobook_info(source_id) or {}
+        try:
+            total_duration = float(info.get("duration_seconds") or 0.0)
+        except (TypeError, ValueError):
+            total_duration = 0.0
+
+        markers = self._parse_marker_chapters(info, source_id, total_duration)
+        if markers:
+            return markers
 
         tracks = info.get("tracks") or []
         if tracks:
