@@ -128,6 +128,9 @@ summary::-webkit-details-marker { display: none; }
 [hidden], .hidden { display: none !important; }
 .book-section { padding: 24px 0; border-top: 1px solid var(--line); }
 .book-section h2 { font-size: 1.1rem; margin: 0 0 16px; }
+.book-alert { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--warn); border-radius: 10px; }
+.book-alert h3 { margin: 0 0 6px; font-size: .95rem; color: var(--warn); }
+.book-alert p { margin: 0; overflow-wrap: anywhere; }
 .book-chips, .book-tools { display: flex; flex-wrap: wrap; gap: 10px; }
 .book-chips > span { border: 1px solid var(--line); padding: 4px 9px; border-radius: 20px; font-size: .8rem; }
 .book-app-row { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); padding: 16px 0; }
@@ -250,9 +253,8 @@ summary::-webkit-details-marker { display: none; }
 .ctc-badge { left: 8px; right: auto; bottom: 8px; }
 .book-copy { padding: 13px 14px 14px; }
 .book-author { color: var(--text-3); font-size: 12px; }
-.book-heading { min-height: 64px; margin: 4px 0 12px; }
+.book-heading { margin: 4px 0 10px; }
 .book-ratings { display: block; margin-top: 3px; color: var(--text-3); font: 11px/1.4 var(--font-mono); }
-.library-page[data-view="list"] .book-heading { min-height: 0; }
 .library-page[data-view="spines"] .book-ratings { display: none; }
 .book-copy h3 { display: -webkit-box; margin: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font: 500 16px/1.35 var(--font-book); }
 .book-copy h3 small { display: block; color: var(--text-2); font-size: .8em; }

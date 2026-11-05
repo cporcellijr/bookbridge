@@ -58,6 +58,11 @@
 /* P13: the only Settings menu lives in the rail, and moves to the page on phones. */
 .rail-settings { overflow: hidden; }
 .rail-settings .brand, .rail-settings .rail-foot { flex: none; }
+/* Short screens (landscape phones): the whole rail scrolls instead of squeezing the menu to a sliver. */
+@media (min-width: 761px) and (max-height: 600px) {
+  .rail-settings { overflow-y: auto; }
+  .rail-settings .settings-rail-nav, .rail-settings .settings-navigation, .rail-settings .settings-navigation .settings-menu { flex: none; min-height: auto; overflow: visible; }
+}
 .settings-rail-nav { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .settings-navigation { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; gap: 8px; }
 .settings-back { display: flex; flex: none; align-items: center; gap: 9px; min-height: 44px; padding: 8px 12px; border-radius: 9px; color: var(--text-2); font-weight: 600; }

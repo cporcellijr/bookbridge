@@ -98,6 +98,10 @@
             const changed = document.getElementById('changed_only');
             if (search) search.value = '';
             if (changed) changed.checked = false;
+            // The filter hid sections on every page; drop those overrides before showing one page.
+            document.querySelectorAll('.settings-main .settings-section').forEach(function (section) {
+                section.style.display = '';
+            });
         }
         const page = selectedPage(name);
         const servicePage = serviceNames.includes(page);

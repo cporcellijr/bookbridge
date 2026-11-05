@@ -1026,11 +1026,14 @@
     window.exitBookSelection = function () { setBookSelectMode(false); };
     selectModeButton?.addEventListener('click', () => setBookSelectMode(!librarySelectMode));
     document.addEventListener('keydown', event => {
-        if (librarySelectMode && event.key === 'Escape') {
-            event.preventDefault();
-            setBookSelectMode(false);
-            selectModeButton?.focus();
-        }
+        if (!librarySelectMode || event.key !== 'Escape') return;
+        // An open Ctrl K search (or whoever already took the key) owns Escape, and a
+        // running batch keeps its bar so the result and retry stay visible.
+        const search = document.getElementById('bb-search-overlay');
+        if (event.defaultPrevented || libraryBatchRunning || (search && !search.hidden)) return;
+        event.preventDefault();
+        setBookSelectMode(false);
+        selectModeButton?.focus();
     });
     document.addEventListener('click', event => {
         if (!librarySelectMode || event.target.matches('[data-select-book]')) return;

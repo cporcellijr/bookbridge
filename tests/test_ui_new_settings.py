@@ -347,10 +347,23 @@ class TestP11SettingsNavigation(unittest.TestCase):
         keys = [slug for _, slug in sections]
         self.assertEqual(keys, [key for key, _ in links])
         self.assertEqual(keys, [key for _, key in links])
-        self.assertEqual(keys, ['audiobookshelf', 'koreader', 'storyteller', 'grimmory', 'bookfusion',
-                                'bookorbit', 'kavita', 'readest', 'cwa', 'hardcover', 'storygraph', 'goodreads'])
+        # Derived, not pinned: adding a service needs a section, a menu link and a Test mapping.
+        self.assertTrue(keys)
+        for key in keys:
+            self.assertRegex(self.js, r"\b" + key + r": '[a-z]+'")
         for aliases, slug in sections:
             self.assertEqual(aliases.split()[0], slug)
+
+    def test_leaving_a_search_shows_the_chosen_page_again(self):
+        # Executes settings-p6.js against a small fake DOM (tests/test_ui_new_settings_nav.js).
+        import shutil
+        import subprocess
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is required to run the Settings navigation script')
+        result = subprocess.run([node, str(ROOT / 'tests/test_ui_new_settings_nav.js')],
+                                capture_output=True, text=True, timeout=15, cwd=ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_tile_grid_and_configure_scroll_are_removed(self):
         self.assertNotIn('next-service-tiles', self.markup + self.js + self.css)
@@ -369,7 +382,9 @@ class TestP11SettingsNavigation(unittest.TestCase):
     def test_all_hashes_survive_python_settings_save_redirect(self):
         menu = re.findall(r'data-tab="([a-z_]+)"', self.markup)
         self.assertEqual(len(menu), len(set(menu)))
-        self.assertEqual(len(menu), 20)
+        services = re.findall(r'class="settings-tab settings-service-tab[^"]*" data-tab="([a-z_]+)"', self.markup)
+        pages = {'sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users', 'logs'}
+        self.assertEqual(set(menu), set(services) | pages)
         self.assertTrue(all(name.isidentifier() for name in menu))
         for name in ('sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users', 'logs'):
             self.assertIn(name, menu)

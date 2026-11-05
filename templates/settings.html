@@ -4253,7 +4253,8 @@
             });
 
             // Clear dirty flag on any form submit (settings save or user-admin action).
-            document.querySelectorAll('form').forEach(function (form) {
+            // The interface switch saves nothing here, so leaving through it still warns.
+            document.querySelectorAll('form:not(.nav-interface-form):not(.interface-switch)').forEach(function (form) {
                 form.addEventListener('submit', clearDirty);
             });
         }

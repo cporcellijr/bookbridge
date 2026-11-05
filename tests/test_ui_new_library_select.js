@@ -66,10 +66,11 @@ function makeBook(id) {
 }
 const first = makeBook('one');
 const second = makeBook('two');
+const searchOverlay = {hidden: true};
 const document = {
   addEventListener(type, callback, capture) { listeners.on(type, callback, capture); },
   getElementById(id) {
-    return ({'library-page': page, 'select-mode-button': select, 'selection-bar': bar, 'selection-count': count})[id] ?? null;
+    return ({'library-page': page, 'select-mode-button': select, 'selection-bar': bar, 'selection-count': count, 'bb-search-overlay': searchOverlay})[id] ?? null;
   },
   querySelectorAll(selector) {
     if (selector === '.view-switch [data-view]') return views;
@@ -114,9 +115,9 @@ function cardClick(link) {
   listeners.emit('click', event);
   return event;
 }
-function key(key) {
+function key(key, extra = {}) {
   let prevented = false;
-  listeners.emit('keydown', {key, preventDefault() {prevented = true;}});
+  listeners.emit('keydown', {key, ...extra, preventDefault() {prevented = true;}});
   return prevented;
 }
 function selectedCount() {return inputs.filter(input => input.checked).length;}
@@ -145,6 +146,14 @@ function selectedCount() {return inputs.filter(input => input.checked).length;}
   second.input.dispatchEvent(new context.Event('change', {bubbles: true}));
   assert.equal(count.textContent, '2 selected', 'native checkbox changes remain supported');
 
+  // P14 #4: Escape that closes Ctrl K search, or that another handler already took, keeps the selection.
+  searchOverlay.hidden = false;
+  assert.equal(key('Escape'), false);
+  searchOverlay.hidden = true;
+  assert.equal(key('Escape', {defaultPrevented: true}), false);
+  assert.equal(page.dataset.selectMode, 'on');
+  assert.equal(count.textContent, '2 selected');
+
   assert(key('Escape'));
   assert.equal(page.dataset.selectMode, 'off');
   assert.equal(bar.hidden, true);
@@ -166,7 +175,10 @@ function selectedCount() {return inputs.filter(input => input.checked).length;}
   select.click();
   cardClick(first.link);
   cardClick(second.link);
-  await context.window.bulkSyncNow();
+  const running = context.window.bulkSyncNow();
+  assert.equal(key('Escape'), false, 'Escape waits while a batch is running');
+  assert.equal(page.dataset.selectMode, 'on');
+  await running;
   assert.equal(requests, 2);
   assert.equal(page.dataset.selectMode, 'on', 'a bulk action must not exit selection mode');
   assert.equal(bar.hidden, false);

@@ -108,7 +108,6 @@
     .format-chips { max-width: 100%; }
     .selection-bar { max-height: 50dvh; overflow-y: auto; bottom: calc(72px + env(safe-area-inset-bottom)); }
     .library-page .book-copy { padding: 10px; }
-    .library-page .book-heading { min-height: 0; }
     .library-page .book-copy h3 {
         display: block; max-height: none; overflow-wrap: break-word; word-break: normal;
         -webkit-line-clamp: unset; -webkit-box-orient: initial;

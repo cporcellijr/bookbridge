@@ -66,6 +66,22 @@ class TestInterfaceSwitch(unittest.TestCase):
         self.assertEqual(response.location, "/")
         self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_MODE"), "new")
 
+    def test_control_characters_in_next_cannot_redirect_off_site(self):
+        # P14 #1: "/%09/evil.example" decoded to "/\t/evil.example", passed the prefix
+        # checks and came back as "Location: //evil.example"; "%0d" raised a 500.
+        unsafe = ("/%09/evil.example", "/%0d/x", "/%0a/x", "/%7f/x")
+        self._login("ui-reader")
+        for value in unsafe:
+            with self.subTest(route="interface", next=value):
+                response = self.client.post(f"/account/interface?next={value}", data={"ui_mode": "new"})
+                self.assertEqual((response.status_code, response.location), (302, "/"))
+        self.client.get("/logout")
+        for value in unsafe:
+            with self.subTest(route="login", next=value):
+                response = self.client.post(f"/login?next={value}", data={"username": "ui-reader", "password": "pw"})
+                self.assertEqual((response.status_code, response.location), (302, "/"))
+                self.client.get("/logout")
+
     def test_anonymous_user_redirects_to_login(self):
         response = self.client.post("/account/interface", data={"ui_mode": "new"})
         self.assertEqual(response.status_code, 302)
