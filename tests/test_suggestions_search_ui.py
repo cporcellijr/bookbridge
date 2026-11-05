@@ -98,6 +98,15 @@ class SearchTabPageTests(SearchPageTestCase):
         self.assertIn('name="audio_only" id="selected_audio_only"', html)
         self.assertNotIn('id="readalongEpubCheckbox"', html)
 
+    def test_storyteller_picker_hidden_unless_storyteller_is_configured(self):
+        for template in ("suggestions.html", "next/suggestions.html"):
+            with self.subTest(template=template):
+                off = self._render(template)
+                on = self._render(template, storyteller_enabled=True)
+                self.assertIn('<div class="storyteller-pick" hidden>', off)
+                self.assertIn('<div class="storyteller-pick">', on)
+                self.assertIn('id="storytellerCardGrid"', off)
+
     def test_forge_stage_modal_renders_only_with_storyteller(self):
         self.assertNotIn('id="forgeStageModal"', self._render())
         html = self._render(storyteller_enabled=True)

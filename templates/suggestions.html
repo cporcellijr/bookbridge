@@ -383,12 +383,15 @@
                         <input type="hidden" name="ebook_source_path" id="selected_ebook_source_path" value="">
                         <input type="hidden" name="storyteller_uuid" id="selected_storyteller_uuid" value="">
                         <input type="hidden" name="audio_only" id="selected_audio_only" value="">
-                        <label class="field-label" for="storytellerCardGrid">{{ _('Storyteller (Preferred)') }}</label>
-                        <p class="field-hint">{{ _('Optional. Choose this to create a tri-link.') }}</p>
-                        <div class="selection-grid-scroll">
-                            <div id="storytellerCardGrid" class="resource-grid"></div>
+                        {# Hidden, not removed: the picker scripts still read these ids. #}
+                        <div class="storyteller-pick"{% if not storyteller_enabled %} hidden{% endif %}>
+                            <label class="field-label" for="storytellerCardGrid">{{ _('Storyteller (Preferred)') }}</label>
+                            <p class="field-hint">{{ _('Optional. Choose this to create a tri-link.') }}</p>
+                            <div class="selection-grid-scroll">
+                                <div id="storytellerCardGrid" class="resource-grid"></div>
+                            </div>
+                            <p id="storytellerGridEmpty" class="ebook-grid-empty hidden"></p>
                         </div>
-                        <p id="storytellerGridEmpty" class="ebook-grid-empty hidden"></p>
                         <label class="field-label" for="ebookCardGrid">{{ _('Ebook Match') }}</label>
                         <div class="selection-grid-scroll">
                             <div id="ebookCardGrid" class="ebook-grid"></div>
