@@ -74,7 +74,7 @@
 :root[data-theme="light"] .discover-page .source-badge:not(.manual):not(.exact):not(.queued):not(.linked):not(.samefolder):not(.sameseries):not(.reason):not(.ignored) {
     background: var(--surface-2); color: var(--text-2); border-color: var(--line-2);
 }
-:root[data-theme="light"] .discover-page :is(.series-name.is-other,.series-meta-row,.series-chevron,.group-select,.row-seq,.series-grouping-label,.scan-progress-text,.readalong-option) {
+:root[data-theme="light"] .discover-page :is(.series-name.is-other,.series-meta-row,.series-chevron,.group-select,.row-seq,.series-grouping-label,.scan-progress-text) {
     color: var(--text-2);
 }
 :root[data-theme="light"] .discover-page :is(.btn-link,.list-feedback,.queue-actions .btn:not(.btn-success):not(.btn-danger)) {

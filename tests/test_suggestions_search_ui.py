@@ -92,10 +92,11 @@ class SearchTabPageTests(SearchPageTestCase):
         self.assertIn("/api/me/kosync-documents", html)
         self.assertRegex(html, r'class="reader-docs-wrap" data-only-tab="search"')
 
-    def test_review_form_carries_audio_only_and_readalong(self):
+    def test_review_form_carries_audio_only_but_no_per_book_readalong(self):
+        # The read-along EPUB is asked once, on the queue at Match All.
         html = self._render()
         self.assertIn('name="audio_only" id="selected_audio_only"', html)
-        self.assertIn('name="readalong_epub_requested" value="true" disabled', html)
+        self.assertNotIn('id="readalongEpubCheckbox"', html)
 
     def test_forge_stage_modal_renders_only_with_storyteller(self):
         self.assertNotIn('id="forgeStageModal"', self._render())

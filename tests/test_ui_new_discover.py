@@ -66,7 +66,7 @@ class TestNewDiscover(unittest.TestCase):
                             'scanProgressBar', 'searchTabForm', 'queuePanel', 'queueList',
                             'ebookSelectAllBtn', 'ebookAddSelectedBtn', 'addAllExactBtn',
                             'addToQueueForm', 'ebookCardGrid', 'storytellerCardGrid',
-                            'readalongEpubOption', 'reader-docs-wrap', '/api/me/'):
+                            'reader-docs-wrap', '/api/me/'):
                 with self.subTest(feature=feature):
                     self.assertIn(feature, page)
             for action in ('process_queue', 'forge_and_match_queue', 'remove_from_queue',
@@ -174,3 +174,16 @@ class TestNewDiscover(unittest.TestCase):
         self.assertIn(b'/job-queue', response.data)
         spawn.assert_called_once()
         self.assertEqual(len(spawn.call_args.args[1]), 1)
+
+
+class TestReadalongAskedOnceAtMatchAll(unittest.TestCase):
+    """The read-along EPUB choice is offered once, on the queue at Match All, not per book."""
+
+    def test_selected_book_has_no_readalong_box_and_queue_keeps_one(self):
+        root = Path(foundation._TEMPLATES)
+        for page in ('suggestions.html', 'next/suggestions.html', 'next/_discover_scripts.html'):
+            with self.subTest(page=page):
+                self.assertNotIn('readalongEpubCheckbox', (root / page).read_text(encoding='utf-8'))
+        for panel in ('_match_queue_panel.html', 'next/_match_queue_panel.html'):
+            with self.subTest(panel=panel):
+                self.assertIn('id="queueReadalongCheckbox"', (root / panel).read_text(encoding='utf-8'))
