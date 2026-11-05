@@ -106,6 +106,32 @@ class TestNewLibrary(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_library_filter_moves_into_the_top_bar_on_wide_screens(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required for the search placement test")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_search.js")],
+            capture_output=True, text=True, timeout=15, cwd=_ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_library_has_one_search_box_with_the_ctrl_k_launcher_inside(self):
+        self._login("ui-reader")
+        self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
+        text = self.client.get("/").get_data(as_text=True)
+        slot = text.index('data-library-search-slot')
+        self.assertLess(slot, text.index('id="bb-search-open"'))
+        self.assertLess(text.index('id="bb-search-open"'), text.index('</div>', slot))
+        self.assertEqual(text.count('id="dashboard-search"'), 1)
+        self.assertEqual(text.count('id="bb-search-open"'), 1)
+        stats = self.client.get("/stats").get_data(as_text=True)
+        self.assertNotIn('data-library-search-slot', stats)
+        self.assertIn('id="bb-search-open"', stats)
+
     def test_reader_gets_new_library_with_classic_default_unchanged(self):
         observed = []
 

@@ -74,6 +74,20 @@ summary::-webkit-details-marker { display: none; }
 .search-placeholder span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-placeholder kbd { margin-left: auto; padding: 3px 6px; border: 1px solid var(--line-2); border-radius: 5px; background: var(--surface-2); color: var(--text-2); font: 500 11px var(--font-mono); }
 .search-placeholder:disabled { cursor: not-allowed; opacity: .72; }
+/* Library: the filter field sits in the top bar box with the Ctrl K launcher at its end. */
+@media (min-width: 761px) {
+  .library-search { min-width: 0; width: min(100%, 560px); height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--text-2); }
+  .library-search:focus-within { border-color: var(--ribbon-strong); }
+  .library-search > .field { flex: 1; min-width: 0; min-height: 0; height: 100%; padding: 0; border: 0; background: transparent; }
+  .library-search > .field:focus-visible { outline: none; }
+  .library-search .search-placeholder { width: auto; height: 32px; padding: 0 4px; border: 0; background: none; }
+  .library-search .search-placeholder > .icon, .library-search .search-placeholder > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .library-toolbar .search-field { display: none; }
+}
+@media (max-width: 760px) {
+  .library-search { display: contents; }
+  .library-search > .icon { display: none; }
+}
 .theme-toggle { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-left: auto; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); cursor: pointer; }
 .theme-toggle:hover { border-color: var(--line-2); }
 .theme-label { font-size: 13px; }

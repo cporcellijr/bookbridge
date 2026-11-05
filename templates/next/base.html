@@ -137,7 +137,7 @@
         <div class="main-column">
             <header class="topbar">
                 <div class="mobile-brand"><svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span></div>
-                <button class="search-placeholder" id="bb-search-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bb-search-dialog" aria-keyshortcuts="Control+K Meta+K /"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span>{{ _('Search books, pages, settings') }}</span><kbd>{{ _('Ctrl K') }}</kbd></button>
+                {% block topbar_search %}<button class="search-placeholder" id="bb-search-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bb-search-dialog" aria-keyshortcuts="Control+K Meta+K /"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span>{{ _('Search books, pages, settings') }}</span><kbd>{{ _('Ctrl K') }}</kbd></button>{% endblock %}
                 <button class="theme-toggle" type="button" data-theme-toggle aria-pressed="false" aria-label="{{ _('Switch to day theme') }}" title="{{ _('Switch to day theme') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#theme"></use></svg><span class="theme-label">{{ _('Day theme') }}</span></button>
                 {% if yours|trim %}
                 <details class="mobile-app-menu">
