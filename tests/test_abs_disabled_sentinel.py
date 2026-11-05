@@ -206,6 +206,25 @@ class TestABSDisabledSentinel(unittest.TestCase):
         )
 
 
+    def test_nav_skips_switched_off_audiobookshelf_and_shows_bookorbit_audio(self):
+        env = {
+            "ABS_SERVER": "http://abs.local", "ABS_KEY": "key", "ABS_ENABLED": "false",
+            "BOOKORBIT_SERVER": "http://orbit.local", "BOOKORBIT_ENABLED": "true",
+        }
+        for ui in ("classic", "new"):
+            with self.subTest(ui=ui), patch.dict(os.environ, {**env, "UI_MODE": ui}, clear=False):
+                response = self.client.get("/stats")
+                self.assertEqual(response.status_code, 200)
+                html = response.data.decode("utf-8")
+                self.assertNotIn("Audiobookshelf audiobook library", html)
+                self.assertIn("BookOrbit audiobook library", html)
+            # Blank still means on, like ABSClient.is_configured.
+            with self.subTest(ui=ui, abs_enabled="blank"), patch.dict(
+                os.environ, {**env, "ABS_ENABLED": "", "UI_MODE": ui}, clear=False
+            ):
+                self.assertIn("Audiobookshelf audiobook library", self.client.get("/stats").data.decode("utf-8"))
+
+
 class TestABSCollectionCleanup(unittest.TestCase):
     def test_add_collection_creates_it_with_the_first_book(self):
         with patch.dict(
