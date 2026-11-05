@@ -57,24 +57,24 @@
 }
 .view .save-effect, .view .dirty-note { color: var(--text-2); }
 .view .save-effect.warn { color: var(--warn); }
-.view .settings-main.filtering .next-service-heading, .view .settings-main.filtering .next-service-tiles { display: none; }
-.next-service-heading { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
-.next-service-heading h3 { font: 600 23px var(--font-book); color: var(--text); margin: 0 0 4px; }
-.next-service-heading p { margin: 0; color: var(--text-2); font-size: 13px; }
-.next-service-tiles { display: grid; grid-template-columns: repeat(auto-fit,minmax(205px,1fr)); gap: 12px; margin-bottom: 24px; }
-.next-service-tile { min-width: 0; padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; gap: 10px; }
-.next-service-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.next-service-initial { width: 34px; min-width: 34px; height: 34px; display: grid; place-items: center; background: var(--info-bg); color: var(--info); border-radius: 10px; font: 600 12px var(--font-mono); }
-.next-service-title { color: var(--text); font-weight: 650; overflow-wrap: anywhere; font-size: 14px; }
-.next-service-state { color: var(--text-2); font-size: 12px; display: flex; align-items: flex-start; gap: 7px; }
-.next-service-state:before { content: ""; width: 8px; height: 8px; margin-top: 5px; flex: none; border: 1px solid currentColor; border-radius: 50%; }
-.next-service-state[data-state="ok"] { color: var(--ok); }
-.next-service-state[data-state="off"] { color: var(--text-3); }
-.next-service-actions { display: flex; gap: 8px; margin-top: auto; }
-.next-service-actions button { flex: 1; min-height: 38px; padding: 7px 10px; border: 1px solid var(--line-2); background: var(--surface-2); border-radius: 8px; color: var(--text); font-size: 12px; cursor: pointer; }
-.next-service-actions button:hover { border-color: var(--info); }
-.next-service-actions button:disabled { opacity: .6; cursor: wait; }
-.next-service-section-flash { box-shadow: 0 0 0 2px var(--info); }
+/* P11: One grouped navigation instead of a second service tile list. */
+.view .settings-sidebar { gap: 8px; max-height: calc(100vh - 106px); overflow: hidden; }
+.view .settings-menu { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 14px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding-top: 10px; border-top: 1px solid var(--line); }
+.view .settings-nav-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.view .settings-nav-heading { margin: 0 12px 5px; font: 700 11px/1.5 var(--font-ui); text-transform: uppercase; letter-spacing: .09em; color: var(--text-3); }
+.view .settings-tab { text-decoration: none; min-width: 0; min-height: 44px; padding: 8px 10px; }
+.view .settings-tab-label { min-width: 0; }
+.view .settings-service-tab { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 9px 12px; }
+.view .settings-service-tab .settings-tab-label { color: var(--text); font-size: 13px; font-weight: 650; }
+.view .next-connection-status { display: flex; align-items: center; gap: 7px; font: 500 12px/1.4 var(--font-ui); color: var(--text-2); }
+.view .next-connection-status::before { content: ''; display: block; flex: 0 0 8px; height: 8px; border: 1px solid currentColor; border-radius: 50%; }
+.view .next-connection-status[data-state="ok"] { color: var(--ok); }
+.view .next-connection-status[data-state="off"] { color: var(--text-3); }
+.view .next-connection-test { min-height: 44px; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.view .next-connection-test:hover { border-color: var(--info); }
+.view .next-connection-test:disabled { opacity: .6; cursor: wait; }
+.view .settings-sidebar .changed-only { margin: 2px 0; }
+.view .settings-sidebar .settings-legend { margin: 0; }
 .view .next-logs-panel h3 { font: 600 25px var(--font-book); margin: 4px 0 14px; }
 .view .next-logs-panel iframe { display: block; width: 100%; min-height: 72vh; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 /* Account and per-reader integrations retain the complete Classic forms. */
@@ -112,25 +112,23 @@
 :root[data-theme="light"] .view .settings-section .section-header h3,
 :root[data-theme="light"] .view .settings-section label { color: var(--text) !important; }
 :root[data-theme="light"] .view .settings-section .svc-desc { color: var(--text-2) !important; }
-@media (max-width: 1180px) {
+@media (max-width: 840px) {
   .view .settings-layout { flex-direction: column; }
-  .view .settings-sidebar { position: static; width: 100%; flex-basis: auto; display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; }
-  .view .settings-sidebar .settings-search { flex-basis: 100%; }
-  .view .settings-tab { width: auto; flex: 1 1 auto; }
-  .view .settings-legend { flex-basis: 100%; }
+  .view .settings-sidebar { position: static; width: 100%; flex-basis: auto; flex-direction: column; gap: 8px; max-height: none; overflow: visible; }
+  .view .settings-menu { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
   .view .settings-main { width: 100%; }
 }
-@media (max-width: 760px) {
+@media (max-width: 600px) {
   .view .container { padding: 0 0 150px; }
   .view .settings-layout { gap: 14px; }
   .view .settings-sidebar { padding: 10px; }
-  .view .settings-tab { font-size: 12px; min-height: 42px; padding: 8px 10px; }
+  .view .settings-menu { display: flex; max-height: 280px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+  .view .settings-tab { width: 100%; min-height: 44px; font-size: 13px; padding: 9px 10px; }
   .view .settings-section .section-header { padding: 14px 12px; }
-  .view .settings-section .section-body { padding: 14px 12px; grid-template-columns: minmax(0, 1fr); }
+  .view .settings-section .section-body { padding: 14px 12px; grid-template-columns: minmax(0,1fr); }
   .view .settings-section .full-width { grid-column: 1; }
   .view .submit-bar { left: 10px; right: 10px; bottom: calc(74px + env(safe-area-inset-bottom)); padding: 9px; flex-wrap: wrap; }
-  .view .submit-bar .btn { flex: none; min-height: 42px; }
+  .view .submit-bar .btn { flex: none; min-height: 44px; }
   .view .settings-section .header-tail { width: 100%; }
-  .view .next-service-tiles { grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); gap: 9px; }
   .view .account-wrap .card, .view .integrations-wrap .card, .view .admin-users-wrap .card { padding: 16px; }
 }

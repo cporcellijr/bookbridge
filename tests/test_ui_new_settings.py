@@ -263,3 +263,65 @@ class TestP6RenderedRoutes(unittest.TestCase):
             self.assertNotIn("next/login.html", observed)
         finally:
             template_rendered.disconnect(capture, self.app)
+
+
+class TestP11SettingsNavigation(unittest.TestCase):
+    """P11 regression guards; all of these fail against the P10 Settings UI."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.markup = (ROOT / 'templates/next/settings.html').read_text(encoding='utf-8')
+        cls.js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
+        cls.css = (ROOT / 'static/css/next-p6.css').read_text(encoding='utf-8')
+
+    def test_each_service_has_its_own_connection_menu_entry_in_original_order(self):
+        sections = re.findall(r'<div class="settings-section[^"\n]*" data-svc="([^"]+)" data-service-page="([a-z_]+)"', self.markup)
+        links = re.findall(r'<a href="#([a-z_]+)" class="settings-tab settings-service-tab[^\n]*data-svc="([a-z_]+)"', self.markup)
+        keys = [slug for _, slug in sections]
+        self.assertEqual(keys, [key for key, _ in links])
+        self.assertEqual(keys, [key for _, key in links])
+        self.assertEqual(keys, ['audiobookshelf', 'koreader', 'storyteller', 'grimmory', 'bookfusion',
+                                'bookorbit', 'kavita', 'readest', 'cwa', 'hardcover', 'storygraph'])
+        for aliases, slug in sections:
+            self.assertEqual(aliases.split()[0], slug)
+
+    def test_tile_grid_and_configure_scroll_are_removed(self):
+        self.assertNotIn('next-service-tiles', self.markup + self.js + self.css)
+        self.assertNotIn('next-service-tile', self.markup + self.js + self.css)
+        self.assertNotIn('configureLabel', self.js)
+        # Each service page names the service once: Test lives in its own header.
+        self.assertNotIn('next-connection-card', self.markup + self.js + self.css)
+        self.assertIn("tail.prepend(button)", self.js)
+        self.assertIn("window.testConnection(serviceTests[key], button)", self.js)
+
+    def test_category_menu_reuses_the_translated_labels(self):
+        for msgid in ('🔄 Reading &amp; Sync', '📚 Library &amp; Matching', '🎧 Alignment', '🤖 AI',
+                      '🛠️ Server', '🧰 Maintenance', '👥 Users'):
+            self.assertIn("_('" + msgid + "')", self.markup)
+
+    def test_all_hashes_survive_python_settings_save_redirect(self):
+        menu = re.findall(r'data-tab="([a-z_]+)"', self.markup)
+        self.assertEqual(len(menu), len(set(menu)))
+        self.assertEqual(len(menu), 19)
+        self.assertTrue(all(name.isidentifier() for name in menu))
+        for name in ('sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users', 'logs'):
+            self.assertIn(name, menu)
+        self.assertIn("if (returnTab) returnTab.value = page", self.js)
+        self.assertIn("history.replaceState(null, '', '#' + encodeURIComponent(fragment))", self.js)
+        self.assertIn("integrations: 'audiobookshelf'", self.js)
+        self.assertIn("features: 'library'", self.js)
+        self.assertIn("tools: 'maintenance'", self.js)
+        self.assertIn("showSettingsTab(fieldName, true)", self.js)
+        self.assertIn("focusRequestedField(fragment)", self.js)
+        self.assertIn("field.focus({ preventScroll: true })", self.js)
+
+    def test_navigation_search_spans_pages_and_keeps_the_single_save_bar(self):
+        self.assertEqual(self.markup.count('class="submit-bar"'), 1)
+        self.assertEqual(self.markup.count('id="settingsForm"'), 1)
+        for group in ('Connections', 'Sync & library', 'Server'):
+            self.assertIn("_('" + group + "')", self.markup)
+        self.assertIn('window.applySettingsFilter = applySettingsFilter', self.js)
+        self.assertIn('panel.style.display = matches ?', self.js)
+        self.assertIn("bar.style.display = page === 'maintenance' ? 'none' : ''", self.js)
+        self.assertIn('keepSelectedMenuLinkInView()', self.js)
+        self.assertNotIn('-webkit-line-clamp', self.css)

@@ -1,4 +1,4 @@
-/* New Settings presentation. Classic Settings handlers are included unchanged. */
+/* New-only Settings navigation; Classic's copied Settings handlers remain unchanged. */
 (function () {
     'use strict';
 
@@ -19,101 +19,136 @@
         hardcover: 'hardcover',
         storygraph: 'storygraph'
     };
+    const aliases = {
+        integrations: 'audiobookshelf',
+        general: 'audiobookshelf',
+        reading_apps: 'audiobookshelf',
+        trackers: 'hardcover',
+        features: 'library',
+        tools: 'maintenance'
+    };
+    const serviceNames = Object.keys(serviceTests);
+    const pageNames = ['sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users', 'logs'];
+    let alignHealthLoaded = false;
 
-    if (typeof SETTINGS_TABS !== 'undefined' && !SETTINGS_TABS.includes('logs')) {
-        SETTINGS_TABS.push('logs');
-    }
-    if (typeof window.showSettingsTab === 'function') {
-        const classicShowSettingsTab = window.showSettingsTab;
-        window.showSettingsTab = function (name) {
-            classicShowSettingsTab(name);
-            if (name === 'logs') {
-                const form = document.getElementById('settingsForm');
-                const bar = document.querySelector('.submit-bar');
-                if (form) form.style.display = 'none';
-                if (bar) bar.style.display = 'none';
+    function selectedPage(name) {
+        if (/^[A-Z][A-Z0-9_]*$/.test(name)) {
+            const field = Array.from(document.querySelectorAll('#settingsForm [name]'))
+                .find(function (node) { return node.name === name && node.type !== 'hidden'; });
+            if (field) {
+                const region = field.closest('[data-service-page]');
+                if (region) return region.dataset.servicePage;
+                const panel = field.closest('.tab-panel');
+                if (panel) return panel.dataset.panel;
             }
+        }
+        const canonical = aliases[name] || name;
+        return serviceNames.includes(canonical) || pageNames.includes(canonical)
+            ? canonical : 'audiobookshelf';
+    }
+
+    function keepSelectedMenuLinkInView() {
+        const menu = document.querySelector('.settings-menu');
+        const active = menu && menu.querySelector('.settings-tab.active');
+        if (!active || menu.scrollHeight <= menu.clientHeight) return;
+        const menuBounds = menu.getBoundingClientRect();
+        const linkBounds = active.getBoundingClientRect();
+        if (linkBounds.top < menuBounds.top) {
+            menu.scrollTop -= menuBounds.top - linkBounds.top + 8;
+        } else if (linkBounds.bottom > menuBounds.bottom) {
+            menu.scrollTop += linkBounds.bottom - menuBounds.bottom + 8;
+        }
+    }
+
+    function showSettingsTab(name, preserveFieldHash) {
+        const main = document.querySelector('.settings-main');
+        if (main && main.classList.contains('filtering')) {
+            main.classList.remove('filtering');
+            const search = document.getElementById('settings_search');
+            const changed = document.getElementById('changed_only');
+            if (search) search.value = '';
+            if (changed) changed.checked = false;
+        }
+        const page = selectedPage(name);
+        const servicePage = serviceNames.includes(page);
+        document.querySelectorAll('.settings-tab').forEach(function (link) {
+            const active = link.dataset.tab === page;
+            link.classList.toggle('active', active);
+            if (active) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+        });
+        keepSelectedMenuLinkInView();
+        document.querySelectorAll('.tab-panel').forEach(function (panel) {
+            const active = panel.dataset.panel === (servicePage ? 'integrations' : page);
+            panel.classList.toggle('active', active);
+            panel.style.display = '';
+        });
+        document.querySelectorAll('.settings-section[data-service-page]').forEach(function (section) {
+            section.style.display = section.dataset.servicePage === page ? '' : 'none';
+        });
+        const form = document.getElementById('settingsForm');
+        if (form) form.style.display = (page === 'users' || page === 'logs') ? 'none' : '';
+        const bar = document.querySelector('.submit-bar');
+        // Maintenance has nothing to save (Classic hides the bar there too).
+        if (bar) bar.style.display = page === 'maintenance' ? 'none' : '';
+        const returnTab = document.getElementById('return_tab');
+        if (returnTab) returnTab.value = page;
+        const fragment = preserveFieldHash ? name : page;
+        if (history.replaceState) history.replaceState(null, '', '#' + encodeURIComponent(fragment));
+        else location.hash = encodeURIComponent(fragment);
+
+        if (page === 'alignment' && !alignHealthLoaded) {
+            alignHealthLoaded = true;
+            if (typeof window.loadAlignmentHealth === 'function') window.loadAlignmentHealth();
+        }
+    }
+    window.showSettingsTab = showSettingsTab;
+
+    function connectionState(section) {
+        const header = section.querySelector(':scope > .section-header');
+        const pill = header && header.querySelector('.pill');
+        const enabled = header && header.querySelector('input[type="checkbox"]');
+        const menu = document.querySelector('.settings-menu');
+        const disabled = enabled && !enabled.checked;
+        return {
+            label: pill ? pill.textContent.trim() :
+                (disabled ? menu.dataset.disabledLabel : menu.dataset.enabledLabel),
+            state: disabled || (pill && pill.classList.contains('off')) ? 'off' : 'ok'
         };
     }
 
-    function buildServiceTiles() {
-        const grid = document.getElementById('next-service-tiles');
-        if (!grid) return;
-        const testLabel = grid.dataset.testLabel;
-        const configureLabel = grid.dataset.configureLabel;
-        const regions = document.querySelectorAll('.settings-section[data-svc]');
-
-        regions.forEach(function (region) {
-            const key = region.dataset.svc.split(/\s+/)[0];
-            const header = region.querySelector(':scope > .section-header');
-            if (!header) return;
-            const title = header.querySelector('.svc-title h3');
-            const initials = header.querySelector('.svc-chip');
-            const status = header.querySelector('.pill');
-            const enabled = header.querySelector('input[type="checkbox"]');
-            const body = region.querySelector(':scope > .section-body');
-            if (!title || !serviceTests[key]) return;
-
-            const tile = document.createElement('div');
-            tile.className = 'next-service-tile';
-            const top = document.createElement('div');
-            top.className = 'next-service-name';
-            const emblem = document.createElement('span');
-            emblem.className = 'next-service-initial';
-            emblem.setAttribute('aria-hidden', 'true');
-            emblem.textContent = initials ? initials.textContent : title.textContent.slice(0, 2);
-            const name = document.createElement('span');
-            name.className = 'next-service-title';
-            name.textContent = (title.firstChild && title.firstChild.textContent || title.textContent).trim();
-            top.append(emblem, name);
-            tile.appendChild(top);
-
-            const state = document.createElement('div');
-            state.className = 'next-service-state';
-            function refreshState() {
-                const disabled = enabled && !enabled.checked;
-                state.textContent = status ? status.textContent.trim() : (disabled ? grid.dataset.disabledLabel : grid.dataset.enabledLabel);
-                state.dataset.state = disabled || (status && status.classList.contains('off')) ? 'off' : 'ok';
+    function buildServiceNavigation() {
+        document.querySelectorAll('.settings-service-tab[data-svc]').forEach(function (link) {
+            const key = link.dataset.svc;
+            const section = document.querySelector('.settings-section[data-service-page="' + key + '"]');
+            if (!section) return;
+            const status = link.querySelector('.next-connection-status');
+            const refresh = function () {
+                const state = connectionState(section);
+                status.textContent = state.label;
+                status.dataset.state = state.state;
+            };
+            refresh();
+            const switcher = section.querySelector(':scope > .section-header input[type="checkbox"]');
+            if (switcher) switcher.addEventListener('change', refresh);
+            // Test sits in the service's own header so each page names the service once.
+            const tail = section.querySelector(':scope > .section-header .header-tail');
+            if (tail) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'next-connection-test';
+                button.textContent = document.querySelector('.settings-menu').dataset.testLabel;
+                button.addEventListener('click', function () {
+                    if (typeof window.testConnection === 'function') {
+                        window.testConnection(serviceTests[key], button);
+                    }
+                });
+                tail.prepend(button);
             }
-            refreshState();
-            if (enabled) enabled.addEventListener('change', refreshState);
-            tile.appendChild(state);
-
-            const actions = document.createElement('div');
-            actions.className = 'next-service-actions';
-            const test = document.createElement('button');
-            test.type = 'button';
-            test.textContent = testLabel;
-            test.addEventListener('click', function () {
-                if (typeof window.testConnection === 'function') {
-                    window.testConnection(serviceTests[key], test);
-                }
-            });
-            const configure = document.createElement('button');
-            configure.type = 'button';
-            configure.textContent = configureLabel;
-            configure.addEventListener('click', function () {
-                const search = document.getElementById('settings_search');
-                const changed = document.getElementById('changed_only');
-                if (search) search.value = '';
-                if (changed) changed.checked = false;
-                if (typeof window.applySettingsFilter === 'function') window.applySettingsFilter();
-                if (typeof window.showSettingsTab === 'function') window.showSettingsTab('integrations');
-                if (body) body.classList.remove('collapsed');
-                region.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                region.classList.add('next-service-section-flash');
-                window.setTimeout(function () {
-                    region.classList.remove('next-service-section-flash');
-                }, 1200);
-            });
-            actions.append(test, configure);
-            tile.appendChild(actions);
-            grid.appendChild(tile);
         });
     }
 
-    // Safari must not depend on the non-standard implicit Window.event used by Classic.
-    // Delegate to Classic's shared picker helper with the actual click target.
+    // Safari must not depend on Classic's non-standard implicit Window.event.
     window.bbNextFindShelves = function (evt, kind) {
         const watch = kind === 'watch';
         const button = evt.currentTarget;
@@ -130,18 +165,12 @@
         });
     };
 
-    function focusRequestedField() {
-        // The Settings tab handler normally interprets the fragment as a tab.
-        // Search uses the actual form-field name instead; restore its tab and
-        // expand its enclosing section after the Classic initialization runs.
-        if (!/^[A-Z][A-Z0-9_]*$/.test(requestedField)) return;
+    function focusRequestedField(fieldName) {
+        if (!/^[A-Z][A-Z0-9_]*$/.test(fieldName)) return false;
         const field = Array.from(document.querySelectorAll('#settingsForm [name]'))
-            .find(function (node) { return node.name === requestedField && node.type !== 'hidden'; });
-        if (!field) return;
-        const panel = field.closest('.tab-panel');
-        if (panel && typeof window.showSettingsTab === 'function') {
-            window.showSettingsTab(panel.dataset.panel);
-        }
+            .find(function (node) { return node.name === fieldName && node.type !== 'hidden'; });
+        if (!field) return false;
+        showSettingsTab(fieldName, true);
         const section = field.closest('.settings-section');
         if (section) {
             section.querySelectorAll('.section-body.collapsed').forEach(function (body) {
@@ -151,12 +180,62 @@
         field.closest('details')?.setAttribute('open', '');
         field.scrollIntoView({ block: 'center' });
         field.classList.add('bb-search-setting-target');
-        if (typeof history.replaceState === 'function') {
-            history.replaceState(null, '', '#'+encodeURIComponent(requestedField));
-        }
         field.focus({ preventScroll: true });
+        return true;
     }
 
-    document.addEventListener('DOMContentLoaded', buildServiceTiles);
-    document.addEventListener('DOMContentLoaded', focusRequestedField);
+    function applySettingsFilter() {
+        const main = document.querySelector('.settings-main');
+        const search = document.getElementById('settings_search');
+        const q = (search ? search.value : '').trim().toLocaleLowerCase();
+        const changedOnly = document.getElementById('changed_only').checked;
+        const filtering = !!q || changedOnly;
+        main.classList.toggle('filtering', filtering);
+        if (!filtering) {
+            document.querySelectorAll('.settings-main .settings-section').forEach(function (section) {
+                section.style.display = '';
+            });
+            showSettingsTab(selectedPage((location.hash || '').slice(1)));
+            return;
+        }
+        // Search spans every connection and category, without detaching form fields.
+        document.querySelectorAll('.tab-panel').forEach(function (panel) {
+            let matches = 0;
+            panel.querySelectorAll('.settings-section').forEach(function (section) {
+                const text = ((section.dataset.svc || '') + ' ' + section.textContent).toLocaleLowerCase();
+                const hit = (!q || text.includes(q))
+                    && (!changedOnly || section.classList.contains('has-changed'));
+                section.style.display = hit ? '' : 'none';
+                if (!hit) return;
+                matches += 1;
+                if (q) {
+                    section.querySelectorAll('details').forEach(function (details) {
+                        if (details.textContent.toLocaleLowerCase().includes(q)) details.open = true;
+                    });
+                    section.querySelectorAll(':scope > .section-body.collapsed').forEach(function (body) {
+                        if (body.textContent.toLocaleLowerCase().includes(q)) body.classList.remove('collapsed');
+                    });
+                }
+            });
+            panel.style.display = matches ? 'block' : 'none';
+        });
+        const form = document.getElementById('settingsForm');
+        if (form) form.style.display = '';
+        const bar = document.querySelector('.submit-bar');
+        if (bar) bar.style.display = '';
+    }
+    window.applySettingsFilter = applySettingsFilter;
+
+    document.addEventListener('DOMContentLoaded', function () {
+        buildServiceNavigation();
+        showSettingsTab(requestedField || 'audiobookshelf',
+            /^[A-Z][A-Z0-9_]*$/.test(requestedField));
+        focusRequestedField(requestedField);
+        window.addEventListener('hashchange', function () {
+            let fragment = '';
+            try { fragment = decodeURIComponent(location.hash.slice(1)); }
+            catch (error) { fragment = ''; }
+            if (!focusRequestedField(fragment)) showSettingsTab(fragment || 'audiobookshelf');
+        });
+    });
 }());
