@@ -38,6 +38,12 @@ class TestNewLibrary(unittest.TestCase):
         self.service.link_user_book(self.reader.id, "library-book")
         self.service.link_user_book(self.reader.id, "library-finished")
 
+    def test_card_heading_does_not_reserve_empty_space(self):
+        # A one-line title left a blank band above the progress bar; the heading hugs its content.
+        css = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        rule = re.search(r"^\.book-heading \{([^}]*)\}", css, re.M).group(1)
+        self.assertNotIn("min-height", rule)
+
     def test_library_batch_actions_execute_sequentially_and_prompt_once(self):
         import shutil
         import subprocess
