@@ -54,7 +54,7 @@
     {% set kavita_configured = kavita_url and get_user_bool('KAVITA_ENABLED') %}
     {% set cwa_configured = cwa_url and get_user_bool('CWA_ENABLED') %}
     {% set audio_source = '' %}
-    {% if abs_library_url and abs_library_url|lower != 'disabled' %}{% set audio_source = 'abs' %}
+    {% if abs_library_url and abs_library_url|lower != 'disabled' and get_user_val('ABS_ENABLED', '')|lower not in ['false', '0', 'no', 'off'] %}{% set audio_source = 'abs' %}
     {% elif grimmory_configured %}{% set audio_source = 'grimmory' %}
     {% elif bookorbit_configured %}{% set audio_source = 'bookorbit' %}{% endif %}
     {% set ebook_source = '' %}
