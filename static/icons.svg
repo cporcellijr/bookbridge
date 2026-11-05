@@ -13,5 +13,9 @@
   <symbol id="docs" viewBox="0 0 24 24"><path d="M4 4h6a4 4 0 0 1 4 4v13a4 4 0 0 0-4-3H4zM20 4h-2a4 4 0 0 0-4 4v13a4 4 0 0 1 4-3h2z"/></symbol>
   <symbol id="logout" viewBox="0 0 24 24"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m5-4 4-4-4-4m4 4H9"/></symbol>
   <symbol id="chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="alignment" viewBox="0 0 24 24"><path d="M4 12v4a4 4 0 0 0 4 4h1m11-8v4a4 4 0 0 1-4 4h-1M4 12a8 8 0 0 1 16 0"/><rect x="2" y="11" width="4" height="7" rx="2"/><rect x="18" y="11" width="4" height="7" rx="2"/></symbol>
+  <symbol id="ai" viewBox="0 0 24 24"><path d="m12 2 2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2zM19 18l.8 2.2L22 21l-2.2.8L19 24l-.8-2.2L16 21l2.2-.8z"/></symbol>
+  <symbol id="server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h7M11 17h7"/></symbol>
+  <symbol id="maintenance" viewBox="0 0 24 24"><path d="M14.5 5.5a5 5 0 0 0-6.4 6.4L3 17a2.1 2.1 0 0 0 3 3l5.1-5.1a5 5 0 0 0 6.4-6.4L14 12l-3-3z"/></symbol>
   <symbol id="external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
 </svg>

@@ -965,17 +965,17 @@
         document.querySelectorAll('[data-format]').forEach(chip => { chip.classList.toggle('is-active', chip === button); chip.setAttribute('aria-pressed', String(chip === button)); if (chip.hasAttribute('data-legacy-format')) chip.hidden = chip !== button; });
         filterBooks();
     }));
-    document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll('.view-switch [data-view]').forEach(button => button.addEventListener('click', () => {
         const view = button.dataset.view;
         document.getElementById('library-page').dataset.view = view;
         applySeriesGrouping(view === 'covers' && seriesGroupingToggle.checked);
         seriesGroupingToggle.disabled = view !== 'covers';
-        document.querySelectorAll('[data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        document.querySelectorAll('.view-switch [data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
         try { localStorage.setItem('abs_kosync_view', view); } catch (e) { console.debug('LocalStorage error:', e); }
     }));
     try {
         const savedView = localStorage.getItem('abs_kosync_view');
-        if (savedView && document.querySelector('[data-view="' + savedView + '"]')) document.querySelector('[data-view="' + savedView + '"]').click();
+        if (savedView && document.querySelector('.view-switch [data-view="' + savedView + '"]')) document.querySelector('.view-switch [data-view="' + savedView + '"]').click();
     } catch (e) { console.debug('LocalStorage error:', e); }
     document.querySelectorAll('[data-format]').forEach(chip => {
         const active = chip.dataset.format === filterSelect.value;
