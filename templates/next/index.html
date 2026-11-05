@@ -6,8 +6,7 @@
 {% block topbar_search %}<div class="library-search" data-library-search-slot><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>{{ super() }}</div>{% endblock %}
 {% block content %}
 <div id="library-page" class="library-page" data-view="covers" data-select-mode="off">
-    <header class="page-head"><div><p class="eyebrow">{{ _('YOUR LIBRARY') }}</p><h1 class="h1">{{ _('Library') }}</h1></div>
-        <a class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Discover books') }}</a></header>
+    <header class="page-head"><div><p class="eyebrow">{{ _('YOUR LIBRARY') }}</p><h1 class="h1">{{ _('Library') }}</h1></div></header>
 
     {% if whats_new %}<section id="whats-new-banner" class="library-banner whats-new-banner">
         <div><strong>{{ _('BookBridge updated to %(version)s', version=whats_new.version) }}</strong>

@@ -32,6 +32,34 @@ button, summary, a { -webkit-tap-highlight-color: transparent; }
 .rail { position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; padding: 18px 12px 14px; background: var(--bg-2); border-right: 1px solid var(--line); }
 .brand, .mobile-brand { display: flex; align-items: center; gap: 10px; color: var(--text); font: 600 20px/1.2 var(--font-book); }
 .brand { padding: 2px 10px 24px; }
+.rail-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.rail-head .brand { min-width: 0; }
+.rail-head .brand-mark { flex: none; }
+.rail-toggle { width: 36px; height: 36px; flex: none; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-3); cursor: pointer; }
+.rail-toggle:hover { border-color: var(--line); background: var(--surface); color: var(--text); }
+.rail-toggle .icon { width: 18px; height: 18px; }
+/* Collapsed rail (wide screens only): icons, a badge for counts, dividers for section labels. */
+@media (min-width: 761px) {
+  html[data-rail="collapsed"] { --rail: 76px; }
+  html[data-rail="collapsed"] .rail { z-index: 25; padding: 18px 10px 14px; }
+  html[data-rail="collapsed"] .rail-head { flex-direction: column; align-items: center; gap: 10px; padding-bottom: 18px; }
+  html[data-rail="collapsed"] .rail-head .brand { padding: 2px 0; }
+  html[data-rail="collapsed"] .rail .brand span,
+  html[data-rail="collapsed"] .rail-nav > a > span:not(.count),
+  html[data-rail="collapsed"] .rail-app-links .app-link span,
+  html[data-rail="collapsed"] .rail-app-links .app-link .icon,
+  html[data-rail="collapsed"] .user-menu .user-name,
+  html[data-rail="collapsed"] .user-menu .menu-caret { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html[data-rail="collapsed"] .rail-nav > a, html[data-rail="collapsed"] .rail-app-links .app-link { justify-content: center; padding: 9px 0; }
+  html[data-rail="collapsed"] .rail-nav > a[aria-current="page"]::before { left: -10px; }
+  html[data-rail="collapsed"] .rail-nav > a .count { position: absolute; top: 2px; right: 4px; margin: 0; padding: 0 5px; font-size: 10px; }
+  html[data-rail="collapsed"] .nav-label { height: 1px; margin: 12px 8px; padding: 0; overflow: hidden; color: transparent; background: var(--line); }
+  html[data-rail="collapsed"] .interface-segment { grid-template-columns: 1fr; }
+  html[data-rail="collapsed"] .interface-segment button { min-height: 32px; padding: 4px 2px; font-size: 11px; }
+  html[data-rail="collapsed"] .user-menu > summary { justify-content: center; padding: 7px 0; }
+  /* Fixed so the menu escapes the narrow rail's scroll box and opens beside it. */
+  html[data-rail="collapsed"] .user-menu-panel { position: fixed; left: calc(var(--rail) + 6px); right: auto; bottom: 14px; width: 200px; }
+}
 .brand-mark { width: 21px; height: 26px; stroke: var(--ribbon); fill: none; stroke-width: 1.6; }
 .rail-nav { display: flex; flex-direction: column; gap: 3px; }
 .rail-nav > a { position: relative; min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: var(--r); color: var(--text-2); font-weight: 500; cursor: pointer; list-style: none; }

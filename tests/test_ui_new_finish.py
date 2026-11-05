@@ -99,6 +99,31 @@ class TestP8Finish(unittest.TestCase):
         self.assertNotIn("querySelector('[data-view=", scripts)
         self.assertEqual(scripts.count(".view-switch [data-view"), 4)
 
+    def test_logs_checkboxes_stay_small_and_messages_get_the_room(self):
+        """iPad Safari stretched the Logs checkboxes to the 44px field height and squeezed messages."""
+        css = source("static/css/next-ops.css")
+        rule = lambda selector: css[css.index(selector + " {"):css.index("}", css.index(selector + " {"))]
+        checkbox = rule('.view .logs-wrap .auto-refresh input[type="checkbox"]')
+        for declaration in ("min-height: 0", "width: 22px", "height: 22px", "transform: none"):
+            self.assertIn(declaration, checkbox)
+        self.assertIn("flex-wrap: wrap", rule(".view .logs-wrap .log-line"))
+        self.assertIn("word-break: normal", rule(".view .logs-wrap .log-line"))
+        self.assertIn("flex: none", rule(".view .logs-wrap .log-timestamp, .view .logs-wrap .log-level, .view .logs-wrap .log-module"))
+        self.assertRegex(rule(".view .logs-wrap .log-message"), r"flex: 1 1 \d+px")
+
+    def test_book_cover_column_matches_the_cover_at_every_breakpoint(self):
+        """iPad drawer (~710px): the 760px rule shrank the column to 90px while the cover stayed 150px."""
+        base, finish = source("static/css/next.css"), source("static/css/next-finish.css")
+
+        def block(css: str, width: int) -> str:
+            start = css.index(f"@media (max-width: {width}px) {{")
+            return css[start:css.index("\n}", start)]
+
+        self.assertIn(".book-cover { width: 150px;", base)
+        self.assertIn(".book-cover { width: 90px;", block(base, 640))
+        self.assertIn(".book-hero { grid-template-columns: minmax(0,150px) minmax(0,1fr); }", block(finish, 760))
+        self.assertIn(".book-hero { grid-template-columns: minmax(0,90px) minmax(0,1fr); }", block(finish, 640))
+
     def test_discover_chip_text_is_unchanged_and_visuals_use_new_tokens(self):
         scripts = source("templates/next/_discover_scripts.html")
         css = source("static/css/next-finish.css")
