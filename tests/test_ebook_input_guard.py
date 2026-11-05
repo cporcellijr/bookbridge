@@ -194,6 +194,59 @@ def test_valid_audiobook_epub_reaches_alignment(worker, tmp_path, monkeypatch):
     assert manager.alignment_service._get_alignment(book.abs_id)
 
 
+
+
+def test_worker_records_preflight_before_whisper_audio_acquisition(worker, tmp_path, monkeypatch):
+    """The actual worker must publish evidence before requesting any audio files."""
+    manager, db, _parser, adapter, save_book = worker
+    monkeypatch.setenv("CTC_ENABLED", "false")
+    epub = tmp_path / "preflight.epub"
+    _write_epub(epub, "A real chapter with readable text.")
+    book = save_book(epub.name, abs_id="preflight-worker")
+    book.duration = 3600
+    db.update_book_if_exists(book)
+    manager.transcriber.transcribe_from_smil.return_value = None
+    manager.transcriber.process_audio.return_value = [
+        {"start": 0.0, "end": 10.0, "text": "A real chapter with readable text."}
+    ]
+    from src.services.transcription_preflight import evaluate_preflight
+    recorded = []
+
+    def record(_db, _book, ebook_text, item_details):
+        evidence = evaluate_preflight(ebook_text, _book.duration)
+        recorded.append(evidence)
+        return evidence
+
+    def get_audio(*_args, **_kwargs):
+        assert recorded, "pre-flight must run before acquiring Whisper audio"
+        return []
+
+    adapter.get_chapters.return_value = []
+    adapter.get_audio_files.side_effect = get_audio
+    with patch("src.sync_manager.record_preflight", side_effect=record):
+        manager._run_background_job(book, library_service=manager.library_service)
+    assert len(recorded) == 1
+    assert recorded[0]["assessment"] == "uncalibrated"
+    assert manager.transcriber.process_audio.call_count == 1
+
+
+def test_smil_cache_short_circuits_preflight_and_audio_acquisition(worker, tmp_path, monkeypatch):
+    """A successful alternative transcript must not trigger full-Whisper pre-flight."""
+    manager, db, _parser, adapter, save_book = worker
+    monkeypatch.setenv("CTC_ENABLED", "false")
+    epub = tmp_path / "smil.epub"
+    _write_epub(epub, "A real chapter with readable text.")
+    book = save_book(epub.name, abs_id="preflight-smil")
+    manager.transcriber.transcribe_from_smil.return_value = [
+        {"start": 0.0, "end": 10.0, "text": "A real chapter with readable text."}
+    ]
+    adapter.get_chapters.return_value = []
+    with patch("src.sync_manager.record_preflight") as measure:
+        manager._run_background_job(book, library_service=manager.library_service)
+    measure.assert_not_called()
+    adapter.get_audio_files.assert_not_called()
+    manager.transcriber.process_audio.assert_not_called()
+
 def test_empty_epub_is_rejected_but_cbz_ebook_only_still_activates(worker, tmp_path):
     manager, db, parser, _adapter, save_book = worker
     empty_path = tmp_path / "empty.epub"
