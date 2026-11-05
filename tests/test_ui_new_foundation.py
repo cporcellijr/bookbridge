@@ -26,23 +26,19 @@ _TEMPLATES = str(Path(__file__).parent.parent / "templates")
 
 
 class TestUiModeRegistration(unittest.TestCase):
-    def test_ui_mode_is_a_per_user_select_with_classic_server_default(self):
+    def test_ui_mode_remains_a_per_user_credential_with_classic_server_default(self):
         groups = dict(PER_USER_FIELD_GROUPS)
         fields = {key: ftype for key, _label, ftype in groups["Reading preferences"]}
 
         self.assertIn("UI_MODE", ALL_SETTINGS)
         self.assertEqual(DEFAULT_CONFIG["UI_MODE"], "classic")
         self.assertIn("UI_MODE", PER_USER_CREDENTIAL_KEYS)
-        self.assertEqual(fields["UI_MODE"], "select:classic=Classic|new=New")
+        self.assertNotIn("UI_MODE", fields)
 
-    def test_admin_api_accepts_only_declared_ui_modes(self):
-        from src.api.admin_api import _validate_field, _field_types
+    def test_admin_integrations_api_does_not_expose_ui_mode(self):
+        from src.api.admin_api import _field_types
 
-        ftype = _field_types()["UI_MODE"]
-        self.assertEqual(_validate_field("UI_MODE", ftype, "classic"), "classic")
-        self.assertEqual(_validate_field("UI_MODE", ftype, "new"), "new")
-        with self.assertRaises(ValueError):
-            _validate_field("UI_MODE", ftype, "unexpected")
+        self.assertNotIn("UI_MODE", _field_types())
 
 
 class TestUiTemplate(unittest.TestCase):
@@ -154,21 +150,6 @@ class TestUiModeRoutes(unittest.TestCase):
     def _login(self, username):
         response = self.client.post("/login", data={"username": username, "password": "pw"})
         self.assertEqual(response.status_code, 302)
-
-    def test_per_user_integration_form_saves_ui_mode(self):
-        self._login("ui-reader")
-
-        response = self.client.post("/account/integrations", data={"UI_MODE": "new"})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.service.get_user_credential(self.reader.id, "UI_MODE"), "new")
-
-    def test_integration_form_rejects_unknown_modes_without_changing_the_reader(self):
-        self.service.set_user_credential(self.reader.id, 'UI_MODE', 'new')
-        self._login('ui-reader')
-        response = self.client.post('/account/integrations', data={'UI_MODE': 'unexpected'})
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(self.service.get_user_credential(self.reader.id, 'UI_MODE'), 'new')
 
     def test_new_mode_selects_matching_page_templates_for_each_acting_user(self):
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")

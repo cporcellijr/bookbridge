@@ -155,7 +155,9 @@ class TestP8Finish(unittest.TestCase):
     def test_docs_and_unreleased_entry_identify_beta_switch(self):
         changelog = source("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("### Fixed", 1)[0]
         self.assertIn("**The New interface (beta)", changelog)
-        self.assertIn("My Integrations → Reading preferences → Interface", changelog)
+        self.assertIn("New interface", changelog)
+        self.assertIn("Classic | New", changelog)
+        self.assertIn("without a Save step", changelog)
         self.assertIn("Stats is now open to every reader", changelog)
         self.assertIn("new-interface.md", source("mkdocs.yml"))
         self.assertTrue((ROOT / "docs/new-interface.md").is_file())

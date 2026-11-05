@@ -83,6 +83,15 @@
         </a>
         {% endif %}
     {%- endmacro %}
+    {% macro interface_switch(location) -%}
+    <form class="interface-switch interface-switch-{{ location }}" method="POST" action="{{ url_for('account_interface', next=request.path) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="interface-segment" role="group" aria-label="{{ _('Interface') }}">
+            <button type="submit" name="ui_mode" value="classic" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') != 'new' else 'false' }}">{{ _('Classic') }}</button>
+            <button type="submit" name="ui_mode" value="new" aria-pressed="{{ 'true' if get_user_val('UI_MODE', 'classic') == 'new' else 'false' }}">{{ _('New') }}</button>
+        </div>
+    </form>
+    {%- endmacro %}
     <a class="skip-link" href="#main-content">{{ _('Skip to content') }}</a>
     <div class="app-shell">
         <aside class="rail" aria-label="{{ _('Main navigation') }}">
@@ -111,6 +120,7 @@
             </nav>
             <div class="rail-foot">
                 {% if current_user %}
+                {{ interface_switch('rail') }}
                 <details class="user-menu" id="bb-next-user-menu">
                     <summary aria-haspopup="menu" aria-expanded="false"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span><span class="user-name">{{ current_user.username }}<small>{{ _('Account') }}</small></span><svg class="icon menu-caret" aria-hidden="true"><use href="/static/icons.svg#chevron"></use></svg></summary>
                     <nav class="user-menu-panel" aria-label="{{ _('User menu') }}">
@@ -137,6 +147,7 @@
                 <details class="mobile-user-menu" id="bb-next-mobile-user-menu">
                     <summary aria-label="{{ _('Account menu') }}"><span class="avatar" aria-hidden="true">{{ (current_user.username or '?')[:1]|upper }}</span></summary>
                     <nav class="user-menu-panel" aria-label="{{ _('User menu') }}">
+                        {{ interface_switch('phone') }}
                         <a href="/account">{{ _('Account') }}</a>
                         {% if is_admin %}<a href="/logs">{{ _('Logs') }}</a>{% endif %}
                         <a href="https://cporcellijr.github.io/bookbridge/" target="_blank" rel="noopener noreferrer">{{ _('Docs') }}</a>

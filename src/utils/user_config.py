@@ -119,7 +119,6 @@ def _select(*options) -> str:
 # 'pref' (Server default / On / Off; blank follows the server default).
 PER_USER_FIELD_GROUPS = [
     (N_("Reading preferences"), [
-        ("UI_MODE", N_("Interface"), _select(("classic", N_("Classic")), ("new", N_("New")))),
         ("KOREADER_ANNOTATION_SYNC", N_("Copy my highlights and notes between my KOReader devices"), "pref"),
         ("KOREADER_STATUS_SYNC_ENABLED", N_("Show a book as reading or finished on all my KOReader devices"), "pref"),
         ("KOREADER_SYNC_READ_HISTORY", N_("Show books I read on one KOReader device in the History of my others"), "pref"),

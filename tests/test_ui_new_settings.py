@@ -1,5 +1,6 @@
 """P6 New settings and accounts: Classic routing, form parity, access, and script drift."""
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -12,6 +13,14 @@ from flask.signals import template_rendered
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGES = ("settings", "account", "account_integrations", "admin_users", "admin_user_integrations")
+
+
+def page_fields_only(markup):
+    """Exclude the independent chrome switch, not any account or settings form."""
+    return re.sub(
+        r'<form class="(?:nav-interface-form|interface-switch [^"]+)"[^>]*>.*?</form>',
+        '', markup, flags=re.S,
+    )
 
 
 class Fields(HTMLParser):
@@ -188,8 +197,8 @@ class TestP6RenderedRoutes(unittest.TestCase):
             for url in classic:
                 with self.subTest(role=user.role, url=url):
                     old_fields, new_fields = Fields(), Fields()
-                    old_fields.feed(classic[url])
-                    new_fields.feed(modern[url])
+                    old_fields.feed(page_fields_only(classic[url]))
+                    new_fields.feed(page_fields_only(modern[url]))
                     self.assertEqual(old_fields.fields, new_fields.fields)
 
     def test_classic_and_new_forms_would_save_the_same_values(self):
@@ -197,7 +206,7 @@ class TestP6RenderedRoutes(unittest.TestCase):
         distinctive value and compare the rendered values, ticks and selections."""
         from src.utils.config_loader import ALL_SETTINGS
         paths = {"DATA_DIR", "BOOKS_DIR", "AUDIOBOOKS_DIR", "STORYTELLER_LIBRARY_DIR", "STORYTELLER_ASSETS_DIR",
-                 "EXTRA_EBOOK_DIRS", "CALIBRE_LIBRARY_PATH", "TZ", "LOG_LEVEL", "UI_MODE"}
+                 "EXTRA_EBOOK_DIRS", "CALIBRE_LIBRARY_PATH", "TZ", "LOG_LEVEL"}
         seeded = {key: ("true" if key.endswith(("_ENABLED", "_SYNC")) else "v-" + key.lower())
                   for key in ALL_SETTINGS if key not in paths}
         with patch.dict(os.environ, seeded):
@@ -207,11 +216,9 @@ class TestP6RenderedRoutes(unittest.TestCase):
                 for url in classic:
                     with self.subTest(role=user.role, url=url):
                         old_fields, new_fields = Fields(), Fields()
-                        old_fields.feed(classic[url])
-                        new_fields.feed(modern[url])
-                        # The Interface picker shows each page's own mode; everything else must match.
-                        drop = lambda values: Counter({k: n for k, n in values.items() if k[0] != "UI_MODE"})
-                        self.assertEqual(drop(old_fields.values), drop(new_fields.values))
+                        old_fields.feed(page_fields_only(classic[url]))
+                        new_fields.feed(page_fields_only(modern[url]))
+                        self.assertEqual(old_fields.values, new_fields.values)
                         if url == "/settings":
                             self.assertGreater(sum(n for k, n in old_fields.values.items() if k[3].startswith("v-")), 50)
 
