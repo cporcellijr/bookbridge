@@ -75,6 +75,8 @@
 .view .next-connection-test:disabled { opacity: .6; cursor: wait; }
 .view .settings-sidebar .changed-only { margin: 2px 0; }
 .view .settings-sidebar .settings-legend { margin: 0; }
+/* The Save bar starts at the content column so it never covers the menu (rail + 30 gutter + 222 menu + 20 gap). */
+@media (min-width: 841px) { .view .submit-bar { left: calc(var(--rail) + 272px); } }
 .view .next-logs-panel h3 { font: 600 25px var(--font-book); margin: 4px 0 14px; }
 .view .next-logs-panel iframe { display: block; width: 100%; min-height: 72vh; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 /* Account and per-reader integrations retain the complete Classic forms. */
