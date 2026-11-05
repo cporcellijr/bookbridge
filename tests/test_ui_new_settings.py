@@ -265,6 +265,73 @@ class TestP6RenderedRoutes(unittest.TestCase):
             template_rendered.disconnect(capture, self.app)
 
 
+    # P13 rendered navigation and Classic isolation guards.
+    def _new_html(self, path):
+        self.db.set_user_credential(self.admin.id, "UI_MODE", "new")
+        self.login(self.admin.username)
+        response = self.client.get(path)
+        self.assertEqual(response.status_code, 200)
+        return response.get_data(as_text=True)
+
+    def test_settings_rail_replaces_main_navigation_and_other_pages_keep_it(self):
+        settings = self._new_html('/settings')
+        rail = settings.split('<aside class="rail rail-settings"', 1)[1].split('<div class="rail-foot">', 1)[0]
+        self.assertIn('aria-label="Back to Library"', rail)
+        self.assertIn('id="settings_search"', rail)
+        self.assertIn('class="settings-menu"', rail)
+        self.assertIn('id="settings-navigation"', rail)
+        self.assertNotIn('class="rail-nav"', rail)
+        for link in ('href="/stats"', 'href="/logs"', 'href="/settings"'):
+            self.assertNotIn(link, rail)
+        library = self.client.get('/').get_data(as_text=True)
+        self.assertIn('class="rail-nav"', library)
+        self.assertIn('href="/stats"', library)
+        self.assertNotIn('class="settings-menu"', library)
+
+    def test_settings_single_menu_and_full_width_content_with_legends(self):
+        markup = self._new_html('/settings')
+        for identifier in ('settings_search', 'changed_only', 'settings-navigation', 'settings-mobile-slot'):
+            self.assertEqual(len(re.findall(r'id="' + identifier + r'"', markup)), 1, identifier)
+        self.assertEqual(markup.count('class="settings-menu"'), 1)
+        self.assertNotIn('class="settings-sidebar"', markup)
+        self.assertIn('class="settings-legends"', markup)
+        self.assertLess(markup.index('class="settings-legends"'), markup.index('class="settings-layout"'))
+        self.assertIn('Press Ctrl K to jump to any setting', markup)
+        self.assertIn('class="rail-foot"', markup)
+        self.assertIn('interface-switch-rail', markup)
+
+    def test_new_service_headers_do_not_offer_manual_collapse(self):
+        markup = self._new_html('/settings')
+        self.assertNotIn('class="svc-chev"', markup)
+        self.assertIn('id="toggle_abs"', markup)
+        self.assertIn('id="abs_body"', markup)
+        self.assertIn('class="header-tail"', markup)
+        js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
+        self.assertIn('disableServiceHeaderCollapse()', js)
+        self.assertIn("event.target.closest('.header-tail')", js)
+        self.assertIn('event.stopPropagation()', js)
+        self.assertIn('}, true);', js)
+
+    def test_phone_menu_moves_same_node_and_handles_orientation(self):
+        markup = self._new_html('/settings')
+        js = (ROOT / 'static/js/next/settings-p6.js').read_text(encoding='utf-8')
+        self.assertIn('id="settings-mobile-slot"', markup)
+        self.assertIn('id="settings-rail-slot"', markup)
+        self.assertIn("window.matchMedia('(max-width: 760px)')", js)
+        self.assertIn('if (menu.parentElement !== target) target.appendChild(menu)', js)
+        self.assertIn("viewport.addEventListener('change', move)", js)
+        self.assertEqual(markup.count('class="settings-menu"'), 1)
+
+    def test_classic_settings_keeps_original_sidebar_and_chevrons(self):
+        classic = self.get_pages(self.admin, 'classic')['/settings']
+        self.assertIn('class="settings-sidebar"', classic)
+        self.assertIn('class="svc-chev"', classic)
+        self.assertNotIn('settings-rail-slot', classic)
+        modern = self.get_pages(self.admin, 'new')['/settings']
+        self.assertIn('id="settings-rail-slot"', modern)
+        self.assertNotIn('class="svc-chev"', modern)
+
+
 class TestP11SettingsNavigation(unittest.TestCase):
     """P11 regression guards; all of these fail against the P10 Settings UI."""
 

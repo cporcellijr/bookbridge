@@ -48,6 +48,35 @@
             ? canonical : 'audiobookshelf';
     }
 
+    function mountSettingsNavigation() {
+        const menu = document.getElementById('settings-navigation');
+        const rail = document.getElementById('settings-rail-slot');
+        const mobile = document.getElementById('settings-mobile-slot');
+        if (!menu || !rail || !mobile) return;
+        const viewport = window.matchMedia('(max-width: 760px)');
+        const move = function () {
+            const target = viewport.matches ? mobile : rail;
+            if (menu.parentElement !== target) target.appendChild(menu);
+            keepSelectedMenuLinkInView();
+        };
+        move();
+        if (viewport.addEventListener) viewport.addEventListener('change', move);
+        else viewport.addListener(move);
+    }
+
+    function disableServiceHeaderCollapse() {
+        document.querySelectorAll('.settings-section[data-svc]').forEach(function (section) {
+            const head = section.querySelector(':scope > .section-header');
+            if (!head) return;
+            section.addEventListener('click', function (event) {
+                if (head.contains(event.target) && !event.target.closest('.header-tail')) {
+                    // Capture before the Classic-copied header click handler runs.
+                    event.stopPropagation();
+                }
+            }, true);
+        });
+    }
+
     function keepSelectedMenuLinkInView() {
         const menu = document.querySelector('.settings-menu');
         const active = menu && menu.querySelector('.settings-tab.active');
@@ -228,6 +257,8 @@
     window.applySettingsFilter = applySettingsFilter;
 
     document.addEventListener('DOMContentLoaded', function () {
+        mountSettingsNavigation();
+        disableServiceHeaderCollapse();
         buildServiceNavigation();
         showSettingsTab(requestedField || 'audiobookshelf',
             /^[A-Z][A-Z0-9_]*$/.test(requestedField));

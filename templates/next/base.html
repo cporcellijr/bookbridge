@@ -94,15 +94,16 @@
     {%- endmacro %}
     <a class="skip-link" href="#main-content">{{ _('Skip to content') }}</a>
     <div class="app-shell">
-        <aside class="rail" aria-label="{{ _('Main navigation') }}">
+        <aside class="rail{% if active_page == 'settings' %} rail-settings{% endif %}" aria-label="{{ _('Main navigation') }}">
                 <a class="brand" href="/" aria-label="BookBridge — {{ _('Library') }}">
                 <svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span>
             </a>
+            {% set yours = your_apps() %}
+            {% block rail_nav %}
             <nav class="rail-nav" aria-label="{{ _('Sections') }}">
                 <a href="/" {% if active_page == 'library' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#library"></use></svg><span>{{ _('Library') }}</span></a>
                 <a href="{{ url_for('suggestions') }}" {% if active_page == 'suggestions' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#discover"></use></svg><span>{{ _('Discover') }}</span>{% if queued_count %}<span class="count">{{ queued_count }}</span>{% endif %}</a>
                 <a href="/stats" {% if active_page == 'stats' %}aria-current="page"{% endif %}><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#stats"></use></svg><span>{{ _('Stats') }}</span></a>
-                {% set yours = your_apps() %}
                 {% if yours|trim %}
                 <span class="nav-label">{{ _('Yours') }}</span>
                 <div class="app-links rail-app-links">{{ yours }}</div>
@@ -118,6 +119,7 @@
                 <a href="/account/integrations"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#apps"></use></svg><span>{{ _('My apps') }}</span></a>
                 {% endif %}
             </nav>
+            {% endblock %}
             <div class="rail-foot">
                 {% if current_user %}
                 {{ interface_switch('rail') }}
