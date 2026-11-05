@@ -9,6 +9,7 @@
     <link rel="icon" type="image/png" href="/static/icon.png">
     <link rel="stylesheet" href="/static/fonts/next-fonts.css">
     <link rel="stylesheet" href="/static/css/next.css">
+    <link rel="stylesheet" href="/static/css/next-search.css">
     <script>
         // i18n helpers for strings the templates hand to JS (_('...') piped through tojson).
         // bbFormat fills {name} placeholders. bbPlural picks the ngettext form for n
@@ -123,7 +124,7 @@
         <div class="main-column">
             <header class="topbar">
                 <div class="mobile-brand"><svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span></div>
-                <button class="search-placeholder" type="button" disabled aria-disabled="true"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span>{{ _('Search books, pages, settings') }}</span><kbd>{{ _('Ctrl K') }}</kbd></button>
+                <button class="search-placeholder" id="bb-search-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="bb-search-dialog" aria-keyshortcuts="Control+K Meta+K /"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span>{{ _('Search books, pages, settings') }}</span><kbd>{{ _('Ctrl K') }}</kbd></button>
                 <button class="theme-toggle" type="button" data-theme-toggle aria-pressed="false" aria-label="{{ _('Switch to day theme') }}" title="{{ _('Switch to day theme') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#theme"></use></svg><span class="theme-label">{{ _('Day theme') }}</span></button>
                 {% if yours|trim %}
                 <details class="mobile-app-menu">
@@ -167,7 +168,61 @@
             "Switch to night theme": {{ _('Switch to night theme')|tojson }}
         });
     </script>
+    <div id="bb-search-overlay" class="bb-search-overlay" hidden>
+        <div class="bb-search-backdrop" data-search-close></div>
+        <section id="bb-search-dialog" class="bb-search-dialog" role="dialog" aria-modal="true" aria-labelledby="bb-search-title" aria-describedby="bb-search-help">
+            <h2 id="bb-search-title" class="bb-search-visually-hidden">{{ _('Search books, pages, settings and actions') }}</h2>
+            <div class="bb-search-input-row">
+                <svg class="icon" aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>
+                <input id="bb-search-input" type="search" role="combobox" autocomplete="off" autocapitalize="off" spellcheck="false" aria-autocomplete="list" aria-controls="bb-search-results" aria-expanded="false" placeholder="{{ _('Search books, pages, settings') }}">
+                <button type="button" class="bb-search-close" data-search-close aria-label="{{ _('Close search') }}">{{ _('Esc') }}</button>
+            </div>
+            <p id="bb-search-help" class="bb-search-help">{{ _('Use the arrow keys to choose a result and Enter to open it.') }}</p>
+            <div class="bb-search-results-scroll">
+                <div id="bb-search-results" class="bb-search-results" role="listbox" aria-label="{{ _('Search results') }}"></div>
+                <p id="bb-search-empty" class="bb-search-empty" hidden>{{ _('No matching results') }}</p>
+            </div>
+            <div id="bb-search-message" class="bb-search-message" role="status" aria-live="polite"></div>
+        </section>
+    </div>
+    <script>
+        window.BB_SEARCH_CATALOG = {
+            pages: [
+                { title: {{ _('Library')|tojson }}, url: "/" },
+                { title: {{ _('Discover')|tojson }}, url: {{ url_for('suggestions')|tojson }} },
+                { title: {{ _('Stats')|tojson }}, url: "/stats" },
+                { title: {{ _('Processing')|tojson }}, url: {{ url_for('job_queue_page')|tojson }} },
+                { title: {{ _('What\'s new')|tojson }}, url: "/whats-new" },
+                { title: {{ _('Account')|tojson }}, url: "/account" },
+                { title: {{ _('My apps')|tojson }}, url: "/account/integrations" }
+                {% if is_admin %},
+                { title: {{ _('Settings')|tojson }}, url: "/settings" },
+                { title: {{ _('Logs')|tojson }}, url: "/logs" },
+                { title: {{ _('Admin users')|tojson }}, url: "/admin/users" }
+                {% endif %}
+            ],
+            actions: [
+                {% if is_admin %}
+                { title: {{ _('Scan library')|tojson }}, action: "scan", url: "/suggestions" },
+                { title: {{ _('Process queue')|tojson }}, action: "process_queue", url: "/suggestions" }
+                {% endif %}
+            ],
+            labels: {
+                book: {{ _('Book')|tojson }},
+                page: {{ _('Page')|tojson }},
+                setting: {{ _('Setting')|tojson }},
+                action: {{ _('Action')|tojson }},
+                sync: {{ _('Sync now')|tojson }},
+                loading: {{ _('Loading books and settings…')|tojson }},
+                failed: {{ _('Search could not load all results.')|tojson }},
+                syncStarted: {{ _('Sync started')|tojson }},
+                syncFailed: {{ _('Could not start sync')|tojson }}
+            },
+            maySearchSettings: {{ 'true' if is_admin else 'false' }}
+        };
+    </script>
     <script src="/static/js/next/shell.js" defer></script>
+    <script src="/static/js/next/search.js" defer></script>
     {% endif %}
     {% block scripts %}{% endblock %}
 </body>
