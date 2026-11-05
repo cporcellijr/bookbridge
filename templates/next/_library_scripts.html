@@ -961,6 +961,23 @@
 
 
     /* P3 additions: views, format chips, selection and sequential existing-endpoint actions. */
+    // One search box: wide screens move the Library filter into the top bar; phones keep it in the toolbar.
+    (function () {
+        const slot = document.querySelector('[data-library-search-slot]');
+        const input = document.getElementById('dashboard-search');
+        const home = input ? input.parentElement : null;
+        if (!slot || !home || !window.matchMedia) return;
+        const wide = window.matchMedia('(min-width: 761px)');
+        const place = function () {
+            const target = wide.matches ? slot : home;
+            if (input.parentElement === target) return;
+            if (wide.matches) slot.insertBefore(input, document.getElementById('bb-search-open'));
+            else home.appendChild(input);
+        };
+        place();
+        if (wide.addEventListener) wide.addEventListener('change', place);
+        else wide.addListener(place);
+    }());
     const libraryPage = document.getElementById('library-page');
     const selectModeButton = document.getElementById('select-mode-button');
     let librarySelectMode = false;
