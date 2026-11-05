@@ -119,6 +119,14 @@ class TestNewLibrary(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_header_has_no_discover_button_but_the_empty_library_keeps_one(self):
+        from pathlib import Path
+        page = (Path(__file__).resolve().parent.parent / "templates/next/index.html").read_text(encoding="utf-8")
+        header = page[page.index('<header class="page-head">'):page.index("</header>")]
+        self.assertNotIn("Discover books", header)
+        empty = page[page.index('<section class="empty-state">'):]
+        self.assertIn("Discover books", empty)
+
     def test_library_has_one_search_box_with_the_ctrl_k_launcher_inside(self):
         self._login("ui-reader")
         self.service.set_user_credential(self.reader.id, "UI_MODE", "new")
