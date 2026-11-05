@@ -138,7 +138,8 @@ class TestBookScriptsMatchClassic(unittest.TestCase):
     NEW_ONLY = ("form.target = '_top';", "window.top.location.assign('/');",
                 "window.BB_STRINGS['Unlink BookFusion?']",
                 '<script src="/static/js/reading-position-preview.js"></script>',
-                '<script src="/static/js/next/book.js"></script>')
+                '<script src="/static/js/next/book.js"></script>',
+                '<script src="/static/js/next/current-chapter.js"></script>')
     BLOCK_START = 'function clearPosition(absId) {'
 
     @staticmethod

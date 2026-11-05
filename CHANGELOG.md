@@ -8,6 +8,8 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **The New book window shows your current audiobook chapter** (#428). For Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information, it shows the chapter's title, where it falls in the book (for example 18 of 32) and how far into it you are. Audiobooks without chapters show nothing extra.
+
 - **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch interfaces immediately: choose **New interface** beside the Classic account menu, or use **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in your chosen interface without a Save step. New has a redesigned Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac), day and night themes, and phone navigation. **Stats is now open to every reader** for their own reading and listening activity.
 
 - **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Discover's Pairs and Ebook Only on the next Scan Library while keeping ebooks from your library services.

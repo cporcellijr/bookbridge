@@ -77,6 +77,7 @@ from src.version import APP_VERSION, get_update_status
 from src.db.models import State, JOB_KIND_ALIGNMENT, JOB_KIND_READALONG
 from src.sync_clients.sync_client_interface import LocatorResult, UpdateProgressRequest
 from src.services.audio_source_adapters import AudioResult, ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
+from src.services.current_audio_chapter import resolve_current_chapter
 from src.utils.storyteller_transcript import StorytellerTranscript
 from src.services.readalong_delivery import (
     deliver_readalong_epub,
@@ -7580,6 +7581,66 @@ def index():
         show_diagnostics_modal=show_diagnostics_modal,
         whats_new=whats_new_ctx
     )
+
+
+def api_current_audio_chapter(abs_id: str) -> object:
+    """Optional chapter display from this reader's stored audiobook timestamp."""
+    user_id = get_current_user_id()
+    if user_id is None:
+        return jsonify({"error": "authentication required"}), 401
+    book = database_service.get_book(abs_id)
+    if book is None:
+        return jsonify({"error": "book not found"}), 404
+    if not database_service.is_user_linked(user_id, abs_id):
+        return jsonify({"error": "book not available for this user"}), 403
+
+    unavailable = {"available": False}
+    source = getattr(book, "audio_source", None) or (
+        "ABS" if getattr(book, "sync_mode", "audiobook") != "ebook_only" else None
+    )
+    client_name = {"ABS": "abs", "BookOrbit": "bookorbitaudio",
+                   "BookLore": "bookloreaudio"}.get(source)
+    if not client_name:
+        return jsonify(unavailable)
+    states = database_service.get_states_for_book(abs_id, user_id=user_id)
+    position = next((state.timestamp for state in states
+                     if state.client_name == client_name), None)
+    if position is None or position <= 0:
+        return jsonify(unavailable)
+
+    try:
+        # Fail closed for regular readers: uc() alone may fall back to global clients.
+        clients = _scan_user_clients()
+        if source == "ABS":
+            if not clients.abs_client.is_configured():
+                return jsonify(unavailable)
+            details = clients.abs_client.get_item_details(book.abs_id) or {}
+            chapters = (details.get("media") or {}).get("chapters") or []
+        elif source == "BookOrbit":
+            audio_sync = clients.sync_clients.get("BookOrbitAudio")
+            provider_id = audio_sync._resolve_book_id(book) if audio_sync else None
+            if provider_id is None:
+                return jsonify(unavailable)
+            adapter = BookOrbitAudioSourceAdapter(clients.bookorbit_client, Path("."))
+            chapters = adapter.get_real_chapters(provider_id)
+        else:
+            audio_sync = clients.sync_clients.get("BookLoreAudio")
+            provider_id = audio_sync._resolve_booklore_book_id(book) if audio_sync else None
+            if provider_id is None:
+                return jsonify(unavailable)
+            adapter = BookLoreAudioSourceAdapter(clients.booklore_client, Path("."))
+            chapters = adapter.get_real_chapters(provider_id)
+        chapter = resolve_current_chapter(chapters, position, source)
+        return jsonify({"available": True, **chapter} if chapter else unavailable)
+    except PermissionError:
+        # A reader without their own credentials for this service: nothing to show.
+        return jsonify(unavailable)
+    except Exception:
+        logger.warning(
+            "Current audio chapter unavailable: book=%s provider=%s",
+            sanitize_log_data(abs_id), source, exc_info=True,
+        )
+        return jsonify(unavailable)
 
 
 def book_page(abs_id: str) -> object:
@@ -16488,6 +16549,7 @@ def create_app(test_container=None):
     app.add_url_rule('/api/admin/users/<int:user_id>/bookfusion/device/poll', 'admin_user_bookfusion_device_poll', admin_user_bookfusion_device_poll, methods=['POST'])
     app.add_url_rule('/', 'index', index)
     app.add_url_rule('/book/<abs_id>', 'book_page', book_page, methods=['GET'])
+    app.add_url_rule('/api/books/<abs_id>/current-chapter', 'api_current_audio_chapter', api_current_audio_chapter, methods=['GET'])
     app.add_url_rule('/job-queue', 'job_queue_page', job_queue_page, methods=['GET'])
     app.add_url_rule('/job-queue/reorder', 'job_queue_reorder', job_queue_reorder, methods=['POST'])
     app.add_url_rule('/whats-new', 'whats_new_page', whats_new_page, methods=['GET'])
