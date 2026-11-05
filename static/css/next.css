@@ -216,10 +216,15 @@ summary::-webkit-details-marker { display: none; }
 #filter-count { color: var(--text-3); font: 12px var(--font-mono); white-space: nowrap; }
 .search-handoff { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 18px; padding: 12px 14px; border-radius: 12px; background: var(--info-bg); color: var(--text); }
 .search-handoff[hidden] { display: none; }
-.selection-bar { position: fixed; left: calc(var(--rail) + 32px); right: 32px; bottom: 12px; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface-2); box-shadow: 0 12px 32px #0005; }
+.selection-bar { position: fixed; left: var(--rail); right: 0; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 30; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; width: max-content; max-width: calc(100vw - var(--rail) - 32px); margin: 0 auto; padding: 12px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface-2); box-shadow: 0 12px 32px #0005; }
 .selection-bar[hidden] { display: none; }
-.selection-bar > span { margin-right: auto; font-weight: 600; }
-.selection-bar button { min-height: 38px; padding: 5px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.selection-bar > span { flex-basis: 100%; padding-right: 40px; font-weight: 600; }
+.selection-bar button { min-height: 38px; max-width: 100%; padding: 5px 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); cursor: pointer; overflow-wrap: anywhere; }
+.selection-bar button:disabled { opacity: .45; cursor: not-allowed; }
+.selection-bar .selection-done { position: absolute; top: 7px; right: 8px; width: 36px; min-height: 36px; padding: 0; font-size: 23px; line-height: 1; }
+/* Room below the last cards so the floating selection bar never covers them. */
+.library-page[data-select-mode="on"] { padding-bottom: 150px; }
+#select-mode-button[aria-pressed="true"] { border-color: var(--info); background: var(--info-bg); color: var(--text); }
 .dashboard-section { margin-top: 26px; }
 .dashboard-section[hidden] { display: none; }
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
@@ -229,7 +234,11 @@ summary::-webkit-details-marker { display: none; }
 .book-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(190px,1fr)); gap: 14px; align-items: start; }
 .library-book-card { position: relative; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); transition: border-color .15s, transform .15s; }
 .library-book-card:hover { transform: translateY(-2px); border-color: var(--line-2); }
-.book-select { position: absolute; z-index: 2; top: 10px; left: 10px; width: 20px; height: 20px; accent-color: var(--info); }
+.library-page[data-select-mode="on"] .library-book-card { cursor: pointer; }
+.library-page[data-select-mode="on"] .library-book-card.is-selected { border-color: var(--info); box-shadow: inset 0 0 0 1px var(--info); }
+.book-select-hit { position: absolute; z-index: 2; top: 0; left: 0; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.book-select { width: 20px; height: 20px; margin: 0; accent-color: var(--info); }
+.library-page[data-select-mode="off"] .book-select-hit, .library-page[data-view="spines"] .book-select-hit, .library-page[data-view="spines"] #select-mode-button { display: none; }
 .book-open { display: block; height: 100%; }
 .cover-wrap { position: relative; display: grid; height: 250px; place-items: center; overflow: hidden; background: var(--surface-2); }
 .cover-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
@@ -269,7 +278,7 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
 .library-page[data-view="list"] .book-open { display: grid; grid-template-columns: 68px 1fr; align-items: center; }
 .library-page[data-view="list"] .cover-wrap { height: 112px; }
 .library-page[data-view="list"] .book-copy h3 { min-height: 0; }
-.library-page[data-view="list"] .book-select { left: auto; right: 10px; }
+.library-page[data-view="list"] .book-select-hit { left: auto; right: 0; }
 .library-page[data-view="list"] .book-copy { padding-right: 42px; }
 .series-group { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
 .series-header { width: 100%; min-height: 108px; display: flex; align-items: center; gap: 18px; padding: 18px; border: 0; background: var(--surface-2); color: inherit; text-align: left; cursor: pointer; }
@@ -309,7 +318,11 @@ body.series-grouping-off .series-group, body.series-grouping-off .book-card.flat
  .book-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
  .cover-wrap { height: 220px; }
  .match-item { flex-wrap: wrap; }
- .selection-bar { left: 16px; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); }
+ .selection-bar { left: 8px; right: 8px; bottom: calc(72px + env(safe-area-inset-bottom)); width: auto; max-width: none; max-height: min(50dvh, 300px); overflow-y: auto; gap: 6px; padding: 10px; }
+ .selection-bar button { min-height: 44px; padding: 7px 9px; font-size: 12px; }
+ .selection-bar .selection-done { min-height: 44px; width: 44px; top: 4px; right: 4px; }
+ .selection-bar > span { min-height: 44px; display: flex; align-items: center; }
+ .library-page[data-select-mode="on"] { padding-bottom: 330px; }
 }
 @media (max-width:390px) {
  .book-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
