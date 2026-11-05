@@ -2,6 +2,10 @@
 (function () {
     'use strict';
 
+    let requestedField = '';
+    try { requestedField = decodeURIComponent(location.hash.slice(1)); }
+    catch (error) { requestedField = ''; }
+
     const serviceTests = {
         audiobookshelf: 'abs',
         koreader: 'kosync',
@@ -126,5 +130,33 @@
         });
     };
 
+    function focusRequestedField() {
+        // The Settings tab handler normally interprets the fragment as a tab.
+        // Search uses the actual form-field name instead; restore its tab and
+        // expand its enclosing section after the Classic initialization runs.
+        if (!/^[A-Z][A-Z0-9_]*$/.test(requestedField)) return;
+        const field = Array.from(document.querySelectorAll('#settingsForm [name]'))
+            .find(function (node) { return node.name === requestedField && node.type !== 'hidden'; });
+        if (!field) return;
+        const panel = field.closest('.tab-panel');
+        if (panel && typeof window.showSettingsTab === 'function') {
+            window.showSettingsTab(panel.dataset.panel);
+        }
+        const section = field.closest('.settings-section');
+        if (section) {
+            section.querySelectorAll('.section-body.collapsed').forEach(function (body) {
+                body.classList.remove('collapsed');
+            });
+        }
+        field.closest('details')?.setAttribute('open', '');
+        field.scrollIntoView({ block: 'center' });
+        field.classList.add('bb-search-setting-target');
+        if (typeof history.replaceState === 'function') {
+            history.replaceState(null, '', '#'+encodeURIComponent(requestedField));
+        }
+        field.focus({ preventScroll: true });
+    }
+
     document.addEventListener('DOMContentLoaded', buildServiceTiles);
+    document.addEventListener('DOMContentLoaded', focusRequestedField);
 }());

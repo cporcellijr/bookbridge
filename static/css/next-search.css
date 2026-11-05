@@ -1,0 +1,69 @@
+/* Global command search: viewport-size panel and scrollable result area for iPad Safari. */
+.bb-search-visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.search-placeholder:not(:disabled) { cursor: pointer; }
+.search-placeholder:hover, .search-placeholder[aria-expanded="true"] { border-color: var(--ribbon-strong); color: var(--text); }
+.bb-search-overlay {
+    position: fixed; z-index: 600; top: var(--bb-search-top, 0px);
+    left: var(--bb-search-left, 0px); width: 100%;
+    height: var(--bb-search-height, 100dvh); height: var(--bb-search-height, 100vh);
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: min(12vh, 90px) 16px 16px;
+}
+.bb-search-overlay[hidden] { display: none !important; }
+.bb-search-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .65); }
+.bb-search-dialog {
+    position: relative; width: min(640px, 100%); max-height: 100%;
+    min-height: 150px; display: flex; flex-direction: column;
+    overflow: hidden; border: 1px solid var(--line-2); border-radius: 16px;
+    background: var(--bg-2); box-shadow: 0 25px 85px rgba(0, 0, 0, .46);
+    color: var(--text);
+}
+.bb-search-input-row {
+    flex: none; display: flex; align-items: center; gap: 12px; padding: 12px 15px;
+    border-bottom: 1px solid var(--line);
+}
+.bb-search-input-row .icon { color: var(--text-2); }
+#bb-search-input {
+    flex: 1; min-width: 0; width: 100%; border: 0; outline: none;
+    background: transparent; color: var(--text); font: 16px/1.4 var(--font-ui);
+}
+#bb-search-input::placeholder { color: var(--text-3); }
+.bb-search-close {
+    flex: none; min-height: 34px; padding: 4px 9px; border-radius: 7px;
+    border: 1px solid var(--line-2); background: var(--surface); color: var(--text-2);
+    cursor: pointer; font-size: 12px;
+}
+.bb-search-help { margin: 0; padding: 8px 15px; color: var(--text-3); font-size: 12px; }
+.bb-search-results-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.bb-search-results { display: grid; padding: 6px; }
+.bb-search-result {
+    display: flex; align-items: center; width: 100%; min-height: 51px;
+    gap: 12px; padding: 9px 12px; text-align: left; background: transparent;
+    border: 1px solid transparent; border-radius: 8px; color: var(--text); cursor: pointer;
+}
+.bb-search-result:hover, .bb-search-result[aria-selected="true"] {
+    background: var(--surface-2); border-color: var(--line-2);
+}
+.bb-search-result-type {
+    flex: none; min-width: 56px; padding: 3px 6px; border-radius: 6px;
+    background: var(--surface); color: var(--text-2); text-align: center;
+    font: 11px/1.4 var(--font-mono);
+}
+.bb-search-result-body { min-width: 0; display: grid; gap: 2px; }
+.bb-search-result-body strong {
+    font-weight: 550; overflow-wrap: anywhere; line-height: 1.35;
+}
+.bb-search-result-body small {
+    color: var(--text-3); font-size: 12px; overflow-wrap: anywhere;
+}
+.bb-search-empty, .bb-search-message { margin: 0; padding: 14px 18px; color: var(--text-3); font-size: 13px; }
+.bb-search-message:empty { display: none; }
+.bb-search-message:not(:empty) { border-top: 1px solid var(--line); }
+@media (max-width: 760px) {
+    .bb-search-overlay { padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); }
+    .bb-search-dialog { height: 100%; max-height: 100%; border-radius: 12px; }
+    .bb-search-result { min-height: 54px; }
+}
