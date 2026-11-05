@@ -281,7 +281,7 @@ class TestP11SettingsNavigation(unittest.TestCase):
         self.assertEqual(keys, [key for key, _ in links])
         self.assertEqual(keys, [key for _, key in links])
         self.assertEqual(keys, ['audiobookshelf', 'koreader', 'storyteller', 'grimmory', 'bookfusion',
-                                'bookorbit', 'kavita', 'readest', 'cwa', 'hardcover', 'storygraph'])
+                                'bookorbit', 'kavita', 'readest', 'cwa', 'hardcover', 'storygraph', 'goodreads'])
         for aliases, slug in sections:
             self.assertEqual(aliases.split()[0], slug)
 
@@ -302,7 +302,7 @@ class TestP11SettingsNavigation(unittest.TestCase):
     def test_all_hashes_survive_python_settings_save_redirect(self):
         menu = re.findall(r'data-tab="([a-z_]+)"', self.markup)
         self.assertEqual(len(menu), len(set(menu)))
-        self.assertEqual(len(menu), 19)
+        self.assertEqual(len(menu), 20)
         self.assertTrue(all(name.isidentifier() for name in menu))
         for name in ('sync', 'library', 'alignment', 'ai', 'system', 'maintenance', 'users', 'logs'):
             self.assertIn(name, menu)

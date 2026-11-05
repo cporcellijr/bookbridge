@@ -17,7 +17,8 @@
         readest: 'readest',
         cwa: 'cwa',
         hardcover: 'hardcover',
-        storygraph: 'storygraph'
+        storygraph: 'storygraph',
+        goodreads: 'goodreads'
     };
     const aliases = {
         integrations: 'audiobookshelf',

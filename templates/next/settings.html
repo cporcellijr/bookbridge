@@ -925,6 +925,7 @@
                 <a href="#cwa" class="settings-tab settings-service-tab" data-tab="cwa" data-svc="cwa" onclick="showSettingsTab('cwa'); return false;"><span class="settings-tab-label">{{ _('Calibre-Web Automated') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
                 <a href="#hardcover" class="settings-tab settings-service-tab" data-tab="hardcover" data-svc="hardcover" onclick="showSettingsTab('hardcover'); return false;"><span class="settings-tab-label">{{ _('Hardcover') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
                 <a href="#storygraph" class="settings-tab settings-service-tab" data-tab="storygraph" data-svc="storygraph" onclick="showSettingsTab('storygraph'); return false;"><span class="settings-tab-label">{{ _('StoryGraph') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
+                <a href="#goodreads" class="settings-tab settings-service-tab" data-tab="goodreads" data-svc="goodreads" onclick="showSettingsTab('goodreads'); return false;"><span class="settings-tab-label">{{ _('Goodreads') }}</span><span class="next-connection-status" data-state="off" aria-live="polite"></span></a>
                 </div>
                 <div class="settings-nav-group" role="group" aria-label="{{ _('Sync & library') }}"><h3 class="settings-nav-heading">{{ _('Sync & library') }}</h3>
                 <a href="#sync" class="settings-tab" data-tab="sync" onclick="showSettingsTab('sync'); return false;"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#processing"></use></svg><span class="settings-tab-label">{{ _('🔄 Reading &amp; Sync')|replace('🔄', '')|trim }}</span></a>
@@ -1744,7 +1745,7 @@
                 </div>
             </div>
 
-            <div class="settings-section" data-svc="goodreads">
+            <div class="settings-section" data-svc="goodreads" data-service-page="goodreads">
                 {% set goodreads_enabled = get_bool('GOODREADS_ENABLED') %}
                 <div class="section-header">
                     <div class="svc-left">
