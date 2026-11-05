@@ -7757,8 +7757,8 @@ def job_queue_reorder():
     return redirect(url_for('job_queue_page'))
 
 
-def shelfmark():
-    """Shelfmark handoff - redirects to the configured SHELFMARK_URL."""
+def shelfmark() -> object:
+    """Shelfmark: a page framing SHELFMARK_URL in the New interface, a redirect to it in Classic."""
     url = os.environ.get("SHELFMARK_URL")
     if not url:
         return redirect(url_for('index'))
@@ -7766,7 +7766,10 @@ def shelfmark():
     # Case-insensitive sanitization for the external destination.
     if not url.lower().startswith(('http://', 'https://')):
         url = f"http://{url}"
-        
+
+    template = ui_template('shelfmark.html')
+    if template.startswith('next/'):
+        return render_template(template, frame_url=url)
     return redirect(url)
 
 

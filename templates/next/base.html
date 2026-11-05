@@ -78,8 +78,8 @@
             {% elif ebook_source == 'kavita' %}{{ app_link(kavita_url, '/static/kavita.svg', _('Kavita ebook library'), _('Kavita')) }}{% endif %}
         {% endif %}
         {% if shelfmark_url and (get_bool('SHELFMARK_ENABLED') or (get_val('SHELFMARK_URL') != '' and get_val('SHELFMARK_ENABLED') == '')) %}
-        <a class="app-link" href="/shelfmark" target="_blank" rel="noopener noreferrer" title="{{ _('Shelfmark Tool') }}" aria-label="{{ _('Shelfmark Tool') }}">
-            <img src="/static/shelfmark.png" alt=""><span>{{ _('Shelfmark') }}</span><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#external"></use></svg>
+        <a class="app-link" href="/shelfmark"{% if active_page == 'shelfmark' %} aria-current="page"{% endif %} title="{{ _('Shelfmark Tool') }}" aria-label="{{ _('Shelfmark Tool') }}">
+            <img src="/static/shelfmark.png" alt=""><span>{{ _('Shelfmark') }}</span>
         </a>
         {% endif %}
     {%- endmacro %}
