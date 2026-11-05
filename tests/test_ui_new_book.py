@@ -495,6 +495,19 @@ class TestOpsScriptDrift(unittest.TestCase):
         for old_emoji in ('🔍 DEBUG', 'ℹ️ INFO', '⚠️ WARNING', '❌ ERROR', '🚨 CRITICAL', '📜'):
             self.assertNotIn(old_emoji, new_logs)
 
+    def test_p6_classic_settings_and_account_scripts_remain_verbatim(self):
+        """Copied P6 scripts must change alongside Classic rather than drift."""
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / 'templates'
+        for page in ('settings', 'account', 'account_integrations',
+                     'admin_users', 'admin_user_integrations'):
+            with self.subTest(page=page):
+                classic = (root / f'{page}.html').read_text(encoding='utf-8')
+                partial = (root / 'next' / f'_{page}_scripts.html').read_text(encoding='utf-8')
+                script = (classic[classic.index('<script>'):classic.rfind('{% endblock %}')]
+                          if '<script>' in classic else '')
+                self.assertEqual(partial.strip(), script.strip())
+
     def test_all_classic_ops_targets_exist_in_new(self):
         import re
         from pathlib import Path
