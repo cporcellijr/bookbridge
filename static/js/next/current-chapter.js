@@ -31,7 +31,8 @@
             title.textContent = data.title;
             title.hidden = false;
         }
-        ordinal.textContent = data.index + ' ' + panel.dataset.of + ' ' + data.count;
+        ordinal.textContent = panel.dataset.positionFormat
+            .replace('{index}', data.index).replace('{count}', data.count);
         time.textContent = formatTime(data.elapsed) + ' / ' + formatTime(data.length);
         panel.hidden = false;
     }).catch(function () {

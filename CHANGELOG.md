@@ -8,7 +8,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **The New book window can show your current audiobook chapter.** For Audiobookshelf, BookOrbit, and Grimmory, it displays the chapter's actual title (when supplied), its position in the provider's chapter list, and elapsed/total chapter time. It uses your saved audio position, never substitutes file tracks for missing BookOrbit/Grimmory chapters, and quietly disappears when the provider has no usable markers. Classic and sync behavior are unchanged.
+- **The New book window shows your current audiobook chapter** (#428). For Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information, it shows the chapter's title, where it falls in the book (for example 18 of 32) and how far into it you are. Audiobooks without chapters show nothing extra.
 
 - **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch interfaces immediately: choose **New interface** beside the Classic account menu, or use **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in your chosen interface without a Save step. New has a redesigned Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac), day and night themes, and phone navigation. **Stats is now open to every reader** for their own reading and listening activity.
 

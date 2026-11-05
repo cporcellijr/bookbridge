@@ -11,7 +11,7 @@ async function scenario(kind) {
         '[data-chapter-time]': {textContent: ''}
     };
     const panel = {
-        hidden: true, dataset: {bookId: 'book-one', of: 'of'},
+        hidden: true, dataset: {bookId: 'book-one', positionFormat: '{count}: {index}'},
         querySelector(selector) {return fields[selector];}
     };
     let abort, callback, requested, cleared = false;
@@ -53,7 +53,7 @@ async function scenario(kind) {
         assert.equal(panel.hidden, false, 'successful chapter is shown');
         assert.equal(fields['[data-chapter-title]'].textContent, 'Chapter title');
         assert.equal(fields['[data-chapter-title]'].hidden, false);
-        assert.equal(fields['[data-chapter-position]'].textContent, '2 of 9');
+        assert.equal(fields['[data-chapter-position]'].textContent, '9: 2', 'word order comes from the translated format');
         assert.equal(fields['[data-chapter-time]'].textContent, '0:01:15 / 0:02:00');
     } else {
         assert.equal(panel.hidden, true, kind + ' must stay hidden');

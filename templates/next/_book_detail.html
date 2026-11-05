@@ -43,10 +43,10 @@
 <section class="book-section"><h2>{{ _('Where you are') }}</h2><div class="book-thread" aria-label="{{ _('App positions') }}">{% for key,state in mapping.states.items() %}<span style="--position:{{ state.percentage }}%" title="{{ app_labels.get(key,key) }} {{ state.percentage }}%">{{ app_labels.get(key,key) }} {{ state.percentage }}%</span>{% endfor %}</div>
 <progress max="100" value="{{ mapping.unified_progress }}">{{ mapping.unified_progress }}%</progress><p class="your-place">{{ '%.1f'|format(mapping.unified_progress) }}%{% if mapping.last_leader_service %} · {{ _('Last: %(app)s', app=app_labels.get(mapping.last_leader_service, mapping.last_leader)) }}{% endif %}</p>
 {% if mapping.is_out_of_sync %}<p class="sync-warning">{{ _('Out of sync by %(pct)s%%', pct=mapping.sync_warning_pct) }}</p>{% endif %}
-{% set audio_state_key = {'ABS': 'abs', 'BookOrbit': 'bookorbitaudio', 'BookLore': 'bookloreaudio'}.get(mapping.audio_source) %}
+{% set audio_state_key = {'ABS': 'abs', 'BookOrbit': 'bookorbitaudio', 'BookLore': 'bookloreaudio'}.get(mapping.audio_source or 'ABS') %}
 {% set chapter_audio_state = mapping.states.get(audio_state_key, {}) %}
 {% if mapping.sync_mode != 'ebook_only' and chapter_audio_state.get('timestamp', 0) > 0 %}
-<div class="book-current-chapter" data-current-chapter data-book-id="{{ mapping.abs_id }}" data-of="{{ _('of') }}" hidden>
+<div class="book-current-chapter" data-current-chapter data-book-id="{{ mapping.abs_id }}" data-position-format="{{ _('{index} of {count}') }}" hidden>
   <p class="chapter-eyebrow">{{ _('Current audio chapter') }}</p>
   <p class="chapter-title" data-chapter-title hidden></p>
   <p class="chapter-position" data-chapter-position></p>

@@ -7612,24 +7612,29 @@ def api_current_audio_chapter(abs_id: str) -> object:
         # Fail closed for regular readers: uc() alone may fall back to global clients.
         clients = _scan_user_clients()
         if source == "ABS":
+            if not clients.abs_client.is_configured():
+                return jsonify(unavailable)
             details = clients.abs_client.get_item_details(book.abs_id) or {}
             chapters = (details.get("media") or {}).get("chapters") or []
         elif source == "BookOrbit":
-            audio_sync = clients.sync_clients["BookOrbitAudio"]
-            provider_id = audio_sync._resolve_book_id(book)
+            audio_sync = clients.sync_clients.get("BookOrbitAudio")
+            provider_id = audio_sync._resolve_book_id(book) if audio_sync else None
             if provider_id is None:
                 return jsonify(unavailable)
             adapter = BookOrbitAudioSourceAdapter(clients.bookorbit_client, Path("."))
             chapters = adapter.get_real_chapters(provider_id)
         else:
-            audio_sync = clients.sync_clients["BookLoreAudio"]
-            provider_id = audio_sync._resolve_booklore_book_id(book)
+            audio_sync = clients.sync_clients.get("BookLoreAudio")
+            provider_id = audio_sync._resolve_booklore_book_id(book) if audio_sync else None
             if provider_id is None:
                 return jsonify(unavailable)
             adapter = BookLoreAudioSourceAdapter(clients.booklore_client, Path("."))
             chapters = adapter.get_real_chapters(provider_id)
         chapter = resolve_current_chapter(chapters, position, source)
         return jsonify({"available": True, **chapter} if chapter else unavailable)
+    except PermissionError:
+        # A reader without their own credentials for this service: nothing to show.
+        return jsonify(unavailable)
     except Exception:
         logger.warning(
             "Current audio chapter unavailable: book=%s provider=%s",

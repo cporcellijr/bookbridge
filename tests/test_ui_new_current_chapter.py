@@ -147,6 +147,10 @@ def test_grimmory_original_markers_fallbacks_and_real_only(tmp_path):
         {"title": "Earlier", "start": 0.0, "end": 20.0},
         {"title": "Later", "start": 20.0, "end": 40.0},
     ]
+    client.get_audiobook_info.return_value = {"chapters": [
+        {"title": "Blank first key", "startTimeMs": None, "startTime": 0, "end": 30},
+    ]}
+    assert adapter.get_real_chapters("1") == [{"title": "Blank first key", "start": 0.0, "end": 30.0}]
     client.get_audiobook_info.return_value = {"duration": 25, "chapters": [], "tracks": []}
     assert adapter.get_chapters("1") == [
         {"id": 0, "title": "Audiobook", "start": 0.0, "end": 25.0}
@@ -251,9 +255,25 @@ class TestChapterEndpoint(unittest.TestCase):
         self._state(self.reader.id, book_id, 10)
         self._login("ui-reader")
         with patch("src.web_server._scan_user_clients", side_effect=PermissionError("no per-user credentials")):
-            with self.assertLogs("src.web_server", level="WARNING"):
+            with self.assertNoLogs("src.web_server", level="WARNING"):
                 response = self.client.get(f"/api/books/{book_id}/current-chapter")
         assert response.json == {"available": False}
+
+    def test_switched_off_service_or_missing_client_is_quietly_unavailable(self):
+        abs_book = self._book("book-abs-off")
+        self._state(self.reader.id, abs_book, 10)
+        orbit_book = self._book("book-orbit-off", "BookOrbit")
+        self._state(self.reader.id, orbit_book, 10, "bookorbitaudio")
+        self._login("ui-reader")
+        abs_client = MagicMock()
+        abs_client.is_configured.return_value = False
+        bundle = SimpleNamespace(abs_client=abs_client, sync_clients={}, bookorbit_client=MagicMock())
+        with patch("src.web_server._scan_user_clients", return_value=bundle), \
+             self.assertNoLogs("src.web_server", level="WARNING"):
+            for book_id in (abs_book, orbit_book):
+                assert self.client.get(f"/api/books/{book_id}/current-chapter").json == {"available": False}
+        abs_client.get_item_details.assert_not_called()
+        bundle.bookorbit_client.get_audiobook_info.assert_not_called()
 
     def test_no_audio_row_does_not_contact_service(self):
         book_id = self._book()
@@ -281,6 +301,11 @@ class TestChapterEndpoint(unittest.TestCase):
         assert '/static/js/next/current-chapter.js' in drawer
         assert 'data-current-chapter' not in Path("templates/index.html").read_text(encoding="utf-8")
         assert 'current-chapter.js' not in Path("templates/base.html").read_text(encoding="utf-8")
+        legacy_id = self._book("book-legacy", None)
+        self._state(self.reader.id, legacy_id, 30)
+        legacy = self.client.get(f"/book/{legacy_id}").get_data(as_text=True)
+        assert "data-current-chapter" in legacy, "a blank audio source is Audiobookshelf"
+        assert "{index} of {count}" in page
         ebook_id = "ebook-only"
         self.service.save_book(Book(abs_id=ebook_id, abs_title="Ebook", sync_mode="ebook_only"))
         self.service.link_user_book(self.reader.id, ebook_id)

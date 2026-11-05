@@ -737,14 +737,8 @@ class BookLoreAudioSourceAdapter(AudioSourceAdapter):
             if index >= len(raw) or not isinstance(raw[index], dict):
                 continue
             marker = raw[index]
-            supplied = next((marker[key] for key in start_keys if key in marker), None)
-            if supplied is None:
-                continue
-            try:
-                value = float(supplied)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if not math.isfinite(value) or value < 0:
+            # A start the parser had to infer (from ends or durations) is not a real marker.
+            if not any(self._to_seconds(marker.get(key)) is not None for key in start_keys):
                 continue
             result.append({
                 "title": marker.get("title"),
