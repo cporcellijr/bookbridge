@@ -99,6 +99,18 @@ class TestP8Finish(unittest.TestCase):
         self.assertNotIn("querySelector('[data-view=", scripts)
         self.assertEqual(scripts.count(".view-switch [data-view"), 4)
 
+    def test_logs_checkboxes_stay_small_and_messages_get_the_room(self):
+        """iPad Safari stretched the Logs checkboxes to the 44px field height and squeezed messages."""
+        css = source("static/css/next-ops.css")
+        rule = lambda selector: css[css.index(selector + " {"):css.index("}", css.index(selector + " {"))]
+        checkbox = rule('.view .logs-wrap .auto-refresh input[type="checkbox"]')
+        for declaration in ("min-height: 0", "width: 22px", "height: 22px", "transform: none"):
+            self.assertIn(declaration, checkbox)
+        self.assertIn("flex-wrap: wrap", rule(".view .logs-wrap .log-line"))
+        self.assertIn("word-break: normal", rule(".view .logs-wrap .log-line"))
+        self.assertIn("flex: none", rule(".view .logs-wrap .log-timestamp, .view .logs-wrap .log-level, .view .logs-wrap .log-module"))
+        self.assertRegex(rule(".view .logs-wrap .log-message"), r"flex: 1 1 \d+px")
+
     def test_discover_chip_text_is_unchanged_and_visuals_use_new_tokens(self):
         scripts = source("templates/next/_discover_scripts.html")
         css = source("static/css/next-finish.css")

@@ -106,6 +106,13 @@
 .view .logs-wrap .log-stats { color: var(--text-2); flex-wrap: wrap; }
 .view .logs-wrap .log-header { background: var(--surface-2); }
 .view .logs-wrap .log-content { font-family: var(--font-mono); }
+/* The 44px control height is for fields; checkboxes stay checkbox-sized (Safari stretched them). */
+.view .logs-wrap .auto-refresh input[type="checkbox"] { width: 22px; height: 22px; min-width: 0; min-height: 0; padding: 0; transform: none; accent-color: var(--ribbon); }
+/* Log lines: date, level and module keep their size; the message takes the rest of the row,
+   or a full row of its own when the screen is narrow. */
+.view .logs-wrap .log-line { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; word-break: normal; }
+.view .logs-wrap .log-timestamp, .view .logs-wrap .log-level, .view .logs-wrap .log-module { flex: none; margin-right: 0; }
+.view .logs-wrap .log-message { flex: 1 1 480px; min-width: 0; overflow-wrap: anywhere; }
 .view .whats-new-notes { color: var(--text-2); }
 .view .whats-new-notes strong, .view .whats-new-notes h1, .view .whats-new-notes h2, .view .whats-new-notes h3 { color: var(--text); }
 .view .whats-new-notes code { background: var(--surface-2); color: var(--text); }
