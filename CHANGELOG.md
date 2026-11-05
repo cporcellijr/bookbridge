@@ -8,7 +8,7 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
-- **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** To turn it on, go to **My Integrations → Reading preferences → Interface** and choose **New**. Switch back to Classic there at any time. New has a redesigned Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac), day and night themes, and phone navigation. **Stats is now open to every reader** for their own reading and listening activity.
+- **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch interfaces immediately: choose **New interface** beside the Classic account menu, or use **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in your chosen interface without a Save step. New has a redesigned Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac), day and night themes, and phone navigation. **Stats is now open to every reader** for their own reading and listening activity.
 
 - **Ignore local files in Suggestions** is a new admin setting, off by default. Enable it to exclude locally scanned files from Discover's Pairs and Ebook Only on the next Scan Library while keeping ebooks from your library services.
 - **Suggestions is now Discover, with three tabs: Pairs, Ebook Only and Search.** Every reader can use

@@ -282,6 +282,12 @@ textarea:focus-visible,
     border-radius: 4px;
 }
 
+/* ============ Interface switch ============ */
+.nav-interface-form { margin: 0; flex: none; }
+.nav-interface-button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.nav-interface-button:hover { border-color: var(--border-strong); background: rgba(255, 255, 255, .1); }
+.nav-interface-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ============ User menu ============ */
 .user-menu {
     position: relative;

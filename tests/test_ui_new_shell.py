@@ -101,7 +101,13 @@ def _context(*, admin=False, providers=None, overrides=False, disabled=(), shelf
         "booklore_server": settings.get("BOOKLORE_SERVER", ""),
         "get_locale": lambda: "en",
         "_": lambda text: text,
-        "url_for": lambda endpoint: {"suggestions": "/suggestions", "job_queue_page": "/job-queue"}[endpoint],
+        "url_for": lambda endpoint, **kwargs: (
+            "/account/interface?next=" + kwargs.get("next", "/")
+            if endpoint == "account_interface"
+            else {"suggestions": "/suggestions", "job_queue_page": "/job-queue"}[endpoint]
+        ),
+        "request": SimpleNamespace(path="/"),
+        "csrf_token": lambda: "test-csrf-token",
         "get_val": get_val,
         "get_user_val": get_user_val,
         "get_user_bool": get_user_bool,
