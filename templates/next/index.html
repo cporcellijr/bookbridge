@@ -3,7 +3,7 @@
 {% set active_page = 'library' %}
 {% block title %}{{ _('Library') }} · BookBridge{% endblock %}
 {% block content %}
-<div id="library-page" class="library-page" data-view="covers">
+<div id="library-page" class="library-page" data-view="covers" data-select-mode="off">
     <header class="page-head"><div><p class="eyebrow">{{ _('YOUR LIBRARY') }}</p><h1 class="h1">{{ _('Library') }}</h1></div>
         <a class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Discover books') }}</a></header>
 
@@ -62,13 +62,14 @@
         </select></label><button type="button" id="sort-direction" class="icon-btn" aria-label="{{ _('Reverse sort order') }}" title="{{ _('Reverse sort order') }}">↓</button>
         <label class="group-toggle"><input id="series-grouping-toggle" type="checkbox" checked> {{ _('Group series') }}</label>
         <div class="view-switch" role="group" aria-label="{{ _('View') }}"><button type="button" id="view-covers" data-view="covers" aria-pressed="true">{{ _('Covers') }}</button><button type="button" id="view-spines" data-view="spines" aria-pressed="false">{{ _('Spines') }}</button><button type="button" id="view-list" data-view="list" aria-pressed="false">{{ _('List') }}</button></div>
-        <button type="button" class="btn" onclick="selectAllFilteredBooks()">{{ _('Select all filtered') }}</button>
+        <button type="button" id="select-mode-button" class="btn" aria-pressed="false" aria-controls="selection-bar">{{ _('Select') }}</button>
         <span id="filter-count" role="status" aria-live="polite"></span>
     </section>
     <div id="search-handoff" class="search-handoff hidden"><span id="search-handoff-msg"></span><a id="search-handoff-link" class="btn" href="{{ url_for('suggestions', tab='search') }}">{{ _('Search Discover') }}</a></div>
-    <div id="selection-bar" class="selection-bar" hidden><span id="selection-count" aria-live="polite"></span>
-        <button type="button" onclick="selectAllFilteredBooks()">{{ _('Select all filtered') }}</button><button type="button" onclick="clearBookSelection()">{{ _('Clear') }}</button>
-        <button type="button" onclick="bulkSyncNow()">{{ _('Sync now') }}</button><button type="button" onclick="bulkMarkFinished()">{{ _('Mark finished') }}</button><button type="button" onclick="bulkGenerateReadalong()">{{ _('Create read-along EPUB') }}</button><button type="button" onclick="bulkDeleteBooks()">{{ _('Remove') }}</button>
+    <div id="selection-bar" class="selection-bar" role="toolbar" aria-label="{{ _('Selected books') }}" hidden><span id="selection-count" aria-live="polite">{{ _('0 selected') }}</span>
+        <button type="button" onclick="selectAllFilteredBooks()">{{ _('Select all filtered') }}</button><button type="button" data-selection-clear onclick="clearBookSelection()">{{ _('Clear') }}</button>
+        <button type="button" data-bulk-action onclick="bulkSyncNow()">{{ _('Sync now') }}</button><button type="button" data-bulk-action onclick="bulkMarkFinished()">{{ _('Mark finished') }}</button><button type="button" data-bulk-action onclick="bulkGenerateReadalong()">{{ _('Create read-along EPUB') }}</button><button type="button" data-bulk-action onclick="bulkDeleteBooks()">{{ _('Remove') }}</button>
+        <button type="button" class="selection-done" aria-label="{{ _('Exit selection') }}" title="{{ _('Exit selection') }}" onclick="exitBookSelection()" ><span aria-hidden="true">×</span></button>
     </div>
 
     {% macro render_card(mapping) %}

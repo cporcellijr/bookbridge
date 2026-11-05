@@ -961,6 +961,9 @@
 
 
     /* P3 additions: views, format chips, selection and sequential existing-endpoint actions. */
+    const libraryPage = document.getElementById('library-page');
+    const selectModeButton = document.getElementById('select-mode-button');
+    let librarySelectMode = false;
     document.querySelectorAll('[data-format]').forEach(button => button.addEventListener('click', () => {
         filterSelect.value = button.dataset.format;
         document.querySelectorAll('[data-format]').forEach(chip => { chip.classList.toggle('is-active', chip === button); chip.setAttribute('aria-pressed', String(chip === button)); });
@@ -968,7 +971,9 @@
     }));
     document.querySelectorAll('.view-switch [data-view]').forEach(button => button.addEventListener('click', () => {
         const view = button.dataset.view;
-        document.getElementById('library-page').dataset.view = view;
+        libraryPage.dataset.view = view;
+        if (view === 'spines') setBookSelectMode(false);
+        if (selectModeButton) selectModeButton.hidden = view === 'spines';
         applySeriesGrouping(view === 'covers' && seriesGroupingToggle.checked);
         seriesGroupingToggle.disabled = view !== 'covers';
         document.querySelectorAll('.view-switch [data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
@@ -994,9 +999,51 @@
     }
     function updateSelectionBar() {
         const ids = selectedBookIds(), bar = document.getElementById('selection-bar');
-        bar.hidden = ids.length === 0;
+        bar.hidden = !librarySelectMode;
         document.getElementById('selection-count').textContent = bbFormat({{ _('{count} selected')|tojson }}, {count: ids.length});
+        document.querySelectorAll('[data-bulk-action], [data-selection-clear]').forEach(button => { button.disabled = ids.length === 0; });
+        document.querySelectorAll('.book-card').forEach(card => {
+            card.classList.toggle('is-selected', !!card.querySelector('[data-select-book]:checked'));
+        });
     }
+    function setBookSelectMode(enabled) {
+        librarySelectMode = !!enabled && libraryPage?.dataset.view !== 'spines';
+        if (libraryPage) libraryPage.dataset.selectMode = librarySelectMode ? 'on' : 'off';
+        if (selectModeButton) selectModeButton.setAttribute('aria-pressed', String(librarySelectMode));
+        document.querySelectorAll('.book-open').forEach(link => {
+            if (librarySelectMode) {
+                if (link.dataset.selectionTabindex === undefined) link.dataset.selectionTabindex = link.getAttribute('tabindex') ?? '';
+                link.tabIndex = -1;
+            } else if (link.dataset.selectionTabindex !== undefined) {
+                if (link.dataset.selectionTabindex === '') link.removeAttribute('tabindex');
+                else link.setAttribute('tabindex', link.dataset.selectionTabindex);
+                delete link.dataset.selectionTabindex;
+            }
+        });
+        if (!librarySelectMode) document.querySelectorAll('[data-select-book]').forEach(input => { input.checked = false; });
+        updateSelectionBar();
+    }
+    window.exitBookSelection = function () { setBookSelectMode(false); };
+    selectModeButton?.addEventListener('click', () => setBookSelectMode(!librarySelectMode));
+    document.addEventListener('keydown', event => {
+        if (librarySelectMode && event.key === 'Escape') {
+            event.preventDefault();
+            setBookSelectMode(false);
+            selectModeButton?.focus();
+        }
+    });
+    document.addEventListener('click', event => {
+        if (!librarySelectMode || event.target.matches('[data-select-book]')) return;
+        const card = event.target.closest?.('.book-card');
+        if (!card) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const checkbox = card.querySelector('[data-select-book]');
+        if (checkbox && !checkbox.disabled) {
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+    }, true);
     document.addEventListener('change', event => {
         if (!event.target.matches('[data-select-book]')) return;
         document.querySelectorAll('[data-select-book]').forEach(input => {
@@ -1010,6 +1057,21 @@
         updateSelectionBar();
     };
     window.clearBookSelection = function () { document.querySelectorAll('[data-select-book]').forEach(input => { input.checked = false; }); updateSelectionBar(); };
+    updateSelectionBar();
+    try {
+        const summary = sessionStorage.getItem('bb-library-after-bulk');
+        if (summary !== null) {
+            sessionStorage.removeItem('bb-library-after-bulk');
+            if (libraryPage?.dataset.view !== 'spines') {
+                setBookSelectMode(true);
+                document.getElementById('selection-count').textContent = summary;
+            }
+        }
+    } catch (e) { /* Private browsing may block storage. */ }
+    function reloadAfterSelectionAction() {
+        try { sessionStorage.setItem('bb-library-after-bulk', document.getElementById('selection-count').textContent); } catch (e) { /* Storage may be unavailable. */ }
+        location.reload();
+    }
     let libraryBatchRunning = false;
     async function runSelectedBooks(label, action) {
         if (libraryBatchRunning) return;
@@ -1050,7 +1112,7 @@
             const response = await fetch('/api/mark-complete/' + encodeURIComponent(id), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({delete:false})});
             const data = await response.json();
             if (!response.ok || !data.success) throw new Error(data.error || {{ _('Could not mark finished')|tojson }});
-        }).then(result => { if (!result.failed.length) location.reload(); });
+        }).then(result => { if (!result.failed.length) reloadAfterSelectionAction(); });
     };
     window.bulkGenerateReadalong = function () { return runSelectedBooks({{ _('Creating')|tojson }}, async id => {
         const response = await fetch('/api/readalong-epub/' + encodeURIComponent(id), {method:'POST', headers:{'Content-Type':'application/json'}});
@@ -1067,7 +1129,7 @@
         return runSelectedBooks({{ _('Removing')|tojson }}, async id => {
             const response = await fetch('/delete/' + encodeURIComponent(id), {method:'POST', redirect:'follow'});
             if (!response.ok || /\/login(?:\?|$)/.test(response.url)) throw new Error({{ _('Could not remove this book')|tojson }});
-        }).then(result => { if (!result.failed.length) location.reload(); });
+        }).then(result => { if (!result.failed.length) reloadAfterSelectionAction(); });
     };
 </script>
 

@@ -52,6 +52,54 @@ class TestNewLibrary(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_select_mode_controls_and_hidden_checkbox_rules_are_new_only(self):
+        page = (_ROOT / "templates/next/index.html").read_text(encoding="utf-8")
+        classic = (_ROOT / "templates/index.html").read_text(encoding="utf-8")
+        styles = (_ROOT / "static/css/next.css").read_text(encoding="utf-8")
+        scripts = (_ROOT / "templates/next/_library_scripts.html").read_text(encoding="utf-8")
+        toolbar = re.search(r'<section class="library-toolbar".*?</section>', page, re.S).group()
+        bar = re.search(r'<div id="selection-bar".*?</div>', page, re.S).group()
+
+        self.assertIn('data-select-mode="off"', page)
+        self.assertRegex(toolbar, r'id="select-mode-button"[^>]*aria-pressed="false"')
+        self.assertNotIn("selectAllFilteredBooks()", toolbar)
+        self.assertIn('id="view-spines"', toolbar)
+        self.assertIn('class="book-select-hit"', page)
+        self.assertIn('type="checkbox" data-select-book', page)
+        self.assertIn('data-select-mode="off"] .book-select-hit', styles)
+        self.assertIn('data-view="spines"] #select-mode-button', styles)
+        self.assertIn('id="selection-bar"', bar)
+        self.assertIn('onclick="selectAllFilteredBooks()"', bar)
+        self.assertIn('onclick="clearBookSelection()"', bar)
+        for action in ("bulkSyncNow()", "bulkMarkFinished()", "bulkGenerateReadalong()", "bulkDeleteBooks()"):
+            with self.subTest(action=action):
+                self.assertIn(f'onclick="{action}"', bar)
+        self.assertIn('aria-label="{{ _(\'Exit selection\') }}"', bar)
+        self.assertIn('onclick="exitBookSelection()"', bar)
+        self.assertIn('bar.hidden = !librarySelectMode', scripts)
+        self.assertIn('event.stopImmediatePropagation()', scripts)
+        self.assertIn("event.key === 'Escape'", scripts)
+        self.assertIn("if (view === 'spines') setBookSelectMode(false)", scripts)
+        self.assertIn("reloadAfterSelectionAction()", scripts)
+
+        # Select mode is never introduced to the Classic Library template.
+        self.assertNotIn('id="select-mode-button"', classic)
+        self.assertNotIn('data-select-mode=', classic)
+        self.assertNotIn('exitBookSelection()', classic)
+
+    def test_select_mode_click_keyboard_exit_and_bulk_flow(self):
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required for selection interaction tests")
+        result = subprocess.run(
+            [node, str(_ROOT / "tests/test_ui_new_library_select.js")],
+            capture_output=True, text=True, timeout=15, cwd=_ROOT,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_reader_gets_new_library_with_classic_default_unchanged(self):
         observed = []
 
