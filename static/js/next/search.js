@@ -19,6 +19,7 @@
     let shown = [];
     let previousFocus = null;
     let previousOverflow = '';
+    const background = Array.from(document.querySelectorAll('.app-shell, .tabbar'));
 
     function adjustViewport() {
         if (overlay.hidden) return;
@@ -223,6 +224,7 @@
         previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         overlay.hidden = false;
+        background.forEach(function (element) { element.inert = true; });
         launch.setAttribute('aria-expanded', 'true');
         input.value = '';
         adjustViewport();
@@ -236,6 +238,7 @@
     function close() {
         if (overlay.hidden) return;
         overlay.hidden = true;
+        background.forEach(function (element) { element.inert = false; });
         document.body.style.overflow = previousOverflow;
         launch.setAttribute('aria-expanded', 'false');
         input.removeAttribute('aria-activedescendant');

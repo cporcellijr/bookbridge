@@ -44,15 +44,15 @@
 
     <div class="card">
         <h1>{{ _('Users') }}</h1>
-        <table class="table">
+        <table class="table" role="table">
             <tr><th>{{ _('User') }}</th><th>{{ _('Role') }}</th><th>{{ _('Status') }}</th><th>{{ _('Last login') }}</th><th>{{ _('Actions') }}</th></tr>
             {% for u in users %}
             <tr>
-                <td>{{ u.username }}{% if u.id == current_user_id %} <span style="color:var(--muted-soft)">{{ _('(you)') }}</span>{% endif %}</td>
-                <td><span class="badge {{ u.role }}">{{ {'admin': _('admin'), 'user': _('user')}.get(u.role, u.role) }}</span></td>
-                <td>{% if u.active %}<span class="badge on">{{ _('active') }}</span>{% else %}<span class="badge off">{{ _('disabled') }}</span>{% endif %}</td>
-                <td style="color:var(--muted-soft)">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
-                <td class="row-actions">
+                <td data-label="{{ _('User') }}">{{ u.username }}{% if u.id == current_user_id %} <span style="color:var(--muted-soft)">{{ _('(you)') }}</span>{% endif %}</td>
+                <td data-label="{{ _('Role') }}"><span class="badge {{ u.role }}">{{ {'admin': _('admin'), 'user': _('user')}.get(u.role, u.role) }}</span></td>
+                <td data-label="{{ _('Status') }}">{% if u.active %}<span class="badge on">{{ _('active') }}</span>{% else %}<span class="badge off">{{ _('disabled') }}</span>{% endif %}</td>
+                <td data-label="{{ _('Last login') }}" style="color:var(--muted-soft)">{{ u.last_login.strftime('%Y-%m-%d %H:%M') if u.last_login else '—' }}</td>
+                <td class="row-actions" data-label="{{ _('Actions') }}">
                     <a href="{{ url_for('admin_user_integrations', user_id=u.id) }}" class="btn btn-secondary btn-sm">{{ _('Integrations') }}</a>
                     <form method="POST" class="reset-inline">
                         <input type="hidden" name="action" value="reset_password">
