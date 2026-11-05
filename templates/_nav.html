@@ -45,7 +45,7 @@
 
     <div class="library-links">
         {% set audio_source = '' %}
-        {% if abs_library_url and abs_library_url|lower != 'disabled' %}
+        {% if abs_library_url and abs_library_url|lower != 'disabled' and get_user_val('ABS_ENABLED', '')|lower not in ['false', '0', 'no', 'off'] %}
             {% set audio_source = 'abs' %}
             {{ library_link(abs_library_url, '/static/audiobookshelf.png', _('Audiobookshelf audiobook library')) }}
         {% elif grimmory_configured %}
