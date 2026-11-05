@@ -231,3 +231,29 @@ def test_shell_sprite_font_and_static_script_references_exist():
     assert "prefers-reduced-motion" in css
     assert "localStorage.getItem" in script and "localStorage.setItem" in script
     assert "event.key === 'Escape'" in script
+
+
+def test_rail_collapse_toggle_everywhere_but_settings():
+    env = _env()
+    library = env.get_template("next/base.html").render(**{**_context(), "active_page": "library"})
+    settings = env.get_template("next/base.html").render(**{**_context(), "active_page": "settings"})
+    assert 'data-rail-toggle' in library and 'aria-label="Collapse sidebar"' in library
+    assert 'data-expand-label="Expand sidebar"' in library
+    assert "localStorage.getItem('bookbridge-rail')" in library
+    # Settings keeps its labelled menu: no toggle and no early collapse.
+    assert 'data-rail-toggle' not in settings
+    assert "bookbridge-rail" not in settings
+    assert '<symbol id="sidebar"' in (PROJECT_ROOT / "static" / "icons.svg").read_text(encoding="utf-8")
+
+
+def test_rail_collapse_behaviour():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("Node is required for the rail collapse test")
+    result = subprocess.run([node, str(PROJECT_ROOT / "tests" / "test_ui_new_rail.js")],
+                            capture_output=True, text=True, timeout=15, cwd=PROJECT_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="dark light">
     <title>{% block title %}BookBridge{% endblock %}</title>
     <script>try { var t = localStorage.getItem('bookbridge-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+    {% if active_page != 'settings' %}<script>try { if (localStorage.getItem('bookbridge-rail') === 'collapsed') document.documentElement.dataset.rail = 'collapsed'; } catch (e) {}</script>{% endif %}
     <link rel="icon" type="image/png" href="/static/icon.png">
     <link rel="stylesheet" href="/static/fonts/next-fonts.css">
     <link rel="stylesheet" href="/static/css/next.css">
@@ -95,9 +96,12 @@
     <a class="skip-link" href="#main-content">{{ _('Skip to content') }}</a>
     <div class="app-shell">
         <aside class="rail{% if active_page == 'settings' %} rail-settings{% endif %}" aria-label="{{ _('Main navigation') }}">
+            <div class="rail-head">
                 <a class="brand" href="/" aria-label="BookBridge — {{ _('Library') }}">
                 <svg class="brand-mark" aria-hidden="true"><use href="/static/icons.svg#brand"></use></svg><span>BookBridge</span>
-            </a>
+                </a>
+                {% if active_page != 'settings' %}<button class="rail-toggle" type="button" data-rail-toggle aria-expanded="true" aria-label="{{ _('Collapse sidebar') }}" title="{{ _('Collapse sidebar') }}" data-collapse-label="{{ _('Collapse sidebar') }}" data-expand-label="{{ _('Expand sidebar') }}"><svg class="icon" aria-hidden="true"><use href="/static/icons.svg#sidebar"></use></svg></button>{% endif %}
+            </div>
             {% set yours = your_apps() %}
             {% block rail_nav %}
             <nav class="rail-nav" aria-label="{{ _('Sections') }}">
