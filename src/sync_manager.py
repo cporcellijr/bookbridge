@@ -72,6 +72,7 @@ from src.services.alignment_service import AlignmentService, ContentMatchRejecte
 from src.services.audio_source_adapters import ABSAudioSourceAdapter, BookLoreAudioSourceAdapter, BookOrbitAudioSourceAdapter
 from src.services.library_service import EbookInputError, LibraryService
 from src.services.map_quality import find_slips
+from src.services.transcription_preflight import record_preflight
 from src.services.readalong_delivery import is_generated_readalong_epub
 from src.services.migration_service import MigrationService
 from src.services.reading_session_aggregator import (
@@ -3831,6 +3832,19 @@ class SyncManager:
 
             # Step 3: Fallback to Whisper (Slow Path) - Only runs if SMIL failed
             if not direct_aligned and not raw_transcript:
+                # Read-only length evidence before acquiring audio for full Whisper.
+                # Uncalibrated measurements never reject a pairing or gate a worker.
+                try:
+                    advisory = record_preflight(
+                        self.database_service, book, book_text, item_details,
+                    )
+                    logger.info(
+                        "Transcription pre-flight for '%s': %s EPUB tokens, %s tokens/audio-hour (%s)",
+                        sanitize_log_data(abs_title), advisory["token_count"],
+                        advisory["epub_tokens_per_audio_hour"], advisory["assessment"],
+                    )
+                except Exception:
+                    logger.warning("Transcription pre-flight evidence could not be recorded", exc_info=True)
                 logger.info("🔄 SMIL extraction skipped/failed, falling back to Whisper transcription")
                 
                 if not audio_adapter:

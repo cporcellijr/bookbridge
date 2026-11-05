@@ -466,6 +466,19 @@ class Job(Base):
 
 
 
+class TranscriptionPreflight(Base):
+    """Read-only length evidence and optional acknowledgement per user and pair."""
+    __tablename__ = "transcription_preflights"
+
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    abs_id = Column(String(255), ForeignKey("books.abs_id", ondelete="CASCADE"), primary_key=True)
+    pairing_key = Column(String(64), nullable=False)
+    identity = Column(String(64), nullable=False)
+    evidence_json = Column(Text, nullable=False)
+    acknowledged_at = Column(Float, nullable=True)
+    updated_at = Column(Float, nullable=False)
+
+
 class PendingSuggestion(Base):
     """
     Model for progress-triggered ebook suggestions.

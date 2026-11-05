@@ -228,6 +228,12 @@
         {% endif %}
     </div>
 
+    <p class="subtitle">
+        {{ _('If an audiobook needs Whisper transcription, its uncalibrated EPUB/audio measurements are shown on') }}
+        <a href="{{ url_for('job_queue_page') }}">{{ _('Processing') }}</a>.
+        {{ _('Review the edition before a long run; no unsupported mismatch threshold blocks unattended work.') }}
+    </p>
+
     <div class="tabs sugg-tabs" role="tablist" aria-label="{{ _('Discover') }}">
         {% if 'pairs' in tabs_shown %}
         <button type="button" class="tab" role="tab" id="tab-pairs" data-tab="pairs" aria-controls="suggestionsPanel" aria-selected="false" tabindex="-1">

@@ -8,6 +8,21 @@ All notable changes to BookBridge will be documented in this file.
 
 ### Added
 
+- **EPUB/audio transcription pre-flight measurements** (#528). Before a full Whisper fallback,
+  BookBridge records the EPUB's Unicode-aware word-token count, catalog audiobook duration,
+  EPUB tokens per audio hour, and an explanation. Find the advisory on **Processing** in
+  Classic or New, with a **Continue anyway** acknowledgement linked to that reader and
+  exact pairing. It never pauses unattended work, changes job failure status, or bypasses
+  the final content-match guard. As the reporter's reference rates counted **transcript**
+  words, not EPUB tokens, measurements are explicitly **uncalibrated** (or inconclusive
+  when the input is unreliable), not automatic mismatch verdicts. No threshold is enabled.
+  Regression cases cover both transcription paths, invalid duration, user isolation,
+  duration changes, concurrent acknowledgement, deletion/unlink cleanup, and unchanged
+  final lexical refusal. Review verification on current dev: **6,900 passed,
+  12 skipped, 1,094 subtests passed**.
+  **Deploy requires migration + restart**. EPUB TOC/chapter
+  comparisons, sample audio probes, and calibrated warning thresholds are deferred.
+
 - **The New book window shows your current audiobook chapter** (#428). For Audiobookshelf, BookOrbit and Grimmory audiobooks that carry chapter information, it shows the chapter's title, where it falls in the book (for example 18 of 32) and how far into it you are. Audiobooks without chapters show nothing extra.
 
 - **The New interface (beta) gives BookBridge a fresh look while keeping Classic available.** Switch interfaces immediately: choose **New interface** beside the Classic account menu, or use **Classic | New** above the user menu in New (also in the phone account menu). The page reopens in your chosen interface without a Save step. New has a redesigned Library with Covers, Spines and List, Discover, a book drawer, search with Ctrl K (or ⌘K on Mac), day and night themes, and phone navigation. **Stats is now open to every reader** for their own reading and listening activity.

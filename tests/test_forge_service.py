@@ -1832,6 +1832,54 @@ class TestForgeResume(unittest.TestCase):
         self.assertEqual(kw["text_item"]["bookorbit_id"], "9")
         self.assertNotIn("T4", self.service.active_tasks)
 
+    def test_auto_forge_completion_measures_before_whisper_audio_request(self):
+        """Actual Forge completion fallback measures without acquiring Whisper audio."""
+        from src.db.models import Book
+        sample = "A synthetic narrated passage with enough words."
+        book = Book(abs_id="forge528", abs_title="Forge 528",
+                    audio_source="ABS", audio_source_id="forge528",
+                    ebook_filename="sample.epub", audio_duration=3600)
+        self.mock_db.get_book.return_value = book
+        self.mock_db.get_book_user_ids.return_value = [4]
+        self.mock_ebook_parser.extract_text_and_map.return_value = (sample, [])
+        self.service.transcriber.transcribe_from_smil.return_value = None
+        self.service.storyteller_cleanup_grace_seconds = 0
+        poll = {
+            "processing_triggered": True, "completion_method": "readaloud",
+            "readaloud_status": "ready", "aligned_at": None,
+            "storyteller_title": None, "terminal_error": None,
+        }
+        seen = []
+
+        def acquire_audio(*_args, **_kwargs):
+            assert self.mock_db.save_transcription_preflight.call_count == 1
+            seen.append("preflight-before-audio")
+            return ["staged-audio"]
+
+        def transcribe(*_args, **_kwargs):
+            assert seen == ["preflight-before-audio"]
+            seen.append("whisper")
+            raise RuntimeError("stop after verifying ordering")
+
+        self.service.transcriber.process_audio.side_effect = transcribe
+        with tempfile.TemporaryDirectory() as directory:
+            self.mock_ebook_parser.epub_cache_dir = Path(directory)
+            with patch("src.services.forge_service.time.sleep"), \
+                 patch("src.services.forge_service.ingest_storyteller_transcripts", return_value=None), \
+                 patch("src.utils.config_loader.env_truthy", return_value=False), \
+                 patch.object(self.service, "_poll_auto_forge_completion", return_value=poll), \
+                 patch.object(self.service, "_get_whisper_audio_inputs", side_effect=acquire_audio):
+                self.service._run_forge_match_completion(
+                    abs_id="forge528", book_uuid="uuid-528",
+                    title="Forge 528", text_item={"source": "Local File"},
+                    item_details={}, chapters=[], original_filename=None,
+                    original_ebook_filename=None, original_hash=None,
+                    audio_source="ABS", audio_source_id="forge528",
+                )
+        self.assertEqual(seen, ["preflight-before-audio", "whisper"])
+        evidence = self.mock_db.save_transcription_preflight.call_args.kwargs["evidence"]
+        self.assertEqual(evidence["assessment"], "uncalibrated")
+
     def test_resume_completion_task_noops_when_book_missing(self):
         self.mock_db.get_book.return_value = None
         with patch.object(self.service, "_run_forge_match_completion") as mock_complete:

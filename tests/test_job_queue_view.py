@@ -155,6 +155,107 @@ class JobQueueRouteTests(unittest.TestCase):
         self.assertNotIn("Private Bob", html)
         self.assertNotIn("Bob Staged", html)
 
+    def test_preflight_ui_is_scoped_and_ack_is_only_for_current_pair(self):
+        from src.services.transcription_preflight import (
+            evidence_identity, pair_key, evaluate_preflight,
+        )
+        a = Book(abs_id="alice-pair", abs_title="Visible pair",
+                 audio_source="ABS", audio_source_id="alice-pair",
+                 ebook_source="BookOrbit", ebook_source_id="82",
+                 ebook_filename="trim.epub", audio_duration=3600,
+                 status="processing", user_id=self.alice.id)
+        b = Book(abs_id="bob-pair", abs_title="Private pairing",
+                 audio_source="ABS", audio_source_id="bob-pair",
+                 ebook_filename="private.epub", audio_duration=3600,
+                 status="processing", user_id=self.bob.id)
+        self.db.save_book(a)
+        self.db.save_book(b)
+        self.db.save_job(Job(abs_id=a.abs_id, last_attempt=time.time(), progress=.4))
+        self.db.save_job(Job(abs_id=b.abs_id, last_attempt=time.time(), progress=.6))
+        evidence_a = evaluate_preflight("synthetic words only", 3600)
+        evidence_b = evaluate_preflight("private text", 3600)
+        identity = evidence_identity(a, "synthetic words only")
+        self.assertTrue(self.db.save_transcription_preflight(
+            a.abs_id, self.alice.id, identity, pair_key(a), evidence_a))
+        self.assertTrue(self.db.save_transcription_preflight(
+            b.abs_id, self.bob.id, evidence_identity(b, "private text"),
+            pair_key(b), evidence_b))
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        for path in ("/job-queue",):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            html_page = response.get_data(as_text=True)
+            self.assertIn("EPUB/audio pre-flight", html_page)
+            self.assertIn("Continue anyway", html_page)
+            self.assertIn("EPUB tokens per audio hour", html_page)
+            self.assertIn("not a mismatch verdict", html_page)
+            self.assertNotIn("Private pairing", html_page)
+            self.assertNotIn("private text", html_page)
+        self.assertEqual(self.client.post(
+            "/job-queue/preflight/ack",
+            data={"abs_id": b.abs_id,
+                  "identity": evidence_identity(b, "private text")},
+        ).status_code, 404)
+        self.assertEqual(self.client.post(
+            "/job-queue/preflight/ack",
+            data={"abs_id": a.abs_id, "identity": "incorrect"},
+        ).status_code, 409)
+        ok = self.client.post(
+            "/job-queue/preflight/ack",
+            data={"abs_id": a.abs_id, "identity": identity},
+        )
+        self.assertEqual(ok.status_code, 302)
+        self.assertTrue(
+            self.db.get_transcription_preflights(self.alice.id, [a.abs_id])[a.abs_id]["acknowledged"]
+        )
+        page = self.client.get("/job-queue").get_data(as_text=True)
+        self.assertIn("Advisory acknowledged", page)
+        self.assertNotIn("Continue anyway", page)
+        self.assertIsNone(self.db.get_latest_job(a.abs_id).last_error)
+        self.assertEqual(self.db.get_latest_job(a.abs_id).progress, .4)
+        self.db.set_user_credential(self.alice.id, "UI_MODE", "new")
+        new_page = self.client.get("/job-queue")
+        self.assertEqual(new_page.status_code, 200)
+        new_html = new_page.get_data(as_text=True)
+        self.assertIn("EPUB/audio pre-flight", new_html)
+        self.assertIn("Advisory acknowledged", new_html)
+        a.ebook_source_id = "different-edition"
+        self.db.save_book(a)
+        self.assertNotIn("EPUB/audio pre-flight", self.client.get("/job-queue").get_data(as_text=True))
+        self.assertEqual(self.client.post(
+            "/job-queue/preflight/ack",
+            data={"abs_id": a.abs_id, "identity": identity},
+        ).status_code, 409)
+
+    def test_inconclusive_preflight_renders_without_rate_and_never_stops_job(self):
+        from src.services.transcription_preflight import (
+            evaluate_preflight, evidence_identity, pair_key,
+        )
+        book = Book(abs_id="unspaced528", abs_title="Unspaced script",
+                    audio_source="ABS", audio_source_id="unspaced528",
+                    ebook_filename="text.epub", duration=3600,
+                    status="processing", user_id=self.alice.id)
+        self.db.save_book(book)
+        self.db.save_job(Job(abs_id=book.abs_id, last_attempt=time.time(), progress=.2))
+        text = "你好世界" * 20
+        evidence = evaluate_preflight(text, 3600)
+        self.assertEqual(evidence["assessment"], "inconclusive")
+        self.assertIsNone(evidence["epub_tokens_per_audio_hour"])
+        self.db.save_transcription_preflight(
+            book.abs_id, self.alice.id,
+            evidence_identity(book, text), pair_key(book), evidence,
+        )
+        self.client.post("/login", data={"username": "alice", "password": "pw-alice"})
+        for interface in ("classic", "new"):
+            self.db.set_user_credential(self.alice.id, "UI_MODE", interface)
+            page = self.client.get("/job-queue")
+            self.assertEqual(page.status_code, 200)
+            markup = page.get_data(as_text=True)
+            self.assertIn("Unspaced script", markup)
+            self.assertIn("inconclusive", markup.lower())
+            self.assertIn("Continue anyway", markup)
+            self.assertNotIn("EPUB tokens per audio hour</span>", markup)
+
     def test_running_job_queue_page_enables_auto_refresh(self):
         import src.web_server as ws
         with ws._VISIBLE_BATCH_LOCK:
