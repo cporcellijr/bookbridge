@@ -61,15 +61,17 @@ class TestP8Finish(unittest.TestCase):
             self.assertIn(f"_('{name}')", text)
         self.assertIn('aria-label="{{ _(\'Shelfmark Tool\') }}"', text)
 
-    def test_settings_sections_have_nine_distinct_icons(self):
+    def test_settings_categories_keep_distinct_icons_after_p11_navigation(self):
         markup = source("templates/next/settings.html")
         sections = re.findall(
-            r'<button[^>]+class="settings-tab[^"]*"[^>]+data-tab="([^"]+)"[^>]*>'
+            r'<a[^>]+class="settings-tab"[^>]+data-tab="([^"]+)"[^>]*>'
             r'<svg[^>]*><use href="/static/icons.svg#([^"]+)"',
             markup,
         )
-        self.assertEqual(len(sections), 9)
-        self.assertEqual(len({icon for _name, icon in sections}), 9)
+        self.assertEqual([name for name, _icon in sections],
+                         ['sync', 'library', 'alignment', 'ai', 'system',
+                          'maintenance', 'users', 'logs'])
+        self.assertEqual(len({icon for _name, icon in sections}), 8)
         symbols = set(re.findall(r'<symbol id="([^"]+)"', source("static/icons.svg")))
         self.assertTrue(set(icon for _name, icon in sections).issubset(symbols))
 
