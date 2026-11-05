@@ -23,22 +23,36 @@ class Fields(HTMLParser):
         self.fields = Counter()
         self.values = Counter()
         self._select = None
+        self._textarea = None
+        self._text = []
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag in ("input", "select", "textarea") and attrs.get("name"):
+            name, disabled = attrs["name"], "disabled" in attrs
             kind = (attrs.get("type") or ("text" if tag == "input" else tag)).lower()
-            self.fields[(attrs["name"], kind)] += 1
+            self.fields[(name, kind)] += 1
             if tag == "input":
-                state = "checked" in attrs if kind in ("checkbox", "radio") else attrs.get("value", "")
-                self.values[(attrs["name"], kind, attrs.get("value") if kind == "radio" else None, str(state))] += 1
-            self._select = attrs["name"] if tag == "select" else None
+                ticked = kind in ("checkbox", "radio")
+                state = "checked" in attrs if ticked else attrs.get("value", "")
+                self.values[(name, kind, attrs.get("value") if ticked else None, str(state), disabled)] += 1
+            self._select = (name, disabled) if tag == "select" else None
+            self._textarea = (name, disabled) if tag == "textarea" else None
+            self._text = []
         elif tag == "option" and self._select and "selected" in attrs:
-            self.values[(self._select, "select", None, attrs.get("value", ""))] += 1
+            self.values[(self._select[0], "select", None, attrs.get("value", ""), self._select[1])] += 1
+
+    def handle_data(self, data):
+        if self._textarea:
+            self._text.append(data)
 
     def handle_endtag(self, tag):
         if tag == "select":
             self._select = None
+        elif tag == "textarea" and self._textarea:
+            name, disabled = self._textarea
+            self.values[(name, "textarea", None, "".join(self._text), disabled)] += 1
+            self._textarea = None
 
 
 class TestP6Sources(unittest.TestCase):
@@ -94,6 +108,9 @@ class TestP6RenderedRoutes(unittest.TestCase):
         from src.db.database_service import DatabaseService
         import src.db.migration_utils
         from src.web_server import create_app
+        import src.web_server as web_module
+        # create_app rebinds web_server globals (database, dirs, synchronous tasks); restore them in tearDown.
+        self._web_globals = dict(vars(web_module))
 
         self.db = DatabaseService(os.path.join(self.temp, "p6.db"))
         self.admin = self.db.create_user("p6-admin", "testpassword", role="admin")
@@ -114,6 +131,11 @@ class TestP6RenderedRoutes(unittest.TestCase):
         import src.db.migration_utils
         src.db.migration_utils.initialize_database = self.original_init
         self.db.db_manager.close()
+        import src.web_server as web_module
+        web_globals = vars(web_module)
+        for key in set(web_globals) - set(self._web_globals):
+            del web_globals[key]
+        web_globals.update(self._web_globals)
         os.environ.clear()
         os.environ.update(self._old_env)
         shutil.rmtree(self.temp, ignore_errors=True)
@@ -192,6 +214,19 @@ class TestP6RenderedRoutes(unittest.TestCase):
                         self.assertEqual(drop(old_fields.values), drop(new_fields.values))
                         if url == "/settings":
                             self.assertGreater(sum(n for k, n in old_fields.values.items() if k[3].startswith("v-")), 50)
+
+    def test_value_parser_sees_checkbox_values_textarea_text_and_disabled_controls(self):
+        """Each of these changes what a form submits, so the parity test must tell them apart."""
+        def values(markup):
+            fields = Fields()
+            fields.feed(markup)
+            return fields.values
+        for a, b in (('<input type="checkbox" name="K" value="on" checked>', '<input type="checkbox" name="K" value="false" checked>'),
+                     ('<textarea name="K">one</textarea>', '<textarea name="K">two</textarea>'),
+                     ('<input name="K" value="x">', '<input name="K" value="x" disabled>'),
+                     ('<select name="K"><option value="a" selected></select>', '<select name="K" disabled><option value="a" selected></select>')):
+            with self.subTest(a=a):
+                self.assertNotEqual(values(a), values(b))
 
     def test_no_admin_access_or_foreign_credentials_for_reader(self):
         self.db.set_user_credential(self.reader.id, "UI_MODE", "new")

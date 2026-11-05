@@ -1324,6 +1324,9 @@
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // Reading the storage objects themselves throws when the browser blocks storage.
+    const sessionStore = (() => { try { return window.sessionStorage; } catch (e) { return null; } })();
+    const localStore = (() => { try { return window.localStorage; } catch (e) { return null; } })();
     function readJson(storage, key) {
         try { return JSON.parse(storage.getItem(key) || 'null'); } catch (e) { return null; }
     }
@@ -1343,7 +1346,7 @@
     }
 
     function loadInitialState() {
-        const saved = readJson(sessionStorage, 'suggestions_tab_state') || {};
+        const saved = readJson(sessionStore, 'suggestions_tab_state') || {};
         const params = new URLSearchParams(window.location.search);
         const urlTab = params.get('tab');
         activeTab = TABS.includes(urlTab) ? urlTab : (TABS.includes(saved.active) ? saved.active : TABS[0]);
@@ -1364,8 +1367,8 @@
                 group: params.get('group') !== 'flat',
             });
         }
-        const hidden = readJson(sessionStorage, 'suggestions_hidden') || {};
-        const expanded = readJson(localStorage, 'suggestions_expanded') || {};
+        const hidden = readJson(sessionStore, 'suggestions_hidden') || {};
+        const expanded = readJson(localStore, 'suggestions_expanded') || {};
         TABS.forEach((tab) => {
             (Array.isArray(hidden[tab]) ? hidden[tab] : []).forEach((key) => hiddenKeys[tab].add(key));
             (Array.isArray(expanded[tab]) ? expanded[tab] : []).forEach((key) => expandedGroups[tab].add(key));
@@ -1373,7 +1376,7 @@
     }
 
     function saveState() {
-        writeJson(sessionStorage, 'suggestions_tab_state', { active: activeTab, tabs: tabState });
+        writeJson(sessionStore, 'suggestions_tab_state', { active: activeTab, tabs: tabState });
         const st = tabState[activeTab];
         const params = new URLSearchParams({ tab: activeTab });
         if (st.q) params.set('q', st.q);
@@ -1391,11 +1394,11 @@
     }
 
     function saveHidden() {
-        writeJson(sessionStorage, 'suggestions_hidden', { pairs: [...hiddenKeys.pairs], ebook_only: [...hiddenKeys.ebook_only] });
+        writeJson(sessionStore, 'suggestions_hidden', { pairs: [...hiddenKeys.pairs], ebook_only: [...hiddenKeys.ebook_only] });
     }
 
     function saveExpanded() {
-        writeJson(localStorage, 'suggestions_expanded', { pairs: [...expandedGroups.pairs], ebook_only: [...expandedGroups.ebook_only] });
+        writeJson(localStore, 'suggestions_expanded', { pairs: [...expandedGroups.pairs], ebook_only: [...expandedGroups.ebook_only] });
     }
 
     function filtersFor(tab) {

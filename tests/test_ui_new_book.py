@@ -242,6 +242,7 @@ LIBRARY_ALLOWED_CHANGES = (("if (formatValue === 'paired') return card.dataset.s
   'const card = document.querySelector(`.book-card[data-abs-id="${book.abs_id}"]`);\n'
   'if (!card) return;\n'),
  ('                            card.dataset.progress = book.unified_progress;\n'
+  "                            card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });\n"
   "                            const spine = card.querySelector('.spine-progress');\n"
   '                            if (spine) spine.textContent = book.unified_progress.toFixed(0) + '
   "'%';\n"

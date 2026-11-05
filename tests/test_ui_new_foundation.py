@@ -109,6 +109,9 @@ class TestUiModeRoutes(unittest.TestCase):
         import src.db.migration_utils
         from src.web_server import create_app
 
+        import src.web_server as web_module
+        # create_app rebinds web_server globals (database, dirs, synchronous tasks); restore them in tearDown.
+        self._web_globals = dict(vars(web_module))
         self.service = DatabaseService(os.path.join(self.temp_dir, "ui.db"))
         self.admin = self.service.create_user("ui-admin", "pw", role="admin")
         self.reader = self.service.create_user("ui-reader", "pw", role="user")
@@ -139,6 +142,11 @@ class TestUiModeRoutes(unittest.TestCase):
 
         src.db.migration_utils.initialize_database = self._original_init_db
         self.service.db_manager.close()
+        import src.web_server as web_module
+        web_globals = vars(web_module)
+        for key in set(web_globals) - set(self._web_globals):
+            del web_globals[key]
+        web_globals.update(self._web_globals)
         os.environ.clear()
         os.environ.update(self._original_env)
         shutil.rmtree(self.temp_dir, ignore_errors=True)
@@ -200,3 +208,16 @@ class TestUiModeRoutes(unittest.TestCase):
             self.assertIn("admin_user_integrations.html", observed)
         finally:
             template_rendered.disconnect(capture, self.app)
+
+
+class TestUiFixtureRestoresWebServerGlobals(unittest.TestCase):
+    def test_fixture_leaves_web_server_globals_as_it_found_them(self):
+        import src.web_server as web
+        names = ("_BACKGROUND_TASKS_SYNCHRONOUS", "database_service", "DATA_DIR", "EBOOK_DIR", "COVERS_DIR")
+        before = [vars(web).get(name) for name in names]
+        fixture = TestUiModeRoutes()
+        fixture.setUp()
+        fixture.tearDown()
+        for name, value in zip(names, before):
+            with self.subTest(name=name):
+                self.assertIs(vars(web).get(name), value)

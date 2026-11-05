@@ -228,3 +228,8 @@
 :root[data-theme="light"] .u-btn-sm { color: var(--text); background: var(--surface-2); border: 1px solid var(--line-2); }
 /* The Library page has no --gradient, so the opt-in's main button drew no background. */
 #diagnostics-optin-modal .hc-modal-footer button:not(.hc-btn-cancel) { background: var(--ribbon) !important; color: var(--ribbon-ink) !important; }
+:root[data-theme="light"] .discover-page .btn-dismiss { background: var(--surface-2); color: var(--text); border-color: var(--line-2); }
+:root[data-theme="light"] .discover-page .btn-reject { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+/* Night: Classic's small tag and INFO badge colors fall below 4.5:1 on New surfaces. */
+.view .tracker-tag { color: var(--text-2); }
+:root:not([data-theme="light"]) .view .logs-wrap .log-level.INFO { color: #4fd1e6; }
