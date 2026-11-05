@@ -93,6 +93,13 @@ summary::-webkit-details-marker { display: none; }
 .theme-label { font-size: 13px; }
 .mobile-user-menu { display: none; }
 .view { width: 100%; max-width: 1440px; min-height: 60vh; padding: 24px 32px 100px; outline: none; }
+/* Shelfmark fills the main area below a one-line header. */
+.view:has(.shelfmark-page) { padding-bottom: 16px; }
+.shelfmark-head { align-items: center; flex-wrap: nowrap; margin: 0 0 12px; }
+.shelfmark-head .btn { display: inline-flex; align-items: center; gap: 8px; }
+.shelfmark-warning { margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface); color: var(--text-2); }
+.shelfmark-frame { display: block; width: 100%; height: calc(100vh - 188px); height: calc(100dvh - 188px); min-height: 420px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.app-link[aria-current="page"] { background: var(--surface); color: var(--text); }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; margin: 8px 0 26px; }
 .h1 { margin: 0; font: 600 34px/1.15 var(--font-book); letter-spacing: -.015em; text-wrap: balance; }
 .card { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
@@ -112,6 +119,8 @@ summary::-webkit-details-marker { display: none; }
   .mobile-brand { display: flex; font-size: 17px; white-space: nowrap; }
   .mobile-brand .brand-mark { width: 18px; height: 22px; }
   .search-placeholder { width: 44px; min-width: 44px; justify-content: center; padding: 0; }
+  .view:has(.shelfmark-page) { padding-bottom: 0; }
+  .shelfmark-frame { height: calc(100vh - 294px); height: calc(100dvh - 294px); min-height: 360px; }
   .search-placeholder span, .search-placeholder kbd { display: none; }
   .theme-toggle { width: 44px; min-width: 44px; padding: 0; }
   .theme-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
