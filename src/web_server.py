@@ -9519,10 +9519,9 @@ def _queue_item_from_match_form(clients) -> "dict | None":
     }
     # Opt-in intent, recorded per queue item. Only meaningful for a
     # BookOrbit-audio item; honoured by both
-    # Forge & Match and Match All (_record_readalong_intent_for_match) -- the
-    # template only offers the control for a BookOrbit audiobook selection, but
-    # the checkbox itself is a plain form
-    # field, so re-check the value tolerantly (both a bare "on" and "true").
+    # Forge & Match and Match All (_record_readalong_intent_for_match). The UI
+    # asks once, at Match All (_apply_queue_readalong_request); a direct POST
+    # may still carry it, so re-check the value tolerantly ("on" and "true").
     readalong_epub_requested = (
         request.form.get('readalong_epub_requested') or ''
     ).strip().lower() in {'true', '1', 'yes', 'on'}
