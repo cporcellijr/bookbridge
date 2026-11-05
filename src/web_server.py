@@ -1459,6 +1459,19 @@ def account_language():
     return redirect(url_for('account'))
 
 
+def account_interface():
+    """Save the signed-in reader's interface and reopen the requested page."""
+    user = current_user()
+    if user is None:
+        return redirect(url_for('login'))
+
+    ui_mode = request.form.get('ui_mode')
+    if ui_mode not in ('classic', 'new'):
+        return "Unsupported interface", 400
+    database_service.set_user_credential(user.id, 'UI_MODE', ui_mode)
+    return redirect(_safe_next_url())
+
+
 def account_integrations():
     """Self-service integration settings for the signed-in user."""
     user = current_user()
@@ -1507,8 +1520,6 @@ def _apply_user_integrations(user_id):
     libraries.
     """
     from src.utils.user_config import PER_USER_FIELD_GROUPS
-    if 'UI_MODE' in request.form and request.form['UI_MODE'] not in ('classic', 'new'):
-        abort(400)
     values = {}
     for _group, fields in PER_USER_FIELD_GROUPS:
         for key, _label, ftype in fields:
@@ -16406,6 +16417,7 @@ def create_app(test_container=None):
 
     # Register context processors, jinja globals, etc.
     app.context_processor(inject_global_vars)
+    app.jinja_env.globals['csrf_token'] = _ensure_csrf_token
     app.jinja_env.globals['safe_folder_name'] = safe_folder_name
     app.jinja_env.globals['suggestion_source_badge'] = suggestion_source_badge
     app.jinja_env.globals['suggestion_bulk_block'] = _suggestion_bulk_block
@@ -16461,6 +16473,7 @@ def create_app(test_container=None):
     app.add_url_rule('/logout', 'logout', logout, methods=['GET', 'POST'])
     app.add_url_rule('/account', 'account', account, methods=['GET', 'POST'])
     app.add_url_rule('/account/language', 'account_language', account_language, methods=['POST'])
+    app.add_url_rule('/account/interface', 'account_interface', account_interface, methods=['POST'])
     app.add_url_rule('/account/integrations', 'account_integrations', account_integrations, methods=['GET', 'POST'])
     app.add_url_rule('/api/account/test-connection/<service>', 'account_test_connection', account_test_connection, methods=['POST'])
     app.add_url_rule('/api/account/abs-libraries', 'account_abs_libraries', account_abs_libraries, methods=['POST'])
