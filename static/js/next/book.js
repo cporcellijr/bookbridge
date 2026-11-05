@@ -27,9 +27,16 @@
         frame.style.visibility = 'hidden';
         dialog.append(frame);
         document.body.append(dialog);
-        const restore = document.activeElement;
+        const restore = trigger && trigger.isConnected ? trigger : document.activeElement;
         const close = function () {
-            dialog.close(); dialog.remove(); restore?.focus();
+            dialog.close(); dialog.remove();
+            if (restore && restore.isConnected) {
+                restore.focus();
+                // Native dialog focus restoration can run after close() in Chrome/Safari.
+                requestAnimationFrame(function () {
+                    if (restore.isConnected) restore.focus({preventScroll: true});
+                });
+            }
         };
         dialog.addEventListener('cancel', function (event) { event.preventDefault(); close(); });
         dialog.addEventListener('click', function (event) { if (event.target === dialog) close(); });
@@ -45,7 +52,7 @@
             doc.addEventListener('keydown', function (event) {
                 if (event.key === 'Escape') { event.preventDefault(); close(); }
                 if (event.key !== 'Tab') return;
-                const items = Array.from(doc.querySelectorAll('a[href],button:not(:disabled),input,summary,[tabindex="0"]')).filter(node => node.checkVisibility() && node.tabIndex >= 0);
+                const items = Array.from(doc.querySelectorAll('a[href],button:not(:disabled),input,summary,[tabindex="0"]')).filter(node => node.getClientRects().length > 0 && node.tabIndex >= 0 && getComputedStyle(node).visibility !== 'hidden');
                 const first = items[0], last = items[items.length - 1];
                 if (event.shiftKey && doc.activeElement === first) { event.preventDefault(); last?.focus(); }
                 else if (!event.shiftKey && doc.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -54,5 +61,7 @@
         });
         frame.src = url + (url.includes('?') ? '&' : '?') + 'fragment=1';
         dialog.showModal();
+        dialog.tabIndex = -1;
+        dialog.focus();
     };
 })();
