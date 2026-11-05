@@ -170,7 +170,7 @@ class TestNewDiscover(unittest.TestCase):
             })
             response = self.client.post('/suggestions', data={'action': 'process_queue'}, follow_redirects=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'1 added to your Library, 0 sent to Processing', response.data)
+        self.assertIn(b'Adding 1 to your Library and 0 to Processing in the background', response.data)
         self.assertIn(b'/job-queue', response.data)
         spawn.assert_called_once()
         self.assertEqual(len(spawn.call_args.args[1]), 1)

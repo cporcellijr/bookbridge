@@ -20,7 +20,7 @@
 
     {% if discover_process_summary %}
     <div class="discover-process-summary" role="status">
-        {{ _('%(added)s added to your Library, %(sent)s sent to Processing', added=discover_process_summary.added, sent=discover_process_summary.sent) }}
+        {{ _('Adding %(added)s to your Library and %(sent)s to Processing in the background', added=discover_process_summary.added, sent=discover_process_summary.sent) }}
         <a href="{{ url_for('job_queue_page') }}">{{ _('View Processing') }}</a>
     </div>
     {% endif %}

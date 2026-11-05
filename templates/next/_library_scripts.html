@@ -912,6 +912,7 @@
                                 lastSync.textContent = bbFormat({{ _('Synced %(when)s', when='{when}')|tojson }}, { when: book.last_sync });
                             }
                             card.dataset.progress = book.unified_progress;
+                            card.querySelectorAll('[data-app-pct]').forEach(node => { const app = book.states && book.states[node.dataset.appPct]; if (app) node.textContent = app.percentage.toFixed(1) + '%'; });
                             const spine = card.querySelector('.spine-progress');
                             if (spine) spine.textContent = book.unified_progress.toFixed(0) + '%';
                             if (book.states && Object.keys(book.states).length) {
@@ -962,7 +963,7 @@
     /* P3 additions: views, format chips, selection and sequential existing-endpoint actions. */
     document.querySelectorAll('[data-format]').forEach(button => button.addEventListener('click', () => {
         filterSelect.value = button.dataset.format;
-        document.querySelectorAll('[data-format]').forEach(chip => { chip.classList.toggle('is-active', chip === button); chip.setAttribute('aria-pressed', String(chip === button)); if (chip.hasAttribute('data-legacy-format')) chip.hidden = chip !== button; });
+        document.querySelectorAll('[data-format]').forEach(chip => { chip.classList.toggle('is-active', chip === button); chip.setAttribute('aria-pressed', String(chip === button)); });
         filterBooks();
     }));
     document.querySelectorAll('.view-switch [data-view]').forEach(button => button.addEventListener('click', () => {
@@ -981,7 +982,6 @@
         const active = chip.dataset.format === filterSelect.value;
         chip.classList.toggle('is-active', active);
         chip.setAttribute('aria-pressed', String(active));
-        if (chip.hasAttribute('data-legacy-format')) chip.hidden = !active;
     });
     document.getElementById('suggestions-banner')?.addEventListener('keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }

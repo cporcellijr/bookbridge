@@ -346,7 +346,7 @@
                         } else if (data.status === 'up_to_date') {
                             btn.innerHTML = 'ℹ️ ' + {{ _('Already optimal')|tojson }};
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
                         setTimeout(() => {
                             if (btn.dataset.ctcAligned === 'true') return;
@@ -372,7 +372,7 @@
                             // alone can run several minutes with no other feedback.
                             const label = data.stage_label || {{ _('Generating')|tojson }};
                             const pct = (typeof data.percent === 'number') ? ' ' + data.percent + '%' : '';
-                            btn.innerHTML = '⏳ ' + label + '…' + pct;
+                            btn.textContent = '⏳ ' + label + '…' + pct;
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                             return;
                         }
@@ -381,7 +381,7 @@
                             _setReadalongBadge(absId, true);
                         } else if (data.state === 'failed') {
                             const stagePrefix = data.stage_label ? data.stage_label + ': ' : '';
-                            btn.innerHTML = '❌ ' + stagePrefix + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + stagePrefix + (data.error || {{ _('Failed')|tojson }});
                         } else {
                             btn.innerHTML = originalText;
                         }
@@ -405,7 +405,7 @@
                             btn.innerHTML = '⏳ ' + {{ _('Generating… (this can take minutes)')|tojson }};
                             setTimeout(() => _pollReadalongEpubStatus(absId, btn, originalText), 5000);
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                             setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 4000);
                         }
                     }).catch(error => {
@@ -433,7 +433,7 @@
                         } else if (data.success) {
                             btn.innerHTML = 'ℹ️ ' + {{ _('Nothing to remove')|tojson }};
                         } else {
-                            btn.innerHTML = '❌ ' + (data.error || {{ _('Failed')|tojson }});
+                            btn.textContent = '❌ ' + (data.error || {{ _('Failed')|tojson }});
                         }
                         setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; }, 3000);
                     }).catch(error => {

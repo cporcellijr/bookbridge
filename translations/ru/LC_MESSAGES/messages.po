@@ -1217,8 +1217,8 @@ msgstr "Начинаем связывание с BookFusion…"
 
 #: templates/admin_user_integrations.html:271
 #, python-brace-format
-msgid "Go to <a href=\"{url}\" target=\"_blank\" style=\"color:#aab4f5;\">{url}</a> and enter code <strong>{code}</strong> while signed in to this user's BookFusion account."
-msgstr "Перейдите на <a href=\"{url}\" target=\"_blank\" style=\"color:#aab4f5;\">{url}</a> и введите код <strong>{code}</strong>, войдя в аккаунт BookFusion этого пользователя."
+msgid "Go to <a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#aab4f5;\">{url}</a> and enter code <strong>{code}</strong> while signed in to this user's BookFusion account."
+msgstr "Перейдите на <a href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#aab4f5;\">{url}</a> и введите код <strong>{code}</strong>, войдя в аккаунт BookFusion этого пользователя."
 
 #: templates/admin_user_integrations.html:290
 msgid "BookFusion linked to this user. Save or refresh to see the stored token."

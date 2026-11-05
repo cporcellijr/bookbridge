@@ -41,7 +41,6 @@
     .sort-label { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 
     .layout { margin-top: 16px; display: grid; grid-template-columns: minmax(0,1fr) 420px; gap: 20px; align-items: start; }
-    .layout.no-queue { grid-template-columns: minmax(0,1fr); }
     /* Shared .panel supplies surface/border/radius; this layout manages its own padding */
     .layout .panel { padding: 0; }
     .panel-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
